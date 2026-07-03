@@ -9,8 +9,8 @@ import pytest
 from app.events.types import PROMOTE_DONE, PROMOTE_ERROR, PROMOTE_INTENT_CREATED, PROMOTION_TRANSITION_APPLIED
 from app.observability import status_service
 from app.promotion.consumer import consume_promotion_intents, reset_promotion_dedup_store
-from app.store import object_store as object_store_module
-from app.store.object_store import DomainObject, ObjectStore
+from app import objects as object_store_module
+from app.objects import DomainObject, ObjectStore
 
 pytestmark = pytest.mark.not_pg
 

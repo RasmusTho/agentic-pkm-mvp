@@ -26,8 +26,8 @@ from app.events.types import (
     WATCHER_RUN,
 )
 from app.promotion.consumer import consume_promotion_intents, reset_promotion_dedup_store
-from app.store import object_store as object_store_module
-from app.store.object_store import DomainObject, ObjectStore
+from app import objects as object_store_module
+from app.objects import DomainObject, ObjectStore
 from app.watcher.events import build_watcher_run_event
 
 pytestmark = pytest.mark.not_pg

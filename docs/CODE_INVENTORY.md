@@ -70,23 +70,23 @@ Audit pass 2026-05-18 against the `main` baseline. For each deprecated package: 
 
 ### `app/store`
 
-**Files (5):** `membership_store.py`, `object_store.py`, `relation_index.py`, `vector_index.py`, `vector_store.py`
+**Files (3):** `membership_store.py`, `relation_index.py`, `vector_index.py`
 
-**Current role:** `object_store.py` is a compatibility shim — it delegates actual storage to `app/stores` through `resolve_object_store_port` but re-exports `DomainObject`, `ObjectStore`, and index types that callers import directly.
+**Removed (KERNEL-03, #2765):** `object_store.py` and `vector_store.py` — the legacy write generation is gone. `DomainObject` and the `ObjectStore` facade are owned by `app/objects` and write only through the `app.stores` provider seam, with no silent in-memory fallback. Guard: `tests/architecture/test_single_store_writer.py`.
 
-**Stable canonical import boundary (shipped v5.6.1+):** `app/objects` — the new canonical home for `DomainObject`, `ObjectStore`, `RelationEdge`, `GraphSlice`, `RelationIndex`, `ScoredNeighbor`, and `VectorIndex`. New code must import from `app.objects`, not from `app.store.object_store`. Existing callers migrate per-area in follow-up issues; the `app/store` compatibility shims remain until all callers are migrated.
+**Current role:** `relation_index.py` and `vector_index.py` are compatibility shims re-exported through `app.objects`; `membership_store.py` is a direct-DB membership writer used by `app/agents/projector`.
 
-**Residual callers outside `app/store/` (production code):**
+**Stable canonical import boundary (shipped v5.6.1+):** `app/objects` — the canonical home for `DomainObject`, `ObjectStore`, `RelationEdge`, `GraphSlice`, `RelationIndex`, `ScoredNeighbor`, and `VectorIndex`. New code must import from `app.objects`.
 
-`app/agents/` (chunker, citation_checker, classifier, deduper, indexer, normalizer, panel, panel_agent/agent+execution+runtime, planner, projector, reviewer, set_evaluator), `app/cli/index_rebuild.py`, `app/cli/smoke.py`, `app/domain/plan.py`, `app/indexer/consumer.py`, `app/ingest/api.py`, `app/ingest/vault_alpha.py`, `app/orchestrator/executor.py`, `app/promotion/consumer.py`, `app/services/indexer.py`, `app/watcher/vault_watcher.py`
+**Residual callers outside `app/store/` (production code):** `app/objects/__init__.py` (re-exports the `relation_index`/`vector_index` shim types), `app/agents/projector/agent.py` (`membership_store.save_membership`).
 
-**Test callers:** Very broad — `tests/fakes/`, `tests/agents/`, `tests/cli/`, `tests/e2e/`, `tests/indexer/`, `tests/panel/`, `tests/quality_wave/`, `tests/runtime/`, `tests/stores/`, `tests/test_domain_write_boundary.py`, `tests/test_relation_index_contract.py`, `tests/test_vector_index_contract.py`. `tests/test_object_store_contract.py` has been migrated to `app.objects`.
+**Test callers:** `tests/test_relation_index_contract.py`, `tests/test_vector_index_contract.py`, `tests/fakes/fake_relation_index.py`, `tests/fakes/fake_vector_index.py`, `tests/architecture/test_module_layout.py`.
 
 **Doc references:** `docs/CODE_INVENTORY.md`, `docs/STATUS.md`, `docs/CORE_RUNTIME_AGENTIC_LAB_BOUNDARY.md`
 
-**Removal blocker:** Very broad caller surface across canonical packages. Follow-up migration issues should update callers to import from `app.objects`; once complete, `app/store` shims can be removed.
+**Removal blocker:** The remaining shim types (`RelationIndex`, `VectorIndex`) are the contract types re-exported by `app.objects`; relocating them and migrating `membership_store` are bounded follow-ups.
 
-**Recommended cleanup:** One issue per package area (agents, ingest+indexer, cli, tests/fakes). Do not attempt in a single PR. See [Cleanup follow-ups](#cleanup-follow-ups).
+**Recommended cleanup:** One bounded issue to move `relation_index.py`/`vector_index.py` types into `app/objects` and migrate `membership_store`; then delete the package. See [Cleanup follow-ups](#cleanup-follow-ups).
 
 ---
 
@@ -123,9 +123,8 @@ Issues recommended by the 2026-05-18 audit. Each is bounded and safe to implemen
 | Issue | Scope | Blocker |
 | --- | --- | --- |
 | ~~Remove `app/agent` + `app/plugins`~~ | **Done** — removed in #1171 (2026-05-22) | — |
-| Migrate `app/store` callers — agents area | Update `app/agents/**` to import from `app/stores` or canonical boundaries instead of `app.store.object_store` | `DomainObject` must be re-exported from a stable location first |
-| Migrate `app/store` callers — ingest + indexer area | Update `app/ingest/`, `app/indexer/`, `app/services/indexer.py`, `app/promotion/consumer.py` | Same as above |
-| Migrate `app/store` callers — cli + domain area | Update `app/cli/`, `app/domain/plan.py`, `app/orchestrator/executor.py`, `app/watcher/vault_watcher.py` | Same as above |
+| ~~Migrate `app.store.object_store` callers + delete the legacy writers~~ | **Done** — KERNEL-03 (#2765): callers import `app.objects`; `object_store.py`/`vector_store.py` deleted | — |
+| Migrate remaining `app/store` shims | Move `relation_index.py`/`vector_index.py` contract types into `app/objects`; migrate `membership_store.py` off direct DB writes; delete `app/store` | Bounded; guard tests in `tests/architecture/` must be updated in the same change |
 These issues are not yet created in GitHub. When created, they should be `type:refactor`, scoped to one area each, and carry explicit `Verify:` targets before being marked `agent:ready`.
 
 ---

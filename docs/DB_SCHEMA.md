@@ -182,6 +182,15 @@ there is no `search_vector` column anywhere in the schema (active or legacy).
 - `created_at` (`timestamptz`, default `now()`)
 
 ### `embeddings` (legacy)
+
+KERNEL-03 (#2765) caller inventory: the only store-layer code path writing this table
+(`app/store/vector_store.py`) had zero callers and was deleted; no writer of `embeddings` remains
+anywhere in `app/` (guard:
+`tests/architecture/test_single_store_writer.py::test_one_writer_per_table` asserts zero writers).
+One read reference remains: `app/jobs/backfill.py` uses a `NOT EXISTS (... FROM embeddings ...)`
+predicate when selecting objects to backfill. Table removal itself belongs to KERNEL-04 (#2766),
+which must resolve that read reference when deciding the drop.
+
 - `id` (`uuid`, PK; default varies by migration)
 - `object_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`)
 - `chunk_id` (`uuid`, nullable FK → `chunks.id`, `ON DELETE CASCADE`)

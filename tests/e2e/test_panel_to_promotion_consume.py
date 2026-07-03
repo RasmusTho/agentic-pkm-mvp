@@ -12,7 +12,7 @@ from app.agents.panel_agent.runtime import execute_panel_intent
 from app.events.types import PROMOTE_DONE, PROMOTE_INTENT_CREATED
 from app.observability.status_service import get_system_status
 from app.promotion.consumer import consume_promotion_intents
-from app.store import object_store as object_store_module
+from app import objects as object_store_module
 from app.objects import DomainObject, ObjectStore
 
 pytestmark = pytest.mark.not_pg

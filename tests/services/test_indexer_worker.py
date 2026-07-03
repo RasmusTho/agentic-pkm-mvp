@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from uuid import UUID
 
 from app.services.indexer import handle_ingest_object_created
-from app.store import object_store as object_store_module
+from app import objects as object_store_module
 from app.objects import ObjectStore
 
 

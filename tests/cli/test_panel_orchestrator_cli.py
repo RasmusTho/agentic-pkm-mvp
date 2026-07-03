@@ -15,7 +15,7 @@ from app.agents.panel_agent.runtime import execute_panel_intent
 from app.events.panel import NoteRef, PanelActionMapping, PanelIntentAction, PanelInfo
 from app.planner.schema import Plan, PlanMetadata, PlanStep
 from app.cli import cli
-from app.store import object_store as object_store_module
+from app import objects as object_store_module
 from app.objects import DomainObject, ObjectStore
 from app.stores.plan_store import get_plan_store, reset_plan_store
 

@@ -81,7 +81,7 @@ def test_doctor_reports_indexed(tmp_path, monkeypatch) -> None:
     reset_diagnose_cache()
     monkeypatch.setenv("EMBED_MODEL", "embed-test")
     try:
-        import app.store.object_store as legacy_object_store
+        import app.objects as legacy_object_store
 
         legacy_object_store._MEMORY_STORE.clear()
 

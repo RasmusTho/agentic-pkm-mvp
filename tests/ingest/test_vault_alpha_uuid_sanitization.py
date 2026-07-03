@@ -24,7 +24,10 @@ class _DummySearchStore:
 
 
 def test_invalid_frontmatter_uuid_generates_uuid4(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("STORE_BACKEND", "pg")
+    # Explicit memory backend (KERNEL-03, #2765): the DomainObject facade write
+    # in _ingest_single fails loud on an unconfigured pg backend; this test
+    # exercises uuid sanitization, not the store backend.
+    monkeypatch.setenv("STORE_BACKEND", "memory")
 
     vault_root = tmp_path / "vault"
     note_dir = vault_root / "Inbox"

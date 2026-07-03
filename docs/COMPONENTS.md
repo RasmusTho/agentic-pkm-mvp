@@ -43,6 +43,17 @@ Environment note:
 - **VectorIndex (memory/pg)** — Embedding storage + similarity search. Maturity: Baseline. See `docs/EMBEDDINGS.md` for the embedding contract.
 - **RelationIndex (memory/pg)** — Relation graph storage for typed links and provenance edges. Maturity: Baseline.
 
+Single store generation (KERNEL-03, #2765):
+
+- `app/stores/*` is the only write generation for the durable store tables; the legacy
+  `app/store/object_store.py` / `app/store/vector_store.py` writers were removed. `DomainObject`
+  and the `ObjectStore` facade are owned by `app/objects` and write through the
+  `app.stores` provider seam only (guard: `tests/architecture/test_single_store_writer.py`).
+- Backend resolution is fail-loud: the in-memory backend requires an explicit
+  `STORE_BACKEND=memory`, and a configured-but-unreachable Postgres (`DATABASE_URL`/`DB_DSN`)
+  raises at first store access instead of silently degrading to volatile in-memory state
+  (guard: `tests/stores/test_provider_fail_loud.py`).
+
 ## File-based system artifacts
 
 - **Companion Note** — First-class system artifact linked 1:1 with a tracked vault note in the

@@ -7,7 +7,6 @@ from functools import lru_cache
 from typing import Literal, Tuple
 
 from app.db.dsn import resolve_dsn
-from app.settings import settings
 
 from .base import ObjectStore, RelationIndex, VectorIndex
 from .memory import MemoryObjectStore, MemoryRelationIndex, MemoryVectorIndex
@@ -31,39 +30,61 @@ class StorePortBinding:
     contract: str = "StorePort"
 
 
-def _pg_reachable(dsn: str) -> bool:
-    if not dsn:
-        return False
+def _require_pg_reachable(dsn: str) -> None:
+    """Raise when the configured Postgres DSN cannot be reached.
+
+    Fail-loud contract (KERNEL-03 / audit invariant I-S4): a configured but
+    unreachable database must never silently degrade to a volatile in-memory
+    store.
+    """
     normalized = resolve_dsn(dsn)
     if not normalized:
-        return False
+        raise RuntimeError(
+            "Store backend resolution failed: the configured Postgres DSN is empty "
+            "after normalization. Fix DATABASE_URL/DB_DSN or set STORE_BACKEND explicitly."
+        )
     try:
         import psycopg
 
         conn = psycopg.connect(normalized, connect_timeout=1)
         conn.close()
-        return True
     except Exception as exc:
-        logger.warning("Postgres unreachable during store auto-detect: %s", exc)
-        return False
+        logger.error("Postgres configured but unreachable during store resolution: %s", exc)
+        raise RuntimeError(
+            "Store backend resolution failed: Postgres is configured "
+            "(DATABASE_URL/DB_DSN) but unreachable. Refusing to fall back to a "
+            f"volatile in-memory store. Underlying error: {exc}"
+        ) from exc
 
 
 def _resolve_backend() -> str:
     global _LAST_RESOLVED_BACKEND
     override = os.getenv("STORE_BACKEND")
     normalized_override = (override or "").strip().lower()
-    dsn = os.getenv("DATABASE_URL", "").strip()
-    if override:
+    dsn = resolve_dsn()
+    if normalized_override:
+        # Fail-loud contract (KERNEL-03 / I-S4): validate the override at the
+        # resolution seam so a typo'd backend ('postgres', 'pgvector') raises
+        # here — never a silent memory route, and never a bogus label reported
+        # by resolve_store_backend() consumers (e.g. index-rebuild receipts).
+        if normalized_override not in {"memory", "pg"}:
+            raise RuntimeError(
+                f"Store backend '{normalized_override}' is not supported: set STORE_BACKEND "
+                "to 'pg' or 'memory' (explicit opt-in to volatile state), or unset it to "
+                "resolve from DATABASE_URL/DB_DSN."
+            )
         _LAST_RESOLVED_BACKEND = (normalized_override, dsn, normalized_override)
         return normalized_override
 
-    if _pg_reachable(dsn):
-        _LAST_RESOLVED_BACKEND = (normalized_override, dsn, "pg")
-        return "pg"
+    if not dsn:
+        raise RuntimeError(
+            "No store backend configured: set STORE_BACKEND=memory explicitly for the "
+            "volatile in-memory backend, or configure DATABASE_URL/DB_DSN for Postgres."
+        )
 
-    backend = getattr(settings, "store_backend", "memory").lower()
-    _LAST_RESOLVED_BACKEND = (normalized_override, dsn, backend)
-    return backend
+    _require_pg_reachable(dsn)
+    _LAST_RESOLVED_BACKEND = (normalized_override, dsn, "pg")
+    return "pg"
 
 
 @lru_cache(maxsize=1)
@@ -97,7 +118,7 @@ def resolve_store_backend() -> str:
 def resolved_store_backend_hint() -> str | None:
     """Return the current store backend only if it is already known without probing."""
     override = (os.getenv("STORE_BACKEND") or "").strip().lower()
-    dsn = os.getenv("DATABASE_URL", "").strip()
+    dsn = resolve_dsn()
     if _LAST_RESOLVED_BACKEND is None:
         return None
     cached_override, cached_dsn, backend = _LAST_RESOLVED_BACKEND

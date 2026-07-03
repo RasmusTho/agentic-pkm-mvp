@@ -13,7 +13,7 @@ import click
 from app.components.embeddings import EmbeddingIdentity, get_embedding_client
 from app.index.artifact_metadata import build_indexed_unit_payload
 from app.llm.embed_queue import EmbedDeadLetterError, embed_with_retry
-from app.store import object_store as legacy_store
+from app import objects as domain_objects
 from app.stores import get_vector_index, resolve_store_backend
 
 FAILURES_PATH_ENV = "INDEX_REBUILD_FAILURES_PATH"
@@ -46,8 +46,8 @@ def _extract_text(payload: dict | None) -> str:
     return ""
 
 
-def _load_objects(limit: int | None) -> Tuple[List[legacy_store.DomainObject], str]:
-    store = legacy_store.ObjectStore()
+def _load_objects(limit: int | None) -> Tuple[List[domain_objects.DomainObject], str]:
+    store = domain_objects.ObjectStore()
     objects = store.list_objects(limit=limit or 1000000)
     backend = resolve_store_backend()
     table = "memory" if backend == "memory" else "store_objects"
@@ -153,7 +153,7 @@ def _record_failure(
     summary: Dict[str, object],
     path: Path,
     identity: Dict[str, object],
-    domain_obj: legacy_store.DomainObject,
+    domain_obj: domain_objects.DomainObject,
     stage: str,
     exc: Exception,
     attempts: int,
@@ -509,7 +509,7 @@ def reconcile(
         kind = str(row.get("kind") or "note")
         source_ref = str(row.get("source_ref") or "")
         vector_payload = dict(row.get("payload") or {})
-        domain_obj = legacy_store.DomainObject(
+        domain_obj = domain_objects.DomainObject(
             uuid=str(object_id),
             kind=kind,
             source_ref=source_ref,

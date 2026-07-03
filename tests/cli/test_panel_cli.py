@@ -8,7 +8,7 @@ from uuid import uuid4
 from click.testing import CliRunner
 
 from app.cli import cli
-from app.store import object_store as object_store_module
+from app import objects as object_store_module
 from app.objects import DomainObject, ObjectStore
 
 

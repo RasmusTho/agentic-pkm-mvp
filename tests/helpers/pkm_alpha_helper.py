@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict
 from uuid import UUID
 
-import app.store.object_store as legacy_store
+import app.objects as legacy_store
 from app.ingest.vault_root import _ingest_file
 from app.observability.log import with_trace_id
 from app.stores import get_object_store, reset_store_backends
