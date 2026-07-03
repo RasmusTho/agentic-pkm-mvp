@@ -206,7 +206,7 @@ Original EmbeddingIdentity and EmbeddingClientProtocol preserved. Legacy code co
 
 ## Test Coverage
 
-See `tests/components/embeddings/` — currently 15 test modules.
+See `tests/components/embeddings/` for the current test modules.
 
 ## Known Providers
 
@@ -243,7 +243,7 @@ app/components/embeddings/
     ├── mock.py                 # MockEmbeddings
     └── local.py                # LocalEmbeddings
 
-tests/components/embeddings/     # see tests/components/embeddings/ — currently 15 test modules
+tests/components/embeddings/     # test modules for this component
 ```
 
 ## Usage Examples
