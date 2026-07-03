@@ -3,7 +3,7 @@ Doc role: Reference
 Authority: Human-readable snapshot of the current database schema and DB outbox bootstrap; migrations and bootstrap code remain the executable source of truth.
 Temporal class: operational
 Source of truth: code
-Last verified against: app/stores/pg.py (2026-06-30)
+Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kernel04_store_schema_in_migrations.py (2026-07-03)
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -14,9 +14,13 @@ Last verified against: app/stores/pg.py (2026-06-30)
 # DB Schema (Current Reality)
 
 ## Source Of Truth
-- Runtime DDL in `app/stores/pg.py` (`_ensure_tables()`) defines the **active store** tables
-  (`store_objects`, `store_vector_index`, `store_relations`, `store_relation_memberships`,
-  `vector_index_meta`). These are created at runtime, **not** by Alembic.
+- The **active store** tables (`store_objects`, `store_vector_index`, `store_relations`,
+  `store_relation_memberships`, `vector_index_meta`) are **migration-owned** (KERNEL-04, #2766):
+  Alembic revision `c2766a04d001` creates them, and `app/stores/pg.py::_ensure_tables()` is
+  assert-only outside tests — a Postgres runtime with a missing store table raises with a
+  "run migrations" hint instead of creating schema. Test fixtures opt in to create-on-demand via
+  `STORE_SCHEMA_AUTOCREATE=1`. Schema parity between the migration and the audited
+  `_ensure_tables()` shape is asserted by `tests/migrations/test_store_schema_parity.py`.
 - `app/services/outbox.py` (`bootstrap()`) defines the **DB outbox** table (canonical queue) at runtime.
 - Alembic migrations under `app/alembic/versions/` define the legacy AMG-core
   (`objects`/`chunks`/`embeddings`/...) lineage; see "Historical migration lineage" below. Most of
@@ -76,9 +80,11 @@ Instead they are:
 
 ## Core Tables (Store)
 
-The active store tables are created by runtime DDL in `app/stores/pg.py` (`_ensure_tables()`), not by
-Alembic. The shapes below mirror that code (verified per the `Last verified against` frontmatter).
-They remain mirror/projection surfaces and do not hold semantic authority over the note contract.
+The active store tables are migration-owned: created by Alembic revision `c2766a04d001`
+(KERNEL-04, #2766), with `app/stores/pg.py::_ensure_tables()` asserting their presence (and running
+the idempotent identity **data** backfill) rather than creating schema outside tests. The shapes
+below mirror the migration (verified per the `Last verified against` frontmatter). They remain
+mirror/projection surfaces and do not hold semantic authority over the note contract.
 
 ### `store_objects`
 - `object_id` (`uuid`, PK)
@@ -181,15 +187,20 @@ there is no `search_vector` column anywhere in the schema (active or legacy).
 - `text` (`text`)
 - `created_at` (`timestamptz`, default `now()`)
 
-### `embeddings` (legacy)
+### `embeddings` (legacy, **deprecated — kept, not dropped**)
 
 KERNEL-03 (#2765) caller inventory: the only store-layer code path writing this table
 (`app/store/vector_store.py`) had zero callers and was deleted; no writer of `embeddings` remains
 anywhere in `app/` (guard:
 `tests/architecture/test_single_store_writer.py::test_one_writer_per_table` asserts zero writers).
-One read reference remains: `app/jobs/backfill.py` uses a `NOT EXISTS (... FROM embeddings ...)`
-predicate when selecting objects to backfill. Table removal itself belongs to KERNEL-04 (#2766),
-which must resolve that read reference when deciding the drop.
+
+KERNEL-04 (#2766) decision: the table is **deprecated in this document and NOT dropped**; the
+`c2766a04d001` migration intentionally does not touch it, because the zero-**readers**
+precondition is not met — one read reference remains (`app/jobs/backfill.py` uses a
+`NOT EXISTS (... FROM embeddings ...)` predicate when selecting objects to backfill, and
+`view_chunks_missing_embeddings` reads it). The drop is a named follow-up recorded on issue
+#2766: remove/replace the backfill read predicate and the view, then drop `embeddings` in its
+own forward-only migration.
 
 - `id` (`uuid`, PK; default varies by migration)
 - `object_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`)
@@ -243,8 +254,9 @@ Interpretation:
 - but the event payload is still an operational artifact layer rather than the whole domain model.
 
 ## Explicit Deltas / Known Gaps
-- The primary runtime store is the `store_*` set defined by runtime DDL in `app/stores/pg.py`
-  (`_ensure_tables()`). The AMG-core tables under `app/alembic/versions/` are mostly legacy lineage,
+- The primary runtime store is the `store_*` set, migration-owned since Alembic revision
+  `c2766a04d001` (KERNEL-04; `_ensure_tables()` is assert-only outside tests). The AMG-core tables
+  under `app/alembic/versions/` are mostly legacy lineage,
   **except `objects` and `decisions`, which are still on the active runtime path** (vault ingest →
   `PgObjects.upsert` INSERTs into `objects`; `app/services/decisions.py` reads/writes `decisions`);
   `chunks`/`embeddings`/`membership` are touched by the backfill job and `membership_store`. An earlier

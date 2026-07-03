@@ -12,11 +12,38 @@ from psycopg.rows import dict_row
 
 from app.components.embeddings import EmbeddingIdentity, get_embedding_identity
 from app.db.dsn import resolve_dsn
+from app.db.errors import StoreSchemaMissingError
 from app.embedding_config import coerce_floats, l2_normalize
 
 from .base import ObjectStore, RelationIndex, RelationMembership, VectorIndex
 
 _TABLES_READY = False
+
+# The five migration-owned store tables (Alembic revision c2766a04d001).
+_STORE_TABLES = (
+    "store_objects",
+    "store_vector_index",
+    "store_relations",
+    "store_relation_memberships",
+    "vector_index_meta",
+)
+
+# store_vector_index identity columns the migration guarantees.
+_IDENTITY_COLUMNS = ("dim", "model", "provider", "normalize")
+
+_MIGRATION_HINT = (
+    "Store schema is migration-owned (KERNEL-04, #2766): run 'alembic upgrade head' "
+    "against this database. See docs/DB_SCHEMA.md :: store tables."
+)
+
+
+def _schema_autocreate_enabled() -> bool:
+    """Explicit test-fixture opt-in for create-on-demand schema.
+
+    Production/runtime Postgres never auto-creates store tables; only test
+    environments set STORE_SCHEMA_AUTOCREATE=1 (see tests/conftest.py).
+    """
+    return (os.getenv("STORE_SCHEMA_AUTOCREATE") or "").strip().lower() in {"1", "true", "yes"}
 
 
 def _dsn() -> str:
@@ -35,8 +62,21 @@ def _connect():
 
 
 def _ensure_tables() -> None:
+    """Assert (or, in tests, create) the migration-owned store schema.
+
+    Outside tests this is assert-only (KERNEL-04, #2766): a missing store
+    table or identity column raises ``StoreSchemaMissingError`` with a
+    "run migrations" hint instead of creating schema imperatively. The
+    idempotent per-row **data** repairs (`_run_data_repairs`: dim backfill +
+    identity backfill) always run — data repair, not DDL. Test fixtures set
+    STORE_SCHEMA_AUTOCREATE=1 to keep create-on-demand for scratch databases.
+    """
     global _TABLES_READY
     if _TABLES_READY:
+        return
+    if not _schema_autocreate_enabled():
+        _assert_tables()
+        _TABLES_READY = True
         return
     with _connect() as conn:
         with conn.cursor() as cur:
@@ -100,14 +140,72 @@ def _ensure_tables() -> None:
                 """
             )
             cur.execute("ALTER TABLE store_vector_index ADD COLUMN IF NOT EXISTS dim INTEGER")
-            cur.execute("UPDATE store_vector_index SET dim = array_length(embedding, 1) WHERE dim IS NULL")
             # Phase A (EMBEDREL-06): per-vector full embedding identity columns.
             # `model` and `dim` already exist; add `provider` and `normalize` so every
             # row records the complete (provider, model, dim, normalize) identity tuple.
             cur.execute("ALTER TABLE store_vector_index ADD COLUMN IF NOT EXISTS provider TEXT")
             cur.execute("ALTER TABLE store_vector_index ADD COLUMN IF NOT EXISTS normalize BOOLEAN")
-            _backfill_identity_columns(cur)
+            _run_data_repairs(cur)
     _TABLES_READY = True
+
+
+def _assert_tables() -> None:
+    """Fail loud when the migration-owned store schema is absent.
+
+    Raises ``StoreSchemaMissingError`` — classified transient by the outbox
+    worker dispatch path (`_is_transient_dispatch_error`): schema-missing is a
+    boot-ordering condition on a fresh stack (alembic runs in api/agent-service
+    boot; worker/watcher depend only on db), so it must crash-retry under
+    supervision, never spend poison budget or dead-letter.
+    """
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            missing_tables: list[str] = []
+            for table in _STORE_TABLES:
+                cur.execute("SELECT to_regclass(%s) AS oid", (table,))
+                row = cur.fetchone()
+                if not (row and row.get("oid")):
+                    missing_tables.append(table)
+            if missing_tables:
+                raise StoreSchemaMissingError(
+                    f"Missing store table(s) {missing_tables} in the configured Postgres. "
+                    f"{_MIGRATION_HINT}"
+                )
+            # Schema-scope the column check to match to_regclass resolution
+            # (first schema on search_path): an unfiltered information_schema
+            # query could see a same-named table in another schema and mask a
+            # genuinely missing column, or fail on a complete one.
+            cur.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = current_schema() AND table_name = 'store_vector_index'
+                """
+            )
+            present = {row["column_name"] for row in cur.fetchall()}
+            missing_columns = [col for col in _IDENTITY_COLUMNS if col not in present]
+            if missing_columns:
+                raise StoreSchemaMissingError(
+                    f"store_vector_index is missing identity column(s) {missing_columns}. "
+                    f"{_MIGRATION_HINT}"
+                )
+            # Idempotent data repair (not DDL) — same repairs the old boot path ran.
+            _run_data_repairs(cur)
+
+
+def _run_data_repairs(cur) -> None:
+    """Idempotent per-row data repairs (data, never DDL) run at store preflight.
+
+    Runs in both the assert-only path and the test-only autocreate path so the
+    migration-owned posture loses no repair the old create-on-boot path
+    performed:
+
+    - `dim` backfill: legacy environments hold rows written before the `dim`
+      column existed; `PgVectorIndex.search` filters `WHERE dim = %s`, so a
+      NULL-dim row would silently vanish from retrieval (I-S3 class).
+    - provider/normalize identity backfill (`_backfill_identity_columns`).
+    """
+    cur.execute("UPDATE store_vector_index SET dim = array_length(embedding, 1) WHERE dim IS NULL")
+    _backfill_identity_columns(cur)
 
 
 def _backfill_identity_columns(cur) -> None:
