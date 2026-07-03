@@ -2,7 +2,7 @@
 name: Observability Stabilization (Fas 0)
 description: Make the always-on health signals tell the truth, give the operator one real alert path, stop the silent audit lie, and make the running commit observable.
 parent_capability: Observability Stabilization
-state: Spec lane — parent feature issue + child slices to be filed.
+state: Implemented. Parent feature issue #2597 filed; all 11 children (#2598-#2604, #2615-#2618) closed. Parent #2597 remains open by design pending operator test-deploy acknowledgment.
 source: ULTRACODE health/telemetry/observability audit 2026-06-27 (owner decisions in audit §1b Beslutslogg)
 ---
 
@@ -70,22 +70,22 @@ These invariants hold *across* tasks; a breakdown whose tasks are each locally c
 
 ## Relationship to GitHub Issues
 
-- **Parent feature issue:** [#2597](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2597) — validation hub, `agent:blocked` while child slices are open. See `PARENT_FEATURE_ISSUE.md`.
+- **Parent feature issue:** [#2597](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2597) — validation hub, open by design pending operator test-deploy acknowledgment; all child slices are closed. See `PARENT_FEATURE_ISSUE.md`.
 - **Child issues** (filed from the specs; spec is the source of truth, issues track pickup):
 
   | Task | Issue | Agent state |
   |---|---|---|
-  | OBSSTAB-01 READINESS_REFLECTS_DEPENDENCIES | [#2598](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2598) | ready |
-  | OBSSTAB-02 CONTAINER_HEALTH_SIGNALS | [#2599](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2599) | blocked (after -01) |
-  | OBSSTAB-03 AUDIT_WRITER_STOPS_LYING | [#2600](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2600) | ready |
-  | OBSSTAB-04 SCHEDULED_PROBE_AND_PUSH_ALERT | [#2601](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2601) | blocked (after -01) |
-  | OBSSTAB-05 RUNTIME_VERSION_MARKER | [#2602](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2602) | ready |
-  | OBSSTAB-06 FALSE_GREEN_REGISTER_AND_DOC_TRUTH | [#2603](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2603) | ready |
-  | OBSSTAB-07 DEV_DB_SNAPSHOT_RESTORE | [#2604](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2604) | ready |
-  | OBSSTAB-08 OPERATOR_HEALTH_GLYPH_AMBIENT | [#2615](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2615) | ready (P0, operator-facing primary) |
-  | OBSSTAB-09 OPERATOR_DRAWER_RENDERS_LOADBEARING_HEALTH | [#2616](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2616) | ready |
-  | OBSSTAB-10 OPERATOR_DRAWER_SHOWS_BACKLOG | [#2617](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2617) | ready |
-  | OBSSTAB-11 UI_HEALTHZ_NOT_FALSE_GREEN | [#2618](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2618) | ready |
+  | OBSSTAB-01 READINESS_REFLECTS_DEPENDENCIES | [#2598](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2598) | closed (delivered 2026-06-28) |
+  | OBSSTAB-02 CONTAINER_HEALTH_SIGNALS | [#2599](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2599) | closed (delivered 2026-06-28) |
+  | OBSSTAB-03 AUDIT_WRITER_STOPS_LYING | [#2600](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2600) | closed (delivered 2026-06-28) |
+  | OBSSTAB-04 SCHEDULED_PROBE_AND_PUSH_ALERT | [#2601](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2601) | closed (delivered 2026-06-28) |
+  | OBSSTAB-05 RUNTIME_VERSION_MARKER | [#2602](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2602) | closed (delivered 2026-06-28) |
+  | OBSSTAB-06 FALSE_GREEN_REGISTER_AND_DOC_TRUTH | [#2603](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2603) | closed (delivered 2026-06-28) |
+  | OBSSTAB-07 DEV_DB_SNAPSHOT_RESTORE | [#2604](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2604) | closed (delivered 2026-06-28) |
+  | OBSSTAB-08 OPERATOR_HEALTH_GLYPH_AMBIENT | [#2615](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2615) | closed (delivered 2026-06-28) |
+  | OBSSTAB-09 OPERATOR_DRAWER_RENDERS_LOADBEARING_HEALTH | [#2616](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2616) | closed (delivered 2026-06-28) |
+  | OBSSTAB-10 OPERATOR_DRAWER_SHOWS_BACKLOG | [#2617](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2617) | closed (delivered 2026-06-28) |
+  | OBSSTAB-11 UI_HEALTHZ_NOT_FALSE_GREEN | [#2618](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2618) | closed (delivered 2026-06-28) |
 
 - **Cross-links:** `OBSSTAB-05` (#2602) complements #2527 (prod-runs-dirty-main, governance) — it makes the running commit observable, it does not replace the deploy-source-of-truth reconciliation. #2589 (healthy-services-but-fails) is a related false-green symptom.
 

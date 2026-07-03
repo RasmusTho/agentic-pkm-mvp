@@ -79,5 +79,4 @@ capability vault-first and non-authoritative.
 
 ## Related GitHub Issues
 
-Filed as one `agent:ready` issue (design/concept-contract task). The owner shapes the contracts in PR
-review; do not over-split — one coherent design pass produces both contracts.
+Filed as #1922; closed 2026-06-13.

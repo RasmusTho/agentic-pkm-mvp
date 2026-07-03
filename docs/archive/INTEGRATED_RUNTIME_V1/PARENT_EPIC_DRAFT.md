@@ -89,7 +89,7 @@ Core candidate outcomes:
 ### Acceptance Criteria
 
 - [ ] V1 scope is classified: each candidate capability is `core`, `optional`, `experimental`, or `out of scope`.
-  Verify: scope table in `docs/INTEGRATED_RUNTIME_V1/README.md` or successor owner spec.
+  Verify: scope table in `docs/archive/INTEGRATED_RUNTIME_V1/README.md` or successor owner spec.
 - [ ] System Entry Point release substrate is closed or explicitly blocked by named residual issues.
   Verify: #1782/#1795/#1851 state plus owner-doc/status writeback.
 - [ ] Companion UI route parity is enforced for every active v1-visible control.
@@ -166,7 +166,7 @@ Create the v1 scope matrix, using the evidence pack and errata. Include System E
 
 #### Acceptance Criteria
 - [ ] Every candidate capability has one v1 class and rationale.
-  Verify: `docs/INTEGRATED_RUNTIME_V1/README.md` or successor owner spec contains a complete scope table.
+  Verify: `docs/archive/INTEGRATED_RUNTIME_V1/README.md` or successor owner spec contains a complete scope table.
 - [ ] No future v6.1 capability is smuggled into core v1 without a release gate.
   Verify: out-of-scope/non-goals section names deferred v6.1+ surfaces.
 - [ ] Proportional governance is linked as deferred.

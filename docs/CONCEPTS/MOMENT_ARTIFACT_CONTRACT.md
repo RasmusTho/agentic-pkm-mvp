@@ -1,11 +1,11 @@
-State: Concept contract (forward line; not yet shipped) — defines the "moment" as a first-class vault-native artifact for the Contextual Relevance Engine.
+State: Concept contract — Implemented. Delivered by CRE-01..CRE-04 (#1922-#1925, closed 2026-06-13); defines the "moment" as a first-class vault-native artifact for the Contextual Relevance Engine, live in `app/relevance/*`.
 Doc role: Core SoT (moment artifact)
 Authority: Canonical definition of the moment artifact — its vault home, schema, provenance, receipt, lifecycle, and non-authoritative projection. Subordinate to the human-need brief `docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md` and to the artifact, companion-note, receipt, and cognitive-load contracts it composes; it does not override current runtime truth in `docs/STATUS.md` / `docs/ARCHITECTURE.md`. The relevance evaluator that *produces* moments and the scarcity gate that decides *whether to reach out* are defined separately (CRE-02); this contract defines only the artifact they exchange.
 Owner: Product / Contextual Relevance Engine capability authority
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md
-Last reviewed: 2026-06-13
+Last reviewed: 2026-07-02
 Last verified against: docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, docs/CONCEPTS/CONTEXT_AND_ARTIFACT_DIMENSIONS.md, docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md, docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md, docs/CONCEPTS/ARTIFACT_MODEL_AND_LIFECYCLES.md, docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md, docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md, docs/COGNITIVE_LOAD_PROJECTION_LAYER.md
 
 # Moment Artifact Contract

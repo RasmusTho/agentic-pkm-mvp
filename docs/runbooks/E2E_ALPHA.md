@@ -12,6 +12,9 @@ This document defines the end-to-end runtime contract for Alpha: the watcher det
   - `VAULT_RUNTIME_DIR_REL` (if unset, resolved from system settings)
 
 ## Canonical Flow
+
+> **Legacy caveat:** `make alpha-up` is marked **Legacy** in `docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md` (§Startup path selection) — it runs `scripts/start_full_system.sh` without explicit compose file, project name, or `PKM_ENVIRONMENT` binding. Do not use it for new prod startups; use `make prod-start-full` instead. It remains valid for this E2E contract's own alpha-scoped verification flow below.
+
 Run these in order:
 
 ```bash

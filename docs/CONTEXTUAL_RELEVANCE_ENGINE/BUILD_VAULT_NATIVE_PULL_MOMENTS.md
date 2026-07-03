@@ -69,5 +69,4 @@ proactivity is built on top.
 
 ## Related GitHub Issues
 
-Filed as `agent:blocked` (on CRE-01, CRE-02). Becomes `agent:ready` when both contracts merge. May
-split into more than one issue if the evaluator and the now-surface render are large.
+Filed as #1924; closed 2026-06-13.

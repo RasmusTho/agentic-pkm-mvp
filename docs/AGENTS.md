@@ -1,4 +1,11 @@
 State: SoT v5.5 Reality-MVP baseline locked (watcher/panel safety + concurrency guardrails) with the forward line now tracking v5.6 (LangGraph + Reasoning rollouts). This document defines system-level agent architecture and coordination patterns.
+Doc role: Core SoT
+Authority: Canonical system-level agent architecture and coordination-pattern contract: shared agent design principles, the cross-agent matrix, LangGraph/AgentState direction, and coordination via Outbox, Planner, and A2A envelopes. Downstream of `docs/HUMAN-FLOWS.md` and `docs/AGENT-FLOWS.md` on agent-facing function; `docs/STATUS.md` and `docs/ARCHITECTURE.md` win on current runtime truth.
+Owner: Product / system architecture
+Temporal class: strategic
+Review cadence: event-driven
+Source of truth: mixed
+Last reviewed: 2026-07-02
 # Agents
 
 This document covers the system-level view of agents in the current architecture:
@@ -29,8 +36,9 @@ For the canonical ontology of `System Agent`, `Agent Role`, `Delegation`, `Autho
 
 This document is about agents that exist inside the PKM system/runtime.
 It is not the instruction set for development-time builder agents or repo automation.
-Development-time guidance lives in the root `AGENTS.md`, `docs/development/DEV_WORKFLOW.md`, and
-`docs/plans/ONTOLOGY_EXECUTION_COORDINATION.md`.
+Development-time guidance lives in the root `AGENTS.md` and `docs/development/DEV_WORKFLOW.md`.
+(`docs/plans/ONTOLOGY_EXECUTION_COORDINATION.md` records the now-concluded ontology-alignment pass;
+historical context only, not active development-time guidance.)
 System-level design rules for modularity, capability composition, and documentation layering live in `docs/DESIGN_PRINCIPLES.md`.
 
 Use `docs/PANEL_AGENT.md` for PanelAgent-specific runtime behavior, panel syntax, emitted events, and wiring details.

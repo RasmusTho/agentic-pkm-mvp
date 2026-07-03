@@ -1,11 +1,11 @@
-State: Concept contract (forward line; not yet shipped) — defines the deterministic reach-out ladder + scarcity gate for the Contextual Relevance Engine (CRE-02, part 2 of 2).
+State: Concept contract — Implemented. Delivered by CRE-02/CRE-04 (#1923/#1925, closed 2026-06-13); defines the deterministic reach-out ladder + scarcity gate for the Contextual Relevance Engine (part 2 of 2), live in `app/relevance/*` and `app/watcher/relevance_tick.py`.
 Doc role: Core SoT (reach-out / scarcity gate)
 Authority: Canonical definition of the *deterministic gate* half of the engine — the graduated reach-out ladder, the context-dependent interruption threshold, the non-negotiable zero-tolerance floor, defer-not-drop suppression, and the mapping of effects onto the #1881 governance tiers. Subordinate to the human-need brief `docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md` and to the moment, receipt, and cognitive-load contracts it composes; does not override current runtime truth in `docs/STATUS.md` / `docs/ARCHITECTURE.md`. The *what to surface* decision is the separate, adaptive `docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md`.
 Owner: Product / Contextual Relevance Engine capability authority
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md
-Last reviewed: 2026-06-13
+Last reviewed: 2026-07-02
 Last verified against: docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/CONTEXT_AND_ARTIFACT_DIMENSIONS.md, docs/COGNITIVE_LOAD_PROJECTION_LAYER.md, docs/COMPANION_UI_COGNITIVE_LOAD_OPERATING_MODEL.md, docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md, docs/CAPABILITY_CONTRACT_MODEL.md
 
 # Reach-out and Scarcity Gate Contract

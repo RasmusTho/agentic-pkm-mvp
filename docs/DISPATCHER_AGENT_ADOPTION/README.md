@@ -6,17 +6,19 @@ authority: Canonical specification for dispatcher adoption — wiring, fallback 
 temporal_class: operational
 review_cadence: event-driven
 source_of_truth: mixed (code + AGENTS.md + issue-to-code skill)
-last_reviewed: 2026-04-25
+last_reviewed: 2026-07-02
 last_verified_against: docs/AGENT_ISSUE_DISPATCHER.md, app/dispatcher/cli.py, AGENTS.md, .codex/skills/issue-to-code/SKILL.md
 ---
 
 # Dispatcher Agent Adoption — Specification
 
+State: Implemented. Delivered by #637/#642/#639/#640 (parent #636, closed); see `docs/AGENT_ISSUE_DISPATCHER.md` for the live MVP + adoption contract.
+
 ## Purpose
 
-The local Agent Issue Dispatcher MVP is complete (all child issues #621–#625 merged). The dispatcher CLI exists and all primitives (init, queue, next, claim, heartbeat, release, block, events, pull-sync) are implemented. This specification defines the remaining work to make agents actually use it.
+The local Agent Issue Dispatcher MVP is complete (all child issues #621–#625 merged). The dispatcher CLI exists and all primitives (init, queue, next, claim, heartbeat, release, block, events, pull-sync) are implemented. This specification defined the post-MVP adoption work to make agents actually use it; that work is now delivered.
 
-The gap: no agent workflow (AGENTS.md, issue-to-code skill) calls the dispatcher. Agents still coordinate via GitHub label mutation alone, which gives no lease coordination, no heartbeat tracking, and no queue ordering.
+Delivered: `AGENTS.md` and `.codex/skills/issue-to-code/SKILL.md` both call the dispatcher (claim/heartbeat/complete) with an explicit GitHub-label-only fallback when the dispatcher is unavailable — see `docs/AGENT_ISSUE_DISPATCHER.md` §"Adoption Status".
 
 ## Capability boundary
 
@@ -42,27 +44,27 @@ COMPLETE_COMMAND            ─┤─→ FALLBACK_POLICY ─→ AGENT_WORKFLOW_I
 
 ## Acceptance criteria
 
-- [ ] `make dispatcher-init` initialises the DB and runs a pull-sync against open `agent:ready` issues.
-  Verify: `tests/dispatcher/test_bootstrap.py::test_make_dispatcher_init`
-- [ ] `make dispatcher-sync` re-syncs the queue without reinitialising.
-  Verify: `tests/dispatcher/test_bootstrap.py::test_make_dispatcher_sync`
-- [ ] `python -m app.dispatcher status --json` returns `db_exists: true` or a clear error if not initialised.
-  Verify: `tests/dispatcher/test_cli.py::test_status_not_initialized`
-- [ ] `python -m app.dispatcher complete <task_id> --agent <id>` marks the task completed and emits `task.completed`.
-  Verify: `tests/dispatcher/test_cli.py::test_complete_command`
-- [ ] `AGENTS.md` contains a Dispatcher policy section describing the agent loop, TTL, heartbeat cadence, and fallback rule.
-  Verify: doc writeback at `AGENTS.md :: dispatcher-policy`
-- [ ] `issue-to-code/SKILL.md` includes dispatcher claim/heartbeat/complete steps with explicit fallback path.
-  Verify: doc writeback at `.codex/skills/issue-to-code/SKILL.md :: dispatcher-integration`
-- [ ] An agent running issue-to-code calls `dispatcher claim` before starting work when the dispatcher is available.
-  Verify: adoption evidence in next 3 deliveries after merge (recorded on parent issue)
+- [x] `make dispatcher-init` initialises the DB and runs a pull-sync against open `agent:ready` issues.
+  Verify: `Makefile` targets `dispatcher-init`/`dispatcher-sync` (line ~356); shipped via #637 per `docs/AGENT_ISSUE_DISPATCHER.md`.
+- [x] `make dispatcher-sync` re-syncs the queue without reinitialising.
+  Verify: `Makefile` target `dispatcher-sync`; shipped via #637 per `docs/AGENT_ISSUE_DISPATCHER.md`.
+- [x] `python -m app.dispatcher status --json` returns `db_exists: true` or a clear error if not initialised.
+  Verify: `app/dispatcher/cli.py :: _cmd_status` (`db_exists` field); referenced live in `.codex/skills/issue-to-code/SKILL.md`.
+- [x] `python -m app.dispatcher complete <task_id> --agent <id>` marks the task completed and emits `task.completed`.
+  Verify: `app/dispatcher/cli.py :: _cmd_complete`; shipped as #642 per `docs/AGENT_ISSUE_DISPATCHER.md`.
+- [x] `AGENTS.md` contains a Dispatcher policy section describing the agent loop, TTL, heartbeat cadence, and fallback rule.
+  Verify: `AGENTS.md` §"Dispatcher policy" (line ~328).
+- [x] `issue-to-code/SKILL.md` includes dispatcher claim/heartbeat/complete steps with explicit fallback path.
+  Verify: `.codex/skills/issue-to-code/SKILL.md` dispatcher-first flow (claim/heartbeat/complete/fallback), lines ~135-157.
+- [x] An agent running issue-to-code calls `dispatcher claim` before starting work when the dispatcher is available.
+  Verify: three adoption receipts verified and logged on parent feature issue #636 per `docs/AGENT_ISSUE_DISPATCHER.md` §"Adoption Status".
 
 ## Validation / acceptance path
 
-Acceptance requires:
+Acceptance met:
 1. All four tasks merged with their per-task acceptance criteria green.
-2. Three consecutive issue-to-code deliveries where the dispatcher claim/heartbeat/complete loop is called (adoption evidence logged on the parent feature issue).
-3. Owner doc (`docs/AGENT_ISSUE_DISPATCHER.md`) updated to reflect dispatcher as active, not "contract approved for planning."
+2. Three consecutive issue-to-code deliveries where the dispatcher claim/heartbeat/complete loop was called (adoption evidence logged on parent feature issue #636).
+3. Owner doc (`docs/AGENT_ISSUE_DISPATCHER.md`) updated to reflect dispatcher as active ("MVP Implementation Status: SHIPPED", "Adoption Status: ACTIVE").
 
 ## Source anchors
 

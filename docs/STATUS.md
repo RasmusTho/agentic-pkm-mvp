@@ -19,7 +19,7 @@ present and any owner-doc promotion gate has been satisfied.
 
 Target SBS status note: `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` is adopted as target-state architecture for long-horizon subsystem boundaries and change-impact reasoning. It is not fully implemented. Current implementation may contain transition debt tracked through `docs/architecture/SBS_TRANSITION_DEBT.md`; operationalization is tracked through `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md`, `docs/ROADMAP.md`, tracking issue #2337, and delivery issue set #2355. Current shipped behavior remains owned by this file and `docs/ARCHITECTURE.md`.
 
-Integrated Runtime v1 release line: #1874 is open to integrate already-shipped capabilities through route parity, readiness matrix, Panel staging persistence, golden-path UAT, and negative-safety UAT gates without claiming new shipped behavior here.
+Integrated Runtime v1 release line: #1874 closed as completed 2026-06-12 (all 7 children #1851/#1875-#1880 delivered via PRs #1882-#1888), integrating already-shipped capabilities through route parity, readiness matrix, Panel staging persistence, golden-path UAT, and negative-safety UAT gates.
 
 Contextual Relevance Engine posture: CRE-01 and CRE-02 are delivered concept-contract slices;
 CRE-03 is shipped as the vault-native pull runtime slice, and CRE-04 is shipped for governed
@@ -375,7 +375,7 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 - Status summaries now expose instance provenance (`instance_id`, `instance_role`, `environment`) for runtime attribution; this does not change artifact identity or companion note identity semantics.
 - Production-facing path is the active current-state default; lab/dev-only flows remain explicitly non-production.
 - The local test stack can be started successfully against a separate test vault, and `uat-seed-vault-test` works.
-- The repo-supported local bootstrap/UAT path is still not fully self-contained end to end; several concrete blocker issues already exist for that work.
+- The repo-supported local bootstrap/UAT path is delivered end to end: tasks #331-#336 are closed and `make test-bootstrap` runs the resettable, reproducible, verified local test-vault flow (reset → init vault → start stack → verify → UAT assert) described in `docs/LOCAL_TEST_BOOTSTRAP/README.md`.
 - Issue #240 has a real-vault Alpha acceptance receipt recorded in `docs/PANEL_AGENT.md` after the 2026-04-08 server-side soak; that specific PanelAgent 2.0 acceptance gate is no longer pending.
 - iCloud sync transport chain is validated end-to-end (MacBook → Mac mini via CloudDocs); the `.git.nosync` + symlink fix (Issue #421) removed the root-cause CloudDocs upload-queue blocker. Parent feature #355 is closed COMPLETED with its final acceptance receipt posted on 2026-04-13; clean statistical timing measurement and Mac mini headless infrastructure hardening remain follow-up work in #432 and #433, not blockers for #355 closure.
 - The current docs-first stabilization wave is making the intended supported path explicit before further implementation continues.

@@ -1,4 +1,4 @@
-State: Plan (coordination contract for ontology-aligned execution across concurrent workstreams).
+State: Concluded/historical. The ontology-alignment pass this coordination contract supported has concluded; `docs/STATUS.md` no longer tracks it. Retained as context alongside `docs/plans/ONTOLOGY_ALIGNMENT_PLAN.md` and `docs/plans/ONTOLOGY_STATUS_NEXT_DECISIONS.md`.
 
 # Ontology Execution Coordination
 

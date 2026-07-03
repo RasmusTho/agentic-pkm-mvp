@@ -9,7 +9,7 @@ depends_on: [PERSIST_COMMITMENTS_AS_VAULT_ARTEFACTS.md]
 can_parallelize_with: []
 ---
 
-State: Specification for the read-only companion-route surface. Slice 2 of the COMMITMENT_SURFACING capability (parent #1960). Depends on slice 1. Code-affecting.
+State: Implemented. Delivered by PR #2097 (issue #2074, slice 2 of the COMMITMENT_SURFACING capability, parent hub #1960 closed 2026-06-18).
 
 # Expose Commitments In Companion Route
 

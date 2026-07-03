@@ -11,7 +11,7 @@ Last reviewed: 2026-06-16
 
 Coupling snapshot taken while landing the directional import-boundary contract (#2070, ADR-0013).
 The contract enforces one invariant — **nothing outside the interaction layer (`api`/`chat`/`cli`/`web`)
-may import it** — non-blocking on PRs. This file records the leaks that contract surfaces, the leaks
+may import it** — blocking on PRs since #2481 (2026-06-24). This file records the leaks that contract surfaces, the leaks
 it cannot yet see, and the shared-hub fan-out, each routed to a follow-up.
 
 ## A. Machine-enforced leaks (reported by `lint-imports --config importlinter.ini`)
@@ -56,5 +56,5 @@ De-coupling or re-homing the hubs is out of scope here; this row exists so growt
 
 - `docs/adr/ADR-0013-code-dependency-direction.md` — the governing decision
 - `importlinter.ini` — the enforced contract
-- `.github/workflows/import-linter.yaml` — non-blocking PR runner
+- `.github/workflows/import-linter.yaml` — blocking PR runner (flipped from advisory via #2481, 2026-06-24)
 - Follow-ups: #2083 (shared helpers), #2084 (obs↔cli cycle), #2085 (namespace packages)

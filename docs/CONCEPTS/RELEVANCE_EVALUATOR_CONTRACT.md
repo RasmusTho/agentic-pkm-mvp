@@ -1,11 +1,11 @@
-State: Concept contract (forward line; not yet shipped) — defines the adaptive relevance evaluator for the Contextual Relevance Engine (CRE-02, part 1 of 2).
+State: Concept contract — Implemented. Delivered by CRE-02 (#1923, closed 2026-06-13); defines the adaptive relevance evaluator for the Contextual Relevance Engine (part 1 of 2), live in `app/relevance/*`.
 Doc role: Core SoT (relevance evaluator)
 Authority: Canonical definition of the relevance evaluator — the *adaptive cognition* half of the engine that, given the context model, **produces** candidate moments (it does not enumerate them). Subordinate to the human-need brief `docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md` and to the moment, salience, capability-contract, and emergent-features contracts it composes; does not override current runtime truth in `docs/STATUS.md` / `docs/ARCHITECTURE.md`. The *whether/how to reach out* decision is a separate, deterministic contract — `docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md`.
 Owner: Product / Contextual Relevance Engine capability authority
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md
-Last reviewed: 2026-06-13
+Last reviewed: 2026-07-02
 Last verified against: docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md, docs/CAPABILITY_CONTRACT_MODEL.md, docs/EMERGENT_FEATURES_MODEL.md, docs/CONCEPTS/RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md
 
 # Relevance Evaluator Contract

@@ -1,4 +1,11 @@
-State: SoT v5.6 forward line kickoff (docs-first)
+State: Delivered plan snapshot. Historical kickoff plan with acceptance criteria for watchers auto-run, LangGraph rollout, and Orchestrator V2; current closure/follow-up truth lives in STATUS/ROADMAP.
+Doc role: Plan
+Authority: Historical kickoff plan, subordinate to `docs/STATUS.md` and `docs/ROADMAP.md` on shipped reality.
+Owner: Product / architecture forward line
+Temporal class: strategic
+Review cadence: event-driven
+Source of truth: mixed
+Last reviewed: 2026-02-05
 # SoT v5.6 Forward Line Kickoff
 
 ## Objective

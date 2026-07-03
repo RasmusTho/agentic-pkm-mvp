@@ -1,4 +1,4 @@
-State: Specification directory (capability source of truth) for reliable embedding ingestion.
+State: Specification directory (capability source of truth) for reliable embedding ingestion. Child slices EMBEDREL-01..06 (incl. #2752) are closed; parent hub #2292 remains OPEN pending a coordinator re-check (as of 2026-07-01). Do not claim the parent closed.
 
 # Embedding Reliability & Pluggable Provider
 
