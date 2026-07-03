@@ -206,15 +206,7 @@ Original EmbeddingIdentity and EmbeddingClientProtocol preserved. Legacy code co
 
 ## Test Coverage
 
-206 test functions across 8 test files:
-- `test_embedding_schema.py` (33 tests): Tag and embedding creation, validation, serialization
-- `test_embedding_provider_base.py` (20 tests): Provider ABC contract and behavior
-- `test_mock_embeddings.py` (24 tests): MockEmbeddings functionality
-- `test_local_embeddings.py` (23 tests): LocalEmbeddings with custom models
-- `test_validation.py` (30 tests): Tag validation and provider recognition
-- `test_audit.py` (31 tests): Counting, filtering, and distribution queries
-- `test_migration.py` (28 tests): Legacy tagging and provider migration
-- `test_integration.py` (17 tests): Multi-provider workflows and serialization
+See `tests/components/embeddings/` for the current test modules.
 
 ## Known Providers
 
@@ -251,17 +243,7 @@ app/components/embeddings/
     ├── mock.py                 # MockEmbeddings
     └── local.py                # LocalEmbeddings
 
-tests/components/embeddings/
-├── conftest.py
-├── test_embedding_schema.py
-├── test_embedding_provider_base.py
-├── test_mock_embeddings.py
-├── test_local_embeddings.py
-├── test_validation.py
-├── test_audit.py
-├── test_migration.py
-├── test_integration.py
-└── run_tests.py                # Standalone test runner
+tests/components/embeddings/     # test modules for this component
 ```
 
 ## Usage Examples
