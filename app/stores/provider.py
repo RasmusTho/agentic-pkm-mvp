@@ -6,16 +6,15 @@ from typing import Optional, Tuple
 
 import psycopg
 
+from app.db.dsn import resolve_dsn
+
 from .memory import MemoryObjects, MemoryDecisions
 from .postgres import PgObjects, PgDecisions
 from .base import ObjectsStore, DecisionsStore
 
 
 def _dsn() -> str:
-    url = os.environ.get("DATABASE_URL", "").strip()
-    if not url:
-        return ""
-    return url.replace("+psycopg", "")
+    return resolve_dsn()
 
 
 @lru_cache(maxsize=8)
@@ -24,12 +23,21 @@ def _resolved_backend(explicit: Optional[str], dsn: str) -> str:
         return explicit.lower()
 
     if not dsn:
-        return "memory"
+        raise RuntimeError(
+            "No store backend configured: set STORE_BACKEND=memory explicitly for the "
+            "volatile in-memory backend, or configure DATABASE_URL/DB_DSN for Postgres."
+        )
 
+    # Fail-loud contract (KERNEL-03 / audit invariant I-S4): a configured but
+    # unreachable database must never silently degrade to in-memory state.
     try:
         conn = psycopg.connect(dsn, connect_timeout=1)
-    except Exception:
-        return "memory"
+    except Exception as exc:
+        raise RuntimeError(
+            "Store backend resolution failed: Postgres is configured "
+            "(DATABASE_URL/DB_DSN) but unreachable. Refusing to fall back to a "
+            f"volatile in-memory store. Underlying error: {exc}"
+        ) from exc
     else:
         conn.close()
         return "pg"

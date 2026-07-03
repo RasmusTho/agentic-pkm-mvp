@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 
 
 class FakeCanonicalStore:
@@ -44,7 +44,7 @@ def test_get_object_uses_memory_cache():
         source_ref="vault://Inbox/note.md",
         created_at=datetime.now(timezone.utc),
     )
-    from app.store import object_store as legacy
+    from app import objects as legacy
 
     legacy._MEMORY_STORE.clear()
     legacy._MEMORY_STORE[obj.uuid] = obj
@@ -54,12 +54,15 @@ def test_get_object_uses_memory_cache():
     assert got.uuid == "mem-1"
 
 
-def test_save_object_keeps_memory_fallback_when_port_resolution_fails(monkeypatch):
-    from app.store import object_store as legacy
+def test_save_object_raises_when_port_resolution_fails(monkeypatch):
+    """Fail-loud (KERNEL-03 / I-S4): no silent in-memory fallback on store errors."""
+    import pytest
+
+    from app import objects as legacy
 
     legacy._MEMORY_STORE.clear()
     monkeypatch.setattr(
-        "app.store.object_store.resolve_object_store_port",
+        "app.objects.resolve_object_store_port",
         lambda: (_ for _ in ()).throw(RuntimeError("missing dsn")),
     )
     obj = DomainObject(
@@ -70,9 +73,10 @@ def test_save_object_keeps_memory_fallback_when_port_resolution_fails(monkeypatc
         created_at=datetime.now(timezone.utc),
     )
 
-    ObjectStore().save_object(obj, emit_outbox=False, trace_id="test")
+    with pytest.raises(RuntimeError, match="missing dsn"):
+        ObjectStore().save_object(obj, emit_outbox=False, trace_id="test")
 
-    assert legacy._MEMORY_STORE["fallback-1"] is obj
+    assert "fallback-1" not in legacy._MEMORY_STORE
 
 
 def _fake_binding(backend: str, store: FakeCanonicalStore):
@@ -97,7 +101,7 @@ def test_get_object_delegates_to_canonical_store(monkeypatch):
         "created_at": datetime.now(timezone.utc),
     }
     store = FakeCanonicalStore(record=row)
-    monkeypatch.setattr("app.store.object_store.resolve_object_store_port", lambda: _fake_binding("pg", store))
+    monkeypatch.setattr("app.objects.resolve_object_store_port", lambda: _fake_binding("pg", store))
 
     obj = ObjectStore().get_object(str(oid))
     assert obj is not None
@@ -123,7 +127,7 @@ def test_list_objects_delegates_to_canonical_store(monkeypatch):
         },
     ]
     store = FakeCanonicalStore(rows=rows)
-    monkeypatch.setattr("app.store.object_store.resolve_object_store_port", lambda: _fake_binding("pg", store))
+    monkeypatch.setattr("app.objects.resolve_object_store_port", lambda: _fake_binding("pg", store))
 
     listed = ObjectStore().list_objects(limit=5)
     assert len(listed) == 2
@@ -141,6 +145,6 @@ def test_count_objects_delegates_to_canonical_store(monkeypatch):
         }
     ]
     store = FakeCanonicalStore(rows=rows)
-    monkeypatch.setattr("app.store.object_store.resolve_object_store_port", lambda: _fake_binding("pg", store))
+    monkeypatch.setattr("app.objects.resolve_object_store_port", lambda: _fake_binding("pg", store))
 
     assert ObjectStore().count_objects() == 1

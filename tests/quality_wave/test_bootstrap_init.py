@@ -17,7 +17,7 @@ from click.testing import CliRunner
 
 from app.cli import cli
 from app.cli.uat import DEFAULT_TARGET_SUBDIR
-from app.store import object_store as object_store_module
+from app import objects as object_store_module
 
 WIRING_SRC = Path("docs/settings/panel-action-wiring.yaml")
 SYSTEM_CONFIG_REL = Path("System/Config")

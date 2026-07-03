@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Optional, List
-from app.store.object_store import DomainObject
+from app.objects import DomainObject
 
 
 class FakeObjectStore:

@@ -9,8 +9,8 @@ import pytest
 
 from app.agents.panel_agent.agent import run_panel_intent_for_note
 from app.agents.panel_agent.runtime import execute_panel_intent
-from app.store import object_store as object_store_module
-from app.store.object_store import DomainObject, ObjectStore
+from app import objects as object_store_module
+from app.objects import DomainObject, ObjectStore
 
 
 @pytest.fixture(autouse=True)

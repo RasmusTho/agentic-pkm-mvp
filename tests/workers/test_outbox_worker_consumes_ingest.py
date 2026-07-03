@@ -25,8 +25,8 @@ import pytest
 from app.events.types import INGEST_VAULT_CHANGED
 from app.services import outbox as outbox_service
 from app.services.outbox import write_outbox_event
-from app.store import object_store as object_store_module
-from app.store.object_store import ObjectStore
+from app import objects as object_store_module
+from app.objects import ObjectStore
 from app.workers import outbox_worker
 
 pytestmark = pytest.mark.not_pg
@@ -339,7 +339,9 @@ def test_transient_failures_do_not_dead_letter_legitimate_event(
     monkeypatch.setenv("WORKER_MAX_DISPATCH_ATTEMPTS", "3")
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_DSN", raising=False)
-    monkeypatch.delenv("STORE_BACKEND", raising=False)
+    # Memory backend is explicit-only since KERNEL-03 (#2765); this test wants
+    # a no-DB unit environment, which now requires the explicit opt-in.
+    monkeypatch.setenv("STORE_BACKEND", "memory")
 
     row_id = _enqueue_ingest(note_path, trace_id="trace-transient")
     assert row_id

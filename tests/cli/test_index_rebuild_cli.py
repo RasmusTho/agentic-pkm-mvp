@@ -12,7 +12,7 @@ from click.testing import CliRunner
 from app.cli import cli
 from app.components.embeddings import get_embedding_client, get_embedding_identity
 from app.db.dsn import resolve_dsn
-from app.store import object_store as legacy_store
+from app import objects as legacy_store
 from app.objects import DomainObject, ObjectStore
 from app.stores import get_vector_index, reset_store_backends
 

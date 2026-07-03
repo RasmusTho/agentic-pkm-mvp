@@ -20,7 +20,7 @@ import pytest
 
 from app.cli.uat import seed_vault_test_notes, run_vault_test_flow, SEED_SOURCE
 from app.promotion.consumer import reset_promotion_dedup_store
-from app.store import object_store as object_store_module
+from app import objects as object_store_module
 from scripts.yaml_roundtrip import load_frontmatter
 
 pytestmark = pytest.mark.not_pg

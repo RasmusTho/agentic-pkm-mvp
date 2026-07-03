@@ -8,7 +8,7 @@ import pytest
 from app.cli.uat import run_vault_test_flow, seed_vault_test_notes
 from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
 from app.promotion.consumer import reset_promotion_dedup_store
-from app.store import object_store as object_store_module
+from app import objects as object_store_module
 from app.stores import reset_store_backends
 from scripts.yaml_roundtrip import load_frontmatter
 

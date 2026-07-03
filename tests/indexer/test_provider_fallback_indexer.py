@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-import app.store.object_store as legacy_object_store
+import app.objects as legacy_object_store
 import pytest
 
 from app.components.embeddings import EmbeddingIdentity

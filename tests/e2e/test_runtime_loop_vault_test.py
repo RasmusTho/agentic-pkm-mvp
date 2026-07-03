@@ -8,7 +8,7 @@ from app.cli.uat import DEFAULT_TARGET_SUBDIR, seed_vault_test_notes
 import app.observability.status_service as status_service
 from app.promotion.consumer import consume_promotion_intents
 from app.runtime.runtime_loop import RuntimeLoopConfig, run_once
-from app.store import object_store as object_store_module
+from app import objects as object_store_module
 from app.objects import ObjectStore
 from scripts.yaml_roundtrip import load_frontmatter
 

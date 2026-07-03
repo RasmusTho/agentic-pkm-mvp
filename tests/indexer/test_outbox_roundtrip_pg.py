@@ -224,7 +224,7 @@ def test_outbox_roundtrip_embeds(tmp_path, monkeypatch) -> None:
     base_dsn, schema = _configure_isolated_pg_test(tmp_path, monkeypatch)
     dsn = os.environ["DATABASE_URL"]
     try:
-        import app.store.object_store as legacy_object_store
+        import app.objects as legacy_object_store
 
         legacy_object_store._MEMORY_STORE.clear()
 
@@ -285,7 +285,7 @@ def test_unembedded_objects_fail_loud(tmp_path, monkeypatch) -> None:
     base_dsn, schema = _configure_isolated_pg_test(tmp_path, monkeypatch)
     dsn = os.environ["DATABASE_URL"]
     try:
-        import app.store.object_store as legacy_object_store
+        import app.objects as legacy_object_store
 
         legacy_object_store._MEMORY_STORE.clear()
 

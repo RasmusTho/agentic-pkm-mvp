@@ -22,7 +22,7 @@ from app.cli.uat import (
     seed_vault_test_notes,
 )
 from app.promotion.consumer import reset_promotion_dedup_store
-from app.store import object_store as object_store_module
+from app import objects as object_store_module
 from app.testing.runtime_contract import failing_check_names
 
 pytestmark = pytest.mark.not_pg

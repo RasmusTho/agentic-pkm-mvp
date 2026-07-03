@@ -8,7 +8,7 @@ import pytest
 import app.guardrails as guardrails
 from app.agents.planner.graph import run_planner_for_goal
 from app.guardrails import GuardrailDecision
-from app.store.object_store import DomainObject, ObjectStore
+from app.objects import DomainObject, ObjectStore
 
 pytestmark = [pytest.mark.not_pg]
 

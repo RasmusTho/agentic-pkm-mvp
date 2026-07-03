@@ -12,7 +12,7 @@ from app.cli.uat import seed_vault_test_notes
 from app.components.concurrency import IdempotencyGuard
 from app.events.types import INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED
 from app.promotion.consumer import consume_promotion_intents, reset_promotion_dedup_store
-from app.store import object_store as object_store_module
+from app import objects as object_store_module
 from app.watcher import registry
 from app.watcher.state import WatcherState
 from app.workers import outbox_worker

@@ -13,7 +13,7 @@ from click.testing import CliRunner
 
 from app.llm.embed_queue import EmbedDeadLetterError
 from app.objects import DomainObject, ObjectStore
-from app.store import object_store as legacy_store
+from app import objects as legacy_store
 from app.stores import reset_store_backends
 
 

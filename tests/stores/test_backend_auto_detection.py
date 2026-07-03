@@ -76,11 +76,13 @@ def test_store_backend_auto_detects_pg(monkeypatch):
     assert resolve_store_backend() == "pg"
 
 
-def test_store_backend_defaults_to_memory(monkeypatch):
+def test_store_backend_without_config_raises(monkeypatch):
+    """Memory is explicit-only (KERNEL-03): no DSN + no override => raise."""
     monkeypatch.delenv("STORE_BACKEND", raising=False)
     monkeypatch.setenv("DATABASE_URL", "")
-    assert resolve_store_backend() == "memory"
-    assert resolved_store_backend_hint() == "memory"
+    monkeypatch.delenv("DB_DSN", raising=False)
+    with pytest.raises(RuntimeError, match="STORE_BACKEND=memory"):
+        resolve_store_backend()
 
 
 def test_store_backend_hint_is_none_when_environment_changes(monkeypatch):

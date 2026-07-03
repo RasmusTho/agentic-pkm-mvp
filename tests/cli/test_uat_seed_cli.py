@@ -5,7 +5,7 @@ import yaml
 
 from app.cli import cli
 from app.cli.uat import DEFAULT_FOLDER_NAME, DEFAULT_TARGET_SUBDIR
-from app.store import object_store as object_store_module
+from app import objects as object_store_module
 
 
 def test_uat_seed_cli_copies_notes(tmp_path: Path) -> None:

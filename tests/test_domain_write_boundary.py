@@ -13,7 +13,7 @@ from pathlib import Path
 
 from app.ingest.vault_alpha import _ingest_single
 from app.retrieval.hybrid import _extract_domain, _doc_in_scope, get_store, Document
-from app.store.object_store import ObjectStore
+from app.objects import ObjectStore
 
 
 def test_ingest_without_domain_marks_unscoped(tmp_path: Path) -> None:
