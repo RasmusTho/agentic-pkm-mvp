@@ -48,6 +48,10 @@ This document is therefore a control-boundary architecture, not a service decomp
 - `docs/foundation/yggdrasil-architecture-context-packet.md` — preserves the doctrine → ontology → semantics → system-breakdown → contracts → tests synthesis behind the architecture-foundation backlog. Read it before working on this decomposition.
 - Architecture-foundation epic: [#2533](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533). This language and control-boundary-ownership stabilization pass is [#2534](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2534).
 - Traceability matrix (doctrine → docs → ADRs → boundaries → schemas → tests → issues): tracked by [#2535](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2535) and not yet landed. Once it exists it becomes the maintained, fine-grained mapping; this document remains the boundary-ownership authority.
+- `docs/architecture/system-context-overlay.md` — ISO/IEC/IEEE 15288 context-layer vocabulary
+  overlay (System of Interest boundary, enabling-system / external-system classification, integrated
+  system context model). A vocabulary layer over this decomposition, not a competing SBS; includes
+  the spine-subsystem → SBS-boundary taxonomy reconciliation (`Capability → CAO+RCA`).
 
 ## Part 1 - Executive Summary
 
