@@ -238,6 +238,11 @@ def test_apply_path_requires_validated_co_authoring(monkeypatch, tmp_path: Path)
     )
 
     assert resp.status_code == 500, resp.text
+    # Discriminator: the guard's structured HTTPException body — NOT a generic
+    # crash rendered as 500. Pre-fix (positional else), the sabotage sentinel's
+    # AssertionError renders as Starlette's plain-text "Internal Server Error",
+    # so this assertion fails against the unguarded ladder (verified in review).
+    assert resp.json()["detail"] == "intent routing error"
     # The note on disk is untouched — the guard fired before any mutation path.
     assert note.read_text(encoding="utf-8") == original
 
