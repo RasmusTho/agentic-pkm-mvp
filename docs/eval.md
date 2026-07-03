@@ -104,11 +104,17 @@ and is the one wired into the `python -m app.eval.run` CLI entrypoint below
 - Answer relevancy / answer-quality style metrics via DeepEval.
 - Faithfulness/hallucination metrics can be added once context is surfaced in ASK responses.
 - Ragas metrics (precision/recall, context relevance) are seeded via `tests/eval/test_rag_ragas.py`.
+- Intent-classification slice (KERNEL-13, #2775): per-class precision/recall +
+  confusion matrix over the bilingual `classification_case.v1` golden set
+  (`docs/eval/classification_golden.yaml`), with `UNKNOWN` scored as safe-fail
+  separately and a **blocking** mutation-side confusion hard gate — see the
+  deterministic runner below and `tests/eval/test_classification_golden.py`.
 
-## Deterministic retrieval/memory metrics runner (`python -m app.eval.run`)
+## Deterministic retrieval/memory/classification metrics runner (`python -m app.eval.run`)
 
 `python -m app.eval.run` (also wired to `make eval`) is a thin, fully offline
-CLI entrypoint over `app.eval.golden.evaluate_bilingual_golden_set`, reusing
+CLI entrypoint over `app.eval.golden.evaluate_bilingual_golden_set` plus the
+intent-classification golden set (`app.eval.classification`), reusing
 `app.eval.benchmark`'s baseline/regression-comparison model — it is not a new
 eval framework. It never calls a live LLM; DeepEval/Ragas suites stay opt-in
 behind `@pytest.mark.eval` and are a separate, non-default path.
@@ -128,6 +134,37 @@ What it reports, all computed over the W2-EVAL-01 bilingual seed
 
 `k` (top-k cutoff) defaults to the value in `config/eval_thresholds.yaml`.
 
+### Intent-classification slice (`classification_case.v1`, KERNEL-13)
+
+The same runner scores the governance-critical intent classifier
+(`app/chat/intent_classifier.py`) over the bilingual golden set
+`docs/eval/classification_golden.yaml` (≥40 sv/en cases incl. adversarial
+families; authored under RESEARCH-06/#2784, rationale in
+`docs/eval/classification_golden_rationale.md`):
+
+- **Per-class precision/recall** for the model-emittable classes
+  (`co_authoring`, `governance_bearing`, `exploratory`) plus macro averages,
+  and a full **confusion matrix** (expected × predicted, incl. `unknown`).
+- **`UNKNOWN` is scored as safe-fail separately, never as a wrong class**: a
+  predicted `UNKNOWN` on an answerable case leaves per-class recall
+  denominators and is reported via `safe_fail` / `answer_rate`; expected-unknown
+  cases are scored via `unknown.safe_fail_rate`.
+- **HARD GATE (blocking, not thresholded):** any case with expected
+  `exploratory`/`unknown` classified into an action-capable class
+  (`co_authoring`, `governance_bearing`) sets `regression: true` and a
+  `classification:hard_gate` failure — mutation-side confusion is the CW-2
+  silent-misroute class this gate exists to block. Read-side confusion is
+  thresholded via the `classification` bucket in `config/eval_thresholds.yaml`.
+
+Deterministic CI mode replays recorded model completions
+(`docs/eval/classification_replay.yaml`) through the classifier's injectable
+completion seam, so KERNEL-07's constrained-output validation layer runs for
+real without a live LLM. The gate runs in the `not pg` PR suite (named CI
+step "Intent-classification golden gate" in `.github/workflows/ci.yml`) via
+`tests/eval/test_classification_golden.py`; live mode
+(`EVAL_LLM_MODE=run pytest -q -m eval tests/eval/test_classification_golden.py`)
+is opt-in and never part of the PR gate.
+
 ### Thresholds and the regression gate
 
 Thresholds live in `config/eval_thresholds.yaml` (schema
@@ -145,16 +182,25 @@ per_language:
 memory_recall:
   precision_at_k: 0.10
   ndcg_at_k: 0.60
+classification:   # read-side floors only; the mutation-side hard gate has no threshold
+  macro_precision: 0.90
+  macro_recall: 0.90
+  pass_rate: 0.90
+  answer_rate: 0.85
+  unknown_safe_fail_rate: 0.85
 k: 5
 ```
 
 `python -m app.eval.run`:
-- prints a human-readable summary (aggregate, per-language, per-slice, and
-  memory-recall metrics, plus a REGRESSION line per failing bucket/metric);
+- prints a human-readable summary (aggregate, per-language, per-slice,
+  memory-recall, and intent-classification metrics incl. the confusion
+  matrix, plus a REGRESSION line per failing bucket/metric);
 - writes a machine-readable scorecard to `runtime/eval/scorecard.json`
   (gitignored — a regenerable artifact, not repo truth);
-- exits non-zero (fail-loud) if any aggregate, per-language, or memory-recall
-  metric falls below its configured threshold, and exits `0` otherwise.
+- exits non-zero (fail-loud) if any aggregate, per-language, memory-recall,
+  or classification read-side metric falls below its configured threshold
+  **or** any mutation-side confusion exists (hard gate, unconditional), and
+  exits `0` otherwise.
 
 Raise a threshold only after intentionally improving retrieval and
 re-measuring the golden set — never to make a regression pass.
@@ -171,6 +217,19 @@ re-measuring the golden set — never to make a regression pass.
   "by_slice": {"exact_lexical": {"...": "..."}, "...": "..."},
   "memory_recall": {"precision@k": 0.20, "ndcg@k": 1.0, "count": 5},
   "memory_recall_route_intents": ["low_trust_citation", "recall_into_ask"],
+  "classification": {
+    "mode": "replay",
+    "n_cases": 68,
+    "per_class": {"co_authoring": {"precision": 1.0, "recall": 1.0, "support": 18, "predicted": 18}, "...": "..."},
+    "macro_precision": 1.0,
+    "macro_recall": 1.0,
+    "pass_rate": 1.0,
+    "confusion_matrix": {"co_authoring": {"co_authoring": 18, "...": 0}, "...": "..."},
+    "unknown": {"expected": 8, "safe_fail_hits": 8, "read_side_landings": 0, "safe_fail_rate": 1.0},
+    "safe_fail": {"count": 0, "answer_rate": 1.0},
+    "mutation_side_confusions": [],
+    "hard_gate_passed": true
+  },
   "queries": [{"...": "per-query row..."}],
   "regression": false,
   "failures": []
@@ -194,8 +253,8 @@ aspirational rather than enforced:
 - Current reality:
   - CI/fitness gates for the deterministic runner live in the tests listed
     above (`tests/eval/test_eval_run_route.py`, `tests/eval/test_golden_metrics.py`,
-    `tests/eval/test_benchmark.py`); broader CI/fitness gates live in
-    `docs/TESTING.md` and the fitness track docs.
+    `tests/eval/test_benchmark.py`, `tests/eval/test_classification_golden.py`);
+    broader CI/fitness gates live in `docs/TESTING.md` and the fitness track docs.
   - LLM-judge eval suites under `tests/eval/` remain opt-in.
 - Useful scorecard shape to preserve for the LLM-judge suites:
 

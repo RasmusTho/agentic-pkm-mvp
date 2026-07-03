@@ -23,4 +23,18 @@ memory_recall:
   precision_at_k: 0.10
   ndcg_at_k: 0.60
 
+# Applied to the intent-classification golden set (KERNEL-13, #2775):
+# docs/eval/classification_golden.yaml scored through the real classifier
+# path via the deterministic replay fixture docs/eval/classification_replay.yaml.
+# These floors gate READ-SIDE confusion only. The mutation-side hard gate
+# (an expected exploratory/unknown case classified into an action-capable
+# class) is enforced unconditionally in app/eval/run.py — it is a blocking
+# regression and deliberately has no threshold here.
+classification:
+  macro_precision: 0.90
+  macro_recall: 0.90
+  pass_rate: 0.90
+  answer_rate: 0.85
+  unknown_safe_fail_rate: 0.85
+
 k: 5

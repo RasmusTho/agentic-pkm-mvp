@@ -26,6 +26,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r dev-requirements.txt
+      - name: Intent-classification golden gate (KERNEL-13)
+        # Explicit, named gate over the classification_case.v1 golden set
+        # (docs/eval/classification_golden.yaml): per-class precision/recall,
+        # confusion matrix, and the blocking mutation-side confusion hard
+        # gate, driven through the real classifier path via the deterministic
+        # replay fixture. Also runs inside the full not-pg suite below; the
+        # dedicated step keeps the gate visible and fails fast with a named
+        # signal when the classifier or dataset regresses (KERNEL-13, #2775).
+        shell: bash
+        env:
+          PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
+        run: |
+          set -o pipefail
+          pytest -q -m "not pg" tests/eval/test_classification_golden.py
       - name: Run not-pg unit tests
         shell: bash
         timeout-minutes: 22
