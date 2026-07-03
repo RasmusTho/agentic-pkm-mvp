@@ -18,7 +18,7 @@ Read `docs/HEALTH.md` before running — it owns the health contract that this s
 
 ## What this skill does
 
-1. Confirms the running prod process's code ref matches `stable` (`git rev-parse stable` == reported version in health endpoint or settings-explain output).
+1. Confirms the running prod process's code ref matches the protected `origin/stable` (`git rev-parse origin/stable` == reported version in health endpoint or settings-explain output).
 2. Confirms the prod Postgres container is healthy (port 15432 responsive, outbox consumer running, no error state in worker heartbeat).
 3. Runs `python -m app.cli status` against the prod channel and confirms all components report healthy.
 4. Runs `python -m app.cli settings-explain` against the prod channel and confirms the resolved environment is `prod`, the vault root is the real vault, and the DB resolves to the prod DB.
