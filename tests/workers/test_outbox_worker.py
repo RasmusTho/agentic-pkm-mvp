@@ -150,3 +150,36 @@ def test_run_once_still_processes_vault_changed(
 
     assert len(handled) == 1
     assert result.state == "processed"
+
+
+def test_store_schema_missing_is_transient_never_dead_letters() -> None:
+    """Schema-missing is boot-ordering, not poison (KERNEL-04, #2766).
+
+    On a fresh stack the worker/watcher containers depend only on the db
+    service while `alembic upgrade head` runs in the api/agent-service boot
+    path, so the first dispatches can hit an unmigrated database. The
+    production classification site (`_is_transient_dispatch_error`) must treat
+    `StoreSchemaMissingError` — raised by the assert-only store preflight —
+    as transient so the row stays pending for crash-retry under supervision
+    instead of burning the poison budget and dead-lettering ingest events.
+    """
+    from app.db.errors import StoreSchemaMissingError
+
+    exc = StoreSchemaMissingError(
+        "Missing store table(s) ['store_objects'] in the configured Postgres. "
+        "Store schema is migration-owned (KERNEL-04, #2766): run 'alembic upgrade head'."
+    )
+    assert outbox_worker._is_transient_dispatch_error(exc) is True
+
+    # Also transient when wrapped mid-chain, as handlers re-raise with context.
+    try:
+        try:
+            raise exc
+        except StoreSchemaMissingError as inner:
+            raise RuntimeError("handler wrapper") from inner
+    except RuntimeError as wrapped:
+        assert outbox_worker._is_transient_dispatch_error(wrapped) is True
+
+    # Guard the boundary: a plain RuntimeError (poison payload class) must NOT
+    # ride the schema-missing exemption.
+    assert outbox_worker._is_transient_dispatch_error(RuntimeError("boom")) is False

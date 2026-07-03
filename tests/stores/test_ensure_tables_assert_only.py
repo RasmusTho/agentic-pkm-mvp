@@ -9,11 +9,14 @@ Spec: docs/RUNTIME_CORRECTNESS_KERNEL/STORE_SCHEMA_IN_MIGRATIONS.md
 
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 
 import psycopg
 import pytest
+
+from app.db.errors import StoreSchemaMissingError
 
 pytestmark = pytest.mark.pg
 
@@ -71,18 +74,22 @@ def _fresh_pg_module(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_missing_table_raises(scratch_db, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Missing store table + no autocreate opt-in => RuntimeError with migration hint."""
+    """Missing store table + no autocreate opt-in => StoreSchemaMissingError with hint.
+
+    The dedicated type matters: the outbox worker classifies it transient
+    (boot-ordering), so it must be exactly what the preflight raises.
+    """
     pg_module = _fresh_pg_module(monkeypatch)
     monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
 
     with psycopg.connect(scratch_db, autocommit=True) as conn:
         conn.execute("DROP TABLE store_vector_index")
 
-    with pytest.raises(RuntimeError, match="alembic upgrade head"):
+    with pytest.raises(StoreSchemaMissingError, match="alembic upgrade head"):
         pg_module.PgObjectStore()
 
     monkeypatch.setattr(pg_module, "_TABLES_READY", False)
-    with pytest.raises(RuntimeError, match="alembic upgrade head"):
+    with pytest.raises(StoreSchemaMissingError, match="alembic upgrade head"):
         pg_module.PgVectorIndex()
 
 
@@ -94,7 +101,7 @@ def test_missing_identity_column_raises(scratch_db, monkeypatch: pytest.MonkeyPa
     with psycopg.connect(scratch_db, autocommit=True) as conn:
         conn.execute("ALTER TABLE store_vector_index DROP COLUMN provider")
 
-    with pytest.raises(RuntimeError, match="alembic upgrade head"):
+    with pytest.raises(StoreSchemaMissingError, match="alembic upgrade head"):
         pg_module.PgObjectStore()
 
 
@@ -108,3 +115,50 @@ def test_migrated_schema_passes_assert_only(scratch_db, monkeypatch: pytest.Monk
     monkeypatch.setattr(pg_module, "_TABLES_READY", False)
     index = pg_module.PgVectorIndex()
     assert index is not None
+
+
+def test_null_dim_row_repaired_and_queryable(scratch_db, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The assert-only preflight keeps the old boot path's dim data repair.
+
+    Legacy environments hold rows written before the `dim` column existed
+    (added as a nullable ALTER). `PgVectorIndex.search` filters
+    `WHERE dim = %s`, so without the boot-time
+    `UPDATE ... SET dim = array_length(embedding, 1) WHERE dim IS NULL`
+    repair a NULL-dim row silently vanishes from retrieval (I-S3 class).
+    """
+    from app.components.embeddings import EmbeddingIdentity
+
+    pg_module = _fresh_pg_module(monkeypatch)
+    monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
+
+    identity = EmbeddingIdentity(provider="ollama", model="m", dim=4, normalize=True)
+    object_id = uuid.uuid4()
+    with psycopg.connect(scratch_db, autocommit=True) as conn:
+        # Simulate the legacy shape: dim nullable (as an ALTER-added column),
+        # one row written before dim existed.
+        conn.execute("ALTER TABLE store_vector_index ALTER COLUMN dim DROP NOT NULL")
+        conn.execute(
+            "INSERT INTO vector_index_meta (id, identity_json) VALUES (1, %s)",
+            (json.dumps({"provider": "ollama", "model": "m", "dim": 4, "normalize": True}),),
+        )
+        conn.execute(
+            """
+            INSERT INTO store_vector_index
+                (object_id, kind, source_ref, payload, embedding, dim, model)
+            VALUES (%s, 'note', 'test://legacy', '{}'::jsonb, %s, NULL, 'm')
+            """,
+            (object_id, [1.0, 0.0, 0.0, 0.0]),
+        )
+
+    index = pg_module.PgVectorIndex()  # preflight runs the data repair
+
+    with psycopg.connect(scratch_db) as conn:
+        row = conn.execute(
+            "SELECT dim FROM store_vector_index WHERE object_id = %s", (object_id,)
+        ).fetchone()
+        assert row is not None and row[0] == 4, "preflight did not backfill NULL dim"
+
+    hits = index.search([1.0, 0.0, 0.0, 0.0], k=5, identity=identity)
+    assert [hit.object_id for hit in hits] == [object_id], (
+        "NULL-dim row not queryable after preflight repair"
+    )

@@ -194,12 +194,13 @@ KERNEL-03 (#2765) caller inventory: the only store-layer code path writing this 
 anywhere in `app/` (guard:
 `tests/architecture/test_single_store_writer.py::test_one_writer_per_table` asserts zero writers).
 
-KERNEL-04 (#2766) decision: the table is **marked deprecated but NOT dropped** in the
-`c2766a04d001` migration, because the zero-**readers** precondition is not met — one read
-reference remains (`app/jobs/backfill.py` uses a `NOT EXISTS (... FROM embeddings ...)` predicate
-when selecting objects to backfill, and `view_chunks_missing_embeddings` reads it). The drop is a
-named follow-up recorded on issue #2766: remove/replace the backfill read predicate and the view,
-then drop `embeddings` in its own forward-only migration.
+KERNEL-04 (#2766) decision: the table is **deprecated in this document and NOT dropped**; the
+`c2766a04d001` migration intentionally does not touch it, because the zero-**readers**
+precondition is not met — one read reference remains (`app/jobs/backfill.py` uses a
+`NOT EXISTS (... FROM embeddings ...)` predicate when selecting objects to backfill, and
+`view_chunks_missing_embeddings` reads it). The drop is a named follow-up recorded on issue
+#2766: remove/replace the backfill read predicate and the view, then drop `embeddings` in its
+own forward-only migration.
 
 - `id` (`uuid`, PK; default varies by migration)
 - `object_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`)

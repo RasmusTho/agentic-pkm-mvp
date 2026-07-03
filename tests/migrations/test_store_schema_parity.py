@@ -108,7 +108,7 @@ def _run_ensure_tables(dsn: str, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _schema_snapshot(dsn: str) -> dict:
-    """Column/PK/CHECK shape of the five store tables, normalized for comparison."""
+    """Column/PK/CHECK/index shape of the five store tables, normalized for comparison."""
     snapshot: dict[str, dict] = {}
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
@@ -149,7 +149,24 @@ def _schema_snapshot(dsn: str) -> dict:
                     (f"public.{table}",),
                 )
                 checks = sorted(row[0] for row in cur.fetchall())
-                snapshot[table] = {"columns": columns, "pk": pk, "checks": checks}
+                # AC1 promises index parity, not only columns/constraints
+                # (pg_indexes covers PK-backing indexes and any secondary ones).
+                cur.execute(
+                    """
+                    SELECT indexname, indexdef
+                    FROM pg_indexes
+                    WHERE schemaname = 'public' AND tablename = %s
+                    ORDER BY indexname
+                    """,
+                    (table,),
+                )
+                indexes = [tuple(row) for row in cur.fetchall()]
+                snapshot[table] = {
+                    "columns": columns,
+                    "pk": pk,
+                    "checks": checks,
+                    "indexes": indexes,
+                }
     return snapshot
 
 
