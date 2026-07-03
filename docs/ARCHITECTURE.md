@@ -6,7 +6,7 @@ Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-06-29
-Last verified against: docs/STATUS.md, docs/ROADMAP.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/now_surface.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2133, and current repo state at 503c6c64 on 2026-06-29
+Last verified against: docs/STATUS.md, docs/ROADMAP.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/now_surface.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2133, docker-compose.yaml, docs/architecture/system-context-overlay.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, and current repo state at 503c6c64 on 2026-06-29
 
 # Architecture — SoT v5.5 Reality-MVP baseline (v5.6 delivered, v6.0 seams shipped)
 
@@ -110,6 +110,47 @@ The current runtime sits inside a small local system boundary:
   - optional observability stack components such as Prometheus and Grafana.
 
 In the current v5.5 baseline, the implemented center of gravity is still the Mimer module: vault-first ingestion, indexing, retrieval, and agent behavior around the Obsidian knowledge surface. Other Yggdrasil modules remain useful conceptual boundaries, but they are not equally implemented in the current runtime.
+
+### Deployed infrastructure classification (current reality)
+
+This subsection is **non-SBS-owned**: it is a current-reality infrastructure classification, not a
+boundary allocation, and it does not create a new allocation table. It applies the four-class
+lifecycle-role rule from `docs/architecture/system-context-overlay.md` (SBI-1) — SoI component /
+COTS system element (deployed configuration) / enabling system / external system — to every
+`docker-compose.yaml` service and every host process listed in
+`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Environment matrix :: Current reality (verified
+2026-06-29)`. For module/host detail, see `docs/architecture/SBS_BOUNDARY_REGISTER.md` (target SBS
+boundary maturity) and `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md` (deploy topology,
+ports, gateways) — this table references, and does not duplicate, either.
+
+| Deployed element | Binding | Classification |
+| --- | --- | --- |
+| `app/`, `yggdrasil_runtime/`, contracts/schemas, companion-note surface | in-repo runtime code | SoI component |
+| `db` (Postgres/pgvector, `docker-compose.yaml:2-14`) | compose service | COTS system element |
+| `ollama` (`docker-compose.yaml:16-31`) | compose service | COTS system element |
+| Ollama reached as a host/remote LLM or embedding provider (`docs/ARCHITECTURE.md:109`) | host/remote service, not the compose service | External system |
+| `api` (`docker-compose.yaml:37-99`) | compose service (SoI component runtime, containerized) | SoI component |
+| `worker` (`docker-compose.yaml:101-142`) | compose service (SoI component runtime, containerized) | SoI component |
+| `watcher` (`docker-compose.yaml:144-188`) | compose service (SoI component runtime, containerized) | SoI component |
+| `companion-ui` (`docker-compose.yaml:190-221`) | compose service (SoI component runtime, containerized) | SoI component |
+| Companion UI gateways (dev/test/prod host processes launched by `scripts/lib/companion_ui_startup.sh`, `DEPLOYMENT_AND_ENVIRONMENTS.md` current-reality row "Startup wrappers") | host process, not containerized | SoI component |
+| Docker / Colima (container runtime hosting the compose services) | host process | Enabling system |
+| Tailscale mesh (`ops/host-setup/README.md`) | host process / network | Enabling system |
+| GitHub (CI, registry via GHCR, issue/PR governance — Builder System, `docs/architecture/SBS_OPERATING_MODEL.md:75,84`) | external managed service | Enabling system |
+| iCloud (Obsidian vault sync transport, `docs/INTEGRATION_FABRIC_CONTRACT.md:42`) | external managed service | External system |
+
+**Ollama's classification attaches to the deployment binding, not the product name**: the same
+Ollama binary is a COTS system element when the runtime provisions and supervises it as the
+`ollama` compose service, and an external system when the runtime instead reaches an
+already-running Ollama over the network as a host/remote provider — these are two distinct rows
+above because they are two distinct bindings, never both at once for a given deployment.
+
+This table classifies lifecycle role only; it does not resolve the dual-role hazard (infrastructure
+as both enabling system and a domain of interest the SoI observes/actuates), which is deferred to
+the companion thread named in `docs/architecture/system-context-overlay.md`. It does not reflect a
+post-#2655 pinned-image topology: deployment epic #2655 (S5/S7) is still open, so the classification
+above is verified against the current `docker-compose.yaml` and the "Current reality (verified
+2026-06-29)" row of the environment matrix, not the "Target" row.
 
 ## Artifact surfaces (current reading, forward-line aligned)
 
