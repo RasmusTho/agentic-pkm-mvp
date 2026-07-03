@@ -18,5 +18,4 @@ hygiene:
   salvage_llm: true
   model: gpt-5.4
   temperature: 0
-  archive_path: Archive/Trash
   allow_hard_delete: false
