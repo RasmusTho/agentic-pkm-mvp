@@ -17,10 +17,22 @@ def _dsn() -> str:
     return resolve_dsn()
 
 
+_ALLOWED_BACKENDS = {"memory", "pg"}
+
+
 @lru_cache(maxsize=8)
 def _resolved_backend(explicit: Optional[str], dsn: str) -> str:
-    if explicit:
-        return explicit.lower()
+    if explicit and explicit.strip():
+        normalized = explicit.strip().lower()
+        # Fail-loud contract (KERNEL-03 / I-S4): an explicit but unknown backend
+        # value must never silently route to the volatile in-memory store.
+        if normalized not in _ALLOWED_BACKENDS:
+            raise RuntimeError(
+                f"Store backend '{normalized}' is not supported: set STORE_BACKEND to "
+                "'pg' or 'memory' (explicit opt-in to volatile state), or unset it to "
+                "resolve from DATABASE_URL/DB_DSN."
+            )
+        return normalized
 
     if not dsn:
         raise RuntimeError(

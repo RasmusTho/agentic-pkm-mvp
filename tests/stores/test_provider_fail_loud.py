@@ -74,3 +74,38 @@ def test_memory_requires_explicit_opt_in(monkeypatch: pytest.MonkeyPatch) -> Non
     # provider seam resolves to the in-process memory stores without raising
     objects, decisions = get_stores()
     assert objects is not None and decisions is not None
+
+
+def test_unknown_backend_value_raises_in_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Review finding on #2832: an explicit but unknown STORE_BACKEND value
+    ('postgres', 'pgvector', a typo) must raise at the provider seam — never
+    silently route get_stores() to the volatile in-memory backend."""
+    monkeypatch.setenv("STORE_BACKEND", "postgres")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://demo:demo@localhost:5432/demo")
+    monkeypatch.delenv("DB_DSN", raising=False)
+    _resolved_backend.cache_clear()
+    with pytest.raises(RuntimeError, match="not supported"):
+        get_stores()
+
+
+def test_unknown_backend_value_raises_in_store_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same contract at the app.stores resolution seam, which also feeds the
+    resolve_store_backend() label consumers (index-rebuild receipts)."""
+    from app.stores import resolve_store_backend
+
+    monkeypatch.setenv("STORE_BACKEND", "pgvector")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://demo:demo@localhost:5432/demo")
+    monkeypatch.delenv("DB_DSN", raising=False)
+    with pytest.raises(RuntimeError, match="not supported"):
+        resolve_store_backend()
+
+
+def test_backend_value_whitespace_normalized(monkeypatch: pytest.MonkeyPatch) -> None:
+    """' memory ' (whitespace/case noise) resolves to the memory backend in the
+    provider seam instead of silently mismatching the allowed set."""
+    monkeypatch.setenv("STORE_BACKEND", " MEMORY ")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    _resolved_backend.cache_clear()
+    stores = get_stores()
+    assert stores is not None

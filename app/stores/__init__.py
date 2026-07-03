@@ -63,6 +63,16 @@ def _resolve_backend() -> str:
     normalized_override = (override or "").strip().lower()
     dsn = resolve_dsn()
     if normalized_override:
+        # Fail-loud contract (KERNEL-03 / I-S4): validate the override at the
+        # resolution seam so a typo'd backend ('postgres', 'pgvector') raises
+        # here — never a silent memory route, and never a bogus label reported
+        # by resolve_store_backend() consumers (e.g. index-rebuild receipts).
+        if normalized_override not in {"memory", "pg"}:
+            raise RuntimeError(
+                f"Store backend '{normalized_override}' is not supported: set STORE_BACKEND "
+                "to 'pg' or 'memory' (explicit opt-in to volatile state), or unset it to "
+                "resolve from DATABASE_URL/DB_DSN."
+            )
         _LAST_RESOLVED_BACKEND = (normalized_override, dsn, normalized_override)
         return normalized_override
 
