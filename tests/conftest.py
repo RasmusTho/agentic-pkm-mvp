@@ -172,6 +172,23 @@ def default_pg_dsn_for_pg_tests(request: pytest.FixtureRequest, monkeypatch: pyt
 
 
 @pytest.fixture(autouse=True)
+def store_schema_autocreate_for_pg_tests(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+    """Explicit create-on-demand opt-in for pg-marked tests (KERNEL-04, #2766).
+
+    Production store schema is migration-owned; ``_ensure_tables()`` is
+    assert-only unless STORE_SCHEMA_AUTOCREATE is set. Test databases keep
+    create-on-demand through this explicit fixture opt-in.
+    """
+
+    if (
+        request.node.get_closest_marker("pg") is not None
+        and os.getenv("STORE_SCHEMA_AUTOCREATE") is None
+    ):
+        monkeypatch.setenv("STORE_SCHEMA_AUTOCREATE", "1")
+    yield monkeypatch
+
+
+@pytest.fixture(autouse=True)
 def default_vault_layout_env(monkeypatch: pytest.MonkeyPatch):
     """Provide explicit test defaults for vault layout env.
 
