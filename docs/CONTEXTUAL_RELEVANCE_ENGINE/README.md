@@ -15,7 +15,7 @@ related_docs:
   - docs/FINDING_AND_REORIENTING/README.md
 ---
 
-State: Active specification directory (forward line; not shipped reality). Grounds the human-need brief `docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md` into bounded tasks. Parent feature issue and child issues are filed on GitHub; GitHub is the authoritative backlog and validation record. Capability name is provisional.
+State: Implemented. Delivered by #1922-#1925 (parent #1921, closed 2026-06-13); CRE-01..CRE-04 shipped per `docs/STATUS.md`, live in `app/relevance/*` and `app/watcher/relevance_tick.py`. Grounds the human-need brief `docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md` into bounded tasks. Capability name is provisional.
 
 # Contextual Relevance Engine — Specification
 
@@ -84,10 +84,10 @@ implementation is large.
 
 GitHub issues:
 
-- Parent feature issue (validation hub, `agent:blocked`): **#1921**
-- `DEFINE_MOMENT_AND_CONTEXT_MODEL`: **#1922** — `agent:blocked` → flips to `agent:ready` when this brief/spec PR (#1918) merges
-- `DEFINE_RELEVANCE_AND_SCARCITY_CONTRACTS`: **#1923** — `agent:blocked` (on #1922)
-- `BUILD_VAULT_NATIVE_PULL_MOMENTS`: **#1924** — `agent:blocked` (on #1922, #1923)
-- `BUILD_PROACTIVE_ATTENTION_LOOP`: **#1925** — `agent:blocked` (on #1922–#1924); final child, carries the owner-doc promotion handoff
+- Parent feature issue (validation hub, closed): **#1921**
+- `DEFINE_MOMENT_AND_CONTEXT_MODEL`: **#1922** — closed
+- `DEFINE_RELEVANCE_AND_SCARCITY_CONTRACTS`: **#1923** — closed
+- `BUILD_VAULT_NATIVE_PULL_MOMENTS`: **#1924** — closed
+- `BUILD_PROACTIVE_ATTENTION_LOOP`: **#1925** — closed; carried the owner-doc promotion handoff
 
-All four children are filed `agent:blocked` pending merge of the brief/spec (PR #1918) and the design-contract chain. #1922 is the first to become ready.
+All four children and the parent validation hub are closed (2026-06-13).

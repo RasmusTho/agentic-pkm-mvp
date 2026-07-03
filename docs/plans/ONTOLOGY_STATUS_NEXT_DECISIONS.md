@@ -1,4 +1,4 @@
-State: Working memo on top of the active ontology-alignment pass.
+State: Concluded/historical. The ontology-alignment pass this memo tracked has concluded; `docs/STATUS.md` no longer tracks it. Retained as context alongside `docs/plans/ONTOLOGY_ALIGNMENT_PLAN.md` and `docs/plans/ONTOLOGY_EXECUTION_COORDINATION.md`.
 Doc role: Status + decision memo
 Authority: Non-authoritative consolidation of what is now established, what is partially realized in runtime, and which ontology decisions should be taken next.
 

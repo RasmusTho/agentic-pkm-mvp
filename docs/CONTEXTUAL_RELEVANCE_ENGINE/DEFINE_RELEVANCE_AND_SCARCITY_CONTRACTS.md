@@ -74,5 +74,4 @@ soft) or a rule-locked engine (cognition too hard) — both violate the brief.
 
 ## Related GitHub Issues
 
-Filed as one `agent:blocked` issue (blocked on CRE-01). Becomes `agent:ready` when task 1's contracts
-merge. Owner shapes the contracts in PR review.
+Filed as #1923; closed 2026-06-13.

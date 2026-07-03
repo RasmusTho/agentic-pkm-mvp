@@ -9,7 +9,7 @@ depends_on: []
 can_parallelize_with: []
 ---
 
-State: Specification for the durable commitment foundation. Slice 1 of the COMMITMENT_SURFACING capability (parent #1960). Code-affecting.
+State: Implemented. Delivered by PR #2092 (issue #2073, slice 1 of the COMMITMENT_SURFACING capability, parent hub #1960 closed 2026-06-18).
 
 # Persist Commitments As Vault Artefacts
 

@@ -72,5 +72,4 @@ aspirational.
 
 ## Related GitHub Issues
 
-Not created in this PR. When filed later, use this task spec as the child implementation issue
-contract for review-queue behavior.
+Filed as #1080; closed. Delivered the review-queue behavior this task spec contracts for.

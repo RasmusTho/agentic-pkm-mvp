@@ -1,4 +1,4 @@
-State: Plan (ontology alignment work on top of the active SoT).
+State: Concluded/historical. The ontology-alignment pass this plan tracked has concluded; `docs/STATUS.md` no longer tracks it. Retained as context for the ontology-alignment history alongside `docs/plans/ONTOLOGY_EXECUTION_COORDINATION.md` and `docs/plans/ONTOLOGY_STATUS_NEXT_DECISIONS.md`.
 
 # Ontology Alignment Plan
 

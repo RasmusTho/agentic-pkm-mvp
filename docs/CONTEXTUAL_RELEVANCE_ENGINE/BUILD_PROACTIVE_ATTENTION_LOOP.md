@@ -74,6 +74,5 @@ the hard guarantees that keep it a prosthesis.
 
 ## Related GitHub Issues
 
-Filed as `agent:blocked` (on CRE-01..03). The final child of the core chain — includes the parent
-owner-doc promotion handoff (HUMAN-FLOWS §5 + runtime-map row). May split (trigger loop vs. reach-out
-channels) if large.
+Filed as #1925; closed 2026-06-13. The final child of the core chain — includes the parent
+owner-doc promotion handoff (HUMAN-FLOWS §5 + runtime-map row).

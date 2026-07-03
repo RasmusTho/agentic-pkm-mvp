@@ -86,7 +86,7 @@ It does **not** own:
 
 Three channels map one-to-one onto the existing environment model, but add identity and isolation guarantees.
 
-DB isolation is two-layer: a **container layer** (shipped, PR #596) provides physical isolation via separate Postgres containers on dedicated host ports; a **resolver layer** (Issue #594, in progress) ensures application code resolves the correct DB name through `app.config.environment` rather than hard-coded strings. Both layers are required.
+DB isolation is two-layer: a **container layer** (shipped, PR #596) provides physical isolation via separate Postgres containers on dedicated host ports; a **resolver layer** (Issue #594, closed 2026-04-24, shipped) ensures application code resolves the correct DB name through `app.config.environment` rather than hard-coded strings. Both layers are shipped.
 
 | Channel | Environment | Compose target | Postgres port | Code ref | Vault | Runtime artifacts |
 | --- | --- | --- | --- | --- | --- | --- |

@@ -108,4 +108,4 @@ When creating GitHub issues:
 
 ---
 
-**Status:** Specification complete. Ready for GitHub issue creation and implementation pickup.
+**Status:** Implemented. Delivered by #331-#336 (all closed); `make test-bootstrap` ships the resettable, reproducible, verified local test-vault flow this spec describes.

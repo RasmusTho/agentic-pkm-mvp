@@ -1,7 +1,7 @@
 ---
 name: Telemetry Relocation — Pull-Only Surfaces
 description: Relocate governance/open-loops/notable-changes/resurface/freshness telemetry off the cold_start door into pull-only surfaces
-state: delivery — child issues filed; #2174 is the live validation hub
+state: Implemented. #2174 closed; delivered.
 parent_issue: "#2174"
 source_anchor: companion-ui/design_handoff/2026-06-19-cold-start-threshold/design-notes.md :: What moves off the door
 ---
@@ -63,12 +63,12 @@ Tasks 4 and 6 are purely gating/suppression tasks (ensure the data does not appe
 
 ## Validation / Acceptance Path
 
-Parent issue #2174 is the live validation hub. After each child merges:
-1. Run `pytest -q tests/companion_ui/test_system_map_overlay.py tests/companion_ui/test_reentry_orientation_treatment.py tests/companion_ui/test_receipts_history_surface.py`
-2. Post a validation receipt comment to #2174 naming the merged PR and the tests that passed.
-3. When all six children are done and green, #2174 can be closed.
+Parent issue #2174 was the validation hub; it is now closed. All children merged and validated:
+1. `pytest -q tests/companion_ui/test_system_map_overlay.py tests/companion_ui/test_reentry_orientation_treatment.py tests/companion_ui/test_receipts_history_surface.py`
+2. Validation receipts posted to #2174 naming each merged PR and the tests that passed.
+3. All six children were done and green; #2174 is closed.
 
 ## Relationship to GitHub Issues
 
-- Parent: #2174 (validation hub — do not close until all children accepted)
-- Children: filed from each task file below; see individual task files for issue numbers once created.
+- Parent: #2174 (validation hub — closed)
+- Children: filed from each task file below; see individual task files for issue numbers.

@@ -11,7 +11,7 @@ related_docs:
   - docs/development/DEV_WORKFLOW.md
 ---
 
-State: Tasks 1-3 delivered (issues #360, #361, #362). Parent issue #359 remains open for lifecycle/project validation cleanup.
+State: Implemented. Tasks 1-3 delivered (issues #360, #361, #362); parent issue #359 closed 2026-04-17.
 
 # Orchestrator A2A Routing Specification
 
@@ -78,13 +78,11 @@ When those conditions are met, update the owning current-state docs in one narro
 
 Backlog receipts created from this specification:
 
-- Parent feature issue: `#359`
+- Parent feature issue: `#359` — closed 2026-04-17
 - Task issue `#360`: `ROUTE_AGENT_CALLS_THROUGH_REGISTERED_HANDLERS` — delivered
 - Task issue `#361`: `EMIT_AGENT_CALL_RESPONSES_AND_FAILURES` — delivered
 - Task issue `#362`: `VERIFY_MULTI_AGENT_CHAIN_TRACEABILITY` — delivered
 
-Keep the parent feature issue open as the live validation hub until lifecycle/project validation cleanup is complete.
-
 ---
 
-Status: Tasks 1-3 delivered. Parent issue #359 remains open for lifecycle/project validation cleanup.
+Status: Tasks 1-3 delivered. Parent issue #359 closed 2026-04-17.

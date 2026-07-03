@@ -25,7 +25,7 @@ Reference inventory for configuration, dependencies, and operational contracts. 
 | `LLM_TIMEOUT` | `app/llm/adapter.py`, `app/llm/embeddings.py` | `120` s (chat); `60` s (embeddings) | HTTP timeouts for provider calls. |
 | `OLLAMA_HOST` / `OLLAMA_URL` | `app/llm/adapter.py`, `app/llm/embeddings.py` | `http://127.0.0.1:11434` | Base URL for Ollama chat + embeddings. |
 | `OLLAMA_EMBED_MODEL` / `EMBED_MODEL` | `app/llm/embeddings.py` | `nomic-embed-text:latest` | Embedding model for `/api/embeddings`. |
-| `EMBED_DIM` | `app/embedding_config.py` | `1536` | Expected embedding dimension (identity). |
+| `EMBED_DIM` | `app/embedding_config.py` | `1536` | Expected embedding dimension (identity). See `docs/EMBEDDINGS.md` for the normative 768-vs-1536 nuance. |
 | `OPENAI_API_KEY`, `OPENAI_BASE` | `app/llm/adapter.py` | – / OpenAI chat URL | Required when `LLM_PROVIDER=openai`. |
 | `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE` | `app/llm/adapter.py` | – / DeepSeek chat URL | Required when `LLM_PROVIDER=deepseek`. |
 | `INDEX_OUTBOX_PATH` | watcher/cli (`app/outbox/events.py`, `app/index/outbox.py`) | `tmp/index-outbox.jsonl` | JSONL audit log (non-canonical); watcher may append for diagnostics. |

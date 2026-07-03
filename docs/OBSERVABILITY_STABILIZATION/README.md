@@ -2,7 +2,7 @@
 name: Observability Stabilization (Fas 0)
 description: Make the always-on health signals tell the truth, give the operator one real alert path, stop the silent audit lie, and make the running commit observable.
 parent_capability: Observability Stabilization
-state: Spec lane — parent feature issue + child slices to be filed.
+state: Implemented. Parent feature issue #2597 filed; all 11 children (#2598-#2604, #2615-#2618) closed. Parent #2597 remains open by design pending operator test-deploy acknowledgment.
 source: ULTRACODE health/telemetry/observability audit 2026-06-27 (owner decisions in audit §1b Beslutslogg)
 ---
 

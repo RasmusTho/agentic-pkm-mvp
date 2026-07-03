@@ -1,9 +1,9 @@
-State: Local draft parent feature issue. Not yet filed on GitHub as of 2026-05-13. This file is
-the local source for later filing and validation tracking.
+State: Implemented. Filed as GitHub Issue #900 and closed; all five slices delivered. This file is
+the local source retained for validation-history tracking; GitHub is authoritative.
 
 # [Feature] Agent Memory
 
-> **Local draft only.** Do not treat this file as a live GitHub issue until it is filed.
+> **Filed and delivered.** GitHub Issue #900 is closed; see `docs/DOCS_INDEX.md` for the delivered-slice record.
 
 ## Context
 

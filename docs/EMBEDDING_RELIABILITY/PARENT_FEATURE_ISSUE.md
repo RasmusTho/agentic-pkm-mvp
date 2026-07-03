@@ -1,6 +1,4 @@
-State: Parent feature issue draft (pre-filing) for the Embedding Reliability & Pluggable Provider capability.
-
-> Once filed on GitHub, update this header with the live issue number and lifecycle state.
+State: Filed as #2292 (open). All six child slices EMBEDREL-01..06 (incl. #2752) are closed; parent hub #2292 remains OPEN pending a coordinator re-check (as of 2026-07-01) — do not claim the parent closed.
 
 # [Embedding Reliability] Reliable embedding ingestion + pluggable provider (Ollama-primary, Gemini-fallback)
 
