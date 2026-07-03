@@ -215,6 +215,17 @@ def classify_cases(
     provider. A case missing from the replay fixture fails loud — a partially
     covered dataset is a false-green (cross-task invariant #6).
     """
+    if completions is not None:
+        # Reverse coverage (review finding on #2851): an orphan replay entry —
+        # a completion id with no golden case — signals a renamed/removed case
+        # whose stale recording would otherwise accumulate silently.
+        golden_ids = {case.id for case in cases}
+        orphans = sorted(set(completions) - golden_ids)
+        if orphans:
+            raise ClassificationGoldenSetError(
+                f"replay fixture has orphan completions with no golden case: {orphans}; "
+                "remove them or restore the matching golden cases"
+            )
     predictions: Dict[str, str] = {}
     for case in cases:
         if completions is None:

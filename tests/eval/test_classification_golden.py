@@ -147,7 +147,7 @@ def test_scorecard_has_confusion_matrix() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_mutation_side_confusion_is_blocking() -> None:
+def test_mutation_side_confusion_is_blocking(monkeypatch, tmp_path) -> None:
     completions = dict(load_replay_completions(CLASSIFICATION_REPLAY_PATH))
     cases = load_classification_cases()
     by_id = {case.id: case for case in cases}
@@ -188,8 +188,11 @@ def test_mutation_side_confusion_is_blocking() -> None:
         f"mutation_side_confusion:{exploratory_id}->co_authoring",
         f"mutation_side_confusion:{unknown_id}->governance_bearing",
     }
-    exit_code = 1 if scorecard["regression"] else 0
-    assert exit_code == 1
+    # Exercise main()'s exit-code propagation for real (review finding on
+    # #2851: re-deriving `1 if regression else 0` locally was tautological).
+    monkeypatch.setattr(eval_run, "build_scorecard", lambda: scorecard)
+    monkeypatch.setattr(eval_run, "SCORECARD_PATH", tmp_path / "scorecard.json")
+    assert eval_run.main([]) == 1
 
     # The human summary names the violation loudly.
     summary = eval_run.render_summary(scorecard)
