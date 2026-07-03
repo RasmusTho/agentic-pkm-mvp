@@ -5,7 +5,7 @@ Owner: Architecture spine / CES practice
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: canonical (charter index); subordinate to the SBS it operationalizes
-Last reviewed: 2026-06-26
+Last reviewed: 2026-07-03
 Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/foundation/yggdrasil-architecture-context-packet.md, docs/architecture/traceability-matrix.md
 
 # Boundary Charters
@@ -56,14 +56,14 @@ ordinary control boundary (see [CES.md](CES.md) and SBS Part 3).
 
 | ID | Name | Kind | Charter | Primary invariant |
 |---|---|---|---|---|
-| HIX | Human Interaction & Intent | Control boundary | Pending ([#2533](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533)) | Human action is explicit and attributable |
+| HIX | Human Interaction & Intent | Control boundary | [HIX.md](HIX.md) | Human action is explicit and attributable |
 | WSP | Workspace, Scope & Principal Context | Control boundary | [WSP.md](WSP.md) | Context is not identity |
 | HKA | Human Knowledge & Artifact Substrate | Control boundary | [HKA.md](HKA.md) | Durable human knowledge changes only through governed authority transition |
 | SIP | Semantic Identity & Provenance | Control boundary | [SIP.md](SIP.md) | Provenance survives derivation |
 | GOV | Governance, Policy, Authority & Receipts | Control boundary | [GOV.md](GOV.md) | Authority transitions require governance and receipts |
-| EBF | External Boundary Fabric | Control boundary | Pending ([#2533](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533)) | External mechanisms do not become authority |
+| EBF | External Boundary Fabric | Control boundary | [EBF.md](EBF.md) | External mechanisms do not become authority |
 | PDM | Persistence & Data Management | Control boundary | [PDM.md](PDM.md) | Storage preserves but does not define meaning |
-| DRI | Derived Representation & Indexing | Control boundary | Pending ([#2533](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533)) | Derived representations are rebuildable and never source of truth |
+| DRI | Derived Representation & Indexing | Control boundary | [DRI.md](DRI.md) | Derived representations are rebuildable and never source of truth |
 | RCA | Retrieval & Context Assembly | Control boundary | [RCA.md](RCA.md) | Retrieval produces candidate evidence, not truth |
 | MEM | Machine Memory & Learning | Control boundary | [MEM.md](MEM.md) | Agent memory is noncanonical until promoted |
 | CAO | Cognitive Capability & Agent Orchestration | Control boundary | [CAO.md](CAO.md) | Agents reason and propose; they do not mutate or execute |
@@ -98,12 +98,14 @@ Delivered by [#2540](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2540)�
 - Knowledge / identity / persistence: [HKA.md](HKA.md), [SIP.md](SIP.md), [PDM.md](PDM.md) — [#2541](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2541)
 - Governed cognition / action: [GOV.md](GOV.md), [RCA.md](RCA.md), [MEM.md](MEM.md), [CAO.md](CAO.md), [EXE.md](EXE.md) — [#2542](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2542)
 - Context / sync / observability / stewardship: [WSP.md](WSP.md), [SFC.md](SFC.md), [OEF.md](OEF.md), [CES.md](CES.md) — [#2543](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2543)
+- Final three charters (completing 14/14): [EBF.md](EBF.md), [HIX.md](HIX.md), [DRI.md](DRI.md) — [#2836](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2836) (SBI-7)
+
+Coverage is now **14/14** Level 2 control boundaries, plus the CES stewardship practice.
 
 ## Pending (later backlog)
 
 These are open issues, not gaps in reasoning:
 
-- **Pending charters:** HIX, EBF, DRI — not in this batch; tracked under epic [#2533](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533).
 - **Tests / evals:** invariant registry [#2550](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2550), anti-contamination eval corpus [#2551](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2551), xfail skeletons [#2552](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2552).
 
 The `Required tests` named in each charter are **future** test names for #2550–#2552; this batch

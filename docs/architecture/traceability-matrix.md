@@ -5,7 +5,7 @@ Owner: Architecture spine / CES practice
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: canonical (principle → artifact mapping); subordinate to the docs it maps
-Last reviewed: 2026-06-26
+Last reviewed: 2026-07-03
 Last verified against: docs/foundation/00-yggdrasil-doctrine.md, docs/architecture/functional-ontology.md, docs/architecture/semantic-dimensions.md, docs/architecture/cross-scope-flow.md, docs/foundation/yggdrasil-architecture-context-packet.md, docs/SYSTEM_BREAKDOWN_STRUCTURE.md
 
 # Yggdrasil Traceability Matrix
@@ -69,15 +69,14 @@ issues add rows without restructuring it.
 | [semantic-dimensions.md](semantic-dimensions.md) | Orthogonal meaning-preserving metadata. | #2538 |
 | [cross-scope-flow.md](cross-scope-flow.md) | Governed cross-scope use. | #2539 |
 
-## Boundary charters delivered (#2540–#2543)
+## Boundary charters delivered (#2540–#2543, #2836)
 
-The boundary charters for the **delivered** boundaries are no longer pending. Eleven of the fourteen
-Level 2 control boundaries — plus the CES stewardship practice (a twelfth charter, but not a control
-boundary) — now have a charter under
+All fourteen Level 2 control boundaries — plus the CES stewardship practice (a fifteenth charter,
+but not a control boundary) — now have a charter under
 [`docs/boundaries/`](../boundaries/README.md) stating what each owns, what it must never own, its
 inputs/outputs, required metadata, policy/provenance obligations, invariants, failure modes, and the
-future tests that will enforce it. **HIX, EBF, and DRI remain pending** (later backlog under #2533) —
-do not treat this matrix as full boundary-charter coverage until all fourteen charters exist.
+future tests that will enforce it. Charter coverage is **14/14**; HIX, EBF, and DRI were the last
+three, delivered by [#2836](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2836) (SBI-7).
 
 | Charter | Boundary | Enforces (principle rows) |
 | --- | --- | --- |
@@ -91,11 +90,14 @@ do not treat this matrix as full boundary-charter coverage until all fourteen ch
 | [EXE.md](../boundaries/EXE.md) | Capability Execution & Automation | #10 (execution cannot authorize itself) |
 | [WSP.md](../boundaries/WSP.md) | Workspace, Scope & Principal Context | #2, #11 (context is not identity; scope binding is not permission) |
 | [SFC.md](../boundaries/SFC.md) | Synchronization, Federation & Consensus | #11, #14 (sync preserves boundaries; parent aggregation is not sibling sharing) |
+| [HIX.md](../boundaries/HIX.md) | Human Interaction & Intent | #17 (propose/confirm/escalate rather than silently act) |
+| [EBF.md](../boundaries/EBF.md) | External Boundary Fabric | #18 (standards/providers are adapters, not the ontology) |
+| [DRI.md](../boundaries/DRI.md) | Derived Representation & Indexing | #8, #16 (projection is not evidence; derived representations preserve metadata/provenance) |
 | [OEF.md](../boundaries/OEF.md) | Observability, Evaluation & Fitness | #13 (observability is not policy) |
 | [CES.md](../boundaries/CES.md) | Contract & Evolution Stewardship (practice, not runtime) | architecture evolves explicitly |
 
 Index + template: [README.md](../boundaries/README.md), [\_template.md](../boundaries/_template.md).
-Pending charters (later backlog): HIX, EBF, DRI.
+Charter coverage is complete: 14/14 Level 2 control boundaries, plus CES.
 
 Per-principle charter references:
 
