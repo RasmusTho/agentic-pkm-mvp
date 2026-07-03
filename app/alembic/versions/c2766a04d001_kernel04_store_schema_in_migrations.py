@@ -19,6 +19,11 @@ from alembic import op
 # Alembic identifiers
 revision = "c2766a04d001"
 down_revision = "5b8ff54bed0f"
+
+# Machine-readable classification for the promotion migration gate
+# (docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md;
+# app/release_channels/reversibility.py). Downgrade raises by design.
+reversibility = "forward-only"
 branch_labels = None
 depends_on = None
 
