@@ -37,6 +37,30 @@ python -m app.cli health status --json
 - Runtime processing is driven by the DB outbox; `INDEX_OUTBOX_PATH` remains the append-only audit log. Clearing the JSONL file only affects audit/diagnostics and does not reset the DB queue.
 - There is no `health explain` command in this release; use `python -m app.cli health status --json` (plus the health incident log) to understand why a state transition occurred.
 
+## Dead-letter signal
+
+The contract snapshot surfaces the dead-letter queue state (KERNEL-12 / #2774, audit invariant I-E4) so a "quietly does nothing" pipeline stall is loud instead of invisible:
+
+| Snapshot field | Meaning | Source |
+| --- | --- | --- |
+| `dead_lettered_count` | Number of `outbox.event.dead_lettered` audit records — outbox rows the worker dropped after exhausting its dispatch-attempt budget. | DB outbox (`topic = 'outbox.event.dead_lettered'`) when `STORE_BACKEND=pg`; otherwise the JSONL audit-log tail. |
+| `oldest_undelivered_age_seconds` | Age of the oldest DB outbox row still pending delivery (`delivered_at is null`); `0.0` when the queue is empty. | DB outbox only. On the file/memory path this is always `0.0` — the JSONL log is an audit sink with no delivery tracking. |
+| `dead_letter_status` | `pass` or `warn`; `warn` when either threshold below is breached. | Computed from the two fields against `HealthThresholds`. |
+
+Thresholds (configurable in the vault `health.md` `thresholds:` block, same as the outbox-age thresholds; both keys are optional and default when absent):
+
+| Threshold | Default | Breach condition |
+| --- | --- | --- |
+| `dead_lettered_warn` | `1` | `dead_lettered_count >= dead_lettered_warn` (any dead-letter is loud by default) |
+| `oldest_undelivered_age_warn_s` | `600.0` | `oldest_undelivered_age_seconds > oldest_undelivered_age_warn_s` |
+
+Posture — **alerting signal only, read-only, no auto-repair**:
+
+- A breach sets `dead_letter_status: warn` and appends an inspection hint to `suggested_actions`, and the CLI dependency check (`python -m app.cli health --json`, key `checks.dead_letters`) reports `ok: false` with the same fields.
+- A breach does **not** block vault writes: dead-letter breach is not in `WRITE_BLOCKED_STATES` (`writes_allowed` stays `true`). Dead-letters are downstream-processing failures; capture is the product and stays available while processing is repaired.
+- `checks.dead_letters` is a non-required check: it never flips the aggregate `/api/health` `ok`/`required_ok` booleans, so a full dead-letter queue cannot restart containers.
+- Re-driving or clearing dead-lettered rows is an explicit operator/agent action; no health surface mutates the outbox.
+
 ## Span + logging
 The command is wrapped with `@span("health.check")`, so health check runs are recorded in `docs/OBSERVABILITY.md`. Exceptions populate `extra.error`.
 
@@ -45,7 +69,7 @@ The command is wrapped with `@span("health.check")`, so health check runs are re
 - Run `python -m app.cli health status --json` after manual ingestion to confirm `state` is `running` and that `catch_up_progress["processing_mode"]` is `idle` (or `replay` while the worker catches up).
 ## Health threshold env-var overrides (lab profile only)
 
-The four `HEALTH_THRESHOLDS_*` environment variables can override the threshold
+The `HEALTH_THRESHOLDS_*` environment variables can override the threshold
 values that are normally read from the vault settings file:
 
 | Variable | Field | Type |
@@ -54,6 +78,8 @@ values that are normally read from the vault settings file:
 | `HEALTH_THRESHOLDS_OUTBOX_RECOVER_OLDEST_AGE_S` | `outbox_recover_oldest_age_s` | `float` |
 | `HEALTH_THRESHOLDS_DEGRADE_SAMPLES` | `degrade_samples` | `int` |
 | `HEALTH_THRESHOLDS_RECOVER_SAMPLES` | `recover_samples` | `int` |
+| `HEALTH_THRESHOLDS_DEAD_LETTERED_WARN` | `dead_lettered_warn` | `int` |
+| `HEALTH_THRESHOLDS_OLDEST_UNDELIVERED_AGE_WARN_S` | `oldest_undelivered_age_warn_s` | `float` |
 
 **These overrides are only applied when `PKM_SETTINGS_PROFILE=lab`.**
 In operator/prod profiles (the default) the variables are silently ignored,

@@ -27,6 +27,10 @@ class HealthThresholds:
     outbox_recover_oldest_age_s: float
     degrade_samples: int
     recover_samples: int
+    # Dead-letter signal thresholds (KERNEL-12 / #2774). Optional in vault
+    # settings frontmatter so existing deployed health.md files keep loading.
+    dead_lettered_warn: int = 1
+    oldest_undelivered_age_warn_s: float = 600.0
 
     @staticmethod
     def defaults() -> HealthThresholds:
@@ -35,6 +39,8 @@ class HealthThresholds:
             outbox_recover_oldest_age_s=5.0,
             degrade_samples=3,
             recover_samples=10,
+            dead_lettered_warn=1,
+            oldest_undelivered_age_warn_s=600.0,
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -43,6 +49,8 @@ class HealthThresholds:
             "outbox_recover_oldest_age_s": self.outbox_recover_oldest_age_s,
             "degrade_samples": self.degrade_samples,
             "recover_samples": self.recover_samples,
+            "dead_lettered_warn": self.dead_lettered_warn,
+            "oldest_undelivered_age_warn_s": self.oldest_undelivered_age_warn_s,
         }
 
 
@@ -100,6 +108,14 @@ _ENV_OVERRIDE_SPEC = {
     "HEALTH_THRESHOLDS_RECOVER_SAMPLES": (
         "recover_samples",
         int,
+    ),
+    "HEALTH_THRESHOLDS_DEAD_LETTERED_WARN": (
+        "dead_lettered_warn",
+        int,
+    ),
+    "HEALTH_THRESHOLDS_OLDEST_UNDELIVERED_AGE_WARN_S": (
+        "oldest_undelivered_age_warn_s",
+        float,
     ),
 }
 
@@ -250,6 +266,19 @@ def _parse_thresholds(data: dict[str, Any], errors: list[str]) -> HealthThreshol
             values[key] = caster(raw_value)
         except Exception:
             threshold_errors.append(f"invalid thresholds.{key}")
+    # Dead-letter thresholds are OPTIONAL (default when absent) so settings
+    # files written before KERNEL-12 keep loading without a status="fail".
+    for key, caster in [
+        ("dead_lettered_warn", int),
+        ("oldest_undelivered_age_warn_s", float),
+    ]:
+        raw_value = raw_thresholds.get(key)
+        if raw_value is None:
+            continue
+        try:
+            values[key] = caster(raw_value)
+        except Exception:
+            threshold_errors.append(f"invalid thresholds.{key}")
     if threshold_errors:
         errors.extend(threshold_errors)
         return None
@@ -313,6 +342,8 @@ def _apply_env_overrides(
         "outbox_recover_oldest_age_s": thresholds.outbox_recover_oldest_age_s,
         "degrade_samples": thresholds.degrade_samples,
         "recover_samples": thresholds.recover_samples,
+        "dead_lettered_warn": thresholds.dead_lettered_warn,
+        "oldest_undelivered_age_warn_s": thresholds.oldest_undelivered_age_warn_s,
     }
     errors: list[str] = []
     for env_key, (field, caster) in _ENV_OVERRIDE_SPEC.items():

@@ -62,6 +62,85 @@ def _count_outbox_lines(path: Path) -> int:
     return _count_outbox_lines_from_file(path)
 
 
+# Dead-letter audit topic (KERNEL-12 / #2774). Mirrors OUTBOX_EVENT_DEAD_LETTERED
+# in app/workers/outbox_worker.py without importing the worker module.
+_DEAD_LETTER_EVENT = "outbox.event.dead_lettered"
+
+
+def _dead_letter_stats_db() -> dict[str, Any] | None:
+    """Dead-letter/backlog stats via the DB outbox when STORE_BACKEND=pg. None on any error."""
+    backend = (os.getenv("STORE_BACKEND") or "memory").strip().lower()
+    if backend != "pg":
+        return None
+    try:
+        from app.services.outbox import dead_letter_stats
+
+        return dead_letter_stats()
+    except Exception:
+        return None
+
+
+def _dead_letter_stats_from_records(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """File-based fallback: count dead-letter audit records in the JSONL tail.
+
+    The JSONL log is an append-only audit sink with no delivery tracking, so
+    ``oldest_undelivered_age_seconds`` is 0.0 on this path — the DB outbox is
+    the only delivery queue (the memory backend has none).
+    """
+    count = 0
+    for rec in records:
+        if event_name(rec) == _DEAD_LETTER_EVENT:
+            count += 1
+    return {"dead_lettered_count": count, "oldest_undelivered_age_seconds": 0.0}
+
+
+def _dead_letter_status(stats: dict[str, Any], thresholds: HealthThresholds) -> str:
+    """Return ``"warn"`` when a dead-letter/backlog threshold is breached, else ``"pass"``.
+
+    Alerting signal ONLY (KERNEL-12 design decision): this status never feeds
+    ``WRITE_BLOCKED_STATES`` — dead-letters are downstream-processing failures
+    and must not block the human's ability to capture notes.
+    """
+    warn_count = max(int(thresholds.dead_lettered_warn), 1)
+    if int(stats.get("dead_lettered_count") or 0) >= warn_count:
+        return "warn"
+    age = float(stats.get("oldest_undelivered_age_seconds") or 0.0)
+    if age > float(thresholds.oldest_undelivered_age_warn_s):
+        return "warn"
+    return "pass"
+
+
+def dead_letter_snapshot(*, thresholds: HealthThresholds | None = None) -> dict[str, Any]:
+    """Read-only dead-letter signal for non-contract health surfaces (CLI check).
+
+    Reflects the exact fields and thresholds `HealthContract.evaluate()` puts in
+    the contract snapshot, computed from the same outbox source (DB when
+    ``STORE_BACKEND=pg``, else the JSONL audit tail). Detection only — never
+    mutates the outbox.
+    """
+    if thresholds is None:
+        try:
+            vault_root = resolve_optional_vault_root()
+        except VaultRootMisconfiguredError:
+            vault_root = None
+        thresholds = load_health_settings(vault_root=vault_root).settings.thresholds
+    stats = _dead_letter_stats_db()
+    source = "db_outbox"
+    if stats is None:
+        stats = _dead_letter_stats_from_records(_read_tail_records())
+        source = "jsonl_tail"
+    return {
+        "dead_lettered_count": stats["dead_lettered_count"],
+        "oldest_undelivered_age_seconds": stats["oldest_undelivered_age_seconds"],
+        "dead_letter_status": _dead_letter_status(stats, thresholds),
+        "source": source,
+        "thresholds": {
+            "dead_lettered_warn": thresholds.dead_lettered_warn,
+            "oldest_undelivered_age_warn_s": thresholds.oldest_undelivered_age_warn_s,
+        },
+    }
+
+
 def _read_tail_records(path: Path | None = None) -> list[dict[str, Any]]:
     """Read at most _HEALTH_TAIL_BYTES from the end of the outbox; return parsed records."""
     target = (path or default_outbox_path()).expanduser()
@@ -268,9 +347,21 @@ class HealthContract:
         )
         events_status = self._events_status(records)
         errors = self._count_errors(records, now)
+        # Dead-letter signal (KERNEL-12 / #2774): read-only detection from the
+        # outbox source (DB when STORE_BACKEND=pg, else the JSONL audit tail).
+        dead_letter = _dead_letter_stats_db() or _dead_letter_stats_from_records(records)
+        dead_letter_status = _dead_letter_status(
+            dead_letter,
+            settings_result.settings.thresholds,
+        )
         writes_allowed = state not in WRITE_BLOCKED_STATES
         write_guard_reason = None if writes_allowed else reason
-        suggested_actions = self._suggested_actions(age, index_status, writes_allowed)
+        suggested_actions = self._suggested_actions(
+            age,
+            index_status,
+            writes_allowed,
+            dead_letter_status=dead_letter_status,
+        )
 
         bootstrap_state, bootstrap_reason = self._bootstrap_state(object_count, outbox_count)
 
@@ -318,6 +409,9 @@ class HealthContract:
             "index_doctor_status": index_status,
             "events_doctor_status": events_status,
             "errors_last_10m": errors,
+            "dead_lettered_count": dead_letter["dead_lettered_count"],
+            "oldest_undelivered_age_seconds": dead_letter["oldest_undelivered_age_seconds"],
+            "dead_letter_status": dead_letter_status,
             "settings_status": settings_result.status,
             "settings_source": settings_result.source.to_payload(),
             "settings_errors": settings_result.errors,
@@ -359,6 +453,13 @@ class HealthContract:
         # timeout, so on a known-down DB it could block for seconds. Report 0.
         object_count = 0
         events_status = self._events_status(records)
+        # DB is known down: compute the dead-letter signal from the JSONL audit
+        # tail only (never a second DB connection on this path).
+        dead_letter = _dead_letter_stats_from_records(records)
+        dead_letter_status = _dead_letter_status(
+            dead_letter,
+            settings_result.settings.thresholds,
+        )
         catch_up_progress = self._catch_up_progress(
             outbox_count,
             age,
@@ -412,6 +513,9 @@ class HealthContract:
             "index_doctor_status": index_status,
             "events_doctor_status": events_status,
             "errors_last_10m": self._count_errors(records, now),
+            "dead_lettered_count": dead_letter["dead_lettered_count"],
+            "oldest_undelivered_age_seconds": dead_letter["oldest_undelivered_age_seconds"],
+            "dead_letter_status": dead_letter_status,
             "settings_status": settings_result.status,
             "settings_source": settings_result.source.to_payload(),
             "settings_errors": settings_result.errors,
@@ -524,12 +628,26 @@ class HealthContract:
             "processing_mode": mode,
         }
 
-    def _suggested_actions(self, age: float, index_status: str, writes_allowed: bool) -> list[str]:
+    def _suggested_actions(
+        self,
+        age: float,
+        index_status: str,
+        writes_allowed: bool,
+        *,
+        dead_letter_status: str = "pass",
+    ) -> list[str]:
         actions: list[str] = []
         if age > 0:
             actions.append("python -m app.cli events-doctor --path $INDEX_OUTBOX_PATH")
         if index_status in {"warn", "fail"}:
             actions.append("python -m app.cli index doctor --json")
+        if dead_letter_status == "warn":
+            # Detection only: inspection is suggested; re-drive/repair stays an
+            # explicit operator/agent action (KERNEL-12 read-only invariant).
+            actions.append(
+                "inspect dead-lettered outbox events: "
+                "grep outbox.event.dead_lettered $INDEX_OUTBOX_PATH"
+            )
         if not writes_allowed:
             actions.append("python -m app.cli health status --json")
         return actions
@@ -605,5 +723,6 @@ __all__ = [
     "GLOBAL_STATE_MACHINE",
     "DEFAULT_CONTRACT",
     "HealthContract",
+    "dead_letter_snapshot",
     "reset_state_machine",
 ]
