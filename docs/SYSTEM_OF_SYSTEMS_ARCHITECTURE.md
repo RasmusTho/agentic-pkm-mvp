@@ -154,3 +154,18 @@ This document is verified by the existence of:
 - a `Subsystem map` section that names all eight subsystems (Human Surface, Knowledge & Artifact, Runtime Projection, Capability, Agent/Orchestration, Governance/Authority, Integration Fabric, Observability/Fitness) and links each to its owner doc(s).
 
 `docs/ARCHITECTURE.md` and `docs/DOCS_INDEX.md` point to this document without duplicating its content.
+
+## 15288 overlay note (term usage)
+
+The "system-of-systems" framing in this document's title and `Subsystem map` above is colloquial for
+"modular, authority-separated single system" (`docs/GLOSSARY.md :: System of Systems`; ADR-0015's
+modularity intent) — it is not an INCOSE System of Systems claim about the eight subsystems above,
+which fail the INCOSE independent-operability test (they are "conceptual decompositions of the same
+single local-first runtime… not separate deployments, services, or processes," per the Reading rules
+above). This reading is advisory, from the 2026-07-03 INCOSE boundary audit
+(`docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md :: §3`), not a change to this document's
+authority or content. The full 15288 vocabulary — System of Interest boundary, enabling-system /
+external-system classification, and the integrated system context model — lives in
+`docs/architecture/system-context-overlay.md`. Whether to rename this document given the one
+INCOSE-defensible SoS reading (the operator's assembled environment) is an open owner decision (audit
+§15 Q2); this note does not settle it.
