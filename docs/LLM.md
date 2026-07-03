@@ -28,7 +28,7 @@ The embedding provider is selected by `EMBED_PRIMARY_PROVIDER` (env) when set, o
 - `openai`: chat via OpenAI-compatible Chat Completions API.
 - `deepseek`: chat via DeepSeek API.
 
-> **Planned (not yet usable):** `gemini` is a recognized embedding-provider *selection* value, but its adapter is not yet registered in `app/llm/embeddings.py::PROVIDER_REGISTRY`. Setting `EMBED_PRIMARY_PROVIDER=gemini` today fails with `Unsupported embedding provider`. The accepted posture (`docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`) is Ollama-primary with a **dimension-matched (768)** Google Gemini (`gemini-embedding-001` @ `output_dimensionality=768`, L2-renormalized) auto-fallback consulted on primary failure; the fallback write is **MIXED-IDENTITY / reconcilable** (carries the Gemini identity, reconciled via `index reconcile` once Ollama recovers; the query path always uses the primary identity — `docs/EMBEDDING_RELIABILITY/README.md` CTI-1/2/3). The adapter lands in the Embedding Reliability capability (issue #2292; runtime wiring tracked by #2296/#2297); see `docs/EMBEDDINGS.md :: Configuration` and `:: Fallback rule` for provider selection and the fallback contract.
+> **Planned (not yet usable):** `gemini` is a recognized embedding-provider *selection* value, but its adapter is not yet registered in `app/llm/embeddings.py::PROVIDER_REGISTRY` (superseded as the canonical registry — see `app/components/llm/`, `docs/COMPONENTS.md:95`; this module is still the current physical dispatch location). Setting `EMBED_PRIMARY_PROVIDER=gemini` today fails with `Unsupported embedding provider`. The accepted posture (`docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`) is Ollama-primary with a **dimension-matched (768)** Google Gemini (`gemini-embedding-001` @ `output_dimensionality=768`, L2-renormalized) auto-fallback consulted on primary failure; the fallback write is **MIXED-IDENTITY / reconcilable** (carries the Gemini identity, reconciled via `index reconcile` once Ollama recovers; the query path always uses the primary identity — `docs/EMBEDDING_RELIABILITY/README.md` CTI-1/2/3). The adapter lands in the Embedding Reliability capability (issue #2292; runtime wiring tracked by #2296/#2297); see `docs/EMBEDDINGS.md :: Configuration` and `:: Fallback rule` for provider selection and the fallback contract.
 
 ## Core Environment Variables (Current Reality)
 
@@ -37,15 +37,15 @@ The embedding provider is selected by `EMBED_PRIMARY_PROVIDER` (env) when set, o
 - `LLM_MODEL` (default: `llama3.1:8b`) used for chat/completions
 - `LLM_REASONING_MODEL` (default: `LLM_MODEL`) used when callers request reasoning mode
 - `LLM_TIMEOUT` (seconds)
-  - chat defaults to 120s in `app/llm/adapter.py`
-  - embeddings defaults to 60s in `app/llm/embeddings.py`
+  - chat defaults to 120s in `app/llm/adapter.py` (superseded provider surface — canonical access is `app/components/llm/`, `docs/COMPONENTS.md:95`)
+  - embeddings defaults to 60s in `app/llm/embeddings.py` (superseded adapter registry — canonical access is `app/components/llm/`, `docs/COMPONENTS.md:95`)
 
 ### Ollama (Chat)
 - `OLLAMA_HOST` (default: `http://127.0.0.1:11434`)
   - Chat endpoint: `${OLLAMA_HOST}/api/chat`
 
 ### Ollama (Embeddings)
-Embeddings are handled by `app/llm/embeddings.py`.
+Embeddings are currently dispatched from `app/llm/embeddings.py` (superseded as the canonical adapter registry; the live canonical access layer is `app/components/llm/` — `docs/COMPONENTS.md:95` — via `get_embeddings_client`).
 
 - Base URL:
   - `OLLAMA_URL` (preferred) or `OLLAMA_HOST` (fallback)

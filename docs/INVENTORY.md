@@ -14,20 +14,31 @@ Reference inventory for configuration, dependencies, and operational contracts. 
 
 <!-- SECTION:INVENTORY:BEGIN -->
 ## Environment variables
+
+> **Superseded module note.** `app/llm/adapter.py` has zero runtime importers; it is **superseded**
+> as the provider surface. `app/llm/embeddings.py::PROVIDER_REGISTRY` is likewise superseded as the
+> adapter registry. The live canonical access layer for both chat and embeddings is
+> `app/components/llm/` (`docs/COMPONENTS.md:95` — "LLM router + fabric"); high-level modules must
+> use `get_chat_client` / `get_embeddings_client`, and
+> `tests/architecture/test_import_rules.py::test_high_level_llm_access_uses_fabric` enforces the
+> split. The rows below still name `app/llm/adapter.py` / `app/llm/embeddings.py` because those are
+> the current physical locations of provider env-var parsing, not because they are the canonical
+> access surface.
+
 | Variable | Used in (module) | Default | Effect |
 | --- | --- | --- | --- |
 | `VAULT_ROOT` | worker/watcher/cli | (none) | Path to the live vault root for watcher/ingest flows. |
 | `VAULT_LAYOUT_NOTE_REL` | `app/vault/layout.py` | (none) | Disambiguate which `vault.layout.md` to load when multiple exist. |
 | `VAULT_SYSTEM_DIR_REL` / `VAULT_INBOX_DIR_REL` / `VAULT_DESK_DIR_REL` | `app/vault/layout.py`, `app/vault/paths.py` | (none) | Folder hints; used when generating/validating layout or resolving paths. |
-| `LLM_PROVIDER` | `app/llm/adapter.py`, `app/llm/embeddings.py` | `ollama` | Selects chat/embedding backend (`ollama`, `mock`, `openai`, `deepseek`). |
-| `LLM_MODEL` / `LLM_REASONING_MODEL` | `app/llm/adapter.py` | `llama3.1:8b` | Chat model; reasoning flavor via `LLM_REASONING_MODEL`. |
-| `LLM_MOCK_RESPONSE` | `app/llm/adapter.py` | `UNSURE` | Returned when `LLM_PROVIDER=mock`. |
-| `LLM_TIMEOUT` | `app/llm/adapter.py`, `app/llm/embeddings.py` | `120` s (chat); `60` s (embeddings) | HTTP timeouts for provider calls. |
-| `OLLAMA_HOST` / `OLLAMA_URL` | `app/llm/adapter.py`, `app/llm/embeddings.py` | `http://127.0.0.1:11434` | Base URL for Ollama chat + embeddings. |
-| `OLLAMA_EMBED_MODEL` / `EMBED_MODEL` | `app/llm/embeddings.py` | `nomic-embed-text:latest` | Embedding model for `/api/embeddings`. |
+| `LLM_PROVIDER` | `app/llm/adapter.py` (superseded, see note above), `app/llm/embeddings.py` (superseded, see note above) | `ollama` | Selects chat/embedding backend (`ollama`, `mock`, `openai`, `deepseek`). |
+| `LLM_MODEL` / `LLM_REASONING_MODEL` | `app/llm/adapter.py` (superseded, see note above) | `llama3.1:8b` | Chat model; reasoning flavor via `LLM_REASONING_MODEL`. |
+| `LLM_MOCK_RESPONSE` | `app/llm/adapter.py` (superseded, see note above) | `UNSURE` | Returned when `LLM_PROVIDER=mock`. |
+| `LLM_TIMEOUT` | `app/llm/adapter.py` (superseded, see note above), `app/llm/embeddings.py` (superseded, see note above) | `120` s (chat); `60` s (embeddings) | HTTP timeouts for provider calls. |
+| `OLLAMA_HOST` / `OLLAMA_URL` | `app/llm/adapter.py` (superseded, see note above), `app/llm/embeddings.py` (superseded, see note above) | `http://127.0.0.1:11434` | Base URL for Ollama chat + embeddings. |
+| `OLLAMA_EMBED_MODEL` / `EMBED_MODEL` | `app/llm/embeddings.py` (superseded, see note above) | `nomic-embed-text:latest` | Embedding model for `/api/embeddings`. |
 | `EMBED_DIM` | `app/embedding_config.py` | `1536` | Expected embedding dimension (identity). See `docs/EMBEDDINGS.md` for the normative 768-vs-1536 nuance. |
-| `OPENAI_API_KEY`, `OPENAI_BASE` | `app/llm/adapter.py` | – / OpenAI chat URL | Required when `LLM_PROVIDER=openai`. |
-| `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE` | `app/llm/adapter.py` | – / DeepSeek chat URL | Required when `LLM_PROVIDER=deepseek`. |
+| `OPENAI_API_KEY`, `OPENAI_BASE` | `app/llm/adapter.py` (superseded, see note above) | – / OpenAI chat URL | Required when `LLM_PROVIDER=openai`. |
+| `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE` | `app/llm/adapter.py` (superseded, see note above) | – / DeepSeek chat URL | Required when `LLM_PROVIDER=deepseek`. |
 | `INDEX_OUTBOX_PATH` | watcher/cli (`app/outbox/events.py`, `app/index/outbox.py`) | `tmp/index-outbox.jsonl` | JSONL audit log (non-canonical); watcher may append for diagnostics. |
 | `DATABASE_URL` / `DB_DSN` | `app/services/outbox.py`, runtime | (none) | DB connection string (required when DB outbox is enabled/required). |
 | `STORE_BACKEND` | watcher/runtime (`app/watcher/registry.py`) | `memory` | Controls some watcher gating/requirements. |
@@ -61,7 +72,7 @@ All commands run via `python -m app.cli <command>` (Click). `--json` switches to
 - **ffmpeg** – converts arbitrary formats to 16 kHz mono wav (`app/media/transcribe.py:47-65`).
 - **faster-whisper** – local ASR with `_MODEL_CACHE` (`app/media/transcribe.py:68-99`).
 - **Ollama** – `/api/chat` and `/api/embeddings` (`app/agents/qa/agent.py:31-48`, `app/llm/embeddings.py:34-43`).
-- **httpx / requests** – also used for OpenAI/DeepSeek (`app/llm/adapter.py:16-47`).
+- **httpx / requests** – also used for OpenAI/DeepSeek (`app/llm/adapter.py:16-47`, superseded — see Environment variables note above; canonical access is `app/components/llm/`).
 
 ## Index-outbox JSONL schema
 Defined in `app/index/outbox.py`. Each line contains at least:

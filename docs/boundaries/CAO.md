@@ -46,6 +46,16 @@ without side effects.
 
 - **RCA** (request context), **MEM** (request recall), **GOV** (request authorization), **EXE** (request execution), **EBF** (model providers).
 
+> **CES-pending divergence.** `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` Part 5's dependency table
+> (`:1446`) lists `CAO | RCA, MEM, HKA read contracts, SIP, GOV, EXE request contracts, EBF model
+> providers` — i.e. it grants CAO an "HKA read contracts" dependency this charter does not list.
+> That grant is **not** applied here: it would widen CAO's authority surface against this charter's
+> own reach-around caution ("must consume bounded context, never the raw store" — see Calls
+> forbidden below), so it is routed through CES stewardship
+> (`docs/boundaries/CES.md`) rather than mechanically synced. See
+> `docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md` §6 (C4) and
+> `docs/architecture/SBS_TRANSITION_DEBT.md` for tracking.
+
 ## Calls forbidden
 
 - **Direct mutation / tool calls** — must not write HKA or call tools without EXE + GOV.
