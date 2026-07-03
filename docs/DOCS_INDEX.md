@@ -171,7 +171,10 @@ The 2026 docs cleanup work is not retained as live documentation. The active rea
 | --- | --- | --- | --- | --- |
 | README.md | Top-level overview | Aligned (v6.0 seams shipped; v6.1+ framing) | 2026-05-17 | Quickstart + invariants; points readers to DOCS_INDEX/STATUS/ARCHITECTURE and the wider active docs set. |
 | docs/DOCS_INDEX_RATIONALE.md | DOCS_INDEX Notes rationale register | Reference (companion to DOCS_INDEX, added 2026-07-03) | 2026-07-03 | Relocated decision-history/rationale prose cut from DOCS_INDEX Notes cells during the A2b prose-slim pass, keyed by path. Advisory, non-normative. |
+| docs/REQUIREMENTS_INDEX.md | Requirements coverage index (SRS axes) | Reference (SYSTEM_CONTEXT_OVERLAY task SBI-5, #2839) | 2026-07-03 | Thin 20-axis index mapping SRS/requirements coverage axes to verdict (Well-specified/Scattered/Absent) and owner doc(s); records the deliberate scale/perf-budget absence and flags audit §15 Q1/Q5 as still open. Transcribes `docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md` §8; not an SRS itself. |
 | docs/ui-audit.md | Companion UI UX audit + correction record (point-in-time) | Point-in-time audit (non-canonical) | 2026-06-27 | Evidence-based UX audit with findings and fixes applied in one pass. Subordinate to `docs/COMPANION_UI_PRODUCT_SPEC.md`; deferred items tracked as GitHub issues. |
+| schemas/README.md | JSON Schemas index (operational + Yggdrasil architecture contracts) | Reference | 2026-07-01 | Indexes operational schemas (capture_triage, merge_arbiter, hygiene_action, system-settings) and the Yggdrasil architecture-contract schemas (#2544-#2548) that pair one-to-one with `docs/architecture/*` prose docs; no runtime validation harness wired into CI yet. |
+| ops/host-setup/README.md | Yggdrasil two-box host setup (operator runbook) | Reference (operator runbook) | 2026-06-01 | Mac mini + gaming-PC + thin-client host topology over Tailscale, with LLM routing that prefers the idle gaming GPU and backs off during games. Operator-run steps plus per-box coding-agent playbooks. |
 
 ## Core SoT Docs
 | Path | Scope | Review status | Last reviewed | Notes |
