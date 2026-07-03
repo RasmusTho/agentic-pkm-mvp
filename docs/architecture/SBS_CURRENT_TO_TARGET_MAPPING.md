@@ -5,8 +5,8 @@ Owner: Architecture spine / CES practice
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-24
-Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/ENVIRONMENTS.md, docs/VAULT_OPTIONAL_RUNTIME/README.md
+Last reviewed: 2026-07-03
+Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/ENVIRONMENTS.md, docs/VAULT_OPTIONAL_RUNTIME/README.md, docs/architecture/system-context-overlay.md
 
 # SBS Current-To-Target Mapping
 
@@ -32,6 +32,32 @@ Use this map when changing an existing area and classifying target SBS impact. T
 | Sync | SFC, WSP, GOV, PDM, HKA, SIP, OEF | Current single-node posture maps to SFC as a no-op/single-authoritative-node boundary. | Sync can be postponed until it resolves meaning through ad hoc rules. |
 | Observability | OEF, GOV, CES practice | Health, traces, metrics, evals, and CI fitness map to OEF and stewardship. | OEF findings can mutate behavior without governance if control loops are introduced. |
 | Docs / roadmap / issue processes | CES practice, OEF, all owners | ADRs, contracts, registers, roadmap, PR template, and issues are the stewardship surface. | Documentation can drift back into implementation structure without owner checks. |
+
+## Spine-Subsystem Crosswalk
+
+Row-level mapping from the current eight-subsystem spine (`docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`)
+to its SBS boundary code(s), reconciled in `docs/architecture/system-context-overlay.md` (§4 of
+`docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md`, SBI-3). This is a translation table
+between two coexisting taxonomies, not an arbitration of which one is authoritative when they
+disagree.
+
+| Spine subsystem | SBS code(s) | Notes |
+|---|---|---|
+| Human Surface | HIX | Direct 1:1. |
+| Knowledge & Artifact | HKA (+ SIP) | HKA is the primary owner; SIP participates as the ingestion/source-projection path onto the same durable surface. |
+| Runtime Projection | PDM + DRI | Storage mechanics (PDM) and derived/rebuildable representations (DRI) both live under this spine subsystem. |
+| Capability | CAO + RCA | **The spine's "Capability" subsystem silently splits across two SBS boundaries — orchestration-facing capability surfacing (CAO) and retrieval/context-assembly capability (RCA) — and no other doc in the repo states this split explicitly.** |
+| Agent/Orchestration | CAO | Direct 1:1. |
+| Governance/Authority | GOV | Direct 1:1. |
+| Integration Fabric | EBF | Direct 1:1. |
+| Observability/Fitness | OEF | Direct 1:1. |
+
+WSP, SFC, MEM, and EXE have no dedicated spine ancestor in the table above — they are target-state
+refinements introduced by the SBS that the current eight-subsystem spine never named as first-class
+subsystems. This is exactly why the spine must stay a *bridge* from current runtime mental model to
+target decomposition (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:63`), not a competing decomposition: the
+spine is intentionally coarser than the SBS, and this crosswalk does not attempt to force a
+one-to-one row for subsystems the spine never claimed to have.
 
 ## Mapping Rule
 
