@@ -21,6 +21,7 @@ class ChatClient:
         kind: str | None = None,
         trace_id: str | None = None,
         max_tokens: int | None = None,
+        response_format: dict[str, Any] | str | None = None,
     ) -> str:
         return call_llm(
             name,
@@ -31,6 +32,7 @@ class ChatClient:
             provider_override=self.route.provider,
             model_override=self.route.model,
             max_tokens=max_tokens,
+            response_format=response_format,
         )
 
 

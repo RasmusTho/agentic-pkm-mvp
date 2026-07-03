@@ -69,8 +69,9 @@ def _ollama_chat(
     temperature: float = 0.0,
     timeout: float = 12.0,
     max_tokens: int | None = None,
+    response_format: dict[str, Any] | str | None = None,
 ) -> str:
-    body = {
+    body: dict[str, Any] = {
         "model": model,
         "messages": [
             {"role": "system", "content": system},
@@ -80,6 +81,10 @@ def _ollama_chat(
     }
     if max_tokens is not None:
         body["options"]["num_predict"] = int(max_tokens)
+    if response_format is not None:
+        # Ollama structured outputs: "json" for JSON mode, or a JSON Schema
+        # object for schema-constrained decoding (KERNEL-07).
+        body["format"] = response_format
 
     base = _ollama_base_url()
     parsed = urlparse(base)
@@ -251,10 +256,21 @@ def _http_chat(
     messages: list[dict[str, str]],
     timeout: float,
     max_tokens: int | None = None,
+    response_format: dict[str, Any] | str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     payload: dict[str, Any] = {"model": model, "messages": messages}
     if max_tokens is not None:
         payload["max_tokens"] = int(max_tokens)
+    if response_format is not None:
+        # OpenAI-compatible JSON mode. NOTE: the caller's JSON Schema is NOT
+        # transmitted on this path — a dict response_format degrades to generic
+        # {"type": "json_object"}, so the model is only nudged toward JSON and
+        # schema misses (wrong enum member, missing field) surface as UNKNOWN
+        # re-asks instead of being prevented by constrained decoding. Safe
+        # (caller-side validate_payload in app/components/llm/constrained.py is
+        # the real gate) but classification availability is lower here than on
+        # the Ollama path, which does receive the schema object via `format`.
+        payload["response_format"] = {"type": "json_object"}
     resp = requests.post(
         url,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -285,6 +301,7 @@ def call_llm(
     provider_override: str | None = None,
     model_override: str | None = None,
     max_tokens: int | None = None,
+    response_format: dict[str, Any] | str | None = None,
 ) -> str:
     def _deterministic_response_for_kind() -> str:
         if kind and "ranking" in str(kind):
@@ -358,6 +375,7 @@ def call_llm(
                     temperature,
                     timeout=float(os.getenv("LLM_TIMEOUT", "12")),
                     max_tokens=max_tokens,
+                    response_format=response_format,
                 )
             )
         except (LLMError, socket.timeout, ConnectionRefusedError, RuntimeError, OSError) as exc:
@@ -392,6 +410,7 @@ def call_llm(
                 messages=messages,
                 timeout=float(os.getenv("LLM_TIMEOUT", "60")),
                 max_tokens=max_tokens,
+                response_format=response_format,
             )
         except Exception as exc:
             raise LLMError(
@@ -411,6 +430,7 @@ def call_llm(
                 messages=messages,
                 timeout=float(os.getenv("LLM_TIMEOUT", "60")),
                 max_tokens=max_tokens,
+                response_format=response_format,
             )
         except Exception as exc:
             raise LLMError(

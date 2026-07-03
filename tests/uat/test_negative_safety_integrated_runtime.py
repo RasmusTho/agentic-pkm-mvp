@@ -336,8 +336,12 @@ def test_provider_unavailable_fails_closed(
     assert queue.status_code == 200, queue.text
     assert confirm.status_code == 200, confirm.text
     assert confirm.json()["status"] == "logged"
-    assert coauthor.status_code == 503, coauthor.text
-    assert "edit-capable LLM provider" in coauthor.json()["detail"]
+    # With no edit-capable provider the intent classification cannot validate:
+    # the coauthor surface fails closed on the explicit UNKNOWN landing surface
+    # (read-only + re-ask, KERNEL-07) and the note is never mutated.
+    assert coauthor.status_code == 200, coauthor.text
+    assert coauthor.json()["status"] == "unknown_intent_reask"
+    assert coauthor.json()["reask"] is True
     assert note.read_text(encoding="utf-8") == before_canvas
 
 

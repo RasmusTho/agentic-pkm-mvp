@@ -4,12 +4,15 @@ Covers the LLM-backed cognition that labels a canvas co-authoring *intent*
 (not the generated body) as co-authoring / governance-bearing / exploratory,
 and — when governance-bearing — into the correct ``GovernanceActionType``.
 
-The cognition is pure: it consults the shared ``ReasoningFacade`` and returns a
-typed label. It never mutates a note, calls ``CanvasWriter``, or stages a Panel
-intent. A degraded/mock/unparseable backend must never fabricate a governance
-routing; it defaults conservatively to co-authoring.
+The cognition is pure: it runs a schema-constrained completion through the
+shared utility (``app/components/llm/constrained.py``) and returns a typed
+label. It never mutates a note, calls ``CanvasWriter``, or stages a Panel
+intent. A degraded/mock/unvalidated completion must never fabricate a
+routing; it yields the explicit ``UNKNOWN`` class (KERNEL-07, #2769 — the
+former silent ``CO_AUTHORING`` default is gone).
 
-Implements CANVAS_CHAT_SURFACE/CLASSIFY_COAUTHORING_INTENT (issue #1743).
+Implements CANVAS_CHAT_SURFACE/CLASSIFY_COAUTHORING_INTENT (issue #1743);
+UNKNOWN semantics per RUNTIME_CORRECTNESS_KERNEL/STRUCTURED_INTENT_OUTPUT_WITH_UNKNOWN.
 """
 
 from __future__ import annotations
@@ -24,46 +27,38 @@ from app.chat.intent_classifier import (
     IntentClassification,
     IntentClassifierCognition,
 )
-from app.reasoning.models import ReasoningMode, ReasoningRun
 
 
-class _LabelStub:
-    """Deterministic facade stub returning a fixed classification label.
+class _CompletionStub:
+    """Deterministic raw-completion stub returning a fixed label.
 
-    Records calls so tests can assert the cognition consulted the facade with
-    the intent, and nothing else.
+    Records calls so tests can assert the cognition consulted the completion
+    with the intent, and nothing else. Raises when ``fail=True`` to simulate a
+    failed provider run.
     """
 
-    def __init__(self, label: str, *, status: str = "ok") -> None:
+    def __init__(self, label: str, *, fail: bool = False) -> None:
         self._label = label
-        self._status = status
+        self._fail = fail
         self.calls: list[dict[str, object]] = []
 
-    def answer(
+    def __call__(
         self,
-        question: str,
         *,
-        context: str | None = None,
-        object_ids: list[str] | None = None,
+        system: str,
+        user: str,
         trace_id: str | None = None,
-    ) -> ReasoningRun:
-        self.calls.append(
-            {"question": question, "context": context, "trace_id": trace_id}
-        )
-        return ReasoningRun(
-            id="run-intent-1",
-            mode=ReasoningMode.ASK_ANSWER,
-            status=self._status,  # type: ignore[arg-type]
-            result=None if self._status != "ok" else {"answer": self._label},
-            object_uuids=[],
-            trace_id=trace_id,
-            error=None if self._status == "ok" else "provider failed",
-        )
+        max_tokens: int | None = None,
+    ) -> str:
+        self.calls.append({"system": system, "user": user, "trace_id": trace_id})
+        if self._fail:
+            raise RuntimeError("provider failed")
+        return self._label
 
 
-def _classify(label: str, intent: str, *, status: str = "ok") -> IntentClassification:
-    facade = _LabelStub(label, status=status)
-    cognition = IntentClassifierCognition(facade_factory=lambda: facade)
+def _classify(label: str, intent: str, *, fail: bool = False) -> IntentClassification:
+    completion = _CompletionStub(label, fail=fail)
+    cognition = IntentClassifierCognition(completion=completion)
     return cognition.classify(intent=intent)
 
 
@@ -109,6 +104,19 @@ def test_cross_note_intent_classified() -> None:
     assert result.action_type is GovernanceActionType.CROSS_NOTE
 
 
+def test_governance_with_null_action_falls_back_to_frontmatter() -> None:
+    # Schema-valid governance classification with a null action subtype keeps
+    # the governance signal (routing to the gated pipeline is safe) with the
+    # conservative frontmatter bucket.
+    result = _classify(
+        '{"intent_class": "governance_bearing", "action_type": null}',
+        intent="promote this note",
+    )
+    assert result.intent_class is IntentClass.GOVERNANCE_BEARING
+    assert result.action_type is GovernanceActionType.FRONTMATTER_UPDATE
+    assert result.classified is True
+
+
 # ---------------------------------------------------------------------------
 # Co-authoring / exploratory → no governance action
 # ---------------------------------------------------------------------------
@@ -134,25 +142,29 @@ def test_exploratory_intent_classified() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Conservative degraded policy
+# Explicit UNKNOWN on validation failure (no CO_AUTHORING default)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    "label,status",
+    "label,fail",
     [
-        ("MOCK_ASK_ANSWER: classify intent | context: ...", "ok"),  # mock backend
-        ("this is not a parseable classification", "ok"),  # unparseable
-        ("", "ok"),  # empty
-        ("{\"intent_class\": \"governance_bearing\"}", "failed"),  # failed run
+        ("MOCK_ASK_ANSWER: classify intent | context: ...", False),  # mock backend
+        ("this is not a parseable classification", False),  # unparseable
+        ("", False),  # empty
+        ('{"intent_class": "governance_bearing"}', True),  # failed run
+        ('{"intent_class": "co_authoring"}', False),  # missing required key
+        ('{"intent_class": "unknown", "action_type": null}', False),  # not emittable
     ],
 )
-def test_degraded_backend_defaults_coauthoring(label: str, status: str) -> None:
-    result = _classify(label, intent="promote this note to evergreen", status=status)
-    # Never fabricate a governance routing from an untrusted/degraded response.
+def test_degraded_backend_yields_explicit_unknown(label: str, fail: bool) -> None:
+    result = _classify(label, intent="promote this note to evergreen", fail=fail)
+    # Never fabricate any routing from an untrusted/degraded/invalid response —
+    # and never default to a mutation-capable class (KERNEL-07).
     assert result.classified is False
-    assert result.intent_class is IntentClass.CO_AUTHORING
+    assert result.intent_class is IntentClass.UNKNOWN
     assert result.action_type is None
+    assert result.rationale  # carries the failure reason for diagnostics
 
 
 # ---------------------------------------------------------------------------
@@ -165,8 +177,8 @@ def test_classifier_is_pure_no_writes(tmp_path: Path) -> None:
     original = "---\nuuid: u1\n---\n\n# Hello\n\nBody.\n"
     note.write_text(original, encoding="utf-8")
 
-    facade = _LabelStub('{"intent_class": "co_authoring", "action_type": null}')
-    cognition = IntentClassifierCognition(facade_factory=lambda: facade)
+    completion = _CompletionStub('{"intent_class": "co_authoring", "action_type": null}')
+    cognition = IntentClassifierCognition(completion=completion)
     result = cognition.classify(
         intent="tighten the intro",
         current_body=note.read_text(encoding="utf-8"),
@@ -176,10 +188,10 @@ def test_classifier_is_pure_no_writes(tmp_path: Path) -> None:
     assert isinstance(result, IntentClassification)
     # The note on disk is untouched — the cognition performs no writes.
     assert note.read_text(encoding="utf-8") == original
-    # Only the injected facade was consulted, exactly once, with the intent.
-    assert len(facade.calls) == 1
-    assert "tighten the intro" in str(facade.calls[0]["question"])
-    assert facade.calls[0]["trace_id"] == "trace-pure-1"
+    # Only the injected completion was consulted, exactly once, with the intent.
+    assert len(completion.calls) == 1
+    assert "tighten the intro" in str(completion.calls[0]["user"])
+    assert completion.calls[0]["trace_id"] == "trace-pure-1"
 
     # Structurally pure: the module imports no writer / Panel-pipeline symbol
     # into its namespace (checked on bound names, not docstring prose).
