@@ -51,7 +51,9 @@ task, or be split into sub-PRs if that is cheaper):
   read contracts," against `CAO.md`'s own reach-around caution — must be routed through the CES
   stewardship channel, with a one-line note in the PR, rather than silently applied.
 - **C6** — Live PDM storage-leak failure mode with no debt row: direct `psycopg` + raw SQL in
-  `app/api/routes/search.py:6,18,41-46` and `app/store/vector_store.py:5,20,27-38`, a failure mode
+  `app/api/routes/search.py:6,18,41-46` (the `app/store/vector_store.py:5,20,27-38` half of the
+  audit's evidence was resolved by KERNEL-03/#2765, which deleted that module — the remaining live
+  evidence is `search.py` only), a failure mode
   the PDM charter names by name (`docs/boundaries/PDM.md:82`) but that has no row in
   `SBS_TRANSITION_DEBT.md`. Fix: add one debt row (mechanical — the failure mode and its evidence
   are already fully specified by the audit; this task only records it in the register's own format).
