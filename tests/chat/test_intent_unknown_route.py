@@ -188,6 +188,60 @@ def test_unknown_degrades_read_only_and_reask(monkeypatch, tmp_path: Path) -> No
     assert note.read_text(encoding="utf-8") == original
 
 
+def test_apply_path_requires_validated_co_authoring(monkeypatch, tmp_path: Path) -> None:
+    """Structural guard (I-A2): generate-and-apply is an explicit CO_AUTHORING
+    match, not a positional else-branch. An unvalidated classification that
+    claims CO_AUTHORING (classified=False) must fail loud (500) and never
+    reach body mutation."""
+    from app.chat.intent_classifier import IntentClassification
+
+    note = tmp_path / "note.md"
+    original = "---\nuuid: note-uuid-guard\n---\n\n# Hello\n\nOriginal body.\n"
+    note.write_text(original, encoding="utf-8")
+
+    monkeypatch.setenv("CANVAS_ENABLED", "1")
+    monkeypatch.setattr(canvas_module, "_get_vault_root", lambda: tmp_path)
+    monkeypatch.setattr(canvas_module, "_get_vault_root_or_picker", lambda **_: tmp_path)
+
+    class _UnvalidatedClassifier:
+        def __init__(self, **_: object) -> None:  # matches production ctor shape
+            pass
+
+        def classify(self, **_: object) -> IntentClassification:
+            # Adversarial: claims CO_AUTHORING without schema validation.
+            return IntentClassification(
+                intent_class=IntentClass.CO_AUTHORING,
+                action_type=None,
+                classified=False,
+                rationale="crafted, unvalidated",
+                trace_id=None,
+            )
+
+    monkeypatch.setattr(canvas_module, "IntentClassifierCognition", _UnvalidatedClassifier)
+
+    def _fail_generation() -> None:  # pragma: no cover - must never run
+        raise AssertionError("unvalidated classification must not reach generation")
+
+    monkeypatch.setattr(canvas_module, "_coauthor_facade_factory", _fail_generation)
+
+    canvas_module._sessions.clear()
+    canvas_module._edit_history.clear()
+    canvas_module._undone_history.clear()
+    client = TestClient(app, raise_server_exceptions=False)
+    resp = client.post("/api/canvas/sessions", json={"note_path": "note.md", "label": "guard"})
+    assert resp.status_code == 200, resp.text
+    session_id = resp.json()["session_id"]
+
+    resp = client.post(
+        f"/api/canvas/sessions/{session_id}/coauthor",
+        json={"intent": "rewrite the intro"},
+    )
+
+    assert resp.status_code == 500, resp.text
+    # The note on disk is untouched — the guard fired before any mutation path.
+    assert note.read_text(encoding="utf-8") == original
+
+
 # ---------------------------------------------------------------------------
 # AC3 (enforcement): schema validation runs on the production classify() path.
 # ---------------------------------------------------------------------------

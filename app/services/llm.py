@@ -262,9 +262,14 @@ def _http_chat(
     if max_tokens is not None:
         payload["max_tokens"] = int(max_tokens)
     if response_format is not None:
-        # OpenAI-compatible JSON mode. Schema-level constrained decoding is
-        # provider-specific; JSON mode plus caller-side schema validation
-        # (app/components/llm/constrained.py) is the portable contract.
+        # OpenAI-compatible JSON mode. NOTE: the caller's JSON Schema is NOT
+        # transmitted on this path — a dict response_format degrades to generic
+        # {"type": "json_object"}, so the model is only nudged toward JSON and
+        # schema misses (wrong enum member, missing field) surface as UNKNOWN
+        # re-asks instead of being prevented by constrained decoding. Safe
+        # (caller-side validate_payload in app/components/llm/constrained.py is
+        # the real gate) but classification availability is lower here than on
+        # the Ollama path, which does receive the schema object via `format`.
         payload["response_format"] = {"type": "json_object"}
     resp = requests.post(
         url,

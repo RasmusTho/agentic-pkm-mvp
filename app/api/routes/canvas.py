@@ -12,6 +12,7 @@ All session state is in-memory for the lifetime of the API process.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,6 +44,8 @@ from app.reasoning.facade import ReasoningFacade, get_reasoning_facade
 from app.orientation.leave_point_cursor import capture_leave_point_cursor
 from app.panel.canvas_pipeline import CanvasPanelPipeline
 from app.panel.confirmation import _proposal_store as _panel_proposal_store
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/canvas", tags=["canvas"])
 
@@ -545,6 +548,13 @@ def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse | JSONRe
         # Explicit UNKNOWN landing surface: degrade to read-only handling plus
         # a re-ask affordance. Never fall through to generate-and-apply — the
         # silent CO_AUTHORING failure default is gone (audit invariant I-A2).
+        # The classifier already logged the degradation reason; record the
+        # landing here so the re-ask rate is observable per session.
+        logger.info(
+            "coauthor intent landed UNKNOWN (session=%s): %s",
+            session_id,
+            classification.rationale or "no rationale",
+        )
         return JSONResponse(
             status_code=200,
             content=UnknownIntentReask(session_id=session_id).model_dump(),
@@ -573,6 +583,19 @@ def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse | JSONRe
             status_code=200,
             content=ExploratoryResponse(session_id=session_id).model_dump(),
         )
+
+    if not (classification.classified and classification.intent_class is IntentClass.CO_AUTHORING):
+        # Structural guard (I-A2): the generate-and-apply path is an explicit
+        # CO_AUTHORING match, never a positional else-branch. A new IntentClass
+        # member or a reordered ladder must fail loud here instead of falling
+        # through to body mutation.
+        logger.error(
+            "coauthor routing ladder fell through without a validated CO_AUTHORING class "
+            "(intent_class=%s classified=%s)",
+            classification.intent_class,
+            classification.classified,
+        )
+        raise HTTPException(status_code=500, detail="intent routing error")
 
     # Schema-validated CO_AUTHORING — proceed to the generate-and-apply path.
     cognition = CoAuthoringCognition(facade_factory=_coauthor_facade_factory)

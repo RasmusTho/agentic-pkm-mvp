@@ -92,3 +92,15 @@ mutation route.
 One bounded issue. TCD hint: Sonnet / high effort (governance-critical boundary + a fuzz proof that
 UNKNOWN is never a route; the shared utility is reused by KERNEL-09). Escalate if constrained
 decoding requires provider-abstraction changes beyond `app/components/llm/`.
+
+## Implementation notes (delivered by PR #2824)
+
+- **Strict enum matching is chosen, not accidental**: the old parser's `.strip().lower()` coercion
+  is removed. A near-miss enum value (`'CO_AUTHORING'`, padded whitespace) validate-fails to
+  `UNKNOWN` rather than being coerced — trading a little recall on sloppy providers for a boundary
+  with no interpretation layer. Extra payload fields are tolerated (no `additionalProperties:
+  false`); enum membership and required fields are exact.
+- **OpenAI-compatible providers get JSON mode, not the schema**: `app/services/llm.py` transmits
+  `{"type": "json_object"}` only; the registered schema reaches the model only on the Ollama
+  `format` path. Caller-side validation remains the gate on every path; on JSON-mode providers
+  schema misses surface as `UNKNOWN` re-asks.

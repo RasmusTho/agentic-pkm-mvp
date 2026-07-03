@@ -37,6 +37,7 @@ mutation-capable class.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -48,6 +49,8 @@ from app.components.llm.constrained import (
     constrained_completion,
     register_schema,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class IntentClass(str, Enum):
@@ -152,6 +155,15 @@ class IntentClassifierCognition:
                 complete=self._completion,
             )
         except ConstrainedCompletionError as exc:
+            # Fail-loud observability: without this line a provider outage is
+            # indistinguishable from "model was unsure" — the surface would
+            # silently brick into a re-ask loop with no operator signal.
+            logger.warning(
+                "intent classification degraded to UNKNOWN (schema_ref=%s trace_id=%s): %s",
+                INTENT_CLASSIFICATION_SCHEMA_REF,
+                trace_id or "-",
+                exc.reason,
+            )
             return _unknown(trace_id, reason=exc.reason)
         return _from_validated(payload, trace_id=trace_id)
 
