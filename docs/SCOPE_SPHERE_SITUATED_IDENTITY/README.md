@@ -1,4 +1,4 @@
-State: Implemented. Docs/spec breakdown is complete (parent issue #645 and slice issues #651-#654 are closed); implementation is delivered (#730/#731/#733, tests PR #759). Owner-doc promotion (ARCHITECTURE.md row) is tracked by issue #2825.
+State: Implemented. Docs/spec breakdown is complete (parent issue #645 and slice issues #651-#654 are closed); implementation is delivered (#730/#731/#733, tests PR #759). Owner-doc promotion (ARCHITECTURE.md row) is complete via issue #2825 (`docs/ARCHITECTURE.md` :: Current vs Planned Status table, "Context dimensions" row).
 
 # Scope, Sphere, and Situated Identity
 
