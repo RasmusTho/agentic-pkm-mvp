@@ -54,6 +54,71 @@ enactment task, not done by this docs-only proposal.
 
 ---
 
+## 0.1 Addenda — owner refinements (2026-07-04, later)
+
+### KAP / acquisition fit (the "YouTube epic")
+
+KAP (Knowledge Acquisition Platform; Phase-2 vertical = YouTube, #2795/#2796–#2801) is a **capability
+inside Mimer**, **not** a constituent. It acquires from *external public sources* (YouTube, RSS,
+podcasts): no private-observation seam, no independent volatility clock beyond its EBF source
+plugins, and it lives in Mimer's runtime + authority chain. `[conform]`
+
+KAP and Heimdall are **symmetric as pipelines, asymmetric as structure**: both end at a hand-off
+artifact (KAP → *candidate*, Heimdall → *published event*), both feed the **one** GOV promotion gate,
+and both conform to the shared Layer-2 **provenance/replay standard**. So **KAP is the pathfinder** —
+it builds the acquire→hand-off→promote backbone *now* (batch, public sources) that Heimdall later
+**generalizes** to a streaming sensor. Practical rule for the YouTube epic: build provenance/replay,
+the candidate contract, and entity extraction **generalizably** (design as if a second consumer
+exists — because it does), even while implementations stay module-lazy (OD-5). KAP's spec phrase
+"standalone platform" means a clean, pluggable in-Mimer capability — **not** an SoS constituent; no
+demotion, no conflict. Naming: KAP is a *capability* (descriptive name; optional alias **Ratatosk** —
+the squirrel carrying messages up and down the tree). `[extend]`
+
+### OD-9 — Canonical entity register (promote the contract early; broad entity scope)
+
+Refines the identity-register decision. The identity substrate is **not just speaker/person
+identity** — it is a **canonical entity register** for *people, organizations, projects, places,
+devices, and topics*, because the goal is to **link and connect everything** across systems (one
+canonical "Acme Corp" that both a YouTube-derived candidate and a Heimdall event reference). It is
+the cross-system linking substrate that makes single-source-of-truth work *across* constituents.
+`[extend]`
+
+- **Decision (locked):** promote the **entity-register contract + a thin resolution interface now**
+  — both KAP (entity extraction) and Heimdall (attribution) are already consumers, so the
+  module-lazy "wait for the second consumer" test is already met for the *contract*. The graph
+  richness grows on top later; implementation stays proportional (cost-efficiency principle).
+- **Ownership:** Layer-2 substrate, owned by no constituent. It owns canonical **entity existence +
+  ID**; **SIP** (in Mimer) maps knowledge-artifact identity onto register entities and keeps
+  artifact semantic/provenance identity. Register is upstream of SIP; neither forks the other.
+
+### Two-way communication + single-source-of-truth / system-of-record integrity
+
+Fable's "pure producer" framing is refined: Heimdall is the sole producer of the **event stream**
+(the fact-plane dependency is one-way), but constituents **communicate bidirectionally through
+contracts** (entity lookups, corrections, control/consent, enrichment) — never by reaching into
+another's internals (ECO-1). SSoT is preserved by one rule:
+
+> **One system-of-record per domain.** Heimdall is SoR for *observed events*; Mimer/HKA is SoR for
+> *durable human knowledge*; the entity register is SoR for *canonical entities*. Every other holder
+> is a **rebuildable projection**, never truth. No fact has two owning systems; cross-system
+> references are **by ID against the owner's SoR**, never by copy-as-truth. The only path to
+> canonical remains the one GOV promotion gate.
+
+Corrections sent *back* to a producer become **new records** (e.g. a correction to a Heimdall event
+is a new event — append-only intact, HEIM-1), never in-place edits. **Consequence for the substrate:**
+the Layer-2 **event-bus contract must support bidirectional / request-response**, not only
+fire-and-forget pub/sub.
+
+- **ECO-11 — One system-of-record per domain.** No domain fact has two owning systems; cross-system
+  references resolve by ID against the owning SoR; projections are rebuildable and never canonical.
+  Enforcement: Medium — contract + design-review gate. `[extend]`
+
+**Enactment note:** OD-9 (entity-register contract) joins OD-5's substrate-contract promotion set;
+ECO-11 and the bidirectional-bus requirement fold into the event-bus + provenance contracts designed
+at Heimdall design-acceptance. Still advisory; nothing built here.
+
+---
+
 ## 1. Executive summary
 
 **Recommended structure.** The apex is the **Personal Agentic Ecosystem** — an acknowledged System-of-Systems under one human apex authority, governed by contracts (CES/ADR), never by a runtime component. It has exactly three constituents today: **Yggdrasil** (the knowledge-and-cognition system — the current SoI, with all 14 control boundaries + CES intact inside it), **Heimdall** (the sensor — observation → attributed, append-only published events; its raw layer is the innermost private ring), and the **private bindings constituent** (proto; operator-bound configuration, born outside the public repo). Future private siblings (home automation, network) are slots, not builds. A thin **platform substrate** (event-bus contract, identity/entity register, provenance/replay standard, build/CI, container base, host topology) is owned by no constituent; promotion into it is owner-gated. KAP stays a capability inside Yggdrasil. Repo stays a monorepo with a hard internal seam until a named split-trigger fires.
