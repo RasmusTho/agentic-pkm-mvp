@@ -30,6 +30,18 @@ trusted for replay (audit invariant **I-S2**).
   substrate) and stays first; the DB transaction begins only after the note read is stable.
 - No behavior change on the happy path; rollback on any statement failure leaves zero partial rows.
 
+### Coverage extension — #2864 (`upsert_object_from_note`, `delete_note`)
+
+The two other producers in `vault_sync.py` had the same defect the audit named for
+`sync_markdown`: they `conn.commit()` the objects/`file_state` write and only *then* called
+`_enqueue()` — on a **separate** connection, outside the `with _conn()` block. A crash between the
+commit and the enqueue changed durable state with the event lost. #2864 moves each `_enqueue(...)`
+onto the **same** connection (`conn=conn`) and **before** the final `conn.commit()`, so
+objects + `file_state` + outbox commit as one transaction. This closes the last two guard-by-caller
+producers on this seam; the remaining over-dedup key issue on `save_object` is tracked separately
+(#2863). Coverage now: `sync_markdown`, `handle_rename`, `upsert_object_from_note`, `delete_note`
+all commit the store write and the outbox event atomically.
+
 ## Concretely
 
 ```bash

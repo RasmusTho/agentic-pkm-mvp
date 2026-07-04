@@ -250,17 +250,24 @@ def delete_note(path: str, *, uuid_value: str | None = None) -> None:
                     "source": "vault_sync.delete_note",
                 }
                 delete_payload["uuid"] = effective_uuid
+        if deleted and delete_payload is not None:
+            # KERNEL-01 atomicity (#2864): enqueue on the SAME connection,
+            # before the commit, so the file_state delete + objects path-null +
+            # outbox event land in one transaction. A crash between the store
+            # write and the enqueue can no longer drop the delete event.
+            #
+            # Observation = the deleted version's last observed mtime, so a
+            # delete→recreate→delete cycle emits both deletes (the recreated
+            # file carries a new mtime) while a retried delete of the same
+            # version dedups.
+            deleted_version_mtime = (state or {}).get("mtime")
+            _enqueue(
+                INGEST_OBJECT_DELETED,
+                delete_payload,
+                conn=conn,
+                observation=str(deleted_version_mtime) if deleted_version_mtime is not None else None,
+            )
         conn.commit()
-    if deleted and delete_payload is not None:
-        # Observation = the deleted version's last observed mtime, so a
-        # delete→recreate→delete cycle emits both deletes (the recreated file
-        # carries a new mtime) while a retried delete of the same version dedups.
-        deleted_version_mtime = (state or {}).get("mtime")
-        _enqueue(
-            INGEST_OBJECT_DELETED,
-            delete_payload,
-            observation=str(deleted_version_mtime) if deleted_version_mtime is not None else None,
-        )
 
 
 def upsert_object_from_note(path: str, frontmatter: dict[str, Any], body: str, fm_changed: bool, body_changed: bool) -> None:
@@ -320,24 +327,28 @@ def upsert_object_from_note(path: str, frontmatter: dict[str, Any], body: str, f
             body_hash=body_hash,
             mtime=mtime,
         )
-        conn.commit()
 
-    topic = None
-    if state is None:
-        topic = INGEST_OBJECT_CREATED
-    elif body_changed:
-        topic = INGEST_OBJECT_UPDATED
-    elif fm_changed:
-        topic = INGEST_OBJECT_METADATA
-    if topic:
-        payload = {
-            "uuid": uuid_value,
-            "title": title,
-            "review_state": review_state,
-            "content": body,
-            "path": path_str,
-        }
-        _enqueue(topic, payload, observation=mtime.isoformat())
+        # KERNEL-01 atomicity (#2864): enqueue on the SAME connection, before
+        # the commit, so objects + file_state + outbox land in one transaction.
+        # A crash between the store write and the enqueue can no longer leave
+        # durable state changed with the event lost (silent projection drift).
+        topic = None
+        if state is None:
+            topic = INGEST_OBJECT_CREATED
+        elif body_changed:
+            topic = INGEST_OBJECT_UPDATED
+        elif fm_changed:
+            topic = INGEST_OBJECT_METADATA
+        if topic:
+            payload = {
+                "uuid": uuid_value,
+                "title": title,
+                "review_state": review_state,
+                "content": body,
+                "path": path_str,
+            }
+            _enqueue(topic, payload, conn=conn, observation=mtime.isoformat())
+        conn.commit()
 
 
 def active_edit(path: Path) -> bool:
