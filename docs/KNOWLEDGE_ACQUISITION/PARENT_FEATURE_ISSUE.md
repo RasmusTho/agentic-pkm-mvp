@@ -1,4 +1,4 @@
-State: **Filed.** Parent feature issue **#2795** (validation hub, `agent:blocked` pending kernel-backlog sequencing); children **#2796–#2801** filed 2026-07-02 in dependency order, all `agent:blocked` until the Runtime Correctness Kernel backlog (#2762–#2777) clears per owner decision.
+State: **Filed.** Parent feature issue **#2795** (validation hub, `agent:blocked` pending kernel-backlog sequencing); children **#2796–#2801** filed 2026-07-02 in dependency order. KA-01 (#2796) delivered via PR #2928 (2026-07-04); its dependents KA-02 (#2797) and KA-03 (#2798) unblocked to `agent:ready`. KA-04–KA-06 (#2799–#2801) remain `agent:blocked` on their own unmet prerequisites.
 Doc role: Parent-issue mirror (GitHub issue #2795 is the authoritative backlog/validation surface)
 Authority: None — this file mirrors the filed parent issue so the spec directory is self-describing; the live issue governs.
 
@@ -24,8 +24,9 @@ slice holds, the platform contracts are proven before any breadth is built.
 
 ## Sequencing and gates
 
-- All children `agent:blocked` until #2762–#2777 (Runtime Correctness Kernel) clears; flip to
-  `agent:ready` in dependency order at that point (or on explicit owner green-light).
+- KA-01 (#2796) delivered via PR #2928; KA-02 (#2797) and KA-03 (#2798), whose sole prerequisite was
+  KA-01, flipped to `agent:ready`. KA-04–KA-06 (#2799–#2801) remain `agent:blocked` until their own
+  prerequisites (KA-03, KA-04, KA-05 respectively) clear, in dependency order.
 - Integration-fabric class decision #2794: resolved (Acquisition source, class 11) by the same
   docs PR that filed this issue set.
 - Review-posture vocabulary: posture-not-token pending #2793.
