@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from importlib import reload
 from pathlib import Path
 
@@ -74,6 +75,29 @@ class FlakyVaultPort(RecordingVaultPort):
             self.fail_delete = False  # fail exactly once, then recover
             raise RuntimeError("simulated transient delete-sync failure")
         super().delete_note(path, uuid_value=uuid_value)
+
+
+class PersistentlyFailingVaultPort(RecordingVaultPort):
+    """RecordingVaultPort that raises on every upsert for the target note.
+
+    Models a non-transient fault (e.g. a permanently-invalid outbox payload the
+    in-transaction enqueue rejects on every scan), used to prove scan_once does
+    not re-emit a full traceback on every re-scan. Set fail_upsert_for to None
+    to model recovery.
+    """
+
+    def __init__(self, *, fail_upsert_for: str | None) -> None:
+        super().__init__()
+        self.fail_upsert_for = fail_upsert_for
+        self.upsert_attempts = 0
+
+    def upsert_note_object(
+        self, path: Path, frontmatter: dict[str, object], body: str, fm_changed: bool, body_changed: bool
+    ) -> None:
+        if self.fail_upsert_for and Path(path).name == self.fail_upsert_for:
+            self.upsert_attempts += 1
+            raise RuntimeError("permanent invalid-payload failure")
+        super().upsert_note_object(path, frontmatter, body, fm_changed, body_changed)
 
 
 def _load_watcher(monkeypatch: pytest.MonkeyPatch, vault_dir: Path):
@@ -238,3 +262,80 @@ def test_scan_survives_delete_failure_and_retries(
     watcher.scan_once(port)  # port recovered → delete now succeeds
     assert port.deletes
     assert str(note) not in watcher.STATE
+
+
+def test_persistent_upsert_failure_logs_traceback_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "bad.md").write_text("---\nuuid: bad-1\n---\n\nBad body", encoding="utf-8")
+
+    watcher = _load_watcher(monkeypatch, vault)
+    monkeypatch.setattr(watcher, "active_edit", lambda _: False)
+    port = PersistentlyFailingVaultPort(fail_upsert_for="bad.md")
+
+    scans = 5
+    with caplog.at_level(logging.WARNING, logger="scripts.fs_watcher"):
+        for _ in range(scans):
+            watcher.scan_once(port)
+
+    # Back-off is preserved: every scan still re-attempts the failing note.
+    assert port.upsert_attempts == scans
+
+    records = [r for r in caplog.records if r.name == "scripts.fs_watcher"]
+    with_traceback = [r for r in records if r.exc_info is not None]
+    without_traceback = [r for r in records if r.exc_info is None]
+
+    # Full traceback emitted only on the first observed failure.
+    assert len(with_traceback) == 1
+    assert with_traceback[0].levelno == logging.ERROR
+    # Subsequent failures downgraded to WARNING with no traceback — no per-scan flood.
+    assert len(without_traceback) == scans - 1
+    assert all(r.levelno == logging.WARNING for r in without_traceback)
+
+
+def test_recovered_note_clears_failed_path_tracking(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "bad.md").write_text("---\nuuid: bad-1\n---\n\nBad body", encoding="utf-8")
+
+    watcher = _load_watcher(monkeypatch, vault)
+    monkeypatch.setattr(watcher, "active_edit", lambda _: False)
+    bad_path = str(vault / "bad.md")
+
+    port = PersistentlyFailingVaultPort(fail_upsert_for="bad.md")
+    watcher.scan_once(port)
+    assert bad_path in watcher.FAILED_SYNC_PATHS  # first failure tracked
+
+    port.fail_upsert_for = None  # note recovers
+    watcher.scan_once(port)
+    assert bad_path not in watcher.FAILED_SYNC_PATHS  # cleared on success → next fault logs fresh traceback
+
+
+def test_failed_upsert_then_deleted_note_is_pruned_from_tracking(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "bad.md"
+    note.write_text("---\nuuid: bad-1\n---\n\nBad body", encoding="utf-8")
+
+    watcher = _load_watcher(monkeypatch, vault)
+    monkeypatch.setattr(watcher, "active_edit", lambda _: False)
+    bad_path = str(note)
+
+    port = PersistentlyFailingVaultPort(fail_upsert_for="bad.md")
+    watcher.scan_once(port)
+    assert bad_path in watcher.FAILED_SYNC_PATHS  # first failure tracked
+    assert bad_path not in watcher.STATE  # never recorded, since the first upsert failed
+
+    note.unlink()  # removed from the vault before it ever synced successfully
+    watcher.scan_once(port)
+
+    # It is neither re-scanned (gone from disk) nor a stale-delete path (never in
+    # STATE), so it must be pruned — not leaked, and not left to suppress the first
+    # traceback of a future note re-created at the same path.
+    assert bad_path not in watcher.FAILED_SYNC_PATHS

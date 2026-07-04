@@ -18,6 +18,32 @@ logger = logging.getLogger(__name__)
 VAULT = Path(os.getenv("VAULT_DIR", "vault"))
 STATE: dict[str, dict[str, Any]] = {}
 UUID_INDEX: dict[str, str] = {}
+# Paths whose sync is currently failing. run() re-invokes scan_once every ~1.2s,
+# so a persistently non-transient fault would otherwise emit a full ERROR-level
+# traceback on every scan (~50x/min), drowning real errors. We log the traceback
+# only on the first observed failure per path (see _log_sync_failure) and clear
+# the path here on the next successful sync so a recovered-then-failing note logs
+# a fresh traceback again.
+FAILED_SYNC_PATHS: set[str] = set()
+
+
+def _log_sync_failure(path_str: str, message: str, *args: object) -> None:
+    """Log a per-path sync failure, emitting a full traceback only the first time
+    a given path fails since its last success.
+
+    The level split — ``logger.exception`` (with traceback) for a first-class
+    failure vs ``logger.warning`` (no traceback) for a lower-signal one — follows
+    ``app/services/note_watcher.py``. The first-vs-repeat dedup keyed on
+    ``FAILED_SYNC_PATHS`` is specific to this scan loop, since ``run()`` re-invokes
+    ``scan_once`` every ~1.2s and would otherwise re-emit a traceback for the same
+    fault on every pass. Callers must invoke this from inside the active ``except``
+    block so ``logger.exception`` captures the live exception.
+    """
+    if path_str in FAILED_SYNC_PATHS:
+        logger.warning(message + " (repeat; traceback suppressed until recovery)", *args)
+        return
+    FAILED_SYNC_PATHS.add(path_str)
+    logger.exception(message, *args)
 
 
 def _hash_frontmatter(data: dict[str, Any]) -> str:
@@ -100,9 +126,12 @@ def scan_once(port: VaultPort | None = None) -> None:
             # A transient sync failure (e.g. DB error, or an outbox schema-validation
             # raise from the in-transaction enqueue after #2864) must not kill the scan
             # loop. Skip _record so STATE still shows the note as changed and the next
-            # scan pass retries it; that periodic re-scan is the back-off.
-            logger.exception("Vault sync failed for %s; skipping, will retry on next scan", note_path)
+            # scan pass retries it; that periodic re-scan is the back-off. A persistent
+            # fault would flood logs at ~50 tracebacks/min, so only the first failure
+            # per path emits a traceback; repeats are downgraded until recovery.
+            _log_sync_failure(str(note_path), "Vault sync failed for %s; skipping, will retry on next scan", note_path)
             continue
+        FAILED_SYNC_PATHS.discard(str(note_path))
         _record(note_path, uuid_value, fm_hash, body_hash)
 
     stale_paths = set(STATE.keys()) - current_paths
@@ -113,10 +142,20 @@ def scan_once(port: VaultPort | None = None) -> None:
         except Exception:
             # Same resilience contract as the upsert path: leave STATE/UUID_INDEX intact
             # so the stale-path delete is retried on the next scan instead of being lost.
-            logger.exception("Vault delete-sync failed for %s; skipping, will retry on next scan", path_str)
+            # Same traceback-dedup as the upsert path: first failure per path only.
+            _log_sync_failure(path_str, "Vault delete-sync failed for %s; skipping, will retry on next scan", path_str)
             continue
+        FAILED_SYNC_PATHS.discard(path_str)
         STATE.pop(path_str, None)
         UUID_INDEX.pop(entry["uuid"], None)
+
+    # Drop failure tracking for paths that are neither still present nor pending a
+    # stale-delete retry. Without this, a note that failed its very first sync
+    # (never recorded in STATE) and was then removed from the vault would never be
+    # discarded — leaking here and, worse, suppressing the first-failure traceback
+    # if a note is later re-created at the same path. discard-on-success handles
+    # recovery; this handles disappearance.
+    FAILED_SYNC_PATHS.intersection_update(current_paths | set(STATE.keys()))
 
 
 def run() -> None:
