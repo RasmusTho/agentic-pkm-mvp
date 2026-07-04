@@ -31,6 +31,8 @@ on:
       - ".codex/skills/prepare-promotion/**"
       - ".codex/skills/execute-promotion/**"
       - ".codex/skills/verify-promotion/**"
+      - "tests/properties/**"
+      - "scripts/ci/property_gate_fault_injection.sh"
       - ".github/workflows/harness-selfverify.yml"
 
 permissions: read-all
@@ -135,3 +137,22 @@ jobs:
       - name: A deliberately-broken harness MUST be rejected
         run: |
           PYTHON="$(command -v python)" bash scripts/ci/harness_gate_fault_injection.sh
+
+  property-gate-fault-injection:
+    name: P-2 mirror-census gate fault-injection proof (#2909)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+      - name: Install Python deps
+        run: |
+          python -m pip install -U pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
+      - name: An unregistered emit_outbox=False call site MUST fail the P-2 census gate
+        run: |
+          PYTHON="$(command -v python)" bash scripts/ci/property_gate_fault_injection.sh
