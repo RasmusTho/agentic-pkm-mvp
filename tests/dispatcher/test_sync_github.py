@@ -511,6 +511,58 @@ def test_reconcile_keeps_blocked_when_open_issue_lookup_fails(tmp_store: SqliteS
     assert stored.blocked_reason == "waiting for upstream"
 
 
+def test_reconcile_keeps_ready_when_open_issue_lookup_fails(tmp_store: SqliteStore) -> None:
+    """Ready tasks must not complete when open-issue snapshot is unavailable.
+
+    Without the open-issues snapshot the adapter cannot distinguish "issue
+    closed" (completed is correct) from "issue open but agent:ready label
+    removed" (should stay/demote, not complete). Regression for #2760.
+    """
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
+    tmp_store.upsert_task(task)
+
+    source = MagicMock(spec=GitHubIssueSource)
+    source.list_issues.return_value = []
+    source.list_open_issues.side_effect = RuntimeError("gh issue list failed")
+    source.get_rate_limit.return_value = None
+
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+    adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    stored = tmp_store.get_task("github-issue-101")
+    assert stored is not None
+    assert stored.status == "ready"
+
+    events = [e for e in tmp_store.list_events() if e.event_type == "sync.reconciled"]
+    assert events == []
+
+
+def test_reconcile_keeps_ready_when_kill_switch_active(tmp_store: SqliteStore) -> None:
+    """Ready tasks must not complete when the rate-limit kill switch skipped
+
+    the open-issues scan. Regression for #2760.
+    """
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
+    tmp_store.upsert_task(task)
+
+    source = MagicMock(spec=GitHubIssueSource)
+    source.list_issues.return_value = []
+    source.list_open_issues.return_value = []
+    source.get_rate_limit.return_value = {"remaining": 10, "reset": 0}
+
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+    adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    source.list_open_issues.assert_not_called()
+
+    stored = tmp_store.get_task("github-issue-101")
+    assert stored is not None
+    assert stored.status == "ready"
+
+    events = [e for e in tmp_store.list_events() if e.event_type == "sync.reconciled"]
+    assert events == []
+
+
 def test_gh_cli_get_rate_limit_uses_valid_gh_flags_and_parses_rate_key() -> None:
     """Regression guard: `gh api` has no `--json` field-selector flag (that's
 
