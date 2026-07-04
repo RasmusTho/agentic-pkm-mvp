@@ -19,11 +19,16 @@ _HYBRID_WARMED = False
 def _ensure_hybrid_store_loaded() -> None:
     """Warm the in-process retrieval cache from the durable vector index.
 
-    Single production init call site for the retrieval cache-through
-    (KERNEL-05, audit invariant I-D3): the cache is populated ONLY by a
-    load/rebuild from ``store_vector_index``, never by scanning the object
-    store or any other ad-hoc fan-in. Safe to call on every request; the
-    rebuild itself is a no-op once the process has already warmed.
+    The primary production init call site is the FastAPI lifespan warm in
+    ``app/api/app.py::_warm_retrieval_cache`` (audit F2 / #2900), which covers
+    every retrieval entrypoint sharing the module-level ``_STORE``, not just
+    ``/api/ask``. This per-request call is a defensive fallback for contexts
+    where the ASGI lifespan did not run (e.g. a route invoked directly in a
+    test without app startup) — the cache is populated ONLY by a load/rebuild
+    from ``store_vector_index`` (KERNEL-05, audit invariant I-D3), never by
+    scanning the object store or any other ad-hoc fan-in. Safe to call on
+    every request; the rebuild itself is a no-op once the process has already
+    warmed.
     """
     global _HYBRID_WARMED
     hybrid = get_hybrid_store()

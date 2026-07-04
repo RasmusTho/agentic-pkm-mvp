@@ -171,10 +171,30 @@ def _log_v6_seam_status() -> None:
     )
 
 
+def _warm_retrieval_cache() -> None:
+    """Warm the in-process retrieval cache from the durable vector index.
+
+    Single production init call site (KERNEL-05, audit invariant I-D3;
+    post-merge audit finding F2 / #2900): every retrieval entrypoint
+    (``/api/ask``, ``/api/context-bundles``, and any other
+    ``app.retrieval.hybrid.hybrid_search`` caller) shares the same
+    module-level ``_STORE``. Warming it once here, at process/lifespan
+    init, means no route-specific warm can be skipped or added without
+    cold-start coverage — new routes cannot silently regress I-D3.
+    """
+    from app.retrieval.hybrid import rebuild_from_durable_index
+
+    try:
+        rebuild_from_durable_index()
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning("Retrieval cache warm from durable index failed: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await _run_index_preflight()
     _log_v6_seam_status()
+    _warm_retrieval_cache()
     yield
 
 
