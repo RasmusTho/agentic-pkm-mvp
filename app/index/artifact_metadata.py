@@ -4,6 +4,7 @@ import hashlib
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
+from app.agents.panel.filters import strip_ai_panels
 from app.ingest.chunk_policy import CHUNK_POLICY_VERSION
 
 # Embed-pipeline version stamped into every store_vector_index row's
@@ -75,12 +76,17 @@ def build_indexed_unit_payload(
     # Transform provenance stamp (KERNEL-06, #2768, audit invariant I-D1).
     # Rides inside this same payload dict so it commits in the same upsert
     # statement as the vector — cross-task invariant #4 forbids a separate
-    # "stamp later" write. `content_hash` is computed from the exact embedded
-    # text (post strip_ai_panels, matching what the caller actually embeds).
+    # "stamp later" write. `content_hash` is computed from the CANONICAL source
+    # body — strip_ai_panels applied here so the hash is deterministic across
+    # reingest even after an AI panel / companion block is written back into the
+    # note (idempotent no-op on panel-free text). Hashing the enriched body
+    # instead makes content_hash non-deterministic and breaks reingest
+    # idempotence + cold-rebuild (registry_chain).
     embedded_text = text if text is not None else str(payload_out.get("text") or payload_out.get("content") or "")
+    canonical_text = strip_ai_panels(embedded_text)
     payload_out["provenance"] = {
         "source_ref": safe_source_ref,
-        "content_hash": compute_content_hash(embedded_text),
+        "content_hash": compute_content_hash(canonical_text),
         "chunk_policy_version": CHUNK_POLICY_VERSION,
         "pipeline_version": EMBED_PIPELINE_VERSION,
         "embedding_identity": _embedding_identity_dict(embedding_identity) if embedding_identity is not None else None,
