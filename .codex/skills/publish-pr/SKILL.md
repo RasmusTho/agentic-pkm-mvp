@@ -142,6 +142,19 @@ git push origin <branch-name>
 
 Verify push succeeded and GitHub suggests PR creation.
 
+### Publication preflight — live open-PR overlap re-check (direct-repair and lane PRs without a claimed Issue)
+
+The snapshot that motivated this PR may be stale by publication time — a concurrent session can push the same fix between your audit and your `gh pr create` (seen: PR #2757 duplicated #2755). Immediately before Step 6, re-check live GitHub state via REST:
+
+```bash
+REPO=$(git remote get-url origin | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')
+gh api "repos/$REPO/pulls?state=open&per_page=100" --jq '.[] | "\(.number)\t\(.head.ref)\t\(.title)"'
+# For any open PR whose title/head suggests the same surface, compare its file set:
+gh api "repos/$REPO/pulls/<N>/files?per_page=100" --jq '.[].filename'
+```
+
+Any overlap with your staged file set => STOP: keep the earlier compliant PR, close your duplicate or rebase it to the non-overlapping delta (mirrors `deliver-issue-set`'s pre-dispatch reconcile rule). Issue-claimed implementation-lane PRs may skip this — the Issue claim is the collision guard there.
+
 ### Step 6: Create or Update PR
 
 Execute based on lane classification:

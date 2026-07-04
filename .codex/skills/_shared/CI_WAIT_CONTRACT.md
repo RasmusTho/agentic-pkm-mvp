@@ -60,6 +60,8 @@ failing **closed** on any fetch error (an unverifiable state never reports succe
 - `4` — Codex verdict unresolved (only with `--codex`) — resolve before merge
 - `5` — the PR head moved during the wait (when SHA is auto-resolved) — verified checks are stale; re-run
 
+**The exit code is the gate — never let a pipeline eat it.** Do not run the script as `await_pr_checks.sh <PR> 2>&1 | tail -2` (or any `| grep`/`| tee` composition) when its exit code gates a merge: a pipeline's status is the *last* command's, so a failed check exits 0 through `tail` and an `&& gh pr merge` chain merges on red (seen: PR #2759). Run the script bare and capture `rc=$?` before any formatting, and key the merge on `$rc`. The same holds in background shells: the gate is the captured rc, never the visible output.
+
 The CI wait never issues a GraphQL check-state call. For an autonomous `&& gh pr merge`, run
 `scripts/await_pr_checks.sh <PR>` (no `--codex`) and require exit `0`, then run the local review gate
 per `verification-and-closure` :: *Running the local review gate* before merging. `--codex` is
