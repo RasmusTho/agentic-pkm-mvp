@@ -29,7 +29,13 @@ from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault
 from app.events.panel import NoteRef, PanelIntentEvent, PanelLogEntry, PanelRuntimeActionResult
 from app.events.schema import make_outbox_event
 from app.outbox.events import INDEX_OUTBOX_PATH
-from app.services.outbox import append_jsonl_outbox_event, coerce_outbox_event, write_outbox_event
+from app.services.outbox import (
+    EVENT_ID_FINGERPRINT,
+    append_jsonl_outbox_event,
+    coerce_outbox_event,
+    derive_idempotency_key,
+    write_outbox_event,
+)
 from app.objects import ObjectStore
 
 logger = logging.getLogger(__name__)
@@ -80,7 +86,12 @@ def _write_db_outbox_events(events: Iterable[Any]) -> None:
         if outbox_event is None:
             continue
         try:
-            write_outbox_event(outbox_event, idempotency_key=outbox_event.event_id)
+            write_outbox_event(
+                outbox_event,
+                idempotency_key=derive_idempotency_key(
+                    outbox_event.event, outbox_event.event_id, EVENT_ID_FINGERPRINT
+                ),
+            )
         except Exception as exc:
             print(f"WARN: failed to enqueue DB outbox event {outbox_event.event}: {exc}")
 

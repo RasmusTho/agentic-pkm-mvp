@@ -8,7 +8,7 @@ from pathlib import Path
 from app.agents.panel_agent.agent import run_panel_intent_for_note
 from app.agents.panel_agent.runtime import PanelRuntimeResult, execute_panel_intent
 from app.events.panel import PanelIntentEvent
-from app.services.outbox import coerce_outbox_event, write_outbox_event
+from app.services.outbox import EVENT_ID_FINGERPRINT, coerce_outbox_event, derive_idempotency_key, write_outbox_event
 from app.objects import DomainObject, ObjectStore
 from scripts.yaml_roundtrip import load_frontmatter
 
@@ -83,7 +83,12 @@ def run_panel_note_execution(
             outbox_event = coerce_outbox_event(event, default_source="panel_agent")
             if outbox_event is None:
                 continue
-            write_outbox_event(outbox_event, idempotency_key=outbox_event.event_id)
+            write_outbox_event(
+                outbox_event,
+                idempotency_key=derive_idempotency_key(
+                    outbox_event.event, outbox_event.event_id, EVENT_ID_FINGERPRINT
+                ),
+            )
     # Thread the caller's already-resolved vault (the watcher/outbox-worker path
     # resolves it through its own canonical resolver) into the runtime so writeback
     # targets the bound vault without the panel runtime re-reading the env (#2476).

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import uuid as uuid_module
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 from app.events.models import Event, new_event
 from app.events.schema import OutboxEvent
@@ -189,29 +191,93 @@ def _coerce_event(event: Event | OutboxEvent) -> Event:
     )
 
 
+# Fixed UUIDv5 namespace for deterministic outbox idempotency keys (KERNEL-02).
+# Changing this value changes every derived key and breaks replay dedup — never rotate it.
+OUTBOX_IDEMPOTENCY_NAMESPACE = uuid_module.UUID("6f0f5a5e-2764-5b8e-9d3a-1c9e02764a02")
+
+# Canonical content-fingerprint label for emissions keyed on their own
+# ``event_id`` (panel projections, capture receipts, index-embedding requests).
+# Honest scope: event_id is random per constructed event, so this dedups only
+# a double-insert of the SAME in-memory event object (producer retry after a
+# partial failure) — it does NOT dedup a logical re-emission that rebuilds the
+# event. Logical replay dedup requires a content-derived fingerprint, adopted
+# per-topic as each topic's semantics allow.
+EVENT_ID_FINGERPRINT = "event-id"
+
+
+def derive_idempotency_key(topic: str, source_id: str, content_fingerprint: str) -> str:
+    """Derive the deterministic outbox idempotency key for one logical emission.
+
+    The single shared derivation scheme (KERNEL-02, audit invariant I-E1):
+    ``uuid5(namespace, sha256(topic \\x1f source_id \\x1f content_fingerprint))``.
+    Producers must not invent ad-hoc key schemes; choose the fingerprint
+    deliberately per topic:
+
+    - ingest events: ``source_id`` = note uuid/path, fingerprint = content hash
+      plus a per-observation marker (the observed file mtime). Dedup scope is
+      the SAME OBSERVATION (crash/retry re-emission), never all-time content
+      recurrence: an A→B→A revert is a new observation (new stat mtime) and
+      MUST emit — a bare content key would swallow it against the original A
+      row (over-dedup = silent projection divergence, worse than duplicates).
+      Suppressing no-op emissions (pure metadata touch) is the upstream change
+      detector's job (hash comparison), not the key's.
+    - watcher-run audit events: ``source_id`` = relative path, fingerprint =
+      run-window payload hash (mtime + content hash)
+    - retry / dead-letter events: ``source_id`` = original outbox/event id,
+      fingerprint = attempt-scoped (``retry:<n>`` / ``poison:<attempts>``) so
+      genuine re-emissions are NOT swallowed
+    - event-id-keyed emissions: ``source_id`` = the event's ``event_id``,
+      fingerprint = :data:`EVENT_ID_FINGERPRINT`. This protects against
+      double-insert of the same constructed event only, not logical replay
+      (event_id is random per construction); move such topics to content-derived
+      fingerprints as their semantics allow.
+    """
+    parts = {"topic": topic, "source_id": source_id, "content_fingerprint": content_fingerprint}
+    for name, value in parts.items():
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"derive_idempotency_key requires a non-empty string {name!r}, got {value!r}")
+    digest = hashlib.sha256("\x1f".join((topic, source_id, content_fingerprint)).encode("utf-8")).hexdigest()
+    return str(uuid_module.uuid5(OUTBOX_IDEMPOTENCY_NAMESPACE, digest))
+
+
+def payload_fingerprint(payload: Mapping[str, Any] | None, *, exclude: tuple[str, ...] = ("trace_id",)) -> str:
+    """Stable sha256 fingerprint of an event payload for key derivation.
+
+    Canonical JSON (sorted keys) over the payload minus volatile keys
+    (``trace_id`` by default) so a retried emission of the same content maps to
+    the same idempotency key while changed content produces a new one.
+    """
+    source = {k: v for k, v in dict(payload or {}).items() if k not in exclude}
+    canonical = json.dumps(source, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def write_outbox_event(
     event: Event | OutboxEvent,
     conn: Any = None,
     *,
-    idempotency_key: str | None = None,
+    idempotency_key: str,
 ) -> str:
+    """Insert one event into the DB outbox, keyed by a mandatory idempotency key.
+
+    ``idempotency_key`` is required (keyless calls are a ``TypeError`` at the
+    signature level) and becomes the row ``id`` with ``ON CONFLICT (id) DO
+    NOTHING``: duplicate emission with the same key yields exactly one row and
+    returns ``""`` for the swallowed duplicate. Derive keys with
+    :func:`derive_idempotency_key`.
+    """
+    if not isinstance(idempotency_key, str) or not idempotency_key.strip():
+        raise ValueError(f"write_outbox_event requires a non-empty idempotency_key, got {idempotency_key!r}")
     envelope = _coerce_event(event)
     conn, close = _use_conn(conn)
     stored = envelope.model_dump_json()
     created_at = envelope.created_at or datetime.now(timezone.utc)
     try:
-        if idempotency_key:
-            cur = _exec(
-                conn,
-                "insert into outbox (id, topic, payload, created_at, attempts) values (%s, %s, %s::jsonb, %s, %s) on conflict (id) do nothing returning id",
-                (idempotency_key, envelope.event_type, stored, created_at, 0),
-            )
-        else:
-            cur = _exec(
-                conn,
-                "insert into outbox (topic, payload, created_at, attempts) values (%s, %s::jsonb, %s, %s) returning id",
-                (envelope.event_type, stored, created_at, 0),
-            )
+        cur = _exec(
+            conn,
+            "insert into outbox (id, topic, payload, created_at, attempts) values (%s, %s, %s::jsonb, %s, %s) on conflict (id) do nothing returning id",
+            (idempotency_key, envelope.event_type, stored, created_at, 0),
+        )
         if hasattr(cur, "fetchone"):
             row = cur.fetchone()
             if row:
@@ -301,16 +367,53 @@ def insert_object_and_outbox(
     object_id: str | None = None,
     source: str | None = None,
     conn: Any = None,
+    observation: str | None = None,
 ) -> str:
-    """Helper som bygger ett Event och skickar det till outbox."""
+    """Helper som bygger ett Event och skickar det till outbox.
+
+    Derives the mandatory idempotency key from ``(topic, object identity,
+    content fingerprint [+ observation marker])`` (I-E1). The dedup scope is
+    the SAME LOGICAL EMISSION (crash/retry of one observation), not all-time
+    content recurrence: outbox rows are never purged, so a bare content key
+    would swallow an A→B→A revert against the original A row while the
+    object/file_state write still commits (``ON CONFLICT DO NOTHING`` is not
+    an error) — silent projection divergence downstream.
+
+    ``observation`` is a per-observation marker mixed into the fingerprint
+    (NOT into the event payload). It must re-derive identically on crash-retry
+    of the same observation and change for each new observation — the observed
+    file's stat mtime qualifies; emission-moment wall clock does not. Callers
+    whose payload already embeds the observation (e.g. the watcher payload's
+    ``mtime`` field) need not pass it. Suppressing no-op emissions (pure
+    metadata touch) belongs to the upstream change detectors, not this key.
+    """
     data = dict(payload or {})
     if object_id:
         data.setdefault("object_id", object_id)
     if trace_id:
         data.setdefault("trace_id", trace_id)
     data.setdefault("event", topic)
+    fingerprint_source: Dict[str, Any] = dict(data)
+    if "__observation__" in fingerprint_source:
+        # Reserved name: a payload carrying this key would be silently clobbered
+        # by the observation marker below, masking caller data — fail loud.
+        raise ValueError("payload field '__observation__' is reserved for observation-scoped keys")
+    if observation is not None:
+        # Reserved fingerprint-only field: scopes the key to this observation
+        # without leaking into the emitted payload.
+        fingerprint_source["__observation__"] = observation
+    fingerprint = payload_fingerprint(fingerprint_source)
+    source_id = str(
+        object_id
+        or data.get("uuid")
+        or data.get("object_id")
+        or data.get("path")
+        or data.get("relative_path")
+        or fingerprint
+    )
+    key = derive_idempotency_key(topic, source_id, fingerprint)
     event = new_event(event_type=topic, payload=data, trace_id=trace_id, source=source)
-    return write_outbox_event(event, conn=conn)
+    return write_outbox_event(event, conn=conn, idempotency_key=key)
 
 
 def _coerce_event_from_db(raw_payload: Any, topic: str) -> Event:
@@ -432,8 +535,12 @@ def ack_outbox(*args, **kwargs) -> bool:
 
 
 __all__ = [
+    "EVENT_ID_FINGERPRINT",
     "OUTBOX_DEAD_LETTER_TOPIC",
+    "OUTBOX_IDEMPOTENCY_NAMESPACE",
     "dead_letter_stats",
+    "derive_idempotency_key",
+    "payload_fingerprint",
     "write_outbox_event",
     "insert_object_and_outbox",
     "poll_outbox_one",

@@ -60,7 +60,35 @@ Notes:
 
 - Every event MUST carry a unique `event_id`.
 - Consumers MUST deduplicate by `event_id` and treat duplicates as no-ops.
-- Producers SHOULD use deterministic `event_id` values for retry safety.
+- Every DB outbox insert MUST carry a deterministic idempotency key (KERNEL-02, #2764):
+  `app/services/outbox.py::write_outbox_event` requires `idempotency_key` (a keyless call is a
+  `TypeError`), the key becomes the row `id` with `ON CONFLICT (id) DO NOTHING`, and producers MUST
+  derive it through the single shared helper
+  `app/services/outbox.py::derive_idempotency_key(topic, source_id, content_fingerprint)`
+  (`uuid5(namespace, sha256(topic ‖ source_id ‖ fingerprint))`). Ad-hoc key schemes are forbidden;
+  `tests/architecture/test_outbox_producer_idempotency.py` gates every callsite.
+- Per-topic fingerprints are chosen deliberately: vault-sync and watcher ingest events key on
+  `(topic, object uuid/path, content fingerprint + observation marker)` (the API `/ingest` route and
+  `object_store.save_object` producers do not carry an observation marker yet and retain the bare
+  content key — tracked in #2863), where the observation
+  marker is the observed file stat mtime (vault-sync passes it as a fingerprint-only component; the
+  watcher payload already embeds it). The dedup scope is the SAME OBSERVATION — a crash/retry
+  re-emission re-derives the identical key and dedups — never all-time content recurrence: outbox
+  rows are not purged, so a bare content key would silently swallow an A→B→A content revert against
+  the original A row while the object/file_state write still commits (over-dedup = silent projection
+  divergence, worse than duplicates). Suppressing no-op emissions (pure metadata touch) is the
+  upstream change detectors' job (content-hash comparison in vault-sync and the watcher scanner);
+  after a watcher restart a touch may over-emit one content-identical event — the safe failure
+  direction, since handlers are idempotent. Watcher-run audit events key on
+  `(topic, relative path, run-window mtime+hash)`; worker retry/dead-letter events key
+  on `(topic, original event/outbox id, attempt)` so intentional re-emissions are NOT swallowed;
+  event-scoped emissions (panel projections, capture receipts, index-embedding requests) key on
+  their `event_id`. Honest scope of `event_id` keying: it dedups only a double-insert of the same
+  constructed event (producer retry after partial failure), not a logical re-emission that rebuilds
+  the event — logical replay dedup requires a content-derived fingerprint, adopted per-topic as
+  semantics allow.
+- The worker's in-memory `_EventDedup` cache remains a fast-path optimization only; it is no longer
+  load-bearing for duplicate suppression.
 - `watcher.run` and watcher auto-exec events MUST be deduplicated to prevent duplicate panel intents or promotions.
 
 See `docs/CONCURRENCY.md` for the broader concurrency and idempotency guardrails.

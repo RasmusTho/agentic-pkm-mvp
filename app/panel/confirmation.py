@@ -28,7 +28,13 @@ from app.agents.panel.writeback import (
 from app.events.panel import PanelIntentEvent
 from app.events.schema import make_outbox_event
 from app.outbox.events import INDEX_OUTBOX_PATH
-from app.services.outbox import append_jsonl_outbox_event, coerce_outbox_event, write_outbox_event
+from app.services.outbox import (
+    EVENT_ID_FINGERPRINT,
+    append_jsonl_outbox_event,
+    coerce_outbox_event,
+    derive_idempotency_key,
+    write_outbox_event,
+)
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 
 logger = logging.getLogger(__name__)
@@ -565,7 +571,12 @@ def _emit_projection_event(
         outbox_evt = coerce_outbox_event(evt, default_source="panel_agent.confirmation")
         if outbox_evt is not None:
             try:
-                write_outbox_event(outbox_evt, idempotency_key=outbox_evt.event_id)
+                write_outbox_event(
+                    outbox_evt,
+                    idempotency_key=derive_idempotency_key(
+                        outbox_evt.event, outbox_evt.event_id, EVENT_ID_FINGERPRINT
+                    ),
+                )
             except Exception as exc:
                 logger.debug("projection event db outbox write skipped event=%s err=%s", event_name, exc)
     return evt.event_id

@@ -20,7 +20,14 @@ from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
 from app.events.schema import OutboxEvent
 from app.events.types import INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED
 from app.services.note_uuid import ensure_note_uuid
-from app.services.outbox import append_jsonl_outbox_event, insert_object_and_outbox, write_outbox_event
+from app.services.outbox import (
+    EVENT_ID_FINGERPRINT,
+    append_jsonl_outbox_event,
+    derive_idempotency_key,
+    insert_object_and_outbox,
+    payload_fingerprint,
+    write_outbox_event,
+)
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.settings.tiering import resolve_dev_lab_env_typed, resolve_dev_lab_env_value
 from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
@@ -376,7 +383,10 @@ def _process_panel_note(
 
     for event in result.events:
         try:
-            write_outbox_event(event)
+            write_outbox_event(
+                event,
+                idempotency_key=derive_idempotency_key(event.event, event.event_id, EVENT_ID_FINGERPRINT),
+            )
         except Exception:
             state.enqueue_failures_total += 1
             logger.exception(
@@ -1058,7 +1068,15 @@ def _emit_watch_event(
             raise RuntimeError("DATABASE_URL or DB_DSN required for watcher DB outbox")
         if require_db or _has_db_outbox_env():
             try:
-                write_outbox_event(event)
+                # Watcher-run scoped key: (topic, relative path, run-window
+                # fingerprint mtime+hash) — a retried tick dedups, a new file
+                # state produces a new row (I-E1).
+                write_outbox_event(
+                    event,
+                    idempotency_key=derive_idempotency_key(
+                        PANEL_SCAN_REQUESTED, str(rel_path), payload_fingerprint(payload)
+                    ),
+                )
             except Exception:
                 state.enqueue_failures_total += 1
                 if require_db:

@@ -56,7 +56,7 @@ from app.events.models import new_event
 from app.events.types import ASK_QUERY_RECEIVED, INGEST_OBJECT_CREATED
 from app.agents.normalizer.agent import run as normalize_run
 from app.index.outbox import append_jsonl
-from app.services.outbox import write_outbox_event
+from app.services.outbox import derive_idempotency_key, payload_fingerprint, write_outbox_event
 from app.orchestrator.handler import OrchestratorContext, handle_event
 from app.orchestrator.runtime import Orchestrator
 from app.orchestrator.executor import MockPlanExecutor
@@ -559,7 +559,14 @@ def pipe(source: str, as_json: bool, trace_id: Optional[str]) -> None:
             source=str(path),
         )
         try:
-            write_outbox_event(db_event)
+            write_outbox_event(
+                db_event,
+                idempotency_key=derive_idempotency_key(
+                    INGEST_OBJECT_CREATED,
+                    str(normalize_res["object_id"]),
+                    payload_fingerprint(db_payload),
+                ),
+            )
         except Exception as exc:
             click.echo(f"WARNING: pipe DB outbox emit failed: {exc}", err=True)
 

@@ -5,7 +5,13 @@ from app.events.panel import NoteRef, PanelInfo, PanelIntentExecutedEvent, Panel
 from app.events.models import new_event
 from app.events.schema import OutboxEvent
 from app.events.types import INGEST_OBJECT_CREATED
-from app.services.outbox import append_jsonl_outbox_event, coerce_outbox_event, serialize_outbox_record, write_outbox_event
+from app.services.outbox import (
+    append_jsonl_outbox_event,
+    coerce_outbox_event,
+    derive_idempotency_key,
+    serialize_outbox_record,
+    write_outbox_event,
+)
 
 
 class FakeConn:
@@ -27,14 +33,16 @@ def test_write_outbox_event_serializes_payload():
     }
 
     event = new_event(event_type=INGEST_OBJECT_CREATED, payload=payload, trace_id=payload["trace_id"])
-    write_outbox_event(event, conn)
+    key = derive_idempotency_key(INGEST_OBJECT_CREATED, event.event_id, "event-id")
+    write_outbox_event(event, conn, idempotency_key=key)
 
     assert len(conn.executed) == 1
     sql, params = conn.executed[0]
 
     assert "insert into outbox" in sql.lower()
-    topic, payload_json, created_at, attempts = params
+    row_id, topic, payload_json, created_at, attempts = params
 
+    assert row_id == key
     assert topic == INGEST_OBJECT_CREATED
     data = json.loads(payload_json)
     assert data["event_type"] == INGEST_OBJECT_CREATED
@@ -53,12 +61,16 @@ def test_write_outbox_event_accepts_panel_event_source_models():
         )
     )
 
-    write_outbox_event(event, conn)
+    write_outbox_event(
+        event,
+        conn,
+        idempotency_key=derive_idempotency_key("panel.intent.executed", event.event_id, "event-id"),
+    )
 
     assert len(conn.executed) == 1
     sql, params = conn.executed[0]
     assert "insert into outbox" in sql.lower()
-    topic, payload_json, created_at, attempts = params
+    row_id, topic, payload_json, created_at, attempts = params
 
     assert topic == "panel.intent.executed"
     data = json.loads(payload_json)

@@ -65,8 +65,10 @@ from app.governance.governed_write import (
 from app.knowledge.write_ops import append_note_relative
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services.outbox import (
+    EVENT_ID_FINGERPRINT,
     append_jsonl_outbox_event,
     coerce_outbox_event,
+    derive_idempotency_key,
     write_outbox_event,
 )
 from app.vault.paths import get_vault_inbox_dir_rel
@@ -212,7 +214,10 @@ def _emit_capture_event(payload: dict[str, Any], trace_id: str) -> list[str]:
         if outbox_evt is not None:
             try:
                 stored_id = write_outbox_event(
-                    outbox_evt, idempotency_key=outbox_evt.event_id
+                    outbox_evt,
+                    idempotency_key=derive_idempotency_key(
+                        outbox_evt.event, outbox_evt.event_id, EVENT_ID_FINGERPRINT
+                    ),
                 )
                 emitted = emitted or bool(stored_id)
             except Exception as exc:

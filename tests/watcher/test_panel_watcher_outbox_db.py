@@ -30,7 +30,7 @@ uuid: test-uuid
 
     events: list[OutboxEvent] = []
 
-    def fake_write_outbox(ev):
+    def fake_write_outbox(ev, **kwargs):
         events.append(ev)
         return "ok"
 
@@ -83,7 +83,7 @@ uuid: test-uuid
 
     events: list[OutboxEvent] = []
 
-    def fake_write_outbox(ev):
+    def fake_write_outbox(ev, **kwargs):
         events.append(ev)
         return "ok"
 
@@ -140,7 +140,7 @@ uuid: test-uuid
 
     events: list[OutboxEvent] = []
 
-    def fake_write_outbox(ev):
+    def fake_write_outbox(ev, **kwargs):
         events.append(ev)
         return "ok"
 
