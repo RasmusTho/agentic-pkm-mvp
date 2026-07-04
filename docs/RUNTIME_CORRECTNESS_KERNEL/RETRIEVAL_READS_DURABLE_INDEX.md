@@ -86,11 +86,41 @@ absence of recall becomes diagnosable (index doctor) instead of silent.
 - Store backend resolution / legacy writer removal (KERNEL-03) and DDL migration (KERNEL-04),
   which this task depends on.
 
+## Coverage Note: All Entrypoints Warm (#2900, post-merge audit F2)
+
+The original KERNEL-05 delivery wired `rebuild_from_durable_index()` at exactly one production call
+site: `app/api/routes/ask.py::_ensure_hybrid_store_loaded`. That covered `/api/ask` but left every
+other consumer of the shared module-level `_STORE` (notably `/api/context-bundles` ->
+`app/retrieval/production_bundle.py` -> `app/retrieval/capability.py::retrieve` ->
+`app.retrieval.hybrid.hybrid_search`) able to serve a cold, empty cache on a fresh process restart
+until an unrelated `/api/ask` call happened to warm it first — the exact "consumes nothing is
+invisible" (I-D3) class this task was meant to eliminate (audit record #2899, finding F2).
+
+Fix: added a single FastAPI lifespan warm, `app/api/app.py::_warm_retrieval_cache`, called from
+`lifespan()` at process startup. This is now the primary production init call site and covers every
+router registered on `app`, not just `/api/ask` — a new route added later cannot silently regress
+cold-start coverage because it never needs its own warm call. The per-request warm in
+`app/api/routes/ask.py::_ensure_hybrid_store_loaded` remains as a defensive fallback for contexts
+where the ASGI lifespan did not run (e.g. a route invoked directly without app startup); both call
+sites route through the same `rebuild_from_durable_index()` — the cache-through contract (I-D3) is
+unchanged, only the coverage of *when* it is invoked changed.
+
+Verified for the context-bundles path specifically by
+`tests/retrieval/test_retrieval_durable_equivalence.py::test_context_bundles_served_from_durable_after_restart`,
+which asserts a non-empty bundle on a cold cache (no prior `/api/ask` call) and kill-and-restart
+equivalence for `/api/context-bundles`, mirroring the guarantee `test_results_survive_restart`
+already gave `/api/ask`.
+
+Audit finding F5 (re-embed vs. restore the durable `embedding` column on rebuild) is noted, not
+fixed, here — it is an embedding-identity fidelity gap under embedder-identity change, not a
+cold-cache coverage gap, and is out of scope for this task per the governing issue.
+
 ## Related Docs
 
 - `docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md :: CW-1, I-D3`
 - `docs/EMBEDDINGS.md`, `docs/ARCHITECTURE.md` (update the retrieval-truth description at promotion)
 - `docs/RAG` / epic #2314 spec surfaces
+- Audit record #2899 (post-merge kernel audit, finding F2); governing issue #2900
 
 ## Related GitHub Issues
 

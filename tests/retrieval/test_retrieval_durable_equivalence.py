@@ -187,3 +187,66 @@ def test_allowlist_entries_still_call_target_methods() -> None:
         "add_document/set_documents) — remove them:\n"
         + "\n".join(f"  {s}" for s in sorted(stale))
     )
+
+
+# ---------------------------------------------------------------------------
+# Post-merge audit F2 (#2899 I-D3 / #2900): every production retrieval
+# entrypoint must read the durable-index-backed store, not just /api/ask.
+# ---------------------------------------------------------------------------
+
+
+def test_context_bundles_served_from_durable_after_restart() -> None:
+    """Cold-cache the context-bundles path: a /api/context-bundles-equivalent
+    request must serve durable-index results even when it is the FIRST
+    retrieval call in the process (no prior /api/ask warm), and results must
+    be identical before and after a simulated kill-and-restart (cache
+    discard + rebuild) — not just for /api/ask.
+    """
+    from app.retrieval.capability import RetrievalRequest
+    from app.retrieval.production_bundle import retrieve_and_emit_bundle
+
+    _seed_durable_index()
+
+    # Cold start: no /api/ask has ever run, no explicit rebuild has been
+    # triggered by the test. The production lifespan warm
+    # (app/api/app.py::_warm_retrieval_cache) is what must cover this path;
+    # simulate it directly here (it is a thin call to rebuild_from_durable_index).
+    assert hybrid.get_store().all() == [], "test setup must start from a cold cache"
+
+    from app.api.app import _warm_retrieval_cache
+
+    _warm_retrieval_cache()
+
+    assert hybrid.get_store().all(), (
+        "the lifespan warm (app/api/app.py::_warm_retrieval_cache) must "
+        "populate the shared retrieval store before any route runs"
+    )
+
+    result_before, _receipt_before = retrieve_and_emit_bundle(
+        RetrievalRequest(query="alpha retrieval mountains", trace_id="cold-start"),
+        bundle_id="cold-start-bundle",
+    )
+    before_ids = [item.artifact_id for item in result_before.bundle.included]
+    assert before_ids, (
+        "/api/context-bundles must return a non-empty bundle on a cold cache, "
+        "without any prior /api/ask request warming the shared store"
+    )
+
+    # Kill-and-restart equivalence for the context-bundles path specifically:
+    # discard the in-process cache, keep the durable index untouched, rebuild
+    # via the same production lifespan seam, and confirm identical results.
+    hybrid.get_store().set_documents([])
+    hybrid.reset_durable_rebuild_state()
+    _warm_retrieval_cache()
+
+    result_after, _receipt_after = retrieve_and_emit_bundle(
+        RetrievalRequest(query="alpha retrieval mountains", trace_id="post-restart"),
+        bundle_id="post-restart-bundle",
+    )
+    after_ids = [item.artifact_id for item in result_after.bundle.included]
+
+    assert after_ids == before_ids, (
+        "context-bundles results must be identical before and after a "
+        "cache-discard + rebuild (kill-and-restart equivalence), matching the "
+        "guarantee /api/ask already had"
+    )
