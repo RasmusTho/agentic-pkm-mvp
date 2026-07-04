@@ -14,17 +14,56 @@ from app.db.dsn import ping_postgres
 from app.events.outbox import default_outbox_path, event_name, latest_trace_story, normalize_timestamp
 from app.index.doctor import diagnose_index
 from app.settings.health_settings import HealthThresholds, load_health_settings
-from app.stores import get_object_store
+from app.stores import get_object_store, resolve_store_backend
 
 # Health checks must never load the full outbox into memory; it can grow to hundreds of MB.
 # Bound tail reads to this many bytes — enough to capture recent activity for all checks.
 _HEALTH_TAIL_BYTES = 8 * 1024 * 1024  # 8 MB
 
 
-def _count_outbox_lines_db() -> int | None:
-    """Count total outbox rows via DB when STORE_BACKEND=pg. Returns None on any error."""
-    backend = (os.getenv("STORE_BACKEND") or "memory").strip().lower()
-    if backend != "pg":
+@dataclass(frozen=True)
+class StoreBackendResolution:
+    """Outcome of consulting the canonical store-resolution seam (#2843).
+
+    Every health-surface site that used to re-derive "is this pg or memory?"
+    from `os.getenv("STORE_BACKEND")` directly (three sites, ~lines 26/72/540
+    at audit time) diverged from `app.stores`'s unset -> DSN-resolution
+    semantics: an unset `STORE_BACKEND` with a configured-but-unreachable DSN
+    was silently read as "memory" and pg-only checks were skipped instead of
+    surfacing the fail-loud resolution error (KERNEL-03 / #2765). This type is
+    the single place that consults `resolve_store_backend()` so the health
+    surface can never re-diverge from the store seam's own semantics.
+    """
+
+    backend: str | None
+    error: str | None
+
+
+def _resolve_store_backend_for_health() -> StoreBackendResolution:
+    """Consult the production store-resolution seam; never raise.
+
+    Wraps `app.stores.resolve_store_backend()` — the exact seam
+    `get_object_store()` / `get_vector_index()` use — so a resolution failure
+    (unknown backend value, configured-but-unreachable Postgres, no backend
+    configured at all) is captured as data instead of allowed to propagate out
+    of the health contract (loud ≠ fatal at boot, #2005).
+    """
+    try:
+        backend = resolve_store_backend()
+    except Exception as exc:
+        return StoreBackendResolution(backend=None, error=f"{type(exc).__name__}: {exc}")
+    return StoreBackendResolution(backend=backend, error=None)
+
+
+def _count_outbox_lines_db(resolution: StoreBackendResolution | None = None) -> int | None:
+    """Count total outbox rows via DB when the resolved backend is pg. None on any error.
+
+    ``resolution`` lets one `evaluate()` call resolve the backend once and
+    reuse it across sibling helpers rather than re-probing Postgres per call;
+    defaults to a fresh resolution for direct/standalone callers.
+    """
+    resolution = resolution or _resolve_store_backend_for_health()
+    if resolution.backend != "pg":
         return None
     try:
         from app.services.outbox import count_outbox_events
@@ -54,9 +93,9 @@ def _count_outbox_lines_from_file(path: Path) -> int:
         return 0
 
 
-def _count_outbox_lines(path: Path) -> int:
+def _count_outbox_lines(path: Path, resolution: StoreBackendResolution | None = None) -> int:
     """Count outbox records: DB when available, else streaming file line count."""
-    db_count = _count_outbox_lines_db()
+    db_count = _count_outbox_lines_db(resolution)
     if db_count is not None:
         return db_count
     return _count_outbox_lines_from_file(path)
@@ -67,10 +106,14 @@ def _count_outbox_lines(path: Path) -> int:
 _DEAD_LETTER_EVENT = "outbox.event.dead_lettered"
 
 
-def _dead_letter_stats_db() -> dict[str, Any] | None:
-    """Dead-letter/backlog stats via the DB outbox when STORE_BACKEND=pg. None on any error."""
-    backend = (os.getenv("STORE_BACKEND") or "memory").strip().lower()
-    if backend != "pg":
+def _dead_letter_stats_db(resolution: StoreBackendResolution | None = None) -> dict[str, Any] | None:
+    """Dead-letter/backlog stats via the DB outbox when the resolved backend is pg.
+
+    None on any error. ``resolution`` lets callers reuse a single resolved
+    backend across one `evaluate()` pass (see `_count_outbox_lines_db`).
+    """
+    resolution = resolution or _resolve_store_backend_for_health()
+    if resolution.backend != "pg":
         return None
     try:
         from app.services.outbox import dead_letter_stats
@@ -295,26 +338,43 @@ class HealthContract:
         settings_result = load_health_settings(vault_root=vault_root)
         outbox_path = default_outbox_path()
 
-        # Dependency layer (#2598): probe the live DB FIRST, before any DB-backed
-        # diagnostic (object store count, index doctor) runs. When Postgres is
-        # down under STORE_BACKEND=pg we must short-circuit and RETURN a complete
-        # `unhealthy` snapshot here — those diagnostics would otherwise open a
-        # second psycopg connection that raises or hangs, turning /readyz's clean
-        # 503 into a 500 or a slow timeout. `unhealthy` (not `degraded`) is
-        # required: `degraded` is in READY_STATES so /readyz would stay 200 on
-        # DB-down — the false-green this slice exists to kill.
-        db_down_reason = self._db_dependency_down_reason()
+        # Store-resolution layer (#2843): resolve the backend ONCE through the
+        # production seam (`app.stores.resolve_store_backend()`) and reuse the
+        # outcome for every sibling helper below, instead of each site
+        # independently re-deriving "is this pg or memory?" from
+        # `os.getenv("STORE_BACKEND")` (three sites diverged from the store
+        # seam's unset -> DSN-resolution semantics — see StoreBackendResolution).
+        resolution = _resolve_store_backend_for_health()
+
+        # Dependency layer (#2598 + #2843): probe the live DB FIRST, before any
+        # DB-backed diagnostic (object store count, index doctor) runs. When
+        # Postgres is down, or store resolution itself failed (unknown backend
+        # value, no backend configured at all), we must short-circuit and
+        # RETURN a complete `unhealthy` snapshot here — those diagnostics would
+        # otherwise open a second psycopg connection that raises or hangs,
+        # turning /readyz's clean 503 into a 500 or a slow timeout, or would
+        # swallow the resolution failure into a false "empty" bootstrap state.
+        # `unhealthy` (not `degraded`) is required: `degraded` is in
+        # READY_STATES so /readyz would stay 200 on DB-down — the false-green
+        # this slice exists to kill.
+        db_down_reason = self._db_dependency_down_reason(resolution)
         if db_down_reason is not None:
             return self._db_down_snapshot(
                 now=now,
                 settings_result=settings_result,
                 outbox_path=outbox_path,
                 reason=db_down_reason,
+                resolution=resolution,
             )
 
-        outbox_count = _count_outbox_lines(outbox_path)
+        outbox_count = _count_outbox_lines(outbox_path, resolution)
         records = _read_tail_records(outbox_path)
-        object_count = self._count_objects()
+        # #2843: never swallow a store-access error into a bare 0. Resolution
+        # already succeeded (the db_down short-circuit above returned early
+        # otherwise), so a failure here is a narrower post-resolution fault
+        # (e.g. schema missing) — still surfaced loudly, never folded into
+        # "genuinely empty".
+        object_count, store_count_error = self._count_objects()
         latest_ts = self._latest_timestamp(records)
         age = self._compute_age(latest_ts, now)
         prev_state = self.state_machine.state
@@ -349,7 +409,7 @@ class HealthContract:
         errors = self._count_errors(records, now)
         # Dead-letter signal (KERNEL-12 / #2774): read-only detection from the
         # outbox source (DB when STORE_BACKEND=pg, else the JSONL audit tail).
-        dead_letter = _dead_letter_stats_db() or _dead_letter_stats_from_records(records)
+        dead_letter = _dead_letter_stats_db(resolution) or _dead_letter_stats_from_records(records)
         dead_letter_status = _dead_letter_status(
             dead_letter,
             settings_result.settings.thresholds,
@@ -361,9 +421,12 @@ class HealthContract:
             index_status,
             writes_allowed,
             dead_letter_status=dead_letter_status,
+            store_count_error=store_count_error,
         )
 
-        bootstrap_state, bootstrap_reason = self._bootstrap_state(object_count, outbox_count)
+        bootstrap_state, bootstrap_reason = self._bootstrap_state(
+            object_count, outbox_count, store_error=store_count_error
+        )
 
         if settings_result.settings.incident_capture.enabled:
             transitioned = state != prev_state
@@ -399,6 +462,10 @@ class HealthContract:
             "outbox_count": outbox_count,
             "outbox_recent_age_s": age,
             "store_object_count": object_count,
+            # #2843: distinct loud signal for store-resolution health, computed
+            # once above and reused by every sibling helper in this evaluate().
+            "store_resolution_status": "ok" if resolution.error is None else "failed",
+            "store_resolution_error": resolution.error,
             "bootstrap_state": bootstrap_state,
             "bootstrap_reason": bootstrap_reason,
             "embedding_identity": {
@@ -432,6 +499,7 @@ class HealthContract:
         settings_result: Any,
         outbox_path: Path,
         reason: str,
+        resolution: StoreBackendResolution | None = None,
     ) -> dict[str, Any]:
         """Build a complete `unhealthy` snapshot for a known DB-down stack.
 
@@ -441,6 +509,12 @@ class HealthContract:
         consumers never KeyError. The outbox state machine is intentionally NOT
         mutated — this is a contract-level dependency override, so outbox recovery
         hysteresis is unaffected once Postgres returns.
+
+        ``resolution`` (#2843) is the store-resolution outcome that produced
+        ``reason`` — carried through so the snapshot's ``store_resolution_*``
+        fields and ``bootstrap_state`` reflect *why* we are down (a genuine
+        resolution failure, not just a live ping failure) instead of silently
+        reporting the ambiguous "empty" bootstrap state.
         """
         state = "unhealthy"
         since_ts = now.isoformat()
@@ -469,7 +543,10 @@ class HealthContract:
         writes_allowed = False  # unhealthy is in WRITE_BLOCKED_STATES
         write_guard_reason = reason
         suggested_actions = ["python -m app.cli health status --json"]
-        bootstrap_state, bootstrap_reason = self._bootstrap_state(object_count, outbox_count)
+        store_error = resolution.error if resolution is not None else reason
+        bootstrap_state, bootstrap_reason = self._bootstrap_state(
+            object_count, outbox_count, store_error=store_error
+        )
 
         if settings_result.settings.incident_capture.enabled and state != self.state_machine.state:
             self._append_incident_log(
@@ -503,6 +580,8 @@ class HealthContract:
             "outbox_count": outbox_count,
             "outbox_recent_age_s": age,
             "store_object_count": object_count,
+            "store_resolution_status": "failed" if store_error is not None else "ok",
+            "store_resolution_error": store_error,
             "bootstrap_state": bootstrap_state,
             "bootstrap_reason": bootstrap_reason,
             "embedding_identity": {
@@ -529,16 +608,29 @@ class HealthContract:
             result["recent_transition_history"] = list(self.state_machine.transition_history)
         return result
 
-    def _db_dependency_down_reason(self) -> str | None:
+    def _db_dependency_down_reason(
+        self, resolution: StoreBackendResolution | None = None
+    ) -> str | None:
         """Return a human-legible reason when the DB dependency is down, else None.
 
-        Only gates readiness when ``STORE_BACKEND=pg`` — the memory backend has no
-        Postgres dependency. The ping is bounded (``connect_timeout=1.0`` s) so the
-        health probe never hangs, and any unexpected probe error fails closed (the
-        DB is treated as unreachable) rather than silently reporting ready.
+        ``resolution`` is the outcome of consulting `resolve_store_backend()`
+        (the production store seam) — a resolution failure (unknown backend
+        value, configured-but-unreachable Postgres, or no backend configured
+        at all) is itself a down-dependency reason (#2843): the store seam
+        already refuses to fall back to a volatile in-memory store on these
+        conditions (KERNEL-03 / #2765), so the health surface must not
+        independently decide "unset means memory, skip the check" and go
+        quiet where the store layer itself would raise.
+
+        When resolution succeeds and the backend is ``"pg"``, a live ping
+        still runs (bounded ``connect_timeout=1.0`` s) as defense in depth
+        against Postgres dropping in the moment between resolution and this
+        call. The memory backend has no Postgres dependency to ping.
         """
-        backend = (os.getenv("STORE_BACKEND") or "memory").strip().lower()
-        if backend != "pg":
+        resolution = resolution or _resolve_store_backend_for_health()
+        if resolution.error is not None:
+            return f"store resolution failed: {resolution.error}"
+        if resolution.backend != "pg":
             return None
         try:
             ok, detail = self.db_ping_fn(timeout=1.0)
@@ -635,6 +727,7 @@ class HealthContract:
         writes_allowed: bool,
         *,
         dead_letter_status: str = "pass",
+        store_count_error: str | None = None,
     ) -> list[str]:
         actions: list[str] = []
         if age > 0:
@@ -648,6 +741,10 @@ class HealthContract:
                 "inspect dead-lettered outbox events: "
                 "grep outbox.event.dead_lettered $INDEX_OUTBOX_PATH"
             )
+        if store_count_error is not None:
+            # #2843: a post-resolution store-access failure (e.g. schema
+            # missing) is loud, not folded into "empty" — point at the doctor.
+            actions.append("python -m app.cli health --json")
         if not writes_allowed:
             actions.append("python -m app.cli health status --json")
         return actions
@@ -698,13 +795,26 @@ class HealthContract:
         except Exception:
             return
 
-    def _count_objects(self) -> int:
-        try:
-            return get_object_store().count_objects()
-        except Exception:
-            return 0
+    def _count_objects(self) -> tuple[int, str | None]:
+        """Count objects via the production store seam; never swallow the error (#2843).
 
-    def _bootstrap_state(self, object_count: int, outbox_count: int) -> tuple[str, str]:
+        `get_object_store()` routes through the same fail-loud resolution as
+        the rest of the runtime, so a store-resolution failure or a runtime
+        error surfacing after resolution (e.g. schema missing) is captured and
+        returned as data instead of being reported as an innocuous ``0``. The
+        caller (`evaluate()`) treats a non-``None`` error as a distinct loud
+        signal — it never gets folded into "genuinely empty".
+        """
+        try:
+            return get_object_store().count_objects(), None
+        except Exception as exc:
+            return 0, f"{type(exc).__name__}: {exc}"
+
+    def _bootstrap_state(
+        self, object_count: int, outbox_count: int, *, store_error: str | None = None
+    ) -> tuple[str, str]:
+        if store_error is not None:
+            return "unknown", f"store object count unavailable: {store_error}"
         if object_count == 0 and outbox_count == 0:
             return "empty", "no objects ingested yet"
         return "active", "objects or outbox events detected"
