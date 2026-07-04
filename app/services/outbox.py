@@ -394,6 +394,10 @@ def insert_object_and_outbox(
         data.setdefault("trace_id", trace_id)
     data.setdefault("event", topic)
     fingerprint_source: Dict[str, Any] = dict(data)
+    if "__observation__" in fingerprint_source:
+        # Reserved name: a payload carrying this key would be silently clobbered
+        # by the observation marker below, masking caller data — fail loud.
+        raise ValueError("payload field '__observation__' is reserved for observation-scoped keys")
     if observation is not None:
         # Reserved fingerprint-only field: scopes the key to this observation
         # without leaking into the emitted payload.

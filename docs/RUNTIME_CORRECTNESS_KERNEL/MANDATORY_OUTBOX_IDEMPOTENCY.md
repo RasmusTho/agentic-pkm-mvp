@@ -100,3 +100,11 @@ the safe failure direction. See `docs/EVENTS.md :: Event Idempotency (normative)
 
 One bounded issue. TCD hint: Sonnet / medium effort (mechanical signature + producer sweep with a
 clear grep gate). Escalate only if a producer's natural fingerprint is genuinely ambiguous.
+
+### Known deferrals (tracked)
+
+- `object_store.save_object` and the `/ingest` API route still key on bare content (no observation
+  marker) — the A→B→A revert hole remains on those two producers: #2863.
+- `upsert_object_from_note` / `delete_note` commit the object/file_state transaction before the
+  outbox enqueue (crash between = event lost regardless of key design) — KERNEL-01 atomic-pattern
+  extension: #2864.
