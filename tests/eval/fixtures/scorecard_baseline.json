@@ -1,0 +1,58 @@
+{
+  "schema_version": "eval_scorecard.v1",
+  "k": 5,
+  "thresholds": {
+    "schema_version": "eval_thresholds.v1",
+    "aggregate": {"precision_at_k": 0.15, "ndcg_at_k": 0.60},
+    "per_language": {"precision_at_k": 0.10, "ndcg_at_k": 0.55},
+    "memory_recall": {"precision_at_k": 0.10, "ndcg_at_k": 0.60},
+    "classification": {
+      "macro_precision": 0.90,
+      "macro_recall": 0.90,
+      "pass_rate": 0.90,
+      "answer_rate": 0.85,
+      "unknown_safe_fail_rate": 0.85
+    },
+    "k": 5
+  },
+  "aggregate": {"precision@k": 0.20, "ndcg@k": 0.90, "count": 11},
+  "by_language": {
+    "en": {"precision@k": 0.20, "ndcg@k": 0.92, "count": 6},
+    "sv": {"precision@k": 0.20, "ndcg@k": 0.88, "count": 5}
+  },
+  "by_slice": {
+    "exact_lexical": {"precision@k": 0.20, "ndcg@k": 1.0, "count": 3},
+    "hybrid_semantic": {"precision@k": 0.13, "ndcg@k": 0.85, "count": 3},
+    "recall_into_ask": {"precision@k": 0.20, "ndcg@k": 1.0, "count": 3},
+    "low_trust_citation": {"precision@k": 0.20, "ndcg@k": 0.95, "count": 2}
+  },
+  "memory_recall": {"precision@k": 0.20, "ndcg@k": 1.0, "count": 5},
+  "memory_recall_route_intents": ["low_trust_citation", "recall_into_ask"],
+  "classification": {
+    "mode": "replay",
+    "n_cases": 68,
+    "dataset": "docs/eval/classification_golden.yaml",
+    "replay": "docs/eval/classification_replay.yaml",
+    "per_class": {
+      "co_authoring": {"precision": 0.947, "recall": 0.947, "support": 20, "predicted": 19},
+      "governance_bearing": {"precision": 0.933, "recall": 1.0, "support": 15, "predicted": 15},
+      "exploratory": {"precision": 0.96, "recall": 0.96, "support": 25, "predicted": 25}
+    },
+    "macro_precision": 0.95,
+    "macro_recall": 0.93,
+    "pass_rate": 0.94,
+    "confusion_matrix": {
+      "co_authoring": {"co_authoring": 18, "governance_bearing": 0, "exploratory": 1, "unknown": 1},
+      "governance_bearing": {"co_authoring": 1, "governance_bearing": 14, "exploratory": 0, "unknown": 0},
+      "exploratory": {"co_authoring": 0, "governance_bearing": 0, "exploratory": 24, "unknown": 1},
+      "unknown": {"co_authoring": 0, "governance_bearing": 0, "exploratory": 1, "unknown": 7}
+    },
+    "unknown": {"expected": 8, "safe_fail_hits": 7, "read_side_landings": 1, "safe_fail_rate": 0.875},
+    "safe_fail": {"count": 2, "answer_rate": 0.96},
+    "mutation_side_confusions": [],
+    "hard_gate_passed": true
+  },
+  "queries": [],
+  "regression": false,
+  "failures": []
+}

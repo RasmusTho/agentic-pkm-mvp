@@ -18,3 +18,13 @@ Object summary:
 
 Object text:
 {{text}}
+
+Output schema version:
+- This prompt (version 1) produces JSON pinned to output schema version **v1**:
+  `app/schemas/prompts/classifier_output.v1.json` (the `outputs_schema` in the
+  frontmatter above). Invariant I-C3: the prompt version and the output schema
+  version are bound — bumping either requires bumping the prompt contract
+  (a new `classifier.v2` mirror + schema pin), never silently redefining v1.
+- Any model or prompt-version change to this Router prompt requires a
+  baseline-vs-candidate scorecard compare artifact on the PR — see
+  `docs/eval.md :: Scorecard compare`.

@@ -17,6 +17,7 @@ path.
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from dataclasses import dataclass
@@ -26,6 +27,12 @@ from typing import Dict, List, Mapping
 import yaml
 
 from app.eval.classification import evaluate_classification_golden_set
+from app.eval.compare import (
+    DEFAULT_RELATIVE_TOLERANCE,
+    ScorecardCompareError,
+    compare_scorecard_files,
+    render_compare_summary,
+)
 from app.eval.golden import MEMORY_RECALL_ROUTE_INTENTS, evaluate_bilingual_golden_set
 
 THRESHOLDS_PATH = Path("config") / "eval_thresholds.yaml"
@@ -209,12 +216,86 @@ def render_summary(scorecard: dict) -> str:
     return "\n".join(lines)
 
 
-def main(argv: List[str] | None = None) -> int:
+def run_default() -> int:
+    """Default (no-subcommand) behavior: build + write + gate the scorecard."""
     scorecard = build_scorecard()
     write_scorecard(scorecard)
     print(render_summary(scorecard))
     print(f"\nScorecard written to {SCORECARD_PATH}")
     return 1 if scorecard["regression"] else 0
+
+
+def run_compare(
+    baseline: Path,
+    candidate: Path,
+    *,
+    tolerance: float = DEFAULT_RELATIVE_TOLERANCE,
+    output: Path | None = None,
+) -> int:
+    """`compare` subcommand: deterministic baseline-vs-candidate report.
+
+    Operates purely on the two already-produced `eval_scorecard.v1` files —
+    no golden-set re-run, no live LLM. Exit code is 1 only on a
+    `regression` verdict (KERNEL-14).
+    """
+    try:
+        comparison = compare_scorecard_files(baseline, candidate, tolerance=tolerance)
+    except ScorecardCompareError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print(render_compare_summary(comparison))
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(comparison, indent=2) + "\n", encoding="utf-8")
+        print(f"\nCompare artifact written to {output}")
+    return 1 if comparison["verdict"] == "regression" else 0
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m app.eval.run",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    subparsers = parser.add_subparsers(dest="command")
+    compare_parser = subparsers.add_parser(
+        "compare",
+        help="Compare two eval_scorecard.v1 files (baseline vs candidate).",
+    )
+    compare_parser.add_argument(
+        "--baseline", type=Path, required=True, help="Path to the baseline scorecard JSON."
+    )
+    compare_parser.add_argument(
+        "--candidate", type=Path, required=True, help="Path to the candidate scorecard JSON."
+    )
+    compare_parser.add_argument(
+        "--tolerance",
+        type=float,
+        default=DEFAULT_RELATIVE_TOLERANCE,
+        help=(
+            "Relative worsening fraction flagged as regression "
+            f"(default {DEFAULT_RELATIVE_TOLERANCE})."
+        ),
+    )
+    compare_parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Optional path to write the machine-readable compare artifact (JSON).",
+    )
+    return parser
+
+
+def main(argv: List[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+    if args.command == "compare":
+        return run_compare(
+            args.baseline,
+            args.candidate,
+            tolerance=args.tolerance,
+            output=args.output,
+        )
+    return run_default()
 
 
 if __name__ == "__main__":
