@@ -1,4 +1,4 @@
-State: Specification (docs-authoring; target-state framing). Not implemented; YouTube is the first planned implementation.
+State: Specification (docs-authoring; target-state framing). The required `fetch(item_ref)` operation and its `content_identity`/dedup semantics are implemented for the `youtube_url` plugin (KA-01, #2796, `app/knowledge_acquisition/`); `discover`, `backfill`, and other source instances remain not implemented.
 Doc role: Capability contract
 Authority: Defines the source-plugin interface for the Knowledge Acquisition Platform: identity, discovery, fetch, provenance, dedup, and sync-cursor semantics. Boundary-adapter classification is owned by `docs/INTEGRATION_FABRIC_CONTRACT.md`; this document is the instantiating contract for its **Acquisition source** integration class (class 11, added 2026-07-02 via #2794).
 
