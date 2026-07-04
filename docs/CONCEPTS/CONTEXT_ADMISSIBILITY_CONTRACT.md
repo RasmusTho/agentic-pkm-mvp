@@ -1,4 +1,4 @@
-State: Concept contract companion defining the inbound context/memory admissibility predicate (admit-by rule) — the input-side analogue of the outbound `AuthorityFlags`. Normative for new work; runtime enforcement is delivered separately (parent #2022, Slice #2025).
+State: Concept contract companion defining the inbound context/memory admissibility predicate (admit-by rule) — the input-side analogue of the outbound `AuthorityFlags`. Normative for new work. Runtime enforcement is delivered in two layers: the activation-gate flip (parent #2022, Slices #2024/#2025, delivered) and the `app/` retrieval-path enforcement — scope prefilter before ranking, content-free denials, evidence-role clamp, and a bounded `ContextEnvelope` at the ASK/chat seam — delivered by KERNEL-10 (#2772) in `app/retrieval/hybrid.py` + `app/retrieval/envelope.py`.
 Doc role: Concept contract companion
 Authority: Canonical owner of the **inbound** admit-by predicate — what context and memory is *eligible to enter* a proposal, answer, or action. It does **not** redefine the **outbound** authority axis (what a selected item *may do*); that remains owned by `app/context_bundles/schema.py` (`AuthorityFlags`) and `app/agent_memory/authority_guard.py`. This contract supersedes the documented-only conservative default recorded under #1598 in `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` and `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md`.
 
@@ -198,8 +198,10 @@ cross-reference back to this contract (see those sections' supersession notes).
 
 ## Out of scope
 
-- Runtime enforcement of the predicate — Slice #2025 (parent #2022).
-- The dormant→active activation-gate flip rule — Slice #2024.
+- The dormant→active activation-gate flip rule — Slice #2024 (delivered).
+- Retrieval-path enforcement of the predicate (scope prefilter before ranking, content-free denials,
+  evidence-role clamp, bounded `ContextEnvelope` at the ASK/chat seam) — delivered by KERNEL-10
+  (#2772) in `app/retrieval/hybrid.py` + `app/retrieval/envelope.py`.
 - Any capability activation — Slice #2026 (human-gated).
 - Redefining the outbound `AuthorityFlags` / `authority_guard` enforcement — owned upstream, unchanged.
 

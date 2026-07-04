@@ -1,14 +1,17 @@
 """Eval skeleton: private programming notes do not leak into work results.
 
 Invariant registry: docs/testing/invariant-tests.md :: private_not_in_work_results
-Issues: #2550 (registry), #2551 (corpus), #2552 (skeletons).
+Issues: #2550 (registry), #2551 (corpus), #2552 (skeletons). App enforcement: #2772 (KERNEL-10).
 
-The runtime skeleton xfails *only* on the missing runtime import (require_future_runtime).
+Since KERNEL-10 the runtime assertion runs un-xfailed against the LIVE app retrieval path
+(``tests/evals/_app_adapter.py`` -> ``scoped_hybrid_search`` under an active scope), not the
+test-only ``yggdrasil_runtime`` reference.
 """
 
 from __future__ import annotations
 
-from tests.evals._helpers import load_group, require_future_runtime
+from tests.evals import _app_adapter as rca
+from tests.evals._helpers import load_group
 
 
 def test_private_fixtures_denied_by_default() -> None:
@@ -27,12 +30,8 @@ def test_private_fixtures_denied_by_default() -> None:
 def test_private_not_in_work_results() -> None:
     # Invariant registry: docs/testing/invariant-tests.md :: private_not_in_work_results
     # Private -> work is denied by default; crossing requires governed promotion/redaction/
-    # CrossScopeFlow. Future vertical slice: retrieval prefilter -> GOV cross-scope evaluation.
-    rca = require_future_runtime(
-        "retrieval",
-        "Runtime retrieval/cross-scope enforcement not implemented yet; protects "
-        "private_not_in_work_results (#2550) over the corpus (#2551).",
-    )
+    # CrossScopeFlow. Enforced in the live app path: the scope prefilter excludes private material
+    # from a work-scoped result before ranking (similarity is not permission).
     result = rca.retrieve(query="debugging a stateful system", active_scope_id="scope:work/project-alpha")
     leaked = [c for c in result.candidate_items if c.metadata_bundle.scope_id == "scope:private/programming"]
     assert leaked == [], "private material must not appear in a work result without a governed flow"
