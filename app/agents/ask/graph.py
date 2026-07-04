@@ -12,7 +12,7 @@ from app.activation.ask_synthesis import (
     evaluate_ask_synthesis,
 )
 from app.retrieval.envelope import assemble_and_validate_ask_envelope
-from app.retrieval.hybrid import ScopedRetrieval, _resolve_domain_scope
+from app.retrieval.hybrid import ScopeDenial, ScopedRetrieval, _resolve_domain_scope
 from app.agent_memory.recall_activation import activate_guarded_recall
 from app.agent_memory.recall_explanation import (
     ActivationReason,
@@ -65,6 +65,10 @@ def _retrieve_node(state: AgentState, *, k: int, ask_settings) -> AgentState:
         ask_score = score_hit(hit)
         enriched.append(_to_retrieved_hit(hit, ask_score=ask_score))
     state.hits = enriched
+    # Content-free scope denials ride the state separately from hits (KERNEL-10): they are
+    # scope-level, so later rerank/truncation of hits must never drop them. getattr keeps
+    # compatibility with test fakes that return a hits-only response.
+    state.denials = [d.to_dict() for d in (getattr(response, "denials", ()) or ())]
     return state
 
 
@@ -225,7 +229,16 @@ def _hits_as_scoped_retrieval(state: AgentState) -> ScopedRetrieval:
                 "evidence_role_in_context": hit.evidence_role_in_context,
             }
         )
-    return ScopedRetrieval(results=results, denials=(), active_scope=_resolve_domain_scope())
+    # Rehydrate the content-free denials captured at retrieval time (state carries them as plain
+    # dicts). They are scope-level: hit reranking/truncation between retrieve and here must not —
+    # and does not — affect them.
+    denial_fields = {"reason", "denial_class", "escalation_recommended", "required_flow_class"}
+    denials = tuple(
+        ScopeDenial(**{k: v for k, v in d.items() if k in denial_fields})
+        for d in (state.denials or [])
+        if isinstance(d, dict) and d.get("reason") and d.get("denial_class")
+    )
+    return ScopedRetrieval(results=results, denials=denials, active_scope=_resolve_domain_scope())
 
 
 def _envelope_source_ids(envelope: dict[str, Any]) -> list[str]:

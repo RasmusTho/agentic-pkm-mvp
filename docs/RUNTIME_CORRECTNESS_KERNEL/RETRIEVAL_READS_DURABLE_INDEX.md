@@ -92,7 +92,8 @@ The original KERNEL-05 delivery wired `rebuild_from_durable_index()` at exactly 
 site: `app/api/routes/ask.py::_ensure_hybrid_store_loaded`. That covered `/api/ask` but left every
 other consumer of the shared module-level `_STORE` (notably `/api/context-bundles` ->
 `app/retrieval/production_bundle.py` -> `app/retrieval/capability.py::retrieve` ->
-`app.retrieval.hybrid.hybrid_search`) able to serve a cold, empty cache on a fresh process restart
+`app.retrieval.hybrid.scoped_hybrid_search`, whose ranked results `hybrid_search` also projects)
+able to serve a cold, empty cache on a fresh process restart
 until an unrelated `/api/ask` call happened to warm it first — the exact "consumes nothing is
 invisible" (I-D3) class this task was meant to eliminate (audit record #2899, finding F2).
 

@@ -168,3 +168,129 @@ def test_envelope_denials_surface_as_escalation_conditions() -> None:
     assert envelope["escalation_conditions"], "denied material must surface as an escalation condition"
     for cond in envelope["escalation_conditions"]:
         assert cond["denial_class"] == "cross_scope_no_flow"
+
+
+def test_ask_seam_envelope_carries_real_denials_end_to_end(tmp_path, monkeypatch) -> None:
+    """PRODUCTION-SEAM denial threading (review F1): with an active scope and relevant out-of-scope
+    material in the real store, the envelope assembled by the ASK graph carries non-empty,
+    content-free ``denied_scopes`` and a matching escalation condition — denials survive the
+    retrieve -> rerank -> answer path (they are scope-level, not per-hit)."""
+    from app.retrieval.hybrid import get_store
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("ASK_DOMAIN_SCOPE", "work")
+    monkeypatch.setenv(
+        "ASK_SYNTHESIS_RECEIPTS_PATH",
+        str(tmp_path / "runtime" / "activation" / "ask_synthesis_receipts.jsonl"),
+    )
+
+    store = get_store()
+    store.set_documents([])
+    store.add_document(
+        doc_id="work-in-scope",
+        text="stateful workflow engine reconciliation notes",
+        source_ref="work/notes.md",
+        payload={"domain": "work"},
+    )
+    store.add_document(
+        doc_id="rpg-out-of-scope",
+        # Shares query vocabulary so it is RELEVANT — and must become a denial, not vanish.
+        text="stateful workflow engine ritual of the aether",
+        source_ref="rpg/ritual.md",
+        payload={"domain": "rpg"},
+    )
+
+    def _fake_llm_answer(question, context, ask_settings):
+        return "Synthesized in scope.", {"provider": "mock"}
+
+    captured: dict[str, dict] = {}
+    original_assemble = ask_graph.assemble_and_validate_ask_envelope
+
+    def _spy_assemble(scoped, **kwargs):
+        env = original_assemble(scoped, **kwargs)
+        captured["envelope"] = env
+        return env
+
+    monkeypatch.setattr(ask_graph, "retrieve_relevant_promoted", _no_recall)
+    monkeypatch.setattr(ask_graph, "llm_answer", _fake_llm_answer)
+    monkeypatch.setattr(ask_graph, "assemble_and_validate_ask_envelope", _spy_assemble)
+
+    try:
+        state = run_ask_graph("stateful workflow engine", trace_id="trace-denials")
+    finally:
+        store.set_documents([])
+
+    # Retrieval surfaced only the in-scope doc; the graph ran to an answer.
+    assert [h.object_id for h in state.hits] == ["work-in-scope"]
+    assert "envelope" in captured, "the ASK seam must assemble a ContextEnvelope"
+    envelope = captured["envelope"]
+    validate_envelope(envelope)
+
+    # The real prefilter denial reached the envelope: non-empty and class-matched.
+    assert envelope["denied_scopes"], (
+        "relevant out-of-scope material must surface as a denial on the production envelope"
+    )
+    assert any(d["denial_class"] == "cross_scope_no_flow" for d in envelope["denied_scopes"])
+    # ...with a matching escalation condition (useful denied material is surfaced, not hidden).
+    assert any(
+        c.get("denial_class") == "cross_scope_no_flow" for c in envelope["escalation_conditions"]
+    ), "a denial must surface as an escalation condition"
+
+    # Content-free: the denial and escalation records leak no identity/content of the denied doc.
+    import json as _json
+
+    denial_blob = _json.dumps(
+        {"denied": envelope["denied_scopes"], "escalations": envelope["escalation_conditions"]}
+    ).lower()
+    for leaked in ("rpg", "ritual", "aether", "rpg-out-of-scope", "rpg/ritual.md"):
+        assert leaked not in denial_blob, f"denial leaked identifying content: {leaked!r}"
+
+    # And the state carries them scope-level, unaffected by hit truncation in the rerank node.
+    assert state.denials and state.denials[0]["denial_class"] == "cross_scope_no_flow"
+
+
+def test_envelope_honors_proposed_role_downgrade() -> None:
+    """Review F2: a legitimate proposed DOWNGRADE of the in-context role is honored (not silently
+    reset to intrinsic); a proposed upgrade is still clamped to intrinsic."""
+    scoped = ScopedRetrieval(
+        results=[
+            {
+                "id": "doc-down",
+                "doc_id": "doc-down",
+                "text": "body",
+                "score": 0.5,
+                "snippet": "body",
+                "source_ref": "vault/a.md",
+                # Intrinsic evidence, proposed downgrade to background -> honored.
+                "payload": {"domain": "work", "evidence_role": "evidence"},
+                "evidence_role_in_context": "background",
+            },
+            {
+                "id": "doc-up",
+                "doc_id": "doc-up",
+                "text": "body",
+                "score": 0.4,
+                "snippet": "body",
+                "source_ref": "vault/b.md",
+                # Intrinsic background, proposed upgrade to evidence -> clamped to background.
+                "payload": {"domain": "work", "evidence_role": "background"},
+                "evidence_role_in_context": "evidence",
+            },
+        ],
+        denials=(),
+        active_scope="work",
+    )
+    envelope = assemble_and_validate_ask_envelope(
+        scoped,
+        active_workspace_id="workspace:ask",
+        active_scope_id="scope:work",
+        principal_id="principal:ask",
+        user_intent="orient",
+    )
+    roles = {
+        item["metadata_bundle"]["object_id"]: item["evidence_role_in_context"]
+        for item in envelope["retrieved_items"]
+    }
+    assert roles["doc-down"] == "background", "a proposed downgrade must be honored"
+    assert roles["doc-up"] == "background", "a proposed upgrade must be clamped to intrinsic"
