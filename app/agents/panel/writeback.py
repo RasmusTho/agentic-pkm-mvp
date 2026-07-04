@@ -155,6 +155,23 @@ def write_receipts(
     return "\n".join(lines)
 
 
+def strip_ai_status_block(markdown: str) -> str:
+    """Remove the ``> [!info]- AI status`` receipt callout, if present.
+
+    The callout is panel-writeback output (``write_receipts``) appended *outside*
+    the ``%% AI:Start/End %%`` fence, so ``strip_ai_panels`` alone does not remove
+    it. Its receipt lines carry a per-run timestamp (e.g. "(2026-07-04 19:08)"),
+    so leaving it in any canonical/hashed view of a note body makes that view
+    non-deterministic across otherwise-identical reruns (KERNEL-06, #2768).
+    """
+    lines = markdown.splitlines()
+    start, end, _receipts = _parse_receipts(lines)
+    if start is None or end is None:
+        return markdown
+    remaining = lines[:start] + lines[end:]
+    return "\n".join(remaining).rstrip("\n")
+
+
 def remove_actions_from_markdown(markdown: str, action_ids: set[str]) -> str:
     """Remove checkbox lines whose ``ai:id`` annotation is in *action_ids*."""
     if not action_ids:
@@ -212,6 +229,7 @@ __all__ = [
     "parse_action_line",
     "remove_actions_from_markdown",
     "stable_action_id",
+    "strip_ai_status_block",
     "upsert_executed_ids",
     "write_receipts",
 ]

@@ -32,6 +32,14 @@ STORE_TABLES = (
 # The last schema revision before the store tables became migration-owned.
 PRE_STORE_HEAD = "5b8ff54bed0f"
 
+# The KERNEL-04 store-schema-owning revision this test asserts parity against.
+# Pinned explicitly (not "head"): later migrations are free to add indexes or
+# other DDL on top of the store tables (e.g. KERNEL-06/#2768's content_hash
+# lookup index) without this test comparing against a moving target — this
+# test's job is verifying c2766a04d001 itself matches _ensure_tables(), not
+# every subsequent migration.
+STORE_SCHEMA_HEAD = "c2766a04d001"
+
 
 def _admin_dsn() -> str:
     from app.db.dsn import resolve_dsn
@@ -171,11 +179,11 @@ def _schema_snapshot(dsn: str) -> dict:
 
 
 def test_fresh_db_parity(scratch_db_factory, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fresh-DB `alembic upgrade head` == the audited `_ensure_tables()` shape."""
+    """Fresh-DB `alembic upgrade <STORE_SCHEMA_HEAD>` == the audited `_ensure_tables()` shape."""
     migrated = scratch_db_factory()
     bootstrapped = scratch_db_factory()
 
-    _alembic_upgrade(migrated, monkeypatch)
+    _alembic_upgrade(migrated, monkeypatch, STORE_SCHEMA_HEAD)
     _run_ensure_tables(bootstrapped, monkeypatch)
 
     migrated_shape = _schema_snapshot(migrated)
@@ -188,7 +196,7 @@ def test_fresh_db_parity(scratch_db_factory, monkeypatch: pytest.MonkeyPatch) ->
     )
     # Every table actually exists (non-empty column sets).
     for table in STORE_TABLES:
-        assert migrated_shape[table]["columns"], f"{table} missing after alembic upgrade head"
+        assert migrated_shape[table]["columns"], f"{table} missing after alembic upgrade"
 
 
 def test_upgrade_idempotent_on_existing(scratch_db_factory, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -213,7 +221,7 @@ def test_upgrade_idempotent_on_existing(scratch_db_factory, monkeypatch: pytest.
         )
 
     before = _schema_snapshot(dsn)
-    _alembic_upgrade(dsn, monkeypatch)  # applies only the store-schema revision
+    _alembic_upgrade(dsn, monkeypatch, STORE_SCHEMA_HEAD)  # applies only the store-schema revision
     after = _schema_snapshot(dsn)
 
     assert before == after, "Migration changed an existing environment's store schema"

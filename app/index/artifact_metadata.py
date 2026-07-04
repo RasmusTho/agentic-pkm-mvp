@@ -1,7 +1,17 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import asdict, is_dataclass
 from typing import Any
+
+from app.ingest.chunk_policy import CHUNK_POLICY_VERSION
+
+# Embed-pipeline version stamped into every store_vector_index row's
+# provenance (KERNEL-06, #2768). Bump this when the embedding pipeline
+# (pre-processing, chunking-to-embed wiring, or model-invocation shape)
+# changes in a way that would make existing vectors stale relative to a
+# re-run, independent of a chunk-policy or model change.
+EMBED_PIPELINE_VERSION = "v1"
 
 
 def _embedding_identity_dict(identity: Any) -> dict[str, Any]:
@@ -17,6 +27,16 @@ def _embedding_identity_dict(identity: Any) -> dict[str, Any]:
         "dim": getattr(identity, "dim", None),
         "normalize": getattr(identity, "normalize", None),
     }
+
+
+def compute_content_hash(text: str) -> str:
+    """Stable hash of the exact embedded text (KERNEL-06, #2768).
+
+    Used both to stamp `provenance.content_hash` at write time and to detect
+    staleness at doctor/reconcile time (a mismatch means the source text
+    changed since the vector was produced).
+    """
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
 def build_indexed_unit_payload(
@@ -51,7 +71,25 @@ def build_indexed_unit_payload(
     payload_out["review_state"] = str(payload_out.get("review_state") or "provisional")
     if embedding_identity is not None:
         payload_out["embedding_identity"] = _embedding_identity_dict(embedding_identity)
+
+    # Transform provenance stamp (KERNEL-06, #2768, audit invariant I-D1).
+    # Rides inside this same payload dict so it commits in the same upsert
+    # statement as the vector — cross-task invariant #4 forbids a separate
+    # "stamp later" write. `content_hash` is computed from the exact embedded
+    # text (post strip_ai_panels, matching what the caller actually embeds).
+    embedded_text = text if text is not None else str(payload_out.get("text") or payload_out.get("content") or "")
+    payload_out["provenance"] = {
+        "source_ref": safe_source_ref,
+        "content_hash": compute_content_hash(embedded_text),
+        "chunk_policy_version": CHUNK_POLICY_VERSION,
+        "pipeline_version": EMBED_PIPELINE_VERSION,
+        "embedding_identity": _embedding_identity_dict(embedding_identity) if embedding_identity is not None else None,
+    }
     return payload_out
 
 
-__all__ = ["build_indexed_unit_payload"]
+__all__ = [
+    "build_indexed_unit_payload",
+    "compute_content_hash",
+    "EMBED_PIPELINE_VERSION",
+]

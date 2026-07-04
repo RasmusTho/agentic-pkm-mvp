@@ -849,6 +849,57 @@ def inspect_pg_metadata_completeness(*, limit: int = 5) -> dict:
     }
 
 
+def inspect_pg_content_hash_staleness(*, limit: int = 5) -> dict:
+    """Return counts + sample ids of ``store_vector_index`` rows whose stored
+    ``provenance.content_hash`` no longer matches the current ``store_objects``
+    text (KERNEL-06, #2768).
+
+    Read-only diagnosis only — never re-embeds or mutates. A mismatch means
+    the source object's text changed since the vector was produced; ``index
+    reconcile`` is the explicit, operator/agent-triggered repair (cross-task
+    invariant #5: doctor detects, reconcile repairs, nothing auto-mutates).
+
+    Rows with no recorded ``content_hash`` (written before this capability
+    existed) are reported separately as ``unstamped_count`` rather than
+    treated as stale — they need a rebuild to acquire a hash, not a
+    content-drift re-embed.
+    """
+    _ensure_tables()
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT v.object_id AS object_id,
+                       v.payload->'provenance'->>'content_hash' AS stored_hash,
+                       COALESCE(o.payload->>'text', o.payload->>'content', '') AS current_text
+                FROM store_vector_index AS v
+                JOIN store_objects AS o ON o.object_id = v.object_id
+                """
+            )
+            rows = cur.fetchall()
+
+    from app.index.artifact_metadata import compute_content_hash
+
+    stale_ids: list[str] = []
+    unstamped_ids: list[str] = []
+    for row in rows:
+        stored_hash = row.get("stored_hash")
+        if not stored_hash:
+            unstamped_ids.append(str(row["object_id"]))
+            continue
+        current_hash = compute_content_hash(row.get("current_text") or "")
+        if current_hash != stored_hash:
+            stale_ids.append(str(row["object_id"]))
+
+    return {
+        "checked": len(rows),
+        "stale_count": len(stale_ids),
+        "stale_sample_ids": stale_ids[:limit],
+        "unstamped_count": len(unstamped_ids),
+        "unstamped_sample_ids": unstamped_ids[:limit],
+    }
+
+
 def inspect_pg_index_state() -> dict:
     """Return diagnostics for the Postgres vector index (identity + dims)."""
     _ensure_tables()

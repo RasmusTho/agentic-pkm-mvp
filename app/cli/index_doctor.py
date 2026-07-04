@@ -68,6 +68,16 @@ def doctor(as_json: bool, strict: bool, warn: bool, coverage: bool) -> None:
             samples = completeness.get("missing_sample_ids") or []
             if samples:
                 click.echo(f"  Sample object ids: {', '.join(samples)}")
+        staleness = result.get("content_hash_staleness") or {}
+        if staleness.get("stale_count"):
+            click.echo(
+                f"Content-hash staleness (re-embed candidates): {staleness['stale_count']} "
+                f"of {staleness.get('checked', 0)} rows."
+            )
+            samples = staleness.get("stale_sample_ids") or []
+            if samples:
+                click.echo(f"  Sample object ids: {', '.join(samples)}")
+            click.echo("Recommended repair: python -m app.cli index reconcile")
         vault_coverage = result.get("vault_coverage") or {}
         if vault_coverage.get("error"):
             click.echo(f"Vault coverage scan skipped: {vault_coverage['error']}")

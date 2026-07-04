@@ -9,11 +9,13 @@ from typing import Any, Callable, Iterable
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.agents.panel.filters import strip_ai_panels
 from app.agents.panel.writeback import (
     annotate_action_ids,
     new_option_id,
     remove_actions_from_markdown,
     stable_action_id,
+    strip_ai_status_block,
     upsert_executed_ids,
     write_receipts,
 )
@@ -661,7 +663,12 @@ def _refresh_companion_hash(
         if companion is None:
             return
         _, body = load_frontmatter(updated_text)
-        content = (body or updated_text).strip()
+        # Canonicalize the same way ingest does (KERNEL-06, #2768 fix): strip both
+        # the `%% AI:Start/End %%` fence and the `> [!info]- AI status` receipt
+        # callout before hashing, so this post-writeback refresh converges on the
+        # same content_hash ingest already stamped rather than re-diverging it with
+        # a fresh receipt timestamp on every panel run.
+        content = strip_ai_status_block(strip_ai_panels(body or updated_text)).strip()
         new_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
         if companion.content_hash == new_hash:
             return

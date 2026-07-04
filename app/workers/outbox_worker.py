@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from app.agents.panel.filters import strip_ai_panels
+from app.agents.panel.writeback import strip_ai_status_block
 from app.agents.panel_agent.execution import refresh_panel_note_object, run_panel_note_execution
 from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
 from app.events.sync import SyncChainCorrelationData, SyncLatencySummaryEvent
@@ -1051,7 +1053,19 @@ def handle_ingest_vault_changed(
         return WorkerIngestSummary(ingested=0)
 
     frontmatter, body = load_frontmatter(raw_text)
-    content = (body or raw_text).strip()
+    # Canonicalize on the AI-panel-stripped body (KERNEL-06, #2768 fix): the panel
+    # agent writes both the `%% AI:Start/End %%` fence contents and a separate
+    # `> [!info]- AI status` receipt callout back into the note body on disk (see
+    # app/agents/panel_agent/runtime.py write_text / app/agents/panel/writeback.py
+    # write_receipts). The receipt callout carries a per-run timestamp, so the raw
+    # body mutates between first ingest and a later reingest of the same source
+    # content even when nothing the human wrote changed. Hashing the raw body made
+    # `provenance.content_hash` (and the companion content_hash) non-deterministic
+    # across reruns, breaking registry-chain rerun idempotence. Stripping both
+    # panel artifacts here — once, before `content` fans out to the store_objects
+    # payload, the vector-index content_hash stamp, and the companion hash — keeps
+    # all three consumers looking at the same canonical source body.
+    content = strip_ai_status_block(strip_ai_panels(body or raw_text)).strip()
 
     note_uuid = _normalize_uuid_value(frontmatter.get("uuid") or frontmatter.get("id"))
     if not note_uuid and healed_uuid:
