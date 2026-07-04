@@ -13,7 +13,7 @@ from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services.note_update import apply_promotion_frontmatter
 from app.components.concurrency import EventDedupStore
 from app.objects import DomainObject, ObjectStore
-from app.services.outbox import write_outbox_event
+from app.services.outbox import derive_idempotency_key, payload_fingerprint, write_outbox_event
 
 
 def _read_outbox(path: Path, start: int = 0) -> Iterable[dict]:
@@ -103,7 +103,18 @@ def _emit_jsonl_event(events: list[OutboxEvent], event_type: str, payload: dict,
 
 def _emit_db_event(event_type: str, payload: dict, trace_id: str | None) -> None:
     event = new_event(event_type=event_type, payload=payload, trace_id=trace_id, source="promotion.consumer")
-    write_outbox_event(event)
+    # Promotion emissions dedup on the originating intent: replaying the same
+    # intent (same source_event + payload) is a no-op at the log layer (I-E1).
+    source_id = str(
+        payload.get("source_event")
+        or payload.get("intent_event_id")
+        or payload.get("note_uuid")
+        or "promotion.consumer"
+    )
+    write_outbox_event(
+        event,
+        idempotency_key=derive_idempotency_key(event_type, source_id, payload_fingerprint(payload)),
+    )
 
 
 def _handle_promotion_payload(

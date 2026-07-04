@@ -10,7 +10,7 @@ from uuid import UUID
 from app.embedding_config import get_embed_dim
 from app.events.schema import make_outbox_event
 from app.llm.embeddings import EMBED_MODEL
-from app.services.outbox import write_outbox_event
+from app.services.outbox import EVENT_ID_FINGERPRINT, derive_idempotency_key, write_outbox_event
 from app.settings.watcher_settings import load_watcher_settings
 
 logger = logging.getLogger(__name__)
@@ -116,7 +116,10 @@ def emit_index_embedding_requested(event: Dict[str, Any]) -> None:
     )
 
     record: Dict[str, Any] = dict(envelope.model_dump())
-    write_outbox_event(envelope, idempotency_key=str(record.get("event_id") or ""))
+    write_outbox_event(
+        envelope,
+        idempotency_key=derive_idempotency_key(INDEX_EMBEDDING_REQUESTED, envelope.event_id, EVENT_ID_FINGERPRINT),
+    )
     _append_record_best_effort(record, event_name=INDEX_EMBEDDING_REQUESTED)
 
 

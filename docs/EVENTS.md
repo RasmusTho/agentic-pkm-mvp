@@ -60,7 +60,21 @@ Notes:
 
 - Every event MUST carry a unique `event_id`.
 - Consumers MUST deduplicate by `event_id` and treat duplicates as no-ops.
-- Producers SHOULD use deterministic `event_id` values for retry safety.
+- Every DB outbox insert MUST carry a deterministic idempotency key (KERNEL-02, #2764):
+  `app/services/outbox.py::write_outbox_event` requires `idempotency_key` (a keyless call is a
+  `TypeError`), the key becomes the row `id` with `ON CONFLICT (id) DO NOTHING`, and producers MUST
+  derive it through the single shared helper
+  `app/services/outbox.py::derive_idempotency_key(topic, source_id, content_fingerprint)`
+  (`uuid5(namespace, sha256(topic ‖ source_id ‖ fingerprint))`). Ad-hoc key schemes are forbidden;
+  `tests/architecture/test_outbox_producer_idempotency.py` gates every callsite.
+- Per-topic fingerprints are chosen deliberately: ingest events key on
+  `(topic, object uuid/path, content fingerprint)` so re-emitting unchanged content is a log-layer
+  no-op; watcher-run events key on `(topic, relative path, run-window mtime+hash)`; worker
+  retry/dead-letter events key on `(topic, original event/outbox id, attempt)` so intentional
+  re-emissions are NOT swallowed; event-scoped emissions (panel projections, capture receipts,
+  index-embedding requests) key on their `event_id`.
+- The worker's in-memory `_EventDedup` cache remains a fast-path optimization only; it is no longer
+  load-bearing for duplicate suppression.
 - `watcher.run` and watcher auto-exec events MUST be deduplicated to prevent duplicate panel intents or promotions.
 
 See `docs/CONCURRENCY.md` for the broader concurrency and idempotency guardrails.

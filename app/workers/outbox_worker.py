@@ -25,7 +25,15 @@ from app.services.indexer import handle_ingest_object_created
 from app.services.companion_note import CompanionNote, scan_attachments, write_companion
 from app.settings.runtime import get_settings_bundle
 from app.services.note_uuid import ensure_note_uuid
-from app.services.outbox import ack_outbox, append_jsonl_outbox_event, bootstrap, bump_outbox_attempts, poll_outbox_one, write_outbox_event
+from app.services.outbox import (
+    ack_outbox,
+    append_jsonl_outbox_event,
+    bootstrap,
+    bump_outbox_attempts,
+    derive_idempotency_key,
+    poll_outbox_one,
+    write_outbox_event,
+)
 from app.vault.paths import NoVaultSelectedError, get_vault_inbox_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD
 from app.events.models import new_event
@@ -609,7 +617,17 @@ def _emit_retry_dead_letter(
     )
     append_jsonl_outbox_event(_outbox_audit_path(), event, default_source="worker")
     if _use_db_outbox():
-        write_outbox_event(event)
+        # Attempt-scoped key (topic, original event id/path, retry count) so a
+        # retried audit write dedups but a later genuine re-exhaustion at a new
+        # attempt count is NOT swallowed (I-E1).
+        write_outbox_event(
+            event,
+            idempotency_key=derive_idempotency_key(
+                OUTBOX_EVENT_DEAD_LETTERED,
+                _original_event_id(payload, original_event_id) or str(note_path),
+                f"retry-exhausted:{reason}:{retry_count}",
+            ),
+        )
 
 
 def _dead_letter_outbox_message(
@@ -644,7 +662,17 @@ def _dead_letter_outbox_message(
         )
         append_jsonl_outbox_event(_outbox_audit_path(), event, default_source="worker")
         if _use_db_outbox():
-            write_outbox_event(event)
+            # Keyed on (topic, poisoned outbox row id, attempts): duplicate
+            # audit emission for the same drop dedups; a later re-poisoning at
+            # a different attempt count produces a distinct row (I-E1).
+            write_outbox_event(
+                event,
+                idempotency_key=derive_idempotency_key(
+                    OUTBOX_EVENT_DEAD_LETTERED,
+                    str(message_id),
+                    f"poison:{attempts}",
+                ),
+            )
         logger.warning(
             "worker dead-lettered poison outbox row topic=%s id=%s reason=%s attempts=%s",
             topic,
@@ -712,7 +740,17 @@ def _queue_transient_retry(
 
     try:
         if _use_db_outbox():
-            write_outbox_event(retry_event)
+            # Attempt-scoped key (topic, original event id/path, retry:<n>) so
+            # each retry attempt is a distinct row (intentional re-emission),
+            # while a duplicate enqueue of the same attempt dedups (I-E1).
+            write_outbox_event(
+                retry_event,
+                idempotency_key=derive_idempotency_key(
+                    topic,
+                    _original_event_id(payload, original_event_id) or str(note_path),
+                    f"retry:{retry_count + 1}:{reason}",
+                ),
+            )
         else:
             append_jsonl_outbox_event(_outbox_audit_path(), retry_event, default_source="worker")
     except Exception:

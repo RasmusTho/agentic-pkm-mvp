@@ -59,18 +59,19 @@ class FakeOutboxConn:
         text = " ".join(sql.lower().split())
 
         if text.startswith("insert into outbox"):
+            # Keyed insert shape (KERNEL-02): id is the mandatory idempotency
+            # key with ON CONFLICT (id) DO NOTHING semantics.
+            row_id, topic, payload, created_at, attempts = params
+            if row_id in self.rows:
+                return _FakeCursor([])
             self._seq += 1
-            row_id = f"row-{self._seq:04d}"
-            topic = params[0]
-            payload = params[1]
-            created_at = params[2] if len(params) > 2 else datetime.now(timezone.utc)
             self.rows[row_id] = {
                 "id": row_id,
                 "topic": topic,
                 "payload": payload,
                 "created_at": created_at,
                 "delivered_at": None,
-                "attempts": 0,
+                "attempts": attempts,
             }
             return _FakeCursor([(row_id,)])
 
@@ -175,7 +176,10 @@ def _enqueue_ingest(note_path, *, trace_id: str) -> str:
         trace_id=trace_id,
         source="watcher.registry",
     )
-    return write_outbox_event(event)
+    key = outbox_service.derive_idempotency_key(
+        INGEST_VAULT_CHANGED, payload["relative_path"], outbox_service.payload_fingerprint(payload)
+    )
+    return write_outbox_event(event, idempotency_key=key)
 
 
 def _write_note(tmp_path, name: str = "note.md") -> Any:
