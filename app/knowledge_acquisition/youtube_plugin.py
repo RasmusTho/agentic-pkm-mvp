@@ -125,20 +125,43 @@ def select_caption_track(
       dict includes machine-*translated* tracks (one entry per target language);
       those are auto-*translated* and MUST NOT be requested
       (YOUTUBE_SOURCE_SPEC.md § Transcript acquisition, point 1; 429-prone).
-      This function only ever looks at the source video's own detected/original
-      language key, never at translated-language keys, so translated tracks are
-      structurally excluded rather than filtered after the fact.
-    - Captionless (no manual or auto track in an original language) returns
-      `CaptionSelection(available=False)` — a normal outcome, not an error.
+
+    Language selection (the "original language" resolution):
+
+    - **Video language known** — that language is the *only* candidate, for both
+      the manual and the automatic pass. The `en`/`sv` defaults are NOT mixed in:
+      for e.g. a `de` video whose `automatic_captions` carry only auto-*translated*
+      `en`/`sv` entries, looking up those keys would request a translated track.
+      A known-language video with no track in its own language is captionless.
+      (A manual or auto track in the video's own language is accepted even when
+      that language is outside `original_languages` — original-language-only
+      refers to the video's language; wrong-language *rejection* is the
+      pipeline's early metadata filter, not the plugin's job.)
+    - **Video language unknown** (`language` missing/None) — conservative
+      posture, documented decision (spec is silent; PR #2928 review round 1):
+      the manual pass falls back to `original_languages` because manual tracks
+      are creator-provided and never auto-*translated* (requesting one cannot
+      hit the 429-prone translated endpoint, and the operator's content
+      universe is sv/en per YOUTUBE_SOURCE_SPEC § Transcript acquisition).
+      The automatic pass is skipped entirely: without the video's language we
+      cannot tell an original auto track from an auto-translated one, so we
+      prefer captionless (KA-02 ASR consumes it) over risking a translated
+      track.
+    - Captionless (no acceptable track) returns `CaptionSelection(available=False)`
+      — a normal outcome, not an error.
     """
     manual = info.get("subtitles") or {}
     automatic = info.get("automatic_captions") or {}
     video_language = info.get("language")
 
-    candidate_languages = [lang for lang in (video_language,) if lang]
-    candidate_languages.extend(lang for lang in original_languages if lang not in candidate_languages)
+    if video_language:
+        manual_candidates: tuple[str, ...] = (video_language,)
+        automatic_candidates: tuple[str, ...] = (video_language,)
+    else:
+        manual_candidates = original_languages
+        automatic_candidates = ()  # conservative: never guess at auto-caption keys
 
-    for lang in candidate_languages:
+    for lang in manual_candidates:
         tracks = manual.get(lang)
         if tracks:
             return CaptionSelection(
@@ -148,7 +171,7 @@ def select_caption_track(
                 track_url=_pick_track_url(tracks),
             )
 
-    for lang in candidate_languages:
+    for lang in automatic_candidates:
         tracks = automatic.get(lang)
         if tracks:
             return CaptionSelection(
