@@ -1,4 +1,4 @@
-State: Specification (docs-authoring; target-state framing). Not implemented; first source instance and Phase 2 vertical-slice definition.
+State: Specification (docs-authoring; target-state framing). §Transcript acquisition and §Metadata are implemented for the explicit-URL `fetch` path (KA-01, #2796, `app/knowledge_acquisition/youtube_plugin.py`) — caption-first, manual-track preferred, original-language only, captionless as a normal outcome, immutable raw record with dedup. ASR fallback (§Transcript acquisition point 2), §Discovery, and §Writeback remain not implemented; the Phase 2 vertical slice is not yet complete end to end.
 Doc role: Source instance specification
 Authority: Instantiates `SOURCE_PLUGIN_CONTRACT.md` for YouTube. Mechanism choices are grounded in `RESEARCH_2026-07.md` (mid-2026 verification). The triage flow for the resulting artifacts is owned by `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md` §4.3; the artifact class by `LIFE_WIDE_ARTIFACT_TAXONOMY.md` (`youtube_source_note`).
 
