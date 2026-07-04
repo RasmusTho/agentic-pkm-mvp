@@ -15,6 +15,83 @@ except ImportError:
 from app.components.retrieval import embed_docs, embed_query
 from app.retrieval.hook_adapter import maybe_rerank
 
+# Conservative -> permissive ordering of evidence roles (semantic-dimensions.md). Mirrors
+# yggdrasil_runtime/retrieval.py::_EVIDENCE_ORDER — the reference for the invariant SHAPE. The
+# in-context role may only be downgraded from the intrinsic role, never upgraded toward `evidence`.
+_EVIDENCE_ORDER = ("non_evidence", "inspiration", "analogy", "reference", "background", "evidence")
+
+# Intrinsic default for vault-derived / index-projection material with no explicit evidence_role:
+# retrieval produces candidate context, not authority (ADR-0039), so it defaults to `background`,
+# never `evidence`. An item reaches in-context `evidence` ONLY when its payload explicitly carries
+# intrinsic `evidence`.
+_DEFAULT_INTRINSIC_EVIDENCE_ROLE = "background"
+
+
+def _intrinsic_evidence_role(payload: dict[str, Any] | None) -> str:
+    """Intrinsic evidence role for a doc: ``payload['evidence_role']`` when present and valid,
+    otherwise the conservative ``background`` default. Never invented as ``evidence``."""
+    raw = (payload or {}).get("evidence_role")
+    if isinstance(raw, str) and raw in _EVIDENCE_ORDER:
+        return raw
+    return _DEFAULT_INTRINSIC_EVIDENCE_ROLE
+
+
+def _clamp_in_context(intrinsic: str, proposed: str | None = None) -> str:
+    """Return an in-context evidence role that never exceeds the intrinsic role (non-upgrading).
+
+    Ported from ``yggdrasil_runtime/retrieval.py::_clamp_in_context``: defaults to the intrinsic
+    role; a proposed value is honored only when it is ordinally lower-or-equal. Retrieval may
+    downgrade an evidence role for the current context but must never upgrade it toward ``evidence``.
+    """
+    if intrinsic not in _EVIDENCE_ORDER:
+        intrinsic = _DEFAULT_INTRINSIC_EVIDENCE_ROLE
+    if proposed is None or proposed not in _EVIDENCE_ORDER:
+        return intrinsic
+    return proposed if _EVIDENCE_ORDER.index(proposed) <= _EVIDENCE_ORDER.index(intrinsic) else intrinsic
+
+
+@dataclass(frozen=True)
+class ScopeDenial:
+    """Content-free record that some relevant material was excluded by the scope prefilter.
+
+    Records WHY and WHAT CLASS of flow would be needed WITHOUT identifying the denied content,
+    scope, object, provenance, or even a per-document count — mirrors
+    ``yggdrasil_runtime/retrieval.py::ScopeDenial`` and validates against
+    ``schemas/_defs.schema.json :: scope_denial`` (via the retrieval-result / context-envelope
+    contracts). A denial is never a silent drop and never leaks scope/object identity.
+    """
+
+    reason: str
+    denial_class: str
+    escalation_recommended: bool = False
+    required_flow_class: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "reason": self.reason,
+            "denial_class": self.denial_class,
+            "escalation_recommended": self.escalation_recommended,
+        }
+        if self.required_flow_class is not None:
+            out["required_flow_class"] = self.required_flow_class
+        return out
+
+
+@dataclass(frozen=True)
+class ScopedRetrieval:
+    """Structured retrieval result carrying the ranked eligible items plus the content-free denials.
+
+    ``results`` are the same ``List[dict]`` items ``hybrid_search`` returns (each now carrying an
+    ``evidence_role_in_context``); ``denials`` records excluded-but-relevant material by class only;
+    ``scope_policy_prefiltered`` asserts the eligibility decision ran BEFORE ranking. The
+    ContextEnvelope assembler (:mod:`app.retrieval.envelope`) consumes this — never raw dicts.
+    """
+
+    results: List[dict]
+    denials: tuple[ScopeDenial, ...] = ()
+    scope_policy_prefiltered: bool = True
+    active_scope: str | None = None
+
 
 @dataclass
 class Document:
@@ -272,50 +349,97 @@ def _snippet(text: str, query: str, size: int = 300) -> str:
     return text[start:end].strip()
 
 
-def hybrid_search(query: str, *, k: int = 8, language: Optional[str] = None, query_vector: list[float] | None = None) -> List[dict]:
-    docs = _STORE.all()
-    if not docs:
+def _denials_for_excluded(
+    excluded: List[Document], scope: str, token_set: set[str]
+) -> tuple[ScopeDenial, ...]:
+    """Content-free denials for relevant material excluded by the scope prefilter.
+
+    A doc is "relevant" if it shares at least one query token (a cheap lexical overlap check —
+    ineligible content is NEVER embedded or run through the scoring machinery; that restraint is the
+    invariant itself). Aggregated by denial class so the result records that material WAS withheld
+    without leaking object/scope identity, content, provenance, or a per-document count.
+    Mirrors ``yggdrasil_runtime/retrieval.py::_denials_for_excluded``.
+
+    The live ``app/`` path has no suppression_state today, so only the ``cross_scope_no_flow`` class
+    can actually occur; ``suppressed`` is intentionally NOT emitted (do not invent a class that
+    cannot occur), while the record shape stays compatible with the schema's denial enum.
+    """
+    if not token_set:
+        return ()
+    out_of_scope_relevant = False
+    for doc in excluded:
+        doc_tokens = set(_tokenize(doc.text, doc.language))
+        if token_set & doc_tokens:
+            out_of_scope_relevant = True
+            break
+    if not out_of_scope_relevant:
+        return ()
+    return (
+        ScopeDenial(
+            reason="relevant material outside the active scope was excluded; no CrossScopeFlow admits it",
+            denial_class="cross_scope_no_flow",
+            escalation_recommended=False,
+            required_flow_class="other-scope -> active-scope, governed flow required",
+        ),
+    )
+
+
+def _rank_eligible(
+    query: str,
+    docs: List[Document],
+    eligible_idx: List[int],
+    *,
+    k: int,
+    language: Optional[str],
+    query_vector: list[float] | None,
+) -> List[dict]:
+    """Score, normalize, and rank ONLY the eligible docs, then package result dicts.
+
+    Scores come from the store's cached BM25 + embedding indexes (the single source of vectors —
+    a cache-through of the durable index, KERNEL-05), but the candidate set and min/max
+    normalization are restricted to ``eligible_idx``, so ineligible rows can never enter the scored
+    candidate set nor shift the normalization of eligible rows (the correctness bug the prefilter
+    closes). Each result dict carries ``evidence_role_in_context`` clamped ordinally ``<=`` its
+    intrinsic role.
+    """
+    if not eligible_idx:
         return []
 
-    scope = _resolve_domain_scope()
-    allowed_idx: set[int] | None = None
-    if scope:
-        allowed_idx = {idx for idx, doc in enumerate(docs) if _doc_in_scope(doc, scope)}
-        if not allowed_idx:
-            return []
-
     tokens = _tokenize(query, language)
-    bm25_raw = _STORE.bm25_scores(tokens)
+    # Full-corpus raw scores from the store cache, then sliced to the eligible partition BEFORE
+    # normalization — ineligible rows are excluded from the candidate set and the normalization base.
+    bm25_full = _STORE.bm25_scores(tokens)
     emb_vector_raw = query_vector if query_vector is not None else embed_text(query)
     emb_vector = np.array(emb_vector_raw, dtype=np.float32)
     if emb_vector.ndim != 1 or not emb_vector.shape[0]:
         raise ValueError("embedding client returned invalid vector shape")
-    emb_raw = _STORE.embedding_scores(emb_vector)
+    emb_full = _STORE.embedding_scores(emb_vector)
+
+    idx_arr = np.array(eligible_idx, dtype=np.intp)
+    bm25_raw = np.asarray(bm25_full, dtype=np.float32)[idx_arr]
+    emb_raw = np.asarray(emb_full, dtype=np.float32)[idx_arr]
 
     bm25_norm = _normalize(bm25_raw)
     emb_norm = _normalize(emb_raw)
 
     token_set = set(tokens)
-    overlap_bonus = np.zeros(len(docs), dtype=np.float32)
+    overlap_bonus = np.zeros(len(eligible_idx), dtype=np.float32)
     if token_set:
-        for i, doc in enumerate(docs):
+        for i, doc_idx in enumerate(eligible_idx):
+            doc = docs[doc_idx]
             doc_tokens = set(_tokenize(doc.text, doc.language))
             overlap_bonus[i] = len(token_set & doc_tokens) / max(1, len(token_set))
 
     combined = 0.5 * bm25_norm + 0.4 * emb_norm + 0.1 * overlap_bonus
-    order = np.argsort(-combined)
-    if allowed_idx is not None:
-        ordered = [int(idx) for idx in order if int(idx) in allowed_idx]
-    else:
-        ordered = [int(idx) for idx in order]
-    ordered = ordered[:k]
+    order = [int(i) for i in np.argsort(-combined)][:k]
 
     results: List[dict] = []
-    for idx in ordered:
-        doc = docs[int(idx)]
-        score = float(np.clip(combined[int(idx)], 0.0, 1.0))
+    for i in order:
+        doc = docs[eligible_idx[i]]
+        score = float(np.clip(combined[i], 0.0, 1.0))
         snippet = _snippet(doc.text, query)
         payload = dict(doc.payload or {})
+        intrinsic = _intrinsic_evidence_role(payload)
         results.append(
             {
                 "id": doc.doc_id,
@@ -325,13 +449,106 @@ def hybrid_search(query: str, *, k: int = 8, language: Optional[str] = None, que
                 "snippet": snippet,
                 "source_ref": doc.source_ref,
                 "payload": payload,
+                # In-context evidence role, clamped so it never exceeds the intrinsic role.
+                "evidence_role_in_context": _clamp_in_context(intrinsic),
             }
         )
-    return maybe_rerank(query, results)
+    return results
+
+
+def _partition_by_scope(
+    docs: List[Document], scope: str | None
+) -> tuple[List[int], List[Document]]:
+    """Split docs into (eligible indices, excluded docs) by scope eligibility, BEFORE tokenize/score.
+
+    Eligibility decides membership; similarity decides order. With no active scope every doc is
+    eligible (unchanged behavior). With an active scope, membership is the same conservative domain
+    decision as before (``_doc_in_scope``: explicit ``payload['domain']`` / ``bridge_domains``;
+    missing domain is ineligible) — only its POSITION moves ahead of scoring. Eligible items are
+    returned as store indices so scoring can reuse the store's cached vectors while excluding the
+    ineligible rows from the candidate set.
+    """
+    if not scope:
+        return list(range(len(docs))), []
+    eligible_idx: List[int] = []
+    excluded: List[Document] = []
+    for idx, doc in enumerate(docs):
+        if _doc_in_scope(doc, scope):
+            eligible_idx.append(idx)
+        else:
+            excluded.append(doc)
+    return eligible_idx, excluded
+
+
+def _contain_rerank(query: str, admitted: List[dict]) -> List[dict]:
+    """Apply the optional rerank hook, then enforce that it only reordered/dropped within the
+    admitted set — reranking never reintroduces an excluded doc (spec AC1, second clause)."""
+    admitted_ids = {item.get("doc_id") for item in admitted}
+    reranked = maybe_rerank(query, admitted)
+    intruders = {item.get("doc_id") for item in reranked} - admitted_ids
+    if intruders:
+        raise AssertionError(
+            f"rerank introduced doc_ids absent from the admitted set: {sorted(map(str, intruders))}"
+        )
+    return reranked
+
+
+def scoped_hybrid_search(
+    query: str,
+    *,
+    k: int = 8,
+    language: Optional[str] = None,
+    query_vector: list[float] | None = None,
+) -> ScopedRetrieval:
+    """Scope-prefiltered retrieval with content-free denials — the structured entrypoint.
+
+    Partitions the store into eligible/excluded BY SCOPE before ranking, ranks the eligible set
+    only, records excluded-but-relevant material as content-free denials, and returns a
+    :class:`ScopedRetrieval`. ``hybrid_search`` is the ``List[dict]`` projection of ``.results``.
+    """
+    docs = _STORE.all()
+    scope = _resolve_domain_scope()
+    if not docs:
+        return ScopedRetrieval(results=[], denials=(), scope_policy_prefiltered=True, active_scope=scope)
+
+    # 1) PREFILTER before ranking — eligibility decides membership, not similarity.
+    eligible_idx, excluded = _partition_by_scope(docs, scope)
+
+    # Content-free denials for relevant-but-excluded material (never a silent drop). The empty
+    # eligible set is likewise no longer a silent early-exit.
+    token_set = set(_tokenize(query, language))
+    denials = _denials_for_excluded(excluded, scope, token_set) if scope else ()
+
+    # 2) RANK only the eligible set (candidate set + normalization restricted to eligible-only).
+    results = _rank_eligible(
+        query, docs, eligible_idx, k=k, language=language, query_vector=query_vector
+    )
+
+    # 3) Rerank within the admitted set only (never reintroduces an exclusion).
+    results = _contain_rerank(query, results)
+    return ScopedRetrieval(
+        results=results,
+        denials=denials,
+        scope_policy_prefiltered=True,
+        active_scope=scope,
+    )
+
+
+def hybrid_search(query: str, *, k: int = 8, language: Optional[str] = None, query_vector: list[float] | None = None) -> List[dict]:
+    """Item-consumer entrypoint: the ranked, scope-eligible result dicts.
+
+    The scope prefilter is now internal to this production entrypoint (it runs BEFORE scoring via
+    :func:`scoped_hybrid_search`), so callers and the spec's ``test_prefilter_precedes_ranking``
+    bind to the same path. Each result dict additionally carries ``evidence_role_in_context``.
+    """
+    return scoped_hybrid_search(query, k=k, language=language, query_vector=query_vector).results
 
 
 __all__ = [
     "hybrid_search",
+    "scoped_hybrid_search",
+    "ScopedRetrieval",
+    "ScopeDenial",
     "get_store",
     "MemoryHybridStore",
     "Document",
