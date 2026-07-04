@@ -54,6 +54,28 @@ class RecordingVaultPort:
         self.messages.append((message, uri))
 
 
+class FlakyVaultPort(RecordingVaultPort):
+    """RecordingVaultPort that raises once on a targeted sync call, then recovers."""
+
+    def __init__(self, *, fail_upsert_for: str | None = None, fail_delete: bool = False) -> None:
+        super().__init__()
+        self.fail_upsert_for = fail_upsert_for
+        self.fail_delete = fail_delete
+
+    def upsert_note_object(
+        self, path: Path, frontmatter: dict[str, object], body: str, fm_changed: bool, body_changed: bool
+    ) -> None:
+        if self.fail_upsert_for and Path(path).name == self.fail_upsert_for:
+            raise RuntimeError("simulated transient outbox/enqueue failure")
+        super().upsert_note_object(path, frontmatter, body, fm_changed, body_changed)
+
+    def delete_note(self, path: Path, *, uuid_value: str | None = None) -> None:
+        if self.fail_delete:
+            self.fail_delete = False  # fail exactly once, then recover
+            raise RuntimeError("simulated transient delete-sync failure")
+        super().delete_note(path, uuid_value=uuid_value)
+
+
 def _load_watcher(monkeypatch: pytest.MonkeyPatch, vault_dir: Path):
     monkeypatch.setenv("VAULT_DIR", str(vault_dir))
     monkeypatch.setenv("OBSIDIAN_VAULT_NAME", "TestVault")
@@ -165,3 +187,54 @@ def test_deleted_note_propagates_to_port(monkeypatch: pytest.MonkeyPatch, tmp_pa
     deleted_path, deleted_uuid = port.deletes[-1]
     assert deleted_path.endswith("note.md")
     assert deleted_uuid == "dead-beef"
+
+
+def test_scan_survives_upsert_failure_and_processes_remaining_notes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "bad.md").write_text("---\nuuid: bad-1\n---\n\nBad body", encoding="utf-8")
+    (vault / "good.md").write_text("---\nuuid: good-1\n---\n\nGood body", encoding="utf-8")
+
+    watcher = _load_watcher(monkeypatch, vault)
+    monkeypatch.setattr(watcher, "active_edit", lambda _: False)
+    port = FlakyVaultPort(fail_upsert_for="bad.md")
+
+    # A raising sync call on one note must not crash the scan loop.
+    watcher.scan_once(port)
+
+    upserted = {Path(p).name for p, *_ in port.upserts}
+    assert "good.md" in upserted  # loop moved on to the healthy note
+    assert "bad.md" not in upserted  # failing note was skipped, not recorded
+
+    # STATE was not recorded for the failed note, so a later healthy scan retries it.
+    port.fail_upsert_for = None
+    watcher.scan_once(port)
+    upserted = {Path(p).name for p, *_ in port.upserts}
+    assert "bad.md" in upserted
+
+
+def test_scan_survives_delete_failure_and_retries(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "note.md"
+    note.write_text("---\nuuid: del-1\n---\n\nBody", encoding="utf-8")
+
+    watcher = _load_watcher(monkeypatch, vault)
+    monkeypatch.setattr(watcher, "active_edit", lambda _: False)
+    port = FlakyVaultPort(fail_delete=True)
+    watcher.scan_once(port)  # index the note → STATE populated
+    assert str(note) in watcher.STATE
+
+    note.unlink()
+    watcher.scan_once(port)  # delete_note raises once; loop must survive
+
+    assert port.deletes == []  # the failed delete was not recorded as done
+    assert str(note) in watcher.STATE  # STATE preserved → retry on next scan
+
+    watcher.scan_once(port)  # port recovered → delete now succeeds
+    assert port.deletes
+    assert str(note) not in watcher.STATE
