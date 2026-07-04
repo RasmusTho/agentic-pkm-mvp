@@ -39,3 +39,4 @@
 - [ADR-0040: Prod promotion ref — `main` interim baseline; gated `stable` deferred](./ADR-0040-prod-promotion-ref-main-interim.md)
 - [ADR-0041: `MODULAR_ARCHITECTURE.md` is misnamed — rename to an accurate title](./ADR-0041-system-of-systems-doc-rename.md)
 - [ADR-0042: DESIGN_PRINCIPLES §9 mislabels volatility isolation — reword now](./ADR-0042-design-principles-9-volatility-isolation.md)
+- [ADR-0043: Heimdall naming + ecosystem Norse name register (Proposed)](./ADR-0043-heimdall-naming-and-norse-name-register.md)
