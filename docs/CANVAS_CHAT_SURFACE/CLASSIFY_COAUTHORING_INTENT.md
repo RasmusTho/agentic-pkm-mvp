@@ -25,7 +25,7 @@ Last reviewed: 2026-06-09
 
 ## What This Task Does
 
-- Add `app/chat/intent_classifier.py` with:
+- Add `app/components/llm/intent_classifier.py` with:
   - `IntentClass` enum: `CO_AUTHORING`, `GOVERNANCE_BEARING`, `EXPLORATORY`.
   - `IntentClassification` (frozen dataclass): `intent_class: IntentClass`, `action_type: GovernanceActionType | None` (set **iff** `GOVERNANCE_BEARING`), `classified: bool`, `rationale: str | None`, `trace_id: str | None`.
   - `IntentClassifierCognition` mirroring `CoAuthoringCognition`: a `facade_factory: Callable[[], ReasoningFacade]` injectable (default `get_reasoning_facade`) so tests run without a live LLM, and a `classify(*, intent, current_body=None, trace_id=None) -> IntentClassification` method.
@@ -41,8 +41,8 @@ Last reviewed: 2026-06-09
 ## Concretely
 
 ```python
-from app.chat.intent_classifier import IntentClassifierCognition, IntentClass
-from app.chat.governance_router import GovernanceActionType
+from app.components.llm.intent_classifier import IntentClassifierCognition, IntentClass
+from app.components.llm.intent_classifier import GovernanceActionType
 
 cog = IntentClassifierCognition(facade_factory=lambda: stub_facade)
 

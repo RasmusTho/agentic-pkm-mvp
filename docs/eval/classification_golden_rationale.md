@@ -7,7 +7,7 @@ Spec: `docs/RUNTIME_CORRECTNESS_KERNEL/INTENT_CLASSIFICATION_GOLDEN_SET.md`.
 
 ## Why this dataset is adversarial by design
 
-The intent classifier (`app/chat/intent_classifier.py::classify`) is the LLM decision
+The intent classifier (`app/components/llm/intent_classifier.py::classify`) is the LLM decision
 that gates mutations. The audit failure mode (CW-2) is *silent conversion*: a
 governance-bearing intent read as a body edit, or an exploratory question read as an
 action. Cases were therefore authored to probe specific confusion boundaries rather

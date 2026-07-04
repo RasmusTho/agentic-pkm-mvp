@@ -3,7 +3,7 @@
 # `completions` maps every case id in docs/eval/classification_golden.yaml to
 # a RECORDED raw model completion string. Deterministic CI mode replays these
 # through the injectable completion seam of
-# app/chat/intent_classifier.py::IntentClassifierCognition, so KERNEL-07's
+# app/components/llm/intent_classifier.py::IntentClassifierCognition, so KERNEL-07's
 # constrained-output validation layer (schema validation, explicit-UNKNOWN
 # degrade, governance action mapping) runs for real — only the network call
 # is replayed. See app/eval/classification.py and
