@@ -7,14 +7,19 @@ from fastapi.testclient import TestClient
 
 from app.api.app import app
 from app.api.routes import ask as ask_module
+from app.components.embeddings import EmbeddingIdentity
 from app.retrieval.hybrid import get_store as get_hybrid_store
-from app.stores import get_object_store, reset_store_backends
+from app.retrieval.hybrid import reset_durable_rebuild_state
+from app.stores import get_vector_index, reset_store_backends
 from app.db.dsn import resolve_dsn
 from app.stores.pg import pg_available
 
 
 @pytest.mark.pg
 def test_ask_warm_loads_pg_store(monkeypatch) -> None:
+    """KERNEL-05: the ASK warm-load path rebuilds the retrieval cache from the
+    durable ``store_vector_index`` — not from a scan of the object store. See
+    docs/RUNTIME_CORRECTNESS_KERNEL/RETRIEVAL_READS_DURABLE_INDEX.md."""
     if not pg_available():
         pytest.skip("Postgres backend not available")
 
@@ -25,15 +30,20 @@ def test_ask_warm_loads_pg_store(monkeypatch) -> None:
     reset_store_backends()
     hybrid_store = get_hybrid_store()
     hybrid_store.set_documents([])
+    reset_durable_rebuild_state()
     ask_module._HYBRID_WARMED = False
 
-    store = get_object_store()
+    identity = EmbeddingIdentity(provider="mock", model="mock-embedding", dim=8, normalize=False)
+    vector_index = get_vector_index()
     object_id = uuid4()
-    store.put(
-        object_id,
+    vector_index.upsert(
+        object_id=object_id,
         kind="note",
         source_ref="unit-test://warm-load",
-        payload={"text": "Alpha warm content", "origin": "vault"},
+        payload={"text": "Alpha warm content", "content": "Alpha warm content", "origin": "vault"},
+        embedding=[0.1] * 8,
+        model=identity.model,
+        identity=identity,
     )
 
     client = TestClient(app)
@@ -49,4 +59,5 @@ def test_ask_warm_loads_pg_store(monkeypatch) -> None:
 
     reset_store_backends()
     hybrid_store.set_documents([])
+    reset_durable_rebuild_state()
     ask_module._HYBRID_WARMED = False

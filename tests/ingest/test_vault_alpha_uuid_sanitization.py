@@ -18,11 +18,6 @@ class _DummyStore:
         self.put_calls.append(object_uuid)
 
 
-class _DummySearchStore:
-    def add_document(self, **_kwargs) -> None:
-        return None
-
-
 def test_invalid_frontmatter_uuid_generates_uuid4(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # Explicit memory backend (KERNEL-03, #2765): the DomainObject facade write
     # in _ingest_single fails loud on an unconfigured pg backend; this test
@@ -38,7 +33,9 @@ def test_invalid_frontmatter_uuid_generates_uuid4(monkeypatch: pytest.MonkeyPatc
 
     dummy_store = _DummyStore()
     monkeypatch.setattr(vault_alpha, "get_object_store", lambda: dummy_store)
-    monkeypatch.setattr(vault_alpha, "get_store", lambda: _DummySearchStore())
+    # KERNEL-05 (I-D3): vault_alpha no longer writes the retrieval cache
+    # directly (get_store attribute removed); only index_ingest_object feeds
+    # the durable index, which the cache rebuilds from.
     monkeypatch.setattr(vault_alpha, "index_ingest_object", lambda **_kwargs: None)
     monkeypatch.setattr(vault_alpha, "classify_run", lambda *args, **_kwargs: {})
 

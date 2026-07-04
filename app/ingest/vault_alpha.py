@@ -19,7 +19,6 @@ from app.ingest.config import resolve_ingest_config
 from app.index.outbox import append_jsonl
 from app.observability.ingest_meta import record_ingest_run
 from app.observability.log import with_trace_id
-from app.retrieval.hybrid import get_store
 from app.search.service import ingest_object as index_ingest_object
 from app.settings.runtime import get_settings_bundle
 from app.services.companion_eligibility import (
@@ -565,16 +564,10 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         pass
 
     try:
-        get_store().add_document(
-            doc_id=str(object_uuid),
-            text=stripped_text,
-            source_ref=str(path),
-            payload=store_payload,
-        )
-    except Exception:
-        pass
-
-    try:
+        # Durable write only (KERNEL-05, I-D3): the retrieval cache is never
+        # written here directly. It is populated exclusively by
+        # app.retrieval.hybrid.rebuild_from_durable_index() loading from
+        # store_vector_index, which this upsert feeds.
         index_ingest_object(
             object_id=object_uuid,
             kind="note",

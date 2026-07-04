@@ -178,6 +178,55 @@ def test_doctor_flags_incomplete_metadata(tmp_path, monkeypatch) -> None:
         _drop_schema(base_dsn, schema)
 
 
+def test_no_retrieval_index_divergence(monkeypatch) -> None:
+    """KERNEL-05 AC: index doctor reports zero retrieval-vs-index divergence
+    on a synced fixture (durable index rebuilt into the in-process cache).
+
+    Uses the memory store backend (the default for non-pg tests) so this
+    check runs in the fast/hot suite, not gated behind Postgres.
+    """
+    from app.components.embeddings import EmbeddingIdentity
+    from app.retrieval import hybrid
+    from app.stores import get_vector_index, reset_store_backends
+
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    reset_store_backends()
+    hybrid.get_store().set_documents([])
+    hybrid.reset_durable_rebuild_state()
+    reset_diagnose_cache()
+    try:
+        identity = EmbeddingIdentity(provider="mock", model="embed-test", dim=8, normalize=False)
+        idx = get_vector_index()
+        oid = uuid4()
+        idx.upsert(
+            object_id=oid,
+            kind="note",
+            source_ref="unit-test://doctor-divergence",
+            payload={"text": "synced fixture content", "content": "synced fixture content"},
+            embedding=[0.1] * 8,
+            model=identity.model,
+            identity=identity,
+        )
+
+        # Sync: rebuild the in-process cache from the durable index.
+        hybrid.rebuild_from_durable_index(force=True)
+
+        reset_diagnose_cache()
+        result = diagnose_index()
+
+        divergence = result.get("retrieval_index_divergence") or {}
+        assert divergence.get("checked") is True
+        assert divergence.get("cache_warmed") is True
+        assert divergence.get("missing_from_cache") == 0
+        assert divergence.get("extra_in_cache") == 0
+        assert not any("diverges from the durable index" in w for w in result.get("warnings") or [])
+    finally:
+        reset_diagnose_cache()
+        hybrid.get_store().set_documents([])
+        hybrid.reset_durable_rebuild_state()
+        reset_store_backends()
+
+
 @pytest.mark.pg
 def test_health_surfaces_coverage(tmp_path, monkeypatch) -> None:
     """#2324 AC4: app/cli/health.py surfaces the new completeness/coverage findings."""

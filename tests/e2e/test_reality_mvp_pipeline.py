@@ -10,6 +10,7 @@ from app.api.routes import ask as ask_route
 from app.ingest.vault_root import ingest_vault_root
 from app.observability.ingest_meta import reset_ingest_meta
 from app.retrieval.hybrid import get_store as get_hybrid_store
+from app.retrieval.hybrid import reset_durable_rebuild_state
 from app.stores import get_object_store, reset_store_backends
 
 SCENARIO_DOC = Path("docs/scenarios/REALITY_MVP.md")
@@ -33,6 +34,7 @@ def test_reality_mvp_note_ingest_and_ask(tmp_path: Path, monkeypatch) -> None:
     reset_store_backends()
     reset_ingest_meta()
     get_hybrid_store().set_documents([])
+    reset_durable_rebuild_state()
     monkeypatch.setattr(ask_route, "_HYBRID_WARMED", False, raising=False)
 
     # Post-#2026, ASK answer synthesis is activated through the admissibility

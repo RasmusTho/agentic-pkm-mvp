@@ -46,8 +46,6 @@ ALLOWLIST: frozenset[str] = frozenset(
         "app/agents/pipeline.py",
         "app/agents/projector/agent.py",
         "app/agents/set_evaluator/agent.py",
-        # api / interaction layer
-        "app/api/routes/ask.py",
         # cli area — tracked by cleanup follow-up (see CODE_INVENTORY.md §Cleanup)
         "app/cli/__init__.py",
         "app/cli/alpha_human_flows.py",
@@ -79,6 +77,10 @@ ALLOWLIST: frozenset[str] = frozenset(
         # reasoning
         "app/reasoning/multi.py",
         "app/reasoning/provider.py",
+        # retrieval — KERNEL-05 (#2767): rebuild_from_durable_index() reads
+        # app.stores.get_vector_index(), the same canonical store seam already
+        # used by app/index/doctor.py and app/search/service.py below.
+        "app/retrieval/hybrid.py",
         # search
         "app/search/service.py",
         # services

@@ -631,6 +631,36 @@ class PgVectorIndex(VectorIndex):
             return int(row.get('total') or 0)
         return int(list(row.values())[0] or 0)
 
+    def all_rows(self) -> List[dict]:
+        """Return every durable row for a cache rebuild (KERNEL-05, I-D3).
+
+        This is the single production read path a retrieval cache-through is
+        allowed to bulk-load from; it never partial-loads or filters, so a
+        rebuild from this method is always a faithful mirror of the durable
+        index.
+        """
+        _ensure_tables()
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT object_id, kind, source_ref, payload, embedding
+                    FROM store_vector_index
+                    ORDER BY updated_at
+                    """
+                )
+                rows = cur.fetchall()
+        return [
+            {
+                "object_id": row["object_id"],
+                "kind": row["kind"],
+                "source_ref": row["source_ref"],
+                "payload": row["payload"] or {},
+                "embedding": coerce_floats(row["embedding"] or []),
+            }
+            for row in rows
+        ]
+
 
 class PgRelationIndex(RelationIndex):
     rebuild_source = "vault frontmatter links + PgObjectStore (see docs/CONCEPTS/RELATION_TAXONOMY.md)"
