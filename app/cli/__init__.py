@@ -898,7 +898,13 @@ def alpha_human_flows(
 )
 def yggdrasil_init(root_dir: Path | None) -> None:
     yggdrasil_root = _resolve_yggdrasil_root(root_dir).expanduser()
-    result = YggdrasilScaffolder(root=yggdrasil_root).scaffold()
+    try:
+        result = YggdrasilScaffolder(root=yggdrasil_root).scaffold()
+    except WritesBlockedError as exc:
+        # Guard denied the scaffold action (#2877). The assertion precedes all
+        # filesystem mutation, so nothing was created — surface a clean
+        # non-zero CLI error rather than an uncaught traceback.
+        raise click.ClickException(f"yggdrasil-init blocked: {exc}") from exc
     created = result.get("created", [])
     existed = result.get("existed", [])
 

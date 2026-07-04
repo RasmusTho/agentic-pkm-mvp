@@ -7,13 +7,26 @@ from typing import List
 from app.knowledge.write_ops import write_note_from_absolute
 from app.settings.default_vault_layout import load_default_vault_layout
 from app.vault.layout import ensure_vault_layout_report
+from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
+
+# Bootstrap action asserted at the scaffold seam. It is a member of the write
+# guard's named bootstrap allow-list (``DEFAULT_BOOTSTRAP_ACTIONS`` in
+# app/write_guard.py), so a genuine pre-vault-selection provision survives
+# health-degraded states while a guard that denies the action still blocks the
+# write (#2877; formal-model.md §2.3 T-scaffold, gap #1).
+SCAFFOLD_ACTION = "yggdrasil.scaffold"
 
 
 class YggdrasilScaffolder:
     def __init__(self, root: Path | None = None) -> None:
         self.root = Path(root) if root is not None else Path.home() / "Yggdrasil"
 
-    def scaffold(self) -> dict[str, List[Path]]:
+    def scaffold(self, *, write_guard: WriteGuard = DEFAULT_WRITE_GUARD) -> dict[str, List[Path]]:
+        # Guard-at-seam: assert before any filesystem mutation so a blocked
+        # scaffold is atomic — zero directories created, zero files written.
+        # The seam consults the guard; the named bootstrap escape lives in the
+        # guard's allow-list, not in an unconditional skip here.
+        write_guard.assert_writes_allowed(SCAFFOLD_ACTION)
         yggdrasil_root = self.root.expanduser()
         module_paths = {
             "Mimer": yggdrasil_root / "Mimer",

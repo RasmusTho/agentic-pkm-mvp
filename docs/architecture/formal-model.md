@@ -173,7 +173,13 @@ T-companion-sync, T-move-workbench, T-moment, T-reachout — all WG-gated at the
 T-rebuild / T-reconcile [operator]  (app/cli/index_rebuild.py:198-579)
   post: P.vectors rewritten/re-embedded ; direct writes, NO event ; doctor verifies after
 T-scaffold [operator/human: vault init, yggdrasil-init, layout-ensure]
-  pre-vault-selection bootstrap: idempotent file scaffold, deliberately outside WG
+  pre-vault-selection bootstrap: idempotent file scaffold. yggdrasil-init now CONSULTS WG at the
+  scaffolder seam (app/settings/yggdrasil_scaffolder.py::scaffold, action "yggdrasil.scaffold",
+  asserted before the first mkdir ⇒ blocked path is atomic: zero dirs/files, non-zero CLI exit).
+  A NAMED bootstrap escape (DEFAULT_BOOTSTRAP_ACTIONS in app/write_guard.py) lets a genuine
+  pre-selection provision through under safe_mode/unhealthy — a denying guard still blocks it, so
+  this is a consulted seam, not "outside WG" (#2877). The other four gap-#1 sites remain RESEARCH-03
+  #2781.
 T-settings-compile [operator: settings compile/watch]  (app/settings/writeback.py:23-42)
   post: V.settings @Settings/*.md ← compiled blocks ; ⚠ NO WG, NO event — Divergence F-B
 T-bootstrap-ddl [worker boot]  (app/services/outbox.py:68-73, called from outbox_worker.py:1027)
@@ -252,6 +258,12 @@ audit kernel (`docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md` §2
    scaffold, manager identity-heal via write_frontmatter, checkbox rollback). The deep fix
    candidate is asserting WG inside the port with a named bootstrap escape for pre-selection
    scaffolding (T-scaffold) — recorded for RESEARCH-03 as the strongest form of this invariant.
+   The bounded seam-local form landed for the vault-layout scaffold site: `yggdrasil-init`'s
+   scaffolder now asserts WG at its own seam with the named bootstrap escape
+   (`"yggdrasil.scaffold"` ∈ `DEFAULT_BOOTSTRAP_ACTIONS`), so a genuine new-vault provision
+   survives `safe_mode`/`unhealthy` while a denying guard blocks it atomically (#2877). The
+   remaining four sites (settings writeback already gated by #2809; note_hygiene, identity-heal,
+   checkbox rollback) plus the shared-port form stay with RESEARCH-03 #2781.
 2. **Event-completeness:** every `P.objects`/`P.vectors` mutation has a corresponding event, or is
    declared a *mirror* in a registered list — today `emit_outbox=False` writes are invisible to
    replay (F-E; eight call sites named in §4/C8).
