@@ -85,6 +85,8 @@ ASK_QUERY_RECEIVED = "ask.query.received"
 JOBS_BACKFILL_DONE = "jobs.backfill.done"
 RELATION_MISSING = "relation.missing"
 
+SETTINGS_WRITE_RECEIPT = "settings.write.receipt"
+
 __all__ = [
     "INGEST_OBJECT_CREATED",
     "INGEST_OBJECT_UPDATED",
@@ -158,4 +160,5 @@ __all__ = [
     "ASK_QUERY_RECEIVED",
     "JOBS_BACKFILL_DONE",
     "RELATION_MISSING",
+    "SETTINGS_WRITE_RECEIPT",
 ]
