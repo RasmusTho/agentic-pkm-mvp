@@ -110,6 +110,27 @@ def build_retrieval_candidates(
     return candidates
 
 
+def build_retrieval_candidates_from_envelope(
+    envelope: dict,
+) -> list[CandidateContext]:
+    """Build candidate contexts from a bounded ``ContextEnvelope``, not raw dicts (KERNEL-10).
+
+    The ASK/chat consumption seam now receives a schema-valid ContextEnvelope
+    (``app.retrieval.envelope.assemble_and_validate_ask_envelope``) instead of raw ranked
+    retrieval dicts. Each admitted candidate's identity comes only from its embedded metadata
+    bundle's ``object_id`` (the envelope's single source of identity — no sibling id). The envelope
+    already enforced the scope prefilter and stripped any raw-access/storage field, so this consumer
+    never touches raw index rows.
+    """
+    source_ids: list[str] = []
+    for item in envelope.get("retrieved_items", []):
+        bundle = item.get("metadata_bundle") or {}
+        object_id = str(bundle.get("object_id") or "").strip()
+        if object_id:
+            source_ids.append(object_id)
+    return build_retrieval_candidates(source_ids)
+
+
 def evaluate_ask_synthesis(
     source_ids: Iterable[str],
     *,
@@ -184,6 +205,7 @@ __all__ = [
     "ASK_SYNTHESIS_RECEIPT_EVENT",
     "build_ask_synthesis_posture",
     "build_retrieval_candidates",
+    "build_retrieval_candidates_from_envelope",
     "evaluate_ask_synthesis",
     "emit_ask_synthesis_receipt",
 ]

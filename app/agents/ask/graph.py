@@ -7,7 +7,12 @@ from typing import Any, Iterable, List, Optional
 
 from langgraph.graph import END, START, StateGraph
 
-from app.activation.ask_synthesis import emit_ask_synthesis_receipt, evaluate_ask_synthesis
+from app.activation.ask_synthesis import (
+    emit_ask_synthesis_receipt,
+    evaluate_ask_synthesis,
+)
+from app.retrieval.envelope import assemble_and_validate_ask_envelope
+from app.retrieval.hybrid import ScopedRetrieval, _resolve_domain_scope
 from app.agent_memory.recall_activation import activate_guarded_recall
 from app.agent_memory.recall_explanation import (
     ActivationReason,
@@ -48,6 +53,7 @@ def _to_retrieved_hit(hit: dict[str, Any], ask_score: float | None = None) -> Re
         # sees the short display snippet.
         text=hit.get("text") or payload.get("text") or payload.get("raw_text"),
         payload=payload,
+        evidence_role_in_context=hit.get("evidence_role_in_context"),
     )
 
 
@@ -195,15 +201,66 @@ def _recall_only_fallback(state: AgentState) -> str:
     return title or why
 
 
-def _synthesis_source_ids(state: AgentState) -> list[str]:
-    """Stable ids for the retrieved/recalled context offered to the gate.
+def _hits_as_scoped_retrieval(state: AgentState) -> ScopedRetrieval:
+    """Project the reranked retrieval hits back into a :class:`ScopedRetrieval`.
 
-    These are the same ids surfaced as ASK sources, so the admitted set links
-    the synthesized answer back to its grounded sources.
+    The hits already passed the scope prefilter in ``hybrid_search`` (eligibility decided membership
+    before ranking); this repackages them as the structured value the envelope assembler consumes.
+    Denials are not re-derived here (the retrieval entrypoint owns them); the seam's contract is that
+    the consumer receives a bounded envelope, never raw index rows.
     """
-    ids: list[str] = [h.object_id for h in state.hits if h.object_id]
-    ids.extend(r.artifact_id for r in (state.recalled or []) if r.artifact_id)
+    results: list[dict[str, Any]] = []
+    for hit in state.hits:
+        if not hit.object_id:
+            continue
+        results.append(
+            {
+                "id": hit.object_id,
+                "doc_id": hit.object_id,
+                "text": hit.text or hit.snippet or "",
+                "score": hit.score,
+                "snippet": hit.snippet,
+                "source_ref": hit.path,
+                "payload": dict(hit.payload or {}),
+                "evidence_role_in_context": hit.evidence_role_in_context,
+            }
+        )
+    return ScopedRetrieval(results=results, denials=(), active_scope=_resolve_domain_scope())
+
+
+def _envelope_source_ids(envelope: dict[str, Any]) -> list[str]:
+    """Ordered ``object_id``s of the envelope's retrieved items (single source of identity).
+
+    The envelope's embedded metadata bundles are the only identity source the gate consumes; the
+    consumer never touches raw index rows. Order is preserved so grounded-source linkage on the ASK
+    response matches retrieval order.
+    """
+    ids: list[str] = []
+    for item in envelope.get("retrieved_items", []):
+        bundle = item.get("metadata_bundle") or {}
+        object_id = str(bundle.get("object_id") or "").strip()
+        if object_id:
+            ids.append(object_id)
     return ids
+
+
+def build_ask_envelope(state: AgentState) -> dict[str, Any]:
+    """Assemble and validate the bounded ContextEnvelope the ASK synthesis seam consumes (KERNEL-10).
+
+    This is the production seam: ``app.api.routes.ask`` -> ASK graph -> here. The consumer of the
+    retrieval context is handed a schema-valid ContextEnvelope (no raw vault/index access), never the
+    raw ranked dicts. ``active_scope_id`` is the active domain scope or an explicit ``unscoped``
+    token (an id_string is required and must be non-empty).
+    """
+    scoped = _hits_as_scoped_retrieval(state)
+    active_scope = scoped.active_scope or "scope:unscoped"
+    return assemble_and_validate_ask_envelope(
+        scoped,
+        active_workspace_id="workspace:ask",
+        active_scope_id=active_scope,
+        principal_id="principal:ask",
+        user_intent=state.query or "ask",
+    )
 
 
 def _synthesis_source_paths(state: AgentState) -> dict[str, str]:
@@ -235,7 +292,15 @@ def _answer_node(state: AgentState, *, ask_settings) -> AgentState:
     # the existing run_reasoning(ASK_ANSWER) generation path and emit a
     # provenance-bearing activation receipt. When it blocks (or generation
     # yields nothing), preserve the existing literal-snippet fallback.
-    source_ids = _synthesis_source_ids(state)
+    #
+    # KERNEL-10: the retrieval context reaches the gate as a bounded, schema-valid
+    # ContextEnvelope (no raw index rows). The gate's source ids come from the
+    # envelope's embedded metadata bundles (its single source of identity), with
+    # recalled memory ids appended as before. `evaluate_ask_synthesis` stays the
+    # gate seam so the deterministic admissibility decision is unchanged.
+    envelope = build_ask_envelope(state)
+    source_ids = _envelope_source_ids(envelope)
+    source_ids.extend(r.artifact_id for r in (state.recalled or []) if r.artifact_id)
     decision = evaluate_ask_synthesis(source_ids)
     if decision.activatable:
         context = build_ask_context(

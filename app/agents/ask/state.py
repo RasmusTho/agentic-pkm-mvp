@@ -24,6 +24,10 @@ class RetrievedHit(BaseModel):
     snippet: Optional[str] = None
     text: Optional[str] = None
     payload: dict[str, Any] = Field(default_factory=dict)
+    # In-context evidence role resolved by the retrieval prefilter (KERNEL-10), clamped so it never
+    # exceeds the item's intrinsic role. Carried through to the ContextEnvelope assembled at the
+    # ASK synthesis seam.
+    evidence_role_in_context: Optional[str] = None
 
 
 class AgentState(RuntimeStateModel):
