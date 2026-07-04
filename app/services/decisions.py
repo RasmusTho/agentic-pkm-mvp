@@ -1,13 +1,78 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from functools import lru_cache
 import json
-from typing import Any, Dict, List
+import os
+from typing import Any, Dict, List, Optional
+
+import psycopg
 
 from app.db.db import conn_rw
+from app.db.dsn import resolve_dsn
 
-# in-memory fallback so tests without db still work
+# in-memory fallback used only under an explicit memory backend opt-in
+# (STORE_BACKEND=memory / test conftest override). See D-7
+# (docs/architecture/runtime-semantics.md :: Divergences): a Postgres-configured
+# but unreachable database must never silently degrade to this volatile store.
 _MEM_DECISIONS: Dict[str, List[dict[str, Any]]] = {}
+
+_ALLOWED_BACKENDS = {"memory", "pg"}
+
+
+@lru_cache(maxsize=8)
+def _resolved_backend(explicit: Optional[str], dsn: str) -> str:
+    """Fail-loud store-backend resolution (KERNEL-03 / I-S4 posture).
+
+    Deliberately duplicated from ``app.stores.provider._resolved_backend``
+    instead of imported: ``app.stores`` is a deprecated package
+    (`tests/architecture/test_deprecated_store_callers.py`) and
+    ``app/services/decisions.py`` is not an existing allowlisted caller, so a
+    new import from it would extend the deprecated surface. This mirrors the
+    same explicit-opt-in contract: an explicit but unknown backend value
+    raises; no configuration raises; a configured-but-unreachable Postgres
+    raises. Only an explicit ``STORE_BACKEND=memory`` opt-in routes to the
+    in-process memory fallback below.
+    """
+    if explicit and explicit.strip():
+        normalized = explicit.strip().lower()
+        if normalized not in _ALLOWED_BACKENDS:
+            raise RuntimeError(
+                f"Store backend '{normalized}' is not supported: set STORE_BACKEND to "
+                "'pg' or 'memory' (explicit opt-in to volatile state), or unset it to "
+                "resolve from DATABASE_URL/DB_DSN."
+            )
+        return normalized
+
+    if not dsn:
+        raise RuntimeError(
+            "No store backend configured: set STORE_BACKEND=memory explicitly for the "
+            "volatile in-memory backend, or configure DATABASE_URL/DB_DSN for Postgres."
+        )
+
+    try:
+        conn = psycopg.connect(dsn, connect_timeout=1)
+    except Exception as exc:
+        raise RuntimeError(
+            "Store backend resolution failed: Postgres is configured "
+            "(DATABASE_URL/DB_DSN) but unreachable. Refusing to fall back to a "
+            f"volatile in-memory store. Underlying error: {exc}"
+        ) from exc
+    else:
+        conn.close()
+        return "pg"
+
+
+def _use_memory_backend() -> bool:
+    """Resolve the shared fail-loud store-backend contract (KERNEL-03).
+
+    Raises when Postgres is configured but unreachable, or when nothing is
+    configured at all. Only an explicit ``STORE_BACKEND=memory`` opt-in (set
+    directly or via the test conftest autouse fixtures) routes to the
+    in-process memory fallback below.
+    """
+    backend = _resolved_backend(os.getenv("STORE_BACKEND"), resolve_dsn())
+    return backend == "memory"
 
 
 def insert_decision(object_id: str, key: str, value: dict[str, Any], trace_id: str) -> None:
@@ -19,72 +84,80 @@ def insert_decision(object_id: str, key: str, value: dict[str, Any], trace_id: s
         "created_at": datetime.now(timezone.utc),
     }
 
-    # always write to memory
-    bucket = _MEM_DECISIONS.setdefault(object_id, [])
-    bucket.append(rec)
-
-    # best-effort DB write, ignore errors
-    try:
-        with conn_rw() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO decisions (object_id, key, value, trace_id, created_at)
-                    VALUES (%s, %s, %s::jsonb, %s, %s)
-                    """,
-                    (
-                        object_id,
-                        key,
-                        json.dumps(value),
-                        trace_id,
-                        rec["created_at"],
-                    ),
-                )
-    except Exception:
-        # no db? fine, pytest offline mode just uses memory
+    if _use_memory_backend():
+        bucket = _MEM_DECISIONS.setdefault(object_id, [])
+        bucket.append(rec)
         return
+
+    # Postgres path: a failure here must propagate (fail-loud, no silent
+    # memory fallback — D-7). _use_memory_backend() already raised above if
+    # Postgres was configured but unreachable, so a failure past this point
+    # is a genuine write-time error the caller must see.
+    #
+    # The `decisions` table (app/alembic/versions/202510241200_sot41_amg_core.py)
+    # has no `trace_id` column — only `audit` does. The previous SQL here
+    # referenced a nonexistent column and would have raised UndefinedColumn
+    # on every real Postgres write; this was masked by the D-7 silent
+    # `except Exception: return` this change removes. `trace_id` is folded
+    # into the `value` jsonb envelope instead of adding a schema column,
+    # preserving round-trip access via latest_decision() with no migration.
+    stored_value = dict(value)
+    stored_value["trace_id"] = trace_id
+    with conn_rw() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO decisions (object_id, key, value, created_at)
+                VALUES (%s, %s, %s::jsonb, %s)
+                """,
+                (
+                    object_id,
+                    key,
+                    json.dumps(stored_value),
+                    rec["created_at"],
+                ),
+            )
 
 
 def latest_decision(object_id: str, key: str) -> dict[str, Any] | None:
     """
     Return latest decision with this key for object_id.
-    - First consult in-process memory (used by tests/offline runs).
-    - If missing, try to read the most recent persisted decision from the DB.
+    - Under the explicit memory backend, consult in-process memory only.
+    - Otherwise, read the most recent persisted decision from Postgres.
+      A configured-but-unreachable Postgres raises (fail-loud, D-7).
     """
-    items = _MEM_DECISIONS.get(object_id, [])
-    # walk backwards for newest first
-    for rec in reversed(items):
-        if rec["key"] == key:
-            return rec
-
-    # best-effort DB lookup for cross-process access
-    try:
-        with conn_rw() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT object_id, key, value, trace_id, created_at
-                    FROM decisions
-                    WHERE object_id = %s AND key = %s
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                    """,
-                    (object_id, key),
-                )
-                row = cur.fetchone()
-                if not row:
-                    return None
-                # parse jsonb value into dict
-                raw_val = row["value"]
-                value = raw_val if isinstance(raw_val, dict) else json.loads(raw_val)
-                return {
-                    "object_id": row["object_id"],
-                    "key": row["key"],
-                    "value": value,
-                    "trace_id": row.get("trace_id"),
-                    "created_at": row.get("created_at"),
-                }
-    except Exception:
-        # offline / memory-only mode: no DB available
+    if _use_memory_backend():
+        items = _MEM_DECISIONS.get(object_id, [])
+        for rec in reversed(items):
+            if rec["key"] == key:
+                return rec
         return None
-    return None
+
+    with conn_rw() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT object_id, key, value, created_at
+                FROM decisions
+                WHERE object_id = %s AND key = %s
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (object_id, key),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            # parse jsonb value into dict; trace_id was folded into this
+            # envelope by insert_decision() (see comment there — the
+            # decisions table has no trace_id column).
+            raw_val = row["value"]
+            value = raw_val if isinstance(raw_val, dict) else json.loads(raw_val)
+            trace_id = value.pop("trace_id", None) if isinstance(value, dict) else None
+            return {
+                "object_id": row["object_id"],
+                "key": row["key"],
+                "value": value,
+                "trace_id": trace_id,
+                "created_at": row.get("created_at"),
+            }

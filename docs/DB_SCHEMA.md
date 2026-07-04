@@ -212,7 +212,10 @@ own forward-only migration.
 
 ### `decisions` (legacy)
 - `id` (`uuid`, PK; default varies by migration)
-- `object_id` (`uuid`, FK → `objects.id`, `ON DELETE CASCADE`)
+- `object_id` (`uuid`, nullable, FK → `objects.id`, `ON DELETE SET NULL` — realigned to the
+  `audit.object_id` posture by `1a739d9494af_decisions_fk_set_null.py`, #2788; was
+  `ON DELETE CASCADE` and `NOT NULL` before this migration, see D-5/D-7 in
+  `docs/architecture/runtime-semantics.md :: Divergences`)
 - `agent` (`text`, optional)
 - `kind` (`text`, optional)
 - `key` (`text`)
@@ -225,6 +228,14 @@ own forward-only migration.
 Interpretation:
 - rows in `decisions` are operational/system-side decision records.
 - they are not automatically equivalent to human-approved commitments or receipts.
+- like `audit`, decisions now **survive** object deletion (`object_id` goes `NULL` instead of the
+  row being cascade-deleted), so judgment history is not silently lost if object cleanup (owner
+  decision D-2 on #2778) ever lands.
+- the writer (`app/services/decisions.py::insert_decision`/`latest_decision`) is fail-loud: a
+  Postgres-configured-but-unreachable database raises instead of silently falling back to an
+  in-process memory store; the memory path is reachable only via an explicit
+  `STORE_BACKEND=memory` opt-in (mirrors the KERNEL-03 store-backend contract in
+  `app/stores/provider.py::_resolved_backend`).
 
 ### `membership` (legacy)
 The legacy baseline retains the **composite** key form:

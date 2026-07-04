@@ -153,6 +153,11 @@ Each divergence is classified **fix-code**, **fix-doc**, or **needs-owner-decisi
   `ON DELETE SET NULL` (`:104`). Two canonical append-only logs, opposite loss semantics; if object
   cleanup (D-2) ever lands, judgment history silently vanishes. **fix-code** (align decisions to
   `SET NULL`; one forward-only migration). Follow-up filed — see below.
+  **RESOLVED (2026-07-04, #2788):** forward-only migration
+  `app/alembic/versions/1a739d9494af_decisions_fk_set_null.py` realigns
+  `decisions.object_id` to `ON DELETE SET NULL` (nullable), mirroring `audit.object_id`. This
+  snapshot's row 12 anchor (`ON DELETE CASCADE`) describes the pre-#2788 baseline at `b8ec22f4`;
+  see `docs/DB_SCHEMA.md :: decisions (legacy)` for current reality.
 - **D-6 · Nothing in the system is garbage-collected.** Outbox delivered rows, audit rows, JSONL
   files, review decisions, commitments: no retention policy exists anywhere, and no doc states this
   as a decision. Unbounded growth is currently the *implicit* durability contract.
@@ -165,6 +170,17 @@ Each divergence is classified **fix-code**, **fix-doc**, or **needs-owner-decisi
   failure class as kernel I-S4 (CW-5) but a callsite the kernel specs do not cover. **fix-code**
   (fail-loud or explicit opt-in, mirroring KERNEL-03's provider rule). Folded into the follow-up
   for D-5's module — see below.
+  **RESOLVED (2026-07-04, #2788):** `app/services/decisions.py::insert_decision`/`latest_decision`
+  now resolve through the shared `app.stores.provider._resolved_backend` fail-loud contract — a
+  Postgres-configured-but-unreachable database raises; the in-process memory path is reachable
+  only via an explicit `STORE_BACKEND=memory` opt-in. Fixing this also surfaced and fixed a latent
+  defect the silent fallback had hidden: the writer's INSERT referenced a `trace_id` column that
+  has never existed on `decisions` (only `audit` has it) and would have raised on every real
+  Postgres write; `trace_id` is now folded into the `value` jsonb envelope instead of a schema
+  change. Two callers (`app/agents/reviewer/agent.py`, `app/agents/set_evaluator/agent.py`) still
+  wrap the write in their own `try/except: pass` and re-swallow the failure at the call site —
+  out of #2788's bounded scope (named only `app/services/decisions.py`), tracked as a separate
+  follow-up.
 
 ## Target semantics (explicitly not current reality)
 
