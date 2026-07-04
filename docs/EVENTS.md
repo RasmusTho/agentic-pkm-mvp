@@ -68,11 +68,15 @@ Notes:
   (`uuid5(namespace, sha256(topic ‖ source_id ‖ fingerprint))`). Ad-hoc key schemes are forbidden;
   `tests/architecture/test_outbox_producer_idempotency.py` gates every callsite.
 - Per-topic fingerprints are chosen deliberately: ingest events key on
-  `(topic, object uuid/path, content fingerprint)` so re-emitting unchanged content is a log-layer
-  no-op; watcher-run events key on `(topic, relative path, run-window mtime+hash)`; worker
-  retry/dead-letter events key on `(topic, original event/outbox id, attempt)` so intentional
-  re-emissions are NOT swallowed; event-scoped emissions (panel projections, capture receipts,
-  index-embedding requests) key on their `event_id`.
+  `(topic, object uuid/path, content fingerprint)` — timestamps such as `mtime` are excluded, so
+  re-emitting unchanged content (including a metadata-only touch) is a log-layer no-op; watcher-run
+  events key on `(topic, relative path, run-window mtime+hash)`; worker retry/dead-letter events key
+  on `(topic, original event/outbox id, attempt)` so intentional re-emissions are NOT swallowed;
+  event-scoped emissions (panel projections, capture receipts, index-embedding requests) key on
+  their `event_id`. Honest scope of `event_id` keying: it dedups only a double-insert of the same
+  constructed event (producer retry after partial failure), not a logical re-emission that rebuilds
+  the event — logical replay dedup requires a content-derived fingerprint, adopted per-topic as
+  semantics allow.
 - The worker's in-memory `_EventDedup` cache remains a fast-path optimization only; it is no longer
   load-bearing for duplicate suppression.
 - `watcher.run` and watcher auto-exec events MUST be deduplicated to prevent duplicate panel intents or promotions.

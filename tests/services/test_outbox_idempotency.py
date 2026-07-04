@@ -131,6 +131,31 @@ def test_insert_object_and_outbox_derives_content_key() -> None:
     assert len(conn.rows) == 2
 
 
+def test_ingest_key_ignores_mtime() -> None:
+    """Spec: ingest keys on (topic, note_path, content_hash) — NOT file timestamps.
+
+    A content-identical touch (same hash, new mtime, new trace) is the same
+    logical emission and must dedup; a content change must not.
+    """
+    conn = FakeOutboxConn()
+    watcher_payload = {
+        "vault_path": "/v/n.md",
+        "relative_path": "n.md",
+        "mtime": 100.0,
+        "hash": "content-hash-1",
+        "watcher": "registry:ingest",
+    }
+
+    insert_object_and_outbox(dict(watcher_payload), INGEST_VAULT_CHANGED, "trace-a", conn=conn)
+    touched = dict(watcher_payload, mtime=200.0)
+    insert_object_and_outbox(touched, INGEST_VAULT_CHANGED, "trace-b", conn=conn)
+    assert len(conn.rows) == 1  # metadata-only touch: same key, swallowed
+
+    changed = dict(watcher_payload, mtime=300.0, hash="content-hash-2")
+    insert_object_and_outbox(changed, INGEST_VAULT_CHANGED, "trace-c", conn=conn)
+    assert len(conn.rows) == 2  # content change: new key, new row
+
+
 # --- Shared derivation helper contract ----------------------------------------
 
 

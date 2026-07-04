@@ -195,10 +195,13 @@ def _coerce_event(event: Event | OutboxEvent) -> Event:
 # Changing this value changes every derived key and breaks replay dedup — never rotate it.
 OUTBOX_IDEMPOTENCY_NAMESPACE = uuid_module.UUID("6f0f5a5e-2764-5b8e-9d3a-1c9e02764a02")
 
-# Canonical content-fingerprint label for emissions whose natural dedup scope is
-# their own deterministic ``event_id`` (panel projections, capture receipts,
-# index-embedding requests): retrying the same in-memory event yields the same
-# key; a genuinely new event carries a new event_id and therefore a new key.
+# Canonical content-fingerprint label for emissions keyed on their own
+# ``event_id`` (panel projections, capture receipts, index-embedding requests).
+# Honest scope: event_id is random per constructed event, so this dedups only
+# a double-insert of the SAME in-memory event object (producer retry after a
+# partial failure) — it does NOT dedup a logical re-emission that rebuilds the
+# event. Logical replay dedup requires a content-derived fingerprint, adopted
+# per-topic as each topic's semantics allow.
 EVENT_ID_FINGERPRINT = "event-id"
 
 
@@ -211,14 +214,18 @@ def derive_idempotency_key(topic: str, source_id: str, content_fingerprint: str)
     deliberately per topic:
 
     - ingest events: ``source_id`` = note uuid/path, fingerprint = content hash
-      (see :func:`payload_fingerprint`)
+      (see :func:`payload_fingerprint`; exclude timestamps such as ``mtime`` so
+      a content-identical touch dedups)
     - watcher-run audit events: ``source_id`` = relative path, fingerprint =
       run-window payload hash (mtime + content hash)
     - retry / dead-letter events: ``source_id`` = original outbox/event id,
       fingerprint = attempt-scoped (``retry:<n>`` / ``poison:<attempts>``) so
       genuine re-emissions are NOT swallowed
     - event-id-keyed emissions: ``source_id`` = the event's ``event_id``,
-      fingerprint = :data:`EVENT_ID_FINGERPRINT`
+      fingerprint = :data:`EVENT_ID_FINGERPRINT`. This protects against
+      double-insert of the same constructed event only, not logical replay
+      (event_id is random per construction); move such topics to content-derived
+      fingerprints as their semantics allow.
     """
     parts = {"topic": topic, "source_id": source_id, "content_fingerprint": content_fingerprint}
     for name, value in parts.items():
@@ -369,7 +376,10 @@ def insert_object_and_outbox(
     if trace_id:
         data.setdefault("trace_id", trace_id)
     data.setdefault("event", topic)
-    fingerprint = payload_fingerprint(data)
+    # Ingest-class events key on (topic, note identity, content) — never on
+    # file timestamps: a content-identical re-emission (metadata-only touch =
+    # same content hash, new mtime) must map to the same key and dedup.
+    fingerprint = payload_fingerprint(data, exclude=("trace_id", "mtime"))
     source_id = str(
         object_id
         or data.get("uuid")
