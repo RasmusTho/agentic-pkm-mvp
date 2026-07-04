@@ -1,15 +1,17 @@
 """Eval skeleton: RPG/worldbuilding material is not confused with real-world software.
 
 Invariant registry: docs/testing/invariant-tests.md :: rpg_not_confused_with_software
-Issues: #2550 (registry), #2551 (corpus), #2552 (skeletons).
+Issues: #2550 (registry), #2551 (corpus), #2552 (skeletons). App enforcement: #2772 (KERNEL-10).
 
-The runtime skeleton xfails *only* on the missing runtime import (require_future_runtime); the static
-precondition passes today.
+Since KERNEL-10 the runtime assertion runs un-xfailed against the LIVE app retrieval path
+(``tests/evals/_app_adapter.py`` -> ``scoped_hybrid_search`` under an active scope), not the
+test-only ``yggdrasil_runtime`` reference.
 """
 
 from __future__ import annotations
 
-from tests.evals._helpers import load_group, require_future_runtime
+from tests.evals import _app_adapter as rca
+from tests.evals._helpers import load_group
 
 
 def test_rpg_fixtures_are_distinctly_scoped() -> None:
@@ -28,15 +30,11 @@ def test_rpg_fixtures_are_distinctly_scoped() -> None:
 def test_rpg_not_confused_with_software() -> None:
     # Invariant registry: docs/testing/invariant-tests.md :: rpg_not_confused_with_software
     # A naive embedding search would rank Aethelgard's 'state machine' next to Project Alpha's;
-    # correct behavior needs the architecture (scope/source_role/evidence_role/CrossScopeFlow), not
-    # similarity. Future vertical slice: retrieval prefilter -> RCA result.
-    rca = require_future_runtime(
-        "retrieval",
-        "Runtime retrieval/scope discrimination not implemented yet; protects "
-        "rpg_not_confused_with_software (#2550) over the corpus (#2551).",
-    )
+    # correct behavior needs the architecture (scope prefilter before rank), not similarity. Enforced
+    # in the live app path: scope/policy eligibility partitions the store before scoring.
     # A software-flavored query in a work scope must not admit RPG fiction as evidence.
     result = rca.retrieve(query="state machine authority rules", active_scope_id="scope:work/project-alpha")
+    assert result.scope_policy_prefiltered is True
     for candidate in result.candidate_items:
         assert candidate.metadata_bundle.scope_id != "scope:rpg/worldbuilding" or (
             candidate.evidence_role_in_context in {"analogy", "inspiration"}
