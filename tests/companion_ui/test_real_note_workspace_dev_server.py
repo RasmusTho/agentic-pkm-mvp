@@ -1117,27 +1117,36 @@ class TestBodyEditPanelRendering:
         assert "data-raw-body=" in html
         assert "# Hello" in html
 
-    def test_codemirror_esm_loader_present(self) -> None:
+    def test_codemirror_loaded_from_self_hosted_bundle(self) -> None:
+        # The editor loads from a same-origin vendored bundle via a *dynamic*
+        # import(), not a DCL-gating static import from the esm.sh CDN (#2884).
+        # Dedicated coverage: test_editor_bundle_self_hosted.py.
+        from companion_ui.workspace.serve_dev_page import CODEMIRROR_MODULE_URL
+
         html = self._html(update_flow_available=True)
         assert 'type="module"' in html
-        assert "esm.sh/codemirror" in html
+        assert "esm.sh/codemirror" not in html
+        assert f"await import('{CODEMIRROR_MODULE_URL}')" in html
         assert "_cmView" in html
 
-    def test_body_editor_reads_from_cmview_not_textarea_value(self) -> None:
+    def test_body_editor_reads_from_cmview_when_editor_mounted(self) -> None:
         html = self._html(update_flow_available=True)
-        # The Canvas CodeMirror composer reads from the live _cmView, not a
-        # textarea. (The separate direct human editor legitimately reads its own
-        # plain <textarea>.value — that is the noteEditor, not bodyEditor.)
+        # The Canvas composer reads from the live _cmView when CodeMirror mounted,
+        # falling back to the plain-textarea value only when the bundle was
+        # unreachable (offline degrade). (The separate direct human editor reads
+        # its own plain <textarea>.value — that is the noteEditor, not bodyEditor.)
         assert "window._cmView" in html
         assert "window._cmView.state.doc.toString()" in html
-        assert "var newBody = window._cmView.state.doc.toString();" in html
+        assert "newBody = window._cmView.state.doc.toString();" in html
+        # Offline degrade: read the injected fallback textarea when _cmView absent.
+        assert "window._cmFallbackTextarea" in html
 
     def test_submit_guards_against_uninitialized_editor(self) -> None:
         html = self._html(update_flow_available=True)
-        # submit() must bail out early (not post) when _cmView is not ready
-        assert "if (!window._cmView)" in html
+        # submit() must bail out (not post) when neither the editor nor the
+        # offline fallback textarea is available.
         assert "Editor not ready" in html
-        # the fallback empty-string path must not exist
+        # the old always-empty fallback path must not exist
         assert "_cmView ? window._cmView.state.doc.toString() : ''" not in html
 
     def test_codemirror_absent_when_flow_disabled(self) -> None:

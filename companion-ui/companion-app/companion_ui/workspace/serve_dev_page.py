@@ -2032,12 +2032,22 @@ def _refused_write_draft_restore_script() -> str:
       } else if (draft.kind === 'body_edit') {
         var container = document.getElementById('body-edit-codemirror');
         var bodyPath = container && container.getAttribute('data-note-path');
-        if (container && window._cmView && (!draft.note_path || draft.note_path === bodyPath)) {
-          window._cmView.dispatch({
-            changes: {from: 0, to: window._cmView.state.doc.length, insert: draft.text}
-          });
-          container.setAttribute('data-refused-write-draft-restored', 'true');
-          restored = true;
+        if (container && (!draft.note_path || draft.note_path === bodyPath)) {
+          if (window._cmView) {
+            window._cmView.dispatch({
+              changes: {from: 0, to: window._cmView.state.doc.length, insert: draft.text}
+            });
+            container.setAttribute('data-refused-write-draft-restored', 'true');
+            restored = true;
+          } else if (window._cmFallbackTextarea) {
+            // Offline degrade: the editor bundle failed to load and the body-edit
+            // panel fell back to a plain textarea; restore the refused-write draft
+            // into it so a pending draft survives offline too (see the editor
+            // script's catch block and bodyEditor.submit fallback path).
+            window._cmFallbackTextarea.value = draft.text;
+            container.setAttribute('data-refused-write-draft-restored', 'true');
+            restored = true;
+          }
         }
       } else if (draft.kind === 'capture') {
         var captureInput = document.getElementById('capture-input');
@@ -9937,6 +9947,58 @@ def load_help_guide_html() -> str:
         )
 
 
+# --- Self-hosted browser modules (no runtime CDN) -------------------------------
+#
+# The source editor's front-end dependency (CodeMirror 6) is served from the
+# local API as a vendored, self-contained ESM bundle instead of the public
+# ``esm.sh`` CDN. A top-level ``<script type="module">`` static import gates
+# ``DOMContentLoaded`` on its resolution, so a slow/unreachable CDN previously
+# hung the whole product page (the availability trap behind CI flake #2884).
+# Serving the bundle same-origin removes that runtime dependency and the
+# unpinned third-party-code surface. See ``vendor/README.md`` for provenance and
+# the reproducible build command. The bundle is a packaged UI asset (like
+# ``help_guide.html``), read with ``open().read()`` to stay clear of the
+# vault-I/O architecture guard — the dev server never reads vault files here.
+_VENDOR_DIR = Path(__file__).with_name("vendor")
+
+# request-path -> (filename beside ``vendor/``, Content-Type)
+_VENDOR_ASSETS: dict[str, tuple[str, str]] = {
+    "/static/vendor/codemirror-6.0.1.mjs": (
+        "codemirror-6.0.1.mjs",
+        "text/javascript; charset=utf-8",
+    ),
+}
+
+# Import path the page uses for the editor bundle (single source of truth so the
+# served <script> and the no-CDN test assert against the same constant).
+CODEMIRROR_MODULE_URL = "/static/vendor/codemirror-6.0.1.mjs"
+
+_VENDOR_STATIC_CACHE: dict[str, tuple[str, bytes]] | None = None
+
+
+def vendor_static_assets() -> dict[str, tuple[str, bytes]]:
+    """Preloaded ``request-path -> (Content-Type, bytes)`` map for vendored ESM.
+
+    Merged into every launch profile's ``static_assets`` (dev and production) so
+    the self-hosted editor bundle is served same-origin regardless of profile.
+    A missing bundle is fail-loud at first request (the entry is simply absent
+    from the map, so the page's dynamic import degrades gracefully) rather than
+    crashing the server at import time.
+    """
+    global _VENDOR_STATIC_CACHE
+    if _VENDOR_STATIC_CACHE is None:
+        cache: dict[str, tuple[str, bytes]] = {}
+        for route, (filename, content_type) in _VENDOR_ASSETS.items():
+            path = _VENDOR_DIR / filename
+            try:
+                with open(path, "rb") as fh:
+                    cache[route] = (content_type, fh.read())
+            except OSError:
+                continue
+        _VENDOR_STATIC_CACHE = cache
+    return _VENDOR_STATIC_CACHE
+
+
 def _render_help_toggle(
     include_settings: bool = False, include_runtime_launchers: bool = False
 ) -> str:
@@ -13507,6 +13569,23 @@ def render_index_html(
       font-size: var(--text-sm);
     }}
     .body-edit-codemirror .cm-focused {{ outline: 1px solid var(--border-focus); }}
+    /* Plain-textarea fallback shown when the vendored editor bundle is
+       unreachable — keeps the body-edit panel usable offline. */
+    .body-edit-fallback-textarea {{
+      background: transparent;
+      border: 0;
+      box-sizing: border-box;
+      color: var(--fg-1);
+      display: block;
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+      min-height: 160px;
+      outline: none;
+      padding: 8px;
+      resize: vertical;
+      white-space: pre;
+      width: 100%;
+    }}
     .body-edit-actions {{ display: flex; gap: 8px; }}
     .body-edit-submit {{
       background: var(--bg-raised);
@@ -14518,12 +14597,18 @@ def render_index_html(
         var statusEl = document.getElementById('body-edit-status');
         if (!container || !statusEl) return;
         var notePath = container.getAttribute('data-note-path');
-        if (!window._cmView) {{
+        // Read from CodeMirror when it mounted, else the plain-textarea fallback
+        // installed when the editor bundle was unreachable (offline-resilient).
+        var newBody;
+        if (window._cmView) {{
+          newBody = window._cmView.state.doc.toString();
+        }} else if (window._cmFallbackTextarea) {{
+          newBody = window._cmFallbackTextarea.value;
+        }} else {{
           statusEl.className = 'body-edit-status error';
           statusEl.textContent = 'Editor not ready. Wait for the page to finish loading.';
           return;
         }}
-        var newBody = window._cmView.state.doc.toString();
         statusEl.className = 'body-edit-status';
         statusEl.textContent = 'Submitting…';
         fetch('/api/companion/workspace/body', {{
@@ -14559,11 +14644,13 @@ def render_index_html(
       reset: function() {{
         var container = document.getElementById('body-edit-codemirror');
         var statusEl = document.getElementById('body-edit-status');
+        var orig = container ? (container.getAttribute('data-raw-body') || '') : '';
         if (window._cmView && container) {{
-          var orig = container.getAttribute('data-raw-body') || '';
           window._cmView.dispatch({{
             changes: {{from: 0, to: window._cmView.state.doc.length, insert: orig}}
           }});
+        }} else if (window._cmFallbackTextarea) {{
+          window._cmFallbackTextarea.value = orig;
         }}
         if (statusEl) {{ statusEl.className = 'body-edit-status'; statusEl.textContent = ''; }}
       }}
@@ -14571,26 +14658,50 @@ def render_index_html(
   }})();
   </script>
   <script type="module">
-  import {{EditorView, basicSetup}} from 'https://esm.sh/codemirror@6.0.1';
-  import {{markdown, markdownLanguage}} from 'https://esm.sh/@codemirror/lang-markdown@6.2.5';
-  import {{oneDark}} from 'https://esm.sh/@codemirror/theme-one-dark@6.1.2';
-  var container = document.getElementById('body-edit-codemirror');
-  if (container) {{
+  // Self-hosted CodeMirror bundle served same-origin ({CODEMIRROR_MODULE_URL}),
+  // NOT the esm.sh CDN. Loaded via dynamic import() inside an async IIFE so a
+  // slow/unreachable asset can never gate DOMContentLoaded — the reading surface
+  // and the rest of the page stay live regardless. On load failure the body-edit
+  // panel degrades to a plain <textarea> that keeps the write path working, the
+  // same graceful-degrade posture the mermaid embed already uses. See
+  // vendor/README.md and #2884 (CDN-availability trap that hung the page).
+  (async function () {{
+    var container = document.getElementById('body-edit-codemirror');
+    if (!container) {{ return; }}
     var rawBody = container.dataset.rawBody || '';
-    window._cmView = new EditorView({{
-      doc: rawBody,
-      extensions: [basicSetup, markdown({{base: markdownLanguage}}), oneDark],
-      parent: container,
-    }});
-    // #1416 — the composer is a collapsed <details> by default, so CodeMirror
-    // mounts with zero measured size. Re-measure when the user opens it.
-    var panel = container.closest('details.body-edit-panel');
-    if (panel) {{
-      panel.addEventListener('toggle', function() {{
-        if (panel.open && window._cmView) {{ window._cmView.requestMeasure(); }}
+    try {{
+      var cm = await import('{CODEMIRROR_MODULE_URL}');
+      window._cmView = new cm.EditorView({{
+        doc: rawBody,
+        extensions: [cm.basicSetup, cm.markdown({{base: cm.markdownLanguage}}), cm.oneDark],
+        parent: container,
       }});
+      // #1416 — the composer is a collapsed <details> by default, so CodeMirror
+      // mounts with zero measured size. Re-measure when the user opens it.
+      var panel = container.closest('details.body-edit-panel');
+      if (panel) {{
+        panel.addEventListener('toggle', function() {{
+          if (panel.open && window._cmView) {{ window._cmView.requestMeasure(); }}
+        }});
+      }}
+    }} catch (e) {{
+      // Editor bundle unreachable: fall back to a plain textarea so the panel is
+      // still usable offline. bodyEditor.submit/reset read this element when
+      // window._cmView is absent (see the bodyEditor script above).
+      var ta = document.createElement('textarea');
+      ta.className = 'body-edit-fallback-textarea';
+      ta.setAttribute('data-testid', 'workspace-body-edit-fallback');
+      ta.spellcheck = true;
+      ta.value = rawBody;
+      container.appendChild(ta);
+      window._cmFallbackTextarea = ta;
+      var statusEl = document.getElementById('body-edit-status');
+      if (statusEl) {{
+        statusEl.className = 'body-edit-status';
+        statusEl.textContent = 'Rich editor did not load — editing as plain text.';
+      }}
     }}
-  }}
+  }})();
   </script>
   <script>
   function vaultBrowserToggleReceiptDetail(row) {{
@@ -15062,11 +15173,16 @@ def make_handler(
     so each request instance can reach them without global state.
     """
 
+    # The self-hosted editor bundle is served same-origin in every profile, so
+    # vendored ESM is always available even when a caller passes no (or its own)
+    # static_assets. Caller-supplied entries win on key collision.
+    _merged_static_assets = {**vendor_static_assets(), **(static_assets or {})}
+
     class _Handler(BaseHTTPRequestHandler):
         _client = client
         _api_base_url = api_base_url
         _production_profile = production_profile
-        _static_assets = static_assets or {}
+        _static_assets = _merged_static_assets
 
         def _send_json(self, status_code: int, payload: dict) -> None:
             body = json.dumps(payload).encode("utf-8")
