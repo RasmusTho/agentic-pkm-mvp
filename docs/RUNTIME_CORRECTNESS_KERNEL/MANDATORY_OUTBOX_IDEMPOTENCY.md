@@ -103,8 +103,15 @@ clear grep gate). Escalate only if a producer's natural fingerprint is genuinely
 
 ### Known deferrals (tracked)
 
-- `object_store.save_object` and the `/ingest` API route still key on bare content (no observation
-  marker) — the A→B→A revert hole remains on those two producers: #2863.
+- `object_store.save_object` emitted only `{uuid, kind}`, so a content change derived the same key
+  and was swallowed — real over-dedup/silent event loss. FIXED (#2863): it now mixes the durable
+  payload's content fingerprint into the key via `observation=`, so a content change emits a
+  distinct event while a crash-retry of the same save dedups. The residual A→B→A revert dedup is
+  inherent to content-only keying on the API path (no per-observation file mtime) and is accepted —
+  the same posture as the `/ingest` route below.
+- The `/ingest` API route embeds `content` in its payload, so a content change already emits a
+  distinct event; it still lacks an observation marker, so only the A→B→A revert dedups (the lesser
+  revert hole, not save_object's content-invariant over-dedup). Deferred (own follow-up).
 - `upsert_object_from_note` / `delete_note` commit the object/file_state transaction before the
   outbox enqueue (crash between = event lost regardless of key design) — KERNEL-01 atomic-pattern
   extension: #2864.

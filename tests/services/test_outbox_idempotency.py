@@ -207,6 +207,61 @@ def test_crash_retry_same_observation_dedups() -> None:
 # --- Shared derivation helper contract ----------------------------------------
 
 
+def test_save_object_content_change_emits_new_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    """save_object (objects/API path) must emit a new event when content changes.
+
+    The emitted payload is only ``{uuid, kind}``; under mandatory content-derived
+    keys (#2764) a later save of the SAME uuid with CHANGED content would derive
+    the same key and be swallowed by ``ON CONFLICT DO NOTHING`` while the durable
+    store write still lands — silent event loss (KERNEL-02, #2863). The fix mixes
+    the durable payload's content fingerprint into the key via ``observation=``,
+    so content changes emit distinct events while a crash-retry of the same save
+    still dedups. This drives the real ``ObjectStore.save_object`` production path.
+    """
+    from types import SimpleNamespace
+
+    import app.objects as objects_mod
+    from app.objects import DomainObject, ObjectStore
+
+    conn = FakeOutboxConn()
+
+    def _routed(payload, topic, trace_id=None, **kwargs):  # type: ignore[no-untyped-def]
+        kwargs.pop("conn", None)
+        return insert_object_and_outbox(payload, topic, trace_id, conn=conn, **kwargs)
+
+    # Force a non-memory backend so save_object takes the durable + emit branch;
+    # the stub store's put() is a no-op (we only assert on emitted outbox rows).
+    stub_binding = SimpleNamespace(backend="pg", store=SimpleNamespace(put=lambda *a, **k: None))
+    monkeypatch.setattr(objects_mod, "resolve_object_store_port", lambda: stub_binding)
+    monkeypatch.setattr(objects_mod, "insert_object_and_outbox", _routed)
+
+    store = ObjectStore()
+    obj_uuid = "11111111-1111-1111-1111-111111111111"
+
+    def _save(content: str) -> None:
+        store.save_object(
+            DomainObject(uuid=obj_uuid, kind="note", payload={"content": content}, source_ref=None, created_at=None)
+        )
+
+    _save("A")
+    _save("A")  # crash-retry of the same save: identical content → dedups
+    assert len(conn.rows) == 1
+
+    _save("B")  # changed content → genuinely new event
+    assert len(conn.rows) == 2
+
+    # The objects/API path has no per-observation marker (unlike vault-sync's
+    # file mtime), so the content fingerprint IS the emission identity: a
+    # byte-identical re-save (here, a revert to A) re-derives the first key and
+    # dedups. Distinct content — not recurrence — is the signal that emits.
+    _save("A")
+    assert len(conn.rows) == 2
+
+    # The content fingerprint is fingerprint-only: it must not leak into payloads.
+    assert all("__observation__" not in str(r["payload"]) for r in conn.rows.values())
+    assert all("content" not in str(r["payload"]) for r in conn.rows.values())
+
+
 def test_derive_idempotency_key_is_deterministic_uuid() -> None:
     a = derive_idempotency_key("topic.x", "source-1", "fp-1")
     b = derive_idempotency_key("topic.x", "source-1", "fp-1")
