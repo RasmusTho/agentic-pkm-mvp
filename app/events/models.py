@@ -43,6 +43,11 @@ class Event(BaseModel):
     created_at: str = Field(default_factory=_now_iso)
     source: str | None = None
     instance_id: str = Field(default_factory=_default_instance_id)
+    # Non-semantic metadata, e.g. the KERNEL-08 (#2770) event-topic schema-registry
+    # tag `{"payload_schema": "<topic>.v1"}`. Optional and absent by default so
+    # existing DB-outbox rows (no meta at all) stay valid; absence at dispatch
+    # time is the grandfathering signal (schema_version "v0", log-only).
+    meta: Dict[str, Any] | None = None
 
 
 def new_event(
@@ -55,6 +60,7 @@ def new_event(
     event_id: str | None = None,
     created_at: str | None = None,
     instance_id: str | None = None,
+    meta: Dict[str, Any] | None = None,
 ) -> Event:
     data = dict(payload or {})
     event_kwargs: Dict[str, Any] = dict(
@@ -65,6 +71,7 @@ def new_event(
         context_dimensions=context_dimensions,
         created_at=created_at or _now_iso(),
         source=source,
+        meta=meta,
     )
     if instance_id is not None:
         event_kwargs["instance_id"] = instance_id

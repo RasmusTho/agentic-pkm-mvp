@@ -38,7 +38,9 @@ All outbox records MUST include this minimal envelope:
 - `source` (`string`): emitting component identity (stable attribution label).
 - `timestamp` (`string`, ISO-8601 UTC): emission time.
 - `payload` (`object`): event-specific content.
-- `meta` (`object`, optional): non-semantic metadata; when omitted it is treated as `{}`.
+- `meta` (`object`, optional): non-semantic metadata; when omitted it is treated as `{}`. For DB
+  outbox rows, `meta.payload_schema` (KERNEL-08, #2770) is the registry schema tag — see
+  [Event Topic Schema Registry](#event-topic-schema-registry-normative) below.
 - `context_dimensions` (`object`, optional): named optional top-level field carrying separated
   scope/sphere/identity dimensions with SSI-01 canonical shape (`scope`, `sphere_memberships`,
   `situated_identity`). Omit entirely when the invocation had no separated-dimension context; do
@@ -92,6 +94,31 @@ Notes:
 - `watcher.run` and watcher auto-exec events MUST be deduplicated to prevent duplicate panel intents or promotions.
 
 See `docs/CONCURRENCY.md` for the broader concurrency and idempotency guardrails.
+
+## Event Topic Schema Registry (normative)
+
+Every topic dispatched by `app/workers/outbox_worker.py::_dispatch_topic` has a versioned per-topic
+JSON Schema (KERNEL-08, #2770): `schemas/events/<topic>.v1.schema.json`. Today: `ingest.object.created`,
+`ingest.vault.changed`, `ingest.object.deleted`, `panel.scan.requested`, `promote.intent.created`,
+`note.move.workbench`, `index.embedding.requested`. Coverage is enforced dynamically —
+`tests/events/test_topic_schema_registry.py::test_every_dispatched_topic_has_schema` enumerates the
+live dispatch table via its AST and fails on any gap, so a newly dispatched topic without a schema
+cannot ship silently.
+
+- **Validation at write**: `app/services/outbox.py::write_outbox_event` validates the payload against
+  its topic's registered schema before the DB insert (`app.events.topic_schema_registry`) and stamps
+  `meta.payload_schema = "<topic>.v1"` on success. A violation raises
+  `app.events.topic_schema_registry.TopicSchemaViolation` — the write does not happen.
+- **Validation at dispatch**: `_dispatch_topic` validates again before invoking the real topic
+  handler. An invalid payload against a registered schema dead-letters immediately with reason
+  `schema_violation` via the existing `outbox.event.dead_lettered` path — never partial processing,
+  and never a retry-budget spend (a schema violation is structural, not transient).
+- **Grandfathering (cross-task invariant #1)**: a DB outbox row with no `meta.payload_schema` (nor
+  the legacy `meta.schema_version`) tag predates the registry and is treated as `v0`. Grandfathered
+  rows are validated **log-only** at dispatch — a violation is logged and the real handler still
+  runs; grandfathered rows are never dead-lettered retroactively.
+- Topics with no registered schema are dispatched unvalidated; schema coverage is a property of the
+  registered set, not an implicit requirement on every possible topic string.
 
 ## Outbox consumer contract
 
@@ -217,24 +244,28 @@ delivery semantics; it does not replicate. See `docs/contracts/REPLICATION_ENVEL
 ### `outbox.event.dead_lettered`
 
 Emitted by the outbox worker when a transient retryable ingest or panel-scan event reaches the
-bounded retry limit and will not be requeued, or when an unclassified poison dispatch failure spends
-the configured DB-row dispatch-attempt budget. This is a diagnostic dead-letter signal, not an
-automatic replay request, and it must not be consumed as the original event topic. Classified
-dispatch-level infrastructure transients do not emit this event; they leave the original DB outbox
-row pending for supervised retry.
+bounded retry limit and will not be requeued, when an unclassified poison dispatch failure spends
+the configured DB-row dispatch-attempt budget, or when a registered-schema payload fails validation
+at dispatch (`reason="schema_violation"`, KERNEL-08 #2770 — dead-lettered immediately, on the first
+attempt, with no retry-budget spend since the failure is structural, not transient). This is a
+diagnostic dead-letter signal, not an automatic replay request, and it must not be consumed as the
+original event topic. Classified dispatch-level infrastructure transients do not emit this event;
+they leave the original DB outbox row pending for supervised retry. Grandfathered (pre-registry) rows
+never emit this event for a schema violation — see
+[Event Topic Schema Registry](#event-topic-schema-registry-normative).
 
 Shared payload fields:
 - `original_topic` (`string`): topic that exhausted retries.
 - `original_event_id` (`string`): original event id when available, otherwise empty.
-- `reason` (`string`): worker retry reason or dispatch poison marker.
+- `reason` (`string`): worker retry reason, dispatch poison marker, or `schema_violation`.
 
 Retry-exhaustion payload fields:
 - `note_path` (`string`): note path associated with the failed work.
 - `retry_count` (`int`): retry count at exhaustion.
 
-Dispatch-poison payload fields:
-- `outbox_id` (`string`): DB outbox row id that exhausted dispatch attempts.
-- `attempts` (`int`): DB-row dispatch attempt count at exhaustion.
+Dispatch-poison / schema-violation payload fields:
+- `outbox_id` (`string`): DB outbox row id that exhausted dispatch attempts (or violated its schema).
+- `attempts` (`int`): DB-row dispatch attempt count at exhaustion (`0` for an immediate schema-violation dead-letter).
 - `error` (`string`): final handler error string recorded for operator triage.
 
 Operator visibility:

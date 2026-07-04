@@ -17,6 +17,12 @@ from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
 from app.events.sync import SyncChainCorrelationData, SyncLatencySummaryEvent
 from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_VAULT_CHANGED, NOTE_MOVE_WORKBENCH, PANEL_SCAN_REQUESTED, PROMOTE_INTENT_CREATED
 from app.events.schema import make_outbox_event
+from app.events.topic_schema_registry import (
+    TopicSchemaViolation,
+    is_registered_topic,
+    resolve_payload_schema_version,
+    validate_topic_payload,
+)
 from app.indexer.consumer import process_event as process_indexer_event
 from app.outbox.events import INDEX_EMBEDDING_REQUESTED
 from app.observability.tracer import start_span
@@ -44,6 +50,25 @@ _WRITE_GUARD = OptimisticWriteGuard()
 
 _UNKNOWN_INSTANCE = "unknown"
 OUTBOX_EVENT_DEAD_LETTERED = "outbox.event.dead_lettered"
+
+# Dead-letter reason for a dispatch-time schema violation (KERNEL-08, #2770).
+SCHEMA_VIOLATION_REASON = "schema_violation"
+
+
+class SchemaViolationDispatchError(RuntimeError):
+    """A registered-schema payload failed validation at dispatch.
+
+    Raised by :func:`_dispatch_topic` before the real handler runs, so an
+    invalid payload never partially processes. Marked so the `run()` consume
+    loop dead-letters it immediately with reason ``schema_violation`` instead
+    of spending the poison-retry budget (which exists for handler failures on
+    otherwise-valid payloads, not for structurally invalid ones) or the
+    transient-retry path (a schema violation is never transient).
+    """
+
+    def __init__(self, violation: TopicSchemaViolation) -> None:
+        super().__init__(str(violation))
+        self.violation = violation
 
 
 def _resolve_instance_id() -> str:
@@ -260,9 +285,63 @@ def run_once(
         or "-"
     )
     event_id = _event_id_from_message(message)
-    _dispatch_topic(topic, payload, trace_id=trace_id, message=message, event_id=event_id)
+    try:
+        _dispatch_topic(topic, payload, trace_id=trace_id, message=message, event_id=event_id)
+    except SchemaViolationDispatchError as schema_exc:
+        # Immediate dead-letter (KERNEL-08, #2770): see the matching branch in
+        # run()'s consume loop for the invariant (never transient, no retry budget).
+        logger.warning(
+            "worker dead-lettered schema violation topic=%s id=%s reason=%s",
+            topic,
+            message.get("id"),
+            schema_exc.violation.reason,
+        )
+        _dead_letter_outbox_message(
+            topic,
+            payload,
+            message_id=str(message.get("id") or ""),
+            reason=SCHEMA_VIOLATION_REASON,
+            attempts=0,
+            trace_id=None if trace_id == "-" else trace_id,
+            error=str(schema_exc),
+        )
+        ack_outbox(message["id"])
+        return WorkerTickResult(state="processed", processed=1)
     ack_outbox(message["id"])
     return WorkerTickResult(state="processed", processed=1)
+
+
+def _message_meta(message: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    envelope = message.get("event")
+    meta = getattr(envelope, "meta", None)
+    return meta if isinstance(meta, Mapping) else None
+
+
+def _validate_dispatch_payload(topic: str | None, payload: Mapping[str, Any], *, message: Mapping[str, Any]) -> None:
+    """Validate ``payload`` at dispatch against its registered topic schema.
+
+    Grandfathering (cross-task invariant #1, ``docs/RUNTIME_CORRECTNESS_KERNEL/README.md``):
+    a row with no ``meta.payload_schema``/``meta.schema_version`` tag predates
+    the registry ("v0") and is validated log-only — a violation is logged, never
+    dead-lettered. A row carrying the tag is hard-validated: a violation raises
+    :class:`SchemaViolationDispatchError` so the caller dead-letters immediately
+    with reason ``schema_violation`` instead of running the handler on a payload
+    known to violate its own contract (no partial processing).
+    """
+    if topic is None or not is_registered_topic(topic):
+        return
+    version = resolve_payload_schema_version(_message_meta(message))
+    try:
+        validate_topic_payload(topic, payload)
+    except TopicSchemaViolation as violation:
+        if version.is_grandfathered:
+            logger.warning(
+                "worker schema violation on grandfathered (pre-registry) row topic=%s reason=%s",
+                topic,
+                violation.reason,
+            )
+            return
+        raise SchemaViolationDispatchError(violation) from violation
 
 
 def _dispatch_topic(
@@ -280,7 +359,11 @@ def _dispatch_topic(
     from diverging, which is how a supported topic (e.g. ``promote.intent.created``
     or ``index.embedding.requested``) could be acked as "unsupported" via
     ``run_once`` while ``run()`` actually handled it (#2407).
+
+    Schema validation (KERNEL-08, #2770) runs first, before any handler: an
+    invalid payload against a registered schema must never partially process.
     """
+    _validate_dispatch_payload(topic, payload, message=message)
     if topic == INGEST_OBJECT_CREATED:
         handle_ingest_object_created(_indexer_payload(payload))
     elif topic == INGEST_VAULT_CHANGED:
@@ -1172,6 +1255,29 @@ def run(
                             message=message,
                             event_id=event_id,
                         )
+                    except SchemaViolationDispatchError as schema_exc:
+                        # Immediate dead-letter (KERNEL-08, #2770): a registered-schema
+                        # violation is never transient and never worth a retry budget —
+                        # the payload is structurally invalid, not intermittently
+                        # unavailable, so dispatch never partially processes it.
+                        errors_total += 1
+                        logger.warning(
+                            "worker dead-lettered schema violation topic=%s id=%s reason=%s",
+                            topic,
+                            message.get("id"),
+                            schema_exc.violation.reason,
+                        )
+                        _dead_letter_outbox_message(
+                            topic,
+                            payload,
+                            message_id=str(message.get("id") or ""),
+                            reason=SCHEMA_VIOLATION_REASON,
+                            attempts=0,
+                            trace_id=None if trace_id == "-" else trace_id,
+                            error=str(schema_exc),
+                        )
+                        ack_outbox(message["id"])
+                        continue
                     except Exception as handler_exc:
                         logger.exception(
                             "worker handler failed topic=%s trace_id=%s note_path=%s",

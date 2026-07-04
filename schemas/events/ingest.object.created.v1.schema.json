@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/ingest.object.created.v1.schema.json",
+  "title": "ingest.object.created payload (v1)",
+  "description": "Payload of the ingest.object.created outbox event. Producers (shapes vary genuinely): app/services/vault_sync.py (uuid/title/review_state/content/path), app/api/routes/ingest.py::insert_object_and_outbox (raw ingest request body: uuid/title/review_state/content/origin/trust/source_ref), app/objects/__init__.py::ObjectStore.save_object (minimal uuid/kind only). Consumer: app/workers/outbox_worker.py::handle_ingest_object_created (app/services/indexer.py), which reads every field via .get() with defaults. This schema pins the known field shapes and stays open for producer-specific extras; nothing is hard-required so the minimal object_store producer stays valid.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "uuid": { "type": ["string", "null"] },
+    "kind": { "type": ["string", "null"] },
+    "title": { "type": ["string", "null"] },
+    "review_state": { "type": ["string", "null"] },
+    "maturity": { "type": ["string", "null"] },
+    "content": { "type": ["string", "null"] },
+    "path": { "type": ["string", "null"] },
+    "source_ref": { "type": ["string", "null"] },
+    "origin": { "type": ["string", "null"] },
+    "trust": { "type": ["string", "null"] },
+    "trace_id": { "type": ["string", "null"] },
+    "payload": { "type": ["object", "null"] }
+  }
+}

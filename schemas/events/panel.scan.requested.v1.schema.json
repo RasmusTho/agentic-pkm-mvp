@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/panel.scan.requested.v1.schema.json",
+  "title": "panel.scan.requested payload (v1)",
+  "description": "Payload of the panel.scan.requested outbox event. Producer: app/watcher/registry.py::_emit_watch_event (vault_path, relative_path, mtime, hash, watcher). Consumer: app/workers/outbox_worker.py::handle_panel_scan_requested, which resolves the note via _note_path_from_payload (vault_path preferred, relative_path fallback). Requires at least one of vault_path or relative_path so the consumer can resolve a note path.",
+  "type": "object",
+  "additionalProperties": true,
+  "anyOf": [
+    { "required": ["vault_path"] },
+    { "required": ["relative_path"] }
+  ],
+  "properties": {
+    "vault_path": { "type": "string" },
+    "relative_path": { "type": "string" },
+    "mtime": { "type": ["number", "string", "null"] },
+    "hash": { "type": ["string", "null"] },
+    "watcher": { "type": ["string", "null"] },
+    "trace_id": { "type": ["string", "null"] }
+  }
+}

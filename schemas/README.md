@@ -1,6 +1,6 @@
 # Schemas
 
-JSON Schemas used across the repo. Two groups live here:
+JSON Schemas used across the repo. Three groups live here:
 
 - **Operational schemas** (pre-existing): `capture_triage.schema.json`, `merge_arbiter.schema.json`,
   `hygiene_action.schema.json`, `system-settings.schema.json`.
@@ -8,6 +8,13 @@ JSON Schemas used across the repo. Two groups live here:
   [#2533–#2552](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533)): the machine-readable form
   of the doctrine, functional ontology, semantic dimensions, and CrossScopeFlow model. These pair
   one-to-one with prose docs under `docs/architecture/` and do **not** implement runtime behavior.
+- **`events/` — the event topic schema registry** (KERNEL-08, #2770): `<topic>.v1.schema.json` per
+  topic dispatched by `app/workers/outbox_worker.py::_dispatch_topic`. Unlike the two groups above,
+  these **are** runtime-enforced: `app/services/outbox.py::write_outbox_event` and
+  `app/workers/outbox_worker.py::_dispatch_topic` validate against them via
+  `app/events/topic_schema_registry.py` (the `jsonschema` `Draft202012Validator`, the same machinery
+  as `app/components/llm/constrained.py`'s LLM output registry). See `docs/EVENTS.md :: Event Topic
+  Schema Registry` for the write/dispatch/grandfathering contract.
 
 ## Yggdrasil architecture contracts (#2544–#2548)
 

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/promote.intent.created.v1.schema.json",
+  "title": "promote.intent.created payload (v1)",
+  "description": "Payload of the promote.intent.created outbox event. Producers (shapes vary genuinely): app/agents/panel_agent/graph.py::_promotion_event (rich shape: note/panel/action/instruction/trust_verb/transition) and app/orchestrator/executor.py (minimal shape: note/action/instruction plus maturity/review_state). Consumer: app/promotion/consumer.py::consume_promotion_intent_payload / _handle_promotion_payload, which reads payload.note (uuid, path, title) with a payload.note_path fallback, payload.transition (family, target_maturity), and optional maturity/review_state/trust_verb. The consumer itself degrades to a PROMOTE_ERROR receipt for a missing note uuid/path rather than crashing, so this schema only pins the structural shape (note/transition must be objects when present) and leaves every field optional so both producer shapes stay valid.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "note": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "uuid": { "type": ["string", "null"] },
+        "path": { "type": ["string", "null"] },
+        "title": { "type": ["string", "null"] },
+        "origin": { "type": ["string", "null"] }
+      }
+    },
+    "note_path": { "type": ["string", "null"] },
+    "panel": { "type": ["object", "null"] },
+    "action": { "type": ["object", "null"] },
+    "instruction": { "type": ["string", "null"] },
+    "maturity": { "type": ["string", "null"] },
+    "review_state": { "type": ["string", "null"] },
+    "trust_verb": { "type": ["string", "null"] },
+    "transition": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "family": { "type": ["string", "null"] },
+        "target_maturity": { "type": ["string", "null"] }
+      }
+    },
+    "trace_id": { "type": ["string", "null"] }
+  }
+}
