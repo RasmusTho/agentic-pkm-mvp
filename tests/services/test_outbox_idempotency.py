@@ -131,29 +131,77 @@ def test_insert_object_and_outbox_derives_content_key() -> None:
     assert len(conn.rows) == 2
 
 
-def test_ingest_key_ignores_mtime() -> None:
-    """Spec: ingest keys on (topic, note_path, content_hash) — NOT file timestamps.
+def test_revert_emits_new_event() -> None:
+    """A→B→A content revert MUST emit — dedup scope is the observation, not content.
 
-    A content-identical touch (same hash, new mtime, new trace) is the same
-    logical emission and must dedup; a content change must not.
+    Outbox rows are never purged: a bare content key would collide the revert
+    with the original A row and ON CONFLICT DO NOTHING would swallow it while
+    the object/file_state write still commits — silent projection divergence.
+    Vault-sync payloads carry no mtime; the per-observation marker (observed
+    stat mtime) is mixed into the fingerprint via ``observation=``.
     """
     conn = FakeOutboxConn()
-    watcher_payload = {
+    payload_a = {"uuid": "n-7", "title": "T", "content": "A", "path": "/v/n.md"}
+    payload_b = dict(payload_a, content="B")
+
+    insert_object_and_outbox(dict(payload_a), INGEST_OBJECT_CREATED, "t-1", conn=conn, observation="m1")
+    insert_object_and_outbox(dict(payload_b), INGEST_OBJECT_CREATED, "t-2", conn=conn, observation="m2")
+    assert len(conn.rows) == 2
+
+    # Revert to A: byte-identical payload to the original, NEW observation.
+    insert_object_and_outbox(dict(payload_a), INGEST_OBJECT_CREATED, "t-3", conn=conn, observation="m3")
+    assert len(conn.rows) == 3  # the revert is a genuinely new event
+
+    # Watcher-payload shape: the observation (file mtime) is already embedded
+    # in the payload, so the same revert property holds without observation=.
+    watcher_a = {
         "vault_path": "/v/n.md",
         "relative_path": "n.md",
         "mtime": 100.0,
-        "hash": "content-hash-1",
+        "hash": "hash-A",
         "watcher": "registry:ingest",
     }
+    insert_object_and_outbox(dict(watcher_a), INGEST_VAULT_CHANGED, "t-4", conn=conn)
+    insert_object_and_outbox(
+        dict(watcher_a, mtime=200.0, hash="hash-B"), INGEST_VAULT_CHANGED, "t-5", conn=conn
+    )
+    insert_object_and_outbox(
+        dict(watcher_a, mtime=300.0), INGEST_VAULT_CHANGED, "t-6", conn=conn
+    )  # revert to hash-A at a new mtime
+    assert len(conn.rows) == 6
 
-    insert_object_and_outbox(dict(watcher_payload), INGEST_VAULT_CHANGED, "trace-a", conn=conn)
-    touched = dict(watcher_payload, mtime=200.0)
-    insert_object_and_outbox(touched, INGEST_VAULT_CHANGED, "trace-b", conn=conn)
-    assert len(conn.rows) == 1  # metadata-only touch: same key, swallowed
 
-    changed = dict(watcher_payload, mtime=300.0, hash="content-hash-2")
-    insert_object_and_outbox(changed, INGEST_VAULT_CHANGED, "trace-c", conn=conn)
-    assert len(conn.rows) == 2  # content change: new key, new row
+def test_crash_retry_same_observation_dedups() -> None:
+    """Crash/retry of the SAME observation re-derives the same key and dedups.
+
+    The observation marker must be observation-derived (file stat mtime — it
+    re-reads identically after a crash), never emission wall-clock. A new trace
+    id on the retry must not defeat the dedup.
+    """
+    conn = FakeOutboxConn()
+    payload = {"uuid": "n-8", "title": "T", "content": "A", "path": "/v/n.md"}
+
+    insert_object_and_outbox(dict(payload), INGEST_OBJECT_CREATED, "t-1", conn=conn, observation="m1")
+    insert_object_and_outbox(dict(payload), INGEST_OBJECT_CREATED, "t-2", conn=conn, observation="m1")
+    assert len(conn.rows) == 1  # retried emission of the same observation: swallowed
+
+    # Watcher shape: retried tick / post-restart re-observation re-reads the
+    # same mtime+hash from the file → identical payload → same key.
+    watcher = {
+        "vault_path": "/v/n.md",
+        "relative_path": "n.md",
+        "mtime": 100.0,
+        "hash": "hash-A",
+        "watcher": "registry:ingest",
+    }
+    insert_object_and_outbox(dict(watcher), INGEST_VAULT_CHANGED, "t-3", conn=conn)
+    insert_object_and_outbox(dict(watcher), INGEST_VAULT_CHANGED, "t-4", conn=conn)
+    assert len(conn.rows) == 2
+
+    # The observation marker is fingerprint-only: it must not leak into the
+    # emitted payload.
+    stored = [r for r in conn.rows.values() if r["topic"] == INGEST_OBJECT_CREATED]
+    assert all("__observation__" not in str(r["payload"]) for r in stored)
 
 
 # --- Shared derivation helper contract ----------------------------------------

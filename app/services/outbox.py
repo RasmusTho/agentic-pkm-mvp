@@ -214,8 +214,13 @@ def derive_idempotency_key(topic: str, source_id: str, content_fingerprint: str)
     deliberately per topic:
 
     - ingest events: ``source_id`` = note uuid/path, fingerprint = content hash
-      (see :func:`payload_fingerprint`; exclude timestamps such as ``mtime`` so
-      a content-identical touch dedups)
+      plus a per-observation marker (the observed file mtime). Dedup scope is
+      the SAME OBSERVATION (crash/retry re-emission), never all-time content
+      recurrence: an A→B→A revert is a new observation (new stat mtime) and
+      MUST emit — a bare content key would swallow it against the original A
+      row (over-dedup = silent projection divergence, worse than duplicates).
+      Suppressing no-op emissions (pure metadata touch) is the upstream change
+      detector's job (hash comparison), not the key's.
     - watcher-run audit events: ``source_id`` = relative path, fingerprint =
       run-window payload hash (mtime + content hash)
     - retry / dead-letter events: ``source_id`` = original outbox/event id,
@@ -362,13 +367,25 @@ def insert_object_and_outbox(
     object_id: str | None = None,
     source: str | None = None,
     conn: Any = None,
+    observation: str | None = None,
 ) -> str:
     """Helper som bygger ett Event och skickar det till outbox.
 
     Derives the mandatory idempotency key from ``(topic, object identity,
-    content fingerprint)`` so ingest-class emissions dedup on content (I-E1):
-    re-emitting the same object state is a no-op at the log layer, while any
-    payload change (content hash, mtime, delete marker) produces a new row.
+    content fingerprint [+ observation marker])`` (I-E1). The dedup scope is
+    the SAME LOGICAL EMISSION (crash/retry of one observation), not all-time
+    content recurrence: outbox rows are never purged, so a bare content key
+    would swallow an A→B→A revert against the original A row while the
+    object/file_state write still commits (``ON CONFLICT DO NOTHING`` is not
+    an error) — silent projection divergence downstream.
+
+    ``observation`` is a per-observation marker mixed into the fingerprint
+    (NOT into the event payload). It must re-derive identically on crash-retry
+    of the same observation and change for each new observation — the observed
+    file's stat mtime qualifies; emission-moment wall clock does not. Callers
+    whose payload already embeds the observation (e.g. the watcher payload's
+    ``mtime`` field) need not pass it. Suppressing no-op emissions (pure
+    metadata touch) belongs to the upstream change detectors, not this key.
     """
     data = dict(payload or {})
     if object_id:
@@ -376,10 +393,12 @@ def insert_object_and_outbox(
     if trace_id:
         data.setdefault("trace_id", trace_id)
     data.setdefault("event", topic)
-    # Ingest-class events key on (topic, note identity, content) — never on
-    # file timestamps: a content-identical re-emission (metadata-only touch =
-    # same content hash, new mtime) must map to the same key and dedup.
-    fingerprint = payload_fingerprint(data, exclude=("trace_id", "mtime"))
+    fingerprint_source: Dict[str, Any] = dict(data)
+    if observation is not None:
+        # Reserved fingerprint-only field: scopes the key to this observation
+        # without leaking into the emitted payload.
+        fingerprint_source["__observation__"] = observation
+    fingerprint = payload_fingerprint(fingerprint_source)
     source_id = str(
         object_id
         or data.get("uuid")

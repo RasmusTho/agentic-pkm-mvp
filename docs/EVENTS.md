@@ -68,9 +68,17 @@ Notes:
   (`uuid5(namespace, sha256(topic ‖ source_id ‖ fingerprint))`). Ad-hoc key schemes are forbidden;
   `tests/architecture/test_outbox_producer_idempotency.py` gates every callsite.
 - Per-topic fingerprints are chosen deliberately: ingest events key on
-  `(topic, object uuid/path, content fingerprint)` — timestamps such as `mtime` are excluded, so
-  re-emitting unchanged content (including a metadata-only touch) is a log-layer no-op; watcher-run
-  events key on `(topic, relative path, run-window mtime+hash)`; worker retry/dead-letter events key
+  `(topic, object uuid/path, content fingerprint + observation marker)`, where the observation
+  marker is the observed file stat mtime (vault-sync passes it as a fingerprint-only component; the
+  watcher payload already embeds it). The dedup scope is the SAME OBSERVATION — a crash/retry
+  re-emission re-derives the identical key and dedups — never all-time content recurrence: outbox
+  rows are not purged, so a bare content key would silently swallow an A→B→A content revert against
+  the original A row while the object/file_state write still commits (over-dedup = silent projection
+  divergence, worse than duplicates). Suppressing no-op emissions (pure metadata touch) is the
+  upstream change detectors' job (content-hash comparison in vault-sync and the watcher scanner);
+  after a watcher restart a touch may over-emit one content-identical event — the safe failure
+  direction, since handlers are idempotent. Watcher-run audit events key on
+  `(topic, relative path, run-window mtime+hash)`; worker retry/dead-letter events key
   on `(topic, original event/outbox id, attempt)` so intentional re-emissions are NOT swallowed;
   event-scoped emissions (panel projections, capture receipts, index-embedding requests) key on
   their `event_id`. Honest scope of `event_id` keying: it dedups only a double-insert of the same

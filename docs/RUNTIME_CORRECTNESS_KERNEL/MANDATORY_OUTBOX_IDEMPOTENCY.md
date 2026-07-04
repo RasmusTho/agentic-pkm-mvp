@@ -67,6 +67,23 @@ transactional-outbox guarantee started in KERNEL-01.
    (hot-path producer change).
 3. `ruff check app tests`.
 
+## Implementation notes (divergence from the key sketch above)
+
+The bare ingest key sketched above — `(topic, note_path, content_hash)` — creates a **revert
+hole**: outbox rows are never purged, so when note content goes A → B → back to A, the revert's
+key equals the original A event's key and `ON CONFLICT (id) DO NOTHING` silently swallows the
+revert while the object/file_state write still commits. Downstream projections (indexer, panel)
+never learn the file went back to A — over-dedup/silent loss (I-S3/I-E1), worse than duplicates.
+
+Delivered shape (recorded as a workflow-divergence LearningSignal on #2764): ingest keys are
+`(topic, note uuid/path, content_hash + observation marker)` where the observation marker is the
+**observed file stat mtime** — stable across crash-retry of the same observation (it re-derives
+from the same file version), new for every new filesystem observation including a revert. Dedup
+scope is therefore "same logical emission", not all-time content recurrence. Suppressing no-op
+emissions (pure metadata touch) stays in the upstream change detectors (vault-sync and watcher
+content-hash comparison); a post-restart touch may over-emit one content-identical event, which is
+the safe failure direction. See `docs/EVENTS.md :: Event Idempotency (normative)`.
+
 ## Out of Scope
 
 - Handler-side idempotency verification (KERNEL-11).

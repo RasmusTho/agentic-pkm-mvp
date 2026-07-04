@@ -168,9 +168,19 @@ def _update_path_only(
         )
 
 
-def _enqueue(topic: str, payload: dict[str, Any], *, conn: psycopg.Connection | None = None) -> None:
+def _enqueue(
+    topic: str,
+    payload: dict[str, Any],
+    *,
+    conn: psycopg.Connection | None = None,
+    observation: str | None = None,
+) -> None:
+    # ``observation`` scopes the idempotency key to this filesystem observation
+    # (observed stat mtime): crash/retry of the same observation dedups, while
+    # an A→B→A content revert (new mtime) emits a new event instead of being
+    # swallowed against the original A outbox row.
     trace_id = new_trace_id()
-    insert_object_and_outbox(payload, topic, trace_id, conn=conn)
+    insert_object_and_outbox(payload, topic, trace_id, conn=conn, observation=observation)
 
 
 def update_path(uuid_value: str, new_path: str) -> None:
@@ -242,7 +252,15 @@ def delete_note(path: str, *, uuid_value: str | None = None) -> None:
                 delete_payload["uuid"] = effective_uuid
         conn.commit()
     if deleted and delete_payload is not None:
-        _enqueue(INGEST_OBJECT_DELETED, delete_payload)
+        # Observation = the deleted version's last observed mtime, so a
+        # delete→recreate→delete cycle emits both deletes (the recreated file
+        # carries a new mtime) while a retried delete of the same version dedups.
+        deleted_version_mtime = (state or {}).get("mtime")
+        _enqueue(
+            INGEST_OBJECT_DELETED,
+            delete_payload,
+            observation=str(deleted_version_mtime) if deleted_version_mtime is not None else None,
+        )
 
 
 def upsert_object_from_note(path: str, frontmatter: dict[str, Any], body: str, fm_changed: bool, body_changed: bool) -> None:
@@ -319,7 +337,7 @@ def upsert_object_from_note(path: str, frontmatter: dict[str, Any], body: str, f
             "content": body,
             "path": path_str,
         }
-        _enqueue(topic, payload)
+        _enqueue(topic, payload, observation=mtime.isoformat())
 
 
 def active_edit(path: Path) -> bool:
@@ -497,7 +515,7 @@ def sync_markdown(path: str) -> dict[str, Any]:
                     (uuid_value, "note", payload_json, str(note_path)),
                 )
 
-        _enqueue(topic, obj_payload, conn=conn)
+        _enqueue(topic, obj_payload, conn=conn, observation=mtime.isoformat())
 
         _upsert_file_state(
             conn,
