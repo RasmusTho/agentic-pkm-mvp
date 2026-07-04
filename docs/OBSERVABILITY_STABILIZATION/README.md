@@ -18,7 +18,7 @@ The runtime has genuinely strong **opt-in** deep health (a CLI that really pings
 - The worker/watcher container healthchecks test only that a heartbeat *file is non-empty* (`test -s`), so a hung process reads "healthy" — the exact shape of the prior `processed_total=0` ingest stall.
 - `/readyz` keys on outbox-event *age*, not dependency health, so a Postgres/Ollama outage during a quiet window still returns `200`.
 
-On top of that there is **zero alerting** (nothing tells the single operator anything is wrong), the central **audit writer is dead in prod** (schema-mismatched INSERT silently swallowed → zero rows), and **prod runs an unidentifiable commit** (no git SHA at runtime, deploy from a dirty `main` checkout).
+On top of that there is **zero alerting** (nothing tells the single operator anything is wrong), the central **audit writer is dead in prod** (schema-mismatched INSERT silently swallowed → zero rows) — **RESOLVED 2026-07-04** (delivered 2026-06-28 by `AUDIT_WRITER_STOPS_LYING` / #2600): the writer is alive, best-effort, with an FK-failure fallback (see `app/services/audit.py:33-163`, fallback at `:140-163`); this audit snapshot is left as-is to preserve the historical record, see [D-3 in `docs/architecture/runtime-semantics.md`](../architecture/runtime-semantics.md) for the resolution note. No retention policy exists for the audit table (still true — owner decision D-6, ratified on #2778) — and **prod runs an unidentifiable commit** (no git SHA at runtime, deploy from a dirty `main` checkout).
 
 This capability is the highest-leverage, lowest-regret remediation set: make the always-on signals honest, give the operator one real alert, stop the silent audit lie, and make the running commit observable.
 
