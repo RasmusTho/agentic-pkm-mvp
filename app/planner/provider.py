@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from typing import Any, Dict, List, Mapping, Protocol, Sequence
 
@@ -8,9 +7,15 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.agents.base.audit import audit_log
 from app.events.types import PLANNER_PLAN_FALLBACK
+from app.components.llm.constrained import (
+    ConstrainedCompletionError,
+    constrained_completion,
+    registered_schema,
+)
 from app.components.llm.fabric import get_chat_client
 from app.components.llm.router import LLMTaskIntent
 
+from .plan_schema import PLANNER_OUTPUT_SCHEMA_REF
 from .prompts import PLANNER_SYSTEM_PROMPT, build_planner_user_prompt
 from .schema import Plan, PlanMetadata, PlanStep, PlanTrigger, new_plan_id
 
@@ -262,20 +267,42 @@ class LLMPlanner(BasePlanner):
         if isinstance(inp.metadata, dict):
             trace_id = inp.metadata.get("trace_id")
         client = get_chat_client(LLMTaskIntent(task_kind="plan", complexity_hint="high"))
-        raw = client.chat(
-            "planner",
-            {
-                "system": PLANNER_SYSTEM_PROMPT,
-                "user": prompt,
-            },
-            agent="planner",
-            kind="planner.plan",
-            trace_id=trace_id,
-        )
+        plan_schema = registered_schema(PLANNER_OUTPUT_SCHEMA_REF)
+
+        def _complete(
+            *,
+            system: str,
+            user: str,
+            trace_id: str | None = None,
+            max_tokens: int | None = None,
+        ) -> str:
+            return client.chat(
+                "planner",
+                {"system": system, "user": user},
+                agent="planner",
+                kind="planner.plan",
+                trace_id=trace_id,
+                max_tokens=max_tokens,
+                response_format=plan_schema,
+            )
+
+        # KERNEL-09 (#2771): the planner's JSON is schema-validated through the
+        # KERNEL-07 constrained-completion seam against the planner-facing
+        # registered schema (which REQUIRES step_class on every step) — not
+        # trusted from prompt text. Any invalid output surfaces as a typed
+        # failure and routes to the audited fallback, never a silent partial
+        # parse.
         try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            return self._fallback_plan(inp, f"llm-json-error: {exc}")
+            payload = constrained_completion(
+                PLANNER_OUTPUT_SCHEMA_REF,
+                system=PLANNER_SYSTEM_PROMPT,
+                user=prompt,
+                task_kind="plan",
+                trace_id=trace_id,
+                complete=_complete,
+            )
+        except ConstrainedCompletionError as exc:
+            return self._fallback_plan(inp, f"constrained-completion-error: {exc.reason}")
         try:
             plan = Plan.model_validate(payload)
         except ValidationError as exc:

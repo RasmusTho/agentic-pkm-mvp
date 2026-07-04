@@ -30,8 +30,16 @@ def _fake_plan_payload() -> Dict[str, object]:
             "trace_id": "trace-1",
         },
         "steps": [
-            {"id": "s1", "kind": "agent_call", "description": "Do work"},
-            {"id": "s2", "kind": "tool_call", "description": "Use tool", "tool": "mcp.search.objects"},
+            # step_class is REQUIRED by the planner-facing schema
+            # (planner.plan.output.v1, KERNEL-09 #2771).
+            {"id": "s1", "kind": "agent_call", "description": "Do work", "step_class": "plain"},
+            {
+                "id": "s2",
+                "kind": "tool_call",
+                "description": "Use tool",
+                "tool": "mcp.search.objects",
+                "step_class": "plain",
+            },
         ],
     }
 

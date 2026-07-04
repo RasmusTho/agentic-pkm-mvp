@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Set
 
 from app.planner.schema import Plan, PlanMetadata, PlanStep
 
+from .admission import PlanAdmissionError, admit_plan, resolve_plan_timeout
 from .delivery_sla import map_delivery_sla_terminal_state
 from .events import (
     emit_compensation_started,
@@ -62,13 +63,6 @@ class Outbox:
 def _coerce_int(value: Any) -> int | None:
     try:
         return int(value)
-    except Exception:
-        return None
-
-
-def _coerce_float(value: Any) -> float | None:
-    try:
-        return float(value)
     except Exception:
         return None
 
@@ -175,6 +169,27 @@ class OrchestratorV2:
         """Execute plan with dependency-safe parallel scheduling and compensation."""
         self._validate_plan(plan)
 
+        # Resolve tool settings (orchestrator defaults overlaid by plan context)
+        plan_tool_settings = None
+        if plan.context and isinstance(plan.context.get("tool_settings"), Mapping):
+            plan_tool_settings = dict(plan.context.get("tool_settings") or {})
+        context_tool_settings = self._tool_settings
+        if plan_tool_settings:
+            if context_tool_settings:
+                merged = dict(context_tool_settings)
+                merged.update(plan_tool_settings)
+                context_tool_settings = merged
+            else:
+                context_tool_settings = plan_tool_settings
+
+        # Plan admission (KERNEL-09, #2771): schema + R1-R5 checks before any
+        # scheduling. The plan-level wall-clock timeout is mandatory by
+        # default; a plan-authored plan_timeout_seconds can only LOWER the
+        # operator/default bound (oversized values are clamped loudly),
+        # never raise it, never unbounded.
+        plan_timeout = resolve_plan_timeout(self._tool_settings, plan_tool_settings)
+        admit_plan(plan, plan_timeout_seconds=plan_timeout)
+
         # Extract plan metadata and context
         object_id = plan.meta.source_object_uuid or None
         trace_id = plan.meta.trace_id
@@ -196,24 +211,16 @@ class OrchestratorV2:
                 result = plan_results.get(step_id, {})
                 results.append({"step_id": step_id, "status": "ok", "result": result})
 
-        # Resolve tool settings
-        plan_tool_settings = None
-        if plan.context and isinstance(plan.context.get("tool_settings"), Mapping):
-            plan_tool_settings = dict(plan.context.get("tool_settings") or {})
-        context_tool_settings = self._tool_settings
-        if plan_tool_settings:
-            if context_tool_settings:
-                merged = dict(context_tool_settings)
-                merged.update(plan_tool_settings)
-                context_tool_settings = merged
-            else:
-                context_tool_settings = plan_tool_settings
-
-        # Budget tracking
+        # Budget tracking. The deadline is always set (R4): plan_timeout was
+        # resolved at admission and is guaranteed positive. Precise guarantee:
+        # the deadline gates step SUBMISSION — no new step is submitted at or
+        # after the deadline and the plan halts with plan_timeout. Steps
+        # already in flight run to completion bounded only by their own
+        # tool_timeout_seconds (in-flight cancellation is a known, separately
+        # tracked gap).
         budget_state: MutableMapping[str, int] = {"steps": 0, "tool_calls": 0}
         max_steps = _coerce_int(context_tool_settings.get("max_steps")) if context_tool_settings else None
-        plan_timeout = _coerce_float(context_tool_settings.get("plan_timeout_seconds")) if context_tool_settings else None
-        deadline = (time.monotonic() + plan_timeout) if plan_timeout and plan_timeout > 0 else None
+        deadline = time.monotonic() + plan_timeout
 
         # Build dependency graph
         graph = DependencyGraph(plan.steps)
@@ -234,7 +241,7 @@ class OrchestratorV2:
 
                 # Submit executable steps
                 for step_id in executable:
-                    if deadline is not None and time.monotonic() >= deadline:
+                    if time.monotonic() >= deadline:
                         step = graph.steps[step_id]
                         results.append({
                             "step_id": step_id,
@@ -771,6 +778,7 @@ class OrchestratorV2:
 __all__ = [
     "OrchestratorV2",
     "OrchestratorV2Error",
+    "PlanAdmissionError",
     "PlanValidationError",
     "CompensationError",
     "DependencyGraph",

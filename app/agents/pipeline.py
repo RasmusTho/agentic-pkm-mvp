@@ -17,6 +17,7 @@ from app.events.types import (
     REASONING_VALIDATION_ERROR,
     TEXT_CHUNK_CREATED,
 )
+from app.orchestrator.admission import PlanAdmissionError
 from app.orchestrator.runtime import Orchestrator, OrchestratorError, PlanValidationError
 from app.reasoning.provider import get_deliberation_agent
 from app.reasoning.schema import ReasoningInput, RelationSnapshot, ReasoningValidationError
@@ -219,6 +220,16 @@ def maybe_execute_plan(plan: Plan | None) -> List[Dict[str, Any]] | None:
     orchestrator = _get_orchestrator()
     try:
         return orchestrator.run_plan(plan)
+    except PlanAdmissionError as exc:
+        # KERNEL-09: admission rejection on the live pipeline is an audited,
+        # contained no-op — the plan never reaches execution.
+        audit_log(
+            object_id=plan.meta.source_object_uuid,
+            agent=_PLANNER_AGENT,
+            action=ORCHESTRATOR_PLAN_INVALID,
+            trace_id=plan.meta.trace_id,
+            details={"plan_id": plan.id, "error": str(exc), "rule": exc.rule},
+        )
     except PlanValidationError as exc:
         audit_log(
             object_id=plan.meta.source_object_uuid,
