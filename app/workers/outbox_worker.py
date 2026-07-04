@@ -687,6 +687,52 @@ def _dead_letter_outbox_message(
             message_id,
             reason,
         )
+    _draft_schema_violation_case(
+        topic=topic,
+        reason=reason,
+        event_id=_original_event_id(payload, None) or message_id,
+        payload=payload,
+        trace_id=trace_id,
+    )
+
+
+def _draft_schema_violation_case(
+    *,
+    topic: str | None,
+    reason: str,
+    event_id: str,
+    payload: Mapping[str, Any],
+    trace_id: str | None,
+) -> None:
+    """Draft a schema-violation dead-letter as an eval-case candidate (KERNEL-15, #2777).
+
+    Best-effort and additive to the dead-letter audit above: a failure here
+    (including no vault selected, or WriteGuard blocking writes) must never
+    re-block the queue or mask the underlying dead-letter, so every exception
+    is caught and logged, never re-raised.
+    """
+    try:
+        from app.eval.failure_capture import draft_dead_letter_case, is_schema_violation_reason
+
+        if not is_schema_violation_reason(reason):
+            return
+        vault_root = _resolve_optional_vault_root(None)
+        if vault_root is None:
+            return
+        draft_dead_letter_case(
+            vault_root=vault_root,
+            topic=topic or "",
+            reason=reason,
+            event_id=event_id,
+            payload=payload,
+            trace_id=trace_id,
+        )
+    except Exception:
+        logger.exception(
+            "worker failure-to-eval draft failed topic=%s reason=%s",
+            topic,
+            reason,
+        )
 
 
 def _queue_transient_retry(

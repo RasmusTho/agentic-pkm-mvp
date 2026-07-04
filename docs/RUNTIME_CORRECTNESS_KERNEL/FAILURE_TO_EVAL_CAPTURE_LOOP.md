@@ -30,9 +30,12 @@ closes the loop: every failure becomes a candidate regression test after human a
   material belongs in notes.
 - Each draft carries **full provenance**: `trace_id`, source event (topic + original event id),
   and a payload snapshot. Enough for a reviewer to reconstruct the failure without log archaeology.
-- Drafts land in a **human review queue** (mirror the existing pattern:
-  `app/agent_memory/review_queue.py` + `materialize_promoted_memory` in
-  `app/agent_memory/materialization.py`, which requires a promoted entry before it writes).
+- Drafts land in a **file-based human review surface** that *mirrors the shape* of the existing
+  pattern (`app/agent_memory/review_queue.py` + `materialize_promoted_memory` in
+  `app/agent_memory/materialization.py`): a WriteGuard-gated file, an explicit human-decision
+  promotion step, and no write to the golden set before a promoted decision.
+  It does **not reuse `MemoryCandidateReviewQueue`** — see "Reviewer surfacing" below for why that
+  queue is memory-candidate-specific and an eval-dataset case is a distinct artifact class.
 - Drafting is **WriteGuard-gated** like all vault writes: call
   `app/write_guard.py::WriteGuard.assert_writes_allowed(action)` before the vault write, matching
   `materialize_promoted_memory`'s use of `DEFAULT_WRITE_GUARD`.
@@ -54,6 +57,24 @@ candidate appears with provenance, gated by WriteGuard, and is NOT auto-promoted
 This is the only sustainable answer to RQ4: ground truth is curated history. It converts the two
 worst silent failures (dead-lettered events, misrouted intents) into permanent regression coverage,
 feeding KERNEL-13's golden set from real production failures instead of hand-authored cases alone.
+
+## Reviewer surfacing (deliberate divergence + deferred follow-up)
+
+The spec said to *reuse the existing queue surface* (`MemoryCandidateReviewQueue`). Delivered
+implementation mirrors its shape but does **not** reuse that queue, by design: it is
+memory-candidate-specific end to end. Every entry is an
+`app.agent_memory.candidate.MemoryCandidate` with a required `MemoryType` cognitive class,
+activation-policy / working-context-recall semantics, and a promotion path
+(`materialize_promoted_memory`) that writes a `semantic_memory` note into the agent-memory ledger;
+the companion API projection (`_memory_review_candidate_projection`) hard-requires
+`proposed_memory_type`. An eval-dataset case has no cognitive memory type and promotes into a
+golden-dataset file, not the memory ledger — forcing it into that queue would fabricate a
+`MemoryType` and materialize it as a memory note (a category error). Eval drafts therefore live in
+their own file-based surface (`<system_dir>/eval_drafts/` with `status` frontmatter).
+
+A discoverable *pending-eval-drafts view* (distinct from the memory ledger) is a **bounded
+follow-up**, tracked separately; it is dormant until KERNEL-08 (#2770), the `schema_violation`
+producer, lands. The review **UI** itself stays out of scope (W7/W8, see below).
 
 ## Acceptance Criteria
 
