@@ -87,6 +87,29 @@ bounded budget and an enforced wall-clock, so a malformed or runaway plan cannot
 - Building a real (non-mock) planner or executor; this task lands the admission contract + timeout.
 - Event-topic schemas (KERNEL-08); the shared constrained-completion utility itself (KERNEL-07).
 
+## Implementation Notes (delivered, PR #2854)
+
+- **Entrypoint correction vs. this spec's anchors:** this spec assumed `OrchestratorV2.run_plan`
+  is *the* production run entrypoint. In reality `ORCHESTRATOR_VERSION` defaults to `v1`
+  (`app/orchestrator/runtime.py`) and `app/agents/pipeline.py` / `app/cli` construct
+  `Orchestrator()` directly. Admission (`app/orchestrator/admission.py :: admit_plan` + the
+  mandatory-by-default timeout) is therefore wired into **both** `Orchestrator.run_plan` (V1) and
+  `OrchestratorV2.run_plan`, so the contract holds on every live construction path, including the
+  direct ones.
+- **`step_class` scope (honest boundary):** LLM-produced plans always carry `step_class` — the
+  planner-facing registered schema `planner.plan.output.v1` requires it on every step, so
+  constrained decoding cannot omit it and R1/R2 are never vacuous for LLM plans. Legacy and
+  code-built/deserialized plans without `step_class` are admitted under the remaining rules only
+  (schema, R3 intrinsic verify targets, R4 budgets + timeout, R5 DAG); R1/R2 bind on declared
+  classes and make no claim about undeclared steps.
+- **Timeout semantics, stated precisely:** a plan-authored `plan_timeout_seconds`
+  (`plan.context.tool_settings`) may only **lower** the effective bound — it is clamped (loudly
+  logged) to the operator setting or `DEFAULT_PLAN_TIMEOUT_SECONDS`. The deadline gates step
+  **submission/start**: no new step begins at or after the deadline and the plan halts with
+  `plan_timeout`; steps already in flight are bounded only by their own `tool_timeout_seconds`.
+  In-flight cancellation at the plan deadline is a known gap tracked as follow-up work, not a
+  claim of this task.
+
 ## Related Docs
 
 - `docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md :: §3 decomposition model, I-A4`

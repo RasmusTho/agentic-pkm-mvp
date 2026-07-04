@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Set
 
 from app.planner.schema import Plan, PlanStep
 
+from .admission import admit_plan, resolve_plan_timeout
 from .delivery_sla import map_delivery_sla_terminal_state
 from .events import emit_step_error, emit_step_finished, emit_step_started
 from .executor import MockPlanExecutor, PlanExecutor, StepContext, StepExecutionError
@@ -14,13 +15,6 @@ from .executor import MockPlanExecutor, PlanExecutor, StepContext, StepExecution
 def _coerce_int(value: Any) -> int | None:
     try:
         return int(value)
-    except Exception:
-        return None
-
-
-def _coerce_float(value: Any) -> float | None:
-    try:
-        return float(value)
     except Exception:
         return None
 
@@ -107,13 +101,23 @@ class Orchestrator:
             else:
                 context_tool_settings = plan_tool_settings
 
+        # Plan admission (KERNEL-09, #2771): V1 is the live default run loop
+        # (ORCHESTRATOR_VERSION defaults to v1, and pipeline/cli construct
+        # Orchestrator() directly), so the admission contract binds here too —
+        # every plan passes admit_plan before any step executes. The wall-clock
+        # bound is mandatory by default; a plan-authored plan_timeout_seconds
+        # can only lower it. The deadline gates step *start*: no step begins at
+        # or after the deadline; a step already running is bounded only by its
+        # own tool timeout.
+        plan_timeout = resolve_plan_timeout(self._tool_settings, plan_tool_settings)
+        admit_plan(plan, plan_timeout_seconds=plan_timeout)
+
         budget_state: MutableMapping[str, int] = {"steps": 0, "tool_calls": 0}
         max_steps = _coerce_int(context_tool_settings.get("max_steps")) if context_tool_settings else None
-        plan_timeout = _coerce_float(context_tool_settings.get("plan_timeout_seconds")) if context_tool_settings else None
-        deadline = (time.monotonic() + plan_timeout) if plan_timeout and plan_timeout > 0 else None
+        deadline = time.monotonic() + plan_timeout
 
         for step in plan.steps:
-            if deadline is not None and time.monotonic() >= deadline:
+            if time.monotonic() >= deadline:
                 results.append({
                     "step_id": step.id,
                     "status": "error",

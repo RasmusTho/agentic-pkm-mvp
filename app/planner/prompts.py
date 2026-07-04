@@ -16,6 +16,7 @@ Return a JSON object that matches this schema:
     {
       "id": "step-1",
       "kind": "agent_call|tool_call|decision|note",
+      "step_class": "plain|llm_transform|validation|authority_check|governed_effect|receipt",
       "description": "...",
       "agent": "optional agent name",
       "intent": "optional agent intent",
@@ -27,6 +28,10 @@ Return a JSON object that matches this schema:
   ]
 }
 All fields must be present even if empty.  Keep plans short (<=4 steps) and grounded in the supplied goal and context.
+step_class is REQUIRED on every step. Use "llm_transform" for a step whose output is LLM-generated content,
+and add a "validation" step depending on it before any other step consumes it. Use "governed_effect" for a
+step that mutates durable state; it must depend (directly or transitively) on an "authority_check" step and
+be followed by a "receipt" step that depends on it. Use "plain" for everything else.
 """
 
 

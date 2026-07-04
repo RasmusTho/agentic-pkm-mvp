@@ -15,7 +15,7 @@ from app.components.llm.constrained import (
 from app.components.llm.fabric import get_chat_client
 from app.components.llm.router import LLMTaskIntent
 
-from .plan_schema import PLAN_SCHEMA_REF
+from .plan_schema import PLANNER_OUTPUT_SCHEMA_REF
 from .prompts import PLANNER_SYSTEM_PROMPT, build_planner_user_prompt
 from .schema import Plan, PlanMetadata, PlanStep, PlanTrigger, new_plan_id
 
@@ -267,7 +267,7 @@ class LLMPlanner(BasePlanner):
         if isinstance(inp.metadata, dict):
             trace_id = inp.metadata.get("trace_id")
         client = get_chat_client(LLMTaskIntent(task_kind="plan", complexity_hint="high"))
-        plan_schema = registered_schema(PLAN_SCHEMA_REF)
+        plan_schema = registered_schema(PLANNER_OUTPUT_SCHEMA_REF)
 
         def _complete(
             *,
@@ -287,13 +287,14 @@ class LLMPlanner(BasePlanner):
             )
 
         # KERNEL-09 (#2771): the planner's JSON is schema-validated through the
-        # KERNEL-07 constrained-completion seam against the registered plan
-        # schema — not trusted from prompt text. Any invalid output surfaces as
-        # a typed failure and routes to the audited fallback, never a silent
-        # partial parse.
+        # KERNEL-07 constrained-completion seam against the planner-facing
+        # registered schema (which REQUIRES step_class on every step) — not
+        # trusted from prompt text. Any invalid output surfaces as a typed
+        # failure and routes to the audited fallback, never a silent partial
+        # parse.
         try:
             payload = constrained_completion(
-                PLAN_SCHEMA_REF,
+                PLANNER_OUTPUT_SCHEMA_REF,
                 system=PLANNER_SYSTEM_PROMPT,
                 user=prompt,
                 task_kind="plan",

@@ -20,10 +20,13 @@ class ToolDescriptor(BaseModel):
 
 
 #: Admission-relevant step classes (KERNEL-09, #2771). ``step_class`` is an
-#: explicit declaration over the existing step kinds — legacy plans that do not
-#: declare a class keep their current semantics; declared classes activate the
-#: R1/R2 ordering rules in ``app/orchestrator/admission.py``.
+#: explicit declaration over the existing step kinds; ``plain`` marks a step
+#: with no admission-relevant role. LLM-produced plans must declare a class on
+#: every step (the planner-facing schema requires it); legacy code-built plans
+#: without declarations keep their current semantics — declared classes
+#: activate the R1/R2 ordering rules in ``app/orchestrator/admission.py``.
 StepClass = Literal[
+    "plain",
     "llm_transform",
     "validation",
     "authority_check",

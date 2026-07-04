@@ -1,10 +1,13 @@
 """Plan admission validation (KERNEL-09, #2771).
 
-Every plan passes through :func:`admit_plan` in ``OrchestratorV2.run_plan``
-*before scheduling*. Admission moves plan-shape and boundedness failures from
-the most expensive detection point (step execution) to the cheapest one
-(admission), per audit invariant I-A4 and the §3 decomposition model of
-``docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md``.
+Every plan passes through :func:`admit_plan` *before scheduling* on **both**
+production run loops — ``Orchestrator.run_plan`` (V1, the live default:
+``ORCHESTRATOR_VERSION`` defaults to ``v1``, and ``app/agents/pipeline.py`` /
+``app/cli`` construct ``Orchestrator()`` directly) and
+``OrchestratorV2.run_plan``. Admission moves plan-shape and boundedness
+failures from the most expensive detection point (step execution) to the
+cheapest one (admission), per audit invariant I-A4 and the §3 decomposition
+model of ``docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md``.
 
 Checks (``docs/RUNTIME_CORRECTNESS_KERNEL/PLAN_ADMISSION_VALIDATION.md``):
 
@@ -21,18 +24,26 @@ Checks (``docs/RUNTIME_CORRECTNESS_KERNEL/PLAN_ADMISSION_VALIDATION.md``):
   (``app/orchestrator/executor.py :: MockPlanExecutor.execute_step``).
 - **R4** — the sum of per-step budgets must not exceed the plan budget, and a
   positive plan-level wall-clock timeout must exist. The timeout is mandatory
-  by default: ``resolve_plan_timeout`` falls back to
-  ``DEFAULT_PLAN_TIMEOUT_SECONDS`` when ``plan_timeout_seconds`` is absent or
-  non-positive, so no admitted plan runs unbounded.
+  by default (``resolve_plan_timeout``); a plan-authored
+  ``plan_timeout_seconds`` may only **lower** the effective bound, never raise
+  it past the operator setting or ``DEFAULT_PLAN_TIMEOUT_SECONDS``.
 - **R5** — the plan is a DAG: unknown/duplicate step references and dependency
   cycles are rejected (the legacy ``_validate_step`` explicitly passed on
   forward references and never detected cycles).
 
-``step_class`` declarations are opt-in on the existing ``PlanStep`` shape
-(extend, not fork): legacy plans without declarations are still held to the
-structural rules (schema, R3 intrinsic targets, R4 timeout, R5 DAG), while the
-ordering rules R1/R2 bind as soon as a plan declares transform or
-governed-effect steps.
+Timeout guarantee, stated precisely: the deadline gates **step submission** —
+no new step is scheduled at or after the deadline, and the plan halts with
+``plan_timeout``. Steps already in flight when the deadline passes are bounded
+only by their own ``tool_timeout_seconds``; in-flight cancellation is a known,
+separately tracked gap, not something this module claims to provide.
+
+Scope of ``step_class`` (honest boundary): LLM-produced plans always carry
+``step_class`` on every step — the planner-facing registered schema
+(``planner.plan.output.v1``) requires it, so constrained decoding cannot omit
+it. Legacy and code-built/deserialized plans without ``step_class``
+declarations are admitted under the remaining rules only (schema, R3 intrinsic
+targets, R4 budgets/timeout, R5 DAG); R1/R2 bind on declared classes and make
+no security claim about undeclared steps.
 
 Failure semantics are explicit and loud: any violation raises
 :class:`PlanAdmissionError` naming the rule; there is no silent repair and no
@@ -41,6 +52,7 @@ partial admission.
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from typing import Any, Dict, List, Mapping, Set
 
@@ -48,9 +60,11 @@ from app.components.llm.constrained import ConstrainedCompletionError, validate_
 from app.planner.plan_schema import PLAN_SCHEMA_REF
 from app.planner.schema import Plan, PlanStep
 
-#: Mandatory-by-default plan-level wall-clock budget (seconds). An explicit
-#: positive ``plan_timeout_seconds`` in tool settings overrides it; absence or
-#: a non-positive value falls back here — never to "unbounded".
+logger = logging.getLogger(__name__)
+
+#: Mandatory-by-default plan-level wall-clock budget (seconds). Neither absence
+#: nor a non-positive value ever resolves to "unbounded", and a plan-authored
+#: value can only lower the effective bound (see ``resolve_plan_timeout``).
 DEFAULT_PLAN_TIMEOUT_SECONDS: float = 600.0
 
 #: Recognized verify-target schemes for ``PlanStep.verify`` ("<scheme>:<target>").
@@ -80,36 +94,43 @@ class PlanAdmissionError(Exception):
         self.reason = reason
 
 
-def resolve_plan_timeout(tool_settings: Mapping[str, Any] | None) -> float:
+def _positive_timeout(settings: Mapping[str, Any] | None) -> float | None:
+    raw = settings.get("plan_timeout_seconds") if settings else None
+    try:
+        value = float(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        value = None
+    if value is not None and value > 0:
+        return value
+    return None
+
+
+def resolve_plan_timeout(
+    operator_settings: Mapping[str, Any] | None,
+    plan_settings: Mapping[str, Any] | None,
+) -> float:
     """Return the effective plan-level wall-clock timeout in seconds.
 
-    An explicit positive ``plan_timeout_seconds`` wins; anything else (absent,
-    unparsable, zero, negative) resolves to ``DEFAULT_PLAN_TIMEOUT_SECONDS``.
-    The return value is always positive: a plan without a wall-clock bound is
-    not a state this function can produce.
+    The operator bound is the orchestrator-level ``plan_timeout_seconds`` (or
+    ``DEFAULT_PLAN_TIMEOUT_SECONDS`` when absent/non-positive). A plan-authored
+    ``plan_timeout_seconds`` (from ``plan.context.tool_settings``) may only
+    **lower** the effective bound — a plan cannot raise its own wall-clock
+    budget past what the operator or the default allows; oversized values are
+    clamped loudly. The return value is always positive: a plan without a
+    wall-clock bound is not a state this function can produce.
     """
-    raw = tool_settings.get("plan_timeout_seconds") if tool_settings else None
-    try:
-        supplied = float(raw) if raw is not None else None
-    except (TypeError, ValueError):
-        supplied = None
-    if supplied is not None and supplied > 0:
-        return supplied
-    return DEFAULT_PLAN_TIMEOUT_SECONDS
-
-
-def admit_planner_payload(payload: Any) -> Plan:
-    """Admit raw planner JSON: KERNEL-07 schema validation, then model parse.
-
-    This is the entry for payloads that have not yet become ``Plan`` objects;
-    schema violations raise :class:`PlanAdmissionError` (rule ``schema``)
-    before any pydantic coercion can paper over shape drift.
-    """
-    try:
-        validate_payload(PLAN_SCHEMA_REF, payload)
-    except ConstrainedCompletionError as exc:
-        raise PlanAdmissionError(rule="schema", reason=exc.reason) from exc
-    return Plan.model_validate(payload)
+    operator_bound = _positive_timeout(operator_settings) or DEFAULT_PLAN_TIMEOUT_SECONDS
+    plan_value = _positive_timeout(plan_settings)
+    if plan_value is None:
+        return operator_bound
+    if plan_value > operator_bound:
+        logger.warning(
+            "plan-authored plan_timeout_seconds=%s exceeds the operator bound %ss; clamped",
+            plan_value,
+            operator_bound,
+        )
+        return operator_bound
+    return plan_value
 
 
 def admit_plan(plan: Plan, *, plan_timeout_seconds: float | None) -> Plan:
@@ -350,6 +371,5 @@ __all__ = [
     "PlanAdmissionError",
     "VERIFY_TARGET_SCHEMES",
     "admit_plan",
-    "admit_planner_payload",
     "resolve_plan_timeout",
 ]

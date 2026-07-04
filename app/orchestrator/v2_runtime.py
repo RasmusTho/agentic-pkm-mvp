@@ -184,9 +184,10 @@ class OrchestratorV2:
 
         # Plan admission (KERNEL-09, #2771): schema + R1-R5 checks before any
         # scheduling. The plan-level wall-clock timeout is mandatory by
-        # default — an explicit positive plan_timeout_seconds overrides,
-        # absence falls back to DEFAULT_PLAN_TIMEOUT_SECONDS, never unbounded.
-        plan_timeout = resolve_plan_timeout(context_tool_settings)
+        # default; a plan-authored plan_timeout_seconds can only LOWER the
+        # operator/default bound (oversized values are clamped loudly),
+        # never raise it, never unbounded.
+        plan_timeout = resolve_plan_timeout(self._tool_settings, plan_tool_settings)
         admit_plan(plan, plan_timeout_seconds=plan_timeout)
 
         # Extract plan metadata and context
@@ -211,7 +212,12 @@ class OrchestratorV2:
                 results.append({"step_id": step_id, "status": "ok", "result": result})
 
         # Budget tracking. The deadline is always set (R4): plan_timeout was
-        # resolved at admission and is guaranteed positive.
+        # resolved at admission and is guaranteed positive. Precise guarantee:
+        # the deadline gates step SUBMISSION — no new step is submitted at or
+        # after the deadline and the plan halts with plan_timeout. Steps
+        # already in flight run to completion bounded only by their own
+        # tool_timeout_seconds (in-flight cancellation is a known, separately
+        # tracked gap).
         budget_state: MutableMapping[str, int] = {"steps": 0, "tool_calls": 0}
         max_steps = _coerce_int(context_tool_settings.get("max_steps")) if context_tool_settings else None
         deadline = time.monotonic() + plan_timeout

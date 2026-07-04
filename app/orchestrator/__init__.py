@@ -1,4 +1,4 @@
-from .admission import PlanAdmissionError, admit_plan, admit_planner_payload
+from .admission import PlanAdmissionError, admit_plan
 from .executor import MockPlanExecutor, PlanExecutor, StepContext, StepExecutionError
 from .handler import OrchestratorContext, handle_event
 from .runtime import Orchestrator, OrchestratorError, PlanValidationError
@@ -19,5 +19,4 @@ __all__ = [
     "CheckpointStore",
     "Outbox",
     "admit_plan",
-    "admit_planner_payload",
 ]
