@@ -520,6 +520,32 @@ def _writeguard_blocked_http(exc: WritesBlockedError) -> HTTPException:
     )
 
 
+def _draft_unknown_classification_case(
+    *,
+    vault_root: Path,
+    utterance: str,
+    classification: IntentClassification,
+) -> None:
+    """Draft an UNKNOWN classification as an eval-case candidate (KERNEL-15, #2777).
+
+    Best-effort: a blocked write-state or any other failure here must never
+    break the UNKNOWN re-ask response it accompanies, so every exception is
+    caught and logged, never re-raised.
+    """
+    try:
+        from app.eval.failure_capture import draft_unknown_classification_case
+
+        draft_unknown_classification_case(
+            vault_root=vault_root,
+            utterance=utterance,
+            surface="canvas",
+            rationale=classification.rationale,
+            trace_id=classification.trace_id,
+        )
+    except Exception:
+        logger.exception("coauthor failure-to-eval draft failed for UNKNOWN classification")
+
+
 @router.post("/sessions/{session_id}/coauthor", response_model=CoAuthorResponse)
 def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse | JSONResponse:
     _require_canvas()
@@ -554,6 +580,11 @@ def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse | JSONRe
             "coauthor intent landed UNKNOWN (session=%s): %s",
             session_id,
             classification.rationale or "no rationale",
+        )
+        _draft_unknown_classification_case(
+            vault_root=vault_root,
+            utterance=req.intent,
+            classification=classification,
         )
         return JSONResponse(
             status_code=200,
