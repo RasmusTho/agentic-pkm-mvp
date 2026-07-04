@@ -313,3 +313,29 @@ def test_recovered_note_clears_failed_path_tracking(
     port.fail_upsert_for = None  # note recovers
     watcher.scan_once(port)
     assert bad_path not in watcher.FAILED_SYNC_PATHS  # cleared on success → next fault logs fresh traceback
+
+
+def test_failed_upsert_then_deleted_note_is_pruned_from_tracking(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "bad.md"
+    note.write_text("---\nuuid: bad-1\n---\n\nBad body", encoding="utf-8")
+
+    watcher = _load_watcher(monkeypatch, vault)
+    monkeypatch.setattr(watcher, "active_edit", lambda _: False)
+    bad_path = str(note)
+
+    port = PersistentlyFailingVaultPort(fail_upsert_for="bad.md")
+    watcher.scan_once(port)
+    assert bad_path in watcher.FAILED_SYNC_PATHS  # first failure tracked
+    assert bad_path not in watcher.STATE  # never recorded, since the first upsert failed
+
+    note.unlink()  # removed from the vault before it ever synced successfully
+    watcher.scan_once(port)
+
+    # It is neither re-scanned (gone from disk) nor a stale-delete path (never in
+    # STATE), so it must be pruned — not leaked, and not left to suppress the first
+    # traceback of a future note re-created at the same path.
+    assert bad_path not in watcher.FAILED_SYNC_PATHS

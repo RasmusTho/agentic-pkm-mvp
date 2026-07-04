@@ -31,10 +31,13 @@ def _log_sync_failure(path_str: str, message: str, *args: object) -> None:
     """Log a per-path sync failure, emitting a full traceback only the first time
     a given path fails since its last success.
 
-    Mirrors ``app/services/note_watcher.py``: a first-class failure gets
-    ``logger.exception`` (with traceback); recurring/expected failures get
-    ``logger.warning`` (no traceback). Callers must invoke this from inside the
-    active ``except`` block so ``logger.exception`` captures the live exception.
+    The level split — ``logger.exception`` (with traceback) for a first-class
+    failure vs ``logger.warning`` (no traceback) for a lower-signal one — follows
+    ``app/services/note_watcher.py``. The first-vs-repeat dedup keyed on
+    ``FAILED_SYNC_PATHS`` is specific to this scan loop, since ``run()`` re-invokes
+    ``scan_once`` every ~1.2s and would otherwise re-emit a traceback for the same
+    fault on every pass. Callers must invoke this from inside the active ``except``
+    block so ``logger.exception`` captures the live exception.
     """
     if path_str in FAILED_SYNC_PATHS:
         logger.warning(message + " (repeat; traceback suppressed until recovery)", *args)
@@ -145,6 +148,14 @@ def scan_once(port: VaultPort | None = None) -> None:
         FAILED_SYNC_PATHS.discard(path_str)
         STATE.pop(path_str, None)
         UUID_INDEX.pop(entry["uuid"], None)
+
+    # Drop failure tracking for paths that are neither still present nor pending a
+    # stale-delete retry. Without this, a note that failed its very first sync
+    # (never recorded in STATE) and was then removed from the vault would never be
+    # discarded — leaking here and, worse, suppressing the first-failure traceback
+    # if a note is later re-created at the same path. discard-on-success handles
+    # recovery; this handles disappearance.
+    FAILED_SYNC_PATHS.intersection_update(current_paths | set(STATE.keys()))
 
 
 def run() -> None:
