@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import time
 from pathlib import Path
@@ -11,6 +12,8 @@ from app.ports.filesystem_vault_adapter import FilesystemVaultAdapter
 from app.ports.vault_port import VaultPort
 from app.services.settings import policy
 from app.services.vault_sync import active_edit
+
+logger = logging.getLogger(__name__)
 
 VAULT = Path(os.getenv("VAULT_DIR", "vault"))
 STATE: dict[str, dict[str, Any]] = {}
@@ -91,14 +94,29 @@ def scan_once(port: VaultPort | None = None) -> None:
         if not changed_fm and not changed_body:
             _record(note_path, uuid_value, fm_hash, body_hash)
             continue
-        resolved_port.upsert_note_object(note_path, note.frontmatter, note.body, changed_fm, changed_body)
+        try:
+            resolved_port.upsert_note_object(note_path, note.frontmatter, note.body, changed_fm, changed_body)
+        except Exception:
+            # A transient sync failure (e.g. DB error, or an outbox schema-validation
+            # raise from the in-transaction enqueue after #2864) must not kill the scan
+            # loop. Skip _record so STATE still shows the note as changed and the next
+            # scan pass retries it; that periodic re-scan is the back-off.
+            logger.exception("Vault sync failed for %s; skipping, will retry on next scan", note_path)
+            continue
         _record(note_path, uuid_value, fm_hash, body_hash)
 
     stale_paths = set(STATE.keys()) - current_paths
     for path_str in stale_paths:
-        entry = STATE.pop(path_str)
+        entry = STATE[path_str]
+        try:
+            resolved_port.delete_note(Path(path_str), uuid_value=str(entry.get("uuid") or "") or None)
+        except Exception:
+            # Same resilience contract as the upsert path: leave STATE/UUID_INDEX intact
+            # so the stale-path delete is retried on the next scan instead of being lost.
+            logger.exception("Vault delete-sync failed for %s; skipping, will retry on next scan", path_str)
+            continue
+        STATE.pop(path_str, None)
         UUID_INDEX.pop(entry["uuid"], None)
-        resolved_port.delete_note(Path(path_str), uuid_value=str(entry.get("uuid") or "") or None)
 
 
 def run() -> None:
