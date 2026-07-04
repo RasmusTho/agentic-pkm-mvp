@@ -13,7 +13,7 @@ can_parallelize_with: []
 
 ## Purpose
 
-The intent classifier (`app/chat/intent_classifier.py::classify`, approx. line 93) is the LLM
+The intent classifier (`app/components/llm/intent_classifier.py::classify`, relocated from `app/chat/` by #2853) is the LLM
 decision that gates mutations — misclassification silently converts governance-bearing intent into
 body edits (CW-2). It has **zero eval coverage**. The deterministic runner
 (`app/eval/run.py::build_scorecard`, `docs/eval/retrieval_bilingual_seed.yaml` shaped as
@@ -74,7 +74,7 @@ highest-leverage eval gap in the system.
       Verify: `tests/eval/test_classification_golden.py::test_scorecard_has_confusion_matrix`
 - [ ] Hard gate: any expected exploratory/UNKNOWN case classified into a mutation-capable class fails
       the gate, exercised through the real classifier path (deterministic replay).
-      Verify: `tests/eval/test_classification_golden.py::test_mutation_side_confusion_is_blocking` — drives `app.chat.intent_classifier.classify` via the replay fixture, asserting a mutation-side confusion trips a non-zero exit / regression flag.
+      Verify: `tests/eval/test_classification_golden.py::test_mutation_side_confusion_is_blocking` — drives `app.components.llm.intent_classifier.classify` via the replay fixture, asserting a mutation-side confusion trips a non-zero exit / regression flag.
 - [ ] Gate wired into CI in the same PR as the dataset.
       Verify: CI workflow diff (the `not pg` classification gate step) in this PR
 
@@ -94,7 +94,7 @@ highest-leverage eval gap in the system.
 
 - `docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md :: CW-7, §5.2`
 - `docs/eval.md`, `docs/eval/retrieval_bilingual_seed.yaml`, `config/eval_thresholds.yaml`
-- `app/chat/intent_classifier.py`, `app/eval/run.py`, `app/eval/llm_client.py`
+- `app/components/llm/intent_classifier.py`, `app/eval/run.py`, `app/eval/llm_client.py`
 
 ## Related GitHub Issues
 

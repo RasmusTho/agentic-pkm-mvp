@@ -137,7 +137,7 @@ What it reports, all computed over the W2-EVAL-01 bilingual seed
 ### Intent-classification slice (`classification_case.v1`, KERNEL-13)
 
 The same runner scores the governance-critical intent classifier
-(`app/chat/intent_classifier.py`) over the bilingual golden set
+(`app/components/llm/intent_classifier.py`) over the bilingual golden set
 `docs/eval/classification_golden.yaml` (≥40 sv/en cases incl. adversarial
 families; authored under RESEARCH-06/#2784, rationale in
 `docs/eval/classification_golden_rationale.md`):
@@ -293,7 +293,7 @@ mirrored in the `--output` JSON artifact (`eval_scorecard_compare.v1`):
   offending path — never conflated with a regression verdict.
 
 **Compare artifact required for Router/Synthesizer changes.** Any PR that
-changes the **Router** (intent classifier — `app/chat/intent_classifier.py`
+changes the **Router** (intent classifier — `app/components/llm/intent_classifier.py`
 model, or the `classifier.v1` prompt version/contract) or the **Synthesizer**
 (ASK answer path — ASK model, or the `ask.answer.v1` prompt version/contract,
 i.e. `DEFAULT_ASK_SYSTEM_PROMPT`) must attach a compare artifact to the PR:

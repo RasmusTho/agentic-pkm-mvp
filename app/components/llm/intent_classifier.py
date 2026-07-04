@@ -42,7 +42,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from app.chat.governance_router import GovernanceActionType
 from app.components.llm.constrained import (
     CompletionFn,
     ConstrainedCompletionError,
@@ -66,6 +65,23 @@ class IntentClass(str, Enum):
     GOVERNANCE_BEARING = "governance_bearing"
     EXPLORATORY = "exploratory"
     UNKNOWN = "unknown"
+
+
+class GovernanceActionType(str, Enum):
+    """Governance action types recognised by the canvas-to-Panel bridge.
+
+    Defined here (cognition layer) rather than in ``app.chat.governance_router``
+    (interaction layer) so the classifier — which must name the action type it
+    maps a governance-bearing intent to — never has to import upward into the
+    protected interaction layer (#2853). ``app.chat.governance_router``
+    re-exports this symbol for its existing importers; it is authoritative
+    here.
+    """
+
+    FRONTMATTER_UPDATE = "frontmatter_update"
+    MATURITY_TRANSITION = "maturity_transition"
+    NOTE_LIFECYCLE = "note_lifecycle"
+    CROSS_NOTE = "cross_note"
 
 
 #: Registered schema for the classification completion. The model must return
@@ -264,6 +280,7 @@ def _str_or_none(value: Any) -> str | None:
 
 
 __all__ = [
+    "GovernanceActionType",
     "INTENT_CLASSIFICATION_SCHEMA_REF",
     "IntentClass",
     "IntentClassification",

@@ -13,7 +13,8 @@ can_parallelize_with: [TRANSACTIONAL_VAULT_SYNC, DEAD_LETTER_HEALTH_SIGNAL]
 
 ## Purpose
 
-The intent classifier (`app/chat/intent_classifier.py :: IntentClassifierCognition.classify()`)
+The intent classifier (at audit time `app/chat/intent_classifier.py`, relocated to
+`app/components/llm/intent_classifier.py :: IntentClassifierCognition.classify()` by #2853)
 gets LLM text via `ReasoningFacade.answer()` and parses it with regex + `json.loads`
 (`_extract_json_object` / `_parse_label`, approx. lines 189–243 at audit time). Unparseable or
 degraded output falls through `_defaulted(...)` to **`CO_AUTHORING` with `classified=False`**
@@ -29,7 +30,8 @@ invariants **I-A1** (structured boundary) and **I-A2** (no default routes): CW-2
   provider tool-call where supported) and **validates against a registered schema before returning**.
 - (b) Migrate `IntentClassifierCognition.classify()` to call the utility instead of free-text
   `facade.answer()` + regex. Regex extraction on this control path is removed.
-- (c) Add an explicit `UNKNOWN` member to `IntentClass` (`app/chat/intent_classifier.py`, the enum
+- (c) Add an explicit `UNKNOWN` member to `IntentClass` (at audit time `app/chat/intent_classifier.py`,
+  now `app/components/llm/intent_classifier.py` per #2853, the enum
   at approx. lines 53–58 alongside `CO_AUTHORING`/`GOVERNANCE_BEARING`/`EXPLORATORY`). On validation
   failure the classifier returns `UNKNOWN` surfaced to the caller with a defined landing surface:
   degrade to read-only/exploratory handling **plus** a re-ask affordance. Per cross-task invariant
@@ -43,7 +45,7 @@ invariants **I-A1** (structured boundary) and **I-A2** (no default routes): CW-2
 
 ```bash
 pytest -q tests/chat/test_intent_unknown_route.py
-pytest -q tests/chat/test_intent_classifier.py   # existing suite stays green
+pytest -q tests/components/llm/test_intent_classifier.py   # existing suite stays green
 ```
 
 ## Why This Matters
@@ -71,7 +73,7 @@ mutation route.
 
 ## How to Verify (Pre-Merge)
 
-1. `pytest -q tests/chat/test_intent_unknown_route.py tests/chat/test_intent_classifier.py tests/chat/test_governance_router.py`
+1. `pytest -q tests/chat/test_intent_unknown_route.py tests/components/llm/test_intent_classifier.py tests/chat/test_governance_router.py`
 2. Full `pytest -q -m "not pg"` (control-path change on the chat hot path).
 3. `ruff check app tests`.
 
@@ -104,3 +106,14 @@ decoding requires provider-abstraction changes beyond `app/components/llm/`.
   `{"type": "json_object"}` only; the registered schema reaches the model only on the Ollama
   `format` path. Caller-side validation remains the gate on every path; on JSON-mode providers
   schema misses surface as `UNKNOWN` re-asks.
+
+## Implementation notes (relocation, #2853)
+
+`IntentClassifierCognition`/`IntentClass`/schema registration relocated from `app/chat/` to
+`app/components/llm/intent_classifier.py`: the classifier is proposal-class cognition, not an
+interaction-layer surface (ADR-0013), and living in `app.chat` forced the classification eval gate
+(`app/eval/classification.py`) to import upward into the protected interaction layer, which required
+a documented `ignore_imports` exception in `importlinter.ini`. The relocation removes that exception.
+`GovernanceActionType` moved with it (defined in `app/components/llm/intent_classifier.py`,
+re-exported from `app/chat/governance_router.py` for existing importers) so the classifier never
+needs to import upward to name the governance action type. No behavior change.
