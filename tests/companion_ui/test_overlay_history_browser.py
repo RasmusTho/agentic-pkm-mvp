@@ -177,9 +177,13 @@ def _install_offline_guard(page: Any) -> None:
     guard: it fulfils the esm.sh module imports from vendored repo-local stubs
     and aborts any other external request, so the page loads deterministically
     offline and DCL fires promptly.
+
+    Route on the page's ``BrowserContext`` (the implicit context ``new_page``
+    creates), matching the harness's context-level contract and the sibling
+    browser tests, rather than page-scoped routing.
     """
 
-    install_offline_esm_routes(page)
+    install_offline_esm_routes(page.context)
 
 
 def _wait_open(page: Any, value: str) -> None:
