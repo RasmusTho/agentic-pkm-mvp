@@ -14,7 +14,7 @@ Before any implementation guidance or code change, identify which class the task
 
 | Class | Description | Primary lane | First-read docs |
 | --- | --- | --- | --- |
-| **Architecture** | Target-state design, contract definition, capability specification, ADR, system-level decisions | Docs-authoring or governance | `docs/ARCHITECTURE.md`, `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`, `docs/DESIGN_PRINCIPLES.md`, relevant capability spec |
+| **Architecture** | Target-state design, contract definition, capability specification, ADR, system-level decisions | Docs-authoring or governance | `docs/ARCHITECTURE.md`, `docs/MODULAR_ARCHITECTURE.md`, `docs/DESIGN_PRINCIPLES.md`, relevant capability spec |
 | **Implementation** | Bounded code, schema, or test change from a GitHub slice issue | Issue-first implementation | `AGENTS.md`, `.codex/skills/issue-to-code/SKILL.md`, owner doc, source anchors |
 | **Operations** | Runtime health, promotion, rollback, environment, release-channel | Release-channel / ops skills | `docs/ENVIRONMENTS.md`, `docs/RELEASE_CHANNELS/README.md`, `docs/OPERATIONS.md`, `docs/HEALTH.md` |
 | **Governance** | Skills, `AGENTS.md`, templates, enforcement scripts, delivery-system artifacts | Governance lane | `AGENTS.md`, `docs/development/AGENT_INSTRUCTION_GOVERNANCE.md`, `.codex/skills/README.md` |

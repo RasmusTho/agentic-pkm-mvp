@@ -16,7 +16,7 @@ can_parallelize_with: []
 The same Ollama is described as an "optional external provider" outside the repo boundary
 (`docs/ARCHITECTURE.md:109`) and as a first-party compose service with healthcheck and volume
 (`docker-compose.yaml:16-31`); the same Postgres is "extension fabric" inside the system
-(`docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md:58`), an "external durable store"
+(`docs/MODULAR_ARCHITECTURE.md:58`), an "external durable store"
 (`docs/INTEGRATION_FABRIC_CONTRACT.md:41`), and an unlabeled service
 (`docs/INFRASTRUCTURE.md:17`) in three different docs. This task resolves the contradiction with one
 classification column/section, using the vocabulary SBI-1 defines.

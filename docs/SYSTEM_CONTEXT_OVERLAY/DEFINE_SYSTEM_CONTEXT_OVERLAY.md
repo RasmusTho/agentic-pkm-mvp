@@ -47,12 +47,12 @@ the audit already resolved):
    for "modular, authority-separated single system," per ADR-0015's modularity intent; (ii) the
    INCOSE sense requires operationally- and managerially-independent constituents and does not
    apply to the internal decomposition (the spine subsystems fail every SoS taxon's
-   independent-operability test, `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md:26`) per the 2026-07-03
+   independent-operability test, `docs/MODULAR_ARCHITECTURE.md:26`) per the 2026-07-03
    audit §3 — cited as advisory, not settling; (iii) the one INCOSE-defensible SoS reading is the
    operator's assembled environment (Yggdrasil + Obsidian + iCloud, `docs/ARCHITECTURE.md:198`),
-   and the doc-title question (rename `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` or keep it) is an
+   and the doc-title question (rename `docs/MODULAR_ARCHITECTURE.md` or keep it) is an
    open owner decision (audit §15 Q2) — the entry links there instead of settling it. Add a
-   one-paragraph overlay note to `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` linking to the new
+   one-paragraph overlay note to `docs/MODULAR_ARCHITECTURE.md` linking to the new
    glossary entry and this overlay doc — a note, not a rename (the rename is SBI-8's reshape
    question).
 5. **Enabling-system principle sentence** (audit §9) — one sentence, appended to
@@ -65,7 +65,7 @@ the audit already resolved):
    function-ID register — the audit's own draft recommendation for one was refuted at its skeptic
    gate (closed issue #2409 already delivers the derivative view).
 
-Link the new doc from `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`, `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`,
+Link the new doc from `docs/MODULAR_ARCHITECTURE.md`, `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`,
 and add a `docs/DOCS_INDEX.md` row for it.
 
 ## Concretely
@@ -73,7 +73,7 @@ and add a `docs/DOCS_INDEX.md` row for it.
 ```bash
 ls docs/architecture/system-context-overlay.md   # or equivalent name chosen at write time
 grep -n "System of Systems" docs/GLOSSARY.md
-grep -n "system-context-overlay\|SYSTEM_CONTEXT_OVERLAY" docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md
+grep -n "system-context-overlay\|SYSTEM_CONTEXT_OVERLAY" docs/MODULAR_ARCHITECTURE.md
 grep -n "docs/architecture/system-context-overlay.md" docs/DOCS_INDEX.md
 grep -n "HUMAN_FLOW_TO_RUNTIME_MAP" docs/architecture/system-context-overlay.md
 ```
@@ -101,9 +101,9 @@ described two incompatible ways because no doc owns the classification rule).
       Verify: doc writeback at `docs/GLOSSARY.md :: System of Systems` — entry present, framed as
       descriptive (repo usage + audit-as-advisory), and links Q2 rather than declaring the doc-title
       question settled
-- [ ] `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` carries a one-paragraph overlay note linking the new
+- [ ] `docs/MODULAR_ARCHITECTURE.md` carries a one-paragraph overlay note linking the new
       doc and the glossary entry, without renaming the file or rewording its existing claims.
-      Verify: doc writeback at `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` (new paragraph, existing
+      Verify: doc writeback at `docs/MODULAR_ARCHITECTURE.md` (new paragraph, existing
       title and content otherwise unchanged)
 - [ ] `docs/DESIGN_PRINCIPLES.md` (or the overlay doc, whichever the task determines is cheaper)
       states the enabling-system-boundary principle sentence.
@@ -123,12 +123,12 @@ described two incompatible ways because no doc owns the classification rule).
 3. Manual read-through: confirm every claim in the new doc traces to an audit §1-§5/§9 finding —
    this task must not introduce a claim the audit did not already make.
 4. `grep -n "docs/architecture/system-context-overlay" docs/DOCS_INDEX.md
-   docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md docs/SYSTEM_BREAKDOWN_STRUCTURE.md` — confirm the doc is
+   docs/MODULAR_ARCHITECTURE.md docs/SYSTEM_BREAKDOWN_STRUCTURE.md` — confirm the doc is
    linked from all three.
 
 ## Out of Scope
 
-- Renaming `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` or rewording `docs/DESIGN_PRINCIPLES.md` §9's
+- Renaming `docs/MODULAR_ARCHITECTURE.md` or rewording `docs/DESIGN_PRINCIPLES.md` §9's
   existing "System-of-Systems Thinking" section — both are reshape-routed to SBI-8.
 - The infra classification column itself (SBI-2) and the spine↔SBS crosswalk rows (SBI-3) — this
   task defines the vocabulary and model those tasks apply; it does not populate their tables.
@@ -140,7 +140,7 @@ described two incompatible ways because no doc owns the classification rule).
 ## Related Docs
 
 - `docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md :: §1, §2, §3, §4, §5, §9`
-- `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`, `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`, `docs/GLOSSARY.md`,
+- `docs/MODULAR_ARCHITECTURE.md`, `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`, `docs/GLOSSARY.md`,
   `docs/DESIGN_PRINCIPLES.md`, `docs/HUMAN_FLOW_TO_RUNTIME_MAP.md`, `docs/DOCS_INDEX.md`
 - `docs/foundation/00-yggdrasil-doctrine.md`, `docs/PROJECT_KERNEL.md`,
   `docs/COGNITIVE_PROSTHESIS_CHARTER.md`

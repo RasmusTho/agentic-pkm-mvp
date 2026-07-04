@@ -6,7 +6,7 @@ Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-07-03
-Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/ENVIRONMENTS.md, docs/VAULT_OPTIONAL_RUNTIME/README.md, docs/architecture/system-context-overlay.md
+Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/MODULAR_ARCHITECTURE.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/ENVIRONMENTS.md, docs/VAULT_OPTIONAL_RUNTIME/README.md, docs/architecture/system-context-overlay.md
 
 # SBS Current-To-Target Mapping
 
@@ -15,7 +15,7 @@ Use this map when changing an existing area and classifying target SBS impact. T
 | Current area | Target owner(s) | Notes | Transition risk |
 |---|---|---|---|
 | Current architecture baseline | HKA, GOV, PDM, DRI, RCA, MEM, CAO, EXE, OEF | `docs/ARCHITECTURE.md` owns shipped runtime wiring. SBS ownership is used for impact classification only. | Target-state wording can be misread as shipped behavior. |
-| Current system-of-systems spine | CES practice, all target subsystems | `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` remains the current eight-subsystem bridge. | Current eight-subsystem map can hide target boundaries that split storage/projection/memory/sync/execution. |
+| Current system-of-systems spine | CES practice, all target subsystems | `docs/MODULAR_ARCHITECTURE.md` remains the current eight-subsystem bridge. | Current eight-subsystem map can hide target boundaries that split storage/projection/memory/sync/execution. |
 | Human surface / UI | HIX, WSP, GOV, OEF | Obsidian, Panel, Chat/canvas, CLI, HTTP API, and Companion UI are interaction surfaces. | UI state can become authority if not routed through owner contracts. |
 | Obsidian / vault interaction | HIX, EBF, HKA, WSP | Obsidian and vault files are current mechanisms and durable surface bindings. | Obsidian/vault can be treated as identity rather than adapter/source binding. |
 | Vault model | WSP, HKA, EBF, PDM | Current vault-first runtime maps to ActiveContextSet, ArtifactContract, source binding, and store resolution. | `activeVault`/vault path may leak as a global architecture primitive. |
@@ -36,7 +36,7 @@ Use this map when changing an existing area and classifying target SBS impact. T
 
 ## Spine-Subsystem Crosswalk
 
-Row-level mapping from the current eight-subsystem spine (`docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`)
+Row-level mapping from the current eight-subsystem spine (`docs/MODULAR_ARCHITECTURE.md`)
 to its SBS boundary code(s), reconciled in `docs/architecture/system-context-overlay.md` (§4 of
 `docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md`, SBI-3). This is a translation table
 between two coexisting taxonomies, not an arbitration of which one is authoritative when they

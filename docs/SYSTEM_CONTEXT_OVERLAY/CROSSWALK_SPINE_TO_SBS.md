@@ -13,7 +13,7 @@ can_parallelize_with: []
 
 ## Purpose
 
-The 8-subsystem spine (`docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`) and the 8-macrodomain /
+The 8-subsystem spine (`docs/MODULAR_ARCHITECTURE.md`) and the 8-macrodomain /
 14-boundary SBS (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md`) coexist with no row-level mapping; docs cite
 one taxonomy or the other with no way to translate between them, and the spine's "Capability"
 subsystem silently splits across CAO and RCA with no doc stating so (audit §4).
@@ -51,7 +51,7 @@ grep -n "Human Surface\|Knowledge & Artifact\|Runtime Projection\|Capability\|Ag
 ## Why This Matters
 
 Without row-level crosswalk rows, any doc or agent that starts from spine vocabulary (used
-throughout `docs/ARCHITECTURE.md` and `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`) has no deterministic
+throughout `docs/ARCHITECTURE.md` and `docs/MODULAR_ARCHITECTURE.md`) has no deterministic
 way to find the SBS boundary that owns a given piece of functionality — it has to re-derive the
 mapping from first principles each time, and the undocumented Capability split means two different
 people will derive two different answers (one landing on CAO, one on RCA, both partially right).
@@ -75,7 +75,7 @@ people will derive two different answers (one landing on CAO, one on RCA, both p
 
 1. `grep -n "CAO\|RCA" docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md` — confirm the Capability
    row names both.
-2. Manual check: all 8 spine names from `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` appear as row
+2. Manual check: all 8 spine names from `docs/MODULAR_ARCHITECTURE.md` appear as row
    labels.
 3. Confirm no existing row in `SBS_CURRENT_TO_TARGET_MAPPING.md` was altered in a way that changes
    its current meaning — this task adds rows, it does not edit existing target-owner claims.
@@ -91,7 +91,7 @@ people will derive two different answers (one landing on CAO, one on RCA, both p
 ## Related Docs
 
 - `docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md :: §4`
-- `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md`, `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`,
+- `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md`, `docs/MODULAR_ARCHITECTURE.md`,
   `docs/SYSTEM_BREAKDOWN_STRUCTURE.md:63 (spine-as-bridge claim)`
 
 ## Related GitHub Issues

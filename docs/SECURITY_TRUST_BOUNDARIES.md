@@ -6,7 +6,7 @@ Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-06-12
-Last verified against: docs/SECURITY_ARCHITECTURE.md, docs/DIAGRAMS.md, docs/diagrams/architecture.mmd, docs/ARCHITECTURE.md, docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/SEMANTIC_SYSTEM_ARCHITECTURE.md, companion-ui/docs/LOCAL_ACCESS_MODEL.md, companion-ui/docs/SEMANTIC_PROJECTION_ALIGNMENT.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md, docs/AGENT-FLOWS.md
+Last verified against: docs/SECURITY_ARCHITECTURE.md, docs/DIAGRAMS.md, docs/diagrams/architecture.mmd, docs/ARCHITECTURE.md, docs/MODULAR_ARCHITECTURE.md, docs/SEMANTIC_SYSTEM_ARCHITECTURE.md, companion-ui/docs/LOCAL_ACCESS_MODEL.md, companion-ui/docs/SEMANTIC_PROJECTION_ALIGNMENT.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md, docs/AGENT-FLOWS.md
 
 # Security Trust Boundaries
 

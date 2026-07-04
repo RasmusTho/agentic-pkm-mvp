@@ -148,7 +148,7 @@ matter:
 - Audit source: `docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md`
 - Epic #2778 (Fable research week) and its child #2785 (Architectural Constitution)
 - `docs/architecture/SBS_OPERATING_MODEL.md`, `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`,
-  `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`, `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md`,
+  `docs/MODULAR_ARCHITECTURE.md`, `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md`,
   `docs/architecture/SBS_BOUNDARY_REGISTER.md`, `docs/architecture/SBS_TRANSITION_DEBT.md`
 - `docs/boundaries/README.md`, `docs/architecture/traceability-matrix.md`, `docs/GLOSSARY.md`,
   `docs/ARCHITECTURE.md`, `docs/DOCS_INDEX.md`

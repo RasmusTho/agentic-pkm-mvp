@@ -6,7 +6,7 @@ Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-06-26
-Last verified against: docs/PROJECT_KERNEL.md, docs/COGNITIVE_PROSTHESIS_CHARTER.md, docs/DESIGN_PRINCIPLES.md, docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/SEMANTIC_SYSTEM_ARCHITECTURE.md, docs/CAPABILITY_CONTRACT_MODEL.md, docs/INTEGRATION_FABRIC_CONTRACT.md, docs/CONCEPTS/PORTABILITY_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/CONCEPTS/INSTANCE_DEVICE_AND_REPLICA_CONTRACT.md, docs/foundation/yggdrasil-architecture-context-packet.md
+Last verified against: docs/PROJECT_KERNEL.md, docs/COGNITIVE_PROSTHESIS_CHARTER.md, docs/DESIGN_PRINCIPLES.md, docs/MODULAR_ARCHITECTURE.md, docs/SEMANTIC_SYSTEM_ARCHITECTURE.md, docs/CAPABILITY_CONTRACT_MODEL.md, docs/INTEGRATION_FABRIC_CONTRACT.md, docs/CONCEPTS/PORTABILITY_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/CONCEPTS/INSTANCE_DEVICE_AND_REPLICA_CONTRACT.md, docs/foundation/yggdrasil-architecture-context-packet.md
 
 # Yggdrasil System Breakdown Structure
 
