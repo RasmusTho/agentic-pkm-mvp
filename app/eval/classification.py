@@ -2,7 +2,7 @@
 
 Scores the bilingual `classification_case.v1` golden set
 (`docs/eval/classification_golden.yaml`, authored under RESEARCH-06 / #2784)
-against the real classifier path `app.chat.intent_classifier`
+against the real classifier path `app.components.llm.intent_classifier`
 (`IntentClassifierCognition.classify`), per
 `docs/RUNTIME_CORRECTNESS_KERNEL/INTENT_CLASSIFICATION_GOLDEN_SET.md`.
 
@@ -41,7 +41,7 @@ from typing import Dict, List, Mapping
 
 import yaml
 
-from app.chat.intent_classifier import IntentClass, IntentClassifierCognition
+from app.components.llm.intent_classifier import IntentClass, IntentClassifierCognition
 
 CLASSIFICATION_GOLDEN_PATH = Path("docs") / "eval" / "classification_golden.yaml"
 CLASSIFICATION_REPLAY_PATH = Path("docs") / "eval" / "classification_replay.yaml"

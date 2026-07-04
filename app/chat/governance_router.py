@@ -17,24 +17,22 @@ later, through the normal Panel pipeline.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
 from typing import Any, Protocol
 
 from app.chat.session_log import SessionLog, SessionLogWriter
+from app.components.llm.intent_classifier import GovernanceActionType
 from app.write_guard import DEFAULT_WRITE_GUARD
-
 
 # ---------------------------------------------------------------------------
 # Types
 # ---------------------------------------------------------------------------
-
-class GovernanceActionType(str, Enum):
-    """Governance action types recognised by the canvas-to-Panel bridge."""
-
-    FRONTMATTER_UPDATE = "frontmatter_update"
-    MATURITY_TRANSITION = "maturity_transition"
-    NOTE_LIFECYCLE = "note_lifecycle"
-    CROSS_NOTE = "cross_note"
+#
+# ``GovernanceActionType`` is defined in the cognition layer
+# (``app.components.llm.intent_classifier``) and re-exported here for existing
+# importers (#2853): the intent classifier must name the action type it maps
+# a governance-bearing intent to, and a cognition-layer module cannot import
+# upward into this (interaction-layer) module. This module remains the
+# authoritative home for ``GovernanceRouter`` and ``PendingAction``.
 
 
 @dataclass

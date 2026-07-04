@@ -21,8 +21,8 @@ from pathlib import Path
 
 import pytest
 
-from app.chat.governance_router import GovernanceActionType
-from app.chat.intent_classifier import (
+from app.components.llm.intent_classifier import (
+    GovernanceActionType,
     IntentClass,
     IntentClassification,
     IntentClassifierCognition,
@@ -195,7 +195,7 @@ def test_classifier_is_pure_no_writes(tmp_path: Path) -> None:
 
     # Structurally pure: the module imports no writer / Panel-pipeline symbol
     # into its namespace (checked on bound names, not docstring prose).
-    import app.chat.intent_classifier as mod
+    import app.components.llm.intent_classifier as mod
 
     for forbidden in ("CanvasWriter", "GovernanceRouter", "write_note_from_absolute"):
         assert forbidden not in vars(mod), f"{forbidden} must not be imported"

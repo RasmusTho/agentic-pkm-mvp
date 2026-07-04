@@ -29,12 +29,12 @@ from app.text.helpers import content_hash as _content_hash, split_frontmatter as
 from app.write_guard import WritesBlockedError
 from app.chat.coauthoring_cognition import CoAuthoringCognition, CoAuthoringUnavailableError
 from app.chat.governance_router import GovernanceActionType, GovernanceRouter
-from app.chat.intent_classifier import (
+from app.components.llm.constrained import CompletionFn
+from app.components.llm.intent_classifier import (
     IntentClass,
     IntentClassification,
     IntentClassifierCognition,
 )
-from app.components.llm.constrained import CompletionFn
 from app.chat.session_log import SessionLog, SessionLogWriter
 from app.api.routes.vault_resolution import (
     active_vault_root_or_selection_required,

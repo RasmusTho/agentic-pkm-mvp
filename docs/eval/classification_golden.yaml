@@ -15,11 +15,11 @@
 #   context.surface       canvas (the classifier runs on the canvas co-authoring surface)
 #   context.note_state    draft-open | seedling-open | evergreen-open | none
 #   expected_intent       co_authoring | governance_bearing | exploratory | unknown
-#                         (enum values from app/chat/intent_classifier.py::IntentClass;
+#                         (enum values from app/components/llm/intent_classifier.py::IntentClass;
 #                         `unknown` is the explicit safe-fail class added by KERNEL-07)
 #   expected_action_type  null unless expected_intent is governance_bearing; then one of
 #                         frontmatter_update | maturity_transition | note_lifecycle | cross_note
-#                         (app/chat/governance_router.py::GovernanceActionType)
+#                         (app/components/llm/intent_classifier.py::GovernanceActionType)
 #   acceptable            intent classes OTHER than expected_intent that the scorer
 #                         treats as a pass (read-side tolerance only)
 #

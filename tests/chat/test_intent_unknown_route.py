@@ -29,7 +29,7 @@ from fastapi.testclient import TestClient
 import app.api.routes.canvas as canvas_module
 import app.components.llm.constrained as constrained_module
 from app.api.app import app
-from app.chat.intent_classifier import (
+from app.components.llm.intent_classifier import (
     INTENT_CLASSIFICATION_SCHEMA_REF,
     IntentClass,
     IntentClassifierCognition,
@@ -120,7 +120,7 @@ def test_constrained_completion_validates() -> None:
         )
 
     # Regex extraction is gone from the classifier control path.
-    import app.chat.intent_classifier as classifier_module
+    import app.components.llm.intent_classifier as classifier_module
 
     bound = vars(classifier_module)
     assert "re" not in bound, "regex module must not be bound on the control path"
@@ -193,7 +193,7 @@ def test_apply_path_requires_validated_co_authoring(monkeypatch, tmp_path: Path)
     match, not a positional else-branch. An unvalidated classification that
     claims CO_AUTHORING (classified=False) must fail loud (500) and never
     reach body mutation."""
-    from app.chat.intent_classifier import IntentClassification
+    from app.components.llm.intent_classifier import IntentClassification
 
     note = tmp_path / "note.md"
     original = "---\nuuid: note-uuid-guard\n---\n\n# Hello\n\nOriginal body.\n"

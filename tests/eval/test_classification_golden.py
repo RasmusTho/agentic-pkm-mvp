@@ -3,7 +3,7 @@
 Verifies the `classification_case.v1` bilingual golden set
 (`docs/eval/classification_golden.yaml`, authored under RESEARCH-06/#2784)
 and the deterministic scoring path that gates the governance-critical
-classifier (`app/chat/intent_classifier.py`):
+classifier (`app/components/llm/intent_classifier.py`):
 
 - dataset shape/size and the invariants that protect the hard gate;
 - scorecard slice with per-class precision/recall + confusion matrix;
@@ -25,7 +25,7 @@ import os
 
 import pytest
 
-from app.chat.intent_classifier import IntentClass, IntentClassifierCognition
+from app.components.llm.intent_classifier import IntentClass, IntentClassifierCognition
 from app.eval import run as eval_run
 from app.eval.classification import (
     ACTION_CAPABLE_CLASSES,
