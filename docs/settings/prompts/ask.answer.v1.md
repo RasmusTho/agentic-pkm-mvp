@@ -29,3 +29,16 @@ Notes (current runtime — this file is descriptive; nothing loads its System/Us
 - Canonical prompt: `AskSettings.system_prompt`, defaulting to `DEFAULT_ASK_SYSTEM_PROMPT` and personalised by `build_ask_system_prompt(owner_name)` (`app/settings/models.py`). When `instance.vault.owner_name` is set, the first line becomes "You are {owner_name}'s personal PKM assistant ..." and the vault-preference line "... ({owner_name}'s own notes) ..."; the guidance is otherwise identical. The System block above mirrors the generic (owner-unset) default verbatim — change one and you change the other in the same PR.
 - Answer path: `app/agents/ask/utils.py::llm_answer` → `app/reasoning/provider.py::run_reasoning(ASK_ANSWER)`. The user message is assembled in code, not rendered from this template: it emits `Question: <question>`, then a `Sources:` block only when context is non-empty. `{{context}}` is the source text built by `build_ask_context`, not a raw schema field.
 - Output is PROSE, not JSON. The model returns a plain-text answer; the runtime wraps it as `result={"answer": "<prose>"}` and the API returns it as `AskResponse.answer` (a string), with `sources` built separately. There is intentionally no `outputs_schema`: unlike `classifier.v1`, the ASK answer is never a model-emitted JSON object validated against a schema. `standards: [json_schema]` binds the INPUT contract (`inputs_schema`) only.
+
+Output schema version:
+- This prompt (version 1) produces **prose, pinned to no JSON output schema by
+  design** — the output contract is the plain-text `AskResponse.answer` string
+  described in the Notes above, and there is deliberately no `outputs_schema`
+  to version. Invariant I-C3 (prompt version ↔ schema version bound) therefore
+  binds `ask.answer.v1` to "prose / no output schema": introducing a
+  model-emitted JSON output for ASK requires a new prompt contract
+  (`ask.answer.v2` + a pinned `outputs_schema`), never a silent reinterpretation
+  of v1.
+- Any model or prompt-version change to this Synthesizer prompt (including
+  `DEFAULT_ASK_SYSTEM_PROMPT` edits) requires a baseline-vs-candidate scorecard
+  compare artifact on the PR — see `docs/eval.md :: Scorecard compare`.

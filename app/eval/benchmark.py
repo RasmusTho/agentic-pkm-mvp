@@ -53,6 +53,38 @@ class BaselineComparison(BaseModel):
     threshold: float
 
 
+# ── Delta math ──────────────────────────────────────────────────────────
+
+
+def compute_metric_delta(
+    baseline_value: float,
+    current_value: float,
+    *,
+    threshold: float,
+    higher_is_better: bool = True,
+) -> tuple[float, float, bool]:
+    """Shared delta/regression math for baseline-vs-current metric pairs.
+
+    Returns ``(delta, delta_pct, regression)``. A metric is a regression when
+    it moves in the *bad* direction by more than *threshold* (a fraction,
+    e.g. ``0.05`` = 5 %). Used by :meth:`BenchmarkSuite.compare` and the
+    scorecard compare seam (``app.eval.compare``).
+    """
+    delta = current_value - baseline_value
+    if baseline_value != 0:
+        delta_pct = delta / baseline_value
+    else:
+        # Zero baseline: use directional sign so regressions are not
+        # silently masked (e.g. 0 → positive on a lower-is-better metric
+        # is bad).
+        delta_pct = float("inf") if delta > 0 else (float("-inf") if delta < 0 else 0.0)
+    if higher_is_better:
+        regression = delta_pct < -threshold
+    else:
+        regression = delta_pct > threshold
+    return delta, delta_pct, regression
+
+
 # ── Suite ───────────────────────────────────────────────────────────────
 
 
@@ -156,19 +188,13 @@ class BenchmarkSuite:
                 if bl_entry is None:
                     continue
                 bl_value = bl_entry["value"]
-                delta = m.value - bl_value
-                if bl_value != 0:
-                    delta_pct = delta / bl_value
-                else:
-                    # Zero baseline: use directional sign so regressions
-                    # are not silently masked (e.g. 0 → positive on a
-                    # lower-is-better metric is bad).
-                    delta_pct = float("inf") if delta > 0 else (float("-inf") if delta < 0 else 0.0)
                 # Regression: metric moved in the *bad* direction beyond threshold.
-                if m.higher_is_better:
-                    regression = delta_pct < -threshold
-                else:
-                    regression = delta_pct > threshold
+                delta, delta_pct, regression = compute_metric_delta(
+                    bl_value,
+                    m.value,
+                    threshold=threshold,
+                    higher_is_better=m.higher_is_better,
+                )
                 comparisons.append(
                     BaselineComparison(
                         scenario=r.scenario,
@@ -246,4 +272,5 @@ __all__ = [
     "BenchmarkResult",
     "BaselineComparison",
     "BenchmarkSuite",
+    "compute_metric_delta",
 ]

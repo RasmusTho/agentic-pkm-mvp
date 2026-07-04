@@ -236,6 +236,75 @@ re-measuring the golden set — never to make a regression pass.
 }
 ```
 
+### Scorecard compare (`python -m app.eval.run compare`)
+
+KERNEL-14 (#2776) adds a deterministic baseline-vs-candidate compare seam over
+two already-produced `eval_scorecard.v1` files:
+
+```bash
+python -m app.eval.run compare \
+  --baseline tests/eval/fixtures/scorecard_baseline.json \
+  --candidate tests/eval/fixtures/scorecard_candidate.json \
+  [--tolerance 0.05] [--output runtime/eval/compare.json]
+```
+
+It operates purely on the two scorecard files — no golden-set re-run, no live
+LLM, no timestamps/RNG: the same scorecard pair always produces byte-identical
+output (`tests/eval/test_scorecard_compare.py`). Implementation:
+`app/eval/compare.py`, reusing `app/eval/benchmark.py`'s delta/regression math
+(`compute_metric_delta`, same default 5 % relative tolerance as
+`BenchmarkSuite.compare`).
+
+What it reports — per-slice deltas (baseline → candidate, delta, delta %):
+
+- **aggregate** precision@k / ndcg@k;
+- **per-language** (`by_language`: `en`, `sv`);
+- **per-route-intent** (`by_slice`: `exact_lexical`, `hybrid_semantic`,
+  `recall_into_ask`, `low_trust_citation`);
+- **memory-recall** slice;
+- **classification** read-side metrics (macro precision/recall, pass rate,
+  answer rate, unknown safe-fail rate), **per-class** precision/recall
+  (`classification.per_class`, keyed like `by_language`/`by_slice`), plus the
+  KERNEL-13 **confusion slice**: hard-gate state on both sides, candidate
+  mutation-side confusions, and the non-zero confusion-matrix cell deltas.
+
+Every numeric leaf the compare touches — including confusion-matrix cells and
+`failures` entries — is checked by a single spec-driven validation walker on
+load; the comparison and the renderer consume only the validated view.
+
+Verdict (`regression` / `improved` / `neutral`), printed as `VERDICT: ...` and
+mirrored in the `--output` JSON artifact (`eval_scorecard_compare.v1`):
+
+- `regression` (exit code 1) when any of: the candidate trips the KERNEL-13
+  mutation-side hard gate (blocking, never tolerance-relative); the candidate
+  scorecard failed its own configured floors (`regression: true` — the floors
+  come from `config/eval_thresholds.yaml` at scorecard build time, which is how
+  compare consumes them); any compared metric worsened by more than the
+  relative tolerance; or any per-language / per-route-intent / per-class slice
+  present in the baseline is **missing** in the candidate (a disappeared slice
+  is the strongest possible regression — the comparison surface must never
+  silently shrink; slices only in the candidate are reported but non-blocking).
+- `improved` (exit 0) when no regression and at least one metric improved
+  beyond the tolerance.
+- `neutral` (exit 0) otherwise.
+- Malformed input (missing sections or keys, non-numeric or NaN/±inf values
+  anywhere in the compared surface, malformed confusion/failure entries, wrong
+  `schema_version`) is exit code **2** with an `error:` message naming the
+  offending path — never conflated with a regression verdict.
+
+**Compare artifact required for Router/Synthesizer changes.** Any PR that
+changes the **Router** (intent classifier — `app/chat/intent_classifier.py`
+model, or the `classifier.v1` prompt version/contract) or the **Synthesizer**
+(ASK answer path — ASK model, or the `ask.answer.v1` prompt version/contract,
+i.e. `DEFAULT_ASK_SYSTEM_PROMPT`) must attach a compare artifact to the PR:
+run the scorecard on `main` (baseline), re-run it on the candidate branch,
+run `python -m app.eval.run compare --baseline ... --candidate ...
+--output ...`, and include the output (or the printed summary) in the PR body
+or as an attached file. A `regression` verdict blocks the change unless the
+regression is explicitly justified and accepted in the PR. This is the
+frozen-baseline evidence rail for model/prompt swaps (audit §5.3, CW-7);
+auto-attaching via CI/skill wiring is deliberately out of scope here.
+
 ### Makefile target
 
 `make eval` runs `python -m app.eval.run` (this was previously stale, pointing
