@@ -801,8 +801,16 @@ class PullSyncAdapter:
                     continue
 
                 task_labels = open_issue_labels.get(task.issue_number)
-                if task_labels is None and task.status == "blocked" and not open_issues_available:
-                    # Keep blocked tasks stable when open-issue snapshot is unavailable.
+                if (
+                    task_labels is None
+                    and task.status in ("blocked", "ready")
+                    and not open_issues_available
+                ):
+                    # Keep blocked/ready tasks stable when the open-issue snapshot
+                    # is unavailable: without it we cannot distinguish "issue
+                    # closed" (completed is correct) from "issue open but
+                    # agent:ready label removed" (should stay/demote, not
+                    # complete). See #2760.
                     continue
                 if task_labels is None:
                     next_status = "completed"
