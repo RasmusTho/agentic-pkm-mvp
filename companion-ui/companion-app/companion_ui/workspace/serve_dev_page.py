@@ -2032,12 +2032,22 @@ def _refused_write_draft_restore_script() -> str:
       } else if (draft.kind === 'body_edit') {
         var container = document.getElementById('body-edit-codemirror');
         var bodyPath = container && container.getAttribute('data-note-path');
-        if (container && window._cmView && (!draft.note_path || draft.note_path === bodyPath)) {
-          window._cmView.dispatch({
-            changes: {from: 0, to: window._cmView.state.doc.length, insert: draft.text}
-          });
-          container.setAttribute('data-refused-write-draft-restored', 'true');
-          restored = true;
+        if (container && (!draft.note_path || draft.note_path === bodyPath)) {
+          if (window._cmView) {
+            window._cmView.dispatch({
+              changes: {from: 0, to: window._cmView.state.doc.length, insert: draft.text}
+            });
+            container.setAttribute('data-refused-write-draft-restored', 'true');
+            restored = true;
+          } else if (window._cmFallbackTextarea) {
+            // Offline degrade: the editor bundle failed to load and the body-edit
+            // panel fell back to a plain textarea; restore the refused-write draft
+            // into it so a pending draft survives offline too (see the editor
+            // script's catch block and bodyEditor.submit fallback path).
+            window._cmFallbackTextarea.value = draft.text;
+            container.setAttribute('data-refused-write-draft-restored', 'true');
+            restored = true;
+          }
         }
       } else if (draft.kind === 'capture') {
         var captureInput = document.getElementById('capture-input');

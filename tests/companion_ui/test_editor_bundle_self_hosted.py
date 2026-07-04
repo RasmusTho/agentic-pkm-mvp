@@ -163,3 +163,13 @@ def test_body_edit_degrades_to_textarea_when_bundle_unreachable() -> None:
         assert "body-edit-fallback-textarea" in html
         # bodyEditor.submit/reset read the fallback element when CodeMirror is absent.
         assert "_cmFallbackTextarea" in html
+
+
+def test_refused_write_draft_restores_into_offline_fallback() -> None:
+    """A pending body_edit refused-write draft is restored into the plain-textarea
+    fallback when the editor bundle failed to load — not only into CodeMirror — so
+    the draft survives the offline path this change introduced."""
+    for html in (_dev_page(), _prod_page()):
+        # The body_edit restore branch must handle the fallback textarea, else a
+        # stashed draft is silently not surfaced when the bundle is unreachable.
+        assert "window._cmFallbackTextarea.value = draft.text" in html
