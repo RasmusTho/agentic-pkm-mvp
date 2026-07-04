@@ -262,6 +262,70 @@ def test_save_object_content_change_emits_new_event(monkeypatch: pytest.MonkeyPa
     assert all("content" not in str(r["payload"]) for r in conn.rows.values())
 
 
+def test_ingest_route_content_only_key_accepted_limitation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ``/ingest`` API route keys on content only — accepted limitation (#2902).
+
+    The route embeds ``content`` in its payload, so a content CHANGE already
+    emits a distinct event (it never had ``save_object``'s pre-#2863
+    ``{uuid, kind}`` content-invariant over-dedup). It passes no ``observation=``
+    marker because an API push is not a file-observation source — there is no
+    natural per-observation mtime — so the content fingerprint IS the emission
+    identity. Consequences pinned here:
+
+    - a byte-identical crash-retry of the same POST dedups (KERNEL-02 intent);
+    - a content change emits a genuinely new event;
+    - a byte-identical A→B→A content revert ALSO dedups (the lesser revert
+      hole): the revert re-derives the original A key and ``ON CONFLICT (id) DO
+      NOTHING`` swallows it while any durable write still lands.
+
+    Decision #2902: accepted, NOT fixed. A caller-supplied idempotency/observation
+    token would let a naive client (per-request UUID) defeat crash-retry dedup
+    entirely — reintroducing the at-least-once-multiplies-effects bug KERNEL-02
+    exists to kill, a worse failure than the rare revert dedup. Residual revert
+    divergence is reconcilable via the incremental reconcile / doctor staleness
+    path (#2880). This drives the real route + ``normalize_artifact_state_axes``
+    path. See ``docs/EVENTS.md :: Event Idempotency (normative)`` and
+    ``docs/RUNTIME_CORRECTNESS_KERNEL/MANDATORY_OUTBOX_IDEMPOTENCY.md ::
+    Known deferrals (tracked)``.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.api.app import app
+
+    conn = FakeOutboxConn()
+
+    def _routed(payload, topic, trace_id=None, **kwargs):  # type: ignore[no-untyped-def]
+        # The route must NOT supply an observation marker (accepted limitation):
+        # content is the only emission identity on the API push path.
+        assert kwargs.get("observation") is None
+        kwargs.pop("conn", None)
+        return insert_object_and_outbox(payload, topic, trace_id, conn=conn, **kwargs)
+
+    monkeypatch.setattr("app.api.routes.ingest.insert_object_and_outbox", _routed)
+    client = TestClient(app)
+
+    def _post(content: str):
+        return client.post(
+            "/ingest",
+            json={"uuid": "ingest-1", "title": "T", "review_state": "inbox", "content": content},
+        )
+
+    assert _post("A").status_code == 200
+    assert _post("A").status_code == 200  # crash-retry of the same POST: dedups
+    assert len(conn.rows) == 1
+
+    assert _post("B").status_code == 200  # content change: genuinely new event
+    assert len(conn.rows) == 2
+
+    # A→B→A byte-identical revert re-derives the first A key and dedups. Accepted:
+    # distinct content — not recurrence — is the signal that emits on this path.
+    assert _post("A").status_code == 200
+    assert len(conn.rows) == 2
+
+    # No observation marker is threaded, so nothing fingerprint-only leaks.
+    assert all("__observation__" not in str(r["payload"]) for r in conn.rows.values())
+
+
 def test_derive_idempotency_key_is_deterministic_uuid() -> None:
     a = derive_idempotency_key("topic.x", "source-1", "fp-1")
     b = derive_idempotency_key("topic.x", "source-1", "fp-1")

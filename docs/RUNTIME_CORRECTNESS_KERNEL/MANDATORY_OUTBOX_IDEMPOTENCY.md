@@ -110,8 +110,19 @@ clear grep gate). Escalate only if a producer's natural fingerprint is genuinely
   inherent to content-only keying on the API path (no per-observation file mtime) and is accepted —
   the same posture as the `/ingest` route below.
 - The `/ingest` API route embeds `content` in its payload, so a content change already emits a
-  distinct event; it still lacks an observation marker, so only the A→B→A revert dedups (the lesser
-  revert hole, not save_object's content-invariant over-dedup). Deferred (own follow-up).
+  distinct event; it carries no observation marker, so a byte-identical A→B→A revert re-derives the
+  original A key and dedups (the lesser revert hole — it never had save_object's content-invariant
+  over-dedup, which required the `{uuid, kind}`-only payload). **Accepted limitation (decided
+  #2902), not deferred:** `/ingest` is an API push, not a file-observation source, so there is no
+  natural per-observation marker (no file stat mtime) — the content fingerprint IS the emission
+  identity. This is the same posture already accepted for `object_store.save_object` (#2863). A
+  caller-supplied idempotency/observation token was rejected: on an external write API a naive
+  client (per-request UUID) would defeat crash-retry dedup entirely, reintroducing the
+  at-least-once-multiplies-effects bug KERNEL-02 exists to kill — a worse failure than the rare
+  revert dedup. Residual revert divergence is reconcilable via the incremental reconcile / doctor
+  staleness path (#2880), the systemic backstop for API-path projection drift, rather than
+  per-producer caller tokens. Pinned by
+  `tests/services/test_outbox_idempotency.py::test_ingest_route_content_only_key_accepted_limitation`.
 - `upsert_object_from_note` / `delete_note` commit the object/file_state transaction before the
   outbox enqueue (crash between = event lost regardless of key design) — KERNEL-01 atomic-pattern
   extension: #2864.
