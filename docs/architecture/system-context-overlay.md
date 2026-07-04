@@ -144,9 +144,9 @@ it. See also the overlay note in `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` itself
 **Principle (audit §9):** development machinery and operational infrastructure never define product
 architecture. The Builder/Product split already exists operationally
 (`docs/architecture/SBS_OPERATING_MODEL.md` §3); this overlay states it as the missing design
-principle rather than adding a new principles document. The companion "System-of-Systems Thinking"
+principle rather than adding a new principles document. The companion "Volatility Isolation"
 principle in `docs/DESIGN_PRINCIPLES.md` §9 describes volatility isolation, not SoS in the INCOSE
-sense (audit §3); rewording that section is reshape-routed to SBI-8 and is out of scope here.
+sense (audit §3); it was reworded from "System-of-Systems Thinking" per ADR-0042 / #2856.
 
 ## Functional allocation
 
@@ -167,7 +167,7 @@ the owner's human-first-naming stance and create a rot-prone parallel registry.
   overlay note pointing back here
 - `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` — target 14-boundary SBS
 - `docs/GLOSSARY.md` — `System of Systems` entry
-- `docs/DESIGN_PRINCIPLES.md` — §9 "System-of-Systems Thinking" (unchanged by this task)
+- `docs/DESIGN_PRINCIPLES.md` — §9 "Volatility Isolation" (reworded per ADR-0042 / #2856; not by this task)
 - `docs/HUMAN_FLOW_TO_RUNTIME_MAP.md` — functional-allocation view
 - `docs/foundation/00-yggdrasil-doctrine.md`, `docs/PROJECT_KERNEL.md`,
   `docs/COGNITIVE_PROSTHESIS_CHARTER.md` — SoI boundary sources

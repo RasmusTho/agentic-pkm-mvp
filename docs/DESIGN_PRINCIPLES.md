@@ -112,9 +112,9 @@ It exists to keep high-level design work systematic:
 - Generality should come from clean seams and reusable contracts, not from collapsing distinct concepts into one runtime construct.
 - When a distinction matters semantically, the design should preserve it even if one implementation temporarily compresses it.
 
-### 9. System-of-Systems Thinking
+### 9. Volatility Isolation
 
-- Yggdrasil should be treated as a system-of-systems, not as one undifferentiated agent runtime.
+- Yggdrasil should be treated as a modular, differentiated decomposition, not as one undifferentiated agent runtime.
 - Interaction, cognition, execution, memory, and governance must be able to evolve at different speeds.
 - Cross-layer coupling should be deliberate, minimal, and documented.
 
