@@ -22,12 +22,12 @@ Five corrections, most systemic first (blast radius × silence of failure):
    systems, or external systems. The same Ollama is an "optional external provider"
    (`docs/ARCHITECTURE.md:109`) and a first-party compose service (`docker-compose.yaml:16-31`);
    the same Postgres is extension fabric inside the system
-   (`docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md:58`) and an "external durable store"
+   (`docs/MODULAR_ARCHITECTURE.md:58`) and an "external durable store"
    (`docs/INTEGRATION_FABRIC_CONTRACT.md:41`). One overlay (§2, backlog SBI-1/SBI-2) resolves this
    without touching the authority architecture.
 2. **"System of Systems" is a category error for the internal decomposition — and the repo's own
    text proves it.** The spine says its subsystems are "not separate deployments, services, or
-   processes" (`docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md:26`); no SoS taxon (directed, acknowledged,
+   processes" (`docs/MODULAR_ARCHITECTURE.md:26`); no SoS taxon (directed, acknowledged,
    collaborative, virtual) admits constituents with no independent operability. The intent behind
    the term — modularity with replaceability (`docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md:97-101`,
    ADR-0015) — is correct and preserved; only the taxonomy is wrong. One defensible SoS reading
@@ -102,7 +102,7 @@ infrastructure-classification contradiction found:
   (`docs/ARCHITECTURE.md:109`) *and* a first-party compose service with healthcheck and volume
   (`docker-compose.yaml:16-31`).
 - Postgres/pgvector: listed under extension fabric as "runtime persistence/index implementations"
-  (`docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md:58`) *and* as an "external durable store" integration
+  (`docs/MODULAR_ARCHITECTURE.md:58`) *and* as an "external durable store" integration
   class (`docs/INTEGRATION_FABRIC_CONTRACT.md:41`) *and* an unlabeled service
   (`docs/INFRASTRUCTURE.md:17`).
 - Colima, Tailscale, the host gateway processes: described operationally
@@ -156,7 +156,7 @@ server/registry topology question is likewise deferred there.
 **Finding.** Thirteen docs use the term (full inventory verified); the flagship usage frames the
 internal 8-subsystem decomposition as an SoS while stating those subsystems are "conceptual
 decompositions of the same single local-first runtime… not separate deployments, services, or
-processes" (`docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md:26`). Every recognized SoS taxon requires
+processes" (`docs/MODULAR_ARCHITECTURE.md:26`). Every recognized SoS taxon requires
 constituents that retain independent operability and usefulness; this fails all of them, including
 directed SoS. The target SBS repeats the term for a hierarchical decomposition
 (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:272`, `:2099`) — a hierarchical system/subsystem breakdown is
@@ -177,7 +177,7 @@ boundary *choice*, not an error).
   "modular, authority-separated single system"; the intent (ADR-0015's modularity commitment) is
   preserved, not overruled; the one INCOSE-defensible reading is the operator's assembled
   environment.
-- *Reshape (routed, not enacted):* renaming `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` and rewording
+- *Reshape (routed, not enacted):* renaming `docs/MODULAR_ARCHITECTURE.md` and rewording
   `docs/DESIGN_PRINCIPLES.md:115-119` (§9 "System-of-Systems Thinking" — which actually describes
   independent evolution speeds, i.e. volatility isolation) are CES/ADR decisions (owner question
   Q2). The audit recommends *against* a near-term rename: thirteen referencing docs and the reading
@@ -187,7 +187,7 @@ boundary *choice*, not an error).
 
 | Candidate | Operational independence | Managerial independence | Verdict |
 | --- | --- | --- | --- |
-| 8 spine subsystems / 14 SBS boundaries | No (`SYSTEM_OF_SYSTEMS_ARCHITECTURE.md:26`) | No | Subsystems, not constituents |
+| 8 spine subsystems / 14 SBS boundaries | No (`MODULAR_ARCHITECTURE.md:26`) | No | Subsystems, not constituents |
 | Builder System | Partial | Same operator | Enabling system (already settled, `SBS_OPERATING_MODEL.md:84`) |
 | SFC replicas (future) | No — one system's nodes, one operator | No | Distributed system, not SoS (ADR-0020 single-node V1) |
 | Obsidian, iCloud | Yes — independent vendors, independently useful | Yes | External systems; *optionally* readable with Yggdrasil as a collaborative SoS at the environment level (`ARCHITECTURE.md:198`) |
@@ -324,7 +324,7 @@ sentence. Renaming would be a high-churn reshape with no information gain.
    (`docs/INTEGRATION_FABRIC_CONTRACT.md:90-96`). One governance gap worth a debt row: the remote
    MCP multiplex seam falls back silently on remote failure and has no admission allowlist
    (`docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md:229-243`, `:235`) — legible-degradation
-   is a kernel constraint (`SYSTEM_OF_SYSTEMS_ARCHITECTURE.md:68`) and silent fallback strains it.
+   is a kernel constraint (`MODULAR_ARCHITECTURE.md:68`) and silent fallback strains it.
 
 ## 7. Integration system
 
@@ -516,7 +516,7 @@ kept so cross-references in review threads stay stable.
   the prosthesis loop) or record "no quantitative NFRs by design at single-user scale"? Both are
   legitimate; today neither is stated. (Consequence of silence: fitness functions have no targets
   to check against, and future contributors re-litigate it.)
-- **Q2 — SoS naming.** Keep `SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` title with the overlay note
+- **Q2 — SoS naming.** Keep `MODULAR_ARCHITECTURE.md` title with the overlay note
   (recommended: zero churn, ambiguity removed), or rename via CES/ADR (13 referencing docs churn)?
 - **Q3 — Dual-role infrastructure stance.** Named here, decided in the companion thread
   (`FABLE5_PROMPT_INFRA_DOMAIN_AND_MCP_TOPOLOGY.md`) — listed so the decision has a visible home.

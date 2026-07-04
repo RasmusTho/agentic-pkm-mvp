@@ -6,7 +6,7 @@ Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-06-04
-Last verified against: docs/ARCHITECTURE.md, docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/SEMANTIC_SYSTEM_ARCHITECTURE.md, docs/SEMANTIC_AUTHORITY_MATRIX.md, docs/SECURITY.md, docs/PRIVACY.md, docs/HUMAN-FLOWS.md, docs/HUMAN_FLOW_TO_RUNTIME_MAP.md, companion-ui/docs/LOCAL_ACCESS_MODEL.md, companion-ui/docs/SEMANTIC_PROJECTION_ALIGNMENT.md, companion-ui/docs/VAULT_MARKDOWN_RENDERER_CONTRACT.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/contracts/TIMEOUT_AND_SLA_CONTRACT.md, docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md, docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md, docs/adr/ADR-0010-builderops-vault-authority-boundary.md
+Last verified against: docs/ARCHITECTURE.md, docs/MODULAR_ARCHITECTURE.md, docs/SEMANTIC_SYSTEM_ARCHITECTURE.md, docs/SEMANTIC_AUTHORITY_MATRIX.md, docs/SECURITY.md, docs/PRIVACY.md, docs/HUMAN-FLOWS.md, docs/HUMAN_FLOW_TO_RUNTIME_MAP.md, companion-ui/docs/LOCAL_ACCESS_MODEL.md, companion-ui/docs/SEMANTIC_PROJECTION_ALIGNMENT.md, companion-ui/docs/VAULT_MARKDOWN_RENDERER_CONTRACT.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/contracts/TIMEOUT_AND_SLA_CONTRACT.md, docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md, docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md, docs/adr/ADR-0010-builderops-vault-authority-boundary.md
 
 # Security Architecture
 

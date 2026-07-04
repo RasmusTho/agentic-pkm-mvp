@@ -6,7 +6,7 @@ Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-05-29
-Last verified against: docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/CONTEXTUALIZATION_LAYER/HUMAN_AND_AGENTIC_ARTIFACTS.md, docs/CONCEPTS/LAYERING_MODEL.md, docs/CONCEPTS/ONTOLOGY_VOCABULARY.md, docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md, docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md, docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/ARCHITECTURE.md, docs/EVENTS.md, docs/FRONTMATTER.md, epic #1363, issue #1364.
+Last verified against: docs/MODULAR_ARCHITECTURE.md, docs/CONTEXTUALIZATION_LAYER/HUMAN_AND_AGENTIC_ARTIFACTS.md, docs/CONCEPTS/LAYERING_MODEL.md, docs/CONCEPTS/ONTOLOGY_VOCABULARY.md, docs/CONCEPTS/TRUST_SEMANTICS_CONTRACT.md, docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md, docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/ARCHITECTURE.md, docs/EVENTS.md, docs/FRONTMATTER.md, epic #1363, issue #1364.
 
 # Semantic System Architecture — Map
 
@@ -16,7 +16,7 @@ It is a docs-only integration artifact. It does not introduce new runtime behavi
 
 ## Relationship to the system-of-systems spine
 
-`docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` decomposes Yggdrasil **structurally** into eight runtime subsystems (Human Surface, Knowledge & Artifact, Runtime Projection, Capability, Agent/Orchestration, Governance/Authority, Integration Fabric, Observability/Fitness).
+`docs/MODULAR_ARCHITECTURE.md` decomposes Yggdrasil **structurally** into eight runtime subsystems (Human Surface, Knowledge & Artifact, Runtime Projection, Capability, Agent/Orchestration, Governance/Authority, Integration Fabric, Observability/Fitness).
 
 This document decomposes Yggdrasil **semantically** into seven semantic layers (ontology, artifact model, representation, governance/authority, runtime, machine mirror, UI projection). The two views are complementary, not competing:
 
@@ -189,7 +189,7 @@ This map is the parent for the rest of epic #1363. Each sibling contract owns it
 - New runtime behavior, schema, events, or on-disk layout — none introduced here.
 - The detailed per-layer contracts — owned by the docs named per layer above.
 - Current shipped-vs-planned runtime status — owned by `docs/ARCHITECTURE.md` and `docs/STATUS.md`.
-- The structural subsystem decomposition — owned by `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`.
+- The structural subsystem decomposition — owned by `docs/MODULAR_ARCHITECTURE.md`.
 
 ## Verification path
 

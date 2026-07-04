@@ -6,7 +6,7 @@ Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-06-21
-Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/ROADMAP.md
+Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/MODULAR_ARCHITECTURE.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/ROADMAP.md
 
 # SBS Operationalization Plan
 
@@ -43,7 +43,7 @@ All target boundaries are declared now as charters, contracts, dependency rules,
 |---|---|---|
 | Target SBS decomposition | `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` | Owns long-horizon subsystem boundaries. |
 | Current runtime architecture | `docs/ARCHITECTURE.md` | Owns shipped/current behavior. |
-| Current system-of-systems spine | `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` | Owns current SoS framing. |
+| Current system-of-systems spine | `docs/MODULAR_ARCHITECTURE.md` | Owns current SoS framing. |
 | SBS operationalization | `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` | Owns transition from strategy to operational reality. |
 | SBS operating model (process) | `docs/architecture/SBS_OPERATING_MODEL.md` | Owns how SBS work is classified, readied, done, reviewed, and recorded; review-gate fallback policy; source-of-truth verification matrix. |
 | SBS roadmap (initiative phases) | `docs/architecture/SBS_ROADMAP.md` | Owns phase intent and status (Phase 0 architecture residency → Phase 5 opportunistic physical separation). |
@@ -105,7 +105,7 @@ All target boundaries are declared now as charters, contracts, dependency rules,
 - Transition debt: `docs/architecture/SBS_TRANSITION_DEBT.md`
 - Fitness rules: `docs/architecture/SBS_FITNESS_RULES.md`
 - Target SBS: `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`
-- Current SoS bridge: `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`
+- Current SoS bridge: `docs/MODULAR_ARCHITECTURE.md`
 
 ## Definition Of Done
 

@@ -1,13 +1,13 @@
 State: SoT v5.5 Reality-MVP baseline locked (v5.6 delivered, v6.0 seams shipped at capability-seam level); this document is target-state framing for how new emergent features compose on top of the kernel and extension fabric, and does not claim every emergent behavior described here is implemented today.
 Anchored to: `docs/COGNITIVE_PROSTHESIS_CHARTER.md` — the composition spine by which Cognitive Expansion surfaces activate onto the governed control plane in the Maintenance / Expansion model (§2.1). The charter wins on purpose framing; this model owns how new behavior composes without bypassing governance.
 Doc role: Core SoT
-Authority: Composition spine for emergent features. Owns the rule that new behavior in Yggdrasil emerges from a standard composition pattern (trigger + context bundle + capability composition + policy evaluation + proposal/action + receipt + feedback signal) over the existing kernel and extension fabric, and owns the rule that emergent features must remain observable and must not bypass governance, write guards, provenance, or authority boundaries. Sits below `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` (kernel and extension fabric), `docs/INTEGRATION_FABRIC_CONTRACT.md` (integration classes), `docs/CAPABILITY_CONTRACT_MODEL.md` (capability shape), and `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md` and `docs/CONTEXT_BUNDLES/` (context bundle semantic contract and implementation-planning surface), and `docs/AGENT_MEMORY/` (agent memory contracts). Does not replace `docs/ARCHITECTURE.md` (current runtime baseline) or `docs/HUMAN-FLOWS.md` (user-facing behavior contract); it explains how their concerns are composed when new emergent behavior is added.
+Authority: Composition spine for emergent features. Owns the rule that new behavior in Yggdrasil emerges from a standard composition pattern (trigger + context bundle + capability composition + policy evaluation + proposal/action + receipt + feedback signal) over the existing kernel and extension fabric, and owns the rule that emergent features must remain observable and must not bypass governance, write guards, provenance, or authority boundaries. Sits below `docs/MODULAR_ARCHITECTURE.md` (kernel and extension fabric), `docs/INTEGRATION_FABRIC_CONTRACT.md` (integration classes), `docs/CAPABILITY_CONTRACT_MODEL.md` (capability shape), and `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md` and `docs/CONTEXT_BUNDLES/` (context bundle semantic contract and implementation-planning surface), and `docs/AGENT_MEMORY/` (agent memory contracts). Does not replace `docs/ARCHITECTURE.md` (current runtime baseline) or `docs/HUMAN-FLOWS.md` (user-facing behavior contract); it explains how their concerns are composed when new emergent behavior is added.
 Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-05-14
-Last verified against: docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/INTEGRATION_FABRIC_CONTRACT.md, docs/CAPABILITY_CONTRACT_MODEL.md, docs/ARCHITECTURE.md, docs/HUMAN-FLOWS.md, docs/AGENT_MEMORY/README.md, docs/CONTEXT_BUNDLES/README.md, docs/FINDING_AND_REORIENTING/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/DOCS_INDEX.md, parent initiative #877, prerequisite phase issues #878, #879, #880, governing slice issue #881.
+Last verified against: docs/MODULAR_ARCHITECTURE.md, docs/INTEGRATION_FABRIC_CONTRACT.md, docs/CAPABILITY_CONTRACT_MODEL.md, docs/ARCHITECTURE.md, docs/HUMAN-FLOWS.md, docs/AGENT_MEMORY/README.md, docs/CONTEXT_BUNDLES/README.md, docs/FINDING_AND_REORIENTING/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/DOCS_INDEX.md, parent initiative #877, prerequisite phase issues #878, #879, #880, governing slice issue #881.
 
 # Emergent Features Model
 
@@ -15,14 +15,14 @@ This document defines how new emergent features are added to Yggdrasil without l
 
 It is a docs-only artifact. It does not introduce a runtime composition registry, an orchestration engine, a runtime feedback bus, or new tests. It sits on top of the existing kernel and extension fabric so later implementation planning has a stable place to attach.
 
-If this document conflicts with `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`, `docs/INTEGRATION_FABRIC_CONTRACT.md`, `docs/CAPABILITY_CONTRACT_MODEL.md`, `docs/AGENT_MEMORY/`, or `docs/CONTEXT_BUNDLES/` on their respective concerns, those owner docs win. This document should be updated to reflect the resolved boundary, not the other way around.
+If this document conflicts with `docs/MODULAR_ARCHITECTURE.md`, `docs/INTEGRATION_FABRIC_CONTRACT.md`, `docs/CAPABILITY_CONTRACT_MODEL.md`, `docs/AGENT_MEMORY/`, or `docs/CONTEXT_BUNDLES/` on their respective concerns, those owner docs win. This document should be updated to reflect the resolved boundary, not the other way around.
 
 ## Reading rules
 
 - "Emergent feature" in this document means a user-visible behavior that did not previously exist and that is added by composing existing surfaces, capabilities, policies, events, memory, and receipts — not by carving a new authority path through the kernel.
 - An emergent feature is not the same thing as a new agent. New agents are an extension-fabric mechanism; emergent features are an outcome that may or may not involve a bounded agent.
 - An emergent feature is not the same thing as a new UI affordance. A button, panel, or chat behavior that has no composed contract behind it is ad hoc UI behavior, not an emergent feature.
-- Every emergent feature must respect every kernel constraint in `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` (`Kernel and extension fabric`): human-first authority, vault-first durability, provenance/receipts/write guards, local-first operation, event/outbox compatibility, authority separation between subsystems, and the single-user/single-vault baseline.
+- Every emergent feature must respect every kernel constraint in `docs/MODULAR_ARCHITECTURE.md` (`Kernel and extension fabric`): human-first authority, vault-first durability, provenance/receipts/write guards, local-first operation, event/outbox compatibility, authority separation between subsystems, and the single-user/single-vault baseline.
 - Target-state language in this document is distinct from current runtime claims. Worked examples below describe the composed shape an emergent feature must take when it is added; they do not assert that the example is already shipped.
 
 ## Composition pattern
@@ -51,7 +51,7 @@ Composition direction: the elements are listed in the order they typically appea
 
 ## Governance and observability rules
 
-These rules bind every emergent feature, regardless of which subsystem it composes over. They are restatements and applications of the kernel constraints in `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`; they are listed here so the composition surface is legible without re-reading the spine.
+These rules bind every emergent feature, regardless of which subsystem it composes over. They are restatements and applications of the kernel constraints in `docs/MODULAR_ARCHITECTURE.md`; they are listed here so the composition surface is legible without re-reading the spine.
 
 - **No bypass of governance.** Every emergent feature must pass through policy evaluation before producing an action against the durable surface. Cognition that proposes without checking policy is allowed; execution that writes without policy is not.
 - **No bypass of write guards.** Every action against the durable surface must respect idempotency, optimistic write guards, per-note opt-outs, and the governed APPLY path. Bulk or composed actions do not get a relaxed write-safety contract because they came out of a composed feature.
@@ -182,7 +182,7 @@ Emergent feature composition is a specific shape with a specific contract. It is
 
 ## Source anchors
 
-- `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` :: Kernel and extension fabric; subsystem map; authority separation.
+- `docs/MODULAR_ARCHITECTURE.md` :: Kernel and extension fabric; subsystem map; authority separation.
 - `docs/INTEGRATION_FABRIC_CONTRACT.md` :: Integration classes; contract fields; authority rule for external components.
 - `docs/CAPABILITY_CONTRACT_MODEL.md` :: Capability definition; canonical capabilities; capability contract shape.
 - `docs/AGENT_MEMORY/README.md` :: Agent memory contract and authority guards.

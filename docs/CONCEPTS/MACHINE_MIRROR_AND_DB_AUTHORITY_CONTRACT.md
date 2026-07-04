@@ -18,7 +18,7 @@ It is the Layer 6 detail for `docs/SEMANTIC_SYSTEM_ARCHITECTURE.md` and the mirr
 
 The durable, authoritative set is the human-readable surface; machine mirrors sit beneath it.
 
-- **Vault authority.** Human-readable Markdown (vault notes + system-owned companion notes) is the durable continuity set and the source of meaning. DB/index/cache state must be rebuildable from it (kernel constraint; owner: `SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`).
+- **Vault authority.** Human-readable Markdown (vault notes + system-owned companion notes) is the durable continuity set and the source of meaning. DB/index/cache state must be rebuildable from it (kernel constraint; owner: `MODULAR_ARCHITECTURE.md`).
 - **Frontmatter authority.** Durable artifact fields are defined by `docs/FRONTMATTER.md`. A mirror may *project* frontmatter (e.g. into store columns) but the frontmatter on the human surface is authoritative; the projected copy is not.
 - **Receipt authority.** Receipts are governance-recorded durable records (Layer 4), **not** mirrors. A receipt is not rebuildable from the vault and must not be treated as a regenerable cache (owner: `MIRROR_RECEIPT_DECISION.md`, `RECEIPT_TRACE_ACCOUNTABILITY_CONTRACT.md`).
 - **Runtime authority boundary.** Runtime/session state (Layer 5) is ephemeral and also non-authoritative, but it is distinct from a mirror: a mirror is rebuildable from durable sources, while runtime state is discardable and not reconstructed (boundary owned by #1369).

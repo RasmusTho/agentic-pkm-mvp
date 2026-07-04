@@ -1,16 +1,16 @@
 State: SoT v5.5 Reality-MVP baseline locked (v5.6 delivered, v6.0 seams shipped at capability-seam level); this document is target-state framing for the integration fabric and does not claim every integration class is uniformly implemented today.
 Doc role: Core SoT
-Authority: Contract spine for how external components attach to Yggdrasil. Owns the integration-class taxonomy and the per-class contract fields (allowed role, authority limits, persistence class, provenance requirement, event boundary, health/observability expectation, replacement strategy). Sits below `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` (Integration Fabric subsystem) and above the narrower adapter contracts (`docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md`, `docs/contracts/A2A_CONTRACT_AND_TRACE.md`, `docs/LLM.md`, `docs/EMBEDDINGS.md`, `docs/CONCEPTS/CLOUD_CONNECTORS_DECISION.md`). Does not replace `docs/ARCHITECTURE.md` for current runtime behavior.
+Authority: Contract spine for how external components attach to Yggdrasil. Owns the integration-class taxonomy and the per-class contract fields (allowed role, authority limits, persistence class, provenance requirement, event boundary, health/observability expectation, replacement strategy). Sits below `docs/MODULAR_ARCHITECTURE.md` (Integration Fabric subsystem) and above the narrower adapter contracts (`docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md`, `docs/contracts/A2A_CONTRACT_AND_TRACE.md`, `docs/LLM.md`, `docs/EMBEDDINGS.md`, `docs/CONCEPTS/CLOUD_CONNECTORS_DECISION.md`). Does not replace `docs/ARCHITECTURE.md` for current runtime behavior.
 Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-07-02 (acquisition-source class added via #2794)
-Last verified against: docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/COMPONENTS.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/LLM.md, docs/LLM_ROUTING.md, docs/EMBEDDINGS.md, docs/CONCEPTS/CLOUD_CONNECTORS_DECISION.md, docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/AGENTS.md, parent initiative #877, prerequisite phase issue #878, governing slice issue #879.
+Last verified against: docs/MODULAR_ARCHITECTURE.md, docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/COMPONENTS.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/LLM.md, docs/LLM_ROUTING.md, docs/EMBEDDINGS.md, docs/CONCEPTS/CLOUD_CONNECTORS_DECISION.md, docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/AGENTS.md, parent initiative #877, prerequisite phase issue #878, governing slice issue #879.
 
 # Integration Fabric Contract
 
-This document defines how internal and external components attach to Yggdrasil through the Integration Fabric subsystem named in `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`. It is a docs-only contract: it does not introduce a runtime integration registry, runtime enforcement, or new tests.
+This document defines how internal and external components attach to Yggdrasil through the Integration Fabric subsystem named in `docs/MODULAR_ARCHITECTURE.md`. It is a docs-only contract: it does not introduce a runtime integration registry, runtime enforcement, or new tests.
 
 The contract has three purposes:
 
@@ -22,8 +22,8 @@ This document is target-state framing. Several integration classes already have 
 
 ## Reading rules
 
-- The integration fabric is part of the extension fabric (see `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`). Integration components are expected to be added, replaced, or removed over time without changing the kernel.
-- Every integration class below must respect every kernel constraint in `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` (`Kernel and extension fabric`): human-first authority, vault-first durability, provenance/receipts/write guards, local-first operation, event/outbox compatibility, authority separation, and the single-user/single-vault baseline.
+- The integration fabric is part of the extension fabric (see `docs/MODULAR_ARCHITECTURE.md`). Integration components are expected to be added, replaced, or removed over time without changing the kernel.
+- Every integration class below must respect every kernel constraint in `docs/MODULAR_ARCHITECTURE.md` (`Kernel and extension fabric`): human-first authority, vault-first durability, provenance/receipts/write guards, local-first operation, event/outbox compatibility, authority separation, and the single-user/single-vault baseline.
 - Current behavior for any specific adapter remains owned by its narrower contract doc (MCP/tools, A2A, LLM/embeddings, cloud connectors). This document does not restate those contracts; it gives them a common shape.
 - Target-state language in this document is distinct from current runtime claims. Where an integration class is partially shipped, the per-class entry says so explicitly.
 
@@ -58,7 +58,7 @@ For each integration class (and for each concrete integration within a class), t
 - **Persistence class** — what this integration is allowed to persist, where, and under what durability claim. Answers must distinguish: durable human meaning (vault Markdown — almost never written directly by an integration), system-owned continuity (companion notes — only through governed paths), runtime projection (rebuildable from vault + companion set), and external durability (lives outside Yggdrasil, treated as opaque to the durable surface).
 - **Provenance requirement** — what provenance must accompany any output or side effect from this integration so the result can be traced back through the event envelope, receipts, and governance layer. Includes integration identity, model/version where applicable, and trace correlation.
 - **Event boundary** — how this integration crosses into the rest of Yggdrasil. Side effects that affect runtime state or the durable surface must cross through the event envelope (`app/events/schema.py`, `docs/EVENTS.md`, `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`) or through an explicit typed capability contract. Bespoke side channels are not allowed.
-- **Health / observability expectation** — what the rest of the system must be able to see about this integration: liveness, error class, latency, failure mode, fallback posture, and provenance of fallback. Failures must degrade legibly per `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` (`How kernel and extension fabric compose`).
+- **Health / observability expectation** — what the rest of the system must be able to see about this integration: liveness, error class, latency, failure mode, fallback posture, and provenance of fallback. Failures must degrade legibly per `docs/MODULAR_ARCHITECTURE.md` (`How kernel and extension fabric compose`).
 - **Replacement strategy** — how this integration can be replaced or removed without violating the kernel. Includes: deterministic fallback or local-first alternative where required, contract surface that lets a successor integration attach without rewriting callers, and migration posture for any external durability it owned.
 
 These fields are the integration-fabric contract surface. A new integration adapter is not blocked on a new doc; it is blocked on answering these fields somewhere authoritative (typically the narrower adapter contract doc).
@@ -103,7 +103,7 @@ This is the integration-fabric **contract**, not the integration-fabric **runtim
 - Per-adapter behavior, retry/backoff, timeout, and SLA detail. Those are owned by the narrower contract docs (`docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md`, `docs/contracts/A2A_CONTRACT_AND_TRACE.md`, `docs/contracts/TIMEOUT_AND_SLA_CONTRACT.md`, `docs/LLM.md`, `docs/EMBEDDINGS.md`).
 - The capability contract model itself — defined separately in `docs/CAPABILITY_CONTRACT_MODEL.md`.
 - Current runtime contracts and current-vs-planned status — owned by `docs/ARCHITECTURE.md`.
-- Kernel constraints and the subsystem map — owned by `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`.
+- Kernel constraints and the subsystem map — owned by `docs/MODULAR_ARCHITECTURE.md`.
 
 ## Verification path
 

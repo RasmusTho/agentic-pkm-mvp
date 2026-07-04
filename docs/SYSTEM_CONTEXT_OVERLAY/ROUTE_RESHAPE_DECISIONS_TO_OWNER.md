@@ -13,7 +13,7 @@ can_parallelize_with: []
 
 > **State — DECIDED (owner, 2026-07-03; recorded 2026-07-04, issue #2840).** The owner chose to
 > **act on both** reshape items, so a future pass must **not** re-ask Q2/Q4:
-> - **Q2 (SoS doc naming):** RENAME `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` → recorded in
+> - **Q2 (SoS doc naming):** RENAME `docs/MODULAR_ARCHITECTURE.md` → recorded in
 >   **ADR-0041** (Accepted); enactment tracked by follow-up **#2855**.
 > - **Q4 (DESIGN_PRINCIPLES §9):** REWORD to volatility-isolation language now → recorded in
 >   **ADR-0042** (Accepted); enactment tracked by follow-up **#2856**.
@@ -30,7 +30,7 @@ owner decline) — never the rename or rewording itself.
 ## Purpose
 
 Audit §13 classifies exactly two items as `Reshape — routed`: renaming
-`docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` and rewording
+`docs/MODULAR_ARCHITECTURE.md` and rewording
 `docs/DESIGN_PRINCIPLES.md :: 9. System-of-Systems Thinking` (which actually describes volatility
 isolation, not SoS). Both require
 a CES/ADR + owner decision per the binding SBS-reconciliation rule
@@ -42,7 +42,7 @@ enacted by an audit or by an agent acting on the audit's recommendation alone.
 Present the owner with the two open questions from audit §15 (reproduced here so this task is
 self-sufficient without re-reading the full audit):
 
-- **Q2 — SoS naming.** Keep `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`'s title with SBI-1's overlay
+- **Q2 — SoS naming.** Keep `docs/MODULAR_ARCHITECTURE.md`'s title with SBI-1's overlay
   note (audit's recommendation: zero churn, ambiguity already removed by the overlay note), or
   rename the file via CES/ADR (thirteen referencing docs would need updating)? The audit recommends
   *against* a near-term rename.
@@ -88,13 +88,13 @@ agent from "helpfully" enacting a rename the owner never asked for.
       `docs/SYSTEM_CONTEXT_OVERLAY/ROUTE_RESHAPE_DECISIONS_TO_OWNER.md` (state line records decline)
 - [ ] No rename or rewording is performed by this task itself — only the decision record.
       Verify: `git diff --stat` for this task's PR shows no changes to
-      `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`'s filename or the wording of
+      `docs/MODULAR_ARCHITECTURE.md`'s filename or the wording of
       `docs/DESIGN_PRINCIPLES.md :: 9. System-of-Systems Thinking`; any resulting rename/reword
       lands in a separate follow-up issue linked from the ADR
 
 ## How to Verify (Pre-Merge)
 
-1. Confirm no file rename occurred: `git status --porcelain docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`
+1. Confirm no file rename occurred: `git status --porcelain docs/MODULAR_ARCHITECTURE.md`
    shows no rename/delete.
 2. Confirm no wording change to `docs/DESIGN_PRINCIPLES.md :: 9. System-of-Systems Thinking` landed
    as part of this task (`grep -A5 "^### 9. System-of-Systems Thinking" docs/DESIGN_PRINCIPLES.md`
@@ -118,7 +118,7 @@ agent from "helpfully" enacting a rename the owner never asked for.
 - `docs/architecture/runtime-semantics.md :: SBS boundary mapping` (precedent for the binding
   reconciliation rule)
 - `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` (owns any resulting reshape enactment)
-- `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`, `docs/DESIGN_PRINCIPLES.md :: 9. System-of-Systems Thinking`
+- `docs/MODULAR_ARCHITECTURE.md`, `docs/DESIGN_PRINCIPLES.md :: 9. System-of-Systems Thinking`
 
 ## Related GitHub Issues
 

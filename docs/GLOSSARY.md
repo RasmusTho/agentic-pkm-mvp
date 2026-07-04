@@ -42,15 +42,15 @@ Brief definitions for recurring concepts.
 - **Health CLI** – `python -m app.cli health --json` validates local deps (ffmpeg/yt-dlp), outbox settings, and LLM reachability.
 - **System of Systems** – In this repo's colloquial usage, "modular, authority-separated single
   system" (ADR-0015's modularity intent; `docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md:97-101`),
-  applied to the internal 8-subsystem decomposition in `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`. This
+  applied to the internal 8-subsystem decomposition in `docs/MODULAR_ARCHITECTURE.md`. This
   is **descriptive of repo usage, not a normative INCOSE ruling**. Per the 2026-07-03 audit
   (`docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md :: §3`, cited as advisory, not
   settling), the INCOSE sense of System of Systems requires operationally- and
   managerially-independent constituents, which the internal subsystems fail
-  (`docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md:26` states they are "not separate deployments, services,
+  (`docs/MODULAR_ARCHITECTURE.md:26` states they are "not separate deployments, services,
   or processes"). The one INCOSE-defensible SoS reading in the repo is the operator's assembled
   environment (Yggdrasil + Obsidian + iCloud, `docs/ARCHITECTURE.md:198`). Whether to rename
-  `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` on the strength of that reading is an **open owner
+  `docs/MODULAR_ARCHITECTURE.md` on the strength of that reading is an **open owner
   decision** (audit §15 Q2, routed to `docs/SYSTEM_CONTEXT_OVERLAY/ROUTE_RESHAPE_DECISIONS_TO_OWNER.md`,
   SBI-8) — this entry links the question rather than settling it. See also
   `docs/architecture/system-context-overlay.md :: System of Systems (SoS) — repo usage vs INCOSE`.

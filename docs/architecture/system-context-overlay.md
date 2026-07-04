@@ -113,7 +113,7 @@ One view, reconciling both existing taxonomies (audit §4):
 ```
 
 **Taxonomy reconciliation.** This view reconciles the 8-subsystem architecture spine
-(`docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`) with the 14-boundary target SBS
+(`docs/MODULAR_ARCHITECTURE.md`) with the 14-boundary target SBS
 (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md`): spine Human Surface→HIX; Knowledge & Artifact→HKA(+SIP);
 Runtime Projection→PDM+DRI; **Capability→CAO+RCA (the split no doc currently states)**;
 Agent/Orchestration→CAO; Governance/Authority→GOV; Integration Fabric→EBF; Observability/Fitness→OEF.
@@ -131,13 +131,13 @@ audit §3). In summary: the repo's internal usage is colloquial for "modular, au
 single system" (`docs/plans/V60_CAPABILITY_AND_AGENT_EVOLUTION.md:97-101`'s "modularity with
 replaceability, not one monolithic agent runtime"), consistent with ADR-0015's modularity intent; the
 INCOSE sense requires operationally- and managerially-independent constituents and does not apply to
-the internal 8-subsystem decomposition (`docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md:26` states those
+the internal 8-subsystem decomposition (`docs/MODULAR_ARCHITECTURE.md:26` states those
 subsystems are "not separate deployments, services, or processes") — this is cited as advisory from
 the 2026-07-03 audit §3, not a settling ruling. The one INCOSE-defensible SoS reading in the repo is
 the operator's assembled environment (Yggdrasil + Obsidian + iCloud, `docs/ARCHITECTURE.md:198`).
-Whether to rename `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` on the strength of that reading is an open
+Whether to rename `docs/MODULAR_ARCHITECTURE.md` on the strength of that reading is an open
 owner decision (audit §15 Q2, routed to SBI-8) — this overlay links the question, it does not answer
-it. See also the overlay note in `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` itself.
+it. See also the overlay note in `docs/MODULAR_ARCHITECTURE.md` itself.
 
 ## Enabling-system principle
 
@@ -163,7 +163,7 @@ the owner's human-first-naming stance and create a rot-prone parallel registry.
 
 - `docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md` — source audit (§1, §2, §3, §4, §5, §9)
 - `docs/SYSTEM_CONTEXT_OVERLAY/README.md` — spec directory this task belongs to
-- `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` — architecture spine (8-subsystem map); carries the SoS
+- `docs/MODULAR_ARCHITECTURE.md` — architecture spine (8-subsystem map); carries the SoS
   overlay note pointing back here
 - `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` — target 14-boundary SBS
 - `docs/GLOSSARY.md` — `System of Systems` entry

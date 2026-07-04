@@ -223,7 +223,7 @@ Connector/Watcher/Inbox decisions (architecture alternatives, watcher matrix, in
 
 ## System-of-systems view
 
-The architecture spine for Yggdrasil as a system-of-systems with a stable kernel and replaceable extension fabric lives in `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`. That document owns the kernel/extension-fabric framing and the eight-subsystem map (Human Surface, Knowledge & Artifact, Runtime Projection, Capability, Agent/Orchestration, Governance/Authority, Integration Fabric, Observability/Fitness). This document remains authoritative for the current runtime baseline and current-vs-planned status.
+The architecture spine for Yggdrasil as a system-of-systems with a stable kernel and replaceable extension fabric lives in `docs/MODULAR_ARCHITECTURE.md`. That document owns the kernel/extension-fabric framing and the eight-subsystem map (Human Surface, Knowledge & Artifact, Runtime Projection, Capability, Agent/Orchestration, Governance/Authority, Integration Fabric, Observability/Fitness). This document remains authoritative for the current runtime baseline and current-vs-planned status.
 
 For long-horizon decomposition and change-impact reasoning, use `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`. For the transition plan, boundary register, debt register, fitness rules, and critical contract stubs, use `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md`.
 

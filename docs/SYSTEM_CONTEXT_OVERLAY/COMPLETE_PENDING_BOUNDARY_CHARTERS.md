@@ -41,7 +41,7 @@ Invariants, Failure modes, Required tests). Order matters — write EBF first:
   `docs/CONCEPTS/USER_NEEDS_MODEL.md` for the responsibility surface already described in prose.
 - **DRI (Derived Representation & Indexing)** — primary invariant "derived representations are
   rebuildable and never source of truth" per `docs/boundaries/README.md`. Consult
-  `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md:58` (extension fabric) and the SBI-2 classification work
+  `docs/MODULAR_ARCHITECTURE.md:58` (extension fabric) and the SBI-2 classification work
   (COTS/rebuildable framing) for consistency, but do not block on SBI-2 landing first — DRI's
   charter is about the boundary's *responsibility*, not the infra classification.
 

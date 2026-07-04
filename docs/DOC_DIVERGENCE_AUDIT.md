@@ -93,7 +93,7 @@ them would risk exactly the broad-rewrite drift this audit warns against.
   `ops/promotions/2026-06-13-cc3ce65d.md`). **Caveat that makes this judgment, not mechanical:** the
   same receipt promoted CRE/recall code *inert* in Wave 1 ("'CRE in prod' ≠ 'CRE running'"). Any
   reframe must keep the promoted-but-dormant distinction and reconcile with `RELEASE_CHANNELS`.
-- **`SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` (med):** Human Surface still reads "Companion-UI is
+- **`MODULAR_ARCHITECTURE.md` (med):** Human Surface still reads "Companion-UI is
   design-handoff … not production runtime" (last reviewed 2026-05-14); the System Entry Point shell
   shipped. → Current-state correction.
 - **`INTERACTION_SURFACES_AND_AUTHORITY/README.md` + `CONTEXT_BUNDLES/README.md` (med):** owner-doc

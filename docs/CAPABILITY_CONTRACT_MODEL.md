@@ -1,12 +1,12 @@
 State: SoT v5.5 Reality-MVP baseline locked (v5.6 delivered, v6.0 seams shipped at capability-seam level); this document is target-state framing for the capability model and does not claim every capability listed below is uniformly implemented today.
 Doc role: Core SoT
-Authority: Contract spine for what a capability is in Yggdrasil and what shape every capability contract must take. Owns the capability definition (distinct from agents, UIs, services, and tools), the standard capability contract shape, and the canonical capability examples. Sits below `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` (Capability subsystem) and beside `docs/INTEGRATION_FABRIC_CONTRACT.md`. Does not replace `docs/ARCHITECTURE.md` (`Capability Model`) for current runtime capability behavior or the per-capability spec directories under `docs/FINDING_AND_REORIENTING/`, `docs/COMMITMENT_AS_FIRST_CLASS/`, `docs/CANVAS_CHAT_SURFACE/`, and `docs/CONTEXT_BUNDLES/`.
+Authority: Contract spine for what a capability is in Yggdrasil and what shape every capability contract must take. Owns the capability definition (distinct from agents, UIs, services, and tools), the standard capability contract shape, and the canonical capability examples. Sits below `docs/MODULAR_ARCHITECTURE.md` (Capability subsystem) and beside `docs/INTEGRATION_FABRIC_CONTRACT.md`. Does not replace `docs/ARCHITECTURE.md` (`Capability Model`) for current runtime capability behavior or the per-capability spec directories under `docs/FINDING_AND_REORIENTING/`, `docs/COMMITMENT_AS_FIRST_CLASS/`, `docs/CANVAS_CHAT_SURFACE/`, and `docs/CONTEXT_BUNDLES/`.
 Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
 Last reviewed: 2026-06-13
-Last verified against: docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md, docs/INTEGRATION_FABRIC_CONTRACT.md, docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/COMPONENTS.md, docs/AGENTS.md, docs/FINDING_AND_REORIENTING/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, docs/CONTEXT_BUNDLES/README.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md, docs/RETRIEVAL.md, parent initiative #877, prerequisite phase issue #878, governing slice issue #879, proportional-governance decision #1881.
+Last verified against: docs/MODULAR_ARCHITECTURE.md, docs/INTEGRATION_FABRIC_CONTRACT.md, docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/COMPONENTS.md, docs/AGENTS.md, docs/FINDING_AND_REORIENTING/README.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/COMMITMENT_AS_FIRST_CLASS/README.md, docs/CONTEXT_BUNDLES/README.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md, docs/RETRIEVAL.md, parent initiative #877, prerequisite phase issue #878, governing slice issue #879, proportional-governance decision #1881.
 
 # Capability Contract Model
 
@@ -27,7 +27,7 @@ A **capability** is a reusable, composable, surface-independent function that:
 - has an **explicit typed contract** (named inputs, named outputs, named authority class, named side-effect class),
 - is **callable by multiple interaction surfaces or agents** without rewiring its semantics for each caller,
 - **returns information** or **proposes a change**, but does not by itself originate intent or decide meaning, and
-- respects every kernel constraint in `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` (`Kernel and extension fabric`).
+- respects every kernel constraint in `docs/MODULAR_ARCHITECTURE.md` (`Kernel and extension fabric`).
 
 A capability is distinct from each of the following:
 
@@ -36,7 +36,7 @@ A capability is distinct from each of the following:
 - **Not a service.** A capability is a contract, not a deployment topology. It may be implemented in-process today and remoted later, or vice versa, without changing the capability contract. "Service" is an implementation detail behind the contract.
 - **Not a tool.** A tool (in the Tool / MCP provider sense in `docs/INTEGRATION_FABRIC_CONTRACT.md`) is a governed effector an agent chooses from inside a control flow. A capability is upstream of tool choice: it provides the information or proposal an agent reasons over before invoking a tool. Some capabilities propose tool-eligible changes (for example, note patch proposal); they still do not themselves perform the mutation.
 
-Capabilities sit inside the Capability subsystem in `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`. They are part of the extension fabric: capabilities are expected to be added, replaced, or removed without changing the kernel.
+Capabilities sit inside the Capability subsystem in `docs/MODULAR_ARCHITECTURE.md`. They are part of the extension fabric: capabilities are expected to be added, replaced, or removed without changing the kernel.
 
 ## Standard capability contract shape
 
@@ -293,7 +293,7 @@ This is the capability **contract model**, not the capability **runtime**. The f
 - Per-capability behavior, inputs/outputs schema, ranking logic, or provider routing. Those are owned by the per-capability spec directories named above.
 - The integration-fabric taxonomy and the authority rule for external components — defined separately in `docs/INTEGRATION_FABRIC_CONTRACT.md`.
 - Current runtime capability behavior and current-vs-planned status — owned by `docs/ARCHITECTURE.md` (`Capability Model`) and the per-capability specs.
-- Kernel constraints and the subsystem map — owned by `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md`.
+- Kernel constraints and the subsystem map — owned by `docs/MODULAR_ARCHITECTURE.md`.
 
 ## Verification path
 

@@ -9,7 +9,7 @@ This document is an implementation catalog (it may mention current entrypoints/c
 System-level design rules for modularity, capability-based composition, and documentation-layer boundaries live in `docs/DESIGN_PRINCIPLES.md`.
 
 Scope note: this document is the current component catalog (descriptive wiring and ownership of shipped building blocks). The contract model for how components compose and how external systems attach lives separately and does not replace this catalog:
-- `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` — kernel/extension-fabric spine and the eight-subsystem map.
+- `docs/MODULAR_ARCHITECTURE.md` — kernel/extension-fabric spine and the eight-subsystem map.
 - `docs/INTEGRATION_FABRIC_CONTRACT.md` — integration-class taxonomy, per-class contract fields, and the authority rule that external components may provide capability, transport, inference, or interface but must not become semantic authority unless promoted through Yggdrasil contracts.
 - `docs/CAPABILITY_CONTRACT_MODEL.md` — capability definition (distinct from agents, UIs, services, and tools), standard capability contract shape, and canonical capability examples.
 For the ontology/runtime distinction behind terms such as `artifact`, `object`, `agent`, `plan`,

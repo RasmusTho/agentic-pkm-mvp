@@ -47,7 +47,7 @@ The SBS is described across several docs, each with a single owner. Do not dupli
 |---|---|---|
 | Target SBS decomposition | `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` | The fourteen Level-2 subsystems, eight macro-domains, dependency rules, forbidden dependencies. |
 | Current runtime architecture | `docs/ARCHITECTURE.md` | What actually ships. Wins on present-tense behavior. |
-| Current system-of-systems spine | `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` | The current eight-subsystem bridge between today's runtime and the target SBS. |
+| Current system-of-systems spine | `docs/MODULAR_ARCHITECTURE.md` | The current eight-subsystem bridge between today's runtime and the target SBS. |
 | SBS operationalization (adoption sequencing) | `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` | Contract-first / module-lazy adoption, slice sequencing, contract ownership. |
 | SBS operating model (this doc) | `docs/architecture/SBS_OPERATING_MODEL.md` | How SBS work is classified, readied, done, reviewed, and recorded. |
 | SBS roadmap / initiative phases | `docs/architecture/SBS_ROADMAP.md` | Phase intent, status, blockers; linked from `docs/ROADMAP.md`. |

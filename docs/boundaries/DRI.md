@@ -9,7 +9,7 @@ State: Boundary charter — Draft (control-boundary contract; docs-only, not a r
 [semantic dimensions](../architecture/semantic-dimensions.md) ·
 [CrossScopeFlow](../architecture/cross-scope-flow.md) ·
 [traceability matrix](../architecture/traceability-matrix.md) ·
-[System of Systems Architecture](../SYSTEM_OF_SYSTEMS_ARCHITECTURE.md)
+[System of Systems Architecture](../MODULAR_ARCHITECTURE.md)
 
 **Canonical separation rule:** DRI owns **rebuildable machine representations**. Everything DRI owns
 must be rebuildable from declared sources or reclassified into HKA, MEM, GOV, or SIP — DRI never
@@ -21,7 +21,7 @@ Own embeddings, chunking, lexical/vector indexes, graph/relation projections, de
 machine-readable mirrors — plus the rebuild, invalidation, and staleness-detection machinery that
 keeps them disposable — so machine representations can be replaced or rebuilt without ever becoming
 hidden knowledge. This is the "runtime persistence/index implementations behind the durable surface"
-named in the extension fabric (`docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md:58`: "Postgres/pgvector,
+named in the extension fabric (`docs/MODULAR_ARCHITECTURE.md:58`: "Postgres/pgvector,
 embedding stacks, relation stores, future stores" are replaceable and must not weaken kernel
 constraints to be replaced).
 

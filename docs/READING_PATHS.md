@@ -41,7 +41,7 @@ defines intent; later docs add detail.
 ## Current runtime architecture
 
 1. `docs/ARCHITECTURE.md` — current runtime owner doc.
-2. `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` — current system-of-systems spine.
+2. `docs/MODULAR_ARCHITECTURE.md` — current system-of-systems spine.
 3. `docs/STATUS.md` — current shipped/posture status.
 4. `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` — target-state context only.
 
