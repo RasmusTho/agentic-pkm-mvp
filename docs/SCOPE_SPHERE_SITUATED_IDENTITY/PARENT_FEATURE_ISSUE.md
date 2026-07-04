@@ -78,4 +78,4 @@ This parent issue source defines the capability-level contract and acceptance pa
 
 - Parent issue #645 is closed as delivered at the docs/spec layer (closed 2026-04-26).
 - Cross-surface validation scenarios are tracked in `VALIDATE_SCOPE_SPHERE_IDENTITY_SEPARATION.md` as the implementation-stage acceptance reference.
-- Owner-doc promotion remains gated on implementation-stage acceptance and validation receipts.
+- Owner-doc promotion is complete via issue #2825 (`docs/ARCHITECTURE.md` :: Current vs Planned Status table, "Context dimensions" row).
