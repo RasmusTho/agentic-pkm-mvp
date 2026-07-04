@@ -87,6 +87,12 @@ def test_per_slice_deltas() -> None:
     assert classification["unknown_safe_fail_rate"]["delta"] == pytest.approx(0.125)
     assert classification["unknown_safe_fail_rate"]["improved"] is True
 
+    # Per-class slice (keyed group, same mechanism as by_language/by_slice).
+    assert set(slices["per_class"]) == {"co_authoring", "governance_bearing", "exploratory"}
+    exploratory = _rows_by_metric(slices["per_class"]["exploratory"])
+    assert exploratory["precision"]["delta"] == pytest.approx(0.04)
+    assert exploratory["precision"]["regression"] is False
+
     # Classification confusion slice (KERNEL-13): hard gate + matrix delta.
     confusion = comparison["classification_confusion"]
     assert confusion["baseline_hard_gate_passed"] is True
@@ -241,7 +247,8 @@ def test_cli_exit_2_on_truncated_scorecard(
     truncated_path.write_text(json.dumps(truncated), encoding="utf-8")
 
     with pytest.raises(
-        ScorecardCompareError, match="missing required section 'classification'"
+        ScorecardCompareError,
+        match="missing required section or key at candidate.classification",
     ):
         compare_scorecard_files(BASELINE_PATH, truncated_path)
 
@@ -251,7 +258,89 @@ def test_cli_exit_2_on_truncated_scorecard(
     captured = capsys.readouterr()
     assert code == 2
     assert "error:" in captured.err
-    assert "missing required section 'classification'" in captured.err
+    assert "missing required section or key at candidate.classification" in captured.err
+
+
+def test_verdict_regression_on_per_class_disappearance() -> None:
+    """per_class joins the missing-key→regression rule (round-2 review).
+
+    The masking hole round 1 closed for by_language/by_slice must be closed
+    by the same mechanism for classification.per_class.
+    """
+    baseline = load_scorecard(BASELINE_PATH)
+    candidate = load_scorecard(CANDIDATE_PATH)
+    del candidate["classification"]["per_class"]["exploratory"]
+
+    comparison = compare_scorecards(baseline, candidate)
+    assert comparison["verdict"] == "regression"
+    assert {"group": "per_class", "key": "exploratory"} in comparison["missing_slices"]
+    summary = render_compare_summary(comparison)
+    assert "MISSING in candidate (blocking)" in summary
+    assert "per_class:exploratory" in summary
+
+
+def test_rejects_nan_confusion_matrix_cell(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Round-2 review: int(...) on raw confusion cells crashed uncaught.
+
+    Non-finite/non-numeric cells must be a ScorecardCompareError naming the
+    cell path (CLI exit 2), never a traceback exit 1.
+    """
+    candidate = load_scorecard(CANDIDATE_PATH)
+    candidate["classification"]["confusion_matrix"]["exploratory"]["unknown"] = float("nan")
+    nan_path = tmp_path / "candidate_nan_cell.json"
+    nan_path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    with pytest.raises(
+        ScorecardCompareError,
+        match=r"non-finite .* candidate\.classification\.confusion_matrix\.exploratory\.unknown",
+    ):
+        compare_scorecard_files(BASELINE_PATH, nan_path)
+
+    code = eval_run.main(
+        ["compare", "--baseline", str(BASELINE_PATH), "--candidate", str(nan_path)]
+    )
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "error:" in captured.err
+
+    # Same mechanism for a non-numeric cell (the empirical int('x') crash).
+    candidate["classification"]["confusion_matrix"]["exploratory"]["unknown"] = "boom"
+    bad_path = tmp_path / "candidate_bad_cell.json"
+    bad_path.write_text(json.dumps(candidate), encoding="utf-8")
+    code = eval_run.main(
+        ["compare", "--baseline", str(BASELINE_PATH), "--candidate", str(bad_path)]
+    )
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "non-numeric" in captured.err
+
+
+def test_rejects_malformed_failures_entry(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Round-2 review: rendering candidate failures crashed on a missing
+    'value' key AFTER a successful compare (exit 1). The walker now rejects
+    malformed failures entries on load (exit 2)."""
+    candidate = load_scorecard(CANDIDATE_PATH)
+    candidate["regression"] = True
+    candidate["failures"] = [{"scope": "aggregate", "metric": "precision_at_k"}]
+    bad_path = tmp_path / "candidate_bad_failures.json"
+    bad_path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    with pytest.raises(
+        ScorecardCompareError, match=r"candidate\.failures\[0\]: missing 'value'"
+    ):
+        compare_scorecard_files(BASELINE_PATH, bad_path)
+
+    code = eval_run.main(
+        ["compare", "--baseline", str(BASELINE_PATH), "--candidate", str(bad_path)]
+    )
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "error:" in captured.err
+    assert "missing 'value'" in captured.err
 
 
 def test_verdict_regression_when_candidate_fails_own_floors() -> None:

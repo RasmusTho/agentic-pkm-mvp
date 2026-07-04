@@ -263,9 +263,14 @@ What it reports — per-slice deltas (baseline → candidate, delta, delta %):
   `recall_into_ask`, `low_trust_citation`);
 - **memory-recall** slice;
 - **classification** read-side metrics (macro precision/recall, pass rate,
-  answer rate, unknown safe-fail rate) plus the KERNEL-13 **confusion slice**:
-  hard-gate state on both sides, candidate mutation-side confusions, and the
-  non-zero confusion-matrix cell deltas.
+  answer rate, unknown safe-fail rate), **per-class** precision/recall
+  (`classification.per_class`, keyed like `by_language`/`by_slice`), plus the
+  KERNEL-13 **confusion slice**: hard-gate state on both sides, candidate
+  mutation-side confusions, and the non-zero confusion-matrix cell deltas.
+
+Every numeric leaf the compare touches — including confusion-matrix cells and
+`failures` entries — is checked by a single spec-driven validation walker on
+load; the comparison and the renderer consume only the validated view.
 
 Verdict (`regression` / `improved` / `neutral`), printed as `VERDICT: ...` and
 mirrored in the `--output` JSON artifact (`eval_scorecard_compare.v1`):
@@ -275,16 +280,17 @@ mirrored in the `--output` JSON artifact (`eval_scorecard_compare.v1`):
   scorecard failed its own configured floors (`regression: true` — the floors
   come from `config/eval_thresholds.yaml` at scorecard build time, which is how
   compare consumes them); any compared metric worsened by more than the
-  relative tolerance; or any per-language / per-route-intent slice present in
-  the baseline is **missing** in the candidate (a disappeared slice is the
-  strongest possible regression — the comparison surface must never silently
-  shrink; slices only in the candidate are reported but non-blocking).
+  relative tolerance; or any per-language / per-route-intent / per-class slice
+  present in the baseline is **missing** in the candidate (a disappeared slice
+  is the strongest possible regression — the comparison surface must never
+  silently shrink; slices only in the candidate are reported but non-blocking).
 - `improved` (exit 0) when no regression and at least one metric improved
   beyond the tolerance.
 - `neutral` (exit 0) otherwise.
-- Malformed input (missing sections, NaN/±inf metric values, wrong
-  `schema_version`) is exit code **2** with an `error:` message — never
-  conflated with a regression verdict.
+- Malformed input (missing sections or keys, non-numeric or NaN/±inf values
+  anywhere in the compared surface, malformed confusion/failure entries, wrong
+  `schema_version`) is exit code **2** with an `error:` message naming the
+  offending path — never conflated with a regression verdict.
 
 **Compare artifact required for Router/Synthesizer changes.** Any PR that
 changes the **Router** (intent classifier — `app/chat/intent_classifier.py`
