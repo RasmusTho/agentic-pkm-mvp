@@ -66,6 +66,11 @@ WriteGuard health-gate and emits an actor-tagged receipt.
 3. The markdown write is applied to `settings/local.md`.
 4. `SettingsWriteReceipt(key, value, surface, actor, timestamp, is_runtime_gating=True)` is
    emitted and logged at INFO.
+5. The same receipt is durably persisted as a `settings.write.receipt` outbox event
+   (`app/vault/settings_service.py :: _emit_settings_write_receipt`, #2787) so the accountability
+   evidence survives process restart — the in-memory dataclass in step 4 is no longer the only
+   record. Queryable via `app/receipts/settings_receipts.py :: query_settings_receipts`, mirroring
+   the `promotion.transition.applied` / `PromotionReceiptQuery` precedent.
 
 **Valid origins of the same seam (no new surfaces here):**
 - UI → `POST /api/companion/vault/settings` (surface=`'api'`) — **wired** (sole caller: `app/api/routes/companion.py:826`)

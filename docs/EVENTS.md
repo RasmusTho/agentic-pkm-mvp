@@ -312,6 +312,35 @@ Fields (all optional, defaults are empty dict / null):
 
 Backward compatibility: existing consumers that only read `cognition_mode` continue to work. The metadata dictionary is additive and intentionally bounded — it must not carry prompt bodies, raw LLM output, or secret material. See `docs/PANEL_AGENT.md` for the producer-side contract (#984).
 
+### `settings.write.receipt`
+
+Durable accountability record for every governed settings write (#2787, RESEARCH-01 divergence
+D-1). Emitted by `SettingsService.update_setting` (`app/vault/settings_service.py`) immediately
+after the in-memory `SettingsWriteReceipt` is built, for both runtime-gating and non-runtime-gating
+keys. Mirrors the `promotion.transition.applied` durability pattern: written best-effort to both
+the JSONL audit surface and the DB outbox, keyed via the shared `derive_idempotency_key` helper
+(`app/services/outbox.py`, KERNEL-02) as an event-id-keyed emission (`EVENT_ID_FINGERPRINT`) — the
+topic schema registry (KERNEL-08) has not landed yet.
+
+Payload:
+- `key` (`string`): the setting key written.
+- `value` (any): the new value.
+- `surface` (`string`): origin surface — `'api'`, `'cli'`, `'file'`, or `'mcp'`.
+- `actor` (`string`): stable actor identity (`'human'` for all UI/API/CLI/file origins today).
+- `timestamp` (`string`, ISO-8601): receipt timestamp (mirrors the in-memory receipt's own
+  timestamp, not necessarily the outbox envelope's `timestamp`).
+- `is_runtime_gating` (`bool`): whether the key is in `RUNTIME_GATING_SETTINGS`.
+
+Query/projection: `app/receipts/settings_receipts.py :: query_settings_receipts`, a typed
+read-only projection over durable `settings.write.receipt` records — the same shape as
+`app/receipts/promotion_receipts.py :: query_promotion_receipts`.
+
+Interpretation:
+- this is the accountability/receipt-supporting layer for settings writes, not an intent or
+  execution-result event,
+- durability is additive: `SettingsService.update_setting`'s return-value contract
+  (`(EffectiveSetting, SettingsWriteReceipt)`) is unchanged.
+
 ### `promote.intent.created`
 
 Emitted when a panel action triggers promotion work.

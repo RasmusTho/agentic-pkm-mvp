@@ -122,6 +122,13 @@ Each divergence is classified **fix-code**, **fix-doc**, or **needs-owner-decisi
   `SettingsWriteReceipt` is an in-memory dataclass (`app/vault/settings_service.py:43-60`) lost on
   restart. A receipt that cannot be produced later is not a receipt. **fix-code** (bounded: emit as
   an outbox event like promotion receipts). Follow-up filed — see below.
+  **RESOLVED (#2787):** `SettingsService.update_setting` now additionally emits the same receipt as
+  a durable `settings.write.receipt` outbox event (`_emit_settings_write_receipt`); the in-memory
+  dataclass remains the return value. Queryable after restart via
+  `app/receipts/settings_receipts.py :: query_settings_receipts`, mirroring the
+  `promotion.transition.applied` / `PromotionReceiptQuery` precedent. The row-11 table entry above
+  and this artifact's snapshot narrative otherwise still describe the pre-#2787 state as of
+  `b8ec22f4` and are not rewritten in place; treat this note as the current-truth override for D-1.
 - **D-2 · Object deletion is a `path=NULL` accident, not a semantic.** `vault_sync.delete_note()`
   nulls the path (`vault_sync.py:224-234`); `handle_ingest_object_deleted` is a no-op
   (`outbox_worker.py` ~505-513); objects rows live forever while their decisions would CASCADE if
