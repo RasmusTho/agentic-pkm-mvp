@@ -201,7 +201,7 @@ Per-claim reconciliation against `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` and `docs/
 - `docs/ROADMAP.md` (owner doc this advises, never replaces)
 - `docs/architecture/formal-model.md` §5 (failure domains; the backup and identity nodes)
 - `docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md` §7 (dependency spine this extends past the kernel)
-- `docs/architecture/SBS_ROADMAP.md`, `SBS_CURRENT_TO_TARGET_MAPPING.md` (transition-debt register)
+- `docs/architecture/SBS_ROADMAP.md`, `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md` (transition-debt register)
 - `docs/HEIMDALL/ECOSYSTEM_SOS_MODEL.md`, ADR-0043 (ecosystem layer of the graph)
 - `docs/testing/invariant-synthesis-2026-07.md` (RESEARCH-03; the property-layer node)
 - `docs/foundation/ARCHITECTURAL_CONSTITUTION.md` (RESEARCH-07; the laws the critical path serves)

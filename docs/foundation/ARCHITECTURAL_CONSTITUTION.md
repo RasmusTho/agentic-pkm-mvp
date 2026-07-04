@@ -21,7 +21,8 @@ rebuild (#2762). Where a doctrine commitment appears below, it is cited, not res
 
 Two merged-or-in-flight framings collided on what "Yggdrasil" names:
 
-- **ADR-0043** (merged, owner-decided 2026-07-04): **Yggdrasil is the whole** — the acknowledged
+- **ADR-0043** (file on `main` via PR #2886; owner-decided 2026-07-04; ADR status: Proposed,
+  enactment deferred): **Yggdrasil is the whole** — the acknowledged
   System-of-Systems in which the constituents hang: **Munin** (knowledge/memory), **Hugin**
   (agent runtime), **Heimdall** (sensing/event capture). "Federation" stays reserved for the SFC
   boundary's node/replication concern and is not the word for the constituent relationship.
@@ -29,8 +30,9 @@ Two merged-or-in-flight framings collided on what "Yggdrasil" names:
   "Personal Agentic Ecosystem" as apex with Yggdrasil as one constituent.
 
 **This constitution adopts ADR-0043: Yggdrasil = the whole.** The owner resolved the clash on
-2026-07-04 (recorded in PR #2888's own reconciliation, which renumbered its ADRs to 0044–0047 and
-rewrote its D1 as a conformance record). The losing framing is flagged, not erased:
+2026-07-04 (recorded in the reconciliation carried by the still-open PR #2888, whose branch
+renumbers its ADRs to 0044–0047 and rewrites its D1 as a conformance record — proposed content, not
+yet merged). The losing framing is flagged, not erased:
 `ecosystem-federation.md` still carries the superseded apex on `main` until PR #2888 merges;
 alignment work is queued as #2890 (model reconciliation) and #2891 (GLOSSARY "federation" usage).
 One nuance holds everything honest: the SoS *reshape itself* (ADR-0041's "modular single system" →
@@ -81,7 +83,9 @@ orthogonal; movement between authority states is a governed transition with a to
 Whether material may participate is a set-membership decision made *before* any scoring, ranking,
 or similarity computation; ranking orders the eligible set and can never reintroduce the excluded.
 Exclusions of relevant material are recorded content-free — a denial that leaks the denied thing's
-identity is itself a disclosure.
+identity is itself a disclosure. The use-time corollary: an admitted candidate's
+`evidence_role_in_context` may be downgraded but never upgraded above its intrinsic evidence role —
+eligibility bounds *participation*, the clamp bounds *standing during participation*.
 
 - **Derivation:** doctrine commitment 1 ("similarity is not permission") given its operational
   form by the retrieval contract and the formal model's admissibility precondition on T-ask.
@@ -97,8 +101,10 @@ identity is itself a disclosure.
   material surfacing in a Project Alpha answer; private notes in work context. The anti-contamination
   corpus (#2551) exists because this failure is *undetectable by the user* when it happens.
 - **Evaluation hook:** registry rows `retrieve_scope_prefilter`, `similarity_not_permission`,
-  `denied_scope_does_not_leak_identity`; the three eval-corpus suites; #2772's
-  `tests/retrieval/test_scope_prefilter_before_rank.py` binds the live entrypoint.
+  `denied_scope_does_not_leak_identity`, and `retrieval_cannot_upgrade_intrinsic_non_evidence`
+  (the clamp); the three eval-corpus suites; #2772's
+  `tests/retrieval/test_scope_prefilter_before_rank.py` binds the live entrypoint, including its
+  in-context role-clamp test.
 - **Belongs in:** runtime + CI.
 
 ### C-3 · Meaning travels with the artifact
@@ -329,7 +335,7 @@ intent, and the wording that now blocks it:
 
 | # | Attack | Disposition |
 |---|---|---|
-| C-1 | "We never *change* authority_state — we just always read the memory item when answering." Laundering standing through *use* rather than mutation. | Blocked by C-2's clamp language ("evidence_role_in_context never exceeds intrinsic") — use-time standing is bounded, not just storage-time. Cross-reference added. |
+| C-1 | "We never *change* authority_state — we just always read the memory item when answering." Laundering standing through *use* rather than mutation. | Blocked by C-2's use-time corollary (`evidence_role_in_context` may be downgraded, never upgraded above the intrinsic role) — use-time standing is bounded, not just storage-time. The corollary was added to C-2's statement and hooks as a result of this attack. |
 | C-2 | Prefilter applied, but the *reranker* hook receives the full corpus "for context." | Wording says ranking "can never reintroduce the excluded"; #2772 brief adds the rerank-containment assertion. Hook, not just prose. |
 | C-3 | Bundle present but fields populated with defaults ("scope: default") — meaning present syntactically, absent semantically. | Conceded as residual risk: schemas enforce shape, not truthfulness. Mitigation lives in C-1 (defaults cannot upgrade standing) and capture-time stamping (`capture_stamps_scope`). Recorded honestly rather than over-claimed. |
 | C-4 | "The second store isn't a *truth*, it's a cache" — declared cache, but written directly by a second writer. | P-6 gates *writers*, not declarations: a cache with its own writer fails the gate regardless of what it is called. |
