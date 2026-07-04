@@ -67,6 +67,7 @@ from app.cli.health import run_health
 from app.stores.plan_store import get_plan_store
 from app.settings.compiler import compile_all
 from app.settings.tiering import require_lab_profile
+from app.write_guard import WritesBlockedError
 from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
 from app.llm.trace_inspect import (
     build_sequence_for_trace,
@@ -1385,7 +1386,10 @@ def settings_explain_alias(as_json: bool, compact: bool) -> None:
 @settings.command("compile", help="Compile vault/@Settings into runtime/settings.")
 @click.option("--auto-heal/--no-auto-heal", default=False, help="Rewrite YAML blocks when invalid values are healed.")
 def settings_compile(auto_heal: bool) -> None:
-    bundle = compile_all(auto_heal=auto_heal)
+    try:
+        bundle = compile_all(auto_heal=auto_heal)
+    except WritesBlockedError as exc:
+        raise click.ClickException(f"settings compile blocked: {exc}") from exc
     click.echo(f"compiled {len(bundle.agents)} agents")
 
 
