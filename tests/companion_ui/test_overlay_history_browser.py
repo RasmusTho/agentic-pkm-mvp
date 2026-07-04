@@ -63,6 +63,8 @@ except ImportError:
 
 from companion_ui.workspace.serve_dev_page import render_index_html
 
+from tests.companion_ui.browser_runtime_harness import install_offline_esm_routes
+
 pytestmark = pytest.mark.browser_runtime
 
 
@@ -161,6 +163,29 @@ def _launch(pw: Any) -> Any:
         return pw.chromium.launch()
 
 
+def _install_offline_guard(page: Any) -> None:
+    """Enforce the module's stated offline contract at the network layer.
+
+    The rendered shell contains a ``<script type="module">`` that STATICALLY
+    imports CodeMirror from the ``esm.sh`` public CDN. Static module imports gate
+    ``DOMContentLoaded`` on their resolution, so when esm.sh is slow or
+    unreachable from the runner, ``page.goto(wait_until="domcontentloaded")``
+    hangs to its 30s timeout — a CDN-reachability flake unrelated to any diff
+    (#2870). The sibling browser tests already guard against this with the shared
+    ``install_offline_esm_routes`` harness; this file hand-rolled its own server
+    setup and was the lone browser test that omitted it. Reuse the canonical
+    guard: it fulfils the esm.sh module imports from vendored repo-local stubs
+    and aborts any other external request, so the page loads deterministically
+    offline and DCL fires promptly.
+
+    Route on the page's ``BrowserContext`` (the implicit context ``new_page``
+    creates), matching the harness's context-level contract and the sibling
+    browser tests, rather than page-scoped routing.
+    """
+
+    install_offline_esm_routes(page.context)
+
+
 def _wait_open(page: Any, value: str) -> None:
     page.wait_for_function(f"{_OPEN_JS} === '{value}'", timeout=5000)
 
@@ -184,6 +209,7 @@ def test_browser_back_closes_single_overlay_url_unchanged() -> None:
             browser = _launch(pw)
             try:
                 page = browser.new_page()
+                _install_offline_guard(page)
                 page.goto(base, wait_until="domcontentloaded")
                 # The host element is display:none until an overlay mounts, so
                 # wait for it to be ATTACHED (not visible).
@@ -244,6 +270,7 @@ def test_browser_back_then_forward_restores_topmost_on_stack() -> None:
             browser = _launch(pw)
             try:
                 page = browser.new_page()
+                _install_offline_guard(page)
                 page.goto(base, wait_until="domcontentloaded")
                 page.wait_for_selector(
                     '[data-region="overlay-host"]', state="attached", timeout=5000
@@ -296,6 +323,7 @@ def test_system_map_route_swaps_overlay_back_closes_in_one_press() -> None:
             browser = _launch(pw)
             try:
                 page = browser.new_page()
+                _install_offline_guard(page)
                 page.goto(base, wait_until="domcontentloaded")
                 page.wait_for_selector(
                     '[data-region="overlay-host"]', state="attached", timeout=5000
@@ -359,6 +387,7 @@ def test_system_map_route_to_immediate_below_reuses_existing_history_entry() -> 
             browser = _launch(pw)
             try:
                 page = browser.new_page()
+                _install_offline_guard(page)
                 page.goto(base, wait_until="domcontentloaded")
                 page.wait_for_selector(
                     '[data-region="overlay-host"]', state="attached", timeout=5000
@@ -429,6 +458,7 @@ def test_system_map_route_to_deeper_stack_target_reuses_existing_history_entry()
             browser = _launch(pw)
             try:
                 page = browser.new_page()
+                _install_offline_guard(page)
                 page.goto(base, wait_until="domcontentloaded")
                 page.wait_for_selector(
                     '[data-region="overlay-host"]', state="attached", timeout=5000
@@ -490,6 +520,7 @@ def test_system_map_vault_route_swaps_on_narrow_back_closes_in_one_press() -> No
                 # NARROW viewport: the persistent inline left pane is suppressed,
                 # so vault is an overlay (prefersOverlay() is true).
                 page = browser.new_page(viewport={"width": 600, "height": 900})
+                _install_offline_guard(page)
                 page.goto(base, wait_until="domcontentloaded")
                 page.wait_for_selector(
                     '[data-region="overlay-host"]', state="attached", timeout=5000
@@ -593,6 +624,7 @@ def test_overlay_query_deep_link_auto_mounts_on_load() -> None:
             browser = _launch(pw)
             try:
                 page = browser.new_page()
+                _install_offline_guard(page)
                 # ?overlay=memory auto-mounts the memory drawer on load.
                 page.goto(
                     f"http://127.0.0.1:{port}/?overlay=memory",
@@ -656,6 +688,7 @@ def test_vault_deep_link_honours_surface_duality_by_viewport() -> None:
             try:
                 # DESKTOP: focus() targets the inline pane; the modal stays shut.
                 page = browser.new_page(viewport={"width": 1200, "height": 900})
+                _install_offline_guard(page)
                 page.goto(deep_link, wait_until="domcontentloaded")
                 page.wait_for_selector(
                     '[data-region="overlay-host"]', state="attached", timeout=5000
@@ -674,6 +707,7 @@ def test_vault_deep_link_honours_surface_duality_by_viewport() -> None:
 
                 # NARROW: no inline pane → focus() falls through to the modal.
                 page = browser.new_page(viewport={"width": 600, "height": 900})
+                _install_offline_guard(page)
                 page.goto(deep_link, wait_until="domcontentloaded")
                 page.wait_for_selector(
                     '[data-region="overlay-host"]', state="attached", timeout=5000
