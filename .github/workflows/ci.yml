@@ -150,7 +150,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: app
           POSTGRES_PASSWORD: app
@@ -176,7 +176,7 @@ jobs:
           pip install -r requirements.txt
           pip install -r dev-requirements.txt
       - name: Upgrade database
-        run: alembic upgrade head || true
+        run: alembic upgrade head
       - name: Run tests
         shell: bash
         env:
