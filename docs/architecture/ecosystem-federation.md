@@ -22,7 +22,7 @@ Two vocabulary guards up front, because both collide with fresh owner decisions:
   (`docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md:154-196`). SoS language below always
   means the ecosystem: the operator's assembled environment
   (`docs/ARCHITECTURE.md:239` "small system-of-systems arrangement"; glossary entry
-  `docs/GLOSSARY.md:44-57`).
+  `docs/GLOSSARY.md:43-56`).
 - **"Federation" here is not SFC's federation.** SFC (Synchronization, Federation & Consensus)
   owns *intra-Yggdrasil* distribution — replicas, nodes, causal ordering
   (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:1077-1132`; ADR-0020;
@@ -54,12 +54,15 @@ does not. Adoption/multi-tenant reasoning is out of scope by issue constraint.
 ### Bridge and target — how the framing is adopted without racing reality
 
 Adversarial review of the SoI promotion (skeptic S1, downgraded) established three facts this
-model must respect: (i) the repo contains **zero** references to any concrete sibling system —
-Home Assistant and OPNsense appear nowhere in docs or code; the ecosystem has exactly one real
-operator-built constituent today; (ii) the owner paid 27-doc churn *the same day* to remove SoS
-vocabulary internally (ADR-0041/0042) — reintroducing it carelessly recreates the ambiguity that
-churn bought down; (iii) no near-term engineering decision changes under an
-ecosystem-primary framing while only one constituent exists.
+model must respect:
+
+- the repo contains **zero** references to any concrete sibling system — Home Assistant and
+  OPNsense appear nowhere in docs or code; the ecosystem has exactly one real operator-built
+  constituent today;
+- the owner paid 27-doc churn *the same day* to remove SoS vocabulary internally
+  (ADR-0041/0042) — reintroducing it carelessly recreates the ambiguity that churn bought down;
+- no near-term engineering decision changes under an ecosystem-primary framing while only one
+  constituent exists.
 
 The repo already owns the pattern that resolves this: **bridge and target**. The 8-subsystem spine
 is the bridge; the 14-boundary SBS is the 2030 target
@@ -139,7 +142,7 @@ flowchart TB
   end
 
   H -->|intent, review, authority| Y
-  B -.->|resolves private bindings| Y
+  B -->|resolves private bindings| Y
   Y <-.->|"capability contracts
   (MCP / A2A / HTTP — protocol-tier adapters)"| S1
   Y <-.->|capability contracts| S2
@@ -147,10 +150,10 @@ flowchart TB
   Y ---|EBF adapters| IC
   Y ---|EBF adapters| LLM
   Y ---|EBF adapters| AQ
-  EN -.-|run and provision constituents, never authority| ECO
+  EN ---|run and provision constituents, never authority| ECO
 ```
 
-Dashed edges are target-state (no sibling exists today). Solid edges exist now. Every edge into
+Dashed edges are target-state (no sibling constituent exists today). Solid edges exist now. Every edge into
 Yggdrasil crosses an EBF-tier adapter under the Integration Fabric authority rule; no edge carries
 semantic authority without contract promotion (§ Capability boundary).
 
@@ -250,7 +253,8 @@ scoped by lifecycle role.
 
 ### The invariant (proposed — owner decision D3)
 
-> **INV-EF1 (two-scope operator-invariance).**
+> **INV-EF1 (two-scope operator-invariance).** *(Proposed — adoption is owner decision D3; not
+> ratified. Quote this box only together with this marker.)*
 > **(a) Product scope — strict.** Artifacts of the SoI product surface (`app/`,
 > `yggdrasil_runtime/`, `schemas/`, product contracts and architecture docs) must be
 > **operator-invariant**: substituting another operator's personal environment leaves them
@@ -289,8 +293,9 @@ why the register check below is mechanical, not manual.
 - **Wiring that actually gates:** the GATE mode joins an existing `pull_request`-triggered
   workflow (e.g. the ci-smoke workflow; `architecture-ci.yaml` is `workflow_dispatch`-only and
   cannot gate PRs as-is) and optionally `.pre-commit-config.yaml`. Consistent with the repo's
-  merge-gate posture, the gate binds through the agent delivery chain, not through branch
-  protection.
+  settled merge-gate posture, the gate binds through the agent delivery chain, not through branch
+  protection (`docs/architecture/SBS_OPERATING_MODEL.md:383` — an unprotected `main` does not
+  waive the gate; that convention is cited here, not proposed by D3).
 - **Invariant registry:** INV-EF1 extends `docs/testing/invariant-tests.md` semantics —
   GATE (secret scan; new-token-without-row) + DOCTOR (register reconciliation). No competing
   registry.
@@ -433,7 +438,8 @@ The stance (four rules, each conform/extend as tagged in § SBS reconciliation):
    `docs/settings/tools/registry.yaml` + descriptor pattern generalizes). The registry *contents*
    for remote/sibling servers — endpoints, credentials, host bindings — are INV-EF1 category
    (ii)/(iii) material: **private side, always.** Public tree: what may attach and on what terms;
-   private side: what actually attaches here. *(Extend.)*
+   private side: what actually attaches here. *(Extend — proposed rule for a surface that does
+   not exist yet; ratification is D4, not this sentence.)*
 4. **Close the silent-fallback gap.** The remote-multiplex seam currently swallows remote failure
    silently (`except Exception: pass`, `app/orchestrator/mcp_tool_provider.py:41-43`;
    `docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md:229-243`), has **no admission
@@ -534,10 +540,10 @@ decision changes. The directive's own word is "aspirational" — the question is
 ### D2 — How is the ecosystem/SFC federation seam governed?
 
 **Problem.** SFC textually owns "Federation" and multi-device/multi-write topology
-(`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:1077-1132`; ADR-0020; `docs/plans/PROTOCOL_SATELLITE_SYNC.md`
-is near-term). Ecosystem federation is inter-system, but Tier 1/2 sibling interactions
-(caches; writes) land in SFC-claimed ground, and mesh exposure of capability surfaces must pass
-the "explicit and proportionate" exposure gate (`docs/SECURITY_TRUST_BOUNDARIES.md:37`).
+(`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:1077-1132`; full evidence chain in § Interaction tiers).
+Ecosystem federation is inter-system, but Tier 1/2 sibling interactions (caches; writes) land in
+SFC-claimed ground, and mesh exposure of capability surfaces must pass the "explicit and
+proportionate" exposure gate (`docs/SECURITY_TRUST_BOUNDARIES.md:37`).
 
 - **Option 1 (recommended): adopt the interaction-tier rule.** Tier 0 free under EBF; Tier 1
   requires ADR-0020's classification obligation before build; Tier 2 requires full
@@ -642,3 +648,5 @@ Classified per the runtime-semantics convention (fix-code / fix-doc / needs-owne
    content row; PRIVACY seam paragraph (docs lane, owner-doc PRs).
 7. Availability-impact descriptor field in the tool-policy contract (docs+implementation; on D4
    accept or independently).
+8. TCD placement-heuristic adoption into the TCD policy surface (builder-governance lane; if the
+   owner adopts § TCD heuristic — the derivation stays in this artifact).
