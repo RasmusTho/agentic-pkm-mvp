@@ -52,6 +52,40 @@ def _identity_to_dict(identity: EmbeddingIdentity | None) -> Dict[str, Any] | No
     }
 
 
+def inspect_retrieval_index_divergence() -> Dict[str, Any]:
+    """Compare the in-process hybrid retrieval cache against the durable vector index.
+
+    KERNEL-05 (audit invariant I-D3): the hybrid store is a cache-through of
+    ``store_vector_index`` and must never diverge from it. Read-only; never
+    mutates either side. When the cache has not been warmed yet (empty), this
+    reports zero divergence rather than a false positive — an unwarmed cache
+    is expected on a cold process, not a fault.
+    """
+    from app.retrieval.hybrid import get_store
+
+    vector_index = get_vector_index()
+    try:
+        durable_ids = {str(row["object_id"]) for row in vector_index.all_rows()}
+    except Exception:
+        return {"checked": False, "reason": "durable index unavailable", "missing_from_cache": 0, "extra_in_cache": 0}
+
+    cache_docs = get_store().all()
+    if not cache_docs:
+        return {"checked": True, "cache_warmed": False, "missing_from_cache": 0, "extra_in_cache": 0}
+
+    cache_ids = {doc.doc_id for doc in cache_docs}
+    missing_from_cache = sorted(durable_ids - cache_ids)
+    extra_in_cache = sorted(cache_ids - durable_ids)
+    return {
+        "checked": True,
+        "cache_warmed": True,
+        "missing_from_cache": len(missing_from_cache),
+        "missing_from_cache_sample": missing_from_cache[:5],
+        "extra_in_cache": len(extra_in_cache),
+        "extra_in_cache_sample": extra_in_cache[:5],
+    }
+
+
 _DIAGNOSE_TTL_S = float(os.getenv("INDEX_DOCTOR_TTL_S", "10"))
 _diagnose_cache: tuple[float, Dict[str, Any]] | None = None
 _diagnose_lock = threading.Lock()
@@ -189,6 +223,17 @@ def diagnose_index(*, use_cache: bool = False, include_vault_coverage: bool = Fa
                 f"{vault_coverage['missing_count']} vault notes have no store_objects row: {sample_text}"
             )
 
+    retrieval_index_divergence = inspect_retrieval_index_divergence()
+    if retrieval_index_divergence.get("checked") and retrieval_index_divergence.get("cache_warmed"):
+        missing = retrieval_index_divergence.get("missing_from_cache") or 0
+        extra = retrieval_index_divergence.get("extra_in_cache") or 0
+        if missing or extra:
+            warnings.append(
+                "Retrieval cache diverges from the durable index: "
+                f"{missing} rows missing from cache, {extra} extra rows in cache. "
+                "Run rebuild_from_durable_index() to resync."
+            )
+
     status = "ok"
     if issues:
         status = "error"
@@ -229,6 +274,7 @@ def diagnose_index(*, use_cache: bool = False, include_vault_coverage: bool = Fa
         "mixed_identities": mixed_identities,
         "metadata_completeness": metadata_completeness,
         "vault_coverage": vault_coverage,
+        "retrieval_index_divergence": retrieval_index_divergence,
     }
     with _diagnose_lock:
         _diagnose_cache = (time.monotonic(), result)
@@ -393,6 +439,7 @@ __all__ = [
     "reset_diagnose_cache",
     "inspect_unembedded_pg_objects",
     "inspect_vault_coverage_gap",
+    "inspect_retrieval_index_divergence",
     "verify_object_embedded",
     "IndexDriftError",
 ]

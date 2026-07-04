@@ -15,7 +15,6 @@ from app.ingest.config import DEFAULT_VAULT_ROOT
 from app.index.outbox import append_jsonl
 from app.knowledge.write_ops import write_note_from_absolute
 from app.observability.log import with_trace_id
-from app.retrieval.hybrid import get_store
 from app.search.service import ingest_object as index_ingest_object
 from app.services.companion_note import companion_path
 from app.stores import get_object_store
@@ -122,15 +121,9 @@ def _ingest_note(path: Path) -> Tuple[str, dict | None]:
         store.put(object_uuid, kind="note", source_ref=str(path), payload=store_payload)
     except Exception:
         pass
-    try:
-        get_store().add_document(
-            doc_id=str(object_uuid),
-            text=stripped_text,
-            source_ref=str(path),
-            payload=store_payload,
-        )
-    except Exception:
-        pass
+    # Retrieval cache is never written here directly (KERNEL-05, I-D3): it is
+    # populated exclusively by rebuild_from_durable_index() loading from
+    # store_vector_index, which index_ingest_object() above feeds.
     classification = classify_res.get("classification") if isinstance(classify_res, dict) else None
     return object_id, classification
 

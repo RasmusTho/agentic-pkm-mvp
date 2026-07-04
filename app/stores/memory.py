@@ -217,6 +217,19 @@ class MemoryVectorIndex(VectorIndex):
     def count_vectors(self) -> int:
         return len(self._entries)
 
+    def all_rows(self) -> list[dict]:
+        """Return every durable row for a cache rebuild (KERNEL-05, I-D3)."""
+        return [
+            {
+                "object_id": entry.object_id,
+                "kind": entry.kind,
+                "source_ref": entry.source_ref,
+                "payload": dict(entry.payload or {}),
+                "embedding": list(entry.embedding or []),
+            }
+            for entry in sorted(self._entries.values(), key=lambda e: e.seq)
+        ]
+
     def search(self, vector: list[float], *, k: int = 5, identity: EmbeddingIdentity | None = None) -> list:
         if not self._entries:
             return []

@@ -6,7 +6,7 @@ import os
 from datetime import timezone, datetime
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import click
 
@@ -16,7 +16,8 @@ from app.knowledge.write_ops import write_note_from_absolute
 from app.orchestrator.runtime import Orchestrator
 from app.planner.schema import Plan, PlanMetadata, PlanStep, new_plan_id
 from app.planner.tools import MCP_TOOL_DESCRIPTORS
-from app.retrieval.hybrid import get_store, hybrid_search
+from app.retrieval.hybrid import hybrid_search, rebuild_from_durable_index
+from app.retrieval.hybrid import reset_durable_rebuild_state as _reset_hybrid_rebuild_state
 from app.settings.validate import validate_settings
 from app.objects import DomainObject, ObjectStore
 from app.stores.plan_store import get_plan_store, reset_plan_store
@@ -247,6 +248,8 @@ def _seed_ask_corpus() -> list[dict[str, str]]:
             "text": "Norway is west of Sweden with capital Oslo.",
         },
     ]
+    from app.search.service import ingest_object as index_ingest_object
+
     store = ObjectStore()
     for entry in corpus:
         payload = {"raw_text": entry["text"], "title": entry["title"], "origin": "seed"}
@@ -258,17 +261,19 @@ def _seed_ask_corpus() -> list[dict[str, str]]:
             created_at=datetime.now(timezone.utc),
         )
         store.save_object(obj, emit_outbox=False, trace_id="smoke-ask")
+        # Durable write only (KERNEL-05, I-D3): seed store_vector_index directly
+        # rather than the in-memory retrieval cache, then rebuild the cache from
+        # the durable index below.
+        index_ingest_object(
+            object_id=UUID(entry["uuid"]),
+            kind="note",
+            source_ref=entry["title"],
+            payload={"title": entry["title"], "uuid": entry["uuid"]},
+            text=entry["text"],
+        )
 
-    get_store().set_documents(
-        [
-            {
-                "doc_id": entry["uuid"],
-                "text": entry["text"],
-                "payload": {"title": entry["title"], "uuid": entry["uuid"]},
-            }
-            for entry in corpus
-        ]
-    )
+    _reset_hybrid_rebuild_state()
+    rebuild_from_durable_index(force=True)
     return corpus
 
 

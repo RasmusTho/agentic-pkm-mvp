@@ -11,44 +11,27 @@ from app.agents.ask.utils import get_ask_settings
 from app.events.models import new_trace_id
 from app.observability.status_service import record_ask_error, record_ask_query
 from app.retrieval.hybrid import get_store as get_hybrid_store
-from app.stores import get_object_store
+from app.retrieval.hybrid import rebuild_from_durable_index
 
 _HYBRID_WARMED = False
 
 
 def _ensure_hybrid_store_loaded() -> None:
+    """Warm the in-process retrieval cache from the durable vector index.
+
+    Single production init call site for the retrieval cache-through
+    (KERNEL-05, audit invariant I-D3): the cache is populated ONLY by a
+    load/rebuild from ``store_vector_index``, never by scanning the object
+    store or any other ad-hoc fan-in. Safe to call on every request; the
+    rebuild itself is a no-op once the process has already warmed.
+    """
     global _HYBRID_WARMED
     hybrid = get_hybrid_store()
     if hybrid.all():
         _HYBRID_WARMED = True
         return
 
-    store = get_object_store()
-    docs_added = 0
-    seen: set[str] = set()
-
-    try:
-        records = list(store.list_objects(limit=100000))
-    except Exception:
-        records = []
-
-    for rec in records:
-        payload = rec.get("payload") or {}
-        text = payload.get("text") or payload.get("content")
-        if not text:
-            continue
-        doc_id = str(rec.get("object_id") or rec.get("id") or payload.get("uuid") or "")
-        if not doc_id or doc_id in seen:
-            continue
-        hybrid.add_document(
-            doc_id=doc_id,
-            text=str(text),
-            source_ref=rec.get("source_ref"),
-            payload=payload,
-        )
-        seen.add(doc_id)
-        docs_added += 1
-
+    docs_added = rebuild_from_durable_index()
     if docs_added > 0:
         _HYBRID_WARMED = True
 

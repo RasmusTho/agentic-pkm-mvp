@@ -124,6 +124,60 @@ class MemoryHybridStore:
 
 
 _STORE = MemoryHybridStore()
+_REBUILT_FROM_DURABLE_INDEX = False
+
+
+def _row_text(payload: dict[str, Any]) -> str | None:
+    text = payload.get("text") or payload.get("content")
+    return str(text) if text else None
+
+
+def rebuild_from_durable_index(*, force: bool = False) -> int:
+    """Load every row from the durable ``store_vector_index`` into the in-process cache.
+
+    This is the ONLY production path allowed to populate the retrieval store
+    (KERNEL-05, audit invariant I-D3): ``MemoryHybridStore`` is a cache-through
+    of ``store_vector_index``, never an independently written truth. Safe to
+    call repeatedly; a completed rebuild is a no-op unless ``force=True`` (used
+    after a kill-and-restart simulation or an explicit operator-triggered
+    reindex).
+
+    Returns the number of documents loaded into the cache.
+    """
+    global _REBUILT_FROM_DURABLE_INDEX
+    if _REBUILT_FROM_DURABLE_INDEX and not force:
+        return len(_STORE.all())
+
+    from app.stores import get_vector_index
+
+    docs: list[dict] = []
+    for row in get_vector_index().all_rows():
+        payload = row.get("payload") or {}
+        text = _row_text(payload)
+        if not text:
+            continue
+        docs.append(
+            {
+                "doc_id": str(row["object_id"]),
+                "text": text,
+                "language": payload.get("language"),
+                "source_ref": row.get("source_ref"),
+                "payload": payload,
+            }
+        )
+    _STORE.set_documents(docs)
+    _REBUILT_FROM_DURABLE_INDEX = True
+    return len(docs)
+
+
+def reset_durable_rebuild_state() -> None:
+    """Test-only: force the next ``rebuild_from_durable_index()`` call to reload.
+
+    Simulates a process restart discarding the in-memory cache without
+    discarding the durable index.
+    """
+    global _REBUILT_FROM_DURABLE_INDEX
+    _REBUILT_FROM_DURABLE_INDEX = False
 
 
 def _resolve_domain_scope() -> str | None:
@@ -276,4 +330,11 @@ def hybrid_search(query: str, *, k: int = 8, language: Optional[str] = None, que
     return maybe_rerank(query, results)
 
 
-__all__ = ["hybrid_search", "get_store", "MemoryHybridStore", "Document"]
+__all__ = [
+    "hybrid_search",
+    "get_store",
+    "MemoryHybridStore",
+    "Document",
+    "rebuild_from_durable_index",
+    "reset_durable_rebuild_state",
+]

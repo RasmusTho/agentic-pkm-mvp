@@ -54,6 +54,8 @@ class VectorIndex(Protocol):
 
     def count_vectors(self) -> int: ...
 
+    def all_rows(self) -> Iterable[dict]: ...
+
 
 @dataclass(frozen=True)
 class RelationMembership:

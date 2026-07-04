@@ -17,7 +17,7 @@ from app.agents.panel.filters import strip_ai_panels
 from app.cli import cli
 from app.ingest import vault_alpha as vault_alpha
 from app.ingest.vault_alpha import _compute_ingest_fingerprint, run_vault_alpha_ingest
-from app.retrieval.hybrid import get_store
+from app.retrieval.hybrid import get_store, rebuild_from_durable_index, reset_durable_rebuild_state
 from app.services.companion_note import companion_path, read_companion, write_companion, CompanionNote
 from app.stores import get_object_store, reset_store_backends
 from scripts.yaml_roundtrip import load_frontmatter
@@ -167,6 +167,7 @@ def _force_memory_backend(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_vault_alpha_ingest_respects_filters_and_panels(tmp_path: Path) -> None:
     reset_store_backends()
     get_store().set_documents([])
+    reset_durable_rebuild_state()
     vault = _prepare_vault(tmp_path)
     runner = CliRunner()
     env = _base_env(tmp_path)
@@ -197,6 +198,9 @@ def test_vault_alpha_ingest_respects_filters_and_panels(tmp_path: Path) -> None:
     has_panel = vault / "Concepts" / "HasPanel.md"
     frontmatter, body = load_frontmatter(has_panel.read_text(encoding="utf-8"))
     assert _bare_uuid(frontmatter.get("uuid"))
+    # KERNEL-05 (I-D3): the retrieval cache is populated only by rebuilding
+    # from the durable index, never directly by ingest.
+    rebuild_from_durable_index(force=True)
     docs = get_store().all()
     assert docs
     for doc in docs:

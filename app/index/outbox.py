@@ -29,6 +29,12 @@ def append_jsonl(obj: Dict[str, Any]) -> None:
     """
     Append a validated JSON document to the index outbox.
     Ensures directory exists and writes one line per entry.
+
+    Pure audit log (KERNEL-05, audit invariant I-D3): this function no longer
+    fans in to the in-memory retrieval store. Retrieval is populated only by
+    ``app.retrieval.hybrid.rebuild_from_durable_index()`` loading from
+    ``store_vector_index`` — never from this JSONL append path. See
+    docs/RUNTIME_CORRECTNESS_KERNEL/RETRIEVAL_READS_DURABLE_INDEX.md.
     """
     for field in ("object_id", "kind", "payload"):
         if field not in obj:
@@ -41,30 +47,6 @@ def append_jsonl(obj: Dict[str, Any]) -> None:
         fh.write(line)
         if not line.endswith("\n"):
             fh.write("\n")
-
-    # Opportunistically fan-in to in-memory retrieval store (best effort)
-    try:
-        payload = obj.get("payload") or {}
-        text = payload.get("content") or payload.get("text")
-        if text:
-            from app.retrieval.hybrid import get_store
-            try:
-                from app.agents.panel.filters import strip_ai_panels
-
-                text = strip_ai_panels(text)
-            except Exception:
-                pass
-
-            get_store().add_document(
-                doc_id=obj["object_id"],
-                text=str(text),
-                language=payload.get("language"),
-                source_ref=obj.get("source_ref"),
-                payload=payload,
-            )
-    except Exception:
-        # retrieval store is best-effort; never block outbox writes
-        pass
 
 
 __all__ = ["append_jsonl", "DEFAULT_OUTBOX_PATH"]
