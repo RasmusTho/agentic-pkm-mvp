@@ -183,3 +183,140 @@ def test_store_schema_missing_is_transient_never_dead_letters() -> None:
     # Guard the boundary: a plain RuntimeError (poison payload class) must NOT
     # ride the schema-missing exemption.
     assert outbox_worker._is_transient_dispatch_error(RuntimeError("boom")) is False
+
+
+def test_schema_violation_dead_letters_at_dispatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """KERNEL-08 (#2770): an invalid registered-schema payload dead-letters immediately.
+
+    Drives the production dispatch entrypoint (`_dispatch_topic` via the
+    `run()` consume loop): a row tagged with a registered schema version whose
+    payload violates that schema must dead-letter with reason
+    `schema_violation` and must never reach the real topic handler (no partial
+    processing), on the very first attempt (no poison-retry budget spent).
+    """
+    from app.events.models import new_event
+
+    vault = tmp_path / "selected-vault"
+    vault.mkdir()
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    monkeypatch.delenv("WATCHER_VAULT_PATH", raising=False)
+
+    # index.embedding.requested.v1 requires payload.object_id; this payload lacks it.
+    bad_payload = {"not_object_id": "x"}
+    tagged_event = new_event(
+        event_type="index.embedding.requested",
+        payload=bad_payload,
+        meta={"payload_schema": "index.embedding.requested.v1"},
+    )
+    message = {
+        "id": "row-schema-violation",
+        "topic": "index.embedding.requested",
+        "payload": bad_payload,
+        "event": tagged_event,
+    }
+
+    poll_calls = {"count": 0}
+
+    def _poll_once():
+        poll_calls["count"] += 1
+        if poll_calls["count"] == 1:
+            return message
+        return None
+
+    monkeypatch.setattr(outbox_worker, "poll_outbox_one", _poll_once)
+    monkeypatch.setattr(outbox_worker, "bootstrap", lambda: None)
+    monkeypatch.setattr(outbox_worker, "write_worker_heartbeat", lambda **_: None)
+
+    def _fail_handler(*_a: Any, **_k: Any) -> None:  # pragma: no cover - must never run
+        raise AssertionError("real topic handler must not run on a schema violation")
+
+    monkeypatch.setattr(outbox_worker, "process_indexer_event", _fail_handler)
+
+    dead_letters: list[dict[str, Any]] = []
+
+    def _capture_dead_letter(topic, payload, *, message_id, reason, attempts, trace_id, error):
+        dead_letters.append(
+            {
+                "topic": topic,
+                "payload": dict(payload),
+                "message_id": message_id,
+                "reason": reason,
+                "attempts": attempts,
+            }
+        )
+
+    monkeypatch.setattr(outbox_worker, "_dead_letter_outbox_message", _capture_dead_letter)
+
+    acked: list[str] = []
+    monkeypatch.setattr(outbox_worker, "ack_outbox", lambda mid: acked.append(mid))
+
+    outbox_worker.run(interval=0.0, heartbeat_interval=9999, log_heartbeat_interval=None, stop_after_ticks=2)
+
+    assert len(dead_letters) == 1
+    assert dead_letters[0]["topic"] == "index.embedding.requested"
+    assert dead_letters[0]["reason"] == "schema_violation"
+    assert dead_letters[0]["message_id"] == "row-schema-violation"
+    assert acked == ["row-schema-violation"]
+
+
+def test_schema_violation_on_grandfathered_row_is_log_only_never_dead_lettered(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A pre-registry row (no payload_schema/schema_version tag) is grandfathered v0.
+
+    Cross-task invariant #1 (docs/RUNTIME_CORRECTNESS_KERNEL/README.md): rows
+    written before the registry existed must be validated log-only at
+    dispatch, never dead-lettered retroactively, even if their payload would
+    violate the current schema.
+    """
+    from app.events.models import new_event
+
+    vault = tmp_path / "selected-vault"
+    vault.mkdir()
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    monkeypatch.delenv("WATCHER_VAULT_PATH", raising=False)
+
+    bad_payload = {"not_object_id": "x"}
+    # No meta at all: this is what a genuinely pre-registry DB row looks like.
+    untagged_event = new_event(event_type="index.embedding.requested", payload=bad_payload)
+    message = {
+        "id": "row-grandfathered",
+        "topic": "index.embedding.requested",
+        "payload": bad_payload,
+        "event": untagged_event,
+    }
+
+    poll_calls = {"count": 0}
+
+    def _poll_once():
+        poll_calls["count"] += 1
+        if poll_calls["count"] == 1:
+            return message
+        return None
+
+    monkeypatch.setattr(outbox_worker, "poll_outbox_one", _poll_once)
+    monkeypatch.setattr(outbox_worker, "bootstrap", lambda: None)
+    monkeypatch.setattr(outbox_worker, "write_worker_heartbeat", lambda **_: None)
+
+    handled: list[Any] = []
+    monkeypatch.setattr(
+        outbox_worker,
+        "process_indexer_event",
+        lambda evt: handled.append(evt),
+    )
+
+    dead_letters: list[Any] = []
+    monkeypatch.setattr(
+        outbox_worker,
+        "_dead_letter_outbox_message",
+        lambda *a, **k: dead_letters.append((a, k)),
+    )
+
+    acked: list[str] = []
+    monkeypatch.setattr(outbox_worker, "ack_outbox", lambda mid: acked.append(mid))
+
+    outbox_worker.run(interval=0.0, heartbeat_interval=9999, log_heartbeat_interval=None, stop_after_ticks=2)
+
+    assert dead_letters == []
+    assert len(handled) == 1
+    assert acked == ["row-grandfathered"]

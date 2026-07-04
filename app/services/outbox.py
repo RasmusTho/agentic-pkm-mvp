@@ -10,6 +10,11 @@ from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 from app.events.models import Event, new_event
 from app.events.schema import OutboxEvent
+from app.events.topic_schema_registry import (
+    current_schema_ref,
+    is_registered_topic,
+    validate_topic_payload,
+)
 
 # Optional DB helpers (tests kan ge FakeConn)
 try:
@@ -180,6 +185,7 @@ def _coerce_event(event: Event | OutboxEvent) -> Event:
     if isinstance(event, Event):
         return event
     payload = event_payload_dict(getattr(event, "payload", None))
+    meta = getattr(event, "meta", None)
     return new_event(
         event_type=event.event,
         payload=dict(payload),
@@ -188,6 +194,7 @@ def _coerce_event(event: Event | OutboxEvent) -> Event:
         source=event_source_name(getattr(event, "source", None), default="app"),
         event_id=event.event_id,
         created_at=event.timestamp,
+        meta=dict(meta) if isinstance(meta, dict) else None,
     )
 
 
@@ -265,10 +272,27 @@ def write_outbox_event(
     NOTHING``: duplicate emission with the same key yields exactly one row and
     returns ``""`` for the swallowed duplicate. Derive keys with
     :func:`derive_idempotency_key`.
+
+    Registry coverage validation (KERNEL-08, #2770): when the event's topic has
+    a registered schema (``schemas/events/<topic>.v1.schema.json``), the payload
+    is validated against it before the insert and ``meta.payload_schema`` is
+    stamped ``"<topic>.v1"`` so dispatch-time validation can distinguish
+    registry-covered rows from pre-registry ("grandfathered") ones. Topics with
+    no registered schema are written unchanged (unvalidated) — coverage over the
+    live dispatch table is enforced by
+    ``tests/events/test_topic_schema_registry.py::test_every_dispatched_topic_has_schema``,
+    not by this write path.
     """
     if not isinstance(idempotency_key, str) or not idempotency_key.strip():
         raise ValueError(f"write_outbox_event requires a non-empty idempotency_key, got {idempotency_key!r}")
     envelope = _coerce_event(event)
+    if is_registered_topic(envelope.event_type):
+        validate_topic_payload(envelope.event_type, envelope.payload)
+        # Stamp on a copy: `envelope` may be the caller's own `Event` instance
+        # (isinstance branch in `_coerce_event`) and must not be mutated in place.
+        stamped_meta = dict(envelope.meta or {})
+        stamped_meta["payload_schema"] = current_schema_ref(envelope.event_type)
+        envelope = envelope.model_copy(update={"meta": stamped_meta})
     conn, close = _use_conn(conn)
     stored = envelope.model_dump_json()
     created_at = envelope.created_at or datetime.now(timezone.utc)

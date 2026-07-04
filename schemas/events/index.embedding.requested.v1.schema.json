@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/index.embedding.requested.v1.schema.json",
+  "title": "index.embedding.requested payload (v1)",
+  "description": "Payload of the index.embedding.requested outbox event. Producer: app/outbox/events.py::emit_index_embedding_requested (payload = {object_id}; other fields ride in meta). Consumer: app/indexer/consumer.py::process_event via app/indexer/consumer.py::_extract_object_id, which requires payload.object_id and raises ValueError('index.embedding.requested missing payload.object_id') when absent. Requires object_id so the consumer can locate the object to embed.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["object_id"],
+  "properties": {
+    "object_id": { "type": "string" }
+  }
+}

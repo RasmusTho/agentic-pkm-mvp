@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/note.move.workbench.v1.schema.json",
+  "title": "note.move.workbench payload (v1)",
+  "description": "Payload of the note.move.workbench outbox event. Producer: app/agents/panel_agent/runtime.py (config-driven zone_move panel actions): note_uuid/note_path/action_id/params. Consumer: app/workers/outbox_worker.py::handle_note_move_workbench, which requires payload.note_path (logs and returns early otherwise) and reads params.destination_zone (default 'workbench') plus action_id/intent_id. Requires note_path so the consumer can locate the vault action Guard chain's mutation target.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["note_path"],
+  "properties": {
+    "note_path": { "type": "string" },
+    "note_uuid": { "type": ["string", "null"] },
+    "params": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "source_zone": { "type": ["string", "null"] },
+        "destination_zone": { "type": ["string", "null"] }
+      }
+    },
+    "action_id": { "type": ["string", "null"] },
+    "intent_id": { "type": ["string", "null"] },
+    "trace_id": { "type": ["string", "null"] }
+  }
+}
