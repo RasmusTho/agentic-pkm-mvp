@@ -40,3 +40,7 @@
 - [ADR-0041: `MODULAR_ARCHITECTURE.md` is misnamed — rename to an accurate title](./ADR-0041-system-of-systems-doc-rename.md)
 - [ADR-0042: DESIGN_PRINCIPLES §9 mislabels volatility isolation — reword now](./ADR-0042-design-principles-9-volatility-isolation.md)
 - [ADR-0043: Heimdall naming + ecosystem Norse name register (Proposed)](./ADR-0043-heimdall-naming-and-norse-name-register.md)
+- [ADR-0044: RESEARCH-08 D1 conforms to the acknowledged-SoS model of ADR-0043 (Yggdrasil = the whole; Heimdall a sibling constituent)](./ADR-0044-research08-d1-conforms-to-acknowledged-sos.md)
+- [ADR-0045: Constituent interaction rule — three tiers + governed-candidate event/evidence intake (Heimdall → downstream)](./ADR-0045-constituent-interaction-tiers-and-evidence-intake.md)
+- [ADR-0046: Adopt INV-EF1, the two-scope public/private operator-invariance seam, with register + lint](./ADR-0046-inv-ef1-public-private-seam.md)
+- [ADR-0047: MCP topology stance for ecosystem constituents — deferred until a concrete remote/sibling server exists](./ADR-0047-mcp-topology-federation-stance.md)
