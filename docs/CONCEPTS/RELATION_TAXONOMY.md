@@ -43,6 +43,8 @@ For every relation the taxonomy records:
 | `links_to` | Generic human association ("see also"); carries no further semantics | human | authoritative (as an association only) | no | no | body-link / frontmatter | traversed | link |
 | `companion_for` | A companion note is *about* this primary artifact (companion → primary) | machine/mixed | supporting | cond | partial | companion + relation-store | audit-only | hidden / provenance |
 | `has_companion` | Inverse of `companion_for` (primary → companion) | machine/mixed | supporting | cond | partial | relation-store | audit-only | hidden |
+| `chat_for` | Chat-session artifact belongs to this note (chat → note); durable reference via the `note_uuid` frontmatter field | machine/mixed | supporting | cond | partial | frontmatter | audit-only | hidden / provenance |
+| `has_chats` | Inverse of `chat_for` (note → chat) | machine/mixed | supporting | cond | partial | frontmatter | audit-only | hidden |
 | `derived_from` | This artifact was produced from that source (transformation/summary) | machine/mixed | derived (provenance) | cond | yes | frontmatter / companion | audit-only / ranking-signal | provenance |
 | `source_ref` | Mutable locator to the origin artifact (path-or-equivalent); identity/continuity aid, not stable primary identity | machine/mixed | derived (provenance/locator) | no | yes | frontmatter | audit-only | provenance |
 | `supports` | That artifact is evidence/grounding for a claim in this artifact | human/inferred | supporting (epistemic) | cond | partial | frontmatter / companion | ranking-signal | provenance |
