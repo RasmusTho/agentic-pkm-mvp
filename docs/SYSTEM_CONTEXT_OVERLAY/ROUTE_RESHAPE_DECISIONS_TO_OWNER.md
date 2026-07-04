@@ -11,6 +11,16 @@ can_parallelize_with: []
 
 # Route Reshape Decisions To Owner
 
+> **State — DECIDED (owner, 2026-07-03; recorded 2026-07-04, issue #2840).** The owner chose to
+> **act on both** reshape items, so a future pass must **not** re-ask Q2/Q4:
+> - **Q2 (SoS doc naming):** RENAME `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` → recorded in
+>   **ADR-0041** (Accepted); enactment tracked by follow-up **#2855**.
+> - **Q4 (DESIGN_PRINCIPLES §9):** REWORD to volatility-isolation language now → recorded in
+>   **ADR-0042** (Accepted); enactment tracked by follow-up **#2856**.
+>
+> SBI-8 produced the two ADRs and the two follow-up issues; it performed no rename/reword itself.
+> Enactment is owned by `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md`.
+
 **This task is owner-decision material, not agent-executable implementation. Do not mark it
 `agent:ready`. File it (if at all) as `agent:needs-human` and do not pick it up as a normal
 implementation slice.** Per audit §13: "No reshape is enacted by this audit. Reshape items exist

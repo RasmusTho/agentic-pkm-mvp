@@ -37,3 +37,5 @@
 - [ADR-0038: MetadataBundle is required for usable objects](./ADR-0038-metadata-bundle-is-required-for-usable-objects.md)
 - [ADR-0039: RetrievalResult is candidate context, not authority](./ADR-0039-retrieval-result-is-candidate-context-not-authority.md)
 - [ADR-0040: Prod promotion ref — `main` interim baseline; gated `stable` deferred](./ADR-0040-prod-promotion-ref-main-interim.md)
+- [ADR-0041: `SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` is misnamed — rename to an accurate title](./ADR-0041-system-of-systems-doc-rename.md)
+- [ADR-0042: DESIGN_PRINCIPLES §9 mislabels volatility isolation — reword now](./ADR-0042-design-principles-9-volatility-isolation.md)
