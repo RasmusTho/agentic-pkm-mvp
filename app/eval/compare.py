@@ -19,10 +19,19 @@ Verdict semantics:
      (``regression: true`` — floors come from ``config/eval_thresholds.yaml``
      at scorecard build time, which is how compare consumes them);
   3. any compared metric worsened relative to baseline by more than the
-     relative tolerance (default 5 %, same as ``BenchmarkSuite.compare``).
+     relative tolerance (default 5 %, same as ``BenchmarkSuite.compare``);
+  4. any per-language / per-route-intent slice present in the baseline is
+     MISSING in the candidate — a disappeared slice is the strongest possible
+     regression, never a silent shrink of the comparison surface. Keys only
+     in the candidate are reported (``slice_coverage``) but do not block.
 - ``improved`` — no regression and at least one metric improved beyond the
   tolerance.
 - ``neutral`` — everything within tolerance.
+
+Malformed inputs fail loud as :class:`ScorecardCompareError` — missing
+required sections and non-finite metric values (NaN/±inf) included — and the
+CLI maps that to exit code 2, so a broken input is never mistaken for a
+genuine ``regression`` verdict (exit 1).
 """
 
 from __future__ import annotations
@@ -74,15 +83,58 @@ def load_scorecard(path: Path) -> Dict:
     return data
 
 
-def _classification_metrics(classification: Dict) -> Dict[str, float]:
+def _section(scorecard: Dict, label: str, key: str) -> Dict:
+    """Fetch a required scorecard section, failing loud on malformed input."""
+    try:
+        value = scorecard[key]
+    except (KeyError, TypeError) as exc:
+        raise ScorecardCompareError(
+            f"{label} scorecard is missing required section {key!r}"
+        ) from exc
+    if not isinstance(value, dict):
+        raise ScorecardCompareError(
+            f"{label} scorecard section {key!r} is not an object"
+        )
+    return value
+
+
+def _require_finite(value: object, path: str) -> float:
+    """Reject non-numeric and non-finite (NaN/±inf) metric values, naming the path."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ScorecardCompareError(f"non-numeric metric value at {path}: {value!r}")
+    if not math.isfinite(value):
+        raise ScorecardCompareError(f"non-finite metric value at {path}: {value!r}")
+    return float(value)
+
+
+def _classification_metrics(classification: Dict, label: str) -> Dict[str, float]:
     """Flatten the read-side classification metrics compared by this seam."""
+    try:
+        metrics = {
+            "macro_precision": classification["macro_precision"],
+            "macro_recall": classification["macro_recall"],
+            "pass_rate": classification["pass_rate"],
+            "answer_rate": classification["safe_fail"]["answer_rate"],
+            "unknown_safe_fail_rate": classification["unknown"]["safe_fail_rate"],
+        }
+    except (KeyError, TypeError) as exc:
+        raise ScorecardCompareError(
+            f"{label} scorecard classification section is missing required key {exc}"
+        ) from exc
     return {
-        "macro_precision": classification["macro_precision"],
-        "macro_recall": classification["macro_recall"],
-        "pass_rate": classification["pass_rate"],
-        "answer_rate": classification["safe_fail"]["answer_rate"],
-        "unknown_safe_fail_rate": classification["unknown"]["safe_fail_rate"],
+        name: _require_finite(value, f"{label}.classification.{name}")
+        for name, value in metrics.items()
     }
+
+
+def _validate_retrieval_bucket(bucket: object, path: str) -> Dict:
+    """Validate one retrieval-metric bucket (finite leaves only)."""
+    if not isinstance(bucket, dict):
+        raise ScorecardCompareError(f"scorecard bucket at {path} is not an object")
+    for metric in RETRIEVAL_METRICS:
+        if metric in bucket:
+            _require_finite(bucket[metric], f"{path}.{metric}")
+    return bucket
 
 
 def _metric_row(
@@ -162,43 +214,94 @@ def compare_scorecards(
 ) -> Dict:
     """Compare two ``eval_scorecard.v1`` dicts into a deterministic report."""
     for label, scorecard in (("baseline", baseline), ("candidate", candidate)):
-        if scorecard.get("schema_version") != SCORECARD_SCHEMA_VERSION:
+        if not isinstance(scorecard, dict) or (
+            scorecard.get("schema_version") != SCORECARD_SCHEMA_VERSION
+        ):
+            schema = scorecard.get("schema_version") if isinstance(scorecard, dict) else None
             raise ScorecardCompareError(
                 f"{label} scorecard has unsupported schema_version "
-                f"{scorecard.get('schema_version')!r} (expected {SCORECARD_SCHEMA_VERSION!r})"
+                f"{schema!r} (expected {SCORECARD_SCHEMA_VERSION!r})"
             )
+
+    # Structural + finiteness validation up front: compare accepts arbitrary
+    # files, so malformed input must raise ScorecardCompareError (CLI exit 2),
+    # never a raw traceback or a silent 'neutral'.
+    sections: Dict[str, Dict[str, Dict]] = {}
+    for label, scorecard in (("baseline", baseline), ("candidate", candidate)):
+        aggregate = _validate_retrieval_bucket(
+            _section(scorecard, label, "aggregate"), f"{label}.aggregate"
+        )
+        memory_recall = _validate_retrieval_bucket(
+            _section(scorecard, label, "memory_recall"), f"{label}.memory_recall"
+        )
+        keyed: Dict[str, Dict[str, Dict]] = {}
+        for group_name in ("by_language", "by_slice"):
+            group = _section(scorecard, label, group_name)
+            for key in group:
+                _validate_retrieval_bucket(group[key], f"{label}.{group_name}.{key}")
+            keyed[group_name] = group
+        classification = _section(scorecard, label, "classification")
+        sections[label] = {
+            "aggregate": aggregate,
+            "memory_recall": memory_recall,
+            "by_language": keyed["by_language"],
+            "by_slice": keyed["by_slice"],
+            "classification": classification,
+            "classification_metrics": _classification_metrics(classification, label),
+        }
 
     slices: Dict = {
         "aggregate": _compare_bucket(
-            baseline["aggregate"], candidate["aggregate"], RETRIEVAL_METRICS, tolerance
+            sections["baseline"]["aggregate"],
+            sections["candidate"]["aggregate"],
+            RETRIEVAL_METRICS,
+            tolerance,
         ),
         "by_language": _compare_keyed_buckets(
-            baseline["by_language"], candidate["by_language"], tolerance
+            sections["baseline"]["by_language"], sections["candidate"]["by_language"], tolerance
         ),
         "by_slice": _compare_keyed_buckets(
-            baseline["by_slice"], candidate["by_slice"], tolerance
+            sections["baseline"]["by_slice"], sections["candidate"]["by_slice"], tolerance
         ),
         "memory_recall": _compare_bucket(
-            baseline["memory_recall"], candidate["memory_recall"], RETRIEVAL_METRICS, tolerance
+            sections["baseline"]["memory_recall"],
+            sections["candidate"]["memory_recall"],
+            RETRIEVAL_METRICS,
+            tolerance,
         ),
         "classification": _compare_bucket(
-            _classification_metrics(baseline["classification"]),
-            _classification_metrics(candidate["classification"]),
+            sections["baseline"]["classification_metrics"],
+            sections["candidate"]["classification_metrics"],
             CLASSIFICATION_METRICS,
             tolerance,
         ),
     }
 
-    baseline_cls = baseline["classification"]
-    candidate_cls = candidate["classification"]
-    classification_confusion = {
-        "baseline_hard_gate_passed": bool(baseline_cls["hard_gate_passed"]),
-        "candidate_hard_gate_passed": bool(candidate_cls["hard_gate_passed"]),
-        "candidate_mutation_side_confusions": candidate_cls["mutation_side_confusions"],
-        "confusion_matrix_delta": _confusion_matrix_delta(
-            baseline_cls["confusion_matrix"], candidate_cls["confusion_matrix"]
-        ),
-    }
+    # A slice present in the baseline but missing in the candidate is the
+    # strongest possible regression: the comparison surface silently shrank.
+    # Blocking; candidate-only keys are reported via slice_coverage only.
+    missing_slices: List[Dict] = []
+    for group_name in ("by_language", "by_slice"):
+        for key in sorted(
+            set(sections["baseline"][group_name]) - set(sections["candidate"][group_name])
+        ):
+            missing_slices.append({"group": group_name, "key": key})
+
+    baseline_cls = sections["baseline"]["classification"]
+    candidate_cls = sections["candidate"]["classification"]
+    try:
+        classification_confusion = {
+            "baseline_hard_gate_passed": bool(baseline_cls["hard_gate_passed"]),
+            "candidate_hard_gate_passed": bool(candidate_cls["hard_gate_passed"]),
+            "candidate_mutation_side_confusions": candidate_cls["mutation_side_confusions"],
+            "confusion_matrix_delta": _confusion_matrix_delta(
+                baseline_cls["confusion_matrix"], candidate_cls["confusion_matrix"]
+            ),
+        }
+    except (KeyError, TypeError) as exc:
+        raise ScorecardCompareError(
+            f"scorecard classification section is missing required key {exc}"
+        ) from exc
 
     def _flag(kind: str) -> List[Dict]:
         flagged: List[Dict] = []
@@ -222,7 +325,7 @@ def compare_scorecards(
     hard_gate_regression = not classification_confusion["candidate_hard_gate_passed"]
     candidate_floor_regression = bool(candidate.get("regression"))
 
-    if hard_gate_regression or candidate_floor_regression or regressions:
+    if hard_gate_regression or candidate_floor_regression or missing_slices or regressions:
         verdict = "regression"
     elif improvements:
         verdict = "improved"
@@ -240,18 +343,21 @@ def compare_scorecards(
         },
         "slice_coverage": {
             "by_language_only_in_baseline": sorted(
-                set(baseline["by_language"]) - set(candidate["by_language"])
+                set(sections["baseline"]["by_language"])
+                - set(sections["candidate"]["by_language"])
             ),
             "by_language_only_in_candidate": sorted(
-                set(candidate["by_language"]) - set(baseline["by_language"])
+                set(sections["candidate"]["by_language"])
+                - set(sections["baseline"]["by_language"])
             ),
             "by_slice_only_in_baseline": sorted(
-                set(baseline["by_slice"]) - set(candidate["by_slice"])
+                set(sections["baseline"]["by_slice"]) - set(sections["candidate"]["by_slice"])
             ),
             "by_slice_only_in_candidate": sorted(
-                set(candidate["by_slice"]) - set(baseline["by_slice"])
+                set(sections["candidate"]["by_slice"]) - set(sections["baseline"]["by_slice"])
             ),
         },
+        "missing_slices": missing_slices,
         "regressions": regressions,
         "improvements": improvements,
         "verdict": verdict,
@@ -340,6 +446,22 @@ def render_compare_summary(comparison: Dict) -> str:
             lines.append(f"    {expected}: {cells}")
     else:
         lines.append("  Confusion-matrix delta: none.")
+
+    if comparison["missing_slices"]:
+        lines.append("")
+        lines.append("Slices present in baseline but MISSING in candidate (blocking):")
+        for item in comparison["missing_slices"]:
+            lines.append(f"  - {item['group']}:{item['key']}")
+
+    coverage = comparison["slice_coverage"]
+    candidate_only = [
+        f"by_language:{key}" for key in coverage["by_language_only_in_candidate"]
+    ] + [f"by_slice:{key}" for key in coverage["by_slice_only_in_candidate"]]
+    if candidate_only:
+        lines.append("")
+        lines.append(
+            "Slices only in candidate (reported, non-blocking): " + ", ".join(candidate_only)
+        )
 
     if comparison["candidate_gate"]["regression"]:
         lines.append("")

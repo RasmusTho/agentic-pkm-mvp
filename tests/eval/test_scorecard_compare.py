@@ -21,6 +21,7 @@ from app.eval.compare import (
     compare_scorecard_files,
     compare_scorecards,
     load_scorecard,
+    render_compare_summary,
 )
 
 pytestmark = pytest.mark.not_pg
@@ -164,6 +165,93 @@ def test_verdict_regression_on_mutation_side_hard_gate() -> None:
     comparison = compare_scorecards(baseline, candidate)
     assert comparison["verdict"] == "regression"
     assert comparison["classification_confusion"]["candidate_hard_gate_passed"] is False
+
+
+def test_verdict_regression_on_missing_slice() -> None:
+    """A slice present in baseline but missing in candidate is blocking.
+
+    Round-1 review repro on PR #2858: deleting 'sv' plus a route slice from
+    the candidate previously yielded 'improved' because only the key
+    intersection was compared and slice_coverage never fed the verdict.
+    """
+    baseline = load_scorecard(BASELINE_PATH)
+    candidate = load_scorecard(CANDIDATE_PATH)
+    del candidate["by_language"]["sv"]
+    del candidate["by_slice"]["hybrid_semantic"]
+
+    comparison = compare_scorecards(baseline, candidate)
+    assert comparison["verdict"] == "regression"
+    assert comparison["missing_slices"] == [
+        {"group": "by_language", "key": "sv"},
+        {"group": "by_slice", "key": "hybrid_semantic"},
+    ]
+    summary = render_compare_summary(comparison)
+    assert "MISSING in candidate (blocking)" in summary
+    assert "by_language:sv" in summary
+    assert "by_slice:hybrid_semantic" in summary
+
+
+def test_candidate_only_slices_report_but_do_not_block() -> None:
+    baseline = load_scorecard(BASELINE_PATH)
+    candidate = load_scorecard(CANDIDATE_PATH)
+    candidate["by_slice"]["new_route_intent"] = {"precision@k": 0.5, "ndcg@k": 0.9, "count": 2}
+
+    comparison = compare_scorecards(baseline, candidate)
+    # Fixture pair verdict is 'improved'; a candidate-only slice must not flip it.
+    assert comparison["verdict"] == "improved"
+    assert comparison["missing_slices"] == []
+    assert comparison["slice_coverage"]["by_slice_only_in_candidate"] == ["new_route_intent"]
+    assert "Slices only in candidate (reported, non-blocking)" in render_compare_summary(
+        comparison
+    )
+
+
+def test_rejects_non_finite_metric_values(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    candidate = load_scorecard(CANDIDATE_PATH)
+    candidate["by_language"]["sv"]["precision@k"] = float("nan")
+    nan_path = tmp_path / "candidate_nan.json"
+    # json.dumps emits bare NaN (invalid strict JSON) — exactly the hostile
+    # input class compare must reject instead of flowing to 'neutral'.
+    nan_path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    with pytest.raises(
+        ScorecardCompareError, match=r"non-finite .* candidate\.by_language\.sv"
+    ):
+        compare_scorecard_files(BASELINE_PATH, nan_path)
+
+    code = eval_run.main(
+        ["compare", "--baseline", str(BASELINE_PATH), "--candidate", str(nan_path)]
+    )
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "error:" in captured.err
+    assert "non-finite" in captured.err
+
+
+def test_cli_exit_2_on_truncated_scorecard(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Malformed input is exit 2 with an `error:` message, never a raw
+    traceback exit that is indistinguishable from a regression verdict (1)."""
+    truncated = load_scorecard(CANDIDATE_PATH)
+    del truncated["classification"]
+    truncated_path = tmp_path / "truncated.json"
+    truncated_path.write_text(json.dumps(truncated), encoding="utf-8")
+
+    with pytest.raises(
+        ScorecardCompareError, match="missing required section 'classification'"
+    ):
+        compare_scorecard_files(BASELINE_PATH, truncated_path)
+
+    code = eval_run.main(
+        ["compare", "--baseline", str(BASELINE_PATH), "--candidate", str(truncated_path)]
+    )
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "error:" in captured.err
+    assert "missing required section 'classification'" in captured.err
 
 
 def test_verdict_regression_when_candidate_fails_own_floors() -> None:
