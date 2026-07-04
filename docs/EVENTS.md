@@ -70,11 +70,12 @@ Notes:
   (`uuid5(namespace, sha256(topic ‖ source_id ‖ fingerprint))`). Ad-hoc key schemes are forbidden;
   `tests/architecture/test_outbox_producer_idempotency.py` gates every callsite.
 - Per-topic fingerprints are chosen deliberately: vault-sync and watcher ingest events key on
-  `(topic, object uuid/path, content fingerprint + observation marker)` (the API `/ingest` route and
-  `object_store.save_object` producers do not carry an observation marker yet and retain the bare
-  content key — tracked in #2863), where the observation
+  `(topic, object uuid/path, content fingerprint + observation marker)`, where the observation
   marker is the observed file stat mtime (vault-sync passes it as a fingerprint-only component; the
-  watcher payload already embeds it). The dedup scope is the SAME OBSERVATION — a crash/retry
+  watcher payload already embeds it). The API `/ingest` route embeds `content` in its payload and
+  `object_store.save_object` keys on the durable payload's content fingerprint (#2863), so both emit
+  on a content change; neither carries a file-observation marker, so only the A→B→A revert dedups
+  (accepted on the API path). The dedup scope is the SAME OBSERVATION — a crash/retry
   re-emission re-derives the identical key and dedups — never all-time content recurrence: outbox
   rows are not purged, so a bare content key would silently swallow an A→B→A content revert against
   the original A row while the object/file_state write still commits (over-dedup = silent projection

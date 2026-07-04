@@ -28,7 +28,7 @@ from uuid import UUID
 
 from app.events.models import new_trace_id
 from app.events.types import INGEST_OBJECT_CREATED
-from app.services.outbox import insert_object_and_outbox
+from app.services.outbox import insert_object_and_outbox, payload_fingerprint
 from app.store.relation_index import RelationEdge, GraphSlice, RelationIndex
 from app.store.vector_index import ScoredNeighbor, VectorIndex
 from app.stores import resolve_object_store_port
@@ -124,6 +124,15 @@ class ObjectStore:
             payload=dict(obj.payload or {}),
         )
         if emit_outbox:
+            # Observation-scoped idempotency key (#2863, KERNEL-02): the emitted
+            # payload is only {uuid, kind}, so without a content component a
+            # later save of the SAME uuid with CHANGED content derives the same
+            # key and is swallowed by ON CONFLICT DO NOTHING — silent event loss
+            # while the durable store write still lands. Mixing the durable
+            # payload's content fingerprint into the key (fingerprint-only, not
+            # into the emitted payload) makes content changes emit a distinct
+            # event while a crash-retry of the same save (identical content)
+            # still dedups. Mirrors the observation= mechanism from PR #2859.
             insert_object_and_outbox(
                 {
                     "uuid": obj.uuid,
@@ -133,6 +142,7 @@ class ObjectStore:
                 trace_id=trace_id,
                 object_id=obj.uuid,
                 source="object_store",
+                observation=payload_fingerprint(obj.payload),
             )
         # Mirror only after the durable write succeeded — the mirror must never
         # hold state the durable store does not (I-S4).
