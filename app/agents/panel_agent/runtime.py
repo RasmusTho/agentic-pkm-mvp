@@ -37,6 +37,7 @@ from app.services.outbox import (
     write_outbox_event,
 )
 from app.objects import ObjectStore
+from app.write_guard import DEFAULT_WRITE_GUARD
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +126,17 @@ def execute_panel_intent(
     vault_root: Path | None = None,
     allow_legacy_promotion_without_trust_verb: bool = False,
 ) -> PanelRuntimeResult:
+    # Guard-at-seam (#2808, formal-model.md Divergence F-A): assert WriteGuard
+    # here, at the write seam itself, before any filesystem mutation. API
+    # callers (PanelConfirmationService, CheckboxProjectionService) already
+    # assert caller-side before invoking this function — that stays as
+    # defense-in-depth (distinct action strings). This is the only assert that
+    # covers the CLI (`panel run`/`panel run-many`) and outbox-worker
+    # (`PANEL_SCAN_REQUESTED`) production call sites, which reach this seam
+    # with no caller-side guard. Raising here (rather than swallowing) keeps
+    # the contract uniform with the sibling guarded writers: callers that want
+    # a soft "blocked" outcome catch `WritesBlockedError` themselves.
+    DEFAULT_WRITE_GUARD.assert_writes_allowed("panel.writeback")
     policy_flags = {
         "execution_mode": "watcher" if intent_event.source.trigger == "watcher" else "manual",
         "allow_legacy_promotion_without_trust_verb": allow_legacy_promotion_without_trust_verb,
