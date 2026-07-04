@@ -200,6 +200,15 @@ normalize from `vector_index_meta`). The row payload must preserve the retrieved
 `store_objects` plus `embedding_identity` so retrieval consumers can inspect the evidence unit
 without consulting hidden process state.
 
+**Transform provenance stamp (KERNEL-06, #2768):** every write also carries a `payload.provenance`
+object — `{source_ref, content_hash, chunk_policy_version, pipeline_version, embedding_identity}` —
+inside the same JSONB payload, written by the same upsert statement as the vector (no separate
+"stamp later" write). `content_hash` is a `sha256` of the exact embedded text
+(`app.index.artifact_metadata.compute_content_hash`); the index doctor compares it against the
+current `store_objects` text to list content-drift re-embed candidates (read-only), and
+`index reconcile` re-embeds only those stale rows. A B-tree expression index on
+`payload->>'content_hash'` (migration `699c97b7c007`) keeps that scan cheap at scale.
+
 **Chunk metadata schema v1 (#2323):** `app/ingest/chunk_policy.py::build_chunks` produces per-chunk
 metadata (`chunk_id`, `source_id`, `heading_path`, `char_start`, `char_end`, `language`,
 `provenance` — full field semantics in `docs/EMBEDDINGS.md :: Oversized input handling`), reusing

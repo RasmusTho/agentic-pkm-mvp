@@ -18,6 +18,11 @@ CHUNK_METADATA_FIELDS_V1 = (
     "provenance",
 )
 
+# Chunk policy version stamped into every store_vector_index row's provenance
+# (KERNEL-06, #2768). Bump this when the chunking algorithm changes in a way
+# that would make existing chunks stale relative to a re-run of the pipeline.
+CHUNK_POLICY_VERSION = "v1"
+
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*\S.*)$")
 
 
@@ -313,4 +318,5 @@ __all__ = [
     "build_structural_chunks",
     "speaker_aware_chunks",
     "CHUNK_METADATA_FIELDS_V1",
+    "CHUNK_POLICY_VERSION",
 ]

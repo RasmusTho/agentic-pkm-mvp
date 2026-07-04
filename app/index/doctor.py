@@ -17,6 +17,7 @@ except Exception:  # pragma: no cover - memory backend optional in some contexts
 try:
     from app.stores.pg import (
         PgVectorIndex,
+        inspect_pg_content_hash_staleness,
         inspect_pg_identity_tuples,
         inspect_pg_index_state,
         inspect_pg_metadata_completeness,
@@ -26,6 +27,7 @@ except Exception:  # pragma: no cover - pg backend optional in some contexts
     inspect_pg_index_state = None  # type: ignore
     inspect_pg_identity_tuples = None  # type: ignore
     inspect_pg_metadata_completeness = None  # type: ignore
+    inspect_pg_content_hash_staleness = None  # type: ignore
 
 
 _RECONCILE_HINT = "python -m app.cli index reconcile"
@@ -142,6 +144,7 @@ def diagnose_index(*, use_cache: bool = False, include_vault_coverage: bool = Fa
     empty_index = False
     mixed_identities: list[tuple] = []
     metadata_completeness: Dict[str, Any] | None = None
+    content_hash_staleness: Dict[str, Any] | None = None
 
     if stored_identity is None:
         warnings.append("VectorIndex has no recorded embedding identity (empty index or legacy backend).")
@@ -209,6 +212,21 @@ def diagnose_index(*, use_cache: bool = False, include_vault_coverage: bool = Fa
                         f"{completeness['missing_count']} store_vector_index rows are missing "
                         f"language/provenance/embedding-identity metadata: {sample_text}"
                     )
+            # Content-hash staleness (KERNEL-06, #2768, I-D1): read-only re-embed
+            # candidate listing. Never mutates; `index reconcile` is the explicit
+            # repair (cross-task invariant #5).
+            if inspect_pg_content_hash_staleness is not None and not empty_index:
+                staleness = inspect_pg_content_hash_staleness()
+                if staleness.get("stale_count"):
+                    content_hash_staleness = staleness
+                    sample_text = ", ".join(staleness.get("stale_sample_ids") or [])
+                    if staleness["stale_count"] > len(staleness.get("stale_sample_ids") or []):
+                        sample_text = f"{sample_text}, ..." if sample_text else "..."
+                    warnings.append(
+                        f"{staleness['stale_count']} store_vector_index rows have stale "
+                        f"content_hash (re-embed candidates): {sample_text}. "
+                        f"Run '{_RECONCILE_HINT}' to re-embed."
+                    )
 
     vault_coverage: Dict[str, Any] | None = None
     if include_vault_coverage:
@@ -273,6 +291,7 @@ def diagnose_index(*, use_cache: bool = False, include_vault_coverage: bool = Fa
         "pg_state": pg_state,
         "mixed_identities": mixed_identities,
         "metadata_completeness": metadata_completeness,
+        "content_hash_staleness": content_hash_staleness,
         "vault_coverage": vault_coverage,
         "retrieval_index_divergence": retrieval_index_divergence,
     }

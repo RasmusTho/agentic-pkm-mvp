@@ -399,6 +399,44 @@ def _mismatched_rows(primary: EmbeddingIdentity, limit: int | None) -> List[dict
             return list(cur.fetchall())
 
 
+def _stale_content_hash_rows(limit: int | None) -> List[dict]:
+    """Return store_vector_index rows whose stored content_hash no longer
+    matches the current store_objects text (KERNEL-06, #2768).
+
+    Rows with no recorded content_hash (pre-KERNEL-06 rows) are excluded here
+    — they need a rebuild to acquire a hash, not a content-drift re-embed;
+    ``inspect_pg_content_hash_staleness`` reports them separately as
+    ``unstamped_count`` for visibility.
+    """
+    from app.index.artifact_metadata import compute_content_hash
+    from app.stores.pg import _connect  # local import: pg backend is optional
+
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            sql_text = """
+                SELECT v.object_id AS object_id, v.kind AS kind, v.source_ref AS source_ref,
+                       v.payload AS payload, v.provider AS provider, v.model AS model,
+                       v.dim AS dim, v.normalize AS normalize,
+                       v.payload->'provenance'->>'content_hash' AS stored_hash,
+                       COALESCE(o.payload->>'text', o.payload->>'content', '') AS current_text
+                FROM store_vector_index AS v
+                JOIN store_objects AS o ON o.object_id = v.object_id
+                WHERE v.payload->'provenance'->>'content_hash' IS NOT NULL
+                ORDER BY v.object_id
+            """
+            cur.execute(sql_text)
+            candidates = list(cur.fetchall())
+
+    stale = [
+        row
+        for row in candidates
+        if compute_content_hash(row.get("current_text") or "") != row.get("stored_hash")
+    ]
+    if limit is not None:
+        stale = stale[:limit]
+    return stale
+
+
 def _reconcile_object_text(object_id, vector_payload: dict | None) -> str:
     """Resolve the source text to re-embed for a row.
 
@@ -486,15 +524,28 @@ def reconcile(
     identity_info = _identity_summary(primary)
     summary["identity"] = identity_info
 
-    rows = _mismatched_rows(primary, limit)
-    summary["total_mismatched"] = len(rows)
+    identity_rows = _mismatched_rows(primary, limit)
+    # KERNEL-06 (#2768): also re-embed rows whose content_hash no longer
+    # matches the current store_objects text — incremental, content-drift
+    # repair, distinct from (and additive to) identity convergence above.
+    # De-dupe by object_id: a row already selected for identity convergence
+    # is re-embedded once (the identity-convergence upsert also refreshes the
+    # content_hash via build_indexed_unit_payload, so it is not stale after).
+    seen_ids = {row["object_id"] for row in identity_rows}
+    stale_content_rows = [
+        row for row in _stale_content_hash_rows(limit) if row["object_id"] not in seen_ids
+    ]
+    rows = identity_rows + stale_content_rows
+    summary["total_mismatched"] = len(identity_rows)
+    summary["total_stale_content_hash"] = len(stale_content_rows)
 
     if not as_json:
         click.echo(
             f"Reconciling to primary identity provider={primary.provider} model={primary.model} "
             f"dim={primary.dim} normalize={primary.normalize}"
         )
-        click.echo(f"Mismatched rows: {len(rows)}")
+        click.echo(f"Mismatched rows: {len(identity_rows)}")
+        click.echo(f"Stale content-hash rows: {len(stale_content_rows)}")
 
     if dry_run:
         summary["message"] = "Dry run complete; no vectors re-embedded."
@@ -588,6 +639,7 @@ def _emit_reconcile_summary(summary: Dict[str, object], as_json: bool) -> None:
         click.echo(str(summary["message"]))
     click.echo(
         f"total_mismatched={summary.get('total_mismatched', 0)} "
+        f"total_stale_content_hash={summary.get('total_stale_content_hash', 0)} "
         f"reconciled={summary.get('reconciled', 0)} "
         f"skipped={summary.get('skipped', 0)} "
         f"errors={summary['error_count']}"

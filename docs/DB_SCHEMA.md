@@ -137,6 +137,12 @@ mirror/projection surfaces and do not hold semantic authority over the note cont
   - an ordinary upsert must match the primary identity; a reconcilable fallback write may record a divergent per-row `provider`/`model`/`normalize` (with the same `dim`), making fallback-written vectors visible and reconcilable (EMBEDREL-06 Phase A, `app/stores/pg.py::PgVectorIndex.upsert`)
   - the `dim` guard is unconditional — a dimension mismatch fails loud and writes no row
   - embeddings do not participate in the identity-history/SCD pattern
+  - **transform provenance stamp (KERNEL-06, #2768):** `payload.provenance` carries `{source_ref,
+    content_hash, chunk_policy_version, pipeline_version, embedding_identity}`, written in the same
+    upsert statement as the vector (never a separate write). `content_hash` is a `sha256` of the
+    exact embedded text; the index doctor's read-only staleness check compares it against the
+    current `store_objects` text, and `index reconcile` re-embeds only the rows that drifted. A
+    B-tree expression index on `payload->>'content_hash'` (migration `699c97b7c007`) backs that scan.
 
 ### `store_relations`
 - `src_id` (`uuid`, `NOT NULL`)
