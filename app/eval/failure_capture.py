@@ -8,8 +8,10 @@ accumulated **adjudicated history**, not a-priori labels (audit §5.4, RQ4).
 What this module does:
 
 - On a dead-lettered outbox event whose ``reason`` is a schema-violation
-  reason (KERNEL-08/12 emit these), :func:`draft_dead_letter_case` writes a
-  draft eval-case artifact with full provenance.
+  reason, :func:`draft_dead_letter_case` writes a draft eval-case artifact
+  with full provenance. KERNEL-08 (event topic schema registry, #2770) is the
+  eventual producer of that reason family; capture is producer-agnostic and
+  does not depend on KERNEL-08 having landed.
 - On an explicit ``UNKNOWN`` classification (KERNEL-07,
   ``app.components.llm.intent_classifier``), :func:`draft_unknown_classification_case`
   writes a draft ``classification_case.v1`` candidate with full provenance.
@@ -25,8 +27,40 @@ draft from landing.
 explicit, recorded human decision via :func:`promote_draft` moves a draft into
 the golden datasets (`docs/eval/classification_golden.yaml` for classification
 cases; a topic-schema fixture for schema-violation cases). Until that decision
-is recorded the draft is inert: present in the review queue, absent from any
+is recorded the draft is inert: present as a pending file, absent from any
 golden dataset.
+
+Deliberate divergence from "reuse the existing queue surface"
+-------------------------------------------------------------
+
+The KERNEL-15 spec says to *mirror* the existing memory review-queue pattern
+(`app/agent_memory/review_queue.py` + `materialize_promoted_memory`). This
+module mirrors its **shape** — a file-based draft, WriteGuard-gated, with an
+explicit human-decision promotion step and no auto-promotion — but does **not**
+reuse `MemoryCandidateReviewQueue` itself, by design. That queue is
+memory-candidate-specific end to end: every entry is a
+:class:`app.agent_memory.candidate.MemoryCandidate` carrying a required
+``MemoryType`` cognitive class, activation-policy / working-context-recall
+semantics, and a promotion path (`materialize_promoted_memory`) that writes a
+``semantic_memory`` note into the agent-memory ledger. The companion API
+projection (`_memory_review_candidate_projection` in
+`app/api/routes/companion.py`) hard-requires ``proposed_memory_type``.
+
+An eval-dataset case is a **distinct artifact class**: it has no cognitive
+memory type, no working-context recall meaning, and its promotion target is a
+golden-dataset file, not the memory ledger. Forcing it into
+`MemoryCandidateReviewQueue` would mean fabricating a ``MemoryType`` and
+materializing it as a memory note — a category error. So eval drafts live in
+their own file-based surface (``<system_dir>/eval_drafts/`` with ``status``
+frontmatter), honoring the storage-substrate rule (human-reviewable, long-lived
+material belongs in notes, not the DB) without corrupting the memory ledger's
+semantics.
+
+Reviewer discoverability (a pending-eval-drafts view distinct from the memory
+ledger) is deferred to a bounded follow-up and is dormant until KERNEL-08
+(#2770), the ``schema_violation`` producer, lands. The review **UI** stays out
+of scope (W7/W8). See the "Reviewer surfacing" note in
+`docs/RUNTIME_CORRECTNESS_KERNEL/FAILURE_TO_EVAL_CAPTURE_LOOP.md`.
 
 Spec: docs/RUNTIME_CORRECTNESS_KERNEL/FAILURE_TO_EVAL_CAPTURE_LOOP.md
 """
@@ -60,11 +94,14 @@ DRAFT_DIR_NAME = "eval_drafts"
 DRAFT_KIND_SCHEMA_VIOLATION = "schema_violation"
 DRAFT_KIND_CLASSIFICATION_CASE = "classification_case.v1"
 
-#: A dead-letter reason is captured when it starts with this prefix. KERNEL-08
-#: (event topic schema registry, #2770) is the eventual producer of exactly
-#: this family; capture does not depend on KERNEL-08 having landed — any
-#: dead-letter reason in this family is drafted regardless of producer.
-SCHEMA_VIOLATION_REASON_PREFIX = "schema_violation"
+#: The schema-violation reason family this task captures. KERNEL-08 (event
+#: topic schema registry, #2770) is the eventual producer of exactly this
+#: family; capture does not depend on KERNEL-08 having landed — any dead-letter
+#: reason in this family is drafted regardless of producer. Matched
+#: delimiter-aware (see :func:`is_schema_violation_reason`): the bare token
+#: ``"schema_violation"`` or a ``"schema_violation:<detail>"`` sub-reason, never
+#: an accidental substring like ``"schema_violationXYZ"``.
+SCHEMA_VIOLATION_REASON = "schema_violation"
 
 #: Review states for a draft. PENDING is the only state this module ever
 #: writes on intake; PROMOTED/REJECTED are terminal states recorded only via
@@ -101,8 +138,20 @@ class DraftEvalCase:
 
 
 def is_schema_violation_reason(reason: str | None) -> bool:
-    """True when a dead-letter ``reason`` belongs to the schema-violation family."""
-    return bool(reason) and reason.strip().lower().startswith(SCHEMA_VIOLATION_REASON_PREFIX)
+    """True when a dead-letter ``reason`` belongs to the schema-violation family.
+
+    Delimiter-aware: matches the bare token ``"schema_violation"`` or a
+    ``"schema_violation:<detail>"`` sub-reason (colon delimiter), and nothing
+    else. A bare ``startswith`` would falsely capture an unrelated or
+    mistyped reason such as ``"schema_violationXYZ"`` — the colon (or exact
+    equality) is required so only genuine members of the family are drafted.
+    """
+    if not reason:
+        return False
+    normalized = reason.strip().lower()
+    return normalized == SCHEMA_VIOLATION_REASON or normalized.startswith(
+        SCHEMA_VIOLATION_REASON + ":"
+    )
 
 
 def _drafts_dir(vault_root: Path) -> Path:

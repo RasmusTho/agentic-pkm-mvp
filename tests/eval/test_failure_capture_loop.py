@@ -117,6 +117,54 @@ def test_non_schema_violation_dead_letter_is_not_drafted(
     assert not _drafts_dir(vault).exists() or not list(_drafts_dir(vault).glob("*.md"))
 
 
+def test_reason_match_is_delimiter_aware() -> None:
+    """The schema-violation reason match is token/delimiter-aware.
+
+    A bare ``startswith("schema_violation")`` would falsely capture an
+    unrelated or mistyped reason like ``"schema_violationXYZ"`` (no delimiter).
+    Only the exact token or a ``"schema_violation:<detail>"`` sub-reason is a
+    genuine family member.
+    """
+    from app.eval.failure_capture import is_schema_violation_reason
+
+    # Genuine members.
+    assert is_schema_violation_reason("schema_violation")
+    assert is_schema_violation_reason("schema_violation:BadPayload")
+    assert is_schema_violation_reason("schema_violation:missing_required_field")
+    assert is_schema_violation_reason("  SCHEMA_VIOLATION:Cased  ")  # normalized
+
+    # Not members — the review finding's false-positive case and neighbours.
+    assert not is_schema_violation_reason("schema_violationXYZ")
+    assert not is_schema_violation_reason("schema_violation_extra")
+    assert not is_schema_violation_reason("dispatch_failed:ValueError")
+    assert not is_schema_violation_reason("")
+    assert not is_schema_violation_reason(None)
+
+
+def test_near_miss_reason_is_not_drafted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A near-miss reason (`schema_violationXYZ`, no delimiter) must not draft,
+    asserted through the real worker dead-letter emission path."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    monkeypatch.setattr(outbox_worker, "append_jsonl_outbox_event", lambda *a, **k: None)
+    monkeypatch.setattr(outbox_worker, "_use_db_outbox", lambda: False)
+
+    outbox_worker._dead_letter_outbox_message(
+        "ingest.vault.changed",
+        {"trace_id": "trace-nearmiss", "event_id": "evt-nearmiss"},
+        message_id="row-nearmiss",
+        reason="schema_violationXYZ",
+        attempts=5,
+        trace_id="trace-nearmiss",
+        error="boom",
+    )
+
+    assert not _drafts_dir(vault).exists() or not list(_drafts_dir(vault).glob("*.md"))
+
+
 # ---------------------------------------------------------------------------
 # AC2 — UNKNOWN classification drafts a classification_case.v1 candidate
 # ---------------------------------------------------------------------------
