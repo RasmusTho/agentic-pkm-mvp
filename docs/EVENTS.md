@@ -74,8 +74,15 @@ Notes:
   marker is the observed file stat mtime (vault-sync passes it as a fingerprint-only component; the
   watcher payload already embeds it). The API `/ingest` route embeds `content` in its payload and
   `object_store.save_object` keys on the durable payload's content fingerprint (#2863), so both emit
-  on a content change; neither carries a file-observation marker, so only the A→B→A revert dedups
-  (accepted on the API path). The dedup scope is the SAME OBSERVATION — a crash/retry
+  on a content change; neither carries a file-observation marker, so a byte-identical A→B→A revert
+  dedups — an accepted limitation on the API push path (decided #2902): no natural per-observation
+  marker exists (an API push has no file stat mtime), and a caller-supplied idempotency token is
+  rejected as an external-API footgun (a naive client sending a per-request UUID would defeat
+  crash-retry dedup entirely, reintroducing the at-least-once bug KERNEL-02 kills). Residual revert
+  divergence is reconcilable via the incremental reconcile / doctor staleness path (#2880); the full
+  rationale lives in
+  `docs/RUNTIME_CORRECTNESS_KERNEL/MANDATORY_OUTBOX_IDEMPOTENCY.md :: Known deferrals (tracked)`.
+  The dedup scope is the SAME OBSERVATION — a crash/retry
   re-emission re-derives the identical key and dedups — never all-time content recurrence: outbox
   rows are not purged, so a bare content key would silently swallow an A→B→A content revert against
   the original A row while the object/file_state write still commits (over-dedup = silent projection
