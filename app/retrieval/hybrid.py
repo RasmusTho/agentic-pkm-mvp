@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, Iterable, Iterator, List, Optional
 
@@ -203,6 +204,61 @@ class MemoryHybridStore:
 _STORE = MemoryHybridStore()
 _REBUILT_FROM_DURABLE_INDEX = False
 
+# G1res-1 (#2981): durable store-generation token captured at the last rebuild,
+# plus the monotonic time of the last generation check. The serving path
+# revalidates the cache against the durable generation signal at most once per
+# min-check interval and forces a rebuild on mismatch, closing the
+# once-per-process staleness gap without a per-query durable-store round-trip.
+_REBUILD_GENERATION: str | None = None
+_LAST_GENERATION_CHECK_MONOTONIC: float | None = None
+
+_DEFAULT_GENERATION_MIN_CHECK_INTERVAL_S = 1.0
+
+
+def _generation_check_min_interval() -> float:
+    """Min seconds between durable generation checks.
+
+    Configurable via ``RETRIEVAL_GENERATION_MIN_CHECK_INTERVAL_S`` but clamped
+    to a mandatory >=1s floor (issue #2981 constraint: the serving path must
+    never round-trip to the durable store on every query). Junk values fall
+    back to the default rather than disabling the bound.
+    """
+    raw = os.getenv("RETRIEVAL_GENERATION_MIN_CHECK_INTERVAL_S", "").strip()
+    if raw:
+        try:
+            return max(_DEFAULT_GENERATION_MIN_CHECK_INTERVAL_S, float(raw))
+        except ValueError:
+            pass
+    return _DEFAULT_GENERATION_MIN_CHECK_INTERVAL_S
+
+
+def _revalidate_cache_generation() -> None:
+    """Serving-path freshness check (G1res-1, #2981).
+
+    Only applies once the cache has been populated from the durable index
+    (never touches test corpora seeded directly via ``set_documents``). At
+    most once per min-check interval, reads the durable store-generation
+    token; on mismatch with the token captured at the last rebuild, forces a
+    full rebuild so committed upserts/purges become visible without a process
+    restart. Changes only WHEN a rebuild happens — never eligibility, scope
+    prefilter ordering, or evidence-role clamping.
+    """
+    global _LAST_GENERATION_CHECK_MONOTONIC
+    if not _REBUILT_FROM_DURABLE_INDEX:
+        return
+    now = time.monotonic()
+    if (
+        _LAST_GENERATION_CHECK_MONOTONIC is not None
+        and (now - _LAST_GENERATION_CHECK_MONOTONIC) < _generation_check_min_interval()
+    ):
+        return
+    _LAST_GENERATION_CHECK_MONOTONIC = now
+
+    from app.stores import get_vector_index
+
+    if get_vector_index().generation() != _REBUILD_GENERATION:
+        rebuild_from_durable_index(force=True)
+
 
 def _row_text(payload: dict[str, Any]) -> str | None:
     text = payload.get("text") or payload.get("content")
@@ -221,14 +277,19 @@ def rebuild_from_durable_index(*, force: bool = False) -> int:
 
     Returns the number of documents loaded into the cache.
     """
-    global _REBUILT_FROM_DURABLE_INDEX
+    global _REBUILT_FROM_DURABLE_INDEX, _REBUILD_GENERATION, _LAST_GENERATION_CHECK_MONOTONIC
     if _REBUILT_FROM_DURABLE_INDEX and not force:
         return len(_STORE.all())
 
     from app.stores import get_vector_index
 
+    index = get_vector_index()
+    # Capture the generation BEFORE reading rows: a write racing the rebuild
+    # then triggers the next generation check instead of being missed.
+    generation = index.generation()
+
     docs: list[dict] = []
-    for row in get_vector_index().all_rows():
+    for row in index.all_rows():
         payload = row.get("payload") or {}
         text = _row_text(payload)
         if not text:
@@ -244,6 +305,8 @@ def rebuild_from_durable_index(*, force: bool = False) -> int:
         )
     _STORE.set_documents(docs)
     _REBUILT_FROM_DURABLE_INDEX = True
+    _REBUILD_GENERATION = generation
+    _LAST_GENERATION_CHECK_MONOTONIC = time.monotonic()
     return len(docs)
 
 
@@ -253,8 +316,10 @@ def reset_durable_rebuild_state() -> None:
     Simulates a process restart discarding the in-memory cache without
     discarding the durable index.
     """
-    global _REBUILT_FROM_DURABLE_INDEX
+    global _REBUILT_FROM_DURABLE_INDEX, _REBUILD_GENERATION, _LAST_GENERATION_CHECK_MONOTONIC
     _REBUILT_FROM_DURABLE_INDEX = False
+    _REBUILD_GENERATION = None
+    _LAST_GENERATION_CHECK_MONOTONIC = None
 
 
 def _resolve_domain_scope() -> str | None:
@@ -506,6 +571,9 @@ def scoped_hybrid_search(
     only, records excluded-but-relevant material as content-free denials, and returns a
     :class:`ScopedRetrieval`. ``hybrid_search`` is the ``List[dict]`` projection of ``.results``.
     """
+    # G1res-1 (#2981): revalidate the durable-index cache-through before serving.
+    _revalidate_cache_generation()
+
     docs = _STORE.all()
     scope = _resolve_domain_scope()
     if not docs:

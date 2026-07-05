@@ -217,6 +217,12 @@ class MemoryVectorIndex(VectorIndex):
     def count_vectors(self) -> int:
         return len(self._entries)
 
+    def generation(self) -> str:
+        """Opaque store-generation token (G1res-1, #2981): ``seq`` advances on
+        every upsert and the entry count drops on purge, so any committed
+        upsert/purge changes the token."""
+        return f"{self._seq}:{len(self._entries)}"
+
     def all_rows(self) -> list[dict]:
         """Return every durable row for a cache rebuild (KERNEL-05, I-D3)."""
         return [

@@ -250,3 +250,135 @@ def test_context_bundles_served_from_durable_after_restart() -> None:
         "cache-discard + rebuild (kill-and-restart equivalence), matching the "
         "guarantee /api/ask already had"
     )
+
+
+# ---------------------------------------------------------------------------
+# G1res-1 (#2981): generation-checked cache revalidation — a durable
+# upsert/purge committed AFTER process warm becomes visible to retrieval
+# within the freshness bound, without a restart and without force=True.
+# ---------------------------------------------------------------------------
+
+
+def _upsert_doc(oid: UUID, title: str, text: str) -> None:
+    identity = EmbeddingIdentity(provider="mock", model="embed-test", dim=8, normalize=False)
+    get_vector_index().upsert(
+        object_id=oid,
+        kind="note",
+        source_ref=f"unit-test://{title}",
+        payload={"title": title, "text": text, "content": text},
+        embedding=[0.1] * 8,
+        model=identity.model,
+        identity=identity,
+    )
+
+
+def _force_generation_check_due() -> None:
+    """Make the next serving-path access due for a generation check without
+    weakening the mandatory >=1s production min-check interval."""
+    hybrid._LAST_GENERATION_CHECK_MONOTONIC = 0.0
+
+
+def test_post_upsert_visibility_without_restart() -> None:
+    """A row upserted after the process warmed must be served by retrieval
+    without a restart, reset, or explicit force=True rebuild (G1res-1 AC1)."""
+    _seed_durable_index()
+    hybrid.rebuild_from_durable_index()
+    assert hybrid.hybrid_search("alpha retrieval mountains", k=5)
+
+    new_id = uuid4()
+    _upsert_doc(new_id, "Gamma note", "gamma retrieval content about glaciers")
+
+    _force_generation_check_due()
+    hits = hybrid.hybrid_search("gamma retrieval glaciers", k=5)
+    assert str(new_id) in [hit["doc_id"] for hit in hits], (
+        "a durable upsert committed after process warm must be visible to "
+        "retrieval via the generation check, without a restart"
+    )
+
+
+def test_post_purge_visibility_without_restart() -> None:
+    """A purge committed after warm disappears from retrieval without restart."""
+    ids = _seed_durable_index()
+    hybrid.rebuild_from_durable_index()
+    before = hybrid.hybrid_search("alpha retrieval mountains", k=5)
+    assert str(ids[0]) in [hit["doc_id"] for hit in before]
+
+    get_vector_index().purge_vectors(ids[0], view="note")
+
+    _force_generation_check_due()
+    after = hybrid.hybrid_search("alpha retrieval mountains", k=5)
+    assert str(ids[0]) not in [hit["doc_id"] for hit in after], (
+        "a durable purge committed after process warm must drop out of "
+        "retrieval without a restart"
+    )
+
+
+def test_generation_check_respects_min_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Repeated queries inside the min-check interval never hit the durable
+    store's generation signal; a due check does (G1res-1 AC2)."""
+    monkeypatch.setenv("RETRIEVAL_GENERATION_MIN_CHECK_INTERVAL_S", "60")
+    _seed_durable_index()
+    hybrid.rebuild_from_durable_index()
+
+    idx = get_vector_index()
+    calls = {"n": 0}
+    real_generation = idx.generation
+
+    def counting_generation() -> str:
+        calls["n"] += 1
+        return real_generation()
+
+    monkeypatch.setattr(idx, "generation", counting_generation)
+
+    # rebuild_from_durable_index just captured a generation and stamped the
+    # check clock; every query inside the 60s window must skip the check.
+    for _ in range(5):
+        hybrid.hybrid_search("alpha retrieval mountains", k=5)
+    assert calls["n"] == 0, (
+        "the generation check must not hit the durable store more often than "
+        "the configured min-check interval under repeated queries"
+    )
+
+    # Once the interval has elapsed (simulated), exactly one check runs for
+    # the next query, and the clock is re-stamped for the queries after it.
+    _force_generation_check_due()
+    for _ in range(5):
+        hybrid.hybrid_search("alpha retrieval mountains", k=5)
+    assert calls["n"] == 1, (
+        "a due generation check must run exactly once, then be re-bounded by "
+        "the min-check interval"
+    )
+
+
+def test_min_check_interval_floor_is_one_second(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The configured interval is clamped to the mandatory >=1s floor; junk
+    values fall back to the default rather than disabling the bound."""
+    monkeypatch.setenv("RETRIEVAL_GENERATION_MIN_CHECK_INTERVAL_S", "0")
+    assert hybrid._generation_check_min_interval() >= 1.0
+    monkeypatch.setenv("RETRIEVAL_GENERATION_MIN_CHECK_INTERVAL_S", "not-a-number")
+    assert hybrid._generation_check_min_interval() >= 1.0
+
+
+def test_force_escape_hatch_unchanged() -> None:
+    """force=True still unconditionally rebuilds (G1res-1 constraint)."""
+    _seed_durable_index()
+    hybrid.rebuild_from_durable_index()
+    n_before = len(hybrid.get_store().all())
+    hybrid.get_store().set_documents([])
+    assert hybrid.rebuild_from_durable_index(force=True) == n_before
+
+
+def test_freshness_check_never_populates_cold_manual_cache() -> None:
+    """The freshness check only applies to a cache that WAS rebuilt from the
+    durable index — it never hijacks a manually seeded store (test/eval
+    harness seams unchanged, per the G1res-1 constraint)."""
+    _upsert_doc(uuid4(), "Durable-only", "durable-only note about comets")
+    hybrid.get_store().set_documents(
+        [{"doc_id": "manual-1", "text": "manually seeded note about comets"}]
+    )
+    _force_generation_check_due()
+    hits = hybrid.hybrid_search("comets", k=5)
+    assert [hit["doc_id"] for hit in hits] == ["manual-1"], (
+        "freshness check must not rebuild over a manually seeded store when "
+        "no durable rebuild has happened in this process"
+    )

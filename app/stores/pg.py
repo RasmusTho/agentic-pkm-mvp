@@ -631,6 +631,28 @@ class PgVectorIndex(VectorIndex):
             return int(row.get('total') or 0)
         return int(list(row.values())[0] or 0)
 
+    def generation(self) -> str:
+        """Cheap opaque store-generation token (G1res-1, #2981).
+
+        ``count(*)`` changes on purge; ``max(updated_at)`` advances on every
+        upsert (the upsert path always writes ``updated_at = now()``), so any
+        committed upsert/purge changes the token without a row scan.
+        """
+        _ensure_tables()
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT count(*) AS total, COALESCE(max(updated_at)::text, '') AS latest "
+                    "FROM store_vector_index"
+                )
+                row = cur.fetchone()
+        if not row:
+            return "0:"
+        if isinstance(row, dict):
+            return f"{int(row.get('total') or 0)}:{row.get('latest') or ''}"
+        values = list(row.values())
+        return f"{int(values[0] or 0)}:{values[1] or ''}"
+
     def all_rows(self) -> List[dict]:
         """Return every durable row for a cache rebuild (KERNEL-05, I-D3).
 
