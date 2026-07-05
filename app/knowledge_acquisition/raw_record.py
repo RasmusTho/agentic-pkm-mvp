@@ -131,6 +131,40 @@ def persist_raw_record(
     )
 
 
+def find_raw_record(
+    *, source_kind: str, item_ref: str, content_identity: str
+) -> RawRecordResult | None:
+    """Dedup pre-check without persisting: return the existing record at the
+    derived identity as a traced no-op result, or ``None`` when absent.
+
+    Lets expensive acquisition paths (KA-02 ASR fallback: audio download +
+    local transcription) resolve identity first and skip the acquisition
+    entirely on a dedup hit, per `SOURCE_PLUGIN_CONTRACT.md` § Identity and
+    dedup ("Dedup is decided **before** fetch wherever the source allows it").
+    Emits the same ``knowledge_acquisition.raw.dedup_noop`` trace as
+    :func:`persist_raw_record`'s internal dedup branch.
+    """
+    object_id = raw_record_object_id(
+        source_kind=source_kind, item_ref=item_ref, content_identity=content_identity
+    )
+    existing = ObjectStore().get_object(str(object_id))
+    if existing is None:
+        return None
+    json_log(
+        event="knowledge_acquisition.raw.dedup_noop",
+        source_kind=source_kind,
+        item_ref=item_ref,
+        content_identity=content_identity,
+        object_id=str(object_id),
+    )
+    return RawRecordResult(
+        object_id=object_id,
+        content_identity=content_identity,
+        is_new=False,
+        record=dict(existing.payload),
+    )
+
+
 def get_raw_record(object_id: UUID) -> dict[str, Any] | None:
     existing = ObjectStore().get_object(str(object_id))
     if existing is None:
@@ -143,5 +177,6 @@ __all__ = [
     "RawRecordResult",
     "raw_record_object_id",
     "persist_raw_record",
+    "find_raw_record",
     "get_raw_record",
 ]

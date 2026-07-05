@@ -22,10 +22,21 @@ a `raw` record shaped identically to the caption path.
 - Wires the captionless outcome to `transcribe_source()` (reuse, not rewrite; diarization hook and
   model cache stay as they are).
 - The resulting `raw` record differs from a caption-path record **only** in
-  `acquisition_method: asr` and its quality note; identity, provenance, immutability, and dedup
-  semantics are byte-for-byte the same contract.
+  `acquisition_method: asr` and its quality note; provenance, immutability, and dedup **semantics**
+  (unchanged re-fetch → traced no-op; changed content → new record, prior untouched) are identical
+  to the caption path.
 - ASR runs only as fallback — never when a usable caption track exists (audio download engages the
   full media anti-bot machinery; see research memo §3).
+
+**ASR-path identity (decided in #2931 review round 1).** The ASR-path `content_identity` is
+metadata-bound: it hashes the stable acquired signals (title, description, duration) plus an `asr`
+method discriminator, and is computed — with the dedup store check — *before* the ASR chain runs.
+The transcript itself is excluded from the hash because beam-search ASR output is
+non-deterministic; a content hash over it can never satisfy `SOURCE_PLUGIN_CONTRACT.md`'s "fetch
+MUST be idempotent". Accepted bound: an upstream audio re-upload with byte-identical metadata is
+not re-acquired (undetectable without downloading the audio). If captions later appear on the
+video, the caption path computes a caption-based identity → a new record → correct quality
+upgrade, with the prior ASR record left untouched.
 
 ## Concretely
 
