@@ -39,7 +39,7 @@ Two event classes exist and must never be conflated `[extend]`:
 
 **Recommendation: reuse the `docs/EVENTS.md` envelope verbatim as the outer envelope; all Heimdal-specific structure lives in `payload`.** `[conform — envelope; extend — payload]`
 
-The existing canonical envelope (`event`, `event_id`, `trace_id`, `source`, `timestamp`, `payload`, `meta`, optional `context_dimensions`) already gives Heimdal: a topic key, a dedup identity, trace correlation, emitter attribution, and the `meta.payload_schema` registry tag (KERNEL-08). Reusing it means every existing consumer-side rule (dedup by `event_id`, unknown-field tolerance, schema-registry validation at write and dispatch, no embedding vectors in payloads) applies to Heimdal events with zero adapter cost. The per-topic JSON schema lands (at enactment, not now) as `schemas/events/heimdal.observation.published.v1.schema.json`; this section is its prose mirror.
+The existing canonical envelope (`event`, `event_id`, `trace_id`, `source`, `timestamp`, `payload`, `meta`, optional `context_dimensions`) already gives Heimdal: a topic key, a dedup identity, trace correlation, emitter attribution, and the `meta.payload_schema` registry tag (KERNEL-08). Reusing it means every existing consumer-side rule (dedup by `event_id`, unknown-field tolerance, schema-registry validation at write and dispatch, no embedding vectors in payloads) applies to Heimdal events with zero adapter cost. The per-topic JSON schema landed at enactment (Epic #3019 slice A4, #3041) as `schemas/events/heimdal.observation.published.v1.schema.json` (plus contract-stub schemas for `heimdal.consent.granted`/`heimdal.consent.revoked`/`heimdal.observation.corrected`); this section is its prose mirror, kept consistent with the schema in the same change (`docs/EVENTS.md :: Heimdal event contract schemas`).
 
 One envelope field needs a reading rule: the envelope `timestamp` is **emission time** (when Heimdal published), never observation time. Observation time lives in the payload (§1.3 time family). Conflating them is the bitemporal failure §8 HEIM-10 exists to catch.
 
@@ -51,7 +51,7 @@ Alternatives considered:
 
 ### 1.3 The observation payload (prose-mirrored field table)
 
-Style per `docs/architecture/metadata-bundle.md`: field families, then rules. The schema (at enactment) is canonical; this table is its prose mirror. `[extend]`
+Style per `docs/architecture/metadata-bundle.md`: field families, then rules. The schema (`schemas/events/heimdal.observation.published.v1.schema.json`, landed at enactment, Epic #3019 slice A4, #3041) is canonical; this table is its prose mirror. `[extend]`
 
 | Family | Fields | Notes |
 | --- | --- | --- |

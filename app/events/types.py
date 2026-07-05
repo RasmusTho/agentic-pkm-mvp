@@ -110,6 +110,30 @@ HEIMDAL_REGISTER_ENTITY_MERGED = "heimdal.register.entity.merged"
 HEIMDAL_REGISTER_ENTITY_SPLIT = "heimdal.register.entity.split"
 HEIMDAL_REGISTER_ENTITY_REDIRECT_RESOLVED = "heimdal.register.entity.redirect_resolved"
 
+# Heimdal event contract schemas (Epic #3019 slice A4, #3041).
+#
+# `HEIMDAL_OBSERVATION_PUBLISHED` is the cross-constituent seam topic (build-now,
+# FABLE_COMPANION §11#3): the published, minimized, attributed observation event
+# that Mimer and future constituents consume, published via
+# `app.heimdal.publish.publish_observation` (A2, #3039) onto the append-only
+# observation log (`app.heimdal.observation_log`, A2). Its payload schema is
+# registered at `schemas/events/heimdal.observation.published.v1.schema.json`
+# and validated via `app.events.topic_schema_registry.validate_topic_payload`
+# (KERNEL-08 machinery, reused verbatim -- not forked).
+#
+# `HEIMDAL_CONSENT_GRANTED` / `HEIMDAL_CONSENT_REVOKED` / `HEIMDAL_OBSERVATION_CORRECTED`
+# are **contract-stubs** per FABLE_COMPANION §11#3: schema-representable now,
+# no runtime producer/consumer lands with this slice. `corrected` carries
+# `supersedes` (§3.5); consent grant/revoke runtime is the consent ledger
+# (A5, out of scope here). Like the register-mutation events above, none of
+# these four topics are dispatched commands -- they are not branched on in
+# `app.workers.outbox_worker._dispatch_topic` and are consumed only via the
+# Heimdal observation log / publish path, never the shared DB `outbox` table.
+HEIMDAL_OBSERVATION_PUBLISHED = "heimdal.observation.published"
+HEIMDAL_CONSENT_GRANTED = "heimdal.consent.granted"
+HEIMDAL_CONSENT_REVOKED = "heimdal.consent.revoked"
+HEIMDAL_OBSERVATION_CORRECTED = "heimdal.observation.corrected"
+
 __all__ = [
     "INGEST_OBJECT_CREATED",
     "INGEST_OBJECT_UPDATED",
@@ -190,4 +214,8 @@ __all__ = [
     "HEIMDAL_REGISTER_ENTITY_MERGED",
     "HEIMDAL_REGISTER_ENTITY_SPLIT",
     "HEIMDAL_REGISTER_ENTITY_REDIRECT_RESOLVED",
+    "HEIMDAL_OBSERVATION_PUBLISHED",
+    "HEIMDAL_CONSENT_GRANTED",
+    "HEIMDAL_CONSENT_REVOKED",
+    "HEIMDAL_OBSERVATION_CORRECTED",
 ]

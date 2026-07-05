@@ -1,0 +1,225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/heimdal.observation.published.v1.schema.json",
+  "title": "heimdal.observation.published payload (v1)",
+  "description": "Payload of the heimdal.observation.published outbox-envelope event (Epic #3019 slice A4, #3041). Canonical published-observation contract per docs/HEIMDAL/FABLE_COMPANION.md §1.3 (prose mirror; this schema is canonical at enactment, ADR-0049 §1/§5). Producer: app.heimdal.publish.publish_observation (A2, #3039), appending onto the append-only observation log (app.heimdal.observation_log). Envelope timestamp (event/event_id/trace_id/source/timestamp/payload/meta) is emission time only -- observation time lives in this payload's time family (§1.2, HEIM-10). Field families: identity, time (bitemporal), actors (attributions), entities (entity_mentions), content, confidence, provenance, sensitivity/consent. Payload rule 1 (§1.3): no published event without observation_id, episode_id, observed_at_start, at least one attribution, confidence, provenance.content_hash + content_identity + capture_chain, sensitivity, and consent (consent.grant_ref required, HEIM-3).",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "observation_id",
+    "episode_id",
+    "observed_at_start",
+    "attributions",
+    "confidence",
+    "provenance",
+    "sensitivity",
+    "consent"
+  ],
+  "properties": {
+    "observation_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identity family: stable identity of this observation (§1.3 identity)."
+    },
+    "episode_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identity family: groups observations from one continuous capture session (§1.3/§1.4 -- one voice memo = one episode)."
+    },
+    "sequence": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Identity family: monotone integer within the episode."
+    },
+    "revision_of": {
+      "type": ["string", "null"],
+      "description": "Identity family: marks re-processing of the same raw evidence through improved stages (references a prior observation_id, never edits it -- HEIM-1)."
+    },
+    "supersedes": {
+      "type": ["string", "null"],
+      "description": "Identity family: marks a correction (§3.5); references the prior observation_id being corrected. Never edits -- always append (HEIM-1)."
+    },
+    "observed_at_start": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Time family (bitemporal, HEIM-10): when reality happened, start. ISO-8601 with offset."
+    },
+    "observed_at_end": {
+      "type": ["string", "null"],
+      "description": "Time family (bitemporal): when reality happened, end. ISO-8601 with offset."
+    },
+    "clock_basis": {
+      "type": ["string", "null"],
+      "enum": ["device_metadata", "ntp_host", "inferred", null],
+      "description": "Time family: names the clock trusted for observed_at (v1: device_metadata). 'inferred' represents timing uncertainty explicitly rather than silently faking it (HEIM-10)."
+    },
+    "captured_at": {
+      "type": ["string", "null"],
+      "description": "Time family: when the raw evidence reached Heimdal's raw layer. Distinct from envelope timestamp (publication) and observed_at_* (reality)."
+    },
+    "attributions": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Actors family (§1.3 actors): who was involved. At least one attribution is required (payload rule 1).",
+      "items": {
+        "type": "object",
+        "required": ["mention_id", "role", "resolution", "basis"],
+        "additionalProperties": true,
+        "properties": {
+          "mention_id": { "type": "string", "minLength": 1 },
+          "role": {
+            "type": "string",
+            "enum": ["speaker", "subject", "present", "recorder"]
+          },
+          "resolution": {
+            "type": "string",
+            "enum": ["resolved", "ambiguous", "unresolved"],
+            "description": "Three-state resolution (§3.3, HEIM-6/HEIM-11) -- never a free-text name as canonical identity."
+          },
+          "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+          "basis": {
+            "type": "string",
+            "enum": ["capture_context", "diarization", "voiceprint", "stated", "inferred"]
+          }
+        }
+      }
+    },
+    "entity_mentions": {
+      "type": ["array", "null"],
+      "description": "Entities family (§1.3 entities): non-actor entity mentions (companies, projects, places, named things). Same three-state resolution as attributions.",
+      "items": {
+        "type": "object",
+        "required": ["mention_id", "surface_form", "resolution"],
+        "additionalProperties": true,
+        "properties": {
+          "mention_id": { "type": "string", "minLength": 1 },
+          "span": {},
+          "surface_form": { "type": "string" },
+          "kind_hint": { "type": ["string", "null"] },
+          "resolution": {
+            "type": "string",
+            "enum": ["resolved", "ambiguous", "unresolved"]
+          },
+          "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+        }
+      }
+    },
+    "modality": {
+      "type": ["string", "null"],
+      "enum": ["speech", "screen", "location", "biometric", "ambient_audio", null],
+      "description": "Content family: v1 ships 'speech'; later modalities are additive (§1.3 content)."
+    },
+    "content": {
+      "type": ["string", "null"],
+      "description": "Content family: the minimized published form (v1: attributed transcript text). No raw audio -- privacy (HEIM-4)."
+    },
+    "content_structure": {
+      "type": ["object", "null"],
+      "description": "Content family: segment boundaries + per-segment timing/confidence.",
+      "additionalProperties": true
+    },
+    "raw_ref": {
+      "type": ["string", "null"],
+      "description": "Content family: opaque reference into the raw layer (never a URL, path, or key -- resolvable only through the policy-gated raw read path, §7/HEIM-5)."
+    },
+    "withheld": {
+      "type": ["array", "null"],
+      "description": "Content family: declares degraded/omitted spans and why (payload rule 4 -- absence must be explicit, never silent).",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "reason": {
+            "type": "string",
+            "enum": ["third_party_speech", "consent_degraded"]
+          }
+        }
+      }
+    },
+    "confidence": {
+      "type": "object",
+      "description": "Confidence family (§2): structured block of orthogonal per-axis scores, never a single scalar.",
+      "additionalProperties": true,
+      "minProperties": 1,
+      "patternProperties": {
+        "^[a-z_]+$": {
+          "type": "object",
+          "required": ["score", "calibration"],
+          "additionalProperties": true,
+          "properties": {
+            "score": { "type": "number", "minimum": 0, "maximum": 1 },
+            "method": { "type": ["string", "null"] },
+            "model_ref": { "type": ["string", "null"] },
+            "calibration": {
+              "type": "string",
+              "enum": ["calibrated", "heuristic", "by_construction"]
+            }
+          }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["content_hash", "content_identity", "capture_chain"],
+      "additionalProperties": true,
+      "description": "Provenance family (§1.3 provenance). Payload rule 1 requires content_hash + content_identity + capture_chain on every published event.",
+      "properties": {
+        "sensor": { "type": ["string", "null"] },
+        "capture_chain": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" },
+          "description": "Every hop the evidence took before Heimdal (v1: ['ios_voice_memos', 'icloud_drive', 'folder_watch']) -- makes the trust boundary legible per event (§7)."
+        },
+        "content_hash": {
+          "type": "string",
+          "minLength": 1,
+          "description": "sha256 of the canonicalized published content (KERNEL-06)."
+        },
+        "content_identity": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Hash of the raw evidence (KAP-compatible join key)."
+        },
+        "stage_versions": {
+          "type": ["object", "null"],
+          "additionalProperties": true,
+          "description": "ASR/attribution/resolution stage versions for replay lineage (§5.3)."
+        },
+        "raw_ref": { "type": ["string", "null"] }
+      }
+    },
+    "sensitivity": {
+      "type": "string",
+      "enum": ["public", "internal", "private", "secret"],
+      "description": "Reuses the existing _defs.schema.json sensitivity value family verbatim (schemas/_defs.schema.json)."
+    },
+    "scope_hint": {
+      "type": ["string", "null"],
+      "description": "Names the capture scope stamped at capture (v1: the operator's dedicated high-sensitivity capture scope, §1.5)."
+    },
+    "consent": {
+      "type": "object",
+      "required": ["basis", "grant_ref"],
+      "additionalProperties": true,
+      "description": "Sensitivity/consent family (§1.3, HEIM-3): consent is required on every event. grant_ref is mandatory -- a payload missing consent.grant_ref must be rejected.",
+      "properties": {
+        "basis": {
+          "type": "string",
+          "enum": ["self_record", "place_optin", "session_optin"]
+        },
+        "granted_by": { "type": ["string", "null"] },
+        "granted_at": { "type": ["string", "null"] },
+        "third_party": {
+          "type": ["string", "null"],
+          "enum": ["none", "marked", "detected", null]
+        },
+        "grant_ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Points into the consent ledger (§6). Required on every event (HEIM-3) -- never null/empty."
+        }
+      }
+    }
+  }
+}

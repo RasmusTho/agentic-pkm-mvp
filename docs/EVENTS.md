@@ -200,8 +200,42 @@ Contract:
   `app.heimdal.observation_log` and querying the table directly. This keeps the boundary
   cursor-shaped, not a shared-table coupling (issue #3039 Constraints).
 - **Out of scope for this slice:** the observation payload's own field schema (family, entity
-  mentions, confidence axes — that is a separate slice, FABLE_COMPANION §11#3); any transport swap to
+  mentions, confidence axes — that landed as slice A4, #3041, below); any transport swap to
   a stream broker (v2, ADR-gated, FABLE_COMPANION §4.3(b)).
+
+## Heimdal event contract schemas (published v1 build-now; consent/corrected contract-stubs)
+
+`schemas/events/heimdal.observation.published.v1.schema.json`,
+`schemas/events/heimdal.consent.granted.v1.schema.json`,
+`schemas/events/heimdal.consent.revoked.v1.schema.json`,
+`schemas/events/heimdal.observation.corrected.v1.schema.json` (Epic #3019 slice A4, #3041; ratified
+by ADR-0049 §1/§5; specified by `docs/HEIMDAL/FABLE_COMPANION.md` §1.3, canonical at enactment — this
+document and §1.3 are now consistent prose/schema mirrors of each other).
+
+- **`heimdal.observation.published` (build-now, canonical).** The cross-constituent seam payload
+  produced by `app.heimdal.publish.publish_observation` (A2, #3039) onto the append-only observation
+  log above. Field families per FABLE_COMPANION §1.3: identity (`observation_id`, `episode_id`,
+  `sequence`, `revision_of`, `supersedes`), time (bitemporal — `observed_at_start`/`observed_at_end`,
+  `clock_basis`, `captured_at`), actors (`attributions[]` with three-state `resolution`), entities
+  (`entity_mentions[]`, same three-state resolution), content (`modality`, `content`, `raw_ref`,
+  `withheld[]`), confidence (per-axis block, never a scalar), provenance (`content_hash`,
+  `content_identity`, `capture_chain`), and sensitivity/consent (`sensitivity`, `consent` with
+  required `grant_ref`, HEIM-3). Validated via the same KERNEL-08 registry choke point
+  (`app.events.topic_schema_registry.validate_topic_payload`) reused verbatim from the DB-outbox
+  registry — not a forked validator. Envelope `timestamp` stays emission time only; all observation
+  time lives in the payload (§1.2, HEIM-10).
+- **`heimdal.consent.granted` / `heimdal.consent.revoked` / `heimdal.observation.corrected`
+  (contract-stubs).** Schema-representable now — a well-formed payload validates against a registered
+  schema — but no runtime producer or consumer lands with this slice. The consent ledger runtime
+  (grants table, capture-time check) is Epic #3019 slice A5; corrected/revision fold logic is
+  FABLE_COMPANION §11#12/§11#14. `heimdal.observation.corrected` carries `supersedes` (§3.5): a
+  correction is a **new** published event, never an in-place edit of the superseded observation
+  (HEIM-1). None of the three stub topics are branched on in
+  `app.workers.outbox_worker._dispatch_topic`, and none are referenced by
+  `app.heimdal.observation_log` / `app.heimdal.publish` / `app.heimdal.cursor_store`.
+- **Out of scope for this slice:** the consent ledger runtime (A5); the corrected/revision fold logic
+  (§11#12/§11#14); the entity register runtime (A1, already landed, #3038); the observation log /
+  cursor mechanics (A2, already landed, #3039); capture, ASR, projector.
 
 ## Event catalog (selected)
 
