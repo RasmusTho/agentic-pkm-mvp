@@ -10,6 +10,7 @@ import psycopg
 
 from app.db.db import conn_rw
 from app.db.dsn import resolve_dsn
+from app.receipts.decision_receipt_log import append_decision_receipt
 
 # in-memory fallback used only under an explicit memory backend opt-in
 # (STORE_BACKEND=memory / test conftest override). See D-7
@@ -76,31 +77,54 @@ def _use_memory_backend() -> bool:
 
 
 def insert_decision(object_id: str, key: str, value: dict[str, Any], trace_id: str) -> None:
+    created_at = datetime.now(timezone.utc)
     rec = {
         "object_id": object_id,
         "key": key,
         "value": value,
         "trace_id": trace_id,
-        "created_at": datetime.now(timezone.utc),
+        "created_at": created_at,
     }
 
     if _use_memory_backend():
+        # Explicit STORE_BACKEND=memory opt-in: volatile by contract (I-S4 /
+        # D-7). There is no durable store and no selected vault in this mode, so
+        # the durable receipt log does not apply — the in-process bucket is the
+        # whole record. The receipt-log commit point below governs the durable
+        # Postgres path only.
         bucket = _MEM_DECISIONS.setdefault(object_id, [])
         bucket.append(rec)
         return
 
-    # Postgres path: a failure here must propagate (fail-loud, no silent
+    # Durable path — decision-receipt log is CANONICAL, Postgres is the
+    # projection (feat #2969, docs/DECISION_RECEIPT_LOG/README.md).
+    #
+    # Receipt-before-ack (C-5/P-5): append the WriteGuard-gated durable receipt
+    # FIRST — that append is the commit point. A blocked WriteGuard raises
+    # (WritesBlockedError) and any I/O failure raises (DecisionReceiptWriteError);
+    # either way the whole write fails and the caller sees it. The governance
+    # action never silently proceeds DB-only (C-8). Only after the durable
+    # receipt lands do we write the derived DB projection row below.
+    append_decision_receipt(
+        object_id=object_id,
+        key=key,
+        value=value,
+        trace_id=trace_id,
+        created_at=created_at,
+    )
+
+    # Postgres projection: a failure here must propagate (fail-loud, no silent
     # memory fallback — D-7). _use_memory_backend() already raised above if
     # Postgres was configured but unreachable, so a failure past this point
-    # is a genuine write-time error the caller must see.
+    # is a genuine write-time error the caller must see. The decision is already
+    # durable in the receipt log at this point; the projection is rebuildable
+    # (Slice 2) if this row is ever lost.
     #
     # The `decisions` table (app/alembic/versions/202510241200_sot41_amg_core.py)
-    # has no `trace_id` column — only `audit` does. The previous SQL here
-    # referenced a nonexistent column and would have raised UndefinedColumn
-    # on every real Postgres write; this was masked by the D-7 silent
-    # `except Exception: return` this change removes. `trace_id` is folded
+    # has no `trace_id` column — only `audit` does. `trace_id` is folded
     # into the `value` jsonb envelope instead of adding a schema column,
-    # preserving round-trip access via latest_decision() with no migration.
+    # preserving round-trip access via latest_decision() with no migration, and
+    # matching the value envelope the receipt log stores.
     stored_value = dict(value)
     stored_value["trace_id"] = trace_id
     with conn_rw() as conn:

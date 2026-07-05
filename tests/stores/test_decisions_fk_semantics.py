@@ -78,6 +78,24 @@ def scratch_db(monkeypatch: pytest.MonkeyPatch):
         pass
 
 
+def _bind_vault_for_receipt_log(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Bind a selected vault + allow the WriteGuard for the durable decision path.
+
+    Since feat #2969, ``insert_decision`` appends a WriteGuard-gated receipt to the
+    vault BEFORE the DB projection write (receipt-before-ack). These FK tests
+    exercise the durable path, so they need a vault to receipt into and an allowed
+    guard — the receipt is the commit point, not incidental.
+    """
+    import app.receipts.decision_receipt_log as receipt_log
+
+    vault = tmp_path / "vault"
+    vault.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    monkeypatch.setattr(
+        receipt_log.DEFAULT_WRITE_GUARD, "assert_writes_allowed", lambda action: None
+    )
+
+
 def _insert_object(dsn: str) -> str:
     object_id = str(uuid.uuid4())
     with psycopg.connect(dsn, autocommit=True) as conn:
@@ -88,9 +106,12 @@ def _insert_object(dsn: str) -> str:
     return object_id
 
 
-def test_object_delete_preserves_decisions(scratch_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_object_delete_preserves_decisions(
+    scratch_db: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Deleting an object leaves its decision rows with object_id=NULL."""
     monkeypatch.setenv("STORE_BACKEND", "pg")
+    _bind_vault_for_receipt_log(monkeypatch, tmp_path)
     from app.services.decisions import _resolved_backend
 
     _resolved_backend.cache_clear()
@@ -142,13 +163,17 @@ def test_fk_delete_rule_is_set_null(scratch_db: str) -> None:
         assert row[0] == "SET NULL"
 
 
-def test_writer_fail_loud(scratch_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_writer_fail_loud(
+    scratch_db: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Postgres configured but unreachable => the production put path raises.
 
     Asserted through app.services.decisions.insert_decision (the production
     writer named in the issue's Source Anchors), not a stubbed dependency.
     """
     from app.services.decisions import _resolved_backend
+
+    _bind_vault_for_receipt_log(monkeypatch, tmp_path)
 
     # First prove the happy path works against the real scratch DB so the
     # subsequent failure is attributable to unreachability, not a broken

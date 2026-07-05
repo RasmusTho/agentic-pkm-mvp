@@ -24,6 +24,13 @@ ALLOW_FILES = (
     'app/search/vector_index.py',
     'app/search/service.py',
     'app/jobs/backfill.py',
+    # Decision-receipt log + its projection rebuild/doctor (feat #2969). The
+    # receipt log is the canonical judgment record; the `decisions` table is a
+    # rebuildable projection. Both read the projection / a bounded objects.uuid
+    # lookup directly through conn_rw, the same bounded pattern already allowed
+    # for app/services/decisions.py and app/jobs/backfill.py above.
+    'app/receipts/decision_receipt_log.py',
+    'app/jobs/decisions_projection.py',
     'app/store/relation_index.py',
     'app/memory_kv/store.py',
     'app/agent/repository.py',

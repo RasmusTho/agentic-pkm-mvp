@@ -40,8 +40,10 @@ ALLOWLIST: frozenset[str] = frozenset(
         "app/objects/__init__.py",
         # agents area — tracked by cleanup follow-up (see CODE_INVENTORY.md §Cleanup)
         "app/agents/_test_helpers.py",
-        "app/agents/classifier/agent.py",
-        "app/agents/classify.py",
+        # app/agents/classifier/agent.py and app/agents/classify.py were migrated
+        # off app.stores.decisions.put_decision onto the guarded receipt-log
+        # writer (app.services.decisions.insert_decision) in feat #2969 slice 1 —
+        # removed from the allowlist so test_no_new_store_callers guards them.
         "app/agents/panel_agent/planning.py",
         "app/agents/pipeline.py",
         "app/agents/projector/agent.py",
