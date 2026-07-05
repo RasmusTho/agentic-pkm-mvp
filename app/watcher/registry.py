@@ -1369,7 +1369,7 @@ def run_registry_forever(config_path: Path, *, max_ticks: int | None = None) -> 
         enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
         write_registry_heartbeat(
             path=cfg.heartbeat_path,
-            status="running",
+            status=_overall_watcher_status(states),
             watchers=_build_watchers_payload(cfg.specs, states),
             outbox_path=cfg.outbox_path,
             vault_path=cfg.vault_path,
