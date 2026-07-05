@@ -474,3 +474,75 @@ def test_run_watcher_tick_prefers_companion_identity(tmp_path: Path, monkeypatch
 
     assert len(emitted) == 1
     assert emitted[0]["uuid"] == companion_uuid
+
+
+def test_run_watcher_tick_rename_does_not_purge_live_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rename safety: when the resolved identity's companion points at a
+    path that still exists (the rename target this tick already re-ingested),
+    no tombstone is emitted -- an async purge would wipe the freshly
+    re-ingested vectors with nothing to restore them."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    old_note = vault / "Concepts" / "Old.md"
+    old_note.parent.mkdir(parents=True, exist_ok=True)
+    old_note.write_text("Body", encoding="utf-8")
+
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "events.jsonl"))
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher_run.jsonl"))
+    snapshot_path = vault / ".state.json"
+
+    identity_uuid = str(uuid4())
+    monkeypatch.setattr(vault_watcher, "delete_note", lambda path, **kw: False)
+    monkeypatch.setattr(
+        vault_watcher,
+        "find_companion_by_source_ref",
+        lambda root, source_ref: type("C", (), {"uuid": identity_uuid})(),
+    )
+    # The identity's companion now points at the rename target (updated by
+    # this tick's ingest of the new path), which exists on disk.
+    monkeypatch.setattr(
+        vault_watcher,
+        "read_companion",
+        lambda root, u: (
+            type("C", (), {"uuid": identity_uuid, "source_ref": "Concepts/New.md"})()
+            if u == identity_uuid
+            else None
+        ),
+    )
+    emitted: list[dict] = []
+    monkeypatch.setattr(
+        vault_watcher,
+        "insert_object_and_outbox",
+        lambda payload, topic, trace_id=None, **kw: emitted.append(payload),
+    )
+
+    vault_watcher.run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=True,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+    )
+
+    # Simulate the rename on disk: old gone, new present.
+    time.sleep(0.01)
+    new_note = vault / "Concepts" / "New.md"
+    new_note.write_text("Body", encoding="utf-8")
+    old_note.unlink()
+
+    summary, _ = vault_watcher.run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=True,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+    )
+
+    assert summary["deleted"] == 1
+    assert summary["deleted_purged"] == 0, "live renamed identity must not be purged"
+    assert emitted == []
+    assert new_note.exists() and not old_note.exists()
