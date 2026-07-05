@@ -10,6 +10,19 @@ Source of truth: This ADR for the topology decision; `docs/RETRIEVAL.md` for the
 **Date:** 2026-06-20
 **Status:** Accepted (ratifies shipped reality)
 
+> **Status annotation (2026-07-05, superseded-in-part by KERNEL-05 delivery, #2982):** Decision
+> point 1 ("in-memory hybrid serving is the active path... the durable `PgVectorIndex` is the
+> intended spine but is not the serving path yet") and point 4 ("this is direction, not shipped
+> state") are **superseded in part**. KERNEL-05 (#2870) landed `rebuild_from_durable_index()` as the
+> sole production path populating the in-process store from the durable index, warmed at API
+> startup, and G1res-1 (#2981, PR #3003) added a bounded store-generation freshness check
+> (`app/retrieval/hybrid.py:212-261`) so the cache revalidates against the durable index rather than
+> only at process start. The durable `PgVectorIndex` is now the served source of truth via this
+> cache-through; the in-memory store is a cache, not an independent write path. This annotation does
+> not alter the ratified text below (weighted linear fusion shape, rerank-off default, and the
+> future-work list in "Future work / when to revisit" are unchanged and still current); see
+> `docs/RETRIEVAL.md :: Hybrid Search :: Scoring` for the corrected live-reality description.
+
 ---
 
 ## Context
