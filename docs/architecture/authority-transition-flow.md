@@ -1,4 +1,4 @@
-State: Canonical Yggdrasil AuthorityTransition contract. Docs-only architecture/schema contract for the foundation backlog (#2533–#2552); the governed contract for durable mutation of human knowledge. Pairs with `schemas/authority-transition.schema.json`. Does not claim shipped runtime behavior.
+State: Canonical Mimer AuthorityTransition contract. Docs-only architecture/schema contract for the foundation backlog (#2533–#2552); the governed contract for durable mutation of human knowledge. Pairs with `schemas/authority-transition.schema.json`. Does not claim shipped runtime behavior.
 Doc role: Architecture / contract
 Authority: Owns the `AuthorityTransition` contract — the architecture state object behind WriteGuard-equivalent governed durable mutation. The machine-readable form is `schemas/authority-transition.schema.json`; this doc is its prose mirror. It composes with the existing GOV `GovernedWriteProtocol` (`docs/contracts/GOVERNED_WRITE_PROTOCOL.md`) and the runtime WriteGuard (`app/write_guard.py`). Subordinate to `docs/foundation/00-yggdrasil-doctrine.md`, `docs/architecture/functional-ontology.md`, and `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`.
 Owner: Architecture spine
@@ -8,7 +8,7 @@ Source of truth: canonical (AuthorityTransition contract); subordinate to doctri
 Last reviewed: 2026-06-27
 Last verified against: docs/architecture/functional-ontology.md, docs/architecture/semantic-dimensions.md, docs/contracts/GOVERNED_WRITE_PROTOCOL.md, docs/boundaries/GOV.md, docs/boundaries/HKA.md, docs/boundaries/EXE.md, schemas/authority-transition.schema.json
 
-# Yggdrasil AuthorityTransition
+# Mimer AuthorityTransition
 
 Parent epic: [#2533](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533) ·
 Contract issue: [#2547](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2547) ·

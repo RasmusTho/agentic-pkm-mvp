@@ -1,6 +1,6 @@
-State: Canonical Yggdrasil semantic dimensions. Docs-only architecture contract for the foundation backlog (#2533–#2552); defines the orthogonal metadata that preserves meaning across storage, indexing, retrieval, memory, projection, and agent use. Does not claim shipped runtime behavior.
+State: Canonical Mimer semantic dimensions. Docs-only architecture contract for the foundation backlog (#2533–#2552); defines the orthogonal metadata that preserves meaning across storage, indexing, retrieval, memory, projection, and agent use. Does not claim shipped runtime behavior.
 Doc role: Architecture / semantic model
-Authority: Owns the orthogonal semantic dimensions (metadata fields) that every Yggdrasil object carries and that must not be collapsed. Its central commitment: `source_role`, `authority_state`, and `evidence_role` are independent and answer different questions. Subordinate to `docs/foundation/00-yggdrasil-doctrine.md` and `docs/architecture/functional-ontology.md`; the physical field bundle is owned by the metadata bundle schema (#2544).
+Authority: Owns the orthogonal semantic dimensions (metadata fields) that every Mimer object carries and that must not be collapsed. Its central commitment: `source_role`, `authority_state`, and `evidence_role` are independent and answer different questions. Subordinate to `docs/foundation/00-yggdrasil-doctrine.md` and `docs/architecture/functional-ontology.md`; the physical field bundle is owned by the metadata bundle schema (#2544).
 Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
@@ -8,7 +8,7 @@ Source of truth: canonical (dimension definitions); subordinate to doctrine and 
 Last reviewed: 2026-06-27
 Last verified against: docs/foundation/00-yggdrasil-doctrine.md, docs/architecture/functional-ontology.md, docs/foundation/yggdrasil-architecture-context-packet.md, docs/architecture/memory-model.md, schemas/memory-item.schema.json
 
-# Yggdrasil Semantic Dimensions
+# Mimer Semantic Dimensions
 
 Parent epic: [#2533](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533)
 

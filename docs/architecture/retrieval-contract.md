@@ -1,4 +1,4 @@
-State: Canonical Yggdrasil RetrievalResult contract. Docs-only architecture/schema contract for the foundation backlog (#2533–#2552); defines candidate-evidence/context semantics for RCA retrieval. Pairs with `schemas/retrieval-result.schema.json`. Does not claim shipped runtime behavior.
+State: Canonical Mimer RetrievalResult contract. Docs-only architecture/schema contract for the foundation backlog (#2533–#2552); defines candidate-evidence/context semantics for RCA retrieval. Pairs with `schemas/retrieval-result.schema.json`. Does not claim shipped runtime behavior.
 Doc role: Architecture / contract
 Authority: Owns the `RetrievalResult` contract — candidate context/evidence produced by RCA, with admissibility status, provenance/citation ranges, and cross-scope semantics. The machine-readable form is `schemas/retrieval-result.schema.json`; this doc is its prose mirror. Subordinate to `docs/foundation/00-yggdrasil-doctrine.md`, `docs/architecture/cross-scope-flow.md`, and `docs/architecture/semantic-dimensions.md`.
 Owner: Architecture spine
@@ -8,7 +8,7 @@ Source of truth: canonical (RetrievalResult contract); subordinate to doctrine, 
 Last reviewed: 2026-06-27
 Last verified against: docs/architecture/cross-scope-flow.md, docs/architecture/semantic-dimensions.md, docs/architecture/metadata-bundle.md, docs/contracts/CONTEXT_BUNDLE.md, docs/boundaries/RCA.md, docs/boundaries/GOV.md, schemas/retrieval-result.schema.json
 
-# Yggdrasil Retrieval Contract (RetrievalResult)
+# Mimer Retrieval Contract (RetrievalResult)
 
 Parent epic: [#2533](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533) ·
 Contract issue: [#2548](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2548) ·

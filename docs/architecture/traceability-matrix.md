@@ -1,4 +1,4 @@
-State: Canonical Yggdrasil traceability matrix. Docs-only control document for the architecture-foundation backlog (#2533–#2552); maps each load-bearing principle to its doc, ADR, ontology, dimensions, boundaries, contract, tests, and implementation issues. Does not claim shipped runtime behavior.
+State: Canonical Mimer traceability matrix. Docs-only control document for the architecture-foundation backlog (#2533–#2552); maps each load-bearing principle to its doc, ADR, ontology, dimensions, boundaries, contract, tests, and implementation issues. Does not claim shipped runtime behavior.
 Doc role: Architecture / traceability control document
 Authority: Owns the climb-back map from doctrine principle to implementation. For any invariant it answers: which doctrine principle, which ontology concepts, which semantic distinctions, which control boundaries, which contract/schema, which test/eval, and which issue. Subordinate to `docs/foundation/00-yggdrasil-doctrine.md`, `docs/architecture/functional-ontology.md`, `docs/architecture/semantic-dimensions.md`, `docs/architecture/cross-scope-flow.md`, and `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`. `TBD` marks an artifact that genuinely belongs to a future issue, not missing thinking.
 Owner: Architecture spine / CES practice
@@ -8,7 +8,7 @@ Source of truth: canonical (principle → artifact mapping); subordinate to the 
 Last reviewed: 2026-07-03
 Last verified against: docs/foundation/00-yggdrasil-doctrine.md, docs/architecture/functional-ontology.md, docs/architecture/semantic-dimensions.md, docs/architecture/cross-scope-flow.md, docs/foundation/yggdrasil-architecture-context-packet.md, docs/SYSTEM_BREAKDOWN_STRUCTURE.md
 
-# Yggdrasil Traceability Matrix
+# Mimer Traceability Matrix
 
 Parent epic: [#2533](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533) ·
 Stabilized SBS: [#2534](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2534) ·

@@ -1,7 +1,7 @@
 State: New — transcribes already-settled findings from the 2026-07-03 INCOSE boundary audit; decides
 nothing new.
 Doc role: Reference
-Authority: ISO/IEC/IEEE 15288 context-layer vocabulary overlay for Yggdrasil. Names the System of
+Authority: ISO/IEC/IEEE 15288 context-layer vocabulary overlay for Mimer. Names the System of
 Interest (SoI) boundary, the enabling-system / COTS-in-deployed-configuration / external-system
 classification rule, and the integrated system context model. A vocabulary layer over the existing
 architecture, not a redesign — it renames nothing, restructures nothing, and grants no new
@@ -25,7 +25,7 @@ restating or subtly redefining the same terms.
 
 ## System of Interest (SoI)
 
-**Definition (15288 overlay).** The Yggdrasil SoI is the local-first cognitive-prosthesis software
+**Definition (15288 overlay).** The Mimer SoI is the local-first cognitive-prosthesis software
 system: the runtime (`app/`, `yggdrasil_runtime/`), its contracts and schemas, its system-owned
 durable artifacts (companion notes, receipts, governance records), and its rebuildable machine
 surfaces (object store, indexes, embeddings, outbox) — the three nested roles of
@@ -134,7 +134,7 @@ INCOSE sense requires operationally- and managerially-independent constituents a
 the internal 8-subsystem decomposition (`docs/MODULAR_ARCHITECTURE.md:26` states those
 subsystems are "not separate deployments, services, or processes") — this is cited as advisory from
 the 2026-07-03 audit §3, not a settling ruling. The one INCOSE-defensible SoS reading in the repo is
-the operator's assembled environment (Yggdrasil + Obsidian + iCloud, `docs/ARCHITECTURE.md:239`).
+the operator's assembled environment (Mimer + Obsidian + iCloud, `docs/ARCHITECTURE.md:239`).
 Whether to rename `docs/MODULAR_ARCHITECTURE.md` on the strength of that reading is an open
 owner decision (audit §15 Q2, routed to SBI-8) — this overlay links the question, it does not answer
 it. See also the overlay note in `docs/MODULAR_ARCHITECTURE.md` itself.

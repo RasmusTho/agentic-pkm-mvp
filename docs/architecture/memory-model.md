@@ -1,4 +1,4 @@
-State: Canonical Yggdrasil MemoryItem contract and promotion boundary. Docs-only architecture/schema contract for the foundation backlog (#2533–#2552). Pairs with `schemas/memory-item.schema.json`. Does not claim shipped runtime behavior.
+State: Canonical Mimer MemoryItem contract and promotion boundary. Docs-only architecture/schema contract for the foundation backlog (#2533–#2552). Pairs with `schemas/memory-item.schema.json`. Does not claim shipped runtime behavior.
 Doc role: Architecture / contract
 Authority: Owns the `MemoryItem` contract — machine-memory types, lifecycle states, required fields, defaults, and the promotion boundary (MEM → GOV → HKA). The machine-readable form is `schemas/memory-item.schema.json`; this doc is its prose mirror. Subordinate to `docs/foundation/00-yggdrasil-doctrine.md`, `docs/architecture/functional-ontology.md`, and `docs/architecture/semantic-dimensions.md`; the durable-mutation path it requires is owned by `docs/architecture/authority-transition-flow.md`.
 Owner: Architecture spine
@@ -8,7 +8,7 @@ Source of truth: canonical (MemoryItem contract); subordinate to doctrine, ontol
 Last reviewed: 2026-06-27
 Last verified against: docs/architecture/semantic-dimensions.md, docs/architecture/metadata-bundle.md, docs/architecture/authority-transition-flow.md, docs/boundaries/MEM.md, docs/boundaries/GOV.md, docs/boundaries/HKA.md, schemas/memory-item.schema.json
 
-# Yggdrasil Memory Model (MemoryItem)
+# Mimer Memory Model (MemoryItem)
 
 Parent epic: [#2533](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533) ·
 Contract issue: [#2546](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2546) ·

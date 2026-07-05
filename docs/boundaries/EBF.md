@@ -10,7 +10,7 @@ State: Boundary charter — Draft (control-boundary contract; docs-only, not a r
 [CrossScopeFlow](../architecture/cross-scope-flow.md) ·
 [traceability matrix](../architecture/traceability-matrix.md)
 
-**Canonical separation rule:** EBF owns **the boundary between Yggdrasil and things it does not
+**Canonical separation rule:** EBF owns **the boundary between Mimer and things it does not
 fully control**. External systems provide mechanisms, observations, candidate evidence, inference,
 transport, or interface — they do not become authority without explicit governance.
 

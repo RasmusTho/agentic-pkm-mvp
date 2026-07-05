@@ -1,6 +1,6 @@
 State: Target-state SBS V2 for 2030 resilience; docs-only strategic architecture; does not claim shipped runtime behavior.
 Doc role: Core SoT / strategic architecture reference
-Authority: Target System Breakdown Structure for Yggdrasil as a long-lived human-first cognitive platform. This document owns the enduring subsystem decomposition, two-level SBS, volatility boundaries, and change-impact model for long-horizon architecture. It is subordinate to `docs/PROJECT_KERNEL.md` and `docs/COGNITIVE_PROSTHESIS_CHARTER.md` on product intent, and subordinate to `docs/ARCHITECTURE.md` / `docs/STATUS.md` on current shipped behavior. It intentionally generalizes beyond current vault, Obsidian, retrieval, memory, storage, UI, sync, and agent-runtime choices.
+Authority: Target System Breakdown Structure for Mimer as a long-lived human-first cognitive platform. This document owns the enduring subsystem decomposition, two-level SBS, volatility boundaries, and change-impact model for long-horizon architecture. It is subordinate to `docs/PROJECT_KERNEL.md` and `docs/COGNITIVE_PROSTHESIS_CHARTER.md` on product intent, and subordinate to `docs/ARCHITECTURE.md` / `docs/STATUS.md` on current shipped behavior. It intentionally generalizes beyond current vault, Obsidian, retrieval, memory, storage, UI, sync, and agent-runtime choices.
 Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
@@ -8,9 +8,9 @@ Source of truth: mixed
 Last reviewed: 2026-06-26
 Last verified against: docs/PROJECT_KERNEL.md, docs/COGNITIVE_PROSTHESIS_CHARTER.md, docs/DESIGN_PRINCIPLES.md, docs/MODULAR_ARCHITECTURE.md, docs/SEMANTIC_SYSTEM_ARCHITECTURE.md, docs/CAPABILITY_CONTRACT_MODEL.md, docs/INTEGRATION_FABRIC_CONTRACT.md, docs/CONCEPTS/PORTABILITY_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/CONCEPTS/INSTANCE_DEVICE_AND_REPLICA_CONTRACT.md, docs/foundation/yggdrasil-architecture-context-packet.md
 
-# Yggdrasil System Breakdown Structure
+# Mimer System Breakdown Structure
 
-This document defines the target System Breakdown Structure (SBS) for Yggdrasil as a long-lived human-first cognitive platform.
+This document defines the target System Breakdown Structure (SBS) for Mimer as a long-lived human-first cognitive platform.
 
 It is not a review of the current repository structure. It is not a service map, package map, deployment diagram, API inventory, or delivery plan. It defines enduring responsibilities that should still be recognizable in 2030 even if most implementation choices have been replaced.
 
@@ -24,7 +24,7 @@ The preferred answer is:
 
 ## Decomposition principle
 
-Yggdrasil is decomposed by authority, cognitive context, and representation boundaries — not by UI feature, storage technology, or agent implementation detail.
+Mimer is decomposed by authority, cognitive context, and representation boundaries — not by UI feature, storage technology, or agent implementation detail.
 
 Level 1 macro-domains describe conceptual responsibility regions. Level 2 entries describe control boundaries / bounded contexts. They are not necessarily one-to-one runtime services.
 
@@ -62,7 +62,7 @@ The recommended SBS V2 is a two-level architecture:
 
 This structure intentionally combines three useful perspectives:
 
-- Authority-first architecture: Yggdrasil's long-term integrity depends on preventing hidden authority escalation.
+- Authority-first architecture: Mimer's long-term integrity depends on preventing hidden authority escalation.
 - Change-isolation architecture: high-volatility seams must have named owners so replacement does not become a platform rewrite.
 - Current-spine continuity: the existing system-of-systems document remains the bridge from the current runtime mental model to this target decomposition.
 
@@ -177,7 +177,7 @@ Example decomposition:
 
 Strengths:
 
-- Correctly treats authority as the deepest Yggdrasil boundary.
+- Correctly treats authority as the deepest Mimer boundary.
 - Preserves the durable/rebuildable line.
 - Names hidden authority escalation as the central architectural failure mode.
 - Recognizes that scope must become richer than a scalar active vault.
@@ -283,7 +283,7 @@ The selected SBS V2 is a hierarchical systems-of-systems decomposition:
 - Treat CES as a cross-cutting stewardship practice, not a runtime subsystem.
 - Avoid a 14-boundary big bang: instantiate a distinct Level-2 implementation surface only when a second independent volatility clock justifies the split.
 
-## Part 3 - Proposed Yggdrasil SBS
+## Part 3 - Proposed Mimer SBS
 
 ### Level 1 macro-domains
 
@@ -301,7 +301,7 @@ Contains:
 
 Rationale:
 
-If this macro-domain weakens, Yggdrasil stops being a human-first cognitive platform and becomes a collection of tools that can silently reinterpret or mutate human meaning.
+If this macro-domain weakens, Mimer stops being a human-first cognitive platform and becomes a collection of tools that can silently reinterpret or mutate human meaning.
 
 #### 2. Cognitive Context & Topology
 
@@ -330,7 +330,7 @@ Contains:
 
 Rationale:
 
-Yggdrasil remains human-first only if the human can understand, guide, correct, approve, and inspect the system.
+Mimer remains human-first only if the human can understand, guide, correct, approve, and inspect the system.
 
 #### 4. External Boundary
 
@@ -451,7 +451,7 @@ Expected rate of change:
 
 Expected lifespan:
 
-- Permanent while Yggdrasil remains human-first.
+- Permanent while Mimer remains human-first.
 
 Rationale:
 
@@ -499,7 +499,7 @@ Expected rate of change:
 
 Expected lifespan:
 
-- Permanent while Yggdrasil operates across contexts, workspaces, devices, principals, or deployment postures.
+- Permanent while Mimer operates across contexts, workspaces, devices, principals, or deployment postures.
 
 Rationale:
 
@@ -586,7 +586,7 @@ Expected rate of change:
 
 Expected lifespan:
 
-- Permanent while Yggdrasil preserves human knowledge.
+- Permanent while Mimer preserves human knowledge.
 
 Rationale:
 
@@ -639,7 +639,7 @@ Expected rate of change:
 
 Expected lifespan:
 
-- Permanent while Yggdrasil needs stable meaning across changing representations and systems.
+- Permanent while Mimer needs stable meaning across changing representations and systems.
 
 Rationale:
 
@@ -696,7 +696,7 @@ Expected rate of change:
 
 Expected lifespan:
 
-- Permanent while Yggdrasil has humans, agents, automation, memory, tools, or external systems.
+- Permanent while Mimer has humans, agents, automation, memory, tools, or external systems.
 
 Rationale:
 
@@ -706,7 +706,7 @@ Governance is the trust spine. It centralizes accountability, not all mechanism.
 
 Purpose:
 
-Own the boundary between Yggdrasil and things it does not fully control.
+Own the boundary between Mimer and things it does not fully control.
 
 Responsibilities:
 
@@ -749,7 +749,7 @@ Expected rate of change:
 
 Expected lifespan:
 
-- Permanent while Yggdrasil connects to external providers, tools, sources, editors, or APIs.
+- Permanent while Mimer connects to external providers, tools, sources, editors, or APIs.
 
 Rationale:
 
@@ -803,7 +803,7 @@ Expected rate of change:
 
 Expected lifespan:
 
-- Permanent while Yggdrasil persists anything through replaceable storage technology.
+- Permanent while Mimer persists anything through replaceable storage technology.
 
 Rationale:
 
@@ -856,7 +856,7 @@ Expected rate of change:
 
 Expected lifespan:
 
-- Permanent while Yggdrasil uses machine representations to operate over durable artifacts and memory.
+- Permanent while Mimer uses machine representations to operate over durable artifacts and memory.
 
 Rationale:
 
@@ -908,7 +908,7 @@ Expected rate of change:
 
 Expected lifespan:
 
-- Permanent while Yggdrasil helps find and assemble context.
+- Permanent while Mimer helps find and assemble context.
 
 Rationale:
 
@@ -960,7 +960,7 @@ Expected rate of change:
 
 Expected lifespan:
 
-- Permanent while Yggdrasil learns or remembers machine-support material across time.
+- Permanent while Mimer learns or remembers machine-support material across time.
 
 Rationale:
 
@@ -1015,7 +1015,7 @@ Expected rate of change:
 
 Expected lifespan:
 
-- Permanent while Yggdrasil offers cognitive augmentation beyond manual browsing.
+- Permanent while Mimer offers cognitive augmentation beyond manual browsing.
 
 Rationale:
 
@@ -1068,7 +1068,7 @@ Expected rate of change:
 
 Expected lifespan:
 
-- Permanent while Yggdrasil performs side effects, automation, tool use, or delegated actions.
+- Permanent while Mimer performs side effects, automation, tool use, or delegated actions.
 
 Rationale:
 
@@ -1125,7 +1125,7 @@ Expected rate of change:
 
 Expected lifespan:
 
-- Permanent while Yggdrasil supports multi-device, central/satellite, offline/online, replicated, or federated operation.
+- Permanent while Mimer supports multi-device, central/satellite, offline/online, replicated, or federated operation.
 
 Rationale:
 
@@ -1178,7 +1178,7 @@ Expected rate of change:
 
 Expected lifespan:
 
-- Permanent while Yggdrasil needs trust, diagnosis, evaluation, or regression protection.
+- Permanent while Mimer needs trust, diagnosis, evaluation, or regression protection.
 
 Rationale:
 
@@ -1233,7 +1233,7 @@ Expected rate of change:
 
 Expected lifespan:
 
-- Permanent while Yggdrasil expects to evolve over many years.
+- Permanent while Mimer expects to evolve over many years.
 
 Rationale:
 
@@ -1862,12 +1862,12 @@ Provider model names, embedding-specific fields, tool payloads, or vendor taxono
 
 Detection:
 
-- Core contracts require provider-specific identifiers where a Yggdrasil-owned concept should exist.
+- Core contracts require provider-specific identifiers where a Mimer-owned concept should exist.
 - Replacing a model, embedding provider, parser, editor, or tool provider changes semantic authority rules.
 
 Mitigation:
 
-Route provider details through EBF/DRI/RCA/CAO/EXE adapters and translate them into stable Yggdrasil-owned contracts before crossing core boundaries.
+Route provider details through EBF/DRI/RCA/CAO/EXE adapters and translate them into stable Mimer-owned contracts before crossing core boundaries.
 
 ### Agent runtime owns policy, retrieval, memory, or tool side effects
 
@@ -2173,4 +2173,4 @@ Use the repository's current eight-subsystem architecture as the bridge. Use thi
 
 The target architecture should optimize for this invariant:
 
-> Yggdrasil may replace most implementation choices without losing human knowledge, semantic continuity, authority accountability, or local-first operability.
+> Mimer may replace most implementation choices without losing human knowledge, semantic continuity, authority accountability, or local-first operability.
