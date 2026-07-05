@@ -3,7 +3,7 @@ Doc role: Reference
 Authority: Human-readable snapshot of the current database schema and DB outbox bootstrap; migrations and bootstrap code remain the executable source of truth.
 Temporal class: operational
 Source of truth: code
-Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kernel04_store_schema_in_migrations.py (2026-07-03)
+Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kernel04_store_schema_in_migrations.py + app/services/outbox.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py (2026-07-05)
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -21,7 +21,14 @@ Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kern
   "run migrations" hint instead of creating schema. Test fixtures opt in to create-on-demand via
   `STORE_SCHEMA_AUTOCREATE=1`. Schema parity between the migration and the audited
   `_ensure_tables()` shape is asserted by `tests/migrations/test_store_schema_parity.py`.
-- `app/services/outbox.py` (`bootstrap()`) defines the **DB outbox** table (canonical queue) at runtime.
+- The **DB outbox** table (canonical queue) is **migration-owned** (KERNEL-05, #2850, follow-up to
+  KERNEL-04): Alembic revision `f3a1c9d2e4b7` creates it, and
+  `app/services/outbox.py::bootstrap()` is assert-only outside tests — a Postgres runtime with a
+  missing outbox table/column raises `OutboxSchemaMissingError` with a "run migrations" hint instead
+  of creating schema (the prior silent `except Exception: pass` around `ensure_schema` is gone). Test
+  fixtures opt in to create-on-demand via the same `STORE_SCHEMA_AUTOCREATE=1` flag KERNEL-04
+  established. Schema parity between the migration and the audited `bootstrap()` shape is asserted by
+  `tests/migrations/test_outbox_schema_parity.py`.
 - Alembic migrations under `app/alembic/versions/` define the legacy AMG-core
   (`objects`/`chunks`/`embeddings`/...) lineage; see "Historical migration lineage" below. Most of
   these are historical-only, **but `objects` and `decisions` remain on the active runtime path**: vault
@@ -256,7 +263,9 @@ The legacy baseline retains the **composite** key form:
 - `latest_decision(object_id uuid, key text) -> jsonb`
 
 ## Canonical Queue (DB Outbox)
-Created/ensured by `app/services/outbox.py:bootstrap()`:
+Migration-owned (KERNEL-05, #2850): Alembic revision `f3a1c9d2e4b7` creates the table exactly as the
+audited `app/services/outbox.py::bootstrap()` produced it; `bootstrap()` is assert-only outside tests
+(`STORE_SCHEMA_AUTOCREATE=1` opts test fixtures into create-on-demand):
 - `outbox`
   - `id` (`uuid`, PK, default `gen_random_uuid()`)
   - `topic` (`text`)

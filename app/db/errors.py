@@ -32,3 +32,20 @@ class StoreSchemaMissingError(RuntimeError):
     """
 
     is_transient = True
+
+
+class OutboxSchemaMissingError(RuntimeError):
+    """Migration-owned outbox schema is absent in a Postgres-backed runtime.
+
+    Raised by the assert-only preflight (`app/services/outbox.py::bootstrap`,
+    KERNEL-05 #2850) when the `outbox` table or an expected column is missing.
+    Mirrors `StoreSchemaMissingError` (KERNEL-04, #2766): schema-missing is a
+    boot-ordering condition (alembic runs in the api/agent-service boot path
+    while the worker only depends on the db service), not a poison payload, so
+    it must crash-retry under supervision and never dead-letter/burn poison
+    budget. It rides the same ``is_transient`` marker protocol the outbox
+    worker's dispatch classifier (`_is_transient_dispatch_error`) already
+    checks generically, so no worker-side change is needed for classification.
+    """
+
+    is_transient = True
