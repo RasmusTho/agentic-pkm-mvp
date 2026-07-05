@@ -56,6 +56,13 @@ services:
         required: false
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     command: ["/bin/bash", "/app/scripts/run_migrations.sh"]
+    environment:
+      # app/__init__.py runs ensure_provider() at import time and alembic's
+      # env.py imports the app package; with LLM_PROVIDER_ENFORCE=1 (from
+      # runtime.defaults.env) an unset LLM_PROVIDER is an import-time crash.
+      # Mirror the api/worker/watcher wiring so migrate resolves the provider
+      # exactly like the proven api alembic path does.
+      LLM_PROVIDER: ${LLM_PROVIDER}
     depends_on:
       db:
         condition: service_healthy
