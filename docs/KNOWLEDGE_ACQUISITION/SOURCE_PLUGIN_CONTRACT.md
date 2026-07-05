@@ -45,8 +45,11 @@ Optional (declared via `capabilities`):
 
 - **`item_ref`** — source-native stable ID (YouTube video ID, podcast GUID, file content hash).
   Uniqueness scope is `(source_kind, item_ref)`.
-- **`content_identity`** — hash of the acquired content itself. Distinguishes "same item, source
-  re-fetched" (dedup: skip) from "same item, content changed upstream" (re-run refinement stages).
+- **`content_identity`** — hash of the acquired content itself, or of the stable acquisition
+  signals (source metadata + acquisition method) where the content is non-deterministically
+  acquired (e.g. local ASR — a hash over varying output can never be idempotent; see
+  `ASR_FALLBACK_PATH.md` §ASR-path identity). Distinguishes "same item, source re-fetched"
+  (dedup: skip) from "same item, content changed upstream" (re-run refinement stages).
 - Dedup is decided **before** fetch wherever the source allows it (discovery metadata), and always
   before refinement. An item already refined at the same `content_identity` is skipped with a
   trace, not silently.

@@ -256,6 +256,38 @@ def test_asr_metadata_change_new_record_prior_untouched(monkeypatch):
     assert updated["caption_body"] == "second transcript"
 
 
+def test_content_identity_golden_pins():
+    # Golden pins (#2931 review round 2): any change to the fingerprint
+    # composition silently RE-KEYS every persisted raw record — exactly the
+    # round-1 regression, where an added fingerprint key shifted caption-path
+    # hashes unnoticed. If one of these assertions fails, identity semantics
+    # changed: that requires an explicit decision/migration, not a test-value
+    # update.
+    metadata = {"title": "Pinned Title", "description": "pinned description", "duration": 61}
+
+    # Caption path — verified byte-identical to KA-01's (origin/main)
+    # fingerprint construction for the same inputs.
+    caption = plugin.CaptionSelection(
+        available=True,
+        language="en",
+        acquisition_method="captions_manual",
+        track_url="https://example.com/x.vtt",
+        body="pinned caption body",
+    )
+    assert (
+        plugin.compute_content_identity(metadata=metadata, caption=caption)
+        == "sha256:477754cd5cb98ec3b63c670fa0c43752fd083f0e7169f6db179e776fee422e05"
+    )
+
+    # ASR path — metadata-bound fingerprint + method discriminator.
+    assert (
+        plugin.compute_content_identity(
+            metadata=metadata, caption=plugin.CaptionSelection(available=False), asr_fallback=True
+        )
+        == "sha256:3b850605f069b26181285531aa225c5688389879a73a619ab5440e4bef8129c4"
+    )
+
+
 def test_asr_failure_runtime_error_is_traced_not_raised(monkeypatch):
     # MAJOR (review round 1): an ASR-chain failure (yt-dlp/faster-whisper
     # missing, download failure → RuntimeError) must be loud, item-scoped, and
@@ -269,6 +301,9 @@ def test_asr_failure_runtime_error_is_traced_not_raised(monkeypatch):
 
     monkeypatch.setattr(plugin, "transcribe_source", boom)
 
+    traced_events: list[dict] = []
+    monkeypatch.setattr(plugin, "json_log", lambda **kw: traced_events.append(kw))
+
     outcome = plugin.fetch(FAKE_URL)  # must not raise
 
     assert outcome.ok is False
@@ -276,6 +311,14 @@ def test_asr_failure_runtime_error_is_traced_not_raised(monkeypatch):
     assert outcome.is_new is False
     assert outcome.object_id is None
     assert outcome.record == {}
+
+    # The failure is TRACED (review round 2): the fallback_failed event was
+    # actually emitted, carrying the item and the error.
+    failed = [e for e in traced_events if e.get("event") == "knowledge_acquisition.asr.fallback_failed"]
+    assert len(failed) == 1
+    assert failed[0]["item_ref"] == "abcdefghijk"
+    assert failed[0]["source_kind"] == plugin.SOURCE_KIND
+    assert "RuntimeError" in failed[0]["error"]
 
     # Nothing was persisted: the identity slot is still free for a retry.
     from app.knowledge_acquisition.raw_record import get_raw_record, raw_record_object_id
@@ -311,12 +354,21 @@ def test_asr_failure_ffmpeg_calledprocesserror_is_traced_not_raised(monkeypatch)
 
     monkeypatch.setattr(plugin, "transcribe_source", boom)
 
+    traced_events: list[dict] = []
+    monkeypatch.setattr(plugin, "json_log", lambda **kw: traced_events.append(kw))
+
     outcome = plugin.fetch(FAKE_URL)  # must not raise
 
     assert outcome.ok is False
     assert outcome.failure is not None and "CalledProcessError" in outcome.failure
     assert outcome.object_id is None
     assert outcome.record == {}
+
+    # The failure is TRACED (review round 2).
+    failed = [e for e in traced_events if e.get("event") == "knowledge_acquisition.asr.fallback_failed"]
+    assert len(failed) == 1
+    assert failed[0]["item_ref"] == "abcdefghijk"
+    assert "CalledProcessError" in failed[0]["error"]
 
     from app.knowledge_acquisition.raw_record import get_raw_record, raw_record_object_id
 
