@@ -552,6 +552,16 @@ This is a confirmed owner decision (not merely surfaced), and it **reshapes the 
   5. **Attention calibration** (intake volume vs noise vs misses): flagged as **one of the most important questions**, to be **approached in stages**, not settled in one shot.
   - **Emerging boundary read (advisory, not final):** because selection here is genuinely *cognitive* (inferring interests, relevance-filtering under quality gates), it leans **Mimer / the agent layer**, with Heimdall doing fetch+transcribe on designated targets. A clean loop falls out: **Heimdall senses behaviour → Mimer infers interests → designates sources/items → Heimdall fetches+transcribes → Mimer makes meaning.** To be confirmed after the Claude Design pass (input 3) and the staged attention-calibration work (input 5).
 
+### Decision run — owner rulings (2026-07-05)
+
+Batched build-gating rulings. Three confirmations + one reshape.
+
+1. **Entity/identity register → Mimer-owned, markdown-built `[reshape → CES/ADR]`.** *Reverses D-IDENTITY / charter FIXED #6* (which fixed the register as a shared Layer-2 substrate owned by no constituent). Owner ruling: **the register belongs to Mimer (the system-of-record); Heimdall integrates with it, not owns it.** Source of record is **`.md` files in the vault** (markdown-first, companion-note style); a **graph database is a derived index** built *from* those notes to improve relationship functionality — never the canonical store. This is a genuine reshape of a FIXED constraint, so it routes through CES/ADR at enactment (same ADR as §9-k).
+   - **v1 mechanic (interpretation — owner to confirm):** with the register on Mimer's side, **Heimdall emits entity _mentions_** (surface forms + provisional local refs) in its events; **canonical _resolution_ (which Anna, which Northvolt) is Mimer's** — identity is knowledge, and knowledge is Mimer. This refines the §9-k handoff (resolution moves from Heimdall to Mimer's side of the seam) and **de-risks v1**: Heimdall neither builds nor blocks on a register. Supersedes the companion's earlier "Entity Register v0 before the first event" as Heimdall's biggest trade-off — that trade-off now belongs to Mimer, on its own schedule.
+2. **ASR location → local, fail-loud.** Confirms §7 rec: raw audio never leaves the machine; no silent cloud fallback. (Public YouTube audio may be allowed a cloud path later — separate, lower-sensitivity decision.)
+3. **YouTube seam → Heimdall owns download + transcribe + attribute(mentions); Mimer owns extract-meaning → candidate.** Confirms §9-k for the concrete YouTube pipeline. **Watch-as-selection stays deferred** (UX-gated, §9-k(b) + input 3 above) — the *fetch+transcribe* front moves to Heimdall now; *what is worth watching* waits for the Claude Design pass.
+4. **Voice-memo capture → iOS Shortcut → watched iCloud folder.** Zero manual per-memo work: a dedicated "Record Audio → Save File (iCloud)" Shortcut (no scraping of Voice Memos' TCC-protected store). One-time setup on the phone/Watch.
+
 ---
 
 ## 10. Red-team pass (adversarial review)
