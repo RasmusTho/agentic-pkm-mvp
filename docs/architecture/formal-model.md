@@ -149,7 +149,7 @@ T-embed [worker → INDEX_EMBEDDING_REQUESTED]  (app/indexer/consumer.py:85-179)
 
 T-delete [human deletes note → watcher → delete_note → INGEST_OBJECT_DELETED]
   post: P.file_state rows deleted ∧ P.objects.path←NULL (TOMBSTONE — ratified D-2)
-        ∧ purge_vectors(P.vectors) [indexer path] ; worker handler itself is a no-op
+        ∧ purge_vectors(P.vectors) [worker handler, app/workers/outbox_worker.py::handle_ingest_object_deleted — #2944]
   future (owner note, not scoped): event-triggered relevance decay lifecycle
         active → archived → forgotten (value lost at a triggering event, not TTL)
 

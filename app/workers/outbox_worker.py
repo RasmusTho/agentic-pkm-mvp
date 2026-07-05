@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from uuid import UUID
 
 from app.agents.panel.filters import strip_ai_panels
 from app.agents.panel.writeback import strip_ai_status_block
@@ -29,7 +30,7 @@ from app.indexer.consumer import process_event as process_indexer_event
 from app.outbox.events import INDEX_EMBEDDING_REQUESTED
 from app.observability.tracer import start_span
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path, write_worker_heartbeat
-from app.services.indexer import handle_ingest_object_created
+from app.services.indexer import handle_ingest_object_created, purge_object_vectors
 from app.services.companion_note import CompanionNote, scan_attachments, write_companion
 from app.settings.runtime import get_settings_bundle
 from app.services.note_uuid import ensure_note_uuid
@@ -414,13 +415,62 @@ def _trace_id_from_envelope(envelope: object) -> str | None:
 
 
 def handle_ingest_object_deleted(payload: Mapping[str, Any]) -> None:
-    # Explicit no-op cleanup hook for delete events. Downstream index cleanup can
-    # be added here later without changing worker dispatch contracts.
+    """Purge the deleted object's vectors from the durable index (T-delete).
+
+    The purge itself is delegated to
+    ``app.services.indexer.purge_object_vectors`` -- the established indexer
+    seam onto the vector index (this worker must not import the transitional
+    ``app.stores`` layer directly; ``tests/architecture/
+    test_deprecated_store_callers.py`` forbids new callers). This handler
+    owns only the event-side contract: payload parsing, logging, and
+    never-crash degradation.
+
+    D-2 tombstone semantics are preserved: only ``store_vector_index`` rows
+    are removed (all views for the object, since neither store backend's
+    ``purge_vectors`` filters by view -- see ``app/stores/memory.py``/
+    ``app/stores/pg.py``); the ``store_objects`` row is never touched and
+    stays as a ``path=NULL`` tombstone per
+    ``tests/properties/test_tombstone_lineage.py`` (D-2, pinned by PR #2943).
+
+    Idempotent under at-least-once redelivery: purging an object with no
+    vector rows (already purged by a prior delivery, or never indexed) is a
+    documented no-op on both store backends (``purge_vectors`` returns 0
+    instead of raising) -- see KERNEL-11's harness registration for this
+    topic in ``tests/workers/test_handler_idempotency_harness.py``.
+
+    In-process cache coherence for the retrieval hybrid store
+    (``app/retrieval/hybrid.py``) is handled by the existing rebuild seam,
+    not here: per KERNEL-05 (``docs/RUNTIME_CORRECTNESS_KERNEL/
+    RETRIEVAL_READS_DURABLE_INDEX.md``), the in-process cache is a
+    cache-through of the durable index rebuilt via
+    ``rebuild_from_durable_index()`` at process warm / explicit rebuild, the
+    same seam ``handle_ingest_object_created`` and the indexer consumer rely
+    on for their own purge+upsert writes -- this handler does not need its
+    own bespoke cache-eviction path to stay consistent with that contract.
+    """
+    raw_uuid = payload.get("uuid")
+    object_id: UUID | None = None
+    if raw_uuid:
+        try:
+            object_id = UUID(str(raw_uuid))
+        except (ValueError, AttributeError, TypeError):
+            object_id = None
+
+    purged = 0
+    if object_id is not None:
+        purged = purge_object_vectors(object_id)
+    else:
+        logger.warning(
+            "ingest delete event missing a resolvable uuid; skipping vector purge path=%s",
+            payload.get("path"),
+        )
+
     logger.info(
-        "handled ingest delete event uuid=%s path=%s deleted=%s",
+        "handled ingest delete event uuid=%s path=%s deleted=%s purged_vectors=%s",
         payload.get("uuid"),
         payload.get("path"),
         payload.get("deleted"),
+        purged,
     )
 
 

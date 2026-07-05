@@ -28,6 +28,38 @@ def llm_embed_text(*, text: str, provider: str, model: str, dim: int, normalize:
     return list(vector)
 
 
+def purge_object_vectors(object_id: _uuid.UUID) -> int:
+    """Purge every vector row for ``object_id`` from the durable index (T-delete, #2944).
+
+    Delete-path twin of the purge half of :func:`handle_ingest_object_created`:
+    lives here (not in the outbox worker) because this module is the
+    established indexer seam onto ``app.stores.get_vector_index()`` — the
+    worker's ``handle_ingest_object_deleted`` delegates its purge to this
+    function so the worker never grows a direct dependency on the
+    transitional store layer (``tests/architecture/
+    test_deprecated_store_callers.py`` forbids new callers).
+
+    Mirrors ``app/indexer/consumer.py::_purge_vectors``: a missing purge
+    primitive or a raising purge degrades to zero rows purged rather than
+    propagating, so a delete event never crash-loops the worker. Purging an
+    object with no vector rows is a documented no-op on both store backends
+    (``purge_vectors`` returns 0 instead of raising), which is what makes
+    redelivery of the same delete event converge (KERNEL-11).
+    """
+    idx = get_vector_index()
+    purge = getattr(idx, "purge_vectors", None)
+    if purge is None:
+        return 0
+    try:
+        return purge(object_id, view=DEFAULT_EMBEDDING_VIEW)
+    except Exception:
+        logger.exception(
+            "purge_vectors raised while purging deleted object's vectors object_id=%s",
+            object_id,
+        )
+        return 0
+
+
 def _is_valid_uuid(value: str | None) -> bool:
     if not value:
         return False

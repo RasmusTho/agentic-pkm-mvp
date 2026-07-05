@@ -101,6 +101,7 @@ import inspect
 import json
 from pathlib import Path
 from typing import Any, Callable
+from uuid import UUID
 
 import pytest
 
@@ -357,9 +358,34 @@ def _setup_ingest_vault_changed(vault_root: Path, monkeypatch: pytest.MonkeyPatc
 
 
 def _setup_ingest_object_deleted(vault_root: Path, monkeypatch: pytest.MonkeyPatch) -> _FixtureResult:
+    """Seed a real vector row for the fixture's object id before dispatch.
+
+    #2944 wired ``handle_ingest_object_deleted`` to purge_vectors for real
+    (previously an explicit no-op). Seeding a genuine vector via the real
+    ``MemoryVectorIndex`` (not stubbed -- see the module docstring's vector
+    index rationale) means dispatch 1 exercises an actual purge (1 row -> 0
+    rows) and dispatch 2 exercises the documented redelivery no-op (0 rows,
+    ``purge_vectors`` returns 0 without raising) -- both legs of AC2's
+    idempotency contract, not a vacuous purge-of-nothing.
+    """
+    from app.components.embeddings import EmbeddingIdentity
+    from app.stores import get_vector_index
+
+    object_id = "33333333-3333-3333-3333-333333333333"
+    idx = get_vector_index()
+    identity = EmbeddingIdentity(provider="stub", model="stub-model", dim=8, normalize=False)
+    idx.upsert(
+        UUID(object_id),
+        kind="note",
+        source_ref="Inbox/deleted.md",
+        payload={"title": "Deleted Fixture Note"},
+        embedding=list(_STUB_VECTOR),
+        model="stub-model",
+        identity=identity,
+    )
     return _FixtureResult(
         {
-            "uuid": "33333333-3333-3333-3333-333333333333",
+            "uuid": object_id,
             "path": str(vault_root / "Inbox" / "deleted.md"),
             "deleted": True,
             "reason": "fixture",
@@ -482,7 +508,9 @@ TOPIC_FIXTURES: dict[str, _TopicFixture] = {
     "ingest.object.deleted": _TopicFixture(
         "ingest.object.deleted",
         _setup_ingest_object_deleted,
-        # Pure-logging no-op handler: emits no outbox events at all.
+        # #2944: the handler now purges the durable vector-index row for real
+        # (durable-state leg), but it still emits no outbox events of its own
+        # -- purely a vector-index mutation, no notification/audit emission.
         emission=_EmissionExpectation.ZERO_BY_DESIGN,
     ),
     "panel.scan.requested": _TopicFixture(
