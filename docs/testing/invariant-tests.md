@@ -509,10 +509,16 @@ retrievable; a blind ingester says so).
   WriteGuard.
 - **Expected failure mode:** a "helpful" slice writes the overview directly to the topic folder, or
   acceptance is inferred from anything other than the human's checkbox.
-- **Current enforcement:** live — `app/expansion/create.py::run_create_pass` only ever writes under
-  the resolved system dir's `drafts` subfolder, gated by the named `expansion.create.stage_write`
-  WriteGuard action; there is no body-edit or canonical-location write path in this module.
-- **Test path:** `tests/invariants/test_expansion_invariants.py::test_create_never_autowrites_canonical`.
+- **Current enforcement:** live, both halves. (create side) `app/expansion/create.py::run_create_pass`
+  only ever writes under the resolved system dir's `drafts` subfolder, gated by the named
+  `expansion.create.stage_write` WriteGuard action; there is no body-edit or canonical-location write
+  path in that module. (acceptance side) `app/expansion/accept.py::accept_draft` is the ONLY path to a
+  canonical note and materializes only a draft whose in-draft acceptance checkbox a human has checked
+  (`DraftNotAcceptedError` otherwise); the canonical write is gated by the named
+  `expansion.create.accept_materialize` WriteGuard action and the decision token is minted from the
+  checkbox, never by the executor itself.
+- **Test path:** `tests/invariants/test_expansion_invariants.py::test_create_never_autowrites_canonical`,
+  `tests/expansion/test_accept_promotion.py::test_unchecked_draft_is_never_materialized`.
 - **Related issues:** #2996 (EXP-3), #2997 (EXP-4, governed acceptance — the only path to canonical),
   #2980 (parent).
 
@@ -527,13 +533,17 @@ retrievable; a blind ingester says so).
   (`proposal_builders`/`CompilationDraft`/`SourceRef`).
 - **Expected failure mode:** unsourced narrative ships; or sources are pruned at acceptance and the
   note becomes untraceable machine text.
-- **Current enforcement:** live — `app/expansion/create.py::_validate_citations` blocks a draft
-  (`UnresolvableCitationError`) when a cited source does not resolve or a quoted span does not exist
-  verbatim in its source text; validation runs before any draft/context is built, never after a
-  silent prune.
+- **Current enforcement:** live, both halves. (create side) `app/expansion/create.py::_validate_citations`
+  blocks a draft (`UnresolvableCitationError`) when a cited source does not resolve or a quoted span
+  does not exist verbatim in its source text; validation runs before any draft/context is built, never
+  after a silent prune. (acceptance side) `app/expansion/accept.py::accept_draft` preserves `sources`
+  and `derived_by: synthesis` verbatim into the canonical note (never pruned, never upgraded to an
+  evidence role), and re-validates citations at acceptance time — a cited source that no longer
+  resolves blocks materialization loudly (`UnresolvableCitationError`).
 - **Test path:** `tests/invariants/test_expansion_invariants.py::test_synthesis_carries_source_provenance`,
-  `tests/expansion/test_create_draft_lifecycle.py`.
-- **Related issues:** #2996 (EXP-3), #2980 (parent).
+  `tests/invariants/test_expansion_invariants.py::test_accepted_note_keeps_provenance`,
+  `tests/expansion/test_create_draft_lifecycle.py`, `tests/expansion/test_accept_promotion.py`.
+- **Related issues:** #2996 (EXP-3), #2997 (EXP-4), #2980 (parent).
 
 ### staged_drafts_invisible_to_retrieval
 
