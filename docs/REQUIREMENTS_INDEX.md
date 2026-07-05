@@ -85,7 +85,7 @@ Verdicts: **W** = Well-specified, **S** = Scattered (exists but no single consol
 
 ### Scale/perf-budget note (audit §15 Q1)
 
-Scale/perf budgets are deliberately absent by single-user design: Yggdrasil targets one human
+Scale/perf budgets are deliberately absent by single-user design: Mimer targets one human
 operator at local-vault scale, not concurrent-user throughput or multi-tenant latency SLAs
 (`docs/ARCHITECTURE.md` line 404 and its neighboring single-user scope statements). This is a
 choice, not an oversight — fitness functions exist to check structural properties, but they have no

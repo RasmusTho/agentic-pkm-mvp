@@ -1,6 +1,6 @@
 State: SoT v5.5 Reality-MVP baseline locked (v5.6 delivered, v6.0 seams shipped at capability-seam level); this document is target-state framing for the system-of-systems decomposition and does not claim every subsystem is implemented today.
 Doc role: Core SoT
-Authority: Architecture spine that frames Yggdrasil as a system-of-systems with a stable kernel and a replaceable extension fabric. Owns the current v5.x/v6 structural spine and eight-subsystem map. The 2030 target System Breakdown Structure, volatility boundaries, and change-impact model are owned by `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`. This document does not replace `docs/ARCHITECTURE.md` (current runtime baseline) or `docs/PROJECT_KERNEL.md` (North Star); it sits above them and explains how their concerns compose.
+Authority: Architecture spine that frames Mimer as a system-of-systems with a stable kernel and a replaceable extension fabric. Owns the current v5.x/v6 structural spine and eight-subsystem map. The 2030 target System Breakdown Structure, volatility boundaries, and change-impact model are owned by `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`. This document does not replace `docs/ARCHITECTURE.md` (current runtime baseline) or `docs/PROJECT_KERNEL.md` (North Star); it sits above them and explains how their concerns compose.
 Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
@@ -10,7 +10,7 @@ Last verified against: docs/PROJECT_KERNEL.md, docs/HUMAN-FLOWS.md, docs/ARCHITE
 
 # System-of-Systems Architecture — Spine
 
-This document is the architecture spine for Yggdrasil read as a system-of-systems. It is a docs-only artifact that frames the system above the current runtime baseline so later contract work (integration fabric, capability contracts, agent memory, context bundles, vault topology) has a stable place to attach.
+This document is the architecture spine for Mimer read as a system-of-systems. It is a docs-only artifact that frames the system above the current runtime baseline so later contract work (integration fabric, capability contracts, agent memory, context bundles, vault topology) has a stable place to attach.
 
 Authority boundaries:
 - `docs/PROJECT_KERNEL.md` owns the North Star and the non-negotiable kernel constraints.
@@ -31,7 +31,7 @@ If this document conflicts with any of the owner docs above on their respective 
 
 ## Kernel and extension fabric
 
-Yggdrasil is read as a stable cognitive kernel with a replaceable extension fabric around it. The kernel is the small set of structural commitments that must remain stable for the system to function as a cognitive prosthesis; the extension fabric is the larger set of surfaces, capabilities, agents, integrations, and UI mirrors that are expected to evolve over time.
+Mimer is read as a stable cognitive kernel with a replaceable extension fabric around it. The kernel is the small set of structural commitments that must remain stable for the system to function as a cognitive prosthesis; the extension fabric is the larger set of surfaces, capabilities, agents, integrations, and UI mirrors that are expected to evolve over time.
 
 ### Kernel (stable, non-negotiable)
 
@@ -40,7 +40,7 @@ The kernel is the structural commitment surface. Changes here are architecture-l
 - **Human-first authority.** The human is the durable author and the final authority over meaning. Agents propose; the human (or a human-authorized rule) decides. Authority lives with the human and with explicit governance, not with whichever runtime component happened to write a value.
 - **Vault-first durable surface.** Human-readable Markdown/vault artifacts (vault notes plus system-owned companion notes) are the durable continuity set. Databases, indexes, workers, agents, APIs, and UIs are mirrors, adapters, or execution services on top of that durable surface; runtime DB/index state must be rebuildable from the vault + companion set.
 - **Provenance, receipts, and write guards.** Every system-originated change to the durable surface must carry provenance, must produce a human-legible receipt, and must respect write-safety gates (idempotency, optimistic guards, per-note opt-outs, governed APPLY paths). This is not optional decoration; it is the trust contract.
-- **Local-first operation.** The system must remain useful and safe with no external integration available. External providers (LLMs, embeddings, cloud connectors, remote tools) are capability, transport, inference, or interface; they are not allowed to become semantic authority without explicit Yggdrasil contracts.
+- **Local-first operation.** The system must remain useful and safe with no external integration available. External providers (LLMs, embeddings, cloud connectors, remote tools) are capability, transport, inference, or interface; they are not allowed to become semantic authority without explicit Mimer contracts.
 - **Event/outbox compatibility.** The common event envelope and outbox semantics are a kernel contract. Agents, capabilities, and integrations cross subsystem boundaries through the envelope, not through bespoke side channels.
 - **Authority separation between subsystems.** Cognition does not directly mutate notes. Execution does not invent intent. Integration does not decide meaning. Governance owns admissibility and audit. These separations are kernel rules, not implementation conveniences.
 - **Single-user, single-vault posture as the current baseline.** Multi-user and multi-vault are not blocked by the kernel, but they are not in scope as a current commitment and must not be designed against as if shipped.
@@ -69,7 +69,7 @@ Extension-fabric components are allowed to be added, replaced, or removed. They 
 
 ## Subsystem map
 
-Yggdrasil's system-of-systems decomposition has eight subsystems. Each subsystem owns a distinct concern; together they cover the current runtime baseline and the v6.0 target-state direction. Each entry below states the concern, the kernel constraints that bind it, the primary owner doc(s), and the current implementation status.
+Mimer's system-of-systems decomposition has eight subsystems. Each subsystem owns a distinct concern; together they cover the current runtime baseline and the v6.0 target-state direction. Each entry below states the concern, the kernel constraints that bind it, the primary owner doc(s), and the current implementation status.
 
 ### 1. Human Surface
 
@@ -116,7 +116,7 @@ Yggdrasil's system-of-systems decomposition has eight subsystems. Each subsystem
 ### 7. Integration Fabric
 
 - **Concern:** External integrations that provide capability, transport, inference, or interface — LLM and embedding providers, cloud connectors, watcher transports (filesystem, sync replicas), MCP/tool descriptors, A2A routing, remote multiplex seams, future external surfaces.
-- **Kernel binding:** Local-first operation (external integrations must not be required for the system to function); external integrations are never semantic authority without an explicit Yggdrasil contract; event/outbox compatibility for any side effects.
+- **Kernel binding:** Local-first operation (external integrations must not be required for the system to function); external integrations are never semantic authority without an explicit Mimer contract; event/outbox compatibility for any side effects.
 - **Owner docs:** `docs/INTEGRATION_FABRIC_CONTRACT.md` (integration-class taxonomy, contract fields, authority rule), `docs/ARCHITECTURE.md` (`Abstraction boundaries`, `Operational topology`, MCP/tools and A2A sections), `docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md`, `docs/contracts/A2A_CONTRACT_AND_TRACE.md`, `docs/CONCEPTS/CLOUD_CONNECTORS_DECISION.md`, `docs/LLM.md`, `docs/EMBEDDINGS.md`.
 - **Status:** Mixed. Unified integration-fabric contract is docs-only authority (`docs/INTEGRATION_FABRIC_CONTRACT.md`, delivered by #879). MCP descriptor registry, registry-backed ToolProvider, flagged remote multiplex seam with deterministic local fallback, bounded in-process A2A routing, watcher abstractions, and provider boundaries are shipped. A runtime integration registry remains out of scope.
 

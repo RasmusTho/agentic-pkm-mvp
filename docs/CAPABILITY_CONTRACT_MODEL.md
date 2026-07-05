@@ -1,6 +1,6 @@
 State: SoT v5.5 Reality-MVP baseline locked (v5.6 delivered, v6.0 seams shipped at capability-seam level); this document is target-state framing for the capability model and does not claim every capability listed below is uniformly implemented today.
 Doc role: Core SoT
-Authority: Contract spine for what a capability is in Yggdrasil and what shape every capability contract must take. Owns the capability definition (distinct from agents, UIs, services, and tools), the standard capability contract shape, and the canonical capability examples. Sits below `docs/MODULAR_ARCHITECTURE.md` (Capability subsystem) and beside `docs/INTEGRATION_FABRIC_CONTRACT.md`. Does not replace `docs/ARCHITECTURE.md` (`Capability Model`) for current runtime capability behavior or the per-capability spec directories under `docs/FINDING_AND_REORIENTING/`, `docs/COMMITMENT_AS_FIRST_CLASS/`, `docs/CANVAS_CHAT_SURFACE/`, and `docs/CONTEXT_BUNDLES/`.
+Authority: Contract spine for what a capability is in Mimer and what shape every capability contract must take. Owns the capability definition (distinct from agents, UIs, services, and tools), the standard capability contract shape, and the canonical capability examples. Sits below `docs/MODULAR_ARCHITECTURE.md` (Capability subsystem) and beside `docs/INTEGRATION_FABRIC_CONTRACT.md`. Does not replace `docs/ARCHITECTURE.md` (`Capability Model`) for current runtime capability behavior or the per-capability spec directories under `docs/FINDING_AND_REORIENTING/`, `docs/COMMITMENT_AS_FIRST_CLASS/`, `docs/CANVAS_CHAT_SURFACE/`, and `docs/CONTEXT_BUNDLES/`.
 Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
@@ -10,7 +10,7 @@ Last verified against: docs/MODULAR_ARCHITECTURE.md, docs/INTEGRATION_FABRIC_CON
 
 # Capability Contract Model
 
-This document defines what a **capability** is in Yggdrasil and what every capability contract must answer. It is a docs-only model: it does not introduce a runtime capability registry, runtime enforcement, or new tests.
+This document defines what a **capability** is in Mimer and what every capability contract must answer. It is a docs-only model: it does not introduce a runtime capability registry, runtime enforcement, or new tests.
 
 The model has three purposes:
 

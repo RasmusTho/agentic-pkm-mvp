@@ -1,6 +1,6 @@
 ---
 name: Runtime Scope Prefilter and Envelope
-description: Promote scope-prefilter-before-ranking, content-free denials, evidence-role clamp, and ContextEnvelope assembly from yggdrasil_runtime into the live app/ retrieval path
+description: Promote scope-prefilter-before-ranking, content-free denials, evidence-role clamp, and ContextEnvelope assembly from mimer_runtime into the live app/ retrieval path
 task_id: KERNEL-10
 source_anchor: "docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md :: I-A5, CW-4"
 parent_capability: RUNTIME_CORRECTNESS_KERNEL
@@ -13,7 +13,7 @@ can_parallelize_with: []
 
 ## Purpose
 
-`yggdrasil_runtime/` (test-only, corpus-backed, excluded from the wheel) already implements the
+`mimer_runtime/` (test-only, corpus-backed, excluded from the wheel) already implements the
 admissibility kernel: scope/policy prefilter **before** ranking (`retrieval.py::retrieve`,
 `eligible_candidates`), content-free `ScopeDenial` records, an evidence-role clamp that never lets
 in-context role exceed the intrinsic role (`retrieval.py::_clamp_in_context`), and
@@ -32,7 +32,7 @@ retrieval so agents consume a bounded `ContextEnvelope`, not raw index access.
 
 - Apply scope/policy eligibility **before** ranking in the live retrieval entrypoint
   (`app/retrieval/hybrid.py::hybrid_search`): ineligible material is excluded from the candidate set
-  prior to scoring, mirroring `yggdrasil_runtime/retrieval.py::eligible_candidates`.
+  prior to scoring, mirroring `mimer_runtime/retrieval.py::eligible_candidates`.
 - Record excluded-but-relevant material as **content-free** denials (denial class + scope only, no
   body/snippet), matching `ScopeDenial` — never a silent drop.
 - Clamp `evidence_role_in_context` so it never upgrades above the item's intrinsic evidence role
@@ -43,9 +43,9 @@ retrieval so agents consume a bounded `ContextEnvelope`, not raw index access.
 - Convert the three runtime eval skeletons (`tests/evals/test_general_knowledge_crosses_clean.py`,
   `test_rpg_not_confused_with_software.py`, `test_private_not_in_work_results.py`) to exercise the
   `app/` path. Today they gate on `require_future_runtime(...)` (`tests/evals/_helpers.py`, line 122),
-  which xfails while the `yggdrasil_runtime` module is absent. "Runs against app runtime" means: add an
+  which xfails while the `mimer_runtime` module is absent. "Runs against app runtime" means: add an
   `app/`-backed adapter/fixture presenting the same corpus through the live retrieval entrypoint, and
-  repoint the skeletons at it (drop the xfail). This does NOT relocate `yggdrasil_runtime` into `app/`.
+  repoint the skeletons at it (drop the xfail). This does NOT relocate `mimer_runtime` into `app/`.
 
 ## Concretely
 
@@ -90,7 +90,7 @@ vanish silently — the exact contamination the corpus (#2551) exists to catch.
 ## Out of Scope
 
 - Lexical mirror + hybrid fusion (stays with #2314 W4-RET-01's other half).
-- Any change to `yggdrasil_runtime/` semantics — this task consumes them as the reference.
+- Any change to `mimer_runtime/` semantics — this task consumes them as the reference.
 - The durable-index read path itself (KERNEL-05 delivers it; this task layers on top).
 
 ## Related Docs
@@ -98,7 +98,7 @@ vanish silently — the exact contamination the corpus (#2551) exists to catch.
 - `docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md :: I-A5, CW-4`
 - `docs/CONCEPTS/CONTEXT_ADMISSIBILITY_CONTRACT.md` (predicate; stale #2025 pointer corrected here)
 - `schemas/context-envelope.schema.json`, `docs/testing/invariant-tests.md` (invariants 5/6/18/19/21)
-- `yggdrasil_runtime/retrieval.py`, `yggdrasil_runtime/context.py` (reference implementation)
+- `mimer_runtime/retrieval.py`, `mimer_runtime/context.py` (reference implementation)
 
 ## Related GitHub Issues
 

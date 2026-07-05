@@ -1,6 +1,6 @@
 State: SoT v5.5 baseline; v6 active planning direction. Charter document; describes product-level thesis, not shipped implementation.
 Doc role: Core SoT
-Authority: Product-level thesis for Yggdrasil as a local-first cognitive prosthesis, second-brain environment, and governed memory/runtime substrate for agents. Other docs should remain compatible with this charter; where they diverge, this charter wins on intent and they win on current implementation truth.
+Authority: Product-level thesis for Mimer as a local-first cognitive prosthesis, second-brain environment, and governed memory/runtime substrate for agents. Other docs should remain compatible with this charter; where they diverge, this charter wins on intent and they win on current implementation truth.
 Owner: Product / kernel
 Temporal class: timeless
 Review cadence: event-driven
@@ -8,11 +8,11 @@ Source of truth: mixed
 Last reviewed: 2026-05-12
 Last verified against: docs/PROJECT_KERNEL.md, docs/HUMAN-FLOWS.md, docs/ARCHITECTURE.md, docs/CONCEPTS/COGNITIVE_ONTOLOGY.md, docs/CONCEPTS/AGENT_ONTOLOGY_CONTRACT.md, docs/CONCEPTS/ARCHIVE_BRAIN_CONTRACT.md
 
-# Cognitive Prosthesis Charter — Yggdrasil / agentic-pkm-mvp
+# Cognitive Prosthesis Charter — Mimer / agentic-pkm-mvp
 
-> Audience: product, architecture, and builder-agent readers who need a single page that explains *what Yggdrasil is for* before reading the kernel, architecture, or concept contracts.
+> Audience: product, architecture, and builder-agent readers who need a single page that explains *what Mimer is for* before reading the kernel, architecture, or concept contracts.
 
-This document is the product-level thesis for Yggdrasil. It does not redefine the kernel
+This document is the product-level thesis for Mimer. It does not redefine the kernel
 (`docs/PROJECT_KERNEL.md`), the human flows (`docs/HUMAN-FLOWS.md`), or the runtime architecture
 (`docs/ARCHITECTURE.md`). It frames them.
 
@@ -22,7 +22,7 @@ charter describes a capability as a product property, current implementation tru
 
 ## 1. Product thesis
 
-Yggdrasil is three things at once, and the design only works when all three are held together:
+Mimer is three things at once, and the design only works when all three are held together:
 
 1. **A local-first cognitive prosthesis for the human.** It supports cognitive functions a human
    cannot reliably do unaided — durable capture, reorientation, retrieval, commitment tracking,
@@ -41,7 +41,7 @@ the prosthesis active rather than passive.
 
 ## 2. Human cognitive burdens the system supports
 
-The system exists because unaided cognition leaks. The cognitive burdens Yggdrasil is meant to
+The system exists because unaided cognition leaks. The cognitive burdens Mimer is meant to
 absorb or share with the human include:
 
 - **Holding too much in working memory.** Open loops, in-flight projects, unfinished thoughts,
@@ -70,7 +70,7 @@ The burdens above are the system's **Cognitive Maintenance** work: preserving co
 load-bearing is lost — capture, organization, recall, retrieval, orientation, context integrity,
 continuity, and the audit trail that keeps all of it trustworthy. Its goal is to **prevent loss**.
 
-Maintenance is necessary but not sufficient. The original purpose of Yggdrasil also includes
+Maintenance is necessary but not sufficient. The original purpose of Mimer also includes
 **Cognitive Expansion**: helping the human become *more capable than they would be without the
 system*. Its goal is not to prevent loss but to **improve cognition** —
 

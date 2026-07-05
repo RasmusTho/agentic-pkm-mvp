@@ -125,7 +125,7 @@ ports, gateways) — this table references, and does not duplicate, either.
 
 | Deployed element | Binding | Classification |
 | --- | --- | --- |
-| `app/`, `yggdrasil_runtime/`, contracts/schemas, companion-note surface | in-repo runtime code | SoI component |
+| `app/`, `mimer_runtime/`, contracts/schemas, companion-note surface | in-repo runtime code | SoI component |
 | `db` (Postgres/pgvector, `docker-compose.yaml:2-14`) | compose service | COTS system element |
 | `ollama` (`docker-compose.yaml:16-31`) | compose service | COTS system element |
 | Ollama reached as a host/remote LLM or embedding provider (`docs/ARCHITECTURE.md:109`) | host/remote service, not the compose service | External system |
@@ -230,7 +230,7 @@ For long-horizon decomposition and change-impact reasoning, use `docs/SYSTEM_BRE
 The complementary **semantic** decomposition lives in `docs/SEMANTIC_SYSTEM_ARCHITECTURE.md`. That document owns the seven semantic layers (ontology, artifact model, representation, governance/authority, runtime, machine mirror, UI projection), the authority topology over artifacts and runtime structures, and the artifact-flow and runtime-vs-durable boundary maps. Where the structural spine answers "which subsystem runs this?", the semantic map answers "what does this mean, what is authoritative, and how does meaning flow and mutate?".
 
 Lower-level contracts that attach to the spine:
-- `docs/INTEGRATION_FABRIC_CONTRACT.md` owns the integration-class taxonomy (human surface, model provider, embedding provider, storage backend, sync transport, parser/OCR, tool/MCP provider, external UI shell, observer/telemetry source, agent runtime), the per-class contract fields, and the authority rule that external components may provide capability, transport, inference, or interface but must not become semantic authority unless promoted through Yggdrasil contracts.
+- `docs/INTEGRATION_FABRIC_CONTRACT.md` owns the integration-class taxonomy (human surface, model provider, embedding provider, storage backend, sync transport, parser/OCR, tool/MCP provider, external UI shell, observer/telemetry source, agent runtime), the per-class contract fields, and the authority rule that external components may provide capability, transport, inference, or interface but must not become semantic authority unless promoted through Mimer contracts.
 - `docs/CAPABILITY_CONTRACT_MODEL.md` owns the capability definition (distinct from agents, UIs, services, and tools), the standard capability contract shape, and the canonical capability examples (retrieval, orientation, resurfacing, context building, citation checking, memory candidate extraction, note patch proposal, archive exposure, commitment surfacing).
 - `docs/EMERGENT_FEATURES_MODEL.md` owns the composition pattern that new emergent features must follow on top of the kernel and extension fabric (`trigger + context bundle + capability composition + policy evaluation + proposal/action + receipt + feedback signal`), and the rule that emergent features must remain observable and must not bypass governance, write guards, provenance, or authority boundaries. Docs-only; does not introduce a runtime composition engine or orchestration framework.
 

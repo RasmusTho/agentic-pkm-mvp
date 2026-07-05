@@ -8,7 +8,7 @@ Source of truth: subordinate (distills owner docs; does not replace them)
 Last reviewed: 2026-06-26
 Last verified against: docs/foundation/yggdrasil-architecture-context-packet.md, docs/SYSTEM_BREAKDOWN_STRUCTURE.md
 
-# Yggdrasil Doctrine
+# Mimer Doctrine
 
 Parent epic: [#2533](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533)
 

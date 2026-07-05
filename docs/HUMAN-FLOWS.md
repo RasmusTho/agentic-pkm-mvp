@@ -9,7 +9,7 @@ Last reviewed: 2026-06-29
 Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2133, and current repo state at 503c6c64 on 2026-06-29
 
 
-# Human Flows — Yggdrasil / agentic-pkm-mvp
+# Human Flows — Mimer / agentic-pkm-mvp
 
 > Audience: humans using the system in Obsidian + CLI. Human language is canonical; automation is additive, not authoritative.
 
@@ -44,7 +44,7 @@ For the broader ontology of the system as a second-brain environment, see:
 
 ## 0. Product thesis: cognitive prosthesis, second brain, and agent memory
 
-Yggdrasil is three things at once, held together by design:
+Mimer is three things at once, held together by design:
 
 - **A cognitive prosthesis for the human.** It supports cognitive functions a human cannot
   reliably do unaided — durable capture, reorientation, retrieval, commitment tracking,

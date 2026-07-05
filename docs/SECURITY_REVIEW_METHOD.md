@@ -1,6 +1,6 @@
 State: Initial security review method. Docs-only; does not mandate runtime implementation.
 Doc role: Review method / template
-Authority: Canonical method for proportionate security reviews over Yggdrasil trust boundaries, data flows, and agentic failure modes.
+Authority: Canonical method for proportionate security reviews over Mimer trust boundaries, data flows, and agentic failure modes.
 Owner: Security architecture / governance
 Temporal class: strategic
 Review cadence: event-driven
@@ -12,7 +12,7 @@ Last verified against: docs/SECURITY_ARCHITECTURE.md, docs/SECURITY_TRUST_BOUNDA
 
 ## Purpose
 
-This document defines how to perform proportionate security review for Yggdrasil. It is a review
+This document defines how to perform proportionate security review for Mimer. It is a review
 method, not a claim that every current path has already undergone formal STRIDE or ATT&CK-style
 analysis.
 
@@ -108,12 +108,12 @@ Use plain tiers instead of inflated severity:
 ## ATT&CK-inspired mapping guidance
 
 Use ATT&CK as adapted vocabulary, not strict enterprise SOC coverage. The goal is shared language
-for agentic and local-first failure modes, not a claim that Yggdrasil operates as an enterprise
+for agentic and local-first failure modes, not a claim that Mimer operates as an enterprise
 network.
 
 Suggested adapted mappings:
 
-| Adapted concern | ATT&CK-like idea | Yggdrasil interpretation |
+| Adapted concern | ATT&CK-like idea | Mimer interpretation |
 | --- | --- | --- |
 | Credential access | Steal or expose secrets | Provider keys, API keys, GitHub auth, local tokens. |
 | Initial access | Reach a surface | Localhost, LAN, Tailscale, browser, API route, tool provider. |

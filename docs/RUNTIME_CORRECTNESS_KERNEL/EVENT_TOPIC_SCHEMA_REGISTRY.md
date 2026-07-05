@@ -15,7 +15,7 @@ can_parallelize_with: [TRANSFORM_PROVENANCE_STAMP]
 
 `OutboxEvent.payload` is `Dict[str, Any]` and `meta` defaults to `{"version": "1.0"}`
 (`app/events/schema.py :: _default_meta`, lines 15–16). No per-topic payload schema exists;
-consumers parse raw dicts. The runtime has a correct formal model in `yggdrasil_runtime/` and
+consumers parse raw dicts. The runtime has a correct formal model in `mimer_runtime/` and
 `tests/`, but the live pipeline speaks untyped dicts — drift is structural (audit **I-E5**, CW-4).
 
 ## What This Task Does
