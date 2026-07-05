@@ -46,8 +46,28 @@ def _drop_schema(dsn: str, schema: str) -> None:
             cur.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))
 
 
+def _ensure_legacy_tables(dsn: str) -> None:
+    """Guarantee ``public.objects``/``file_state``/``outbox`` exist before any
+    test in this module reads or writes them.
+
+    ``app.services.vault_sync`` only creates these tables lazily (via
+    ``app.db.db.ensure_schema``) the first time a caller opens a real
+    connection through ``vault_sync._conn()``. Whichever test in this module
+    runs first (file collection order, not test-name order) may do its
+    "before" row-count baseline read before any ``vault_sync`` call has had
+    that chance, and fail with ``UndefinedTable`` on a genuinely fresh
+    Postgres (#2937). Trigger schema creation explicitly up front instead of
+    relying on incidental cross-test ordering.
+    """
+    from app.db.db import ensure_schema
+
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        ensure_schema(conn)
+
+
 def _configure_isolated_pg_test(monkeypatch) -> tuple[str, str]:
     base_dsn = _pg_base_dsn()
+    _ensure_legacy_tables(base_dsn)
     schema = f"pgtest_{uuid4().hex}"
     _create_schema(base_dsn, schema)
     dsn = _dsn_with_search_path(base_dsn, schema)
@@ -120,6 +140,13 @@ def test_sync_markdown_all_or_nothing(tmp_path, monkeypatch) -> None:
     try:
         from app.services import vault_sync
 
+        # A freshly-written note's mtime is always "now", so sync_markdown's
+        # active_edit() grace-period check (default 5s) would otherwise defer
+        # the sync and return before reaching the objects/outbox write this
+        # test targets. Bypass the grace period deterministically, same
+        # pattern as tests/watcher/test_fs_watcher.py.
+        monkeypatch.setattr(vault_sync, "active_edit", lambda _: False)
+
         note_path = tmp_path / "note.md"
         uuid_value = str(uuid4())
         _write_note(note_path, uuid_value, "Atomicity Note", "hello world")
@@ -167,6 +194,11 @@ def test_sync_markdown_fault_between_file_state_and_outbox(tmp_path, monkeypatch
     dsn = os.environ["DATABASE_URL"]
     try:
         from app.services import vault_sync
+
+        # See test_sync_markdown_all_or_nothing: bypass the active_edit()
+        # grace period so a freshly-written note's first sync reaches the
+        # objects/outbox write instead of deferring.
+        monkeypatch.setattr(vault_sync, "active_edit", lambda _: False)
 
         note_path = tmp_path / "note2.md"
         uuid_value = str(uuid4())
