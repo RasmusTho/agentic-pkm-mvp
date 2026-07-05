@@ -110,7 +110,7 @@ agent from "helpfully" enacting a rename the owner never asked for.
 - Any other reshape-classified item — audit §13 names only these two as `Reshape — routed`; no other
   task in this directory should be treated as reshape material.
 - The dual-role infrastructure stance (Q3) — explicitly owned by the companion thread
-  (`FABLE5_PROMPT_INFRA_DOMAIN_AND_MCP_TOPOLOGY.md`), not this task.
+  (`docs/architecture/ecosystem-federation.md`), not this task.
 
 ## Related Docs
 

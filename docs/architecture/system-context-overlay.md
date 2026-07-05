@@ -83,7 +83,7 @@ classification table (that is `docs/architecture/SBS_OPERATING_MODEL.md` §3 / `
 SBI-3). It also does not decide the dual-role infrastructure stance (the same infrastructure as both
 enabling system and a domain of interest the SoI observes/actuates) or the MCP server/registry
 topology question — both are named and deferred to the companion thread
-`FABLE5_PROMPT_INFRA_DOMAIN_AND_MCP_TOPOLOGY.md` per audit §2.
+`docs/architecture/ecosystem-federation.md` per audit §2.
 
 ## Integrated system context model
 
@@ -134,7 +134,7 @@ INCOSE sense requires operationally- and managerially-independent constituents a
 the internal 8-subsystem decomposition (`docs/MODULAR_ARCHITECTURE.md:26` states those
 subsystems are "not separate deployments, services, or processes") — this is cited as advisory from
 the 2026-07-03 audit §3, not a settling ruling. The one INCOSE-defensible SoS reading in the repo is
-the operator's assembled environment (Yggdrasil + Obsidian + iCloud, `docs/ARCHITECTURE.md:198`).
+the operator's assembled environment (Yggdrasil + Obsidian + iCloud, `docs/ARCHITECTURE.md:239`).
 Whether to rename `docs/MODULAR_ARCHITECTURE.md` on the strength of that reading is an open
 owner decision (audit §15 Q2, routed to SBI-8) — this overlay links the question, it does not answer
 it. See also the overlay note in `docs/MODULAR_ARCHITECTURE.md` itself.
@@ -171,5 +171,5 @@ the owner's human-first-naming stance and create a rot-prone parallel registry.
 - `docs/HUMAN_FLOW_TO_RUNTIME_MAP.md` — functional-allocation view
 - `docs/foundation/00-yggdrasil-doctrine.md`, `docs/PROJECT_KERNEL.md`,
   `docs/COGNITIVE_PROSTHESIS_CHARTER.md` — SoI boundary sources
-- `FABLE5_PROMPT_INFRA_DOMAIN_AND_MCP_TOPOLOGY.md` — companion thread owning the dual-role
+- `docs/architecture/ecosystem-federation.md` — companion thread owning the dual-role
   infrastructure stance and MCP topology question (named here, decided there)
