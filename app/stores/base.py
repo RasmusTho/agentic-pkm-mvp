@@ -56,6 +56,16 @@ class VectorIndex(Protocol):
 
     def all_rows(self) -> Iterable[dict]: ...
 
+    def generation(self) -> str:
+        """Cheap, opaque store-generation token (G1res-1, #2981).
+
+        Changes whenever a durable upsert or purge commits; equality of two
+        tokens means the durable index has not changed between the two reads.
+        Serving-path caches compare this against the token captured at their
+        last rebuild to detect staleness without a full row scan.
+        """
+        ...
+
 
 @dataclass(frozen=True)
 class RelationMembership:

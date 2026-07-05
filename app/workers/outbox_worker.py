@@ -455,7 +455,10 @@ def handle_ingest_object_deleted(payload: Mapping[str, Any]) -> None:
     not here: per KERNEL-05 (``docs/RUNTIME_CORRECTNESS_KERNEL/
     RETRIEVAL_READS_DURABLE_INDEX.md``), the in-process cache is a
     cache-through of the durable index rebuilt via
-    ``rebuild_from_durable_index()`` at process warm / explicit rebuild, the
+    ``rebuild_from_durable_index()`` at process warm / explicit rebuild and
+    kept fresh by the serving path's generation check (G1res-1, #2981:
+    ``_revalidate_cache_generation()`` compares the durable store-generation
+    token at most once per min-check interval and rebuilds on mismatch), the
     same seam ``handle_ingest_object_created`` and the indexer consumer rely
     on for their own purge+upsert writes -- this handler does not need its
     own bespoke cache-eviction path to stay consistent with that contract.
