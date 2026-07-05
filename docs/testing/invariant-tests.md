@@ -477,6 +477,28 @@ retrievable; a blind ingester says so).
   `tests/expansion/test_connect_findings.py`.
 - **Related issues:** #2994 (EXP-1), #2980 (parent).
 
+### declined_findings_not_reproposed
+
+- **Purpose:** A declined finding/draft id is suppressed on later passes until its content basis
+  changes; suppression is visible in pass receipts; the ledger itself is never admitted as context.
+- **Protected principle:** agents propose, human disposes; a "no" must be remembered without
+  becoming knowledge — Cognitive Expansion's moat (mirrors the doctrine's refusal to let the system
+  silently infer "the human dislikes X", `docs/EMERGENT_FEATURES_MODEL.md`'s "agent learns my
+  workflow" example).
+- **Affected boundaries:** Cognitive Expansion (Connect, later Create/E8), Curation finding pipeline
+  (G2, consults the same ledger), retrieval/context-assembly spine (must never reach it).
+- **Expected failure mode:** a proposal-emitting pass re-emits a finding the human already declined
+  every rerun until accepted (proposal-flood); or the ledger is wired into a retrieval/context path,
+  turning suppression state into an input to cognition.
+- **Current enforcement:** live — `app/proposals/declined_ledger.py` (`DeclinedLedger`, keyed on the
+  content-derived `finding_id`; delete-safe; WriteGuard-gated write path only), wired as
+  `app/expansion/connect.py`'s `DeclinedLedgerPort` default (replacing the EXP-1 no-op stub).
+- **Test path:** `tests/proposals/test_declined_ledger.py` (declined ⇒ suppressed + receipted;
+  content-basis change ⇒ new finding_id, re-proposable; ledger deleted/corrupt ⇒ no error, re-
+  proposable; `test_ledger_never_enters_context` — static import-graph + runtime field check),
+  `tests/invariants/test_expansion_invariants.py::test_declined_not_reproposed`.
+- **Related issues:** #2995 (EXP-2), #2994 (EXP-1, consultation point), #2980 (parent).
+
 ## Schema-batch deferred invariants
 
 The [schemas/contracts batch](../../schemas/README.md) explicitly deferred a set of cross-field and
@@ -667,6 +689,7 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 | propose_when_uncertain | #17 | CAO/GOV/HIX | doc + xfail | `tests/invariants/test_context_envelope.py` (xfail) |
 | standards_are_adapters | #18 | EBF/SIP/CES | doc_only | `TBD` (CES review) |
 | connect_proposals_candidate_only | #9 | GOV/RCA | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/expansion/test_connect_findings.py` |
+| declined_findings_not_reproposed | #9 | GOV/RCA | static + runtime | `tests/proposals/test_declined_ledger.py`, `tests/invariants/test_expansion_invariants.py` |
 
 ## Related documents
 

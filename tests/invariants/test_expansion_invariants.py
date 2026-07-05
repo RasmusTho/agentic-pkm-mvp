@@ -124,3 +124,66 @@ def test_connect_finding_classes_all_covered_by_candidate_only_parametrization()
     closed connect set must resolve to propose."""
     for finding_class in CONNECT_FINDING_CLASSES:
         assert track_for_class(finding_class) == FindingTrack.PROPOSE
+
+
+def test_declined_not_reproposed(tmp_path: Path) -> None:
+    """Fitness invariant: ``declined_findings_not_reproposed`` (EXP-2, #2995).
+
+    Invariant registry: docs/testing/invariant-tests.md :: declined_findings_not_reproposed.
+    Spec: docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md §3, §6.
+
+    Production-call-site enforcement: a finding declined through the real
+    `app.proposals.declined_ledger.DeclinedLedger` is suppressed -- not
+    re-emitted -- on the next `run_connect_pass` invocation over an
+    unchanged vault, and the suppression is visible in the pass receipt.
+    Full behavioral coverage (content-basis reset, delete-safety, and the
+    never-enters-context enforcement) lives in
+    `tests/proposals/test_declined_ledger.py`, this invariant's `Verify:`
+    target; this test is the one-assertion fitness probe co-located with its
+    sibling Connect invariants.
+    """
+    from app.expansion.connect import ConnectPassConfig, run_connect_pass
+    from app.proposals.declined_ledger import DeclinedLedger
+
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    for rel, uuid in (("a.md", "uuid-a"), ("b.md", "uuid-b")):
+        (vault_root / rel).write_text(
+            f"---\nuuid: {uuid}\nkind: note\n---\n\n# {uuid}\n\n"
+            "%% AI:Start %%\n## AI-instruktion\n\n## AI-åtgärder\n%% AI:End %%\n",
+            encoding="utf-8",
+        )
+    outbox_path = tmp_path / "outbox.jsonl"
+    guard = WriteGuard(snapshot_fn=lambda: {"state": "healthy", "reason": None})
+    ledger = DeclinedLedger(tmp_path / "declined.jsonl")
+    config = ConnectPassConfig(declined_ledger=ledger)
+
+    def _fake_retrieve(request: RetrievalRequest) -> RetrievalResponse:
+        return RetrievalResponse(
+            query=request.query,
+            hits=[
+                RetrievalHit(
+                    object_id="a", doc_id="a", text="shared alpha beta gamma", score=0.9,
+                    snippet="shared alpha beta gamma", source_ref="a.md", payload={"uuid": "uuid-a"},
+                ),
+                RetrievalHit(
+                    object_id="b", doc_id="b", text="shared alpha beta gamma", score=0.85,
+                    snippet="shared alpha beta gamma", source_ref="b.md", payload={"uuid": "uuid-b"},
+                ),
+            ],
+        )
+
+    first = run_connect_pass(
+        vault_root=vault_root, queries=["shared alpha beta gamma"], config=config,
+        write_guard=guard, outbox_path=outbox_path, retrieve_fn=_fake_retrieve,
+    )
+    assert first.findings
+    finding_id = first.findings[0].finding_id
+    ledger.record_decline(finding_id, finding_class="connect.related_unlinked", write_guard=guard)
+
+    second = run_connect_pass(
+        vault_root=vault_root, queries=["shared alpha beta gamma"], config=config,
+        write_guard=guard, outbox_path=outbox_path, retrieve_fn=_fake_retrieve,
+    )
+    assert second.findings == ()
+    assert second.suppressed_by_decline == 1
