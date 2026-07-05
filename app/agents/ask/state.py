@@ -34,6 +34,11 @@ class AgentState(RuntimeStateModel):
     trace_id: Optional[str] = None
     query: str
     hits: List[RetrievedHit] = Field(default_factory=list)
+    # Content-free scope denials from the retrieval prefilter (KERNEL-10), as plain dicts
+    # (ScopeDenial.to_dict()) so they survive the langgraph state round-trip. Scope-level, not
+    # per-hit: reranking/truncating hits must never drop them. Carried to the ContextEnvelope
+    # assembled at the ASK synthesis seam (denied_scopes + escalation_conditions).
+    denials: List[dict[str, Any]] = Field(default_factory=list)
     recalled: List[RecallExplanation] = Field(default_factory=list)
     # Recalled memory bodies keyed by artifact/memory id. Supporting input only,
     # used to compose a recall-only answer when retrieval returns no hits.

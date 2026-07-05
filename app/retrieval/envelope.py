@@ -25,7 +25,12 @@ from pathlib import Path
 from typing import Any, Iterable
 from uuid import uuid4
 
-from app.retrieval.hybrid import ScopeDenial, ScopedRetrieval, _intrinsic_evidence_role
+from app.retrieval.hybrid import (
+    ScopeDenial,
+    ScopedRetrieval,
+    _clamp_in_context,
+    _intrinsic_evidence_role,
+)
 
 _SCHEMAS_DIR = Path(__file__).resolve().parents[2] / "schemas"
 
@@ -106,13 +111,14 @@ def _bundle_from_result(item: dict[str, Any]) -> dict[str, Any]:
 
 def _retrieved_item(item: dict[str, Any]) -> dict[str, Any]:
     bundle = _bundle_from_result(item)
-    # Clamp in-context role to the intrinsic role of THIS bundle (never upgraded toward evidence).
+    # Clamp the in-context role against THIS bundle's intrinsic role (_clamp_in_context): a proposed
+    # DOWNGRADE is honored; a proposed upgrade, or an invalid/missing proposal, resolves to the
+    # intrinsic role. Never upgraded toward `evidence`.
     proposed = item.get("evidence_role_in_context")
     intrinsic = bundle["evidence_role"]
-    role = proposed if proposed == intrinsic else intrinsic
     return {
         "metadata_bundle": bundle,
-        "evidence_role_in_context": role,
+        "evidence_role_in_context": _clamp_in_context(intrinsic, proposed),
     }
 
 

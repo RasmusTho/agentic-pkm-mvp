@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from app.retrieval.hybrid import hybrid_search
+from app.retrieval.hybrid import ScopeDenial, scoped_hybrid_search
 
 ViewFreshnessState = Literal["fresh", "stale", "partial", "unknown"]
 
@@ -99,15 +99,21 @@ class RetrievalResponse:
     trace_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     diagnostics: dict[str, Any] = field(default_factory=dict)
+    # Content-free scope denials from the prefilter (KERNEL-10): relevant-but-excluded material is
+    # recorded, never silently dropped. Empty when no scope is active or nothing relevant was
+    # excluded. Carried alongside hits so consumers (the ASK envelope seam) can surface them —
+    # denials are scope-level, not per-hit, so downstream hit truncation must never drop them.
+    denials: tuple[ScopeDenial, ...] = ()
 
 
 def retrieve(request: RetrievalRequest) -> RetrievalResponse:
-    raw_hits = hybrid_search(
+    scoped = scoped_hybrid_search(
         request.query,
         k=request.k,
         language=request.language,
         query_vector=request.query_vector,
     )
+    raw_hits = scoped.results
     diagnostics: dict[str, Any] = {
         "query": request.query,
         "scope": request.scope,
@@ -149,6 +155,7 @@ def retrieve(request: RetrievalRequest) -> RetrievalResponse:
         trace_id=request.trace_id,
         metadata=metadata,
         diagnostics=diagnostics,
+        denials=tuple(scoped.denials),
     )
 
 
