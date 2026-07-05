@@ -57,9 +57,11 @@ material belongs in notes, not the DB) without corrupting the memory ledger's
 semantics.
 
 Reviewer discoverability (a pending-eval-drafts view distinct from the memory
-ledger) is deferred to a bounded follow-up and is dormant until KERNEL-08
-(#2770), the ``schema_violation`` producer, lands. The review **UI** stays out
-of scope (W7/W8). See the "Reviewer surfacing" note in
+ledger) is delivered by :func:`list_pending_drafts` plus the
+``/api/eval-drafts`` route (`app/api/routes/eval_drafts.py`, #2871). Real-traffic
+population of the dead-letter draft path still waits on KERNEL-08 (#2770), the
+``schema_violation`` producer — the surfacing view itself is not dormant. The
+review **UI** stays out of scope (W7/W8). See the "Reviewer surfacing" note in
 `docs/RUNTIME_CORRECTNESS_KERNEL/FAILURE_TO_EVAL_CAPTURE_LOOP.md`.
 
 Spec: docs/RUNTIME_CORRECTNESS_KERNEL/FAILURE_TO_EVAL_CAPTURE_LOOP.md
@@ -334,6 +336,33 @@ def _render_draft_note(draft: DraftEvalCase, *, title: str) -> str:
     )
 
 
+def list_pending_drafts(vault_root: Path) -> list[DraftEvalCase]:
+    """List every pending eval-draft in ``<system_dir>/eval_drafts/*.md``.
+
+    Read-only directory scan (KERNEL-15 follow-up, #2871): a discoverable
+    surface distinct from the memory review queue (see the module docstring's
+    "Deliberate divergence" section). Only ``status: pending`` drafts are
+    returned — promoted/rejected drafts are terminal decisions and no longer
+    belong in the pending review surface. Malformed or unparseable draft
+    files are skipped rather than raising, matching :func:`read_draft`'s
+    tolerant-read behaviour; this is a best-effort discovery surface, not a
+    strict schema validator.
+
+    Sorted by ``created_at`` (oldest first) so the oldest unreviewed failure
+    surfaces first.
+    """
+    drafts_dir = vault_root / _drafts_dir(vault_root)
+    if not drafts_dir.exists():
+        return []
+    pending: list[DraftEvalCase] = []
+    for path in sorted(drafts_dir.glob("*.md")):
+        draft = read_draft(vault_root, path.stem)
+        if draft is not None and draft.status == DRAFT_STATUS_PENDING:
+            pending.append(draft)
+    pending.sort(key=lambda d: d.created_at)
+    return pending
+
+
 def read_draft(vault_root: Path, draft_id: str) -> DraftEvalCase | None:
     """Read a drafted eval-case back from its vault-relative path. None if missing/unparseable."""
     path = vault_root / _draft_path(vault_root, draft_id)
@@ -503,6 +532,7 @@ __all__ = [
     "draft_dead_letter_case",
     "draft_unknown_classification_case",
     "is_schema_violation_reason",
+    "list_pending_drafts",
     "promote_draft",
     "read_draft",
     "reject_draft",

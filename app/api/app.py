@@ -105,6 +105,11 @@ except ImportError:
     resurfacing_router = None
 
 try:
+    from app.api.routes.eval_drafts import router as eval_drafts_router
+except ImportError:
+    eval_drafts_router = None
+
+try:
     from app.api.routes.source_understanding import router as source_understanding_router
 except ImportError:
     source_understanding_router = None
@@ -240,6 +245,8 @@ def _create_app() -> FastAPI:
         application.include_router(context_bundles_router, prefix="/api")
     if resurfacing_router is not None:
         application.include_router(resurfacing_router, prefix="/api")
+    if eval_drafts_router is not None:
+        application.include_router(eval_drafts_router, prefix="/api")
     if source_understanding_router is not None:
         application.include_router(source_understanding_router, prefix="/api")
     if capture_router is not None:

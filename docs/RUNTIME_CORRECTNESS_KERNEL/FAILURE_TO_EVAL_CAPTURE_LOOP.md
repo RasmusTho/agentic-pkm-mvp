@@ -58,7 +58,7 @@ This is the only sustainable answer to RQ4: ground truth is curated history. It 
 worst silent failures (dead-lettered events, misrouted intents) into permanent regression coverage,
 feeding KERNEL-13's golden set from real production failures instead of hand-authored cases alone.
 
-## Reviewer surfacing (deliberate divergence + deferred follow-up)
+## Reviewer surfacing (deliberate divergence, delivered)
 
 The spec said to *reuse the existing queue surface* (`MemoryCandidateReviewQueue`). Delivered
 implementation mirrors its shape but does **not** reuse that queue, by design: it is
@@ -72,9 +72,15 @@ golden-dataset file, not the memory ledger — forcing it into that queue would 
 `MemoryType` and materialize it as a memory note (a category error). Eval drafts therefore live in
 their own file-based surface (`<system_dir>/eval_drafts/` with `status` frontmatter).
 
-A discoverable *pending-eval-drafts view* (distinct from the memory ledger) is a **bounded
-follow-up**, tracked separately; it is dormant until KERNEL-08 (#2770), the `schema_violation`
-producer, lands. The review **UI** itself stays out of scope (W7/W8, see below).
+A discoverable *pending-eval-drafts view* (distinct from the memory ledger) is **delivered** (#2871):
+`app.eval.failure_capture.list_pending_drafts` scans `<system_dir>/eval_drafts/*.md` for
+`status: pending` entries with full provenance (kind, trace_id, source event), and
+`GET /api/eval-drafts` / `POST /api/eval-drafts/{draft_id}/decision`
+(`app/api/routes/eval_drafts.py`) surface that list and wire the existing `promote_draft` /
+`reject_draft` entrypoints to it — never touching `MemoryCandidateReviewQueue` or
+`materialize_promoted_memory`. Real-traffic population of the dead-letter draft path still waits on
+KERNEL-08 (#2770), the `schema_violation` producer; the surfacing view itself is not dormant. The
+review **UI** itself stays out of scope (W7/W8, see below).
 
 ## Acceptance Criteria
 
