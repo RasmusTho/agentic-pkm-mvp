@@ -1,99 +1,113 @@
-State: Advisory research artifact (RESEARCH-08, #2852; 2026-07-04). Subordinate to `docs/DOCS_INDEX.md` and owner contracts. This document **is** the companion thread that `docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md:151`, `docs/architecture/system-context-overlay.md:86` and the `docs/SYSTEM_CONTEXT_OVERLAY/` specs name as `FABLE5_PROMPT_INFRA_DOMAIN_AND_MCP_TOPOLOGY.md` (named-but-unwritten until now; re-pointing those references is follow-up work). No reshape is enacted here; every reshape-class claim is a routed proposal (see SBS reconciliation).
+State: Advisory research artifact (RESEARCH-08, #2852; 2026-07-04), naming/model reconciled to ADR-0044 (2026-07-05, #2890). Subordinate to `docs/DOCS_INDEX.md` and owner contracts. This document **is** the companion thread that `docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md:151`, `docs/architecture/system-context-overlay.md:86` and the `docs/SYSTEM_CONTEXT_OVERLAY/` specs name as `FABLE5_PROMPT_INFRA_DOMAIN_AND_MCP_TOPOLOGY.md` (named-but-unwritten until now; re-pointing those references is follow-up work). No reshape is enacted here; every reshape-class claim is a routed proposal (see SBS reconciliation).
 Doc role: Reference (advisory research artifact)
-Authority: Evidence-based design of the owner-directed Option B (2026-07-03): the Personal Agentic Ecosystem as a federated System of Systems with a public/private confidentiality seam. Anchors reflect `origin/main` at 67f5c27f (2026-07-04). Where this artifact and an owner doc disagree, the owner doc wins; divergences are listed, not silently resolved. Method: architecture-research pass — four parallel read-only evidence explorers, central synthesis, five independent adversarial skeptics on every reshape-class or load-bearing claim (verdicts folded in; no claim survived unmodified).
+Authority: Evidence-based design of the ecosystem/SoS seam, read through the ratified naming model. Anchors reflect `origin/main` at 67f5c27f (2026-07-04). Where this artifact and an owner doc disagree, the owner doc wins; divergences are listed, not silently resolved. Method: architecture-research pass — four parallel read-only evidence explorers, central synthesis, five independent adversarial skeptics on every reshape-class or load-bearing claim (verdicts folded in; no claim survived unmodified).
 
-> **Naming/model supersession (2026-07-04).** This artifact's SoS *naming and model* — a "Personal
-> Agentic Ecosystem" parent with **Yggdrasil as a constituent**, and the word "federation" for the
-> inter-system relationship — are **superseded by ADR-0044** (ecosystem structure + naming
-> ratification, from the Fable-5 structure pass `docs/architecture/ECOSYSTEM_STRUCTURE_PROPOSAL.md`,
-> PR #2914). The ratified model: the acknowledged SoS is named **Yggdrasil** (the whole / apex); its
-> constituents are **Mimer** (knowledge-and-cognition, undivided — the current system, reverting to
-> its original name), **Heimdall** (sensor), and a thin **private-bindings** constituent; **Hugin/Munin
-> are reserved, not constituents** (the Munin/Hugin split of the earlier ADR-0043 draft was found
+> **Naming/model reconciliation (2026-07-05, #2890).** This artifact originally used a superseded
+> naming/model — a "Personal Agentic Ecosystem" parent with **Yggdrasil as a constituent**, and the
+> word "federation" for the inter-constituent relationship. The prose below is now reconciled to the
+> ratified model, **ADR-0044** (ecosystem structure + naming ratification, from the Fable-5 structure
+> pass `docs/architecture/ECOSYSTEM_STRUCTURE_PROPOSAL.md`, PR #2914) and its siblings ADR-0045/46/47:
+> the acknowledged SoS is named **Yggdrasil** (the whole / apex, not a constituent); its constituents
+> are **Mimer** (knowledge-and-cognition, undivided — the current system, reverted to its original
+> name), **Heimdall** (sensor), and a thin **private-bindings** constituent; **Hugin/Munin are
+> reserved, not constituents** (the Munin/Hugin split of an earlier ADR-0043 draft was found
 > structurally unsound and dropped). "Federation" is reserved for SFC and is **not** used for the SoS
-> relationship. RESEARCH-08 conforms via ADR-0044; aligning this artifact's prose to that model is a
-> flagged follow-up (**#2890**). Until then, **where this artifact and ADR-0044 disagree on
-> naming/model, ADR-0044 wins.** The seam and interaction *substance* below (public/private invariant
-> INV-EF1, tier classification, governed event/candidate intake) still stand — only the
-> naming/whole-vs-constituent framing is superseded.
+> relationship — the relationship is acknowledged constituents interoperating via capability
+> contracts. The seam and interaction *substance* (public/private invariant INV-EF1, tier
+> classification, governed event/candidate intake) is unchanged by this reconciliation; only naming
+> and whole-vs-constituent framing were rewritten. Owner decisions D1–D3 were ratified as designed
+> (ADR-0044/45/46); D4 was deferred, not adopted (ADR-0047) — see § Owner decisions.
 
-# Ecosystem Federation — the Personal Agentic Ecosystem and the Public/Private Seam
+# Ecosystem Federation — Yggdrasil (the Whole) and the Public/Private Seam
 
-The owner directive resolves the SoI fork toward **Option B, federated**: the aspirational System
-of Interest is a **Personal Agentic Ecosystem** — realized as a federation of independently
-sourced, independently operable systems, split along a **confidentiality seam** because Yggdrasil
-is a public repository. This artifact designs that model. It decides nothing an owner contract
-owns: the SoI promotion, the seam invariant's adoption, and the SFC-seam governance are explicit
-owner decisions (§ Owner decisions), routed per the binding SBS-reconciliation rule.
+*(Title retained for filename/artifact continuity; "federation" in the title names this document's
+subject matter, not the SoS relationship — see the vocabulary guard immediately below.)*
 
-Two vocabulary guards up front, because both collide with fresh owner decisions:
+The acknowledged System of Systems is **Yggdrasil**, the whole / apex (ADR-0044): the personal
+agentic ecosystem, realized as acknowledged constituents interoperating via capability contracts,
+split along a **confidentiality seam** because **Mimer** — the knowledge-and-cognition constituent —
+is developed in a public repository. This artifact designs that model. It decided nothing an owner
+contract owns until ratified: the SoI promotion, the seam invariant's adoption, and the SFC-seam
+governance were explicit owner decisions (§ Owner decisions, now resolved — D1–D3 ratified, D4
+deferred), routed per the binding SBS-reconciliation rule.
+
+Two vocabulary guards up front, load-bearing for the whole document:
 
 - **"System of Systems" applies only at ecosystem level.** ADR-0041 and ADR-0042 (both accepted
-  2026-07-04, both enacted 2026-07-04 via #2855/#2856, closed) remove SoS vocabulary from the
+  2026-07-04, both enacted 2026-07-04 via #2855/#2856, closed) remove SoS vocabulary from Mimer's
   *internal* decomposition
   (`docs/adr/ADR-0041-system-of-systems-doc-rename.md:39-63`,
   `docs/adr/ADR-0042-design-principles-9-volatility-isolation.md:41-61`). The former
   `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` is now `docs/MODULAR_ARCHITECTURE.md`, and
   `docs/DESIGN_PRINCIPLES.md` §9 is now "Volatility Isolation" — this artifact cites the current
-  filenames and heading. Nothing in this document reads Yggdrasil's
+  filenames and heading. Nothing in this document reads Mimer's
   8-spine or 14-boundary decomposition as an SoS; the audit settled that as a category error
   (`docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md:154-196`). SoS language below always
-  means the ecosystem: the operator's assembled environment
+  means the ecosystem: the operator's assembled environment, apex **Yggdrasil**
   (`docs/ARCHITECTURE.md:239` "small system-of-systems arrangement"; glossary entry
-  `docs/GLOSSARY.md:43-56`).
-- **"Federation" here is not SFC's federation.** SFC (Synchronization, Federation & Consensus)
-  owns *intra-Yggdrasil* distribution — replicas, nodes, causal ordering
-  (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:1077-1132`; ADR-0020;
-  `docs/contracts/REPLICATION_ENVELOPE.md`). *Ecosystem federation* is interoperation **between
-  distinct systems** via capability contracts. The seam between the two senses is real and
-  governed — not a footnote; see § Dual-role + MCP (interaction tiers) and owner decision D2.
+  `docs/GLOSSARY.md`).
+- **"Federation" here is not SFC's federation, and is not the SoS relationship's name.** SFC
+  (Synchronization, Federation & Consensus) owns *intra-Mimer* distribution — replicas, nodes,
+  causal ordering (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:1077-1132`; ADR-0020;
+  `docs/contracts/REPLICATION_ENVELOPE.md`). The **inter-constituent SoS relationship** — Yggdrasil's
+  constituents interoperating — is a different thing, and per ADR-0044/45 it is deliberately **not**
+  called "federation" either; it is **acknowledged constituents interoperating via capability
+  contracts**. The seam between SFC's sense and the SoS relationship is real and governed — not a
+  footnote; see § Dual-role + MCP (interaction tiers) and owner decision D2 (ratified, ADR-0045).
 
 ## Ecosystem model
 
 ### The SoS reading, taken at the only level where it is defensible
 
-The INCOSE audit found exactly one defensible SoS reading, *outside* the Yggdrasil SoI: the
+The INCOSE audit found exactly one defensible SoS reading, *outside* Mimer's own SoI: the
 operator's assembled environment — "independently operated, independently useful constituents
 jointly delivering an emergent capability," a collaborative/virtual SoS whose adoption "is an SoI
 boundary *choice*, not an error"
 (`docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md:167-172`). It also named "future home
 automation / EXE targets" as "the genuine future SoS candidate"
-(`docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md:195`). Option B makes that choice
-deliberately and gives the future candidate a designed home.
+(`docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md:195`). ADR-0044 ratifies that reading
+as **Yggdrasil**, the acknowledged SoS apex, and gives the future candidate a designed home.
 
 Taxonomically: today's environment reading is **collaborative** (vendor externals, no joint
-management). The *target* ecosystem is an **acknowledged SoS with a single human apex authority**
-— the operator designates purpose, contracts, and integration, while constituents keep independent
-development lifecycles (OSS upstreams evolve on their own schedules). It is not a directed SoS in
-the strict sense (the operator does not manage Obsidian's or an OSS sibling's development) and it
-is emphatically not multi-user: one ecosystem, one human. Constituent count grows; human count
-does not. Adoption/multi-tenant reasoning is out of scope by issue constraint.
+management). The ecosystem, **Yggdrasil**, is an **acknowledged SoS with a single human apex
+authority** — the operator designates purpose, contracts, and integration, while constituents keep
+independent development lifecycles (OSS upstreams evolve on their own schedules). It is not a
+directed SoS in the strict sense (the operator does not manage Obsidian's or an OSS sibling's
+development) and it is emphatically not multi-user: one ecosystem, one human. Constituent count
+grows; human count does not. Adoption/multi-tenant reasoning is out of scope by issue constraint.
 
-### Bridge and target — how the framing is adopted without racing reality
+### Bridge and target — how the framing was adopted without racing reality
 
 Adversarial review of the SoI promotion (skeptic S1, downgraded) established three facts this
-model must respect:
+model had to respect, and which ADR-0044's ratification honors:
 
 - the repo contains **zero** references to any concrete sibling system — Home Assistant and
   OPNsense appear nowhere in docs or code; the ecosystem has exactly one real operator-built
-  constituent today;
+  constituent today (**Mimer**), with **Heimdall** (the sensor constituent) incoming;
 - the owner paid 27-doc churn *the same day* to remove SoS vocabulary internally
-  (ADR-0041/0042) — reintroducing it carelessly recreates the ambiguity that churn bought down;
+  (ADR-0041/0042) — reintroducing it carelessly would recreate the ambiguity that churn bought
+  down;
 - no near-term engineering decision changes under an ecosystem-primary framing while only one
-  constituent exists.
+  knowledge-and-cognition constituent exists.
 
-The repo already owns the pattern that resolves this: **bridge and target**. The 8-subsystem spine
+The repo already owns the pattern that resolved this: **bridge and target**. The 8-subsystem spine
 is the bridge; the 14-boundary SBS is the 2030 target
-(`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:2105`). The same dual structure applies one level up:
+(`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:2105`), both internal to Mimer. The same dual structure
+applies one level up, at ecosystem scope:
 
-- **Current-state SoI: Yggdrasil** — unchanged, exactly as `docs/architecture/system-context-overlay.md`
-  defines it. Every current-state doc keeps saying so.
-- **Target-state SoI: the Personal Agentic Ecosystem** — the framing this artifact designs,
-  with an explicit **activation condition**: it becomes the primary framing when the first real
-  sibling constituent attaches through a capability contract (evidence-driven, matching the
-  ADR-0016 posture that physical separation follows evidence, not anticipation).
+- **Current-state SoI: Mimer** — unchanged internally, exactly as
+  `docs/architecture/system-context-overlay.md` defines the knowledge-and-cognition system (14
+  control boundaries, CES, correctness kernel, KAP). Every current-state doc keeps saying so.
+- **Ecosystem-level SoS: Yggdrasil** — the apex/whole this artifact designs the seam for, ratified
+  by ADR-0044 rather than left as a target-only framing: Yggdrasil is already the name of the
+  acknowledged SoS today, with **Mimer** as its present sole real constituent and **Heimdall** +
+  **private-bindings** attaching next. The activation condition that mattered while the naming was
+  still open — the first real sibling attaching through a capability contract — has been overtaken
+  by the naming ratification; it remains relevant only for *when the multi-constituent ecosystem
+  becomes operationally significant*, not for whether the apex is named Yggdrasil.
 
-Ratifying this bridge/target adoption — or rejecting it — is owner decision **D1**.
+Owner decision **D1** (ratify the ecosystem SoS) is **resolved**: ADR-0044 ratified it, with the
+refinement that Yggdrasil denotes the apex now, not a target-only frame (see § Owner decisions).
 
 ### Constituents, external systems, enabling systems (lifecycle-role classification)
 
@@ -105,22 +119,24 @@ role, attached to the *deployment binding*, not the product name.
 
 | Ecosystem role | Test | Members today | Members at target |
 | --- | --- | --- | --- |
-| **Constituent** | Independently operable + independently sourced/maintained + jointly purposed via contract, under the operator's apex authority | **Yggdrasil** (the public knowledge/reasoning system: `app/`, `yggdrasil_runtime/`, contracts, schemas — the SoI of `docs/architecture/system-context-overlay.md`) | Yggdrasil + **private personal-environment siblings**: home automation, network, personal infra/data systems — sourced by the TCD heuristic (§ TCD heuristic), attached via capability contracts |
-| **Proto-constituent (exists, unnamed)** | Operator-bound state the ecosystem cannot run without, currently scattered and unsystematized | The **private binding surface**: gitignored `.env*` files, host launchd jobs and `ops/host-setup` realities, the BuilderOps Vault, operator memory | Systematized as the **first private sibling** — a private bindings/configuration constituent that resolves every personal binding the public tree may not carry (§ Public/private invariant) |
+| **Constituent** | Independently operable + independently sourced/maintained + jointly purposed via contract, under the operator's apex authority | **Mimer** (the public knowledge-and-cognition system: `app/`, `yggdrasil_runtime/` (Mimer-sense; deferred rename), contracts, schemas — the SoI of `docs/architecture/system-context-overlay.md`); **Heimdall** (sensor constituent, incoming) | Mimer + Heimdall + **private personal-environment siblings**: home automation, network, personal infra/data systems — sourced by the TCD heuristic (§ TCD heuristic), attached via capability contracts |
+| **Proto-constituent (exists, unnamed)** | Operator-bound state the ecosystem cannot run without, currently scattered and unsystematized | The **private binding surface**: gitignored `.env*` files, host launchd jobs and `ops/host-setup` realities, the BuilderOps Vault, operator memory | Systematized as the **first private sibling** — the private-bindings constituent (ADR-0044) that resolves every personal binding the public tree may not carry (§ Public/private invariant) |
 | **External system** (operational environment) | Vendor-operated; the ecosystem interoperates via contracts; no operator lifecycle control | Obsidian (dual-class by design), iCloud/sync transports, cloud LLM/embedding APIs (incl. Gemini fallback, ADR-0023), acquisition sources, telemetry consumers (`docs/architecture/system-context-overlay.md:72`) | Same set; membership churns with vendor choices |
 | **Enabling system** | Supports constituent lifecycles; not part of operating capability | Builder System incl. GitHub/CI, Docker/Colima, Tailscale mesh + host provisioning, ops scripts (`docs/architecture/system-context-overlay.md:71`) | Same classes. Tailscale gains a second *relation* at target (transport between constituents) — it stays enabling/transport, never authority |
 | **COTS element** (deployed configuration) | Provisioned and supervised by a constituent's own deployment | Postgres/pgvector; Ollama-as-compose-service (`docs/architecture/system-context-overlay.md:70`) | Per-constituent; each sibling supervises its own COTS elements |
 
-What this table deliberately does **not** contain: internal Yggdrasil boundaries as constituents.
+What this table deliberately does **not** contain: Mimer's internal boundaries as constituents.
 The issue directive's mention of "agent runtime/orchestration" and "integration fabric" is read as
 **capability-domain labels for the contract boundary** (§ Capability boundary), not as constituent
 candidates — the audit's constituent-independence test marks all internal boundaries "Subsystems,
-not constituents" (`docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md:190`), and the
-genuine future constituents are the *external* systems EXE will coordinate, not EXE itself
-(`:195`). Future physical separation of any SBS boundary stays owned by the existing machinery —
-ADR-0016's evidence-driven-split criteria and `docs/architecture/SBS_ROADMAP.md` Phase 4
-("Execution and federation seams") / Phase 5 ("Opportunistic physical separation") — cited here,
-not renamed (skeptic S2 verdict honored: no new seam vocabulary).
+not constituents" (`docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md:190`); this is also
+why an earlier draft's attempt to split Mimer into two constituents (Munin/Hugin, per a superseded
+ADR-0043 proposal) failed the same independence test and was dropped by ADR-0044. The genuine
+future constituents are the *external* systems EXE will coordinate, not EXE itself (`:195`).
+Future physical separation of any SBS boundary stays owned by the existing machinery — ADR-0016's
+evidence-driven-split criteria and `docs/architecture/SBS_ROADMAP.md` Phase 4 ("Execution and
+federation seams") / Phase 5 ("Opportunistic physical separation") — cited here, not renamed
+(skeptic S2 verdict honored: no new seam vocabulary).
 
 ### Context/constituent diagram
 
@@ -128,15 +144,17 @@ not renamed (skeptic S2 verdict honored: no new seam vocabulary).
 flowchart TB
   H(["Human operator — apex authority, the only human in the ecosystem"])
 
-  subgraph ECO["PERSONAL AGENTIC ECOSYSTEM — target-state SoS (routed proposal D1)"]
+  subgraph ECO["YGGDRASIL — the whole / acknowledged SoS (ADR-0044)"]
     direction LR
     subgraph PUB["Public seam (operator-invariant)"]
-      Y["Yggdrasil — knowledge/reasoning constituent
+      M["Mimer — knowledge-and-cognition constituent
       capability contracts: knowledge, memory,
       reasoning, knowledge-graph, document"]
     end
     subgraph PRIV["Private seam (operator-bound)"]
-      B["Private binding surface (exists today,
+      HD["Heimdall — sensor constituent
+      (incoming; event/evidence intake into Mimer)"]
+      B["Private-bindings constituent (exists today,
       scattered) -> first sibling: bindings,
       endpoints, credentials, device inventory"]
       S1["Future sibling: home automation
@@ -159,28 +177,31 @@ flowchart TB
     TS["Tailscale mesh + host provisioning"]
   end
 
-  H -->|intent, review, authority| Y
-  B -->|resolves private bindings| Y
-  Y <-.->|"capability contracts
+  H -->|intent, review, authority| M
+  B -->|resolves private bindings| M
+  HD -.->|"governed-candidate event/evidence intake
+  (ADR-0045)"| M
+  M <-.->|"capability contracts
   (MCP / A2A / HTTP — protocol-tier adapters)"| S1
-  Y <-.->|capability contracts| S2
-  Y ---|EBF adapters| O
-  Y ---|EBF adapters| IC
-  Y ---|EBF adapters| LLM
-  Y ---|EBF adapters| AQ
+  M <-.->|capability contracts| S2
+  M ---|EBF adapters| O
+  M ---|EBF adapters| IC
+  M ---|EBF adapters| LLM
+  M ---|EBF adapters| AQ
   EN ---|run and provision constituents, never authority| ECO
 ```
 
-Dashed edges are target-state (no sibling constituent exists today). Solid edges exist now. Every edge into
-Yggdrasil crosses an EBF-tier adapter under the Integration Fabric authority rule; no edge carries
-semantic authority without contract promotion (§ Capability boundary).
+Dashed edges are target-state or not-yet-attached (Heimdall is incoming; the OSS siblings do not
+exist today). Solid edges exist now. Every edge into Mimer crosses an EBF-tier adapter under the
+Integration Fabric authority rule; no edge carries semantic authority without contract promotion
+(§ Capability boundary).
 
 ## Capability boundary
 
 ### The boundary is the contract set, not any protocol
 
-The stable boundary between Yggdrasil and everything else — siblings, external hosts, external
-systems — is the **capability-contract surface**: capabilities as defined by
+The stable boundary between Mimer and everything else — sibling constituents, external hosts,
+external systems — is the **capability-contract surface**: capabilities as defined by
 `docs/CAPABILITY_CONTRACT_MODEL.md:23-30` (reusable, surface-independent, explicitly typed,
 authority-classified), attached through the Integration Fabric's class taxonomy
 (`docs/INTEGRATION_FABRIC_CONTRACT.md:38-48`) and governed by its authority rule
@@ -197,13 +218,14 @@ Five properties make the boundary stable:
    surface. REST/GraphQL/gRPC variants, if ever adopted, join at the same tier — the Integration
    Fabric Contract names no protocol as architecture (verified: no REST/GraphQL/gRPC hits in
    `docs/INTEGRATION_FABRIC_CONTRACT.md`).
-2. **Authority-preserving.** No consumer — sibling, host, or vendor — becomes semantic authority
-   over the durable surface without explicit contract promotion; a code change, a new adapter, or
-   a new vendor relationship is not a promotion (`docs/INTEGRATION_FABRIC_CONTRACT.md:92-94`).
+2. **Authority-preserving.** No consumer — sibling constituent, host, or vendor — becomes semantic
+   authority over the durable surface without explicit contract promotion; a code change, a new
+   adapter, or a new vendor relationship is not a promotion (`docs/INTEGRATION_FABRIC_CONTRACT.md:92-94`).
    At ecosystem level this generalizes cleanly: **siblings hold domain authority in their own
-   domains** (a home-automation sibling owns device state); **Yggdrasil holds knowledge/reasoning
-   authority**; the human is apex authority everywhere. Cross-constituent influence travels as
-   evidence/candidates through contracts, never as direct authority.
+   domains** (a home-automation sibling owns device state; Heimdall owns the fact stream); **Mimer
+   holds knowledge/reasoning authority**; the human is apex authority everywhere in Yggdrasil.
+   Cross-constituent influence travels as evidence/candidates through contracts, never as direct
+   authority (ADR-0045).
 3. **Legibly degrading.** "An integration that fails or is unavailable must degrade legibly"
    (`docs/INTEGRATION_FABRIC_CONTRACT.md:95`) — the constraint the current MCP multiplex seam
    strains (§ Dual-role + MCP).
@@ -269,11 +291,11 @@ enforced) or destructive (breaking fail-loud guards, tests, and cross-device bui
 reproducibility). The issue demands a decidable rule with real enforcement — so the rule must be
 scoped by lifecycle role.
 
-### The invariant (proposed — owner decision D3)
+### The invariant (adopted — owner decision D3, ratified by ADR-0046)
 
-> **INV-EF1 (two-scope operator-invariance).** *(Proposed — adoption is owner decision D3; not
-> ratified. Quote this box only together with this marker.)*
-> **(a) Product scope — strict.** Artifacts of the SoI product surface (`app/`,
+> **INV-EF1 (two-scope operator-invariance).** *(Adopted — owner decision D3, ratified 2026-07-04
+> by ADR-0046. Quote this box only together with this marker.)*
+> **(a) Product scope — strict.** Artifacts of the Mimer product surface (`app/`,
 > `yggdrasil_runtime/`, `schemas/`, product contracts and architecture docs) must be
 > **operator-invariant**: substituting another operator's personal environment leaves them
 > byte-identical. Concretely: no tokens from the personal-binding categories — (i) secrets and
@@ -330,8 +352,8 @@ why the register check below is mechanical, not manual.
 ## TCD heuristic
 
 `AGENTS.md :: Total Cost of Development` chooses capability per accepted delivery — model,
-reasoning, workflow. Option B extends the same decision rule from *who builds* to **where a
-capability lives**: build-in-Yggdrasil vs source/build-as-sibling. Same objective — minimize
+reasoning, workflow. This heuristic extends the same decision rule from *who builds* to **where a
+capability lives**: build-in-Mimer vs source/build-as-sibling. Same objective — minimize
 expected total build+maintain cost per accepted capability over its lifetime, human time dominant:
 
 `place the capability where  C_build + C_maintain + C_integrate + C_coordination + C_defect  is lowest across its lifetime`
@@ -340,13 +362,13 @@ Decision procedure (apply in order; first decisive answer wins):
 
 1. **Authority test.** Does the capability require semantic authority over the vault/durable human
    surface, or live inside the human-authority kernel (governance, provenance, receipts)? →
-   **Build in Yggdrasil.** Authority is non-delegable across the boundary
+   **Build in Mimer.** Authority is non-delegable across the boundary
    (`docs/INTEGRATION_FABRIC_CONTRACT.md:90-96`); externalizing it is a kernel change, not a
    sourcing decision.
 2. **Seam test.** Does the capability require personal-environment bindings as its *substance*
    (device inventories, home topology, network config — INV-EF1 categories (iii)–(v) as content,
    not just configuration)? → **It cannot live in the public tree regardless of cost.** Source or
-   build it as a **private sibling**; expose it to Yggdrasil via capability contract.
+   build it as a **private sibling**; expose it to Mimer via capability contract.
 3. **Sourcing test.** Does a mature, externally-maintained system cover the domain's core (the
    directive's examples: Home Assistant for home automation, OPNsense for network)? → **Source as
    sibling.** The upstream absorbs domain volatility (device/protocol churn) — that is
@@ -355,9 +377,9 @@ Decision procedure (apply in order; first decisive answer wins):
 4. **Marginal-cost comparison (residual case).** Compare `C_build + C_maintain` in-tree against
    `C_source + C_integrate + C_coordination` as sibling. Two repo-derived tiebreakers:
    - **Cognition-differentiating capabilities default in-tree** — knowledge, memory, reasoning,
-     graph, document surfaces are the constituent's identity; splitting them creates coordination
+     graph, document surfaces are Mimer's identity; splitting them creates coordination
      cost with no volatility gain (worked precedent: the Knowledge Acquisition Platform spec
-     stayed platform-in-Yggdrasil with the pipeline ending at candidate).
+     stayed platform-in-Mimer with the pipeline ending at candidate).
    - **Do not split across a seam that invariants must cross.** If an invariant (authority chain,
      provenance, write-guard) would have to hold on both sides of the contract, the split raises
      C_coordination and C_defect beyond any build saving — the cross-cutting-mechanism lesson.
@@ -367,7 +389,8 @@ Worked classification of the directive's examples: home automation → sibling b
 network/personal infra → sibling by tests 2+3; knowledge acquisition → in-tree by test 4a
 (precedent above); TTS → in-tree embedded libraries (already settled: SoI components,
 `docs/architecture/system-context-overlay.md:69`); the private bindings surface → sibling by test
-2 (it *is* the seam's other side).
+2 (it *is* the seam's other side); Heimdall (sensing) → sibling constituent by design (ADR-0044),
+not scored by this heuristic since its constituent status is already decided.
 
 This heuristic is advisory until adopted; if adopted, its home is a short addition to the TCD
 policy surface (builder-governance follow-up), with this section as the derivation.
@@ -377,7 +400,7 @@ policy surface (builder-governance follow-up), with this section as the derivati
 ### The dual-role hazard, separated into its three actual questions
 
 The audit named the hazard and deferred the stance here: the same infrastructure is an enabling
-system (runs the SoI) *and* a domain of interest the SoI observes/actuates; EXE/OEF develop a
+system (runs Mimer's SoI) *and* a domain of interest Mimer observes/actuates; EXE/OEF develop a
 self-reference at their charter attachment points (`docs/boundaries/EXE.md:21-24`,
 `docs/boundaries/OEF.md:22-24`;
 `docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md:144-152`). Adversarial review (skeptic
@@ -423,15 +446,19 @@ bounded stance, using only existing machinery plus one static proposal:
   limit*, not a policy violation: **the monitor dies with the monitored** — OEF cannot report the
   failure of the substrate that hosts it. OEF's charter already forbids the control-loop failure
   mode (`docs/boundaries/OEF.md`); the residual epistemic limit is stated, not machinery'd away.
-  Its real mitigation is an ecosystem capability: **independent observation of Yggdrasil's
+  Its real mitigation is an ecosystem capability: **independent observation of Mimer's
   substrate is exactly what only a separate constituent can provide** — a sibling (or even the
   existing prod-probe launchd pattern matured into one) watching from outside the failure domain.
-  This is the first concrete capability case *for* the federation: observation independence is
-  impossible inside the SoI by construction.
+  This is the first concrete capability case *for* the ecosystem's constituent interoperation*:
+  observation independence is impossible inside Mimer's own SoI by construction.
 
 ### MCP topology stance
 
-Current reality, stated honestly (all anchors verified against code): Yggdrasil today is an MCP
+**Status: deferred, not ratified (ADR-0047, D4).** The four-rule stance below remains the leading
+design candidate but carries no decision force until a concrete remote/sibling MCP server exists;
+it is preserved here for when D4 is revisited (see § Owner decisions).
+
+Current reality, stated honestly (all anchors verified against code): Mimer today is an MCP
 **tool consumer only** — a local registry-backed ToolProvider
 (`docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md:22-36`; registry
 `docs/settings/tools/registry.yaml`) plus an *unimplemented* remote seam: `RemoteMCPProvider` is a
@@ -440,24 +467,24 @@ fakes only). No MCP server exists anywhere in `app/`. The Integration Fabric Con
 "remote MCP servers behind the flagged multiplex seam"
 (`docs/INTEGRATION_FABRIC_CONTRACT.md:44`) is target-state language (divergence DV-3).
 
-The stance (four rules, each conform/extend as tagged in § SBS reconciliation):
+The deferred candidate stance (four rules, each conform/extend as tagged in § SBS reconciliation):
 
-1. **MCP stays protocol-tier.** Federation does not promote MCP to architecture. Capability
-   contracts are the boundary; MCP is one adapter (ADR-0036; doctrine §2.7;
+1. **MCP stays protocol-tier.** The SoS relationship does not promote MCP to architecture.
+   Capability contracts are the boundary; MCP is one adapter (ADR-0036; doctrine §2.7;
    `docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md:339-342`). *(Conform.)*
 2. **Constituent-owned servers.** Each constituent owns and operates the MCP server(s) exposing
-   *its own* capability contracts: Yggdrasil's future MCP server exposes the five capability
+   *its own* capability contracts: Mimer's future MCP server, if built, exposes the five capability
    surfaces (§ Capability boundary); each sibling exposes its domain capabilities behind its own
    server. No shared ecosystem mega-server, no third-party-hosted registry of the operator's
    surfaces — server ownership follows capability ownership, exactly as adapter ownership follows
    the port today. *(Extend — design rule for a surface that does not exist yet.)*
 3. **Registry split along the seam.** The registry *schema and admission policy* — descriptor
-   format, tool policy, allowlist semantics — are public Yggdrasil contracts (the existing
+   format, tool policy, allowlist semantics — are public Mimer contracts (the existing
    `docs/settings/tools/registry.yaml` + descriptor pattern generalizes). The registry *contents*
    for remote/sibling servers — endpoints, credentials, host bindings — are INV-EF1 category
    (ii)/(iii) material: **private side, always.** Public tree: what may attach and on what terms;
    private side: what actually attaches here. *(Extend — proposed rule for a surface that does
-   not exist yet; ratification is D4, not this sentence.)*
+   not exist yet; deferred, not ratified — D4/ADR-0047.)*
 4. **Close the silent-fallback gap.** The remote-multiplex seam currently swallows remote failure
    silently (`except Exception: pass`, `app/orchestrator/mcp_tool_provider.py:41-43`;
    `docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md:229-243`), has **no admission
@@ -472,30 +499,37 @@ The stance (four rules, each conform/extend as tagged in § SBS reconciliation):
    back; (c) the multiplex flag becomes a **typed settings field**. *(Extend; conforms to the
    audit's own debt recommendation.)*
 
-### Interaction tiers — where ecosystem federation meets SFC and ADR-0020
+### Interaction tiers — where the SoS relationship meets SFC and ADR-0020
 
-Skeptic S3 (downgraded) established that a blanket "no ADR-0020 conflict" claim is false: SFC's
-charter textually owns "Federation," "Central/satellite behavior," "Multi-device behavior"
-(`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:1077-1132`), ADR-0020's context names "multi-device,
-central/satellite, offline/online, and multi-write deployments"
+**Status: ratified (ADR-0045, D2).** Skeptic S3 (downgraded) established that a blanket "no
+ADR-0020 conflict" claim is false: SFC's charter textually owns "Federation," "Central/satellite
+behavior," "Multi-device behavior" (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:1077-1132`), ADR-0020's
+context names "multi-device, central/satellite, offline/online, and multi-write deployments"
 (`docs/adr/ADR-0020-sfc-single-node-upgrade-path.md`), and master/satellite sync is a documented
-near-term plan (`docs/plans/PROTOCOL_SATELLITE_SYNC.md`). The surviving, precise rule is a
-**three-tier classification of sibling interaction**:
+near-term plan (`docs/plans/PROTOCOL_SATELLITE_SYNC.md`). The surviving, precise rule, ratified as
+the **three-tier classification of constituent interaction**:
 
 | Tier | Interaction shape | Governing machinery | ADR-0020 status |
 | --- | --- | --- | --- |
-| **0** | Stateless, read-only capability call: sibling asks, Yggdrasil answers, no state retained on either side beyond the exchange | EBF adapter + tool policy + IFC authority rule | **No SFC involvement.** The no-conflict zone — conform |
-| **1** | Sibling-held derived state of Yggdrasil content (caches, mirrors, subscriptions) | EBF + explicit staleness/refresh contract; **must run ADR-0020's own validation obligation** ("classify delivery semantics, idempotency, replay/backfill, conflict envelope, transition posture," `docs/adr/ADR-0020-sfc-single-node-upgrade-path.md:31`) | SFC-adjacent; classification mandatory before build |
-| **2** | Sibling writes toward the vault/durable surface, or multi-write topology | Full IFC promotion path + GOV + SFC semantics | Exactly the ground ADR-0020 reserves; **not licensed** by the ecosystem framing |
+| **0** | Stateless, read-only capability call: one constituent asks, another (e.g. Mimer) answers, no state retained on either side beyond the exchange | EBF adapter + tool policy + IFC authority rule | **No SFC involvement.** The no-conflict zone — conform |
+| **1** | A constituent holds derived state of another's content (caches, mirrors, subscriptions) | EBF + explicit staleness/refresh contract; **must run ADR-0020's own validation obligation** ("classify delivery semantics, idempotency, replay/backfill, conflict envelope, transition posture," `docs/adr/ADR-0020-sfc-single-node-upgrade-path.md:31`) | SFC-adjacent; classification mandatory before build |
+| **2** | A constituent writes toward another's durable surface, or multi-write topology | Full IFC promotion path + GOV + SFC semantics | Exactly the ground ADR-0020 reserves; **not licensed** by the SoS framing |
 
-The word-collision is handled by this document's opening disambiguation plus a proposed
-`docs/GLOSSARY.md` entry distinguishing *SFC federation* (intra-system replicas) from *ecosystem
-federation* (inter-system contracts) — follow-up, since the glossary is an owned surface. How the
-seam is governed long-term (adopt the tier rule / re-scope vocabulary / extend SFC's charter) is
-owner decision **D2**. Additionally, exposing Yggdrasil capability surfaces to siblings over the
+ADR-0045 additionally names a fourth, distinct shape outside this table: **inbound governed-candidate
+event/evidence intake** — a constituent that *emits* data toward another (Heimdall's published-event
+stream → Mimer) is not Tier 0/1/2; the producer publishes attributed, provenance-bearing events and
+the consumer ingests them as candidates/evidence, promoting to durable knowledge only through its own
+governed path (WriteGuard → DecisionToken → governed promotion → AuthorityReceipt).
+
+The word-collision is resolved per this document's opening disambiguation and ADR-0044/45: "federation"
+names only *SFC federation* (intra-Mimer replicas); the SoS relationship between constituents is
+**acknowledged constituents interoperating via capability contracts**, never "federation" — see the
+`docs/GLOSSARY.md` "System of Systems" entry. How the seam is governed long-term is owner decision
+**D2**, now **resolved**: the interaction-tier rule above is adopted (ADR-0045); ADR-0020 and SFC's
+charter are untouched. Additionally, exposing a constituent's capability surfaces to siblings over the
 mesh is a *new network exposure shape* that the environment/exposure boundary's "explicit and
-proportionate" gate (`docs/SECURITY_TRUST_BOUNDARIES.md:37`) must pass per-surface — noted inside
-D2 rather than assumed.
+proportionate" gate (`docs/SECURITY_TRUST_BOUNDARIES.md:37`) must pass per-surface — an obligation
+ADR-0045 carries forward rather than resolving generically.
 
 ## SBS reconciliation
 
@@ -507,109 +541,124 @@ claim is classified against `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` and `docs/archi
 | # | Structural claim | Classification |
 | --- | --- | --- |
 | 1 | Ecosystem-level lifecycle-role table (constituent / proto-constituent / external / enabling / COTS, one level above the settled four-class rule) | **Extend** — new view; no boundary touched; classification rule unchanged |
-| 2 | Yggdrasil remains the current-state SoI; every current-state doc unchanged | **Conform** |
-| 3 | Personal Agentic Ecosystem as **target-state** SoI framing, activation-gated on the first real constituent (bridge/target pattern) | **Reshape — routed** (D1). Not enacted; not assumed by any other section |
-| 4 | No internal boundary is a constituent; "agent runtime / integration fabric" read as capability-domain labels; future physical separation stays with ADR-0016 + `SBS_ROADMAP.md` Phase 4/5 | **Conform** — restates audit §3 verdict and existing machinery; coins no vocabulary |
+| 2 | Mimer remains the current-state knowledge-and-cognition SoI, internally unchanged; every current-state doc keeps describing Mimer's internals as before | **Conform** |
+| 3 | Yggdrasil as the ecosystem's acknowledged-SoS apex, with Mimer + Heimdall + private-bindings as its constituents | **Reshape — ratified** (D1, ADR-0044). Enacted as a naming/model decision; the `yggdrasil_runtime/`→Mimer code/doc rename itself is separate, deferred enactment work |
+| 4 | No internal Mimer boundary is a constituent; "agent runtime / integration fabric" read as capability-domain labels; future physical separation stays with ADR-0016 + `SBS_ROADMAP.md` Phase 4/5 | **Conform** — restates audit §3 verdict and existing machinery; coins no vocabulary |
 | 5 | Private binding surface named as proto-constituent / first-sibling target | **Extend** — names existing unowned reality; creating the sibling is follow-up work |
 | 6 | Capability boundary = contract set; five-surface grouping view over existing enumerations | **Extend** — view only; `CAPABILITY_CONTRACT_MODEL.md` and IFC stay authoritative |
 | 7 | MCP protocol-tier posture | **Conform** (ADR-0036; doctrine §2.7; audit §7) |
-| 8 | Constituent-owned MCP servers; registry schema public / registry contents private | **Extend** — design rule for a not-yet-built surface; enactment via future implementation issues |
-| 9 | Remote-multiplex fixes: admission allowlist, legible degradation, typed flag | **Extend** — conforms to audit §6's debt recommendation; implementation follow-ups, not docs-lane |
-| 10 | INV-EF1 two-scope public/private invariant + register + `public_seam_lint` hook | **Extend** — new fitness/invariant proposal (GATE+DOCTOR) extending `docs/testing/invariant-tests.md` semantics; adoption is D3; owner-doc rows (PRIVACY, SECURITY_TRUST_BOUNDARIES) are follow-up issues |
+| 8 | Constituent-owned MCP servers; registry schema public / registry contents private | **Extend** — design rule for a not-yet-built surface; **deferred, not ratified** (D4, ADR-0047) |
+| 9 | Remote-multiplex fixes: admission allowlist, legible degradation, typed flag | **Extend** — conforms to audit §6's debt recommendation; **deferred with D4** (ADR-0047); no follow-up issues filed until ratified |
+| 10 | INV-EF1 two-scope public/private invariant + register + `public_seam_lint` hook | **Extend** — new fitness/invariant proposal (GATE+DOCTOR) extending `docs/testing/invariant-tests.md` semantics; **adopted** (D3, ADR-0046); owner-doc rows (PRIVACY, SECURITY_TRUST_BOUNDARIES) are follow-up issues |
 | 11 | TCD placement heuristic | **Extend** — derives from `AGENTS.md :: TCD`; adoption into policy surface is builder-governance follow-up |
 | 12 | Dual-role: per-relation classification | **Conform** — the settled binding-attached rule, generalized |
 | 13 | Dual-role: reflexivity bounded by existing GOV chain; availability-impact descriptor field | **Extend** — one static descriptor-field proposal into the tool-policy contract; no new guard machinery; routed |
 | 14 | Independent substrate observation as ecosystem capability | **Extend** — future capability case; creates no boundary |
-| 15 | Interaction-tier rule (Tier 0/1/2) at the ecosystem/SFC seam | Tier 0: **Conform**. Tiers 1–2 governance: **Reshape-adjacent — routed** (D2); any tension with ADR-0020 is surfaced, never resolved here |
-| 16 | Federation-vocabulary disambiguation (SFC vs ecosystem) + glossary entry | **Extend** — glossary follow-up on an owned surface |
+| 15 | Interaction-tier rule (Tier 0/1/2) + governed-candidate intake shape at the constituent/SFC seam | Tier 0: **Conform**. Tiers 1–2 governance + intake shape: **Reshape — ratified** (D2, ADR-0045); ADR-0020 untouched |
+| 16 | "Federation" = SFC only; SoS relationship named without "federation" + glossary entry | **Extend — enacted** (`docs/GLOSSARY.md`, this PR) |
 
-No reshape is enacted by this artifact. Reshape items exist only as routed proposals (D1, D2) and
-proposals awaiting adoption (D3, D4).
+No reshape beyond the ratified naming/model decisions (D1, D2) is enacted by this artifact.
+D3 is adopted as a decision (enactment — the lint script, register, owner-doc rows — is separate
+follow-up work); D4 remains deferred, not adopted.
 
 ## Owner decisions
 
-Presented per the repo convention: Problem → Options → Consequences. Recommendations are marked;
-every decision routes through CES/ADR on acceptance.
+Presented per the repo convention: Problem → Options → Consequences. This section is the
+historical decision record as originally drafted; each subsection now opens with its **resolution**
+(D1–D3 ratified, D4 deferred) per ADR-0044/45/46/47, 2026-07-04.
 
 ### D1 — Ratify the ecosystem SoS as target-state SoI framing?
 
-**Problem.** The 2026-07-03 directive chose Option B: the aspirational SoI is the Personal Agentic
-Ecosystem. Adversarial review found promotion-as-primary-framing-today unjustified: zero real
-siblings exist; ADR-0041/0042 just removed SoS vocabulary internally; no near-term engineering
-decision changes. The directive's own word is "aspirational" — the question is the adoption shape.
+**Resolved: ratified, ADR-0044 (2026-07-04).** The owner ratified the ecosystem SoS, naming the
+apex **Yggdrasil** — a stronger outcome than Option 1 below anticipated: rather than a target-state
+frame gated on a future sibling attaching, Yggdrasil is ratified as the apex *now*, with **Mimer**
+(the renamed current-state SoI), **Heimdall**, and private-bindings as its constituents. The
+activation-condition framing in Option 1 is superseded by this naming ratification; see § Ecosystem
+model.
 
-- **Option 1 (recommended): bridge/target adoption.** Yggdrasil stays the current-state SoI; the
-  ecosystem SoS is ratified as target-state framing with the activation condition (first real
-  constituent attached via contract). One ADR; this doc becomes the target-state reference; no
-  current-state doc churns now. *Consequences:* directive honored without racing reality; SoS
-  vocabulary stays quarantined at ecosystem level (consistent with ADR-0041/0042); the framing
-  self-activates on evidence. Cost: a dual frame to keep straight (mitigated by the activation
-  condition being crisp).
-- **Option 2: primary framing now.** Immediate reframe of SoI-stating docs (kernel, charter,
-  doctrine, ARCHITECTURE, SBS spine, glossary). *Consequences:* maximal directive fidelity; churn
-  across more docs than the 27-doc rename just accepted; reintroduces SoS vocabulary the day after
-  paying to remove it; an SoS with one real constituent invites the same category-error critique
-  the audit leveled internally.
-- **Option 3: decline promotion; keep the environment-overlay reading only.** *Consequences:* zero
-  churn; the federation model remains shelf-advisory; the seam invariant (D3) and TCD heuristic
-  still stand alone; the directive's framing intent is unfulfilled and will resurface with the
-  first sibling.
+**Problem (as originally posed).** The 2026-07-03 directive chose Option B: the aspirational SoI is
+a Personal Agentic Ecosystem. Adversarial review found promotion-as-primary-framing-today
+unjustified: zero real siblings exist; ADR-0041/0042 just removed SoS vocabulary internally; no
+near-term engineering decision changes. The directive's own word was "aspirational" — the question
+was the adoption shape.
 
-### D2 — How is the ecosystem/SFC federation seam governed?
+- **Option 1 (recommended at the time): bridge/target adoption.** Yggdrasil-as-then-named-current-
+  system stays the current-state SoI; the ecosystem SoS is ratified as target-state framing with an
+  activation condition (first real constituent attached via contract). *Superseded in outcome*: the
+  owner's actual ratification (ADR-0044) went further, renaming the current system to **Mimer** and
+  reserving **Yggdrasil** for the apex immediately, not gated on a future sibling.
+- **Option 2: primary framing now.** Immediate reframe of SoI-stating docs. Not the option chosen
+  as originally scoped, but the *naming* half of ADR-0044's actual ratification is closer to this
+  than Option 1's deferred-activation shape — it reframes the apex now, though full doc-by-doc
+  reframing remains a separate, ongoing enactment effort (of which this PR is one slice).
+- **Option 3: decline promotion.** Not chosen.
 
-**Problem.** SFC textually owns "Federation" and multi-device/multi-write topology
-(`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:1077-1132`; full evidence chain in § Interaction tiers).
-Ecosystem federation is inter-system, but Tier 1/2 sibling interactions (caches; writes) land in
-SFC-claimed ground, and mesh exposure of capability surfaces must pass the "explicit and
-proportionate" exposure gate (`docs/SECURITY_TRUST_BOUNDARIES.md:37`).
+### D2 — How is the ecosystem/SFC seam governed?
 
-- **Option 1 (recommended): adopt the interaction-tier rule.** Tier 0 free under EBF; Tier 1
-  requires ADR-0020's classification obligation before build; Tier 2 requires full
-  IFC-promotion + GOV + SFC semantics. Glossary entry disambiguates the two federation senses.
+**Resolved: ratified, ADR-0045 (2026-07-04).** Option 1 was adopted as designed: the three-tier
+interaction-tier rule (§ Interaction tiers) plus a fourth, distinct shape — inbound
+governed-candidate event/evidence intake, the concrete shape Heimdall's published-event stream
+requires. ADR-0020 and SFC's charter are untouched. "Federation" is confirmed SFC-only; the
+glossary entry is enacted in this PR.
+
+**Problem (as originally posed).** SFC textually owns "Federation" and multi-device/multi-write
+topology (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:1077-1132`; full evidence chain in § Interaction
+tiers). The inter-constituent SoS relationship is a different thing, but Tier 1/2 constituent
+interactions (caches; writes) land in SFC-claimed ground, and mesh exposure of capability surfaces
+must pass the "explicit and proportionate" exposure gate (`docs/SECURITY_TRUST_BOUNDARIES.md:37`).
+
+- **Option 1 (recommended, adopted): adopt the interaction-tier rule.** Tier 0 free under EBF; Tier
+  1 requires ADR-0020's classification obligation before build; Tier 2 requires full
+  IFC-promotion + GOV + SFC semantics. Glossary entry states federation = SFC only.
   *Consequences:* ADR-0020 untouched; a crisp, checkable rule for every future sibling design; the
   known plan (satellite sync) stays cleanly on SFC's side of the line.
-- **Option 2: reserve the word.** Rename this model's vocabulary (e.g. "ecosystem confederation").
-  *Consequences:* removes collision at the cost of diverging from the directive's own language and
-  the issue-mandated artifact name; the underlying Tier 1/2 governance question remains and still
-  needs Option 1's substance.
-- **Option 3: extend SFC's charter to own inter-system topology.** *Consequences:* one owner for
-  all distribution semantics; a genuine boundary reshape (SFC grows beyond intra-system replicas),
-  high blast radius, contradicts the audit's finding that the decomposition absorbs gaps without
-  growing; not recommended.
+- **Option 2: reserve the word.** Not chosen as a rename, but its intent (avoid "federation" for
+  the SoS relationship) is exactly what ADR-0044/45 adopted, via "acknowledged constituents
+  interoperating via capability contracts" rather than a renamed synonym.
+- **Option 3: extend SFC's charter.** Not recommended; not chosen.
 
 ### D3 — Adopt INV-EF1 (two-scope public/private invariant) with register + lint?
 
-**Problem.** No rule governs what may live in the public tree; ~307 personal-identifier hits
-exist, some load-bearing; zero secrets. A strict blanket rule is destructive; silence is drift.
+**Resolved: adopted, ADR-0046 (2026-07-04).** Option 1 was adopted as designed. Enactment (the
+`public_seam_lint.py` script, the register, PR-workflow wiring, and the `docs/PRIVACY.md` /
+`docs/SECURITY_TRUST_BOUNDARIES.md` owner-doc rows) remains separate follow-up work — this decision
+record adopts the rule, it does not build the enforcement.
 
-- **Option 1 (recommended): adopt INV-EF1 as proposed.** Two scopes; per-item register;
+**Problem (as originally posed).** No rule governed what may live in the public tree; ~307
+personal-identifier hits existed, some load-bearing; zero secrets. A strict blanket rule would be
+destructive; silence is drift.
+
+- **Option 1 (recommended, adopted): adopt INV-EF1 as proposed.** Two scopes; per-item register;
   `public_seam_lint.py` with secrets-GATE (green day one) + new-token-register-GATE + register
-  DOCTOR; burn-down slices double as first-sibling migration. *Consequences:* enforceable
-  immediately; conscious, owned exceptions instead of drift; real work queue (guard
-  parameterization, doc migration) created as implementation follow-ups; register maintenance is a
-  standing cost (rot risk named).
-- **Option 2: secrets-GATE only.** *Consequences:* cheap, uncontroversial, immediately green;
-  personal-identifier drift continues ungoverned; the seam exists in prose only — fails the
-  issue's no-aspirational-law constraint for categories (ii)–(v).
-- **Option 3: strict operator-invariance everywhere.** *Consequences:* rejected by evidence —
-  breaks fail-loud vault guards, pinning tests, and cross-device builder reproducibility
-  (`docs/AGENT_ISSUE_DISPATCHER.md:244-310`); would force valuable operational truth out of the
-  repo at real cost.
+  DOCTOR; burn-down slices double as first-sibling migration. *Consequences:* enforceable once
+  enacted; conscious, owned exceptions instead of drift; real work queue (guard parameterization,
+  doc migration) created as implementation follow-ups; register maintenance is a standing cost
+  (rot risk named).
+- **Option 2: secrets-GATE only.** Not chosen — fails the no-aspirational-law constraint for
+  categories (ii)–(v).
+- **Option 3: strict operator-invariance everywhere.** Rejected by evidence — breaks fail-loud
+  vault guards, pinning tests, and cross-device builder reproducibility
+  (`docs/AGENT_ISSUE_DISPATCHER.md:244-310`).
 
 ### D4 — Ratify the MCP topology stance?
 
-**Problem.** MCP server/registry ownership has no stated stance; the remote seam has a silent
-fallback, no admission gate, and an untyped flag; siblings will need a rule before the first one
-attaches.
+**Resolved: deferred, not adopted, ADR-0047 (2026-07-04).** The owner chose **Option 2**: defer
+until a concrete remote/sibling MCP server exists. The four-rule stance (§ MCP topology stance)
+remains the leading candidate, preserved for when D4 is revisited, but carries no decision force
+today. The silent-fallback gap in the remote-multiplex seam remains live and unaddressed by this
+deferral; no follow-up issues are filed until D4 is ratified.
 
-- **Option 1 (recommended): adopt the four-rule stance** (protocol-tier; constituent-owned
-  servers; registry schema public / contents private; admission-allowlist + legible-degradation +
-  typed-flag fixes as follow-up implementation issues). *Consequences:* the topology question the
-  audit deferred gets a decided home; the fallback gap closes before any real remote attachment;
-  three bounded implementation issues.
-- **Option 2: defer until a concrete sibling/server exists.** *Consequences:* zero cost now; the
-  silent-fallback gap remains live (it is reachable today by enabling one flag with any injected
-  provider); the next MCP-related change re-litigates ownership without a stance.
+**Problem (as originally posed).** MCP server/registry ownership has no stated stance; the remote
+seam has a silent fallback, no admission gate, and an untyped flag; siblings will need a rule
+before the first one attaches.
+
+- **Option 1 (recommended at the time, not adopted): adopt the four-rule stance** (protocol-tier;
+  constituent-owned servers; registry schema public / contents private; admission-allowlist +
+  legible-degradation + typed-flag fixes as follow-up implementation issues).
+- **Option 2 (chosen): defer until a concrete sibling/server exists.** *Consequences:* zero cost
+  now; the silent-fallback gap remains live (reachable today by enabling one flag with any injected
+  provider); the next MCP-related change re-litigates ownership without a stance until D4 is
+  revisited.
 
 ## Divergences
 
@@ -658,17 +707,23 @@ Classified per the runtime-semantics convention (fix-code / fix-doc / needs-owne
 
 ## Proposed follow-ups (routed; none filed by this artifact)
 
-1. CES/ADR decision records for D1–D4 (owner).
+1. ~~CES/ADR decision records for D1–D4 (owner).~~ **Done:** ADR-0044 (D1), ADR-0045 (D2),
+   ADR-0046 (D3), ADR-0047 (D4, deferral) — all accepted 2026-07-04. The `docs/GLOSSARY.md`
+   reconciliation and this artifact's own naming/model reconciliation (#2890) are enacted by this
+   PR; the `yggdrasil_runtime/`→Mimer code/doc rename remains separate, deferred enactment work.
 2. Re-point the eight `FABLE5_PROMPT_INFRA_DOMAIN_AND_MCP_TOPOLOGY.md` references + DV-1 stale
    anchors — #2855 is closed, so this is now its own filed follow-up, not a bundle target.
-3. `public_seam_lint.py` + register + PR-workflow wiring (implementation lane; on D3 accept).
+3. `public_seam_lint.py` + register + PR-workflow wiring (implementation lane; D3 adopted by
+   ADR-0046 — this follow-up is now unblocked).
 4. Vault-guard/label parameterization and `/Users/rasmus*` burn-down slices (implementation lane;
-   on D3 accept).
+   D3 adopted by ADR-0046 — this follow-up is now unblocked).
 5. MCP admission allowlist, legible-degradation surfacing, typed multiplex flag (implementation
-   lane; on D4 accept).
-6. Glossary: ecosystem-federation vs SFC-federation entry; SECURITY_TRUST_BOUNDARIES source-repo
-   content row; PRIVACY seam paragraph (docs lane, owner-doc PRs).
-7. Availability-impact descriptor field in the tool-policy contract (docs+implementation; on D4
-   accept or independently).
+   lane; **blocked** — D4 deferred by ADR-0047, not filed until D4 is ratified).
+6. ~~Glossary: ecosystem-federation vs SFC-federation entry~~ **Done** (`docs/GLOSSARY.md`, this
+   PR — reconciled to ADR-0044's model, not the originally-proposed two-federations
+   disambiguation, per #2891's reframing); SECURITY_TRUST_BOUNDARIES source-repo content row;
+   PRIVACY seam paragraph remain open (docs lane, owner-doc PRs, D3 follow-ups).
+7. Availability-impact descriptor field in the tool-policy contract (docs+implementation;
+   **blocked** — D4 deferred by ADR-0047).
 8. TCD placement-heuristic adoption into the TCD policy surface (builder-governance lane; if the
    owner adopts § TCD heuristic — the derivation stays in this artifact).
