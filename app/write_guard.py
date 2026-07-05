@@ -14,7 +14,18 @@ from app.health_contract import DEFAULT_CONTRACT, WRITE_BLOCKED_STATES
 # of a guard. A guard constructed without an action in its allow-list still
 # denies that action under a blocked state, so every seam that consults the
 # guard remains genuinely gated.
-DEFAULT_BOOTSTRAP_ACTIONS: frozenset[str] = frozenset({"yggdrasil.scaffold"})
+DEFAULT_BOOTSTRAP_ACTIONS: frozenset[str] = frozenset(
+    {
+        "yggdrasil.scaffold",
+        # Vault-layout provisioning (T-scaffold "layout-ensure", #2910): creates
+        # the FIRST vault.layout.md + system note. The health snapshot itself
+        # cannot be evaluated before that note exists (load_health_settings ->
+        # get_vault_system_dir_rel -> load_layout raises FileNotFoundError), so
+        # this action must short-circuit ahead of evaluation or fresh-vault
+        # bootstrap deadlocks (harness-selfverify promote-to-test smoke, env -i).
+        "vault.layout_ensure",
+    }
+)
 
 
 class WritesBlockedError(RuntimeError):
@@ -39,9 +50,22 @@ class WriteGuard:
         self.bootstrap_actions: frozenset[str] = frozenset(bootstrap_actions)
 
     def assert_writes_allowed(self, action: str) -> None:
+        # Named bootstrap escape, checked BEFORE snapshot evaluation
+        # (#2877/#2910). Bootstrap provisioning must survive not only a
+        # health-blocked state but also an UNEVALUABLE guard: on a brand-new
+        # vault the health snapshot itself depends on state the bootstrap
+        # write is about to create (vault.layout.md -> load_health_settings),
+        # so evaluating first would deadlock the very provisioning that makes
+        # the guard evaluable. This is the same named-escape pattern, not a
+        # new bypass: only registered action strings short-circuit, and a
+        # guard whose allow-list omits the action still evaluates and denies
+        # exactly as before (P-4 fail-closed holds for every non-registered
+        # action -- an evaluation error still blocks those writes loudly).
+        if action in self.bootstrap_actions:
+            return
         snapshot = self.snapshot_fn()
         state = snapshot.get("state") or ""
-        if state in WRITE_BLOCKED_STATES and action not in self.bootstrap_actions:
+        if state in WRITE_BLOCKED_STATES:
             reason = snapshot.get("reason")
             raise WritesBlockedError(state, reason, action)
 

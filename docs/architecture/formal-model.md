@@ -178,8 +178,19 @@ T-scaffold [operator/human: vault init, yggdrasil-init, layout-ensure]
   asserted before the first mkdir ⇒ blocked path is atomic: zero dirs/files, non-zero CLI exit).
   A NAMED bootstrap escape (DEFAULT_BOOTSTRAP_ACTIONS in app/write_guard.py) lets a genuine
   pre-selection provision through under safe_mode/unhealthy — a denying guard still blocks it, so
-  this is a consulted seam, not "outside WG" (#2877). The other four gap-#1 sites remain RESEARCH-03
-  #2781.
+  this is a consulted seam, not "outside WG" (#2877). The knowledge write port itself now also
+  asserts WG unconditionally (app/knowledge/write_ops.py::write_note_from_absolute, default action
+  "knowledge.write_note") — the scaffolder's own nested writes thread the "yggdrasil.scaffold"
+  escape action through to the port so provisioning still survives safe_mode/unhealthy end-to-end
+  (#2910). Layout-ensure provisioning (app/vault/layout.py's two create-if-missing writes, reached
+  by vault-layout-ensure CLI, uat seed, and ingest-time ensure_vault_layout) carries its own
+  registered escape "vault.layout_ensure" ∈ DEFAULT_BOOTSTRAP_ACTIONS: creating the FIRST
+  vault.layout.md is the write the guard's own health evaluation depends on
+  (load_health_settings → load_layout raises until the note exists), so the escape is checked
+  BEFORE snapshot evaluation — a registered bootstrap action survives an UNEVALUABLE guard, while
+  every non-registered action still fails closed on evaluation error (P-4). The watcher tick
+  additionally degrades any WritesBlockedError from inside ingest to its skipped_writes_blocked
+  accounting instead of crashing (#2910, defense-in-depth).
 T-settings-compile [operator: settings compile/watch]  (app/settings/writeback.py:23-42)
   post: V.settings @Settings/*.md ← compiled blocks ; ⚠ NO WG, NO event — Divergence F-B
 T-bootstrap-ddl [worker boot]  (app/services/outbox.py:68-73, called from outbox_worker.py:1027)
@@ -246,7 +257,7 @@ audit kernel (`docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md` §2
 | no silent fallback (stores, decisions writer) | I-S4 | — | ✗ decisions.py:43-45 → #2788 |
 | UNKNOWN route, no default action class | I-A2 | — | ◊ KERNEL-07 #2769 |
 | envelope/scope prefilter on app retrieval | I-A5 | #5-#9, #18-#21, #26 | ◊ KERNEL-10 #2772 |
-| WG at every V-write seam | I-A3 | #13 authority_transition… (spirit) | ✗ F-A, F-B — NEW GAP |
+| WG at every V-write seam | I-A3 | #13 authority_transition… (spirit) | ✓ #2910 (P-1 static gate + runtime property; F-C exempted, named) |
 | memory non-canonical / promotion governed | — | #10, #11, #22-#25 | ✓ (review→materialize chain) |
 | projection ≠ evidence, observability ≠ policy | — | #12, #17 | ✓ doc/xfail as registered |
 
@@ -261,14 +272,26 @@ audit kernel (`docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md` §2
    The bounded seam-local form landed for the vault-layout scaffold site: `yggdrasil-init`'s
    scaffolder now asserts WG at its own seam with the named bootstrap escape
    (`"yggdrasil.scaffold"` ∈ `DEFAULT_BOOTSTRAP_ACTIONS`), so a genuine new-vault provision
-   survives `safe_mode`/`unhealthy` while a denying guard blocks it atomically (#2877). The
-   remaining four sites (settings writeback already gated by #2809; note_hygiene, identity-heal,
-   checkbox rollback) plus the shared-port form stay with RESEARCH-03 #2781.
+   survives `safe_mode`/`unhealthy` while a denying guard blocks it atomically (#2877). **#2910
+   closed the deep fix and the remaining three named sites**: the knowledge write port itself
+   (`write_note_from_absolute`) now asserts WG unconditionally before any I/O (default action
+   `"knowledge.write_note"`; callers needing the bootstrap escape pass their own action through);
+   identity-heal (`VaultManager._ensure_frontmatter_id`, action `"vault.identity_heal"`) is WG-gated
+   and `validate_vault` converts a denying/raising guard into the same loud `invalid` VaultContext
+   an `OSError` persist failure already reached; checkbox-rollback
+   (`app/panel/checkbox_projection.py`'s exception-handler compensating write) is covered
+   automatically now that the port itself is guarded. `tests/properties/test_guard_at_seam.py`
+   pins the class with a static gate (every `write_frontmatter` call site classified
+   guarded/out-of-scope; the port needs no per-site census anymore) plus P-1/P-4 runtime properties
+   sampling the three registered seams. Settings writeback stays gated by #2809; note_hygiene by
+   #2810.
 2. **Event-completeness:** every `P.objects`/`P.vectors` mutation has a corresponding event, or is
    declared a *mirror* in a registered list — today `emit_outbox=False` writes are invisible to
    replay (F-E; eight call sites named in §4/C8).
 3. **Read purity (Q4):** no durable write on a GET/read path except registered heal transitions.
-4. **Fail-closed guards:** a WG evaluation error blocks the write (note/save fails open today).
+4. **Fail-closed guards:** a WG evaluation error blocks the write. #2910 pins this for the three
+   named write seams above (`test_raising_guard_blocks_write`); `note/save` deliberately fails open
+   today — divergence F-C, named exemption, owner decision pending on epic #2778.
 5. **Receipt-before-ack (T-capture shape)** as the general mutating-transition contract.
 
 **Gaps, registry → model:** none structural — the cross-scope/envelope invariants (#5–#9, #16,

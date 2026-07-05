@@ -5,11 +5,14 @@ from datetime import datetime, timezone
 import logging
 import os
 from pathlib import Path
-from typing import Any, Callable, Iterator, Literal
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Literal
 from uuid import uuid4
 
 from app.vault.app_local import AppLocalSettingsStore, KnownVaultRef
 from app.vault.markdown_settings import MarkdownSettingsError, MarkdownSettingsStore
+
+if TYPE_CHECKING:
+    from app.write_guard import WriteGuard
 
 
 VaultStatus = Literal["none", "selected", "missing", "invalid", "uninitialized"]
@@ -256,9 +259,20 @@ class VaultManager:
         *,
         app_local_store: AppLocalSettingsStore | None = None,
         markdown_store: MarkdownSettingsStore | None = None,
+        write_guard: "WriteGuard | None" = None,
     ) -> None:
         self.app_local_store = app_local_store or AppLocalSettingsStore()
         self.markdown_store = markdown_store or MarkdownSettingsStore()
+        # Imported lazily (not at module level): app.write_guard ->
+        # health_contract -> settings.health_settings -> app.vault.paths ->
+        # app.vault.manager closes a circular import back to this module
+        # (the same pattern #2909/#2910 documented for other WG call sites
+        # that sit deep in the settings/health import graph).
+        if write_guard is None:
+            from app.write_guard import DEFAULT_WRITE_GUARD
+
+            write_guard = DEFAULT_WRITE_GUARD
+        self._write_guard = write_guard
         self._context = no_vault_context()
         self._subscribers: list[Callable[[VaultChangedEvent], None]] = []
 
@@ -298,6 +312,9 @@ class VaultManager:
         return context
 
     def validate_vault(self, vault_path: Path) -> VaultContext:
+        # Lazy import: see the constructor's comment on the write_guard cycle.
+        from app.write_guard import WritesBlockedError
+
         expanded = vault_path.expanduser()
         if not expanded.exists():
             return VaultContext(status="missing", active_vault_path=str(expanded))
@@ -377,7 +394,14 @@ class VaultManager:
                 body=local_doc.body,
                 persist=allow_local_heal,
             )
-        except OSError as exc:
+        except (OSError, WritesBlockedError) as exc:
+            # Guard-at-seam (#2910, formal-model.md gap 4 / P-4): a denying or
+            # raising WriteGuard on the identity-heal write is a fail-closed
+            # transition, not a silent success -- it reaches the same loud
+            # "invalid" VaultContext branch as an OSError persist failure,
+            # never a swallowed exception and never a crash out of vault
+            # selection (this method sits on read/select call paths: watcher
+            # registry/config, load_last_active, orientation routes).
             return VaultContext(
                 status="invalid",
                 active_vault_name=expanded.name,
@@ -595,6 +619,16 @@ class VaultManager:
         body: str,
         persist: bool = True,
     ) -> str:
+        """Heal a missing vault/local identity id, WG-gated at the write (#2910).
+
+        This is an explicit heal transition (formal-model.md §3 Q4 / P-3): a
+        missing ``vaultId``/``localInstanceId`` is healed by writing it back to
+        the settings file, registered here (not undocumented) and gated by the
+        same WriteGuard every other vault-write seam consults. A denying or
+        raising guard raises ``WritesBlockedError`` to the caller (currently
+        ``validate_vault``, which converts it into a loud ``invalid``
+        VaultContext rather than swallowing it or persisting a partial write).
+        """
         existing = str(frontmatter.get(key)).strip() if frontmatter.get(key) is not None else ""
         if existing:
             return existing
@@ -602,6 +636,7 @@ class VaultManager:
         if not persist:
             # Read-only ceiling: provide a runtime id without mutating the vault.
             return generated
+        self._write_guard.assert_writes_allowed("vault.identity_heal")
         updated = dict(frontmatter)
         updated[key] = generated
         self.markdown_store.write_frontmatter(path, updated, body=body)

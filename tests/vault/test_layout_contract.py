@@ -79,7 +79,7 @@ def test_ensure_vault_layout_writes_notes_via_knowledge_port(tmp_path: Path, mon
 
     writes: list[str] = []
 
-    def _fake_write_note(path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
+    def _fake_write_note(path: Path, content: str, *, vault_root: Path | None = None, **_kwargs):  # type: ignore[no-untyped-def]
         resolved_root = (vault_root or tmp_path).resolve()
         resolved_path = Path(path).resolve()
         rel = resolved_path.relative_to(resolved_root).as_posix()
@@ -94,3 +94,38 @@ def test_ensure_vault_layout_writes_notes_via_knowledge_port(tmp_path: Path, mon
 
     assert f"{system_folder}/vault.layout.md" in writes
     assert any(path.endswith(".md") and "Vault Structure" in path for path in writes)
+
+
+def test_ensure_vault_layout_bootstraps_fresh_vault_with_vault_root_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fresh-vault layout provisioning must survive the guard's own health
+    evaluation being unevaluable (#2910 harness-selfverify regression).
+
+    When VAULT_ROOT points at a brand-new vault with NO layout note yet (the
+    promote-to-test bootstrap flow under ``env -i``), the WriteGuard's health
+    snapshot itself raises FileNotFoundError (load_health_settings ->
+    get_vault_system_dir_rel -> load_layout) -- because the note whose absence
+    breaks the evaluation is the very note this write creates. The registered
+    "vault.layout_ensure" bootstrap escape must short-circuit ahead of that
+    evaluation so the first layout note can ever exist. Uses the REAL default
+    guard and the REAL health contract -- no guard stubbing.
+    """
+    vault_root = tmp_path / "fresh-vault"
+    vault_root.mkdir()
+
+    system_folder = "⚙️ System"
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", system_folder)
+    monkeypatch.setenv("VAULT_INBOX_DIR_REL", "📥 Inbox")
+    monkeypatch.setenv("VAULT_DESK_DIR_REL", "🛠️ Workbench")
+    # The CI-failure shape: the channel bootstrap exports VAULT_ROOT to the
+    # fresh vault BEFORE any layout note exists, so the guard's health
+    # evaluation resolves this vault and raises while loading its layout.
+    monkeypatch.setenv("VAULT_ROOT", str(vault_root))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+
+    layout = ensure_vault_layout(vault_root)
+
+    note_path = vault_root / system_folder / LAYOUT_NOTE_NAME
+    assert note_path.exists()
+    assert layout.system_folder == system_folder

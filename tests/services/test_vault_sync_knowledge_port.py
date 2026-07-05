@@ -41,7 +41,12 @@ def test_write_note_checks_write_guard(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(vault_sync.DEFAULT_WRITE_GUARD, "assert_writes_allowed", calls.append)
 
     vault_sync._write_note(note_path, {"uuid": "u2"}, "Body")
-    assert calls == ["vault sync note write"]
+    # Two calls, not one (#2910): _write_note asserts caller-side ("vault sync
+    # note write", defense-in-depth per #2808's pattern), and
+    # write_note_from_absolute now ALSO asserts at the port seam itself with
+    # its own default action ("knowledge.write_note") before any I/O -- both
+    # assertions hit the same DEFAULT_WRITE_GUARD singleton this test patched.
+    assert calls == ["vault sync note write", "knowledge.write_note"]
 
 
 def test_write_note_falls_back_to_default_vault_when_env_blank(monkeypatch, tmp_path: Path) -> None:

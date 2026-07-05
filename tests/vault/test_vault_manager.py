@@ -128,6 +128,42 @@ def test_missing_vault_id_is_stable_across_calls(tmp_path: Path) -> None:
     assert store.read(local_path).frontmatter["localInstanceId"] == first.local_instance_id
 
 
+def test_missing_vault_id_heal_blocked_by_denying_guard_marks_vault_invalid(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Guard-at-seam (#2910): a denying WriteGuard on the identity-heal write
+    is a fail-closed transition, not a silent success or a crash out of vault
+    selection. ``_ensure_frontmatter_id`` raises ``WritesBlockedError``;
+    ``validate_vault``'s except clause converts it into a loud ``invalid``
+    VaultContext (the same branch an ``OSError`` persist failure reaches),
+    and the on-disk frontmatter is never partially written.
+    """
+    from app.write_guard import DEFAULT_WRITE_GUARD
+
+    vault = tmp_path / "vault"
+    manager = _manager(tmp_path)
+    manager.initialize_vault(vault)
+    store = MarkdownSettingsStore()
+    vault_path = vault / "settings" / "vault.md"
+    vault_doc = store.read(vault_path)
+    vault_frontmatter = dict(vault_doc.frontmatter)
+    vault_frontmatter.pop("vaultId")
+    store.write_frontmatter(vault_path, vault_frontmatter, body=vault_doc.body)
+    before = vault_path.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(
+        DEFAULT_WRITE_GUARD, "snapshot_fn", lambda: {"state": "safe_mode", "reason": "test-blocked"}
+    )
+    monkeypatch.setattr(DEFAULT_WRITE_GUARD, "bootstrap_actions", frozenset())
+
+    context = manager.validate_vault(vault)
+
+    assert context.status == "invalid"
+    assert context.validation_error is not None
+    assert "vault identity" in context.validation_error
+    assert vault_path.read_text(encoding="utf-8") == before
+
+
 def test_conflicted_settings_mark_vault_invalid(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     manager = _manager(tmp_path)

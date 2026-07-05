@@ -2,12 +2,27 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app.knowledge.contracts import WriteReceipt
 from app.knowledge.locators import make_note_locator, make_note_locator_from_absolute
 from app.knowledge.references import build_obsidian_advanced_uri
 from app.knowledge.settings import KnowledgeAdapter, KnowledgeSettings
 from app.knowledge.service import resolve_knowledge_port
+
+if TYPE_CHECKING:
+    from app.write_guard import WriteGuard
+
+# Default action asserted at the knowledge write port (#2910,
+# formal-model.md §3 gap 1 / P-1). This is the shared root-cause seam:
+# ~20 production call sites reach the vault through ``write_note_from_absolute``
+# with no WriteGuard at the port itself -- some already assert caller-side
+# with their own distinct action string (defense-in-depth, e.g. #2808/#2809),
+# but several (promotion queue, vault layout, filesystem vault adapter, alpha
+# human flows) reached the vault completely unguarded. Asserting here with a
+# generic default action closes every one of those gaps in a single change,
+# and is safe/idempotent for callers that already asserted their own action.
+KNOWLEDGE_WRITE_ACTION = "knowledge.write_note"
 
 
 def default_vault_root_for_path(path: Path | str) -> Path:
@@ -29,7 +44,29 @@ def write_note_from_absolute(
     content: str,
     *,
     vault_root: Path | str,
+    action: str = KNOWLEDGE_WRITE_ACTION,
+    write_guard: "WriteGuard | None" = None,
 ) -> WriteReceipt:
+    # Guard-at-seam (#2910): assert WriteGuard inside the port itself, before
+    # any path resolution or filesystem mutation, so a blocked write is
+    # atomic (zero bytes touched) regardless of which caller reached this
+    # seam. ``action`` defaults to the generic port action but callers that
+    # need the #2877 named bootstrap escape (pre-vault-selection provisioning
+    # such as the yggdrasil-init scaffolder) pass their own escape action
+    # string through explicitly -- the escape lives in the guard's allow-list
+    # (``DEFAULT_BOOTSTRAP_ACTIONS`` in app/write_guard.py), never in an
+    # unconditional skip here. A denying guard still blocks unconditionally.
+    #
+    # Imported lazily (not at module level): app.write_guard -> health_contract
+    # -> events.outbox -> outbox.events -> events.schema -> settings.runtime ->
+    # settings.compiler -> settings.writeback -> app.knowledge.write_ops closes
+    # a circular import back to this module (the same cycle #2809 documented
+    # for app/settings/writeback.py; this port is the shared root cause every
+    # writeback caller ultimately routes through).
+    from app.write_guard import DEFAULT_WRITE_GUARD
+
+    guard = write_guard or DEFAULT_WRITE_GUARD
+    guard.assert_writes_allowed(action)
     resolved_path = Path(os.path.realpath(os.path.expanduser(os.fspath(path))))
     resolved_root = Path(os.path.realpath(os.path.expanduser(os.fspath(vault_root))))
     resolved_path.relative_to(resolved_root)
@@ -74,6 +111,7 @@ def advanced_uri_from_vault_path(path: Path | str, *, vault_root: Path | str) ->
 
 
 __all__ = [
+    "KNOWLEDGE_WRITE_ACTION",
     "advanced_uri_from_vault_path",
     "append_note_relative",
     "default_vault_root_for_path",

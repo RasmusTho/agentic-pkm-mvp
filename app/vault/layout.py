@@ -14,6 +14,17 @@ from app.knowledge.write_ops import write_note_from_absolute
 LAYOUT_NOTE_NAME = "vault.layout.md"
 SYSTEM_NOTE_TITLE = "Vault Structure – Human-First Orientation (Mimer)"
 
+# Registered bootstrap-escape action for layout provisioning (T-scaffold
+# "layout-ensure", #2910). Member of DEFAULT_BOOTSTRAP_ACTIONS in
+# app/write_guard.py: creating the FIRST vault.layout.md is the write the
+# guard's own health evaluation depends on (load_health_settings ->
+# get_vault_system_dir_rel -> load_layout raises until the note exists), so it
+# must carry the named escape or fresh-vault bootstrap deadlocks
+# (harness-selfverify promote-to-test smoke). All producers of this bootstrap
+# moment (vault-layout-ensure CLI, uat seed, ingest-time ensure_vault_layout,
+# the yggdrasil scaffolder's nested call) route through the writes below.
+LAYOUT_ENSURE_ACTION = "vault.layout_ensure"
+
 _SETTINGS_REL_PATH = Path("_system") / "settings" / "system-settings.yaml"
 _ALT_SETTINGS_REL_PATH = Path("@Settings") / "system-settings.yaml"
 
@@ -273,13 +284,24 @@ def _render_layout_note(layout: VaultLayout) -> str:
     return f"---\n{frontmatter}\n---\n\n{body}"
 
 
-def _write_note_via_knowledge_port(vault_root: Path, path: Path, content: str) -> None:
+def _write_note_via_knowledge_port(
+    vault_root: Path, path: Path, content: str, *, action: str | None = None
+) -> None:
     resolved_root = vault_root.expanduser().resolve()
     resolved_path = path.expanduser().resolve()
-    write_note_from_absolute(resolved_path, content, vault_root=resolved_root)
+    # Both writes in this module are the create-if-missing halves of layout
+    # provisioning (T-scaffold "layout-ensure"), so they default to the
+    # registered LAYOUT_ENSURE_ACTION bootstrap escape (#2910) -- creating the
+    # FIRST layout note is the write the guard's own health evaluation depends
+    # on, so a non-escaped action here deadlocks fresh-vault bootstrap. An
+    # outer seam that already asserted its own registered action (the
+    # yggdrasil-init scaffolder) threads it through ``action`` instead.
+    write_note_from_absolute(
+        resolved_path, content, vault_root=resolved_root, action=action or LAYOUT_ENSURE_ACTION
+    )
 
 
-def load_or_create_layout(vault_root: Path) -> VaultLayout:
+def load_or_create_layout(vault_root: Path, *, write_action: str | None = None) -> VaultLayout:
     vault_root = vault_root.expanduser()
 
     try:
@@ -353,11 +375,13 @@ def load_or_create_layout(vault_root: Path) -> VaultLayout:
     )
 
     note_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_note_via_knowledge_port(vault_root, note_path, _render_layout_note(layout))
+    _write_note_via_knowledge_port(
+        vault_root, note_path, _render_layout_note(layout), action=write_action
+    )
     return layout
 
 
-def ensure_system_note(vault_root: Path, system_folder: str) -> Path:
+def ensure_system_note(vault_root: Path, system_folder: str, *, write_action: str | None = None) -> Path:
     note_path = _system_note_path(vault_root, system_folder)
     if note_path.exists():
         return note_path
@@ -366,13 +390,16 @@ def ensure_system_note(vault_root: Path, system_folder: str) -> Path:
         vault_root,
         note_path,
         "# System Notes\n\nThis folder contains system configuration and operational notes.\n",
+        action=write_action,
     )
     return note_path
 
 
-def ensure_vault_layout_report(vault_root: Path) -> tuple[VaultLayout, bool, list[str]]:
+def ensure_vault_layout_report(
+    vault_root: Path, *, write_action: str | None = None
+) -> tuple[VaultLayout, bool, list[str]]:
     vault_root = vault_root.expanduser()
-    layout = load_or_create_layout(vault_root)
+    layout = load_or_create_layout(vault_root, write_action=write_action)
     warnings: list[str] = []
 
     folders = set(layout.root_folders)
@@ -385,7 +412,7 @@ def ensure_vault_layout_report(vault_root: Path) -> tuple[VaultLayout, bool, lis
             continue
         (vault_root / folder).mkdir(parents=True, exist_ok=True)
 
-    ensure_system_note(vault_root, layout.system_folder)
+    ensure_system_note(vault_root, layout.system_folder, write_action=write_action)
 
     migrated = False
     return layout, migrated, warnings
@@ -397,6 +424,7 @@ def ensure_vault_layout(vault_root: Path) -> VaultLayout:
 
 
 __all__ = [
+    "LAYOUT_ENSURE_ACTION",
     "LAYOUT_NOTE_NAME",
     "SYSTEM_NOTE_TITLE",
     "VaultLayout",

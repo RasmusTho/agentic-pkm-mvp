@@ -461,9 +461,25 @@ def run_watcher_tick(
         return summary, messages
 
     summary["ingest_attempted"] = summary["changed"]
-    ingest_summary = run_vault_alpha_ingest_paths(vault_root, result.changed, force=False)
-    summary["ingested"] = ingest_summary.ingested
-    summary["errors"] += ingest_summary.errors
+    try:
+        ingest_summary = run_vault_alpha_ingest_paths(vault_root, result.changed, force=False)
+    except WritesBlockedError as exc:
+        # Guard-at-seam defense-in-depth (#2910): the ingest path's own
+        # layout-ensure writes carry the registered "vault.layout_ensure"
+        # bootstrap escape (app/vault/layout.py), so under the default guard
+        # this branch is not reached for layout provisioning. It remains for
+        # any OTHER WriteGuard-gated write inside ingest (e.g. a caller-side
+        # "ensure uuid" heal) or a guard whose escape list was narrowed: a
+        # blocked ingest degrades to the same skipped_writes_blocked
+        # accounting the panel auto-exec loop below uses, never a crashed
+        # watcher tick.
+        summary["skipped_writes_blocked"] += 1
+        summary["ingested"] = 0
+        messages.append(f"Watcher ingest blocked by write guard: {exc}")
+        ingest_summary = None
+    if ingest_summary is not None:
+        summary["ingested"] = ingest_summary.ingested
+        summary["errors"] += ingest_summary.errors
 
     if not skip_panel and policy_allowed_paths:
         store = ObjectStore()

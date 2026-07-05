@@ -325,6 +325,11 @@ def test_auto_exec_blocked_by_write_guard(tmp_path: Path, monkeypatch: pytest.Mo
 
     after = _note_digest(note_path)
     assert after == before
+    # Exactly 1 (#2910): the ingest-time layout-ensure write is now
+    # port-guarded but carries the registered "vault.layout_ensure" bootstrap
+    # escape (T-scaffold provision-survives-safe_mode, the #2877 semantics),
+    # so it does NOT add a skip under a blocked health state -- the single
+    # skip is the pre-existing panel auto-exec block.
     assert summary.get("skipped_writes_blocked", 0) == 1
     assert summary.get("panel_runs", 0) == 0
 
