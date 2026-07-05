@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
+from app.db.errors import OutboxSchemaMissingError
 from app.events.models import Event, new_event
 from app.events.schema import OutboxEvent
 from app.events.topic_schema_registry import (
@@ -24,6 +25,56 @@ except Exception:  # pragma: no cover
 
     def ensure_schema(_):  # type: ignore
         return None
+
+
+# The outbox table this module owns (Alembic revision f3a1c9d2e4b7, KERNEL-05).
+_OUTBOX_COLUMNS = ("id", "topic", "payload", "created_at", "delivered_at", "attempts")
+
+_OUTBOX_MIGRATION_HINT = (
+    "Outbox schema is migration-owned (KERNEL-05, #2850): run 'alembic upgrade head' "
+    "against this database. See docs/DB_SCHEMA.md :: DB outbox."
+)
+
+
+def _outbox_schema_autocreate_enabled() -> bool:
+    """Explicit test-fixture opt-in for create-on-demand outbox schema.
+
+    Production/runtime Postgres never auto-creates the outbox table; only test
+    environments set STORE_SCHEMA_AUTOCREATE=1 (see tests/conftest.py), mirroring
+    the KERNEL-04 (#2766) precedent for the store_* tables.
+    """
+    return (os.environ.get("STORE_SCHEMA_AUTOCREATE") or "").strip().lower() in {"1", "true", "yes"}
+
+
+def _assert_outbox_schema(conn: Any) -> None:
+    """Fail loud when the migration-owned outbox schema is absent.
+
+    Raises ``OutboxSchemaMissingError`` — classified transient by the outbox
+    worker dispatch path (``_is_transient_dispatch_error``'s generic
+    ``is_transient`` marker check): schema-missing is a boot-ordering condition
+    on a fresh stack (alembic runs in api/agent-service boot; the worker
+    depends only on the db service), so it must crash-retry under supervision,
+    never spend poison budget or dead-letter.
+    """
+    cur = _exec(conn, "SELECT to_regclass('outbox') AS oid")
+    row = cur.fetchone() if hasattr(cur, "fetchone") else None
+    oid = None
+    if row is not None:
+        oid = row[0] if not isinstance(row, dict) else row.get("oid")
+    if not oid:
+        raise OutboxSchemaMissingError(f"Missing table 'outbox' in the configured Postgres. {_OUTBOX_MIGRATION_HINT}")
+    cur = _exec(
+        conn,
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = 'outbox'",
+    )
+    rows = cur.fetchall() if hasattr(cur, "fetchall") else []
+    present = {(r[0] if not isinstance(r, dict) else r.get("column_name")) for r in rows}
+    missing_columns = [col for col in _OUTBOX_COLUMNS if col not in present]
+    if missing_columns:
+        raise OutboxSchemaMissingError(
+            f"outbox table is missing column(s) {missing_columns}. {_OUTBOX_MIGRATION_HINT}"
+        )
 
 
 def _open_conn():
@@ -73,13 +124,25 @@ def _exec(conn: Any, sql: str, params: tuple = ()) -> Any:
 
 
 def bootstrap(conn: Any = None) -> None:
-    """Initiera outbox-tabellen. Valfritt extern conn för tester."""
+    """Initiera outbox-tabellen. Valfritt extern conn för tester.
+
+    Assert-only outside tests (KERNEL-05, #2850): the outbox schema is
+    migration-owned (Alembic revision f3a1c9d2e4b7). A Postgres-backed runtime
+    with a missing outbox table/column raises ``OutboxSchemaMissingError`` with
+    a "run alembic upgrade head" hint instead of creating schema imperatively.
+    Test environments opt in to the historical create-on-demand behavior via
+    ``STORE_SCHEMA_AUTOCREATE=1`` (the same fixture-flag precedent KERNEL-04,
+    #2766 established for the store_* tables; see
+    tests/conftest.py::store_schema_autocreate_for_pg_tests).
+    """
     conn, close = _use_conn(conn)
     try:
-        try:
-            ensure_schema(conn)  # type: ignore[arg-type]
-        except Exception:
-            pass
+        # No longer swallowed (KERNEL-05, #2850): a failure here must surface,
+        # not silently mask a broken connection/legacy-schema seam.
+        ensure_schema(conn)  # type: ignore[arg-type]
+        if not _outbox_schema_autocreate_enabled():
+            _assert_outbox_schema(conn)
+            return
         _exec(conn, "create extension if not exists pgcrypto")
         _exec(
             conn,
