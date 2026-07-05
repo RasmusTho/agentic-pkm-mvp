@@ -63,12 +63,27 @@ This weighted linear fusion is the ratified current topology (see
 encoding** — exact lexical match (BM25) weighted above fuzzy semantic match (embeddings), with a
 small overlap bonus — not an arbitrary tuning artifact.
 
-**Live serving path vs durable spine:** the active serving path is the in-process memory store
-(`app/retrieval/hybrid.py`), consumed through the typed `app/retrieval/capability.py` wrapper. The
-durable Postgres/pgvector index (`PgVectorIndex`) is the intended durable **spine** and forward
-direction, but it is **not** the serving path today — making it the served source is future work
-tracked under the RAG/memory decomposition epic (#2314). Default retrieval is metadata-filtered
-hybrid with **rerank off by default** (`RERANK_ENABLE` unset/false; see *Optional Rerank*).
+**Live serving path — durable index via a cache-through (KERNEL-05, #2870; G1res-1, #2981):** the
+served source of truth is the durable Postgres/pgvector index (`PgVectorIndex` /
+`store_vector_index`). The in-process memory store (`MemoryHybridStore` in `app/retrieval/hybrid.py`)
+is a **cache-through** of that durable index, not an independently written truth —
+`rebuild_from_durable_index()` (`app/retrieval/hybrid.py:268-309`) is the only production path
+allowed to populate it, and it is warmed once at API startup (`_warm_retrieval_cache()` in
+`app/api/app.py:177-193`, called from `lifespan`) so every retrieval entrypoint
+(`app/retrieval/hybrid.py:hybrid_search`/`scoped_hybrid_search`, consumed through the typed
+`app/retrieval/capability.py` wrapper) shares the same warmed cache. Freshness is bounded, not
+per-query-live: `scoped_hybrid_search` revalidates the cache against a cheap durable
+store-generation token (`PgVectorIndex.generation()`, `app/stores/pg.py:634-649`) at most once per a
+configurable minimum interval (`_revalidate_cache_generation()`, `app/retrieval/hybrid.py:235-261`;
+default/floor 1s via `RETRIEVAL_GENERATION_MIN_CHECK_INTERVAL_S`), and forces a full rebuild on a
+generation mismatch — so a committed upsert/purge becomes visible without a process restart, bounded
+by that check interval rather than being instantly live. This closes the durable-spine direction ADR-0024
+recorded and the once-per-process staleness gap that remained after KERNEL-05; see ADR-0024's
+2026-07-05 status annotation for what is now superseded. Remaining scope under the RAG/memory
+decomposition epic (#2314) is retrieval-quality work (RRF/HyDE/low-trust-weights/eval, next
+paragraph), not the serving-path migration, which is delivered. Default retrieval is
+metadata-filtered hybrid with **rerank off by default** (`RERANK_ENABLE` unset/false; see *Optional
+Rerank*).
 
 **Named future work (not current behavior):** RRF (Reciprocal Rank Fusion) over the weighted linear
 sum, HyDE / query expansion, and provenance-aware / low-trust signal weights are deferred behind the
