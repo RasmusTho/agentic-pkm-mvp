@@ -21,11 +21,24 @@ Prereqs:
 - For full runtime: Docker + Docker Compose.
 
 ## What Works Today (SoT v5.5 Baseline)
+
+`docs/STATUS.md` is the authoritative current-state snapshot; this list is a summary of it.
+
+**Cognitive capabilities (user-facing):**
+- **Capture & recall** — the vault is ingested and indexed; `/api/ask` answers over it with hybrid retrieval, sources, and guardrails (`app/api/routes/ask.py`).
+- **Contextual Relevance Engine** — computes vault-native "now" moments from local vault data, materializes them as non-authoritative moment artifacts with receipts, and surfaces glance/now projections plus threshold-cleared in-app nudges (CRE-03/CRE-04 shipped; live in prod). No external connectors or OS notifications.
+- **Orientation** (`/api/orientation`) — read-only situational frame (leave-point, open items, notable change) without a query term.
+- **Commitment surfacing** — durable vault-backed commitments exposed as a read-only projection (next-action / waiting / review-return). No mutation, reminders, or auto-closure yet.
+- **Durable memory & decision receipts** — review decisions survive restart; promoted memory materializes as an agent-authored vault artifact through WriteGuard plus a receipt; decisions are written as readable vault artifacts (canonical) with a Postgres projection.
+- **Companion notes** — a first-class system artifact per tracked vault note carries continuity/repair state without polluting the human-authored note.
+- **Companion UI** (dev/staging shell) — adaptive single-shell workspace: vault Markdown renderer (typography, callouts, tables, images, wikilinks, graceful Mermaid), Vault Browser, and body-edit routed through WriteGuard. Production hardening/packaging remain issue-first.
+
+**Runtime spine (mechanism):**
 - **Registry watcher (runtime default)** scans a bounded scope and enqueues events.
 - **DB outbox is canonical** (worker queue). JSONL (`INDEX_OUTBOX_PATH`) is audit/diagnostic only.
 - **Worker consumes DB outbox** and runs ingest/panel/promotion side-effects.
 - **PanelAgent wiring is settings-backed** (catalog + mappings) and emits observable intent/execution events.
-- **Health spine** (`/api/health` + heartbeats + write guard + incident log) provides deterministic operator signals.
+- **Health spine** (`/api/health` + `/healthz` contract + heartbeats + write guard + incident log) provides deterministic operator signals.
 - **CI fitness gates** parse `CI SUMMARY …` lines and fail merges when `GATES.ok != true`.
 
 ## Core Invariants
