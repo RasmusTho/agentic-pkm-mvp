@@ -62,7 +62,7 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "run_panel_note_execution, which emits panel.action.logged/blocked via the "
         "runtime's own outbox path (app/agents/panel_agent/runtime.py) for the same turn."
     ),
-    ("app/watcher/vault_watcher.py", 136): (
+    ("app/watcher/vault_watcher.py", 137): (
         "_hydrate_store_with_markdown: best-effort raw_text hydration for panel-scan "
         "note refresh; the mutating vault-sync path (T-sync) already emitted "
         "ingest.object.* for this note earlier in the same tick."
@@ -98,7 +98,7 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "event-emission and object-materialization -- see formal-model.md T-materialize); "
         "this call is the eventual T-materialize-equivalent write for the API path."
     ),
-    ("app/ingest/vault_alpha.py", 526): (
+    ("app/ingest/vault_alpha.py", 527): (
         "Legacy vault-alpha ingest path: keeps classifier/normalizer flows working "
         "against the memory backend during tests/alpha runs; the alpha ingest pipeline "
         "emits its own ingest event upstream of this call in the same run."
