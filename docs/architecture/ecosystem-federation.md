@@ -2,6 +2,21 @@ State: Advisory research artifact (RESEARCH-08, #2852; 2026-07-04). Subordinate 
 Doc role: Reference (advisory research artifact)
 Authority: Evidence-based design of the owner-directed Option B (2026-07-03): the Personal Agentic Ecosystem as a federated System of Systems with a public/private confidentiality seam. Anchors reflect `origin/main` at 67f5c27f (2026-07-04). Where this artifact and an owner doc disagree, the owner doc wins; divergences are listed, not silently resolved. Method: architecture-research pass — four parallel read-only evidence explorers, central synthesis, five independent adversarial skeptics on every reshape-class or load-bearing claim (verdicts folded in; no claim survived unmodified).
 
+> **Naming/model supersession (2026-07-04).** This artifact's SoS *naming and model* — a "Personal
+> Agentic Ecosystem" parent with **Yggdrasil as a constituent**, and the word "federation" for the
+> inter-system relationship — are **superseded by ADR-0044** (ecosystem structure + naming
+> ratification, from the Fable-5 structure pass `docs/architecture/ECOSYSTEM_STRUCTURE_PROPOSAL.md`,
+> PR #2914). The ratified model: the acknowledged SoS is named **Yggdrasil** (the whole / apex); its
+> constituents are **Mimer** (knowledge-and-cognition, undivided — the current system, reverting to
+> its original name), **Heimdall** (sensor), and a thin **private-bindings** constituent; **Hugin/Munin
+> are reserved, not constituents** (the Munin/Hugin split of the earlier ADR-0043 draft was found
+> structurally unsound and dropped). "Federation" is reserved for SFC and is **not** used for the SoS
+> relationship. RESEARCH-08 conforms via ADR-0044; aligning this artifact's prose to that model is a
+> flagged follow-up (**#2890**). Until then, **where this artifact and ADR-0044 disagree on
+> naming/model, ADR-0044 wins.** The seam and interaction *substance* below (public/private invariant
+> INV-EF1, tier classification, governed event/candidate intake) still stand — only the
+> naming/whole-vs-constituent framing is superseded.
+
 # Ecosystem Federation — the Personal Agentic Ecosystem and the Public/Private Seam
 
 The owner directive resolves the SoI fork toward **Option B, federated**: the aspirational System
@@ -14,10 +29,13 @@ owner decisions (§ Owner decisions), routed per the binding SBS-reconciliation 
 Two vocabulary guards up front, because both collide with fresh owner decisions:
 
 - **"System of Systems" applies only at ecosystem level.** ADR-0041 and ADR-0042 (both accepted
-  2026-07-04) remove SoS vocabulary from the *internal* decomposition
+  2026-07-04, both enacted 2026-07-04 via #2855/#2856, closed) remove SoS vocabulary from the
+  *internal* decomposition
   (`docs/adr/ADR-0041-system-of-systems-doc-rename.md:39-63`,
-  `docs/adr/ADR-0042-design-principles-9-volatility-isolation.md:41-61`; enactment pending via
-  #2855/#2856 — this artifact cites current filenames). Nothing in this document reads Yggdrasil's
+  `docs/adr/ADR-0042-design-principles-9-volatility-isolation.md:41-61`). The former
+  `docs/SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` is now `docs/MODULAR_ARCHITECTURE.md`, and
+  `docs/DESIGN_PRINCIPLES.md` §9 is now "Volatility Isolation" — this artifact cites the current
+  filenames and heading. Nothing in this document reads Yggdrasil's
   8-spine or 14-boundary decomposition as an SoS; the audit settled that as a category error
   (`docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md:154-196`). SoS language below always
   means the ecosystem: the operator's assembled environment
@@ -599,9 +617,12 @@ Classified per the runtime-semantics convention (fix-code / fix-doc / needs-owne
 
 - **DV-1 (fix-doc).** The audit and its descendants cite `docs/ARCHITECTURE.md:198` for the
   "small system-of-systems arrangement" text; it now lives at `docs/ARCHITECTURE.md:239`
-  (`## System-of-systems view`, `:224`). Stale anchor propagated into
-  `docs/architecture/system-context-overlay.md:137` and `docs/GLOSSARY.md:52`. Mechanical
-  re-anchor, suitable for the #2855 reference-update sweep.
+  (`## System-of-systems view`, `:224`). Stale anchor still present in
+  `docs/architecture/system-context-overlay.md:137` and `docs/GLOSSARY.md:52` — re-verified
+  2026-07-04: #2855's rename sweep (renaming `SYSTEM_OF_SYSTEMS_ARCHITECTURE.md` to
+  `MODULAR_ARCHITECTURE.md`) did not touch these two `ARCHITECTURE.md:198` line-number citations,
+  and #2855 is now closed. Mechanical re-anchor, no longer bundleable into #2855; needs its own
+  follow-up issue.
 - **DV-2 (fix-doc).** Eight references name `FABLE5_PROMPT_INFRA_DOMAIN_AND_MCP_TOPOLOGY.md`
   (audit `:151,:492,:522`; overlay `:86,:174`; `docs/SYSTEM_CONTEXT_OVERLAY/` specs ×3); the file
   never existed. This artifact is that thread's resolution; the references should re-point to
@@ -629,16 +650,17 @@ Classified per the runtime-semantics convention (fix-code / fix-doc / needs-owne
   all retrieval/memory substrate decisions stay in #2314's lane. Nothing here reopens them.
 - **#2762 (correctness kernel):** invariant INV-EF1 extends `docs/testing/invariant-tests.md`
   semantics only; kernel invariant work stays owned there.
-- **#2833 / SBI backlog:** the classification tables extend SBI-1/SBI-2's landed overlay; DV-1
-  folds into #2855's reference sweep; nothing duplicates SBI rows.
-- **ADR-0041/0042 (#2855/#2856):** cited as accepted-but-unenacted; this artifact takes no
-  dependency on either enactment.
+- **#2833 / SBI backlog:** the classification tables extend SBI-1/SBI-2's landed overlay; DV-1's
+  stale `ARCHITECTURE.md:198` anchor survived #2855's now-closed reference sweep and needs its own
+  follow-up issue; nothing duplicates SBI rows.
+- **ADR-0041/0042 (#2855/#2856):** both enacted and closed 2026-07-04; this artifact takes no
+  dependency either way — it already cited the post-enactment filenames and heading.
 
 ## Proposed follow-ups (routed; none filed by this artifact)
 
 1. CES/ADR decision records for D1–D4 (owner).
 2. Re-point the eight `FABLE5_PROMPT_INFRA_DOMAIN_AND_MCP_TOPOLOGY.md` references + DV-1 stale
-   anchors (bundle with #2855 sweep).
+   anchors — #2855 is closed, so this is now its own filed follow-up, not a bundle target.
 3. `public_seam_lint.py` + register + PR-workflow wiring (implementation lane; on D3 accept).
 4. Vault-guard/label parameterization and `/Users/rasmus*` burn-down slices (implementation lane;
    on D3 accept).
