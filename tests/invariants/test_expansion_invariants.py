@@ -346,3 +346,81 @@ def test_create_requires_activation_record(tmp_path: Path) -> None:
     blocked = evaluate_activation(regressed, candidates)
     assert blocked.activatable is False
     assert "admissibility_undeclared" in blocked.blocked_reasons
+
+
+def test_accepted_note_keeps_provenance(tmp_path: Path) -> None:
+    """Fitness invariant: ``synthesis_carries_source_provenance`` at acceptance
+    (EXP-4, #2997).
+
+    Invariant registry: docs/testing/invariant-tests.md :: synthesis_carries_source_provenance.
+    Spec: docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md §2.4, §6.
+
+    Production-call-site enforcement over the whole vertical loop: a real
+    ``run_create_pass`` draft, checked by a human, then accepted via
+    ``app.expansion.accept.accept_draft`` -- the materialized canonical note
+    keeps every provenance field permanently (``sources`` intact,
+    ``derived_by: synthesis`` NOT stripped and NOT upgraded), gains
+    ``accepted_by: human`` + the acceptance receipt id, and an acceptance whose
+    cited source no longer resolves is blocked LOUDLY rather than shipping an
+    untraceable note.
+    """
+    from app.expansion.accept import (
+        UnresolvableCitationError,
+        accept_draft,
+    )
+    from app.expansion.create import CreateRequest, OutputKind, run_create_pass
+    from app.write_guard import WriteGuard
+    from scripts.yaml_roundtrip import load_frontmatter
+
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    outbox_path = tmp_path / "outbox.jsonl"
+    guard = WriteGuard(snapshot_fn=lambda: {"state": "healthy", "reason": None})
+
+    sources = (
+        _create_source("obj-a", "Alpha body about topic X.", "Alpha body about topic X."),
+        _create_source("obj-b", "Beta body about topic X.", "Beta body about topic X."),
+    )
+    request = CreateRequest(kind=OutputKind.OVERVIEW, title="Topic X", sources=sources)
+    report = run_create_pass(request, vault_root=vault_root, outbox_path=outbox_path, write_guard=guard)
+    draft_path = vault_root / report.draft_path
+
+    # A human checks the in-draft acceptance box (the sole trigger).
+    checked = draft_path.read_text(encoding="utf-8").replace("- [ ] Accept", "- [x] Accept")
+    draft_path.write_text(checked, encoding="utf-8")
+
+    result = accept_draft(
+        draft_path,
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        destination="accepted-topic-x.md",
+        write_guard=guard,
+    )
+    fm, _body = load_frontmatter((vault_root / result.final_note_path).read_text(encoding="utf-8"))
+    # Provenance survives acceptance permanently.
+    assert fm["sources"] == ["obj-a", "obj-b"]
+    assert fm["derived_by"] == "synthesis"  # not stripped
+    assert fm["authority_state"] == "accepted"
+    assert fm["accepted_by"] == "human"
+    assert fm["acceptance_receipt_id"] == result.receipt_id
+    # Not silently upgraded to evidence-grade authority.
+    assert "evidence_role" not in fm
+
+    # A cited source that no longer resolves at acceptance time blocks loudly.
+    request2 = CreateRequest(kind=OutputKind.ANSWER_NOTE, title="Topic Y", sources=sources)
+    report2 = run_create_pass(request2, vault_root=vault_root, outbox_path=outbox_path, write_guard=guard)
+    draft2 = vault_root / report2.draft_path
+    draft2.write_text(
+        draft2.read_text(encoding="utf-8").replace("- [ ] Accept", "- [x] Accept"),
+        encoding="utf-8",
+    )
+    with pytest.raises(UnresolvableCitationError):
+        accept_draft(
+            draft2,
+            vault_root=vault_root,
+            outbox_path=outbox_path,
+            destination="accepted-topic-y.md",
+            live_source_ids={"obj-a"},  # obj-b vanished
+            write_guard=guard,
+        )
+    assert not (vault_root / "accepted-topic-y.md").exists()

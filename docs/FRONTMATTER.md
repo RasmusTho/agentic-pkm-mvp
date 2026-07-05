@@ -104,18 +104,25 @@ machine-synthesized artifacts, not to ordinary human-authored notes:
   the note as machine-derived so it stays visibly distinguishable from human prose (mirrors
   `app.knowledge_compilation.proposal_builders._MACHINE_DERIVATIONS`'s existing use of the same
   vocabulary for non-frontmatter provenance signals).
-- `authority_state` — `proposal` while staged (this slice only writes this value); a future accepted
-  state is EXP-4's concern.
+- `authority_state` — `proposal` while staged (EXP-3's draft-write path only ever writes this value);
+  advanced to `accepted` by EXP-4's governed acceptance (`app/expansion/accept.py`) once a human checks
+  the in-draft acceptance checkbox. Acceptance stops at `accepted` (human-owned knowledge); it never
+  sets a real-world-evidence role — trust is not silently upgraded (spec §2.3, owner decision E4
+  defaulting conservative).
 - `sources` — the list of cited source `uuid`s (or `path:`-fallback identities) the draft's SourceRefs
   resolve against. Advisory lineage metadata, not a processing precondition, consistent with `uuid`'s
-  own advisory posture elsewhere in this doc.
-- `accepted_by` — reserved for EXP-4 (#2997): recorded only once a human acceptance receipt promotes
-  a draft to canonical. This slice (EXP-3) never writes this key — a staged, unaccepted draft has no
-  `accepted_by`.
+  own advisory posture elsewhere in this doc. Preserved verbatim through acceptance — provenance
+  survives permanently, never pruned when a draft becomes canonical (EXP-4).
+- `accepted_by` — written by EXP-4 (#2997) as `human` only once a human acceptance receipt promotes a
+  draft to canonical. EXP-3's draft-write path never writes this key — a staged, unaccepted draft has
+  no `accepted_by`. The accepted note also gains `accepted_at`, `acceptance_receipt_id`, and
+  `decision_token_ref` (the governed-write DecisionToken → AuthorityReceipt pair, per
+  `schemas/authority-transition.schema.json`), and keeps `derived_by: synthesis` permanently.
 
-These keys are staging-only in this slice's actual write path (`app/expansion/create.py`); they
-appear here so the enum of accepted system-owned keys is documented before EXP-4 needs it, per this
-doc's existing pattern of naming guardrail fields (trust/review_state) without locking exact names.
+Of these, `derived_by`, `authority_state` (=`proposal`), and `sources` are written by EXP-3's staging
+write path (`app/expansion/create.py`); `authority_state` (=`accepted`), `accepted_by`, `accepted_at`,
+`acceptance_receipt_id`, and `decision_token_ref` are written by EXP-4's acceptance path
+(`app/expansion/accept.py`) — the only path from a staged draft to a canonical note.
 
 For active writing-surface notes, frontmatter should remain a bounded human-facing surface.
 It should not become the only durable home for:
