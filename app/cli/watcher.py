@@ -9,11 +9,45 @@ import click
 from app.runtime.runtime_loop import OutboxPathError, _resolve_watcher_run_log, resolve_outbox_path
 from app.settings.tiering import require_lab_profile
 from app.settings.validate import validate_settings
+from app.vault.manager import VaultManager
 from app.watcher.config import WatcherConfig
 from app.watcher.events import emit_watcher_run_event
 from app.watcher.registry import load_registry_config, run_registry_forever
 from app.watcher.vault_watcher import run_watcher_daemon, run_watcher_tick
 from app.watcher.watcher import run_once as watcher_run_once
+
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+
+
+def _as_bool(value: str | None) -> bool:
+    if value is None:
+        return False
+    return value.strip().lower() in _TRUE_VALUES
+
+
+def _watcher_enable_raw_set() -> bool:
+    """True when WATCHER_ENABLE is genuinely set to a truthy value.
+
+    Distinguishes "operator never enabled the watcher" (WATCHER_ENABLE unset
+    or falsy) from "enable was force-flipped off by the #2005 vault-idle
+    contract" (`cfg.enable is False` even though WATCHER_ENABLE=1). Only the
+    former is a real misconfiguration worth exiting on; the latter must idle
+    (#2992).
+    """
+    return _as_bool(os.getenv("WATCHER_ENABLE"))
+
+
+def _vault_idle_reason(vault_path: Path) -> str:
+    """Describe why the watcher is idling, naming the actual vault status.
+
+    Never names WATCHER_ENABLE — by the time this is called we already know
+    WATCHER_ENABLE was truthy, so the cause is the vault, not the env var.
+    """
+    vault_raw = (os.getenv("WATCHER_VAULT_PATH") or "").strip()
+    if not vault_raw:
+        return "no vault bound (WATCHER_VAULT_PATH unset)"
+    status = VaultManager().validate_vault(vault_path).status
+    return f"vault status={status} path={vault_path}"
 
 
 def _echo_summary(summary: dict) -> None:
@@ -58,7 +92,13 @@ def watcher_once() -> None:
         raise click.ClickException(str(exc)) from exc
 
     if not cfg.enable:
-        raise click.ClickException("WATCHER_ENABLE=1 required; export env and try again.")
+        if not _watcher_enable_raw_set():
+            raise click.ClickException("WATCHER_ENABLE=1 required; export env and try again.")
+        # WATCHER_ENABLE=1 but enable was force-flipped off by the #2005
+        # vault-idle contract (no vault bound / uninitialized vault). Idle
+        # instead of exiting; name the actual vault cause.
+        click.echo(f"watcher idle: {_vault_idle_reason(cfg.vault_path)}; no scan performed.")
+        return
 
     scope_env = (os.getenv("WATCHER_SCOPE_GLOB") or "").strip()
     provenance = "env:WATCHER_SCOPE_GLOB" if scope_env else "default:vaultwide"
@@ -97,7 +137,13 @@ def watcher_run(config: Path, max_ticks: int | None) -> None:
         raise click.ClickException(str(exc)) from exc
 
     if not cfg.enable:
-        raise click.ClickException("WATCHER_ENABLE=1 required; export env and try again.")
+        if not _watcher_enable_raw_set():
+            raise click.ClickException("WATCHER_ENABLE=1 required; export env and try again.")
+        # WATCHER_ENABLE=1 but enable was force-flipped off by the #2005
+        # vault-idle contract (no vault bound / uninitialized vault). Idle —
+        # stay up and tick idle rather than crash-exit — and name the actual
+        # vault cause, not the env var.
+        click.echo(f"watcher idle: {_vault_idle_reason(cfg.vault_path)}; staying up without scanning.")
 
     scope_env = (os.getenv("WATCHER_SCOPE_GLOB") or "").strip()
     provenance = "env:WATCHER_SCOPE_GLOB" if scope_env else "default:vaultwide"
