@@ -234,10 +234,24 @@ audit kernel (`docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md` §2
 - **Q3 Authority receipts.** decisions/audit/receipt events are append-only, never edited. ✓ —
   but receipt *durability* is violated for settings (D-1/#2787) and receipt *emission* precedes
   ack only in T-capture (◊ generalize: I-E3).
-- **Q4 Read purity.** A read transition mutates nothing durable. ✗ three ways: uuid-heal from GET
-  (workspace), identity-heal from lazy vault load, ASK's receipt appends. Model verdict: these are
-  legal only if reclassified as explicit system transitions (heal-on-read is T-uuid-heal, a write
-  transition triggered by a read) — the *undocumented* ones are the defect, not healing itself.
+- **Q4 Read purity.** A read transition mutates nothing durable. ✗ four ways, catalogued in
+  `tests/properties/_machinery.py::REGISTERED_HEAL_TRANSITIONS` (numbering below matches that
+  register): (1) uuid-heal from GET (`app.services.note_uuid::ensure_note_uuid`) — **WG-gated**,
+  `assert_writes_allowed("ensure uuid")`; a denying guard degrades to
+  `identity_state=unresolved_missing_uuid` instead of writing. (2) identity-heal from lazy vault
+  load (`app.vault.manager::VaultManager._ensure_frontmatter_id`) — **WG-gated as of #2910**,
+  `assert_writes_allowed("vault.identity_heal")`; `validate_vault` converts a denying/raising guard
+  into a loud `invalid` VaultContext (previously the documented asymmetry with case 1; now closed).
+  (3) ASK's receipt appends (`T-ask`, durable J-sink appends from a nominal read) — a POST route,
+  never reachable from this property's GET route-walk; advisory by design, not WG-gated (J is
+  declared advisory, not authoritative state). (4) app-local registry bootstrap-on-first-read
+  (`app.vault.app_local::AppLocalSettingsStore.save`) — **NOT WG-gated**: `AppLocalSettingsStore
+  .load()` creates the missing `.app-local.md` with a fresh `appInstallId` the first time any GET
+  route triggers a cold-manager `load_last_active()`; found by the P-3 route-walk property
+  (#2911/#2938), previously undocumented. Model verdict: these are legal only if reclassified as
+  explicit system transitions (heal-on-read is T-uuid-heal, a write transition triggered by a read)
+  — the *undocumented* ones were the defect, not healing itself. Case (4)'s WG-gating posture is an
+  open owner decision — see §7.
 
 **C — consistency (per seam, §4).** C1–C9 with reconciliation mechanism or explicit UNRECONCILED.
 
@@ -350,24 +364,46 @@ domains. Flagged to CES as an extend-candidate, not enacted here.
 
 ## 7. Divergences found by this pass (beyond RESEARCH-01's D-1…D-7)
 
-- **F-A · Panel writeback seam unguarded.** `execute_panel_intent` writes vault markdown via raw
-  `write_text` (`app/agents/panel_agent/runtime.py:601`) with no WriteGuard at the seam; two API
-  callers compensate caller-side, CLI `panel run` and the worker `PANEL_SCAN_REQUESTED` path do
-  not. **fix-code** — enforce WG inside the seam. Follow-up filed.
-- **F-B · Settings compile writeback unguarded.** `app/settings/writeback.py` (+ compiler call
-  sites) writes `V.settings @Settings/*.md` with no WG and no event. **fix-code.** Follow-up filed.
+- **F-A · Panel writeback seam unguarded — DELIVERED (#2868, merged 261f8144).**
+  `execute_panel_intent` now asserts `DEFAULT_WRITE_GUARD.assert_writes_allowed("panel.writeback")`
+  at the seam itself (`app/agents/panel_agent/runtime.py:135`) before any filesystem mutation,
+  covering the CLI `panel run`/`panel run-many` and worker `PANEL_SCAN_REQUESTED` paths that
+  previously reached the seam with no caller-side guard; the checkbox-rollback compensating write
+  is covered transitively (same call path, guard already asserted upstream).
+- **F-B · Settings compile writeback unguarded — DELIVERED (#2869, merged 4f4686a9).**
+  `app/settings/writeback.py` now asserts
+  `DEFAULT_WRITE_GUARD.assert_writes_allowed("settings.compile.writeback")` before calling
+  `write_note_from_absolute`; no event is still emitted (that gap is tracked separately under F-E's
+  event-completeness class, not re-opened here).
 - **F-C · note/save WriteGuard fails open** (`app/api/routes/companion.py:4365-4369`, deliberate per comment).
-  Human-edit availability vs. gate integrity. **needs-owner-decision** — surfaced on epic #2778.
+  Human-edit availability vs. gate integrity. **needs-owner-decision** — surfaced on epic #2778, still open.
 - **F-D · `POST /ingest` is guardless** (`app/api/routes/ingest.py:22`): no WG, no vault/selection check; any
   well-formed payload becomes a P.objects row + event. Acceptable for a trusted-LAN dev seam,
   undocumented as such. **needs-owner-decision** (document trust posture vs. add gate) — surfaced
-  on epic #2778.
+  on epic #2778, still open.
 - **F-E · Mirror-write class (`emit_outbox=False`, no WG)** — eight call sites (C8) make the event
   log an incomplete journal. **fix-code as a class** via the event-completeness invariant
   (registered-mirror list or emitted events); reconciled with KERNEL-02/#2764 scope rather than a
-  parallel fix. Recorded for RESEARCH-03 property synthesis; no separate issue filed.
-- **F-F · `note_hygiene` agent writes unguarded and is orphaned** (`app/agents/note_hygiene/
-  agent.py:57`, no non-test callers). **fix-code (cheap):** guard-or-remove. Follow-up filed.
+  parallel fix. Recorded for RESEARCH-03 property synthesis; no separate issue filed. Still open.
+- **F-F · `note_hygiene` agent writes unguarded and is orphaned — write path DELIVERED (#2829,
+  merged 592d9fcc); orphan status UNCHANGED.** `_write` now asserts
+  `write_guard.assert_writes_allowed("note_hygiene.write")` (`app/agents/note_hygiene/agent.py:58`).
+  No non-test caller exists in `app/` today — the agent remains dormant/orphaned; #2829 chose
+  guard-over-remove, so the "guard-or-remove" disposition is resolved as guard, not remove.
+- **AppLocalSettingsStore bootstrap-on-first-read — Q4 case 4, needs-owner-decision.**
+  `app.vault.app_local::AppLocalSettingsStore.save` (invoked from `.load()` on a cold-manager
+  `load_last_active()`) creates `.app-local.md` with a fresh `appInstallId` on first GET, with no
+  WriteGuard at the seam (`REGISTERED_HEAL_TRANSITIONS["app.vault.app_local::AppLocalSettingsStore
+  .save"]`, `wg_gated=False`). Unlike case 2 (identity-heal, now gated by #2910), this seam has not
+  been gated. Two credible dispositions, neither decided yet: (a) gate it the same way #2910 gated
+  identity-heal — thread a `write_guard.assert_writes_allowed("vault.app_local_bootstrap")` (or
+  similar named action) into `AppLocalSettingsStore.save`, with a bootstrap-escape entry in
+  `DEFAULT_BOOTSTRAP_ACTIONS` if a denying/degraded guard must not block first-run vault
+  provisioning; or (b) register it as an accepted, permanently-ungated heal on the grounds that
+  `.app-local.md` is machine-local bookkeeping (an `appInstallId`, not shared vault content) created
+  once per install and therefore lower-stakes than shared-vault identity fields. **needs-owner-decision**
+  — no issue filed yet for the gating work itself (only #2939, which pins/documents current reality);
+  file a follow-up once the disposition is chosen.
 
 ## 8. Adversarial review record
 
