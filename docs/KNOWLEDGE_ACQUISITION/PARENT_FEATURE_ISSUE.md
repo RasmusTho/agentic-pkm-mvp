@@ -1,4 +1,4 @@
-State: **Filed.** Parent feature issue **#2795** (validation hub, `agent:blocked` pending kernel-backlog sequencing); children **#2796–#2801** filed 2026-07-02 in dependency order. KA-01 (#2796) delivered via PR #2928 (2026-07-04); KA-02 (#2797) delivered via PR #2931 (captionless ASR fallback); KA-03 (#2798) delivered via PR #2932 (deterministic normalize stage); KA-04 (#2799) delivered (open extraction registry + `summary` extractor); KA-05 (#2800) delivered (candidate assembly + governed `youtube_source_note` writeback, this PR). KA-06 (#2801) remains `agent:blocked` on its own unmet prerequisites.
+State: **Delivered.** Parent feature issue **#2795** (validation hub); children **#2796–#2801** filed 2026-07-02 in dependency order, **all six delivered**: KA-01 (#2796) via PR #2928; KA-02 (#2797) via PR #2931 (captionless ASR fallback); KA-03 (#2798) via PR #2932 (deterministic normalize stage); KA-04 (#2799) via PR #2942 (open extraction registry + `summary` extractor); KA-05 (#2800) via PR #2950 (candidate assembly + governed `youtube_source_note` writeback); KA-06 (#2801) via PR #2956 (stage events + no-egress replay, final child). Validation receipts complete on #2795 (child receipts, replay receipt, real-URL operator receipt 2026-07-05); a receipt-discovered caption-track-selection defect was fixed via #2957/PR #2958 before the real-URL receipt passed.
 Doc role: Parent-issue mirror (GitHub issue #2795 is the authoritative backlog/validation surface)
 Authority: None — this file mirrors the filed parent issue so the spec directory is self-describing; the live issue governs.
 
@@ -24,10 +24,9 @@ slice holds, the platform contracts are proven before any breadth is built.
 
 ## Sequencing and gates
 
-- KA-01 (#2796) delivered via PR #2928; KA-02 (#2797) delivered via PR #2931; KA-03 (#2798)
-  delivered via PR #2932; KA-04 (#2799) delivered (open extraction registry + `summary`
-  extractor); KA-05 (#2800) delivered (candidate writeback, this PR). KA-06 (#2801) remains
-  `agent:blocked` until its own prerequisite (KA-05 — now clear) is reflected upstream.
+- All six children delivered in dependency order: KA-01 (#2796, PR #2928), KA-02 (#2797,
+  PR #2931), KA-03 (#2798, PR #2932), KA-04 (#2799, PR #2942), KA-05 (#2800, PR #2950),
+  KA-06 (#2801, PR #2956 — final child).
 - Integration-fabric class decision #2794: resolved (Acquisition source, class 11) by the same
   docs PR that filed this issue set.
 - Review-posture vocabulary: posture-not-token pending #2793.
