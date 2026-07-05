@@ -39,7 +39,9 @@ APP_ROOT = REPO_ROOT / "app"
 # it requires a one-line justification, not just an entry").
 #
 # Census source: docs/architecture/formal-model.md :: 4. Consistency model, C8
-# (11 production sites verified against `main` @ #2909 implementation time).
+# (11 production sites verified against `main` @ #2909 implementation time,
+# plus a 12th added mid-delivery by KA-01 #2928: the pre-pipeline immutable
+# raw record -- formal-model.md's C8 row predates KA-01).
 # `app/cli/smoke.py` sites are dev/CI harness writers, structurally excluded
 # from the formal model's Σ by declaration (formal-model.md §2.3) and MUST
 # NEVER run against a real vault -- they are not part of this census.
@@ -100,6 +102,13 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "Legacy vault-alpha ingest path: keeps classifier/normalizer flows working "
         "against the memory backend during tests/alpha runs; the alpha ingest pipeline "
         "emits its own ingest event upstream of this call in the same run."
+    ),
+    ("app/knowledge_acquisition/raw_record.py", 118): (
+        "KA-01 immutable raw record (pre-pipeline by design): emitting the default "
+        "INGEST_OBJECT_CREATED here would route the unprocessed raw payload straight "
+        "into the indexer/embedding consumer, which the acquisition slice must not "
+        "trigger; refinement stages emit their own stage events later (#2801, "
+        "REFINEMENT_PIPELINE_CONTRACT.md lineage/replay model -- module docstring)."
     ),
 }
 
