@@ -309,7 +309,7 @@ audit kernel (`docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md` §2
 5. **Receipt-before-ack (T-capture shape)** as the general mutating-transition contract.
 
 **Gaps, registry → model:** none structural — the cross-scope/envelope invariants (#5–#9, #16,
-#19–#21, #26–#28) live in the semantic overlay (`yggdrasil_runtime`) that KERNEL-10 promotes into
+#19–#21, #26–#28) live in the semantic overlay (`mimer_runtime`) that KERNEL-10 promotes into
 `app/` retrieval; the model treats them as the admissibility precondition of T-ask/T-retrieve once
 promoted.
 

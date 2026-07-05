@@ -27,7 +27,7 @@ transcription of an already-settled audit finding (this task decides nothing new
 the audit already resolved):
 
 1. **SoI definition** (audit §1) — the Mimer SoI is the local-first cognitive-prosthesis
-   software system: the runtime (`app/`, `yggdrasil_runtime/`), its contracts and schemas, its
+   software system: the runtime (`app/`, `mimer_runtime/`), its contracts and schemas, its
    system-owned durable artifacts, and its rebuildable machine surfaces. Include the two boundary
    refinements: the human is not a component (operator/authority locus,
    `docs/foundation/00-yggdrasil-doctrine.md:24-39`); vault content is custodied, not owned (the

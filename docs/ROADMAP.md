@@ -468,7 +468,7 @@ All six task specs are complete and closed; promotion and rollback skills are au
 
 ## Companion UI integration roadmap (2026-05-19)
 
-- First visual alignment pass delivered (#1119): Yggdrasil design tokens, note body as primary surface, companion rail placeholder, dev/staging marker. This is a dev/staging shell, not a production Companion UI contract.
+- First visual alignment pass delivered (#1119): Mimer design tokens, note body as primary surface, companion rail placeholder, dev/staging marker. This is a dev/staging shell, not a production Companion UI contract.
 - Existing model/runtime foundations confirmed shipped and not to be rebuilt: Canvas Core models and session API (`canvas_core/`, `app/api/routes/canvas.py`), Panel models and confirmation service (`panel/`, `app/panel/confirmation.py`), Canvas Suggestion Flow models (`canvas_suggestion_flow/`), `GET /api/artifacts/note` artifact read endpoint. Remaining Companion UI work is browser wiring, read-side state discovery, stub replacement, and production shell hardening.
 - Governance stub replaced: `_StubPipeline` in `app/api/routes/canvas.py` wired to real `CanvasPanelPipeline` that stages proposals in `ProposalStore`; Panel correction path in `PanelConfirmationService` implemented.
 - Product mode integration is implemented in the dev/staging workspace shell: Find renders source candidates with explanation and Panel handoff; Reorient renders read-only orientation sections from the orientation runtime with source links and Panel handoff hints; Resurface renders low-pressure why-now candidates from the resurfacing runtime with dismiss, snooze, and pin affordances; and Act renders Panel-first proposal review and receipts through the existing confirmation path.

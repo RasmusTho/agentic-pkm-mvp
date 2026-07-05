@@ -12,7 +12,7 @@ Last verified against: docs/COGNITIVE_PROSTHESIS_CHARTER.md, docs/HUMAN-FLOWS.md
 
 ## Purpose
 
-Define Companion UI as the human-facing product shell for Yggdrasil's cognitive prosthesis
+Define Companion UI as the human-facing product shell for Mimer's cognitive prosthesis
 functions.
 
 Companion UI is not a fourth interaction authority surface. It hosts and coordinates the

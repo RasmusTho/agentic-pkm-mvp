@@ -16,7 +16,7 @@ Last verified against: docs/HUMAN-FLOWS.md, docs/COGNITIVE_PROSTHESIS_CHARTER.md
 The Cognitive Load Projection Layer is the governed boundary between canonical artifacts and
 human-facing cognitive-load projections.
 
-This is not an accessibility sidecar for a subset of users. In Yggdrasil, cognitive-load
+This is not an accessibility sidecar for a subset of users. In Mimer, cognitive-load
 reduction is one of the central functions of the cognitive prosthesis: the system helps the human
 hold less in working memory, recover context after interruption, compare source and proposal, and
 decide without losing authorship or authority. Accessibility techniques are valid tools inside

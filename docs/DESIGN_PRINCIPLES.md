@@ -8,7 +8,7 @@ Last reviewed: 2026-03-27
 
 ## Purpose
 
-This document defines the stable design principles that guide architectural evolution in the Agentic PKM / Yggdrasil system.
+This document defines the stable design principles that guide architectural evolution in the Agentic PKM / Mimer system.
 
 It exists to keep high-level design work systematic:
 - principles define the enduring rules,
@@ -114,7 +114,7 @@ It exists to keep high-level design work systematic:
 
 ### 9. Volatility Isolation
 
-- Yggdrasil should be treated as a modular, differentiated decomposition, not as one undifferentiated agent runtime.
+- Mimer should be treated as a modular, differentiated decomposition, not as one undifferentiated agent runtime.
 - Interaction, cognition, execution, memory, and governance must be able to evolve at different speeds.
 - Cross-layer coupling should be deliberate, minimal, and documented.
 

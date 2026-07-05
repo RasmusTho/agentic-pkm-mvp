@@ -101,7 +101,7 @@ Current enforcement:
 - [x] Route vault layout/system-note bootstrap writes through `KnowledgePort` (`app/vault/layout.py`).
 - [x] Route alpha human flows vault note mutation writes through `KnowledgePort` (`app/cli/alpha_human_flows.py`).
 - [x] Route note update + promotion note writes through `KnowledgePort` (`app/services/note_update.py`).
-- [x] Route Yggdrasil bootstrap settings placeholder writes through `KnowledgePort` (`app/settings/yggdrasil_scaffolder.py`).
+- [x] Route Mimer bootstrap settings placeholder writes through `KnowledgePort` (`app/settings/mimer_scaffolder.py`).
 - [x] Route vault ingest mirror-note writes through `KnowledgePort` (`app/ingest/vault_alpha.py`).
 - [x] Route note hygiene archive-note writes through `KnowledgePort` (`app/agents/note_hygiene/agent.py`).
 - [x] Centralize service/runtime vault write+append wiring behind `app/knowledge/write_ops.py` helper functions (`write_note_from_absolute`, `write_note_relative`, `append_note_relative`).

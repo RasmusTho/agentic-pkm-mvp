@@ -72,7 +72,7 @@ verification anchor is an owner doc or current-state test that already says so.
 For each row, the columns answer a different question:
 
 - **Human need** — what is hard for unaided cognition.
-- **System capability** — what Yggdrasil offers to share that load.
+- **System capability** — what Mimer offers to share that load.
 - **Surface** — where the human encounters the capability.
 - **Runtime support** — which supporting machine surfaces make it work.
 - **Provenance / receipt expectation** — what must remain true for the capability to count as a

@@ -92,7 +92,7 @@ eligibility bounds *participation*, the clamp bounds *standing during participat
   Fundamental because it is the only ordering that composes: filter-then-rank is stable under any
   future ranker, reranker, or model; rank-then-mask must re-prove safety for each one (and today's
   live path even lets ineligible rows shift score normalization of eligible ones).
-- **Embodied:** `yggdrasil_runtime/retrieval.py::eligible_candidates` + `_denials_for_excluded`
+- **Embodied:** `mimer_runtime/retrieval.py::eligible_candidates` + `_denials_for_excluded`
   (reference); `schemas/retrieval-result.schema.json` (`scope_policy_prefiltered` pinned,
   content-free denial shape). **Violated (in remediation):** `app/retrieval/hybrid.py::hybrid_search`
   ranks over all docs and masks after ordering, with silent drops — the exact gap KERNEL-10 (#2772,
@@ -192,7 +192,7 @@ registered escapes (bootstrap provisioning), not conventions.
   the seam, a *named* bootstrap escape (`DEFAULT_WRITE_GUARD`/`DEFAULT_BOOTSTRAP_ACTIONS`), denying
   guard blocks atomically.
 - **Embodied:** `app/agents/panel_agent/runtime.py` (seam asserts `"panel.writeback"`, #2808),
-  `app/settings/yggdrasil_scaffolder.py::scaffold` (#2877), `app/agents/note_hygiene/agent.py`
+  `app/settings/mimer_scaffolder.py::scaffold` (#2877), `app/agents/note_hygiene/agent.py`
   (#2810), `app/chat/canvas_writer.py` (WG + structural checks), `app/services/companion_note.py`.
   **Violated (verified on `main` 2026-07-04):** the knowledge write port itself
   (`app/knowledge/write_ops.py::write_note_from_absolute` — the shared root cause every retail fix

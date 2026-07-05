@@ -17,7 +17,7 @@ Five corrections, most systemic first (blast radius × silence of failure):
 
 1. **The missing layer is classification vocabulary, not structure.** Internal boundary discipline
    is strong and largely code-verified (down to zero vendor-SDK imports anywhere in `app/` or
-   `yggdrasil_runtime/`, §7). But nothing classifies the *running external things* — the Postgres
+   `mimer_runtime/`, §7). But nothing classifies the *running external things* — the Postgres
    instance, Ollama, Docker/Colima, Tailscale, iCloud, GitHub, Obsidian — as SoI elements, enabling
    systems, or external systems. The same Ollama is an "optional external provider"
    (`docs/ARCHITECTURE.md:109`) and a first-party compose service (`docker-compose.yaml:16-31`);
@@ -64,7 +64,7 @@ re-pinned to `origin/main` mid-pass after the local checkout proved five commits
 ## 1. System of Interest
 
 **Definition (15288 overlay).** The Mimer SoI is the local-first cognitive-prosthesis software
-system: the runtime (`app/`, `yggdrasil_runtime/`), its contracts and schemas, its system-owned
+system: the runtime (`app/`, `mimer_runtime/`), its contracts and schemas, its system-owned
 durable artifacts (companion notes, receipts, governance records), and its rebuildable machine
 surfaces (object store, indexes, embeddings, outbox) — the three nested roles of
 `docs/COGNITIVE_PROSTHESIS_CHARTER.md:25-40` read as one system.
@@ -114,7 +114,7 @@ the attached thing's classification follows its lifecycle role:
 
 | Classification | Meaning | Members (evidence) |
 | --- | --- | --- |
-| SoI component | Ships inside the system; versioned with it | `app/`, `yggdrasil_runtime/`, schemas, companion-note surface; embedded libraries incl. TTS engines (`requirements-tts.txt:8-9` — pip deps in the runtime image) |
+| SoI component | Ships inside the system; versioned with it | `app/`, `mimer_runtime/`, schemas, companion-note surface; embedded libraries incl. TTS engines (`requirements-tts.txt:8-9` — pip deps in the runtime image) |
 | COTS system element (deployed configuration) | Third-party product the SoI's own deployment provisions and supervises; replaceable behind a port, but part of the deployed system | Postgres/pgvector instance (`docker-compose.yaml:3`, behind PDM `StorePort`, `app/stores/base.py`); Ollama *when run as the compose service* (`docker-compose.yaml:16-31`) |
 | Enabling system | Supports lifecycle stages; not part of the operating system-of-interest | Builder System incl. GitHub/CI (`docs/architecture/SBS_OPERATING_MODEL.md:75,84` — already settled); Docker/Colima (`docs/INFRASTRUCTURE.md:15`); Tailscale mesh + host provisioning (`ops/host-setup/README.md:7-14`); ops/start scripts (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:522` names them "deliberately outside the SBS") |
 | External system (operational environment) | Independently operated/managed; the SoI interoperates via contracts | Obsidian (`docs/INTEGRATION_FABRIC_CONTRACT.md:34` — dual-class by design); iCloud/sync transports (`:42` — "operational plumbing only"); cloud LLM/embedding APIs incl. Gemini fallback (ADR-0023); acquisition sources (`:48`); telemetry consumers (`:46`); *Ollama when reached as a host/remote service* (`docs/ARCHITECTURE.md:109`) |
@@ -308,7 +308,7 @@ sentence. Renaming would be a high-churn reshape with no information gain.
 **Enforcement verification of the three settled positions (review brief §2):**
 
 1. *Standards/MCP are adapters, not ontology* — **holds in code.** Zero provider-SDK imports in
-   `app/` and `yggdrasil_runtime/` (no `anthropic`/`openai`/`google.generativeai`/`ollama`/
+   `app/` and `mimer_runtime/` (no `anthropic`/`openai`/`google.generativeai`/`ollama`/
    `litellm` imports; egress is `httpx`/`requests` against configurable base URLs,
    `app/services/llm.py:45`). Every `mcp` string is a tool-id/kind-tag at the doc-assigned adapter
    tier (`docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md:3`; `app/planner/schema.py:12`).

@@ -10,7 +10,7 @@ Live GitHub parent issue:
 
 ## Context
 
-The Cognitive Load Projection Layer defines cognitive-load reduction as a central Yggdrasil
+The Cognitive Load Projection Layer defines cognitive-load reduction as a central Mimer
 cognitive-prosthesis capability: reduce decoding, parsing, spelling, source-comparison, decision,
 orientation, and resumption friction without reducing the human's reasoning task or transferring
 authority to projections.

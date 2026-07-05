@@ -1,6 +1,6 @@
 State: Initial security architecture spine. Docs-only; does not change runtime behavior or claim high current adversarial exposure.
 Doc role: Core SoT
-Authority: Canonical entry point for Yggdrasil security architecture framing, threat-model tiers, security invariants, and review routing. Subordinate to current runtime SoT docs for shipped behavior and to semantic authority docs for meaning/authority semantics.
+Authority: Canonical entry point for Mimer security architecture framing, threat-model tiers, security invariants, and review routing. Subordinate to current runtime SoT docs for shipped behavior and to semantic authority docs for meaning/authority semantics.
 Owner: Security architecture / governance
 Temporal class: strategic
 Review cadence: event-driven
@@ -12,7 +12,7 @@ Last verified against: docs/ARCHITECTURE.md, docs/MODULAR_ARCHITECTURE.md, docs/
 
 ## Scope
 
-This document is the security architecture entry point for Yggdrasil / Agentic PKM. It defines the
+This document is the security architecture entry point for Mimer / Agentic PKM. It defines the
 security framing, assumptions, threat-model tiers, invariants, and review routing used before
 formal STRIDE, ATT&CK-inspired, attack-path, or attack-tree work.
 
@@ -119,7 +119,7 @@ These invariants are binding review inputs:
    non-vault log and tmp writes are exempt by path ownership.
 9. Receipts must remain human-legible accountability artifacts, distinct from raw traces.
 10. External providers and tools may supply capability, inference, transport, or interface; they do
-    not become authority without explicit Yggdrasil contracts.
+    not become authority without explicit Mimer contracts.
 
 ## Relationship to existing docs
 

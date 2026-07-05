@@ -4,7 +4,7 @@ Authority: Product-kernel contract for purpose, principles, and long-lived stabi
 
 # PROJECT_KERNEL — agentic-pkm-mvp
 
-> Product-level thesis: see `docs/COGNITIVE_PROSTHESIS_CHARTER.md` for the framing of Yggdrasil as a local-first cognitive prosthesis, second-brain environment, and governed memory/runtime substrate for agents. This kernel holds the stability contracts that thesis depends on.
+> Product-level thesis: see `docs/COGNITIVE_PROSTHESIS_CHARTER.md` for the framing of Mimer as a local-first cognitive prosthesis, second-brain environment, and governed memory/runtime substrate for agents. This kernel holds the stability contracts that thesis depends on.
 
 ## 1. North Star
 

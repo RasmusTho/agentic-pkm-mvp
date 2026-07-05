@@ -5,11 +5,11 @@ Authority: Evidence-based structural analysis; file:line anchors reflect `main` 
 # Agentic PKM System Redesign — Structural Leverage Artifacts
 
 Date: 2026-07-02
-Basis: full-code survey of `app/stores`, `app/services/{outbox,vault_sync,indexer}`, `app/workers/outbox_worker.py`, `app/ingest/chunk_policy.py`, `app/indexer/consumer.py`, `app/chat/intent_classifier.py`, `app/orchestrator/*`, `yggdrasil_runtime/*`, `tests/invariants/*`, `tests/evals/*`, `tests/eval/*`, `schemas/*`, `docs/CONCEPTS/*`, `AGENTS.md`.
+Basis: full-code survey of `app/stores`, `app/services/{outbox,vault_sync,indexer}`, `app/workers/outbox_worker.py`, `app/ingest/chunk_policy.py`, `app/indexer/consumer.py`, `app/chat/intent_classifier.py`, `app/orchestrator/*`, `mimer_runtime/*`, `tests/invariants/*`, `tests/evals/*`, `tests/eval/*`, `schemas/*`, `docs/CONCEPTS/*`, `AGENTS.md`.
 
 Reconciliation notes (post-analysis, authoritative for the backlog conversion in `docs/RUNTIME_CORRECTNESS_KERNEL/`):
 - **T5 extends #2314 W4-RET-01.** The epic's deferred stub already names "reconcile the in-memory/durable split"; T5 delivers that half. The lexical-mirror + fusion half of W4-RET-01 stays with the epic.
-- **T10 reframed.** #2022/#2025 (admissibility-governed activation gate) are delivered and closed; the "Slice #2025 pending" reference in `docs/CONCEPTS/CONTEXT_ADMISSIBILITY_CONTRACT.md` is stale numbering. The remaining gap is promoting scope-prefilter + ContextEnvelope semantics from `yggdrasil_runtime` into the `app/` retrieval path.
+- **T10 reframed.** #2022/#2025 (admissibility-governed activation gate) are delivered and closed; the "Slice #2025 pending" reference in `docs/CONCEPTS/CONTEXT_ADMISSIBILITY_CONTRACT.md` is stale numbering. The remaining gap is promoting scope-prefilter + ContextEnvelope semantics from `mimer_runtime` into the `app/` retrieval path.
 
 ---
 
@@ -38,7 +38,7 @@ Ranked by systemic impact (blast radius × silence of failure), not likelihood.
 - **Systemic effect:** at-least-once delivery without enforced idempotency and without atomic state+event means replay is not sound — the event log cannot be trusted to reconstruct state, defeating event-sourcing's core guarantee.
 
 ### CW-4 — Invariant enforcement lives in a test-only package; the runtime speaks untyped dicts
-- 36 named invariants (docs/testing/invariant-tests.md), closed JSON Schemas (`schemas/*.schema.json`), frozen fail-loud value types — all in `yggdrasil_runtime/` (excluded from the wheel) and `tests/`.
+- 36 named invariants (docs/testing/invariant-tests.md), closed JSON Schemas (`schemas/*.schema.json`), frozen fail-loud value types — all in `mimer_runtime/` (excluded from the wheel) and `tests/`.
 - The live pipeline persists permissive `dict` payloads (`store_objects.payload`, `OutboxEvent.payload: Dict[str, Any]`), with no `schema_version`, no closed validation, no MetadataBundle. `inspect_pg_metadata_completeness()` (pg.py:677-721) can *observe* missing W3-SPINE-01 fields but nothing *prevents* writing them.
 - **Systemic effect:** the system has a correct formal model and an unconstrained implementation. Drift between them is structural, not accidental; every new producer widens it.
 
@@ -92,7 +92,7 @@ Minimal set for correctness. `MUST` = fail-loud at runtime; `GATE` = CI/PR-block
 - **I-A2 (No default routes).** Classification failure yields explicit `UNKNOWN` surfaced to the caller (re-ask, degrade to read-only, or ask the user) — never a silent mapping to an action-capable class. *(Violated: intent_classifier.py `_defaulted` → CO_AUTHORING.)*
 - **I-A3 (Governed effects).** Side effects only through a declared capability with `authority_class`; every governed effect emits a receipt keyed to trace_id. *(Exists: WriteGuard + SettingsWriteReceipt + panel descriptors — extend to all executors.)*
 - **I-A4 (Bounded execution).** depth ≤ 2, per-step retries ≤ budget, AND a per-plan wall-clock timeout (missing today: orchestrator v2 has per-step only).
-- **I-A5 (Bounded context).** Agents consume `ContextEnvelope` only; no raw vault/index access; denied scopes are content-free. *(Exists in yggdrasil_runtime + invariant 18/19 — promote to `app/` runtime; aligns with #2025 admissibility slice.)*
+- **I-A5 (Bounded context).** Agents consume `ContextEnvelope` only; no raw vault/index access; denied scopes are content-free. *(Exists in mimer_runtime + invariant 18/19 — promote to `app/` runtime; aligns with #2025 admissibility slice.)*
 
 ### Schema compliance rules
 - **I-C1 (Versioned payloads).** Every persisted JSON payload carries `schema_version`; schemas are closed (`additionalProperties: false`) with an `extensions` object as the only open point. *(Exists in schemas/ contracts; absent in app/ persistence.)*

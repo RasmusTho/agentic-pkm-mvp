@@ -1,7 +1,7 @@
 State: SoT v5.5 Reality-MVP baseline locked (v5.6 delivered, v6.0 seams shipped at capability-seam level); this document is target-state framing for how new emergent features compose on top of the kernel and extension fabric, and does not claim every emergent behavior described here is implemented today.
 Anchored to: `docs/COGNITIVE_PROSTHESIS_CHARTER.md` — the composition spine by which Cognitive Expansion surfaces activate onto the governed control plane in the Maintenance / Expansion model (§2.1). The charter wins on purpose framing; this model owns how new behavior composes without bypassing governance.
 Doc role: Core SoT
-Authority: Composition spine for emergent features. Owns the rule that new behavior in Yggdrasil emerges from a standard composition pattern (trigger + context bundle + capability composition + policy evaluation + proposal/action + receipt + feedback signal) over the existing kernel and extension fabric, and owns the rule that emergent features must remain observable and must not bypass governance, write guards, provenance, or authority boundaries. Sits below `docs/MODULAR_ARCHITECTURE.md` (kernel and extension fabric), `docs/INTEGRATION_FABRIC_CONTRACT.md` (integration classes), `docs/CAPABILITY_CONTRACT_MODEL.md` (capability shape), and `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md` and `docs/CONTEXT_BUNDLES/` (context bundle semantic contract and implementation-planning surface), and `docs/AGENT_MEMORY/` (agent memory contracts). Does not replace `docs/ARCHITECTURE.md` (current runtime baseline) or `docs/HUMAN-FLOWS.md` (user-facing behavior contract); it explains how their concerns are composed when new emergent behavior is added.
+Authority: Composition spine for emergent features. Owns the rule that new behavior in Mimer emerges from a standard composition pattern (trigger + context bundle + capability composition + policy evaluation + proposal/action + receipt + feedback signal) over the existing kernel and extension fabric, and owns the rule that emergent features must remain observable and must not bypass governance, write guards, provenance, or authority boundaries. Sits below `docs/MODULAR_ARCHITECTURE.md` (kernel and extension fabric), `docs/INTEGRATION_FABRIC_CONTRACT.md` (integration classes), `docs/CAPABILITY_CONTRACT_MODEL.md` (capability shape), and `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md` and `docs/CONTEXT_BUNDLES/` (context bundle semantic contract and implementation-planning surface), and `docs/AGENT_MEMORY/` (agent memory contracts). Does not replace `docs/ARCHITECTURE.md` (current runtime baseline) or `docs/HUMAN-FLOWS.md` (user-facing behavior contract); it explains how their concerns are composed when new emergent behavior is added.
 Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
@@ -11,7 +11,7 @@ Last verified against: docs/MODULAR_ARCHITECTURE.md, docs/INTEGRATION_FABRIC_CON
 
 # Emergent Features Model
 
-This document defines how new emergent features are added to Yggdrasil without letting them bypass governance, provenance, human authority, or write guards. It is the composition spine: it states the standard composition pattern that any new emergent behavior must follow, the governance and observability rules that bind it, and how it differs from agent sprawl and ad hoc UI behavior.
+This document defines how new emergent features are added to Mimer without letting them bypass governance, provenance, human authority, or write guards. It is the composition spine: it states the standard composition pattern that any new emergent behavior must follow, the governance and observability rules that bind it, and how it differs from agent sprawl and ad hoc UI behavior.
 
 It is a docs-only artifact. It does not introduce a runtime composition registry, an orchestration engine, a runtime feedback bus, or new tests. It sits on top of the existing kernel and extension fabric so later implementation planning has a stable place to attach.
 
@@ -27,7 +27,7 @@ If this document conflicts with `docs/MODULAR_ARCHITECTURE.md`, `docs/INTEGRATIO
 
 ## Composition pattern
 
-The composition pattern is the standard shape an emergent feature must take in Yggdrasil. Every emergent feature must compose from the following seven elements. The elements are not optional decoration; they are the trust contract that distinguishes governed composition from drift.
+The composition pattern is the standard shape an emergent feature must take in Mimer. Every emergent feature must compose from the following seven elements. The elements are not optional decoration; they are the trust contract that distinguishes governed composition from drift.
 
 `Emergent feature = trigger + context bundle + capability composition + policy evaluation + proposal/action + receipt + feedback signal`
 

@@ -26,7 +26,7 @@ restating or subtly redefining the same terms.
 ## System of Interest (SoI)
 
 **Definition (15288 overlay).** The Mimer SoI is the local-first cognitive-prosthesis software
-system: the runtime (`app/`, `yggdrasil_runtime/`), its contracts and schemas, its system-owned
+system: the runtime (`app/`, `mimer_runtime/`), its contracts and schemas, its system-owned
 durable artifacts (companion notes, receipts, governance records), and its rebuildable machine
 surfaces (object store, indexes, embeddings, outbox) — the three nested roles of
 `docs/COGNITIVE_PROSTHESIS_CHARTER.md:25-40` read as one system.
@@ -66,7 +66,7 @@ attached thing's classification follows its lifecycle role:
 
 | Classification | Meaning | Members (evidence) |
 | --- | --- | --- |
-| SoI component | Ships inside the system; versioned with it | `app/`, `yggdrasil_runtime/`, schemas, companion-note surface; embedded libraries incl. TTS engines (`requirements-tts.txt:8-9` — pip deps in the runtime image) |
+| SoI component | Ships inside the system; versioned with it | `app/`, `mimer_runtime/`, schemas, companion-note surface; embedded libraries incl. TTS engines (`requirements-tts.txt:8-9` — pip deps in the runtime image) |
 | COTS system element (deployed configuration) | Third-party product the SoI's own deployment provisions and supervises; replaceable behind a port, but part of the deployed system | Postgres/pgvector instance (`docker-compose.yaml:3`, behind PDM `StorePort`, `app/stores/base.py`); Ollama *when run as the compose service* (`docker-compose.yaml:16-31`) |
 | Enabling system | Supports lifecycle stages; not part of the operating system-of-interest | Builder System incl. GitHub/CI (`docs/architecture/SBS_OPERATING_MODEL.md:75,84` — already settled); Docker/Colima (`docs/INFRASTRUCTURE.md:15`); Tailscale mesh + host provisioning (`ops/host-setup/README.md:7-14`); ops/start scripts (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:522` names them "deliberately outside the SBS") |
 | External system (operational environment) | Independently operated/managed; the SoI interoperates via contracts | Obsidian (`docs/INTEGRATION_FABRIC_CONTRACT.md:34` — dual-class by design); iCloud/sync transports (`:42` — "operational plumbing only"); cloud LLM/embedding APIs incl. Gemini fallback (ADR-0023); acquisition sources (`:48`); telemetry consumers (`:46`); *Ollama when reached as a host/remote service* (`docs/ARCHITECTURE.md:109`) |
@@ -91,7 +91,7 @@ One view, reconciling both existing taxonomies (audit §4):
 
 ```
                         ┌─────────────────────────────────────────────┐
-   HUMAN (operator,     │              YGGDRASIL SoI                  │   EXTERNAL SYSTEMS
+   HUMAN (operator,     │                MIMER SoI                    │   EXTERNAL SYSTEMS
    authority locus)     │                                             │   (operational env.)
      │ intent/review    │  Human Experience ─ HIX ◄──────────────────┼── Obsidian (editor;
      ▼                  │  Cognitive Context ─ WSP · SFC             │    dual-class human
