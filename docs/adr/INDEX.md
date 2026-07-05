@@ -46,4 +46,4 @@
 - [ADR-0047: MCP topology stance for ecosystem constituents — deferred until a concrete remote/sibling server exists](./ADR-0047-mcp-topology-federation-stance.md)
 - [ADR-0048: Allowlisted mechanical-hygiene body edits move to `act` tier (Proposed — NOT enacted)](./ADR-0048-allowlisted-mechanical-hygiene-act-tier.md)
 - [ADR-0049: Heimdal as the ecosystem ingestion organ + v1 UI/UX enactment — markdown-first control surface, discrete-capture posture, one-shell app topology (Proposed)](./ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md)
-- [ADR-0050: Cross-repo governance + the Bifrost native-app repo; name register adopts traditional Swedish spelling (Heimdal, Bifrost) (Proposed)](./ADR-0050-cross-repo-governance-and-bifrost-client-repo.md)
+- [ADR-0050: Cross-repo governance + the Bifrost native-app repo; name register adopts traditional Swedish spelling (Heimdal, Bifrost) (Accepted)](./ADR-0050-cross-repo-governance-and-bifrost-client-repo.md)
