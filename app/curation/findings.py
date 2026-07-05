@@ -66,6 +66,14 @@ class FindingClass(str, Enum):
     STRUCTURE_GAP = "structure.gap"
     STRUCTURE_STALE_CLAIM = "structure.stale_claim"
 
+    # Cognitive Expansion -- Connect (EXP-1, #2994). Non-amendably propose-track:
+    # see ``CONNECT_FINDING_CLASSES`` below -- no configuration, flag, or future
+    # slice may move a `connect.*` class onto ``MECHANICAL_ALLOWLIST``.
+    # Spec: docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md §1.1.
+    CONNECT_RELATED_UNLINKED = "connect.related_unlinked"
+    CONNECT_THEMATIC_LINK = "connect.thematic_link"
+    CONNECT_CLUSTER_EMERGENCE = "connect.cluster_emergence"
+
 
 # Closed mechanical-allowlist: classes whose track is `auto_fix`. Membership
 # here is what decides the track (spec §1: "class ∈ MECHANICAL_ALLOWLIST ->
@@ -95,6 +103,25 @@ LINT_FINDING_CLASSES: frozenset[FindingClass] = frozenset(
         FindingClass.STRUCTURE_GAP,
         FindingClass.STRUCTURE_STALE_CLAIM,
     }
+)
+
+# Cognitive Expansion -- Connect (EXP-1, #2994) finding classes. Every member is,
+# and must remain, disjoint from ``MECHANICAL_ALLOWLIST`` -- this is asserted at
+# import time below so the propose-track mapping is a construction-level
+# guarantee, not a runtime check alone (spec §1.1: "a `connect.*` class on
+# auto-fix is a contract violation, not a config choice").
+CONNECT_FINDING_CLASSES: frozenset[FindingClass] = frozenset(
+    {
+        FindingClass.CONNECT_RELATED_UNLINKED,
+        FindingClass.CONNECT_THEMATIC_LINK,
+        FindingClass.CONNECT_CLUSTER_EMERGENCE,
+    }
+)
+
+assert CONNECT_FINDING_CLASSES.isdisjoint(MECHANICAL_ALLOWLIST), (
+    "connect.* classes must never appear in MECHANICAL_ALLOWLIST -- this would "
+    "silently move a Connect finding onto the auto_fix track, violating the "
+    "non-amendable propose-track mapping (EXPANSION_CONNECT_AND_CREATE.md §1.1)"
 )
 
 
@@ -209,6 +236,7 @@ __all__ = [
     "FindingTrack",
     "InvalidFindingClassError",
     "LanguageVerdict",
+    "CONNECT_FINDING_CLASSES",
     "LINT_FINDING_CLASSES",
     "MECHANICAL_ALLOWLIST",
     "compute_finding_id",
