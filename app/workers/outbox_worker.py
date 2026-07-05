@@ -1366,6 +1366,16 @@ def run(
 
                 event_id = _event_id_from_message(message)
                 if event_id and _EVENT_DEDUP.seen(event_id):
+                    # Known-duplicate no-op (#2963): this event_id was already
+                    # dispatched earlier in this process lifetime. Ack the row so it advances
+                    # instead of leaving it queued. poll_outbox_one always returns
+                    # the oldest un-acked row, so an un-acked known-duplicate would
+                    # be re-polled every tick, .seen() would keep returning True,
+                    # and the loop would `continue` forever on it -- a silent
+                    # head-of-line stall (a softer echo of the #2252 stall) that
+                    # also starves every downstream row. The row IS handled here
+                    # (a deduplicated no-op), so acking it is the receipt.
+                    ack_outbox(message["id"])
                     continue
 
                 payload = message.get("payload") or {}
