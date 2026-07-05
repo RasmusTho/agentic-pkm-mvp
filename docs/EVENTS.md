@@ -328,6 +328,65 @@ Payload fields (in addition to the envelope):
 - `reason` (`string`): failure class, e.g. `extraction_failed`.
 - `error` (`string`): the underlying error string, preserved for triage (never swallowed).
 
+### `heimdal.register.entity.minted`
+
+Emitted by the Heimdal entity register v0 (Epic #3019 slice A1, #3038) when a new entity
+note is created — either `mint_provisional` (an unknown surface form becomes a durable
+provisional entity) or `mint_canonical` (a canonical entity is admitted directly). A
+**lineage/audit** event, NOT a dispatched command, mirroring the Knowledge Acquisition
+stage events above: it is deliberately absent from `app/workers/outbox_worker.py::
+_dispatch_topic` and from the topic-schema registry. The canonical store for entity
+identity is the `.md` note this event accompanies
+(`app/heimdal/entity_register.py::render_entity_note`), never a DB row or graph — see
+`docs/HEIMDAL/FABLE_COMPANION.md` §3.2 / §9 "Decision run" item 1.
+
+Deterministic idempotency key (KERNEL-02, via `derive_idempotency_key`): keyed on the
+minted `entity_id` plus a fingerprint scope naming the mint kind and surface form/label.
+
+Payload fields (in addition to the envelope):
+- `entity_id` (`string`): the minted `ent:<uuid>` (canonical) or `ent:prov:<uuid>` (provisional) id.
+- `surface_form` / `label` (`string`): the text the entity was minted from.
+- `kind_hint` / `kind` (`string`): `person` | `organization` | `project` | `place` | `agent` | `thing`.
+- `lifecycle` (`string`): `provisional` | `canonical` at mint time.
+- `aliases` (`array[string]`, canonical mints only).
+
+### `heimdal.register.entity.merged`
+
+Emitted by `EntityRegister.merge()` when a governed, human-confirmed merge folds one
+entity into another (`docs/HEIMDAL/FABLE_COMPANION.md` §3.2 op 3 / §9-g). Append-only
+(HEIM-1): the source entity's note is never deleted, only marked `lifecycle: merged` with
+a `merged_into` redirect; the target note's aliases are folded to include the source's
+label/aliases. Lineage/audit event, same non-dispatched posture as above.
+
+Payload fields (in addition to the envelope):
+- `from_id` (`string`): the entity_id that was merged away.
+- `into_id` (`string`): the entity_id it was merged into.
+
+### `heimdal.register.entity.split`
+
+Emitted by `EntityRegister.split()` — the reversible un-merge the F5 red-team gate
+requires before any merge ships (`docs/HEIMDAL/FABLE_COMPANION.md` §10 F5). One event per
+resulting new entity. Splitting a merge target re-points any previously-merged child
+entity whose aliases fall in the new partition, restoring `resolve_redirects()` to the
+pre-merge identity — see `tests/heimdal/test_entity_register.py::test_split_reverses_merge`.
+
+Payload fields (in addition to the envelope):
+- `split_from` (`string`): the entity_id that was partitioned.
+- `new_entity_id` (`string`): the newly minted canonical entity for this partition.
+- `label` (`string`): the new entity's label.
+- `aliases` (`array[string]`): the alias subset moved into the new entity.
+
+### `heimdal.register.entity.redirect_resolved`
+
+Emitted by `EntityRegister.resolve_redirects()` recording that a (possibly stale)
+entity_id was followed through its merge-redirect chain to its current living identity.
+Every consumer of historical Heimdal events uses `resolve_redirects` for this, per
+`docs/HEIMDAL/FABLE_COMPANION.md` §3.2 op 4.
+
+Payload fields (in addition to the envelope):
+- `queried_entity_id` (`string`): the entity_id the caller asked to resolve.
+- `resolved_entity_id` (`string`): the current (non-merged) entity_id it resolves to.
+
 ### `panel.intent.created`
 
 Emitted when an AI panel is parsed for a note and actions are mapped.
