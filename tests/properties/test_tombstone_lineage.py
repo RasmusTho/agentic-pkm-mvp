@@ -328,18 +328,21 @@ def test_delete_leaves_anchored_tombstone(monkeypatch: pytest.MonkeyPatch) -> No
     # payload) through outbox_worker's real, production dispatch entrypoint --
     # this proves the end-to-end wiring from ingest.object.deleted to
     # purge_vectors, not just the primitive in isolation. ---
-    import app.stores as stores_module
     from app.events.models import new_event
     from app.events.types import INGEST_OBJECT_DELETED
+    from app.services import indexer as indexer_module
     from app.workers import outbox_worker
 
-    # handle_ingest_object_deleted resolves the vector index via a lazy
-    # ``from app.stores import get_vector_index`` inside the function (so
-    # tests can retarget it without import-order games) -- patch the source
-    # attribute the fresh import binds to, so the handler purges THIS test's
+    # The worker handler delegates its purge to
+    # ``app.services.indexer.purge_object_vectors`` (the allowlisted indexer
+    # seam onto the vector index -- the worker itself must not import the
+    # transitional app.stores layer, per tests/architecture/
+    # test_deprecated_store_callers.py). purge_object_vectors resolves the
+    # index through app.services.indexer's module-level ``get_vector_index``
+    # binding -- patch that binding so the handler purges THIS test's
     # vector_index instance (already seeded above) rather than the separate
     # process-global singleton.
-    monkeypatch.setattr(stores_module, "get_vector_index", lambda: vector_index)
+    monkeypatch.setattr(indexer_module, "get_vector_index", lambda: vector_index)
 
     envelope = new_event(event_type=INGEST_OBJECT_DELETED, payload=dict(payload))
     message = {
