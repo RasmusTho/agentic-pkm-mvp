@@ -12,6 +12,13 @@ services:
   api:
     ports: !override
       - "18002:8000"
+    # #2991: test channel writes heartbeat/state/outbox artifacts under
+    # /app/tmp-test instead of the base /app/tmp default. Mount the SAME
+    # per-project named runtime-tmp volume at that path so api/worker/watcher
+    # share the test-channel runtime surface too — otherwise the #2991
+    # cross-container-visibility fix would not extend to the test channel.
+    volumes:
+      - "runtime-tmp:/app/tmp-test"
     environment:
       API_HEALTHCHECK_URL: http://host.docker.internal:18002/readyz
       PKM_ENVIRONMENT: test
@@ -28,6 +35,8 @@ services:
       VAULT_DESK_DIR_REL: "🛠️ Workbench"
 
   worker:
+    volumes:
+      - "runtime-tmp:/app/tmp-test"
     environment:
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
@@ -43,6 +52,8 @@ services:
       VAULT_DESK_DIR_REL: "🛠️ Workbench"
 
   watcher:
+    volumes:
+      - "runtime-tmp:/app/tmp-test"
     environment:
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
