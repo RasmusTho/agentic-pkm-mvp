@@ -23,6 +23,7 @@ from app.panel.checkbox_projection import (
 from app.panel.confirmation import (
     ConfirmRequest,
     ConfirmResponse,
+    PanelReceiptPersistenceError,
     SameTurnExecutionError,
     UnknownProposalError,
 )
@@ -41,6 +42,24 @@ async def panel_confirm(request: ConfirmRequest) -> ConfirmResponse:
         )
     except SameTurnExecutionError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    except PanelReceiptPersistenceError as exc:
+        # Receipt-before-ack (P-5, T-panel-confirm): the panel.action.* receipt
+        # could not be persisted to any outbox sink. Withhold the success ack
+        # rather than return a receipt for a lost accountability record —
+        # mirrors T-capture's authority_receipt_persistence_failed shape.
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "authority_receipt_persistence_failed",
+                "state": "not_acknowledged",
+                "message": (
+                    "The panel action may have been applied, but its "
+                    "accountability receipt could not be persisted; success "
+                    "acknowledgement was withheld."
+                ),
+                "trace_id": exc.trace_id,
+            },
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 

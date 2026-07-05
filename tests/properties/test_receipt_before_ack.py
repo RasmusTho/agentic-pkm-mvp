@@ -48,6 +48,19 @@ follow-up per Out of Scope):
      for a raising store); ``_handle_promotion_payload`` has no try/except
      around ``emit(...)``, so the exception propagates out of
      ``consume_promotion_intent_payload`` uncaught.
+  6. **T-panel-confirm** (``app/panel/confirmation.py::
+     PanelConfirmationService.confirm`` via ``_emit_projection_event``) --
+     fixed by #2962 (follow-up of this module's #2912, which explicitly
+     out-of-scoped it). Was ``try: append_jsonl_outbox_event(...) /
+     write_outbox_event(...) except Exception: logger.debug(...)`` with an
+     unconditional ``return evt.event_id`` -- so a lost ``panel.action.logged``
+     / ``panel.action.blocked`` receipt was acked as ``status="logged"`` with a
+     receipt_id. Now ``_emit_projection_event`` tracks an ``emitted`` flag
+     across both sinks (JSONL required, DB mirrored when pg) and raises
+     ``PanelReceiptPersistenceError`` when neither persists; the
+     ``/api/panel/confirm`` route maps it to a withheld-ack 500
+     (``authority_receipt_persistence_failed`` / ``state=not_acknowledged``),
+     mirroring T-capture.
 
 Each registered transition gets one test: inject a failing
 event/receipt-store seam (raises on insert) -> invoke the transition's real
@@ -84,6 +97,23 @@ from app.promotion.consumer import consume_promotion_intent_payload, reset_promo
 from tests.api._vault_test_helpers import bind_initialized_vault
 
 import app.api.routes.companion as companion_module
+import app.panel.confirmation as panel_confirm_module
+from app.agents.panel.writeback import stable_action_id
+from app.events.panel import (
+    NoteRef,
+    PanelInfo,
+    PanelIntentAction,
+    PanelIntentEvent,
+    PanelIntentPayload,
+    PanelRuntimeActionResult,
+)
+from app.panel.confirmation import (
+    ConfirmIdempotencyStore,
+    ConfirmRequest,
+    PanelConfirmationService,
+    ProposalStore,
+    StagedProposal,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +352,192 @@ def test_failing_receipt_store_fails_the_transition_promote(
 
 
 # ===========================================================================
+# 6. T-panel-confirm -- fixed by this issue
+# ===========================================================================
+
+
+def _panel_intent(
+    note_path: str | None,
+    *,
+    note_uuid: str = "panel-prop-uuid-1",
+    action_label: str = "log this",
+) -> PanelIntentEvent:
+    aid = stable_action_id(action_label)
+    return PanelIntentEvent(
+        payload=PanelIntentPayload(
+            note=NoteRef(uuid=note_uuid, path=note_path),
+            panel=PanelInfo(panel_id="panel-prop-1", instruction="do the thing"),
+            actions=[PanelIntentAction(id=aid, label=action_label, checked=True)],
+        )
+    )
+
+
+class _LoggedExecuteResult:
+    """Minimal ``execute_panel_intent`` result: one checked action, all logged,
+    no pre-emitted events -- so ``confirm()`` reaches ``_emit_projection_event``
+    for ``panel.action.logged`` (the accountability receipt under test)."""
+
+    def __init__(self, action_label: str = "log this") -> None:
+        aid = stable_action_id(action_label)
+        self.actions = [
+            PanelRuntimeActionResult(
+                id=aid, label=action_label, checked=True, status="logged", details={}
+            )
+        ]
+        self.emitted_events: list[object] = []
+
+
+def _panel_service_with_staged_proposal(
+    *,
+    proposal_id: str = "panel-prop-1",
+    note_uuid: str = "panel-prop-uuid-1",
+    note_path: str | None = None,
+) -> PanelConfirmationService:
+    """Fresh in-memory service with one proposal staged outside the same-turn
+    window (``proposed_at=0.0``)."""
+    ps = ProposalStore()
+    ids = ConfirmIdempotencyStore()
+    svc = PanelConfirmationService(ps, ids)
+    ps.stage(
+        proposal_id,
+        StagedProposal(
+            artifact_id=note_uuid,
+            intent_event=_panel_intent(note_path, note_uuid=note_uuid),
+            proposed_at=0.0,
+        ),
+    )
+    return svc
+
+
+def _panel_confirm_request(
+    *,
+    proposal_id: str = "panel-prop-1",
+    artifact_id: str = "panel-prop-uuid-1",
+    ikey: str = "panel-ikey-1",
+) -> ConfirmRequest:
+    return ConfirmRequest(
+        proposal_id=proposal_id,
+        artifact_id=artifact_id,
+        action="confirm",
+        idempotency_key=ikey,
+    )
+
+
+def test_failing_receipt_store_fails_panel_confirm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T-panel-confirm (logged branch): when the required JSONL sink cannot
+    persist the ``panel.action.logged`` receipt, the confirm withholds its ack.
+
+    Writes are healthy (guard stubbed) so ``confirm()`` runs confirm -> execute
+    -> all-logged classification and reaches the ``panel.action.logged`` emit;
+    the JSONL sink then fails and, with no DB mirror configured
+    (``STORE_BACKEND=memory``), no sink persists. Before this issue
+    ``_emit_projection_event`` swallowed that and returned ``evt.event_id``, so
+    ``confirm()`` returned ``status="logged"`` with a receipt for a receipt that
+    never persisted. Now it raises ``PanelReceiptPersistenceError`` and the
+    ``/api/panel/confirm`` route converts that into a withheld-ack 500
+    (``authority_receipt_persistence_failed`` / ``state=not_acknowledged``),
+    never a success-with-lost-receipt, and leaves no success cached / the
+    proposal staged for retry.
+    """
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
+    # Healthy writes + memory backend: reach the logged branch, and keep the DB
+    # mirror path unconfigured so the JSONL sink is the only (failing) sink.
+    monkeypatch.setattr(
+        panel_confirm_module.DEFAULT_WRITE_GUARD, "assert_writes_allowed", lambda action: None
+    )
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+
+    def _fail_jsonl(*args: object, **kwargs: object) -> bool:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(panel_confirm_module, "append_jsonl_outbox_event", _fail_jsonl)
+    monkeypatch.setattr(
+        panel_confirm_module, "execute_panel_intent", lambda intent: _LoggedExecuteResult()
+    )
+
+    svc = _panel_service_with_staged_proposal()
+    monkeypatch.setattr(panel_confirm_module, "_service", svc)
+
+    resp = TestClient(app, raise_server_exceptions=False).post(
+        "/api/panel/confirm",
+        json={
+            "proposal_id": "panel-prop-1",
+            "artifact_id": "panel-prop-uuid-1",
+            "action": "confirm",
+            "idempotency_key": "panel-ikey-1",
+        },
+    )
+
+    assert resp.status_code == 500
+    detail = resp.json()["detail"]
+    assert detail["error"] == "authority_receipt_persistence_failed"
+    assert detail["state"] == "not_acknowledged"
+    # Trace-correlatable withheld ack (falls back to the idempotency key when the
+    # staged proposal carries no trace_id).
+    assert detail["trace_id"] == "panel-ikey-1"
+
+    # No success-with-lost-receipt: nothing cached under the key, proposal still
+    # staged so a post-recovery retry resolves instead of failing unknown.
+    assert svc._idempotency.get("panel-ikey-1") is None
+    assert svc._proposals.get("panel-prop-1") is not None
+
+
+def test_failing_receipt_store_fails_panel_confirm_blocked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T-panel-confirm (blocked branch): a WriteGuard-blocked confirm whose
+    ``panel.action.blocked`` receipt cannot persist also withholds its ack.
+
+    The blocked branch emits an accountability receipt too; if the JSONL sink
+    fails with no DB mirror configured, ``_emit_projection_event`` raises and the
+    route returns the same withheld-ack 500 rather than a 200
+    ``status="blocked"`` for a lost blocked-receipt. The proposal stays staged (a
+    WriteGuard block is transient), so retry after recovery resolves it.
+    """
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+
+    def _blocked(action: str) -> None:
+        raise panel_confirm_module.WritesBlockedError("unhealthy", "maintenance", action)
+
+    monkeypatch.setattr(
+        panel_confirm_module.DEFAULT_WRITE_GUARD, "assert_writes_allowed", _blocked
+    )
+
+    def _fail_jsonl(*args: object, **kwargs: object) -> bool:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(panel_confirm_module, "append_jsonl_outbox_event", _fail_jsonl)
+
+    svc = _panel_service_with_staged_proposal()
+    monkeypatch.setattr(panel_confirm_module, "_service", svc)
+
+    resp = TestClient(app, raise_server_exceptions=False).post(
+        "/api/panel/confirm",
+        json={
+            "proposal_id": "panel-prop-1",
+            "artifact_id": "panel-prop-uuid-1",
+            "action": "confirm",
+            "idempotency_key": "panel-ikey-blocked",
+        },
+    )
+
+    assert resp.status_code == 500
+    detail = resp.json()["detail"]
+    assert detail["error"] == "authority_receipt_persistence_failed"
+    assert detail["state"] == "not_acknowledged"
+
+    # Blocked confirm that could not persist its receipt: nothing cached, proposal
+    # kept staged (transient block) for a post-recovery retry.
+    assert svc._idempotency.get("panel-ikey-blocked") is None
+    assert svc._proposals.get("panel-prop-1") is not None
+
+
+# ===========================================================================
 # Ordering assertion: receipt insert happens-before the ack/success point
 # ===========================================================================
 
@@ -409,3 +625,43 @@ def test_recording_receipt_store_ordering_promote_insert_before_applied(
     # an empty call list with a claimed success.
     assert "promotion.transition.applied" in calls
     assert "promote.done" in calls
+
+
+def test_panel_confirm_receipt_insert_happens_before_ack(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With a recording (non-raising) JSONL sink, the ``panel.action.logged``
+    receipt insert is observed by the time ``confirm()`` returns its
+    ``status="logged"`` ack -- pinning insert-then-ack, not insert-xor-ack.
+
+    JSONL-only path (``not pg``-safe): the autouse memory backend plus explicit
+    DSN clearing keep ``_emit_projection_event`` off the DB mirror, so the real
+    ``append_jsonl_outbox_event`` seam is the observed write point.
+    """
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+
+    calls: list[str] = []
+    original_append = panel_confirm_module.append_jsonl_outbox_event
+
+    def _recording_append(path: Path, event: object, **kwargs: object) -> bool:
+        calls.append(str(getattr(event, "event", None)))
+        return original_append(path, event, **kwargs)
+
+    monkeypatch.setattr(panel_confirm_module, "append_jsonl_outbox_event", _recording_append)
+    monkeypatch.setattr(
+        panel_confirm_module, "execute_panel_intent", lambda intent: _LoggedExecuteResult()
+    )
+
+    svc = _panel_service_with_staged_proposal()
+
+    assert calls == []
+    resp = svc.confirm(_panel_confirm_request())
+
+    # The receipt insert happened, and it happened before this observation
+    # point (confirm returning its logged ack) -- never a logged success with
+    # no receipt recorded at all.
+    assert resp.status == "logged"
+    assert resp.receipt is not None and resp.receipt.receipt_id
+    assert "panel.action.logged" in calls
