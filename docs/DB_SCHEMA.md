@@ -3,7 +3,7 @@ Doc role: Reference
 Authority: Human-readable snapshot of the current database schema and DB outbox bootstrap; migrations and bootstrap code remain the executable source of truth.
 Temporal class: operational
 Source of truth: code
-Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kernel04_store_schema_in_migrations.py + app/services/outbox.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py (2026-07-05)
+Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kernel04_store_schema_in_migrations.py + app/services/outbox.py + app/alembic/versions/f3a1c9d2e4b7_kernel05_outbox_schema_in_migrations.py + app/heimdal/observation_log.py + app/heimdal/cursor_store.py + app/alembic/versions/8b21e6a1f0c4_heim_observation_log_and_cursor.py (2026-07-06)
 
 ## v5.5 Baseline Delta (Current Reality)
 - Registry watcher is the runtime default; legacy snapshot watcher is dev-only.
@@ -278,6 +278,36 @@ audited `app/services/outbox.py::bootstrap()` produced it; `bootstrap()` is asse
 Interpretation:
 - the outbox is the canonical runtime queue,
 - but the event payload is still an operational artifact layer rather than the whole domain model.
+
+## Heimdal Observation Log (append-only, per-consumer cursor)
+
+Migration-owned (#3039, Epic #3019 slice A2): Alembic revision `8b21e6a1f0c4` creates both tables;
+`app/heimdal/observation_log.py`/`app/heimdal/cursor_store.py::_bootstrap_pg()` are assert-only
+outside tests (`STORE_SCHEMA_AUTOCREATE=1` opts test fixtures into create-on-demand), mirroring the
+KERNEL-04/KERNEL-05 precedent. See `docs/EVENTS.md :: Heimdal observation log` for the full contract.
+
+- `heimdal_observation_log` — the canonical Heimdal <-> Mimer constituent seam; a separate table from
+  `outbox`, never a `outbox` topic family.
+  - `id` (`uuid`, PK) — the row id is the caller-derived idempotency key (same convention as
+    `outbox.id`), not a random default.
+  - `topic` (`text`, `NOT NULL`)
+  - `payload` (`jsonb`, `NOT NULL`) — the reused outbox envelope (see `docs/EVENTS.md`)
+  - `created_at` (`timestamptz`, `NOT NULL`, default `now()`)
+  - `sequence` (`bigserial`, `NOT NULL`) — monotone log position; the basis for cursor reads
+  - Indexes: `heimdal_observation_log_seq_idx`, `heimdal_observation_log_topic_idx`
+  - **No `delivered_at`/`attempts` columns** — unlike `outbox`, this is not a single-consumer work
+    queue; every consumer reads the same rows independently via its own cursor.
+  - **Append-only enforced by DB trigger** (`heimdal_observation_log_no_update`, HEIM-1): any
+    UPDATE or DELETE against this table raises, independent of caller. The Python API also exposes
+    no update/delete function.
+- `heimdal_observation_cursor` — one row per consumer; consumers never share or affect each other's row.
+  - `consumer_id` (`text`, PK)
+  - `position` (`bigint`, `NOT NULL`, default `0`) — the next unread `sequence` for this consumer
+  - `updated_at` (`timestamptz`, `NOT NULL`, default `now()`)
+
+Interpretation:
+- the log is Heimdal's durable evidence stream; it is not authority over knowledge (HEIM-8),
+- consumer projections built by replaying the log from a cursor are derived and rebuildable.
 
 ## Explicit Deltas / Known Gaps
 - The primary runtime store is the `store_*` set, migration-owned since Alembic revision

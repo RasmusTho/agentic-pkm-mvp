@@ -159,6 +159,50 @@ Outbox events MUST NOT carry embedding vectors.
 - Embeddings are computed in the indexer stage.
 - Events may carry embedding metadata (dimension, model, counts) but not the raw vector payload.
 
+## Heimdal observation log (append-only, per-consumer cursor)
+
+`app/heimdal/observation_log.py`, `app/heimdal/cursor_store.py`, `app/heimdal/publish.py` (#3039,
+Epic #3019 slice A2; ratified by `docs/adr/ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md`
+§1; specified by `docs/HEIMDAL/FABLE_COMPANION.md` §4.2/§1.2).
+
+This is a **separate canonical stream**, not a DB-outbox topic family. It reuses this document's
+outbox envelope (`event`/`event_id`/`trace_id`/`source`/`timestamp`/`payload`/`meta`) verbatim via
+`app.events.schema.make_outbox_event`, and reuses `derive_idempotency_key`/`payload_fingerprint`
+verbatim from `app.services.outbox` — but writes to its own table
+(`heimdal_observation_log`, migration `8b21e6a1f0c4`), never to `outbox`. The envelope `timestamp` on
+a Heimdal observation event is emission time only; observation time (`observed_at_start`, etc.) lives
+in the payload, per FABLE_COMPANION §1.2 / HEIM-10.
+
+Contract:
+
+- **Append-only (HEIM-1).** The log is insert-only: no producer, consumer, or operator path may
+  update or delete an existing row. Enforced at two independent layers: the Python store
+  (`app.heimdal.observation_log`) exposes no update/delete function at all, and the Postgres backend
+  additionally installs a trigger that rejects any UPDATE/DELETE statement against the table
+  (`heimdal_observation_log_no_update`, migration `8b21e6a1f0c4`) regardless of which code path or
+  client issues it. Corrections and revisions are new rows, never rewrites of the original
+  (`supersedes`/`revision_of` are payload fields the log itself has no opinion on).
+- **Per-consumer cursor (`heimdal_observation_cursor`).** Each `consumer_id` owns its own
+  `(consumer_id, position)` row. Reading (`read_observations_for_consumer`) never mutates the
+  cursor; advancing (`advance_cursor_for_consumer`/`consume_observations`) is explicit, monotone
+  (never rewinds), and touches only that consumer's row. A `consumer_id` seen for the first time
+  starts at position 0 and can rebuild its entire projection by reading the whole log from event
+  zero — this is what "downstream constituents are read-models" means in practice.
+- **Idempotency (KERNEL-02 discipline, reused not forked).** `app.heimdal.publish.publish_observation`
+  derives the row's id via the shared `derive_idempotency_key(topic, observation_id,
+  content_fingerprint)`, where the fingerprint folds in the payload plus `stage_versions`
+  (`app.heimdal.publish.observation_fingerprint`). A crash-retry re-publish of the same evidence at
+  the same stage versions re-derives the same key and is swallowed (`ON CONFLICT (id) DO NOTHING`,
+  same convention as `write_outbox_event`); a revision (changed `stage_versions`) or a correction
+  (changed payload content) derives a distinct key and always produces a new row.
+- **Seam discipline.** Consumers (Mimer) must read only through
+  `app.heimdal.publish.read_observations_for_consumer` / `consume_observations` — never by importing
+  `app.heimdal.observation_log` and querying the table directly. This keeps the boundary
+  cursor-shaped, not a shared-table coupling (issue #3039 Constraints).
+- **Out of scope for this slice:** the observation payload's own field schema (family, entity
+  mentions, confidence axes — that is a separate slice, FABLE_COMPANION §11#3); any transport swap to
+  a stream broker (v2, ADR-gated, FABLE_COMPANION §4.3(b)).
+
 ## Event catalog (selected)
 
 ## Interpretation rules
