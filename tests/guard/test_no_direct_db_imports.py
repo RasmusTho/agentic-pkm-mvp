@@ -34,7 +34,9 @@ ALLOW_FILES = (
     'app/store/relation_index.py',
     'app/memory_kv/store.py',
     'app/agent/repository.py',
-    'app/api/routes/search.py',
+    # #2989: /search now reads the canonical retrieval capability
+    # (app.retrieval.capability.retrieve) instead of psycopg/app.db directly;
+    # no allowlist entry needed.
     # Health contract reads the live DB reachability probe (ping_postgres) so
     # readiness reflects real dependency health (#2598). It consumes only the
     # bounded SELECT-1 ping, not the data layer.
