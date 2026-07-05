@@ -36,6 +36,12 @@ drains GraphQL to zero and stalls every other agent's reads — a recurring, sys
 6. **Use the shared helper, preferably through the blessed script.** Do not hand-roll CI or Codex
    wait loops; `scripts/await_pr_checks.sh` delegates shared backoff/verdict behavior to
    `app.dispatcher.poll_backoff`.
+7. **Dedupe check-runs by latest record per name before classifying.** GitHub keeps every check-run
+   record for a head SHA, so a re-run after a body/config fix leaves both the stale failed record
+   and the newer successful one for the same check name on one SHA (observed on PR #2915 and
+   #2924's `pr-contract` check). `scripts/await_pr_checks.sh` keeps only the latest record per
+   check-run name (ranked by `started_at`, falling back to run id) before green/red classification;
+   a genuinely failed latest record still fails closed.
 
 ## Blessed path
 
