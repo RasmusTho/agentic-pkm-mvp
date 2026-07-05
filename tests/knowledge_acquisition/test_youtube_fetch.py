@@ -200,3 +200,46 @@ def test_foreign_video_own_language_track_accepted(monkeypatch):
 
     assert outcome.acquisition_method == "captions_manual"
     assert outcome.language == "de"
+
+
+def test_vtt_preferred_when_json3_listed_first(monkeypatch):
+    # Regression for #2957: real yt-dlp responses list `json3` before `vtt` in the
+    # per-language track list (verified against multiple real videos). The old
+    # `_pick_track_url` did a single pass checking `ext in {"vtt", "srv3", "json3"}` and
+    # returned the FIRST matching track regardless of preference — on every real fetch
+    # that meant `json3`, which `normalize()`'s VTT-only cue parser can never parse
+    # (fail-loud NormalizeError on every real-video caption fetch). `vtt` must be chosen
+    # whenever it is present, no matter where it sorts in the raw track list.
+    info = _base_info(
+        subtitles={
+            "en": [
+                {"ext": "json3", "url": "https://example.com/manual.json3"},
+                {"ext": "srv1", "url": "https://example.com/manual.srv1"},
+                {"ext": "srv3", "url": "https://example.com/manual.srv3"},
+                {"ext": "vtt", "url": "https://example.com/manual.vtt"},
+            ]
+        },
+        automatic_captions={},
+    )
+    monkeypatch.setattr(plugin, "yt_dlp_extract_info", lambda url: info)
+
+    def fake_caption_body(url: str) -> str:
+        assert url == "https://example.com/manual.vtt"
+        return "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello vtt world"
+
+    monkeypatch.setattr(plugin, "fetch_caption_body", fake_caption_body)
+
+    outcome = plugin.fetch(FAKE_URL)
+
+    assert outcome.acquisition_method == "captions_manual"
+    assert outcome.record["caption_body"].startswith("WEBVTT")
+
+
+def test_pick_track_url_falls_back_to_first_when_no_preferred_ext():
+    # No vtt/srv3/json3 present at all: falls back to the first track in the list
+    # (unchanged fallback behavior, still exercised for coverage of the new lookup path).
+    tracks = [
+        {"ext": "ttml", "url": "https://example.com/manual.ttml"},
+        {"ext": "srt", "url": "https://example.com/manual.srt"},
+    ]
+    assert plugin._pick_track_url(tracks) == "https://example.com/manual.ttml"

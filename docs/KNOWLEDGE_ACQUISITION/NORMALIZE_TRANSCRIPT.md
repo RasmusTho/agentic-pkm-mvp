@@ -13,8 +13,15 @@ can_parallelize_with: [ASR_FALLBACK_PATH.md]
 
 ## Purpose
 
-Turn any `raw` transcript record (caption vtt/json3 or ASR segments) into the one source-agnostic
+Turn any `raw` transcript record (caption VTT or ASR segments) into the one source-agnostic
 normalized artifact all extractors consume. Deterministic, no LLM calls.
+
+Caption-path parsing is VTT-only (`parse_caption_cues` matches VTT timestamp lines); the fetch
+side (`youtube_plugin.py::_pick_track_url`, #2957) explicitly prefers a `vtt` track whenever one
+is present so a caption-method raw record always carries a VTT-shaped `caption_body` in practice.
+`json3`/`srv3` remain in the plugin's accepted-ext fallback list only as a last resort when no
+`vtt` track exists at all; this stage does not parse either format today, so a caption record that
+somehow lands here as `json3`/`srv3` still fails loud per the guard below.
 
 ## What This Task Does
 

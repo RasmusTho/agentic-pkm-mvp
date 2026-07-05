@@ -192,10 +192,24 @@ def select_caption_track(
     return CaptionSelection(available=False)
 
 
+# Explicit preference order, checked in full before falling back to the raw list order
+# (#2957): YouTube's timedtext API consistently lists `json3` before `vtt` in
+# `info["subtitles"][lang]` / `info["automatic_captions"][lang]`, so a single pass over
+# `tracks` checking set membership silently locks onto `json3` on every real fetch.
+# `normalize()` (`app/knowledge_acquisition/normalize.py::parse_caption_cues`) only parses
+# VTT-shaped timestamp cues — a `json3` (or `srv3`, TTML-ish XML) body always yields zero
+# cues there, which is a fail-loud `NormalizeError`, not a silent bug, but it made every
+# real-video caption fetch dead on arrival at the normalize stage. `vtt` MUST be preferred
+# whenever present; `srv3`/`json3` remain accepted only as a last-resort fallback ext (kept
+# for forward-compatibility, though normalize() cannot parse them today either).
+_PREFERRED_CAPTION_EXTS: tuple[str, ...] = ("vtt", "srv3", "json3")
+
+
 def _pick_track_url(tracks: list[dict[str, Any]]) -> str | None:
-    for track in tracks:
-        if track.get("ext") in {"vtt", "srv3", "json3"}:
-            return track.get("url")
+    by_ext = {track.get("ext"): track.get("url") for track in tracks}
+    for ext in _PREFERRED_CAPTION_EXTS:
+        if ext in by_ext:
+            return by_ext[ext]
     return tracks[0].get("url") if tracks else None
 
 
