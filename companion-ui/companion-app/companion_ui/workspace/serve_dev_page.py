@@ -157,6 +157,13 @@ _DEFAULT_HOST = "0.0.0.0"
 _DEFAULT_PORT = 8111
 _DEFAULT_API_BASE_URL = "http://127.0.0.1:18001"
 _DEFAULT_API_TIMEOUT_SECONDS = 2.0
+# Long-running operator POST routes (e.g. /api/operator/ask -> /api/ask) can
+# take tens of seconds on a real synthesis backend (measured ~50s on the
+# ollama route). They get their own generous budget so the proxy does not
+# return runtime_unavailable while the backend is still working (#2993).
+# Health-probe GETs are unaffected: they keep their own short, explicit
+# timeout (see the 10.0s httpx.get calls below) independent of this value.
+_DEFAULT_ASK_TIMEOUT_SECONDS = 120.0
 _TRUTHY_ENV = {"1", "true", "yes", "on"}
 
 
@@ -181,11 +188,21 @@ def load_config() -> dict:
         )
     except (TypeError, ValueError):
         api_timeout_seconds = _DEFAULT_API_TIMEOUT_SECONDS
+    try:
+        ask_timeout_seconds = float(
+            os.environ.get(
+                "COMPANION_ASK_TIMEOUT_SECONDS",
+                str(_DEFAULT_ASK_TIMEOUT_SECONDS),
+            )
+        )
+    except (TypeError, ValueError):
+        ask_timeout_seconds = _DEFAULT_ASK_TIMEOUT_SECONDS
     return {
         "host": os.environ.get("HOST", _DEFAULT_HOST),
         "port": int(os.environ.get("PORT", str(_DEFAULT_PORT))),
         "api_base_url": os.environ.get("COMPANION_API_BASE_URL", _DEFAULT_API_BASE_URL),
         "api_timeout_seconds": max(0.25, api_timeout_seconds),
+        "ask_timeout_seconds": max(0.25, ask_timeout_seconds),
     }
 
 
@@ -15166,6 +15183,7 @@ def make_handler(
     api_base_url: str,
     production_profile: bool = False,
     static_assets: dict[str, tuple[str, bytes]] | None = None,
+    ask_timeout_seconds: float = _DEFAULT_ASK_TIMEOUT_SECONDS,
 ) -> type:
     """Return a configured BaseHTTPRequestHandler subclass.
 
@@ -15183,6 +15201,7 @@ def make_handler(
         _api_base_url = api_base_url
         _production_profile = production_profile
         _static_assets = _merged_static_assets
+        _ask_timeout_seconds = ask_timeout_seconds
 
         def _send_json(self, status_code: int, payload: dict) -> None:
             body = json.dumps(payload).encode("utf-8")
@@ -15720,6 +15739,20 @@ def make_handler(
             "/api/operator/ask": "/api/ask",
         }
 
+        # Operator POST paths that are long-running (real synthesis latency is
+        # tens of seconds) and therefore need a generous per-request timeout
+        # override instead of the client's short default (#2993). Keyed by the
+        # companion-UI-facing path (pre-rewrite).
+        _POST_PATH_TIMEOUT_OVERRIDES: dict[str, str] = {
+            "/api/operator/ask": "_ask_timeout_seconds",
+        }
+
+        def _post_timeout_override(self, path: str) -> Optional[float]:
+            attr_name = self._POST_PATH_TIMEOUT_OVERRIDES.get(path)
+            if attr_name is None:
+                return None
+            return getattr(self, attr_name)
+
         def _forwarded_client_headers(self, path: str) -> dict[str, str]:
             if path not in self._FORWARDED_CLIENT_AUTH_PATHS:
                 return {}
@@ -15751,12 +15784,15 @@ def make_handler(
                 self._send_json(400, {"error": "invalid_json", "message": "Request body must be JSON"})
                 return
             runtime_path = self._POST_PATH_REWRITES.get(parsed.path, parsed.path)
+            timeout_override = self._post_timeout_override(parsed.path)
             try:
                 forwarded_headers = self._forwarded_client_headers(parsed.path)
+                post_kwargs: dict = {"json": payload}
                 if forwarded_headers:
-                    data = self._client.post(runtime_path, json=payload, headers=forwarded_headers)
-                else:
-                    data = self._client.post(runtime_path, json=payload)
+                    post_kwargs["headers"] = forwarded_headers
+                if timeout_override is not None:
+                    post_kwargs["timeout"] = timeout_override
+                data = self._client.post(runtime_path, **post_kwargs)
             except WorkspaceClientError as exc:
                 self._proxy_error(
                     exc,
@@ -15796,7 +15832,11 @@ def main() -> None:
         base_url=config["api_base_url"],
         timeout=config["api_timeout_seconds"],
     )
-    handler = make_handler(client=client, api_base_url=config["api_base_url"])
+    handler = make_handler(
+        client=client,
+        api_base_url=config["api_base_url"],
+        ask_timeout_seconds=config["ask_timeout_seconds"],
+    )
     server = CompanionThreadingHTTPServer((config["host"], config["port"]), handler)
     print(
         "[companion-ui] DEV/STAGING ONLY — real-note workspace dev server",
@@ -15812,6 +15852,10 @@ def main() -> None:
     )
     print(
         f"[companion-ui] API timeout:  {config['api_timeout_seconds']}s",
+        flush=True,
+    )
+    print(
+        f"[companion-ui] Ask timeout:  {config['ask_timeout_seconds']}s",
         flush=True,
     )
     print(

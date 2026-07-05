@@ -288,6 +288,7 @@ class TestLoadConfig:
             "port": 8113,
             "api_base_url": "http://127.0.0.1:18000",
             "api_timeout_seconds": 2.0,
+            "ask_timeout_seconds": 120.0,
         }
 
 
