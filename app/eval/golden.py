@@ -101,7 +101,13 @@ def evaluate_golden_set(k: int = 5, *, rerank_provider: str | None = None) -> Di
     backup = _snapshot_store(store)
     corpus = load_corpus()
     judgments = load_judgments()
-    env_updates = {"RERANK_ENABLE": None, "RERANK_PROVIDER": None}
+    # Hermetic gate: the golden judgments are authored against the FULL seed
+    # corpus with no domain scoping, so the deterministic run must ignore an
+    # ambient ``ASK_DOMAIN_SCOPE`` (a leaked scope silently prefilters every
+    # doc out, tanking precision@k to 0 and flipping a clean pass to a
+    # spurious regression — #3016). Neutralized here alongside RERANK_* so the
+    # gate depends only on its fixtures, never on process env / test ordering.
+    env_updates = {"RERANK_ENABLE": None, "RERANK_PROVIDER": None, "ASK_DOMAIN_SCOPE": None}
     if rerank_provider:
         env_updates["RERANK_ENABLE"] = "1"
         env_updates["RERANK_PROVIDER"] = rerank_provider
@@ -161,7 +167,10 @@ def evaluate_bilingual_golden_set(k: int = 5, *, rerank_provider: str | None = N
     backup = _snapshot_store(store)
     corpus = load_bilingual_corpus()
     judgments = load_bilingual_judgments()
-    env_updates = {"RERANK_ENABLE": None, "RERANK_PROVIDER": None}
+    # Hermetic gate — see evaluate_golden_set: force the run unscoped so a
+    # leaked ``ASK_DOMAIN_SCOPE`` cannot prefilter the bilingual seed to empty
+    # and flip a clean pass to a spurious regression (#3016).
+    env_updates = {"RERANK_ENABLE": None, "RERANK_PROVIDER": None, "ASK_DOMAIN_SCOPE": None}
     if rerank_provider:
         env_updates["RERANK_ENABLE"] = "1"
         env_updates["RERANK_PROVIDER"] = rerank_provider
