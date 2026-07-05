@@ -499,6 +499,43 @@ retrievable; a blind ingester says so).
   `tests/invariants/test_expansion_invariants.py::test_declined_not_reproposed`.
 - **Related issues:** #2995 (EXP-2), #2994 (EXP-1, consultation point), #2980 (parent).
 
+### curation_citations_resolve
+
+- **Purpose:** Every `contradiction.claim_conflict` finding carries >= 2 in-vault source references
+  that resolve (as an existing note file) at materialization time; unresolvable evidence voids the
+  finding rather than materializing an uncited callout.
+- **Protected principle:** no uncited "trust me" claim — every contradiction surfaced to the human
+  is independently checkable against the vault, never asserted on the agent's word alone.
+- **Affected boundaries:** Curation finding pipeline (G2), Cognitive Expansion (contradiction pass,
+  sibling of Connect), Panel proposal surface.
+- **Expected failure mode:** a contradiction finding materializes with a citation pointing at a note
+  that was deleted, renamed, or never existed, giving the human an unverifiable "sourced" claim.
+- **Current enforcement:** live — `app/expansion/contradiction.py::run_contradiction_pass`
+  re-derives resolvable citations from the CURRENT vault state at materialization time
+  (`_resolvable_citations`); a finding whose resolvable count falls below
+  `MIN_RESOLVABLE_CITATIONS` (2) is voided before it ever reaches the propose writer.
+- **Test path:** `tests/invariants/test_curation_invariants.py::test_citations_resolve`,
+  `tests/curation/test_contradiction_citations_resolve.py`.
+- **Related issues:** #2999 (G2-4), #2980 (parent).
+
+### semantic_curation_never_autowrites
+
+- **Purpose:** Propose-track findings (including `contradiction.claim_conflict`) can only
+  materialize as unchecked `AI-åtgärder` checkboxes + receipts; no code path from a propose-track
+  finding reaches a body write, a checked box, or a `[!contradiction]` callout in the same pass —
+  the callout, when it exists at all, only ever rides a confirmed human action.
+- **Protected principle:** agents propose, human disposes; PA2-FREEFORM proposal/execution boundary.
+- **Affected boundaries:** Curation finding pipeline (G2), Cognitive Expansion (contradiction pass),
+  Panel proposal surface.
+- **Expected failure mode:** a pass writes a `[!contradiction]` callout or checked box directly,
+  collapsing the propose/confirm boundary into a single machine-authored write.
+- **Current enforcement:** live — `app/expansion/contradiction.py` contains zero callout-writing
+  code; its only write path is the shared `app.curation.proposal_writer.write_curation_proposals`,
+  which only ever inserts unchecked checkbox lines.
+- **Test path:** `tests/invariants/test_curation_invariants.py::test_semantic_never_autowrites`,
+  `tests/curation/test_semantic_never_autowrites.py`.
+- **Related issues:** #2999 (G2-4), #2980 (parent).
+
 ### create_never_autowrites_canonical
 
 - **Purpose:** No synthesis output reaches a canonical vault location without a human acceptance
@@ -780,6 +817,8 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 | synthesis_carries_source_provenance | #4,#9 | GOV/RCA | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/expansion/test_create_draft_lifecycle.py` |
 | staged_drafts_invisible_to_retrieval | #1,#9 | RCA/GOV | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/expansion/test_create_draft_lifecycle.py` |
 | expansion_requires_activation_record | #9 | GOV | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/activation/test_expansion_gate_records.py` |
+| curation_citations_resolve | #9 | GOV/RCA | static + runtime | `tests/invariants/test_curation_invariants.py`, `tests/curation/test_contradiction_citations_resolve.py` |
+| semantic_curation_never_autowrites | #9 | GOV/RCA | static + runtime | `tests/invariants/test_curation_invariants.py`, `tests/curation/test_semantic_never_autowrites.py` |
 
 ## Related documents
 
