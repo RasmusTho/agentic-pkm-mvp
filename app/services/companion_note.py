@@ -203,6 +203,32 @@ def find_duplicate_companions(vault_root: Path) -> list[DuplicateCompanion]:
     ]
 
 
+def find_companion_by_source_ref(vault_root: Path, source_ref: str) -> CompanionNote | None:
+    """Scan all companions for one whose source_ref matches the given
+    vault-relative path.
+
+    This is the durable path->uuid mapping for notes ingested through the
+    vault-alpha path (which keys store rows by note uuid without writing
+    ``file_state``): the companion survives deletion of the source note, so
+    watcher-detected deletions can still resolve the object identity to
+    purge (#2990).
+    """
+    wanted = str(source_ref)
+    companions_dir = vault_root / _companions_dir(vault_root)
+    if not companions_dir.exists():
+        return None
+    for cand in companions_dir.glob("*.md"):
+        try:
+            fm, _ = load_frontmatter(cand.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(fm, dict) and str(fm.get("source_ref", "")) == wanted:
+            companion = _fm_to_companion(fm)
+            if companion is not None:
+                return companion
+    return None
+
+
 def find_companion_by_content_hash(vault_root: Path, sha256: str) -> CompanionNote | None:
     """Scan all companions for one whose content_hash matches sha256."""
     companions_dir = vault_root / _companions_dir(vault_root)
