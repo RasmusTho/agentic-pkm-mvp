@@ -1,4 +1,4 @@
-State: Research survey (advisory), 2026-07-05. **This document is NOT a specification.** It surveys how others solve entity identification and recommends an approach to inform a *future* Heimdall/Mimer entity-identification design. It defines no contract, no schema, and no runtime behaviour; nothing here is binding until enacted through a proper spec + ADR.
+State: Research survey (advisory), 2026-07-05. **This document is NOT a specification.** It surveys how others solve entity identification and recommends an approach to inform a *future* Heimdal/Mimer entity-identification design. It defines no contract, no schema, and no runtime behaviour; nothing here is binding until enacted through a proper spec + ADR.
 Doc role: Research reference (advisory) — background reading, not a design of record
 Authority: None — advisory only. Subordinate to any future entity-identification spec/ADR. Claims no shipped reality.
 Owner: Architecture / Mimer knowledge layer (Rasmus)
@@ -10,7 +10,7 @@ Source of truth: this survey + the cited external sources (see §Sources)
 
 > ⚠️ **This is research, not a spec.** It exists only to inform a later design decision. Read it for the landscape and the recommendation — treat nothing here as decided or contractual. The actual entity-identification *specification* will be a separate, clearly-labelled document. Owner decisions captured so far are marked inline (✅).
 
-Scope: how to recognize entity **mentions** ("Anna", "Northvolt", "the Heimdall project") in transcribed text and resolve them to canonical entities in a **markdown-first, file-per-entity register owned by Mimer**, with a **graph DB as a derived index**. Priors: local-first/privacy, agent-proposes/human-confirms, streaming/incremental, entity kinds = people/orgs/projects (extensible).
+Scope: how to recognize entity **mentions** ("Anna", "Northvolt", "the Heimdal project") in transcribed text and resolve them to canonical entities in a **markdown-first, file-per-entity register owned by Mimer**, with a **graph DB as a derived index**. Priors: local-first/privacy, agent-proposes/human-confirms, streaming/incremental, entity kinds = people/orgs/projects (extensible).
 
 ---
 
@@ -92,9 +92,9 @@ Tie pronouns/aliases to the same entity.
 
 ## 5. Recommended approach for OUR constraints
 
-A local-first EDC pipeline, split across the Heimdall/Mimer seam already decided (Heimdall emits mentions; Mimer resolves):
+A local-first EDC pipeline, split across the Heimdal/Mimer seam already decided (Heimdal emits mentions; Mimer resolves):
 
-1. **Heimdall (capture side):** run **GLiNER** (or a local LLM) on the transcript → emit typed **mentions** (surface form, type, span, context sentence, confidence) on its event. No register access; no canonical identity. *(Confirms owner ruling: Heimdall emits mentions.)*
+1. **Heimdal (capture side):** run **GLiNER** (or a local LLM) on the transcript → emit typed **mentions** (surface form, type, span, context sentence, confidence) on its event. No register access; no canonical identity. *(Confirms owner ruling: Heimdal emits mentions.)*
 2. **Mimer (resolution side):**
    - **Candidate gen:** embedding retrieval over the entity-note register (+ alias/fuzzy match on names & `aliases:`).
    - **Disambiguation:** local-LLM rerank → matched entity id + confidence | new | ambiguous.
@@ -113,7 +113,7 @@ This reuses the system's existing embedding infra, honors local-first + human-co
 - **Public-KB (Wikidata) enrichment?** ✅ **Decided (2026-07-05): yes, in scope** — private register stays source of truth; Wikidata enriches public entities.
 - **Local model choice — GLiNER vs local LLM:** ✅ **Decided (2026-07-05): run a small bake-off** (a head-to-head comparison — run both on a few real voice memos, keep whichever extracts entities better) once real memos exist.
 - **Auto-link confidence threshold** + how much lands in the human-confirm queue — still open; ties directly to the staged **attention-calibration** work (input 5, §9-k).
-- **NER placement confirm:** extraction runs Heimdall-side (per the mentions ruling); candidate-gen/linking/merge run Mimer-side. To confirm when the design starts.
+- **NER placement confirm:** extraction runs Heimdal-side (per the mentions ruling); candidate-gen/linking/merge run Mimer-side. To confirm when the design starts.
 
 ## 7. Additional deep grounding (from the sub-searches) + three sharpened design insights
 

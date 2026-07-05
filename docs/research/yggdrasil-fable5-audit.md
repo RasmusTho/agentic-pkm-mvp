@@ -18,7 +18,7 @@ State: Draft (advisory research, 2026-07-05). Field scan + gap analysis; claims 
 
 **Guardrail:** *reduce friction, not intelligence.* Every recommendation is a **harden-or-compose** of existing architecture, never a rebuild; at most one targeted mechanical refactor. Nothing here adopts A2A/AGNTCY, a third-party memory vendor, or an external durable-execution engine (the standing don't-touch list). Where a compelling external pattern collides with an invariant, it is surfaced as a **Decision** (§IX), not silently taken.
 
-> *Naming footnote (stated once, then dropped): the handover's "Mimer" ≈ our current knowledge-surface module (retrieval seam = `app/retrieval/`), and "Heimdal" ≈ the proactivity/orchestration concern owned by the agent-runtime layer + the Contextual Relevance Engine. The exact Norse register (Mimer→Munin, Heimdall=sensor) is settled in ADR-0043 and irrelevant to this document's purpose. I use the plain capability names below.*
+> *Naming footnote (stated once, then dropped): the handover's "Mimer" ≈ our current knowledge-surface module (retrieval seam = `app/retrieval/`), and "Heimdal" ≈ the proactivity/orchestration concern owned by the agent-runtime layer + the Contextual Relevance Engine. The exact Norse register (Mimer→Munin, Heimdal=sensor) is settled in ADR-0043 and irrelevant to this document's purpose. I use the plain capability names below.*
 
 ---
 

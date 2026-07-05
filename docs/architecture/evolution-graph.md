@@ -47,7 +47,7 @@ graph TD
     KAP2[#2795 KAP Phase 2: one YouTube URL e2e<br/>next]
     SOS --> BUS[Layer-2 event-bus substrate<br/>next]
     KCLOSE -.-> BUS
-    BUS --> HEIM[Heimdall sensor constituent build<br/>next]
+    BUS --> HEIM[Heimdal sensor constituent build<br/>next]
     KAP2 -.-> HEIM
     SBS34[SBS Phase 3/4 contract seams #2359-#2362 #2358<br/>next]
     MV[#2143 multi-vault<br/>deferred-by-decision]
@@ -86,10 +86,10 @@ produces wrong or untrustworthy behavior). Dotted = soft prerequisites (cheaper-
 | #2807 chat artifact via WriteGuard | in-flight | L | M | M | L | L | Closes the last canonical-artifact class writing outside WG |
 | #1956 v6.1 release hub (chat mutation etc.) | in-flight | M | L | H | M | L | Release-channel mechanics exist; the hub is sequencing, not building |
 | #2655/#2698 env separation, pinned images | in-flight | M | M | M | L | M | Operational safety for every later promotion |
-| SoS enactment (merge #2888; #2890/#2891; glossary per ADR-0043 §6) | next | L | M | M | L | L | Pure docs; unblocks coherent naming for Heimdall/Munin/Hugin work |
+| SoS enactment (merge #2888; #2890/#2891; glossary per ADR-0043 §6) | next | L | M | M | L | L | Pure docs; unblocks coherent naming for Heimdal/Munin/Hugin work |
 | #2795 KAP Phase 2 (one YouTube URL e2e) | next | M | L | H | M | L | First acquisition vertical; platform-first precedent; ends at candidate |
 | Layer-2 event-bus substrate | next | H | M | H | H | H | Open Fable design (generalize outbox vs stream-native); **premature before kernel closeout** — the outbox contract is its foundation either way |
-| Heimdall sensor constituent | next | H | L | H | H | M | Consent OFF-default fixed; KAP-backbone question open; O=H (every constituent consumes its stream) but R/M=H (new always-on surface, privacy seam) |
+| Heimdal sensor constituent | next | H | L | H | H | M | Consent OFF-default fixed; KAP-backbone question open; O=H (every constituent consumes its stream) but R/M=H (new always-on surface, privacy seam) |
 | SBS Phase 3/4 contract seams (#2359/#2360/#2361/#2362/#2358) | next | L | M | M | L | L | Contract-first, module-lazy: cheap insurance against boundary erosion |
 | WSP ActiveContextSet seams | next | M | H | H | M | M | Kills the `activeVault` scalar leak (transition debt D1); prerequisite for multi-vault done right |
 | #2143 multi-vault | deferred-by-decision | M | L | M | M | M | Correct to defer until WSP seams exist — building it on `activeVault` would harden the debt |
@@ -115,7 +115,7 @@ it is an ops task, not a code project.
 3. **SoS enactment** (L risk docs-only; unblocks clean naming for every ecosystem workstream).
 4. **#2807 chat-WriteGuard** (L risk, closes a governance gap; already in flight).
 5. **KAP Phase 2 vertical** (M risk, H optionality — proves the acquisition-constituent pattern
-   end-to-end that Heimdall will reuse; ends at candidate so contamination risk is bounded).
+   end-to-end that Heimdal will reuse; ends at candidate so contamination risk is bounded).
 
 ### (c) Capabilities whose cost rises the longer they wait
 
@@ -131,7 +131,7 @@ it is an ops task, not a code project.
 
 ### What this graph recommends deferring (deferral is a decision)
 
-- **Layer-2 event bus + Heimdall build** — until kernel closeout + FD-P backup land. Heimdall's
+- **Layer-2 event bus + Heimdal build** — until kernel closeout + FD-P backup land. Heimdal's
   event stream inherits whatever event-log honesty the substrate has; building the ecosystem's most
   privacy-sensitive constituent on an unfinished journal contract is the one sequencing error this
   graph exists to prevent. (KAP Phase 2 is the right precursor instead — same pattern, bounded.)
@@ -161,8 +161,8 @@ retrieval work then benefits from); (c) interleave (KAP's bounded slice inside #
 debt remains; (c) most total progress, most coordination. *Graph's recommendation:* (c) — KAP
 Phase 2 is one bounded vertical; #2314 is a long arc that shouldn't block it.
 
-**OD-3 — Heimdall timing.**
-*Problem:* Fable-window pressure (charter, owner decisions fresh) argues for starting Heimdall now;
+**OD-3 — Heimdal timing.**
+*Problem:* Fable-window pressure (charter, owner decisions fresh) argues for starting Heimdal now;
 the graph's edges argue the event-bus substrate question should wait for kernel closeout.
 *Options:* (a) design now (Fable: bus architecture + KAP-backbone decision, docs only), build after
 substrate; (b) build now; (c) full defer.
@@ -186,8 +186,8 @@ Per-claim reconciliation against `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` and `docs/
 - **Conforms:** the critical-path reading is the SBS dependency posture applied in time (authority
   and persistence honesty before cognition surfaces); WSP-before-multi-vault is the SBS's own
   "scope collapse into active vault" failure-mode mitigation; deferral posture matches
-  contract-first/module-lazy (ADR-0016) and SFC single-node V1 (ADR-0020); the Heimdall/event-bus
-  nodes conform to the three-layer model in `docs/HEIMDALL/ECOSYSTEM_SOS_MODEL.md` (substrate
+  contract-first/module-lazy (ADR-0016) and SFC single-node V1 (ADR-0020); the Heimdal/event-bus
+  nodes conform to the three-layer model in `docs/HEIMDAL/ECOSYSTEM_SOS_MODEL.md` (substrate
   promotion is Layer-1-governed, enacted via ADR/CES, not by this graph).
 - **Extends:** (a) "FD-P backup" names a durability obligation the SBS assigns PDM but no fitness
   rule or roadmap track owns — flagged to CES as a fitness-rule extend-candidate; (b) the
@@ -202,6 +202,6 @@ Per-claim reconciliation against `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` and `docs/
 - `docs/architecture/formal-model.md` §5 (failure domains; the backup and identity nodes)
 - `docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md` §7 (dependency spine this extends past the kernel)
 - `docs/architecture/SBS_ROADMAP.md`, `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md` (transition-debt register)
-- `docs/HEIMDALL/ECOSYSTEM_SOS_MODEL.md`, ADR-0043 (ecosystem layer of the graph)
+- `docs/HEIMDAL/ECOSYSTEM_SOS_MODEL.md`, ADR-0043 (ecosystem layer of the graph)
 - `docs/testing/invariant-synthesis-2026-07.md` (RESEARCH-03; the property-layer node)
 - `docs/foundation/ARCHITECTURAL_CONSTITUTION.md` (RESEARCH-07; the laws the critical path serves)

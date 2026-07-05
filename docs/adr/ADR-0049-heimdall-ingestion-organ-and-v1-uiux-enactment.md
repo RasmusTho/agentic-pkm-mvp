@@ -1,11 +1,11 @@
-State: Proposed (owner decisions captured 2026-07-05; ratifies the §9-k reshape from `docs/HEIMDALL/FABLE_COMPANION.md` plus the three v1 UI/UX enactment decisions from the Heimdall UI/UX design thread). Records the owner's locked decisions; performs no code change and creates no runtime. Enactment is issue-first, deferred to follow-ups.
+State: Proposed (owner decisions captured 2026-07-05; ratifies the §9-k reshape from `docs/HEIMDAL/FABLE_COMPANION.md` plus the three v1 UI/UX enactment decisions from the Heimdal UI/UX design thread). Records the owner's locked decisions; performs no code change and creates no runtime. Enactment is issue-first, deferred to follow-ups.
 Doc role: Decision record (ADR)
-Authority: Authoritative for (a) the Heimdall↔Mimer ingestion boundary (Heimdall = the ecosystem ingestion organ), and (b) the v1 human-facing UI/UX posture for Heimdall (markdown-first control surface, capture posture, native-app topology). Extends ADR-0044's constituent structure; reshapes the §5 records-of-reality-vs-authored-content boundary in FABLE_COMPANION and moves KAP's acquisition front-end from Mimer to Heimdall. Does not redefine Mimer's internals. SoS scope + the capture/privacy posture are owner-reserved (R-SOS / R-EXTERNAL) and recorded here as the owner's locked decision, not an agent's.
+Authority: Authoritative for (a) the Heimdal↔Mimer ingestion boundary (Heimdal = the ecosystem ingestion organ), and (b) the v1 human-facing UI/UX posture for Heimdal (markdown-first control surface, capture posture, native-app topology). Extends ADR-0044's constituent structure; reshapes the §5 records-of-reality-vs-authored-content boundary in FABLE_COMPANION and moves KAP's acquisition front-end from Mimer to Heimdal. Does not redefine Mimer's internals. SoS scope + the capture/privacy posture are owner-reserved (R-SOS / R-EXTERNAL) and recorded here as the owner's locked decision, not an agent's.
 Owner: Architecture / CES stewardship (Rasmus)
 Temporal class: Durable decision (supersede via a new ADR only if the ingestion boundary, the markdown-first control-surface principle, the capture posture, or the app topology is reversed).
-Source of truth: This ADR plus `docs/HEIMDALL/FABLE_COMPANION.md` §9-k + §11 (the confirmed boundary, captured UX inputs, and v1 critical path), the Heimdall UI/UX design thread (design-of-record: the converged Claude Design v2 output + the owner decision sheet, working artifacts held outside the repo per design convention), and ADR-0043 / ADR-0044 (constituent naming + structure, extended here).
+Source of truth: This ADR plus `docs/HEIMDAL/FABLE_COMPANION.md` §9-k + §11 (the confirmed boundary, captured UX inputs, and v1 critical path), the Heimdal UI/UX design thread (design-of-record: the converged Claude Design v2 output + the owner decision sheet, working artifacts held outside the repo per design convention), and ADR-0043 / ADR-0044 (constituent naming + structure, extended here).
 
-# ADR-0049: Heimdall as the ecosystem ingestion organ + v1 UI/UX enactment (markdown-first control surface, discrete-capture posture, one-shell app topology)
+# ADR-0049: Heimdal as the ecosystem ingestion organ + v1 UI/UX enactment (markdown-first control surface, discrete-capture posture, one-shell app topology)
 
 **Date:** 2026-07-05
 **Status:** Proposed (owner decisions locked 2026-07-05; ratification pending review)
@@ -16,13 +16,13 @@ Source of truth: This ADR plus `docs/HEIMDALL/FABLE_COMPANION.md` §9-k + §11 (
 
 Two owner-directed lines converged on 2026-07-05:
 
-- **The Heimdall Fable window** (`docs/HEIMDALL/FABLE_COMPANION.md`) produced the v1 design and, at
-  **§9-k**, captured a confirmed owner decision that **Heimdall is the ecosystem's ingestion/sensing
+- **The Heimdal Fable window** (`docs/HEIMDAL/FABLE_COMPANION.md`) produced the v1 design and, at
+  **§9-k**, captured a confirmed owner decision that **Heimdal is the ecosystem's ingestion/sensing
   organ** — it owns **watch → fetch → transcribe → attribute** for *all* external sources (voice memos,
   YouTube/podcasts/web, later ambient), and Mimer owns cognition from the handoff. §9-k explicitly flagged
   this as a `reshape` of the §5 boundary that **routes through CES/ADR at enactment**, and left the
   human-facing control surface to a separate design thread.
-- **The Heimdall UI/UX design thread** (Thread B) ran a journey-based exploration of Heimdall's whole
+- **The Heimdal UI/UX design thread** (Thread B) ran a journey-based exploration of Heimdal's whole
   human-facing surface, and the owner ran an independent Claude Design pass. Both converged on
   **"Markdown holds the record; the UI is the lens,"** and the owner then locked three enactment decisions
   (capture posture, app topology, and two declared "bends").
@@ -32,22 +32,22 @@ issue-first. It performs no code change.
 
 ## Decision (owner, locked 2026-07-05)
 
-### 1. Heimdall is the ecosystem ingestion organ (ratifies §9-k)
+### 1. Heimdal is the ecosystem ingestion organ (ratifies §9-k)
 
-Heimdall owns the front of the chain for **every** external source: **watch → fetch → transcribe →
+Heimdal owns the front of the chain for **every** external source: **watch → fetch → transcribe →
 attribute → published event / candidate**. **Mimer** owns cognition from the handoff: **extract meaning →
-integrate → promote to knowledge**. Mimer never watches, fetches, or transcribes. Handoff point: Heimdall
+integrate → promote to knowledge**. Mimer never watches, fetches, or transcribes. Handoff point: Heimdal
 resolves *who/what was observed* (attribution, register refs, provenance, confidence); Mimer decides *what
 it means*. This **demotes** FABLE_COMPANION §5.1's records-of-reality-vs-authored-content line from an
 *ownership* boundary to an event **typing**, and **moves KAP's acquisition front-end** (source plugins,
-download, ASR) from Mimer to Heimdall; KAP's residual cognition/candidate-refinement stays in Mimer.
-Entity **resolution** is Mimer's (identity is knowledge): Heimdall emits entity **mentions**; the
+download, ASR) from Mimer to Heimdal; KAP's residual cognition/candidate-refinement stays in Mimer.
+Entity **resolution** is Mimer's (identity is knowledge): Heimdal emits entity **mentions**; the
 canonical register is Mimer-owned and **markdown-built** (notes canonical; any graph DB is a derived,
 rebuildable index).
 
 ### 2. Markdown-first control surface — held, with two declared bends
 
-Heimdall's entire control state is a small folder of **writable notes in the vault** (`_heimdall/**`, the
+Heimdal's entire control state is a small folder of **writable notes in the vault** (`_heimdal/**`, the
 entity notes, and the captured memos themselves). Every capability — watching, never-listing, interest
 weights, per-source filters, entity merges, consent grants, device config — is a **note edit the agent
 reads as intent**. Any UI is a **lens with better ergonomics, never the sole home of a capability**;
@@ -70,12 +70,12 @@ third-party / GDPR weight; v1 does not incur it.
 
 ### 4. Native app — Topology C (one shell, two bounded clients, splittable)
 
-The native app is **one shell ("Yggdrasil")** hosting **two bounded internal clients** — a Heimdall
+The native app is **one shell ("Yggdrasil")** hosting **two bounded internal clients** — a Heimdal
 (capture) client and a Mimer (knowledge) client — each binding **only** to its own constituent's contract,
 both reading/writing **only** the same vault notes. Not two separate apps day-one; not a merged app. The
 constituent boundary is enforced at the app layer, so a later **split into two apps is a repackaging, not a
 rewrite**, triggered only if always-on-mic App-Store review, capture-vs-reader stability, or a standalone
-capture device demands it. Platform split: **Heimdall client → iPhone + Watch** (capture/consent/device
+capture device demands it. Platform split: **Heimdal client → iPhone + Watch** (capture/consent/device
 health; absent on iPad); **Mimer client → iPhone + iPad-first** (the thinking canvas: multi-column,
 Pencil/keyboard, drag-to-vault, side-by-side entity confirmation). Obsidian is retained as the full-power
 editor of the same vault; **the apps are additional lenses, never the sole home**.
@@ -83,7 +83,7 @@ editor of the same vault; **the apps are additional lenses, never the sole home*
 ### 5. This records the owner's locked decision; enactment is issue-first
 
 This ADR performs **no** code change and creates no runtime. The v1 build follows the FABLE_COMPANION §11
-critical path, reconciled with decisions 2–4, as bounded issue-first slices (a Heimdall v1 epic + children).
+critical path, reconciled with decisions 2–4, as bounded issue-first slices (a Heimdal v1 epic + children).
 The red-team's build-blockers stand: **content-quarantine (F2)** and **reversible register split (F5)** are
 build-now before the vertical; **F1/F3/F4/F6** dispositions ride owner decisions §9-e/§9-h/§9-i.
 
@@ -99,9 +99,9 @@ build-now before the vertical; **F1/F3/F4/F6** dispositions ride owner decisions
 
 ## Consequences
 
-- The ingestion boundary is settled: **Heimdall = watch→fetch→transcribe→attribute for all sources**;
-  **Mimer = cognition from the handoff**. KAP's acquisition front-end moves to Heimdall; ADR-0043/0044's
-  constituent definitions are **extended** (Heimdall's scope now explicitly covers all external ingestion).
+- The ingestion boundary is settled: **Heimdal = watch→fetch→transcribe→attribute for all sources**;
+  **Mimer = cognition from the handoff**. KAP's acquisition front-end moves to Heimdal; ADR-0043/0044's
+  constituent definitions are **extended** (Heimdal's scope now explicitly covers all external ingestion).
 - v1 scope is bounded and low-risk: discrete capture only, so no third-party/GDPR/ambient complexity in the
   first vertical; the always-on mechanism exists on paper and in the consent note, dormant.
 - One native app to build and sign into, with the split option preserved.
@@ -119,11 +119,11 @@ changes (a hard two-apps split, or a merged app).
 
 ## References
 
-- `docs/HEIMDALL/FABLE_COMPANION.md` — §9-k (confirmed ingestion-organ boundary + captured UX inputs),
+- `docs/HEIMDAL/FABLE_COMPANION.md` — §9-k (confirmed ingestion-organ boundary + captured UX inputs),
   §9-k decision run (entity register Mimer-owned/markdown-built; ASR local fail-loud; YouTube seam;
   voice-memo capture), §11 (v1 critical path), §10 (red-team F1–F6).
-- `docs/HEIMDALL/OWNER_DECISIONS.md` (A4), `docs/HEIMDALL/CAPABILITY_CHARTER.md` (A3),
-  `docs/HEIMDALL/ENTITY_IDENTIFICATION_RESEARCH.md`.
-- `docs/adr/ADR-0043` (Heimdall naming), `docs/adr/ADR-0044` (Yggdrasil/Mimer structure) — extended here.
-- Heimdall UI/UX design thread — converged Claude Design v2 output + owner decision sheet (working
+- `docs/HEIMDAL/OWNER_DECISIONS.md` (A4), `docs/HEIMDAL/CAPABILITY_CHARTER.md` (A3),
+  `docs/HEIMDAL/ENTITY_IDENTIFICATION_RESEARCH.md`.
+- `docs/adr/ADR-0043` (Heimdal naming), `docs/adr/ADR-0044` (Yggdrasil/Mimer structure) — extended here.
+- Heimdal UI/UX design thread — converged Claude Design v2 output + owner decision sheet (working
   artifacts outside the repo per design convention).

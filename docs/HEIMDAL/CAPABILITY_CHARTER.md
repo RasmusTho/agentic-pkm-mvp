@@ -1,16 +1,16 @@
-State: Draft (advisory groundwork, 2026-07-04). The capability charter for Heimdall (Event Capture & Attribution) and the entry point for the Fable-5 architecture window. Separates FIXED constraints Fable may not touch from OPEN problems Fable must solve. Advisory until enacted through CES/ADR; creates no runtime behavior and no GitHub work.
+State: Draft (advisory groundwork, 2026-07-04). The capability charter for Heimdal (Event Capture & Attribution) and the entry point for the Fable-5 architecture window. Separates FIXED constraints Fable may not touch from OPEN problems Fable must solve. Advisory until enacted through CES/ADR; creates no runtime behavior and no GitHub work.
 Doc role: Capability charter (Draft) — Fable entry point
-Authority: Authoritative for the *scope contract* of the Heimdall architecture window: what is fixed, what is open, and the proposed fitness invariants. Subordinate to `ECOSYSTEM_SOS_MODEL.md` (where Heimdall sits) and `OWNER_DECISIONS.md` (owner-reserved calls). Claims no shipped reality.
+Authority: Authoritative for the *scope contract* of the Heimdal architecture window: what is fixed, what is open, and the proposed fitness invariants. Subordinate to `ECOSYSTEM_SOS_MODEL.md` (where Heimdal sits) and `OWNER_DECISIONS.md` (owner-reserved calls). Claims no shipped reality.
 Owner: Architecture / CES stewardship (Rasmus)
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: this doc + `ECOSYSTEM_SOS_MODEL.md`, `OWNER_DECISIONS.md`, owner decision session 2026-07-04.
 
-# Heimdall A3 — Capability charter (Fable entry point)
+# Heimdal A3 — Capability charter (Fable entry point)
 
-## What Heimdall is
+## What Heimdal is
 
-**Heimdall = Event Capture & Attribution.** It continuously observes reality and converts observation
+**Heimdal = Event Capture & Attribution.** It continuously observes reality and converts observation
 into **attributed, timestamped events** carrying **confidence** and **provenance**. Its responsibility
 ends at a **published event**. Everything downstream (knowledge promotion in Munin, agent reasoning in
 Hugin) is a read-model of that stream and is out of scope here.
@@ -25,9 +25,9 @@ appears in `OWNER_DECISIONS.md`, stops and returns to the owner.
 
 These are settled. Fable designs within them; it does not relitigate them.
 
-1. **Position in the SoS.** Heimdall is a **sibling constituent**, not a subsystem of Munin. It owns
+1. **Position in the SoS.** Heimdal is a **sibling constituent**, not a subsystem of Munin. It owns
    the append-only fact stream; other constituents are downstream read-models. (`ECOSYSTEM_SOS_MODEL.md` §1–§2)
-2. **Ends at a published event.** Heimdall's boundary is a published, attributed event. It does not
+2. **Ends at a published event.** Heimdal's boundary is a published, attributed event. It does not
    own knowledge promotion, memory, or agent action.
 3. **Event-log-vs-projection.** The event stream is append-only and canonical for "what was observed";
    downstream projections never mutate it and never make an event canonical knowledge without governed
@@ -40,7 +40,7 @@ These are settled. Fable designs within them; it does not relitigate them.
    not human-only, and not open. Only **published, minimized, attributed** events cross the seam by
    default. (`OWNER_DECISIONS.md` D-PRIVACY)
 6. **Identity is shared substrate.** Attribution resolves against the **shared Layer-2 identity/entity
-   register**; Heimdall does not mint a private, divergent notion of "who." (`ECOSYSTEM_SOS_MODEL.md` §5)
+   register**; Heimdal does not mint a private, divergent notion of "who." (`ECOSYSTEM_SOS_MODEL.md` §5)
 7. **Retention.** Primary model is **event-triggered relevance decay**; the raw layer additionally
    carries a **bounded hard retention** for privacy. Fable may design the mechanism, not replace the
    model. (`OWNER_DECISIONS.md` D-RETENTION)
@@ -73,7 +73,7 @@ trade-offs, and flag anything that turns out to need an owner decision.
 4. **Event-bus choice.** Whether the Layer-2 bus generalizes the existing DB outbox
    (`docs/EVENTS.md`) or is a new stream-native transport; delivery/ordering/replay semantics;
    backpressure. (`ECOSYSTEM_SOS_MODEL.md` §5)
-5. **Heimdall vs. KAP.** Whether Heimdall shares KAP's acquire→candidate→publish backbone
+5. **Heimdal vs. KAP.** Whether Heimdal shares KAP's acquire→candidate→publish backbone
    (generalized to a real-time stream) or owns a stream-native backbone, given the fixed shared
    provenance standard. **Owner explicitly left this to Fable** (`OWNER_DECISIONS.md` D-BACKBONE).
 6. **Consent model (mechanism).** How the fixed consent posture is realized: place/session opt-in,
@@ -82,7 +82,7 @@ trade-offs, and flag anything that turns out to need an owner decision.
 7. **Trust / threat model.** Adversaries and failure modes for the most sensitive data in the
    ecosystem: raw-layer compromise, mis-attribution, covert capture, exfiltration via a downstream
    agent's CrossScopeFlow grant, and the mitigations that keep the privacy seam intact.
-8. **Proposed fitness invariants.** The named architecture invariants Heimdall must satisfy, in the
+8. **Proposed fitness invariants.** The named architecture invariants Heimdal must satisfy, in the
    style of `docs/testing/invariant-tests.md` (see below for seeds).
 
 ---
@@ -106,7 +106,7 @@ future test path, consistent with the invariant registry pattern.
   represented explicitly, not guessed as a canonical identity. Enforcement: medium.
 - **HEIM-7 Decay is event-triggered.** Relevance decay fires on triggering events, not merely age;
   the raw layer honors its bounded hard-retention regardless. Enforcement: medium.
-- **HEIM-8 Not authority.** A Heimdall event is candidate evidence; it cannot become canonical human
+- **HEIM-8 Not authority.** A Heimdal event is candidate evidence; it cannot become canonical human
   knowledge without a governed authority transition in Munin. Enforcement: high.
 
 ## SBS reconciliation summary
@@ -119,7 +119,7 @@ future test path, consistent with the invariant registry pattern.
 
 ## References
 
-- `ECOSYSTEM_SOS_MODEL.md` — where Heimdall sits (A1).
+- `ECOSYSTEM_SOS_MODEL.md` — where Heimdal sits (A1).
 - `OWNER_DECISIONS.md` — reserved owner calls + captured decisions (A4).
 - `FABLE_WINDOW.md` — how the Fable window runs (A5).
 - ADR-0043 — naming.

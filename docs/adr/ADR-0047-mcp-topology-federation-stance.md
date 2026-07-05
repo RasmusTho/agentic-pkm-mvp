@@ -1,4 +1,4 @@
-State: Deferred (owner decision, 2026-07-04; RESEARCH-08 decision D4). The owner deferred ratifying the four-rule MCP topology stance until a concrete remote/sibling MCP server is actually on the table (Option 2). The stance as designed in `docs/architecture/ecosystem-federation.md` remains the leading candidate; this ADR records the deferral and the residual risk, and files no follow-up issues. Constituent model per ADR-0044 (Yggdrasil = the whole; Mimer + Heimdall constituents): "Yggdrasil" as the current MCP-consumer system reads as Mimer post-rename (deferred); the deferral and residual risk are unaffected.
+State: Deferred (owner decision, 2026-07-04; RESEARCH-08 decision D4). The owner deferred ratifying the four-rule MCP topology stance until a concrete remote/sibling MCP server is actually on the table (Option 2). The stance as designed in `docs/architecture/ecosystem-federation.md` remains the leading candidate; this ADR records the deferral and the residual risk, and files no follow-up issues. Constituent model per ADR-0044 (Yggdrasil = the whole; Mimer + Heimdal constituents): "Yggdrasil" as the current MCP-consumer system reads as Mimer post-rename (deferred); the deferral and residual risk are unaffected.
 Doc role: Decision record (ADR)
 Authority: Authoritative for the *decision* of how MCP server/registry ownership and remote-attachment admission are governed at the ecosystem-federation seam. MCP's protocol-tier status is unchanged (ADR-0036; doctrine §2.7); this ADR does not promote MCP to architecture. The design content is owned by `docs/architecture/ecosystem-federation.md` § Dual-role + MCP → *MCP topology stance*; this ADR ratifies its adoption, it does not restate the design.
 Owner: Architecture / CES stewardship
@@ -136,15 +136,15 @@ to be filed only once D4 is ratified.
 - No implementation follow-up issues are filed by this ADR — the admission allowlist, legible
   degradation, typed multiplex flag, and availability-impact descriptor field are candidate work
   items only, contingent on future ratification.
-- The operator's incoming private sibling constituent, the **Heimdall** sensor system, may reopen
+- The operator's incoming private sibling constituent, the **Heimdal** sensor system, may reopen
   this question sooner than expected. However, a sensor system may attach via a non-MCP adapter
   (capture/ingest pipeline or A2A) rather than as an MCP server, so deferring D4 now is coherent —
-  it does not presuppose Heimdall will be the trigger.
+  it does not presuppose Heimdal will be the trigger.
 
 ## When to revisit
 
 Revisit when a concrete remote/sibling MCP server — or any MCP-based sibling attachment — first
-appears. If the operator's incoming **Heimdall** sensor system attaches via MCP rather than a
+appears. If the operator's incoming **Heimdal** sensor system attaches via MCP rather than a
 non-MCP adapter, that is a possible trigger. At that point, ratify, revise, or decline the four-rule
 stance against the real attachment's actual constraints, and evaluate the rule-4 fixes against
 genuine remote traffic rather than the current `RemoteMCPProvider` test fake.

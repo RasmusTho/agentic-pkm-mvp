@@ -1,14 +1,14 @@
-State: Draft (advisory groundwork, 2026-07-04). Defines how the Fable-5 architecture window for Heimdall runs: the companion-doc pattern, model routing, and scope boundaries. Advisory until enacted through CES/ADR; creates no runtime behavior and no GitHub work.
+State: Draft (advisory groundwork, 2026-07-04). Defines how the Fable-5 architecture window for Heimdal runs: the companion-doc pattern, model routing, and scope boundaries. Advisory until enacted through CES/ADR; creates no runtime behavior and no GitHub work.
 Doc role: Process/mechanics doc (Draft) — Fable window
-Authority: Authoritative for the *mechanics* of the Heimdall Fable window (how it is run, what it may produce, where its output lands). Subordinate to `CAPABILITY_CHARTER.md` (what Fable solves) and `OWNER_DECISIONS.md` (what it may not decide). Claims no shipped reality.
+Authority: Authoritative for the *mechanics* of the Heimdal Fable window (how it is run, what it may produce, where its output lands). Subordinate to `CAPABILITY_CHARTER.md` (what Fable solves) and `OWNER_DECISIONS.md` (what it may not decide). Claims no shipped reality.
 Owner: Architecture / CES stewardship (Rasmus)
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: this doc + `CAPABILITY_CHARTER.md`, `OWNER_DECISIONS.md`, `AGENTS.md :: Total Cost of Development`, the RESEARCH-08 ecosystem-federation companion-doc precedent, owner decision session 2026-07-04.
 
-# Heimdall A5 — Fable window mechanics
+# Heimdal A5 — Fable window mechanics
 
-Heimdall's OPEN problems (`CAPABILITY_CHARTER.md`) are hard architecture. This doc fixes *how* the
+Heimdal's OPEN problems (`CAPABILITY_CHARTER.md`) are hard architecture. This doc fixes *how* the
 Fable-5 window that solves them is run, so the window produces a reviewable design instead of drifting
 into implementation or relitigating fixed constraints.
 
@@ -17,7 +17,7 @@ into implementation or relitigating fixed constraints.
 The window follows the same companion-doc pattern used for RESEARCH-08 (ecosystem federation): a
 single **living companion document** is the durable thread for the whole window.
 
-- **One companion doc.** Create `docs/HEIMDALL/FABLE_COMPANION.md` when the window opens. It is the
+- **One companion doc.** Create `docs/HEIMDAL/FABLE_COMPANION.md` when the window opens. It is the
   running record: the prompt/framing, Fable's design output, alternatives considered, owner Q&A, and
   the decision log. It is a *thread*, not a one-shot report.
 - **Self-sufficient.** The companion doc must stand alone — no machine-local or gitignored state, no
@@ -69,7 +69,7 @@ The window is a **design** window. Hard boundaries:
 ## 4. Relationship to the A-artifacts `[conform]`
 
 ```
-A1 ECOSYSTEM_SOS_MODEL   →  where Heimdall sits (fixed container)
+A1 ECOSYSTEM_SOS_MODEL   →  where Heimdal sits (fixed container)
 A2 ADR-0043 (naming)     →  what things are called (fixed)
 A4 OWNER_DECISIONS       →  what Fable may not decide (fixed) + captured decisions
 A3 CAPABILITY_CHARTER    →  FIXED vs OPEN problem statement (the brief)
