@@ -1,6 +1,6 @@
 """Propose-track materialization for curation findings (G2-2).
 
-Spec: ``docs/YGGDRASIL_CAPABILITY_HARDENING/GRADUATED_CURATION.md`` §1, §2, §6
+Spec: ``docs/MIMER_CAPABILITY_HARDENING/GRADUATED_CURATION.md`` §1, §2, §6
 (slice G2-2). This module is the "Panel suggested-checkbox materialization"
 path the issue calls for: it turns :class:`app.curation.findings.CurationFinding`
 records into unchecked ``AI-åtgärder`` checkboxes via the *existing* PanelAgent

@@ -1,6 +1,6 @@
 """The Swedish safeguard (multilingual auto-fix gate), G2-2 §3.
 
-Spec: ``docs/YGGDRASIL_CAPABILITY_HARDENING/GRADUATED_CURATION.md`` §3.
+Spec: ``docs/MIMER_CAPABILITY_HARDENING/GRADUATED_CURATION.md`` §3.
 
 Threat modelled: an English-centric checker "corrects" valid Swedish --
 compounds (*sjukvårdsförsäkring*), definite suffixes (*boken*, *husen*),

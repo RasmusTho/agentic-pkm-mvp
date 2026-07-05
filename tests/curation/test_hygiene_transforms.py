@@ -1,6 +1,6 @@
 """#2987 (G2-2) -- deterministic mechanical-hygiene transforms + panel materialization.
 
-Spec: ``docs/YGGDRASIL_CAPABILITY_HARDENING/GRADUATED_CURATION.md`` §2, §6.
+Spec: ``docs/MIMER_CAPABILITY_HARDENING/GRADUATED_CURATION.md`` §2, §6.
 
 Covers:
 - each class-specific deterministic transform reproduces an exact,

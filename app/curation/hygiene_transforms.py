@@ -1,6 +1,6 @@
 """Class-specific deterministic transforms for the mechanical-hygiene engine (G2-2).
 
-Spec: ``docs/YGGDRASIL_CAPABILITY_HARDENING/GRADUATED_CURATION.md`` §2.
+Spec: ``docs/MIMER_CAPABILITY_HARDENING/GRADUATED_CURATION.md`` §2.
 
 Design constraint carried over verbatim from the spec: **detection may be
 cognitive (cheap local LLM or rules), application must be a deterministic

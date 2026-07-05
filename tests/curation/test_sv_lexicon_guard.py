@@ -1,6 +1,6 @@
 """#2987 (G2-2) -- the Swedish safeguard (multilingual auto-fix gate).
 
-Spec: ``docs/YGGDRASIL_CAPABILITY_HARDENING/GRADUATED_CURATION.md`` §3.
+Spec: ``docs/MIMER_CAPABILITY_HARDENING/GRADUATED_CURATION.md`` §3.
 
 Covers the adversarial SV/EN fixture corpus (compounds, definite suffixes,
 code-switching, diacritics, near-English Swedish) named by AC2: every case

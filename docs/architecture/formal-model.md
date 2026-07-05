@@ -174,7 +174,7 @@ T-rebuild / T-reconcile [operator]  (app/cli/index_rebuild.py:198-579)
   post: P.vectors rewritten/re-embedded ; direct writes, NO event ; doctor verifies after
 T-scaffold [operator/human: vault init, yggdrasil-init, layout-ensure]
   pre-vault-selection bootstrap: idempotent file scaffold. yggdrasil-init now CONSULTS WG at the
-  scaffolder seam (app/settings/yggdrasil_scaffolder.py::scaffold, action "yggdrasil.scaffold",
+  scaffolder seam (app/settings/mimer_scaffolder.py::scaffold, action "yggdrasil.scaffold",
   asserted before the first mkdir ⇒ blocked path is atomic: zero dirs/files, non-zero CLI exit).
   A NAMED bootstrap escape (DEFAULT_BOOTSTRAP_ACTIONS in app/write_guard.py) lets a genuine
   pre-selection provision through under safe_mode/unhealthy — a denying guard still blocks it, so
