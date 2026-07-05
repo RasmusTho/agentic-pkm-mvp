@@ -221,6 +221,8 @@ v1 / v2: v1 builds the log table + publish path + one cursor consumer. v2 contra
 
 ## 5. Heimdall vs KAP
 
+> **Revised by owner decision §9-k (2026-07-05):** the owner has since confirmed **Heimdall = the ecosystem ingestion organ** (watch → fetch → transcribe → attribute for *all* external sources, not just voice). This demotes the §5.1 records-of-reality-vs-authored-content line from an *ownership boundary* to an event *typing*, and collapses §5.2's "separate backbones" toward one Heimdall acquisition backbone with Mimer downstream. §5 is retained for its reasoning; §9-k is the standing decision (a `reshape` → CES/ADR).
+
 ### 5.1 The boundary question, made concrete by the voice memo
 
 Is a deliberately-recorded voice memo a Heimdall capture (observation) or a KAP source (authored artifact → candidate)? Both readings are defensible: the memo is discrete, batch, deliberately created, lands as a file — KAP-shaped mechanics; KAP even already specs an ASR stage (KA-02). But the memo also demands attribution, consent-state, episode time semantics, and the raw privacy seam — none of which KAP has or should grow.
@@ -524,10 +526,25 @@ Each per house form: Background / The decision / Options / Recommendation. (a)�
 
 ### j. ASR engine ownership — Heimdall-owned vs shared substrate (owner-directed 2026-07-05)
 
+> **Superseded by §9-k (owner-confirmed 2026-07-05):** with Heimdall owning *all* ingestion and transcription, there is no competing Mimer transcription, so the "two instances" problem dissolves and ASR is simply **Heimdall-owned**. §9-j is retained for the reasoning; §9-k is the standing decision.
+
 - **Background:** The system already has ASR (`app/media/transcribe.py`, faster-whisper; `run_asr()` engine + KAP outbox wrapper). The owner's constraint: **no two whisper instances.** Refines §5.2.
 - **The decision:** Where the ASR engine lives — Heimdall-owned, or shared Layer-2 substrate.
 - **Options:** (1) **Heimdall owns whisper**, Mimer takes over after transcription — clean for the seam, but forces KAP (which transcribes *public* content) to either duplicate the engine or depend on Heimdall (a public pipeline coupling to the most-private constituent). (2) **whisper = shared substrate.** Sub-variants matter: (2a) shared **library + model cache**, invoked in-process inside each constituent's boundary; (2b) shared **service** audio is sent to — **rejected**: shipping Heimdall raw audio to a shared service punctures the privacy seam (FIXED #5).
 - **Recommendation:** **Option 2a.** It kills duplication *and* satisfies Option 1's intent: the engine is shared, but Heimdall still owns the *invocation on raw audio* inside its seam (raw never leaves), and Mimer takes over at the published event. Refactor: extract `run_asr` + model cache → `app/media/asr_engine.py`; KAP keeps its wrapper; Heimdall adds an in-seam, event-emitting wrapper; expose per-segment confidence additively. Validated: the v1 prototype was re-pointed at the real faster-whisper engine (one instance), whisper.cpp demoted to fallback.
+
+### k. Heimdall as the ecosystem ingestion organ (owner-CONFIRMED 2026-07-05) `[reshape → CES/ADR]`
+
+This is a confirmed owner decision (not merely surfaced), and it **reshapes the §5 boundary** — so it routes through CES/ADR at enactment.
+
+- **Background:** The §5.1 discriminator drew the Heimdall/KAP line at *records-of-reality vs authored-content*, leaving KAP (in Mimer) owning YouTube/web watch → download → transcribe. The owner's reframe: *monitoring, downloading, and transcribing are sensing/capture activities — they belong to Heimdall, not Mimer,* for **all** external sources, not just voice.
+- **The decision (confirmed):** **Heimdall is the ecosystem's ingestion/sensing organ.** It owns the front of the chain for every external source — **watch → fetch → transcribe → attribute → published event/candidate**. **Mimer** owns cognition from the handoff: **extract meaning → integrate → promote to knowledge**. Mimer never watches, fetches, or transcribes.
+- **Handoff point:** Heimdall resolves *who/what was observed* (attribution, register refs, provenance, confidence); Mimer decides *what it means* (claims, summaries, promotion). Consistent with the interpretation boundary already fixed in §2.1 (interpretation is downstream).
+- **What this supersedes / revises:**
+  - **§9-j → moot:** ASR is **Heimdall-owned** (Heimdall owns all transcription; no competing Mimer instance). The `run_asr`/model-cache reuse is now an internal Heimdall implementation detail, not a cross-constituent shared substrate.
+  - **§5.1 discriminator → demoted:** records-of-reality vs authored-content is no longer an *ownership* boundary; it becomes an event **typing** (a voice memo and a YouTube transcript both flow through Heimdall, carrying different `modality`/`sensitivity`/scope). §5.2's "separate backbones" collapses toward *one Heimdall acquisition backbone*, with Mimer downstream.
+  - **KAP (spec #2786):** its acquisition front-end (source plugins, download, ASR) moves from Mimer to Heimdall; KAP's residual cognition/candidate-refinement stays in Mimer. Touches RESEARCH-08 and the constituent definitions in ADR-0043/0044 — a genuine `reshape`, to be enacted via an ADR.
+- **OPEN sub-question (owner-deferred, UX-gated):** does Heimdall also own **watch-as-selection** (which channels/sources are worth monitoring, what is worth pulling in), or only fetch+transcribe once something is designated? Watch-as-selection edges into editorial/cognitive judgment (Mimer-ish); fetch+transcribe is unambiguously Heimdall. The owner has flagged that this needs to be understood from a **UX perspective** before it is decided — it is a curation/attention/agency/control question, not a pure architecture one. Deferred; see the UX exploration note in `README.md` status.
 
 ---
 
