@@ -296,7 +296,7 @@ scoped by lifecycle role.
 > **INV-EF1 (two-scope operator-invariance).** *(Adopted — owner decision D3, ratified 2026-07-04
 > by ADR-0046. Quote this box only together with this marker.)*
 > **(a) Product scope — strict.** Artifacts of the Mimer product surface (`app/`,
-> `yggdrasil_runtime/`, `schemas/`, product contracts and architecture docs) must be
+> `mimer_runtime/`, `schemas/`, product contracts and architecture docs) must be
 > **operator-invariant**: substituting another operator's personal environment leaves them
 > byte-identical. Concretely: no tokens from the personal-binding categories — (i) secrets and
 > credentials, (ii) personal identity (usernames, personal paths, emails), (iii) personal
@@ -542,7 +542,7 @@ claim is classified against `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` and `docs/archi
 | --- | --- | --- |
 | 1 | Ecosystem-level lifecycle-role table (constituent / proto-constituent / external / enabling / COTS, one level above the settled four-class rule) | **Extend** — new view; no boundary touched; classification rule unchanged |
 | 2 | Mimer remains the current-state knowledge-and-cognition SoI, internally unchanged; every current-state doc keeps describing Mimer's internals as before | **Conform** |
-| 3 | Yggdrasil as the ecosystem's acknowledged-SoS apex, with Mimer + Heimdall + private-bindings as its constituents | **Reshape — ratified** (D1, ADR-0044). Enacted as a naming/model decision; the `yggdrasil_runtime/`→Mimer code/doc rename itself is separate, deferred enactment work |
+| 3 | Yggdrasil as the ecosystem's acknowledged-SoS apex, with Mimer + Heimdall + private-bindings as its constituents | **Reshape — ratified** (D1, ADR-0044). Enacted as a naming/model decision; the `mimer_runtime/` code/doc rename was completed separately (#3011 + doc clusters) |
 | 4 | No internal Mimer boundary is a constituent; "agent runtime / integration fabric" read as capability-domain labels; future physical separation stays with ADR-0016 + `SBS_ROADMAP.md` Phase 4/5 | **Conform** — restates audit §3 verdict and existing machinery; coins no vocabulary |
 | 5 | Private binding surface named as proto-constituent / first-sibling target | **Extend** — names existing unowned reality; creating the sibling is follow-up work |
 | 6 | Capability boundary = contract set; five-surface grouping view over existing enumerations | **Extend** — view only; `CAPABILITY_CONTRACT_MODEL.md` and IFC stay authoritative |
@@ -710,7 +710,7 @@ Classified per the runtime-semantics convention (fix-code / fix-doc / needs-owne
 1. ~~CES/ADR decision records for D1–D4 (owner).~~ **Done:** ADR-0044 (D1), ADR-0045 (D2),
    ADR-0046 (D3), ADR-0047 (D4, deferral) — all accepted 2026-07-04. The `docs/GLOSSARY.md`
    reconciliation and this artifact's own naming/model reconciliation (#2890) are enacted by this
-   PR; the `yggdrasil_runtime/`→Mimer code/doc rename remains separate, deferred enactment work.
+   PR; the `mimer_runtime/` code/doc rename was completed separately (#3011 + doc clusters).
 2. Re-point the eight `FABLE5_PROMPT_INFRA_DOMAIN_AND_MCP_TOPOLOGY.md` references + DV-1 stale
    anchors — #2855 is closed, so this is now its own filed follow-up, not a bundle target.
 3. `public_seam_lint.py` + register + PR-workflow wiring (implementation lane; D3 adopted by

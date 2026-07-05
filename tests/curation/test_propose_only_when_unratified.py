@@ -1,6 +1,6 @@
 """#2987 (G2-2) -- propose-only while ``AUTOFIX_APPLY`` is unset (AC3).
 
-Spec: ``docs/YGGDRASIL_CAPABILITY_HARDENING/GRADUATED_CURATION.md`` §1, §2, §6.
+Spec: ``docs/MIMER_CAPABILITY_HARDENING/GRADUATED_CURATION.md`` §1, §2, §6.
 
 AC3: "With ``AUTOFIX_APPLY`` unset (the ratified-default state), every
 finding -- including mechanical-allowlist classes -- materializes as an
