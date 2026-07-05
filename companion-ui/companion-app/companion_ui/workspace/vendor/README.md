@@ -54,6 +54,10 @@ failure (`serve_dev_page._mermaid_render_script`), so a CDN outage is non-fatal 
 one diagram falls back to source, the page and editor keep working. A naive
 esbuild bundle of mermaid is ~3.5 MB and statically inlines mermaid's lazy
 diagram-type loaders, which risks breaking diagram-type registration in ways that
-need per-diagram browser verification. Full mermaid vendoring is tracked as a
-follow-up decision (repo-weight vs. residual CDN dependency) rather than shipped
-unverified here.
+need per-diagram browser verification.
+
+**Decision (#2897): accepted — mermaid stays CDN-loaded; the product assumes
+internet access.** It is not self-hosted (the ~3.5 MB bundle + registration risk
+outweigh removing a non-fatal dependency). Revisit only if fully-offline
+operation becomes a requirement. This dependency is recorded in
+`docs/DEPENDENCIES.md` (Browser runtime dependencies).

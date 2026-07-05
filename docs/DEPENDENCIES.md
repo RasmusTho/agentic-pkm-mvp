@@ -44,6 +44,16 @@ Optional / dev-only packages (testing, linting, type-checking, browser automatio
 - `click` – CLI (`app/cli`).
 - `pytest`, `ruff`, `mypy` – development/test.
 
+## Browser runtime dependencies (Companion UI)
+
+Front-end modules the served Companion workspace page loads in the browser at
+runtime. These are **not** Python/pip dependencies; they load as ES modules.
+
+| Module | Source | Availability posture |
+| --- | --- | --- |
+| CodeMirror 6 (source editor) | **Self-hosted** — served same-origin from `/static/vendor/codemirror-6.0.1.mjs` (vendored bundle; see `companion-ui/companion-app/companion_ui/workspace/vendor/README.md`). | No runtime CDN dependency. Loaded via dynamic `import()`; degrades to a plain textarea if the asset is unreachable. |
+| Mermaid 10.9.1 (diagram rendering) | **CDN** — `https://esm.sh/mermaid@10.9.1`, loaded at runtime. | **Accepted, documented external dependency: the product assumes internet access.** Non-fatal — a dynamic `import()` in a `try/catch` that degrades to raw diagram source on failure, so a CDN outage only affects diagram rendering, never the page or editor. Deliberately not self-hosted (bundle ≈3.5 MB and risks diagram-type registration errors); revisit only if fully-offline operation becomes a requirement. Decision: #2897. |
+
 ## Configuration matrix
 | Environment | Env setup | Dependencies | Notes |
 | --- | --- | --- | --- |
