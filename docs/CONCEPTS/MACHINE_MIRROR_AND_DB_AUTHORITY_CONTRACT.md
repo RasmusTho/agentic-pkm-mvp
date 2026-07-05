@@ -83,6 +83,17 @@ The following are the failure modes this contract exists to prevent. Each is pro
 3. **Retrieval heuristics becoming durable authority.** A heuristic that worked well in retrieval is still a heuristic; it does not earn durable standing by being useful.
 4. **Implicit authority migration into DB/index layers.** No code path may make the DB the de facto source of truth by writing values that exist nowhere on the durable surface. If a value must be durable, it belongs in the vault/companion/receipt set, mirrored *from* there.
 
+> **Conformance note (decisions / judgment log, feat #2969, 2026-07-05).** The judgment log
+> (`decisions` — the `review` / `evaluate` / `classification` verdicts) was previously a rule-4
+> violation: a durable value that existed only in Postgres, on no durable surface. It is now a
+> **receipt** on the readable surface — a WriteGuard-gated, append-only JSONL receipt log under
+> `vault/<system_dir>/receipts/decisions/` is the canonical record, and the Postgres `decisions`
+> table is a rebuildable projection over it (`app/receipts/decision_receipt_log.py`,
+> `app/jobs/decisions_projection.py`; owner: `docs/DECISION_RECEIPT_LOG/README.md`). The receipt
+> log rides the vault's iCloud/git durability; the projection loses no meaning on rebuild
+> (`rebuild_decisions_projection()` + doctor equivalence). This closes the standing rule-4 tension
+> for decisions and aligns `docs/architecture/runtime-semantics.md` row 12.
+
 ## Implementation boundary guidance
 
 - Feature code must reach mirrors through the Store/Component abstractions, not DB internals directly (owner: `docs/COMPONENTS.md`; repo rule).

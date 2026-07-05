@@ -47,11 +47,16 @@ def classify_run(object_id: str, trace_id: Optional[str] = None) -> Dict[str, An
     else:
         value = {"type": "note", "trust": "provisional", "confidence": 0.6, "raw": out}
 
-    # Persistera beslutet (tysta fel om stores inte är wired)
-    try:
-        from app.stores.decisions import put_decision
-        put_decision(object_id=object_id, agent="classifier", kind="classify", key="classification", value=value)
-    except Exception:
-        pass
-
+    # Persistence of the classification decision is owned by the resolved
+    # classifier agent (``app.agents.classifier.agent.run`` -> ``insert_decision``,
+    # the one WriteGuard-gated receipt-log writer), which fails loud. This shim is
+    # a thin output-normalizer over that agent; it deliberately does NOT persist a
+    # second, redundant decision row.
+    #
+    # It previously wrote its own ``classification`` decision through the
+    # deprecated ``app.stores.decisions.put_decision`` inside a
+    # ``try: ... except Exception: pass`` — a third silent-swallow site (feat
+    # #2969, slice 1). That write duplicated the resolved agent's persistence and
+    # swallowed every failure; both are removed so a classification-decision
+    # failure surfaces via the resolved agent rather than being lost here.
     return {"classification": value}

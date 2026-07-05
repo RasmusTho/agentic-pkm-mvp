@@ -8,7 +8,7 @@ from app.agents.base.audit import audit_log
 from app.components.reasoning.facade import ReasoningTaskKind, _heuristic_classify, get_reasoning_facade
 from app.memory_kv.store import remember, recall
 from app.objects import ObjectStore, DomainObject
-from app.stores.decisions import put_decision
+from app.services.decisions import insert_decision
 
 logger = logging.getLogger(__name__)
 
@@ -44,13 +44,15 @@ def classify_object(object_id: str, *, trace_id: str) -> dict[str, Any]:
         )
         value = _heuristic_classify(text)
 
-    put_decision(
-        object_id=object_id,
-        key="classification",
-        value=value,
-        agent="classifier",
-        kind="classification",
-    )
+    # Persist through the one WriteGuard-gated receipt-log writer (feat #2969,
+    # slice 1): the durable receipt log is canonical, Postgres is the projection.
+    # ``insert_decision`` appends the guarded receipt first (commit point), then
+    # the DB row; a blocked guard or a failed append raises loudly here rather
+    # than silently proceeding DB-only. Fold the writing agent into the value
+    # envelope (matching reviewer/set_evaluator), since the receipt-log writer
+    # carries the decision value, not the deprecated ``agent``/``kind`` columns.
+    decision_value = {**value, "agent": "classifier"}
+    insert_decision(object_id, "classification", decision_value, trace_id)
     remember(
         agent="classifier",
         kind="classified",

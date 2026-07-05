@@ -36,7 +36,7 @@ defined terms and the Runtime Correctness Kernel (#2762) has a semantic baseline
 | 9 | JSONL index-outbox / receipt files | none (append order) | append-only (`outbox.py:166-174`) | advisory (audit trail; explicitly NOT truth per CW-1) | from DB outbox | **none** — never rotated |
 | 10 | Promotion receipt | outbox row id, `event=promotion.transition.applied` (`receipts/promotion_receipts.py:92-99`) | append-only (projection over outbox) | **canonical** (proof of transition) | from outbox | inherits outbox (none) |
 | 11 | `SettingsWriteReceipt` | none durable | in-memory dataclass only (`vault/settings_service.py:43-60`) | **advisory today; contract says canonical** — see D-1 | **not reconstructible** — lost on restart | n/a (ephemeral) |
-| 12 | Decision row | `id` UUID auto (`202510241200_sot41_amg_core.py:85-94`); lookup `(object_id, key)` latest-wins | append-only INSERT (`services/decisions.py:30-42`); silent memory fallback on DB failure (`:43-45`) | **canonical** (judgment log) | not reconstructible | `ON DELETE CASCADE` from objects — see D-5; no direct path |
+| 12 | Decision receipt / row | receipt `object_id` + `vault_uuid` (canonical, `receipts/decision_receipt_log.py`); DB `id` UUID auto (`202510241200_sot41_amg_core.py:85-94`); lookup `(object_id, key)` latest-wins | WriteGuard-gated append to `vault/<system_dir>/receipts/decisions/decisions-YYYYMM.jsonl` FIRST (commit point, C-6/C-8), then derived DB INSERT (`services/decisions.py::insert_decision`); fail-loud, no silent fallback (#2788, #2969) | **canonical = the vault receipt log**; DB `decisions` = rebuildable **projection** (feat #2969, closes MACHINE_MIRROR rule 4) | **the receipt log** — `rebuild_decisions_projection()` replays JSONL into `decisions`, re-linking via `vault_uuid`; doctor asserts DB == log | `ON DELETE SET NULL` from objects (#2788) — see D-5; receipt log retains history |
 | 13 | Memory: review decision | `(vault_id, channel, candidate_id)` (`review_decision_store.py:212`) | SQLite upsert (`:79-102`); terminal flag after materialization (`:176-193`) | **canonical** (promotion precondition) | none — primary record | **none exists** |
 | 14 | Memory: materialized artifact | `artifact_uuid` (`agent_memory/materialization.py:67`) | WriteGuard-gated vault write | derived (from decision + candidate) | decision store + re-materialization | none |
 | 15 | Memory: `agent_memories` (short-term) | `id` UUID (`migrations_obsidian.sql:15-22`) | append + timestamp decay (`memory_kv/store.py:164-191`) | derived (working memory) | lossy — decay is the design | timestamp decay only |
@@ -101,8 +101,10 @@ route, not through this artifact.
   (`outbox_worker.py` ~505-513) while vector purge for the same topic lives in the indexer consumer
   path (`indexer/consumer.py:65`) — deletion semantics are split across two consumers.
 - **12–15 (judgment/memory plane).** Review decisions are the promotion precondition and genuinely
-  canonical; the silent in-memory fallback in `services/decisions.py:43-45` is the same
-  false-healthy pattern as the legacy store fallback (kernel I-S4 class, though a different module).
+  canonical. The judgment log (class 12) now lives canonically on the readable vault surface as a
+  WriteGuard-gated JSONL receipt log, with the Postgres `decisions` table demoted to a rebuildable
+  projection (feat #2969) — closing both the MACHINE_MIRROR rule-4 violation and the former silent
+  in-memory fallback (D-7, resolved #2788).
 - **19 (chat-session artifact).** Corrected from the original RESEARCH-01 finding: the canvas
   chat-session artifact (`vault/.chats/<note-slug>/*.md`, `type: chat-session`) already persists —
   it is not "nothing on restart." What was actually missing, and what D-4 ratified: formal
@@ -155,11 +157,13 @@ Each divergence is classified **fix-code**, **fix-doc**, or **needs-owner-decisi
   scoped in `docs/CANVAS_CHAT_SURFACE/DEFINE_CHAT_ARTIFACT_DURABILITY.md` +
   `PERSIST_CHAT_ARTIFACT_THROUGH_WRITEGUARD.md` (issues #2806/#2807) as a separate feature-breakdown
   pass (not invented in this artifact).
-- **D-5 · Decisions cascade-delete with their object.** `decisions.object_id` is
-  `ON DELETE CASCADE` (`202510241200_sot41_amg_core.py:87`) while `audit.object_id` is
-  `ON DELETE SET NULL` (`:104`). Two canonical append-only logs, opposite loss semantics; if object
-  cleanup (D-2) ever lands, judgment history silently vanishes. **fix-code** (align decisions to
-  `SET NULL`; one forward-only migration). Follow-up filed — see below.
+- **D-5 · Decisions cascade-delete with their object.** `decisions.object_id` was
+  `ON DELETE CASCADE` while `audit.object_id` is `ON DELETE SET NULL` (`:104`). Two canonical
+  append-only logs, opposite loss semantics; if object cleanup (D-2) ever lands, judgment history
+  silently vanishes. **fix-code** (align decisions to `SET NULL`; one forward-only migration).
+  **RESOLVED (2026-07-04, #2788):** the FK is now `ON DELETE SET NULL`. Additionally, feat #2969
+  makes the vault receipt log the canonical judgment record (the DB row is a projection), so
+  judgment history survives even a full object-row deletion.
   **RESOLVED (2026-07-04, #2788):** forward-only migration
   `app/alembic/versions/1a739d9494af_decisions_fk_set_null.py` realigns
   `decisions.object_id` to `ON DELETE SET NULL` (nullable), mirroring `audit.object_id`. This
