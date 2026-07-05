@@ -9,6 +9,8 @@ review_cadence: event-driven
 source_of_truth: mixed — cites Yggdrasil code (`path:line`) and external sources (URLs)
 ---
 
+State: Draft (advisory research, 2026-07-05). Field scan + gap analysis; claims no shipped reality of its own; every recommendation is a proposal for owner review.
+
 # Yggdrasil × Fable 5 — Field Scan, Inspiration & Gap Analysis
 
 **Date:** 2026-07-05
