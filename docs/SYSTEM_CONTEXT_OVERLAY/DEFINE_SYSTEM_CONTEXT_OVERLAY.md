@@ -13,7 +13,7 @@ can_parallelize_with: [FIX_REGISTER_AND_CHARTER_HYGIENE.md, COMPLETE_PENDING_BOU
 
 ## Purpose
 
-Nothing in the repo currently classifies the *running external things* Yggdrasil depends on — the
+Nothing in the repo currently classifies the *running external things* Mimer depends on — the
 Postgres instance, Ollama, Docker/Colima, Tailscale, iCloud, GitHub, Obsidian — as System of
 Interest (SoI) elements, enabling systems, or external systems in ISO/IEC/IEEE 15288 terms. The
 audit's executive summary calls this "the missing layer is classification vocabulary, not
@@ -26,7 +26,7 @@ Write one new doc under `docs/architecture/` containing exactly five things, eac
 transcription of an already-settled audit finding (this task decides nothing new; it records what
 the audit already resolved):
 
-1. **SoI definition** (audit §1) — the Yggdrasil SoI is the local-first cognitive-prosthesis
+1. **SoI definition** (audit §1) — the Mimer SoI is the local-first cognitive-prosthesis
    software system: the runtime (`app/`, `yggdrasil_runtime/`), its contracts and schemas, its
    system-owned durable artifacts, and its rebuildable machine surfaces. Include the two boundary
    refinements: the human is not a component (operator/authority locus,

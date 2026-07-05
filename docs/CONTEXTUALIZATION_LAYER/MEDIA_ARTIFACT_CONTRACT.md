@@ -6,7 +6,7 @@ Authority: Defines the media artifact roles, subtypes, authority rules, provenan
 
 ## 1. Purpose
 
-This document defines the **media artifact contract** for the Yggdrasil / Agentic PKM.
+This document defines the **media artifact contract** for the Mimer / Agentic PKM.
 
 It exists because media artifacts — photos, screenshots, scans, receipts, manuals, contracts, and reference images — have distinct authority, provenance, lifecycle, and privacy semantics that differ from note artifacts. Media must not be treated as unmanaged Obsidian attachments or as equivalent to Markdown notes.
 
@@ -297,7 +297,7 @@ project: kitchen-paneling
 
 provenance:
   source_kind: own_photo
-  source_file: /Media/Yggdrasil/Photos/Originals/2026/2026-05-18-Kitchen/20260518_142233_kitchen-panel-test.jpg
+  source_file: /Media/Mimer/Photos/Originals/2026/2026-05-18-Kitchen/20260518_142233_kitchen-panel-test.jpg
   original_captured_at: 2026-05-18T14:22:33+02:00
 
 ai_caption: "Oak veneer panel test leaning against kitchen wall."
@@ -344,7 +344,7 @@ project: build-pipeline-debug
 
 provenance:
   source_kind: own_screenshot
-  source_file: /Media/Yggdrasil/Screenshots/2026/2026-05-18-build-error.png
+  source_file: /Media/Mimer/Screenshots/2026/2026-05-18-build-error.png
   original_captured_at: 2026-05-18T09:14:22+02:00
 
 ai_ocr_text: "<AI-extracted text from screenshot, non-authoritative>"
@@ -395,7 +395,7 @@ project: kitchen-paneling
 
 provenance:
   source_kind: own_scan
-  source_file: /Media/Yggdrasil/Scans/2026/2026-05-18-oak-veneer-receipt.pdf
+  source_file: /Media/Mimer/Scans/2026/2026-05-18-oak-veneer-receipt.pdf
   original_captured_at: 2026-05-18
 
 extracted:
@@ -449,7 +449,7 @@ project: kitchen-paneling
 provenance:
   source_kind: web_article
   source_url: https://supplier-example.com/products/oak-veneer-sheet
-  source_file: /Media/Yggdrasil/Reference/2026/2026-05-15-oak-veneer-supplier.jpg
+  source_file: /Media/Mimer/Reference/2026/2026-05-15-oak-veneer-supplier.jpg
   original_captured_at: 2026-05-15
 
 usage_rights: personal_use_only
@@ -489,7 +489,7 @@ area: relations
 
 provenance:
   source_kind: own_photo
-  source_file: /Media/Yggdrasil/Photos/Originals/2026/2026-05-18-family/20260518_173000_birthday.jpg
+  source_file: /Media/Mimer/Photos/Originals/2026/2026-05-18-family/20260518_173000_birthday.jpg
   original_captured_at: 2026-05-18T17:30:00+02:00
 
 human_caption: "Birthday dinner — family gathered at the table."

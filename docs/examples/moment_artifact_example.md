@@ -9,7 +9,7 @@ need:
   basis: reorientation
   summary: "Orient to today: one slipping commitment, two open loops, one event to prep."
 surfaced_refs:
-  - ref: "Projects/Yggdrasil/Contextual Relevance Engine.md"
+  - ref: "Projects/Mimer/Contextual Relevance Engine.md"
     uuid: "b71e4d20-3a55-49c8-9f0a-6c2f8e10d3aa"
     why: "Deadline in 2 days; backward plan step due today (open-loop pressure)."
   - ref: "Daily/2026-06-12.md"
@@ -44,7 +44,7 @@ review unfinished yesterday.
 
 ## Bring into view
 
-- **[Contextual Relevance Engine](Projects/Yggdrasil/Contextual%20Relevance%20Engine.md)** — deadline
+- **[Contextual Relevance Engine](Projects/Mimer/Contextual%20Relevance%20Engine.md)** — deadline
   in 2 days. Today's backward-plan step: finish the scarcity-gate contract review. *(open-loop
   pressure)*
 - **[Yesterday's note](Daily/2026-06-12.md)** — you stopped mid-review of the scarcity gate; resume

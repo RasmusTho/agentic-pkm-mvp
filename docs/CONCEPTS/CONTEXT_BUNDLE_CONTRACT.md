@@ -289,9 +289,9 @@ This posture is consistent with the admissibility default in
 `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`. It applies to all existing shipped bundle
 surfaces (retrieval, orientation, resurfacing, write-proposal linkage) until a follow-up governed
 contract explicitly widens it. `docs/AGENT-FLOWS.md` has explicitly declined that widening for
-Yggdrasil-mediated flows; `may_write=false` remains universal for bundles.
+Mimer-mediated flows; `may_write=false` remains universal for bundles.
 
-A bundle is not memory, and it is also the **mediated egress** vehicle: when Yggdrasil itself
+A bundle is not memory, and it is also the **mediated egress** vehicle: when Mimer itself
 provides context to an external agent through a controlled surface, the content travels as a
 scoped bundle with visible authority flags and exclusions, under the egress posture in
 `docs/AGENT-FLOWS.md` §12 (externally rendered exclusion records are scope-sanitized). Bundles do

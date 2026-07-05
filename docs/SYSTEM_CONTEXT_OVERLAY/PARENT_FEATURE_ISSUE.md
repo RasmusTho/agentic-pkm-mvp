@@ -8,7 +8,7 @@ Title shape: `docs: System Context Overlay — INCOSE/15288 context-layer vocabu
 
 ## Context
 
-`docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md` found that Yggdrasil's internal
+`docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md` found that Mimer's internal
 boundary discipline is strong and code-verified, but nothing classifies the *external things* the
 system runs on or beside (Postgres, Ollama, Docker/Colima, Tailscale, iCloud, GitHub, Obsidian) as
 SoI elements, enabling systems, or external systems — the same Ollama is described as both an

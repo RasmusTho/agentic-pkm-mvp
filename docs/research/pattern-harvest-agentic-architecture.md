@@ -2,7 +2,7 @@ State: offline synthesis (system not online); repo-grounded analysis only.
 # Pattern Harvest — Agentic Architecture (Outer/Inner)
 
 ## 1) Purpose & Scope
-- Brief: We’ll treat this as a targeted pattern-harvest for Yggdrasil/agentic-pkm-mvp: validate our current stratified model by mapping multi-agent best practices onto two layers — Outer Architecture (event choreography, outbox, A2A contracts, policy/guardrails, observability) and Inner Architecture (LangGraph AgentState, PER loops, tool invocation via MCP/tool interfaces). The goal is to extract the “highest leverage” patterns for our constraints (human-first, file/config-first, store abstraction, deterministic CI): event schema discipline; explicit A2A contracts; coherent tool layer boundary (MCP); observability & agent-ops; human-first config + validation/evals.
+- Brief: We’ll treat this as a targeted pattern-harvest for Mimer/agentic-pkm-mvp: validate our current stratified model by mapping multi-agent best practices onto two layers — Outer Architecture (event choreography, outbox, A2A contracts, policy/guardrails, observability) and Inner Architecture (LangGraph AgentState, PER loops, tool invocation via MCP/tool interfaces). The goal is to extract the “highest leverage” patterns for our constraints (human-first, file/config-first, store abstraction, deterministic CI): event schema discipline; explicit A2A contracts; coherent tool layer boundary (MCP); observability & agent-ops; human-first config + validation/evals.
 - Offline phase; output is docs/backlog only, no runtime wiring or new services. Evidence: this doc is scoped to documentation; no code changes accompany it.
 
 ## 2) Current Baseline Snapshot (Repo-grounded)

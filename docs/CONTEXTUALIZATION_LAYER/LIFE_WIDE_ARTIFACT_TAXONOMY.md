@@ -6,7 +6,7 @@ Authority: Names the artifact classes, lifecycle/authority/provenance/work-relat
 
 ## 1. Purpose and scope
 
-This document defines a **life-wide artifact taxonomy** for the Yggdrasil / Agentic PKM. It exists because a human-first, AI-assisted PKM must cover far more than evergreen knowledge notes. It must accommodate:
+This document defines a **life-wide artifact taxonomy** for the Mimer / Agentic PKM. It exists because a human-first, AI-assisted PKM must cover far more than evergreen knowledge notes. It must accommodate:
 
 - short-lived lists (shopping, packing, errands)
 - workspaces and projects (renovation, research, code, roleplaying)
@@ -555,7 +555,7 @@ area: home
 project: kitchen-paneling
 provenance:
   source_kind: own_photo
-  source_file: /Media/Yggdrasil/Photos/Originals/2026/2026-05-18-Kitchen/20260518_142233_kitchen-panel-test.jpg
+  source_file: /Media/Mimer/Photos/Originals/2026/2026-05-18-Kitchen/20260518_142233_kitchen-panel-test.jpg
 captured_at: 2026-05-18T14:22:33+02:00
 people: []
 objects:
@@ -589,7 +589,7 @@ lifecycle: active
 work_relation: capture
 provenance:
   source_kind: own_screenshot
-  source_file: /Media/Yggdrasil/Screenshots/2026/2026-05-18-error.png
+  source_file: /Media/Mimer/Screenshots/2026/2026-05-18-error.png
 ai_ocr_text: "<extracted text, non-authoritative>"
 privacy: review-required
 authority:
@@ -614,7 +614,7 @@ lifecycle: durable
 work_relation: remember
 provenance:
   source_kind: own_scan
-  source_file: /Media/Yggdrasil/Scans/2026/2026-05-18-receipt.pdf
+  source_file: /Media/Mimer/Scans/2026/2026-05-18-receipt.pdf
 extracted:
   vendor: "<vendor>"
   date: "2026-05-18"
@@ -715,7 +715,7 @@ The following rules govern AI and agent behavior under this taxonomy:
 
 > AI generates candidates; the human or governed process decides promotion.
 
-This rule preserves the Yggdrasil authority boundary across the full taxonomy: Human Knowledge Artifacts, Agentic Memory Artifacts, and Machine Mirror Artifacts remain distinct kinds of artifact and MUST NOT be collapsed.
+This rule preserves the Mimer authority boundary across the full taxonomy: Human Knowledge Artifacts, Agentic Memory Artifacts, and Machine Mirror Artifacts remain distinct kinds of artifact and MUST NOT be collapsed.
 
 ## 13. Non-goals and anti-patterns
 

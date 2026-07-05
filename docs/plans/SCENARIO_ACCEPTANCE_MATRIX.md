@@ -708,7 +708,7 @@ update working pages. Need: delegated help without ceremony, inside a boundary t
 Acceptance: edits land as plain Markdown; the zone's working-material standing is legible; the
 human can tell agent-authored from human-authored material; nothing outside the declared root is
 touched. Must not happen: the output reading as human-canonical truth; writes treated as
-Yggdrasil-mediated APPLY; silent edits outside the root.
+Mimer-mediated APPLY; silent edits outside the root.
 
 ### B. A direct filesystem agent updates a draft workspace root
 
@@ -726,7 +726,7 @@ working surfaces that both humans and agents can navigate (two-reader principle,
 the pages remain challengeable working material. Must not happen: synthesis replacing sources;
 uncited claims; the synthesis layer ossifying into unchallengeable authority.
 
-### D. Yggdrasil observes external-agent changes and classifies them
+### D. Mimer observes external-agent changes and classifies them
 
 The runtime notices changed files in declared roots after the fact. Need: the system stays honest
 about what it observed versus what it mediated. Acceptance: changed files are ingested, indexed,

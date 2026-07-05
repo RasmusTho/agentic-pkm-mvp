@@ -14,7 +14,7 @@ docs/DOCS_INDEX.md
 
 ## Purpose
 
-This memo grounds issue #1644: cognitive-load reduction as a central Yggdrasil cognitive-prosthetic
+This memo grounds issue #1644: cognitive-load reduction as a central Mimer cognitive-prosthetic
 capability. Dyslexia and reading-disability evidence are used as constraints and stress tests for
 the design, not as the category that owns the work. This is research material, not a
 shipped-runtime contract.
@@ -362,7 +362,7 @@ Design consequences:
 
 ## Evidence Ranking
 
-| Intervention / concern | Evidence posture | Yggdrasil implication |
+| Intervention / concern | Evidence posture | Mimer implication |
 | --- | --- | --- |
 | Twice-exceptional cognitive profile | Strong enough to treat higher-order reasoning and mechanical decoding/encoding as separable design parameters. | Preserve full intellectual complexity; reduce decoding, spelling, parsing, and working-memory friction. |
 | Cognitive Load Theory framing | Strong conceptual fit for separating intrinsic difficulty from avoidable interface load. | Optimize proposal/review surfaces by reducing unnecessary parsing, source distance, context switches, and ambiguous action identity. |
@@ -384,7 +384,7 @@ Cognitive Load Theory distinguishes the complexity of the thing being learned fr
 created by presentation, sequencing, or environment. Recent summaries emphasize limited working
 memory and the need to minimize cognitive processing irrelevant to the learning or decision task.
 
-For Yggdrasil, the goal is not to make hard decisions appear simple. The goal is to remove
+For Mimer, the goal is not to make hard decisions appear simple. The goal is to remove
 avoidable parsing and coordination burden so the human can spend attention on the actual judgment.
 
 Useful design criteria:
@@ -421,7 +421,7 @@ disabilities, while still noting heterogeneity and a need for more moderator res
 Dyslexia Association also frames text-to-speech as compatible with dyslexia-friendly written
 material.
 
-Yggdrasil implication:
+Mimer implication:
 
 - Listening should be a credible review aid, especially for long source text, proposal review, and
   final confirmation.
@@ -438,7 +438,7 @@ W3C cognitive accessibility guidance also emphasizes clear structure, understand
 including users in testing. The BDA style guide recommends sans-serif fonts, sufficient size,
 spacing, headings, left alignment, short lines, and whitespace.
 
-Yggdrasil implication:
+Mimer implication:
 
 - Reading and decision surfaces should expose render-only adjustments for font size, line height,
   paragraph spacing, column width, and reduced clutter.
@@ -453,7 +453,7 @@ Marinus et al. Dyslexie study found no reading-speed or accuracy benefit over co
 children with or without dyslexia. Later reviews and related studies continue to distinguish user
 preference from reliable objective benefit.
 
-Yggdrasil implication:
+Mimer implication:
 
 - OpenDyslexic, Dyslexie, or similar fonts can be optional display preferences.
 - The product claim should be "user-selectable preference", not "dyslexia support is solved by a
@@ -467,7 +467,7 @@ Recent Bionic Reading studies are not strong enough to support a core claim. Sne
 found no significant reading-time benefit, and a 2025 eye-movement study found no significant
 change in reading speed or eye-movement behavior.
 
-Yggdrasil implication:
+Mimer implication:
 
 - Bionic-style rendering should be explicitly experimental.
 - It should be opt-in, reversible, render-only, and disabled by default.
@@ -564,7 +564,7 @@ Rules:
 
 Summarization faithfulness work is still an active research area. LLM-based factual consistency
 evaluation can help, but current methods remain incomplete, especially for specialized or complex
-documents. The safe Yggdrasil pattern is therefore source-preserving projection plus explicit
+documents. The safe Mimer pattern is therefore source-preserving projection plus explicit
 review posture, not generic summary replacement.
 
 ## WP-F: Simplification-Vs-Authority Decision Memo

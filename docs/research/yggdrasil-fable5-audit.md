@@ -1,20 +1,20 @@
 ---
 kind: research_audit
-title: Yggdrasil × Fable 5 — Field Scan, Inspiration & Gap Analysis
+title: Mimer × Fable 5 — Field Scan, Inspiration & Gap Analysis
 status: Draft (advisory research, 2026-07-05)
-authority: Advisory. Surveys what others build with Fable 5 and coding agents in our space, and maps the ideas onto gaps in Yggdrasil's system and roadmap. Claims no shipped reality of its own; every recommendation is a proposal for owner review. Owner docs, the SBS, and ADRs win on all matters of record.
+authority: Advisory. Surveys what others build with Fable 5 and coding agents in our space, and maps the ideas onto gaps in Mimer's system and roadmap. Claims no shipped reality of its own; every recommendation is a proposal for owner review. Owner docs, the SBS, and ADRs win on all matters of record.
 owner: Architecture / product (Rasmus)
 temporal_class: strategic
 review_cadence: event-driven
-source_of_truth: mixed — cites Yggdrasil code (`path:line`) and external sources (URLs)
+source_of_truth: mixed — cites Mimer code (`path:line`) and external sources (URLs)
 ---
 
 State: Draft (advisory research, 2026-07-05). Field scan + gap analysis; claims no shipped reality of its own; every recommendation is a proposal for owner review.
 
-# Yggdrasil × Fable 5 — Field Scan, Inspiration & Gap Analysis
+# Mimer × Fable 5 — Field Scan, Inspiration & Gap Analysis
 
 **Date:** 2026-07-05
-**Purpose:** Not a name-audit and not a rebuild plan. This surveys **what people are building with Claude Fable 5 and other coding agents for "second brain" / agentic-PKM systems**, then asks one question of each pattern: *do we have this, and if not, where is the gap in our system or roadmap?* The output is inspiration + a prioritised gap list, grounded on one side in real external sources and on the other in Yggdrasil's real code.
+**Purpose:** Not a name-audit and not a rebuild plan. This surveys **what people are building with Claude Fable 5 and other coding agents for "second brain" / agentic-PKM systems**, then asks one question of each pattern: *do we have this, and if not, where is the gap in our system or roadmap?* The output is inspiration + a prioritised gap list, grounded on one side in real external sources and on the other in Mimer's real code.
 
 **Guardrail:** *reduce friction, not intelligence.* Every recommendation is a **harden-or-compose** of existing architecture, never a rebuild; at most one targeted mechanical refactor. Nothing here adopts A2A/AGNTCY, a third-party memory vendor, or an external durable-execution engine (the standing don't-touch list). Where a compelling external pattern collides with an invariant, it is surfaced as a **Decision** (§IX), not silently taken.
 
@@ -24,7 +24,7 @@ State: Draft (advisory research, 2026-07-05). Field scan + gap analysis; claims 
 
 ## 0. Executive summary
 
-**The field validates our direction and exposes our moat.** Across the whole "LLM-Wiki / second-brain" ecosystem that has grown up around Claude Code and Fable 5 in 2025–2026 (brain.md, claude-obsidian, NicholasSpisak/second-brain, the two repos in the handover, mem0, Letta), the shared design is *markdown canonical, index disposable* — exactly ours. But almost all of them **auto-write to the knowledge base with no human gate.** Yggdrasil's WriteGuard + typed grants + decision-receipts are, against this field, a genuine differentiator, not overhead. The most rigorous external work (`memorywire`, SSGM, the "silent memory pollution" result) is *converging toward* the gate we already have.
+**The field validates our direction and exposes our moat.** Across the whole "LLM-Wiki / second-brain" ecosystem that has grown up around Claude Code and Fable 5 in 2025–2026 (brain.md, claude-obsidian, NicholasSpisak/second-brain, the two repos in the handover, mem0, Letta), the shared design is *markdown canonical, index disposable* — exactly ours. But almost all of them **auto-write to the knowledge base with no human gate.** Mimer's WriteGuard + typed grants + decision-receipts are, against this field, a genuine differentiator, not overhead. The most rigorous external work (`memorywire`, SSGM, the "silent memory pollution" result) is *converging toward* the gate we already have.
 
 So the honest finding is not "we're behind." It's: **we're ahead on governance and thin on three things the field does well.** In rough priority:
 
@@ -41,7 +41,7 @@ So the honest finding is not "we're behind." It's: **we're ahead on governance a
 - **Don't chase "no embeddings."** The Karpathy "LLM-Wiki" maximalist claim ("LLMs don't need embeddings over well-organized markdown") is overstated — even its flagship implementation keeps BM25 + cosine rerank. It's a *cheap tier for tiny vaults*, not a replacement.
 - **Don't adopt async memory writes.** mem0 and others default to async for throughput; the "silent memory pollution" result (arXiv 2603.23064) shows async writes are a contamination vector. Our synchronous, gated posture is *correct* — keep it.
 
-**A cost reframing (§VIII):** runtime cognition in Yggdrasil is **local** (router serves `ollama/openai/deepseek/mock`, default ollama — `app/components/llm/router.py:41`; no Anthropic chat provider is wired). So "Fable 5 vs Opus" is a **builder/curation-layer** question, not a runtime one. Fable 5's own profile (great at long-horizon investigation; *bad at* writing clarity, design, and multi-agent orchestration — Lenny's Newsletter) argues for using it sparingly and never by default — matching our standing model-routing policy.
+**A cost reframing (§VIII):** runtime cognition in Mimer is **local** (router serves `ollama/openai/deepseek/mock`, default ollama — `app/components/llm/router.py:41`; no Anthropic chat provider is wired). So "Fable 5 vs Opus" is a **builder/curation-layer** question, not a runtime one. Fable 5's own profile (great at long-horizon investigation; *bad at* writing clarity, design, and multi-agent orchestration — Lenny's Newsletter) argues for using it sparingly and never by default — matching our standing model-routing policy.
 
 ---
 
@@ -195,7 +195,7 @@ Metrics: SV-only, EN-only, and cross-lingual recall@k on a hand-labelled Niflhei
 **When to invoke (decision tree, matches our TCD routing):**
 ```
 Always-on runtime loop (tick, retrieval, panel exec)?  → local Ollama. Never a paid frontier model in the hot path.
-Dev-time building Yggdrasil?                            → Sonnet default; Opus for auth/migration; Fable only for hard architecture/adversarial.
+Dev-time building Mimer?                                → Sonnet default; Opus for auth/migration; Fable only for hard architecture/adversarial.
 Offline curation/eval pass over the vault?             → dense single-chain reasoning → Fable earns its premium; routine → Sonnet.
 Drafting owner-facing docs?                             → NOT Fable (writing-clarity weakness bites our concise-docs preference).
 ```
@@ -225,7 +225,7 @@ At a ~100–500-note bilingual vault: runtime ≈ free (local); a *weekly* Fable
 
 ## Appendix A — Evidence index
 
-**Yggdrasil (this repo):**
+**Mimer (this repo):**
 - Retrieval: `app/retrieval/capability.py:44-159` (typed contract), `app/retrieval/hybrid.py:27,39-50,212,433,459-480`, `docs/RETRIEVAL.md:58-71,119-132`, `docs/adr/ADR-0024-retrieval-topology.md:17`, epic #2314.
 - Vector store / embeddings: `app/stores/pg.py:447,97-106,767-802`, `docs/EMBEDDINGS.md:50-67,160-174`, `app/components/embeddings.py:30-35`, ADR-0023.
 - Write authority / agents: `app/write_guard.py:40-73`, `docs/PANEL_AGENT.md:178-189`, `docs/LANGGRAPH_AGENT_ARCHITECTURE.md:428-437`.

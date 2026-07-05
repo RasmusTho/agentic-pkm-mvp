@@ -228,7 +228,7 @@ Every dead-letter with `schema_violation`, every `UNKNOWN` classification, and e
 ### Pipeline redesign for maximum entropy reduction (ordered)
 1. **Collapse to one retrieval truth** (CW-1): retrieval serves from `store_vector_index` (cache-through allowed, truth single); JSONL demoted to pure audit; delete `app/store/*` legacy generation and the Alembic `embeddings` table. Removes an entire class of divergence permanently.
 2. **Transactional outbox** (CW-3): makes the event log trustworthy; unlocks replay, backfill, and honest metrics.
-3. **Typed boundaries everywhere** (CW-2/CW-4): schema registry + constrained decoding moves the yggdrasil formal model into the live runtime — closing the two-type-systems split.
+3. **Typed boundaries everywhere** (CW-2/CW-4): schema registry + constrained decoding moves the Mimer formal model into the live runtime — closing the two-type-systems split.
 
 ---
 

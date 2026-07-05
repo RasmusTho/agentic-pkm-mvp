@@ -2,7 +2,7 @@ State: Advisory audit snapshot (2026-07-03). Subordinate to `docs/DOCS_INDEX.md`
 Doc role: Reference (audit snapshot)
 Authority: Evidence-based structural analysis under an INCOSE / ISO-IEC-IEEE 15288 lens; file:line anchors reflect `origin/main` at db662a24 (2026-07-03; verified at 75792973 and re-checked after the #2823 fast-forward, which touched no anchored surface). Where this audit and an owner doc disagree, the owner doc wins and the divergence should be raised via issue, not silently resolved. INCOSE vocabulary is applied as a context-layer overlay only (owner decision 2026-07-03); it renames and restructures nothing.
 
-# Yggdrasil System Boundary Review — INCOSE / ISO-15288 Lens
+# Mimer System Boundary Review — INCOSE / ISO-15288 Lens
 
 Method: architecture-research pass (`.codex/skills/architecture-research/SKILL.md`) — nine parallel
 read-only explorers cut along SBS boundaries, central synthesis, and independent adversarial
@@ -63,7 +63,7 @@ re-pinned to `origin/main` mid-pass after the local checkout proved five commits
 
 ## 1. System of Interest
 
-**Definition (15288 overlay).** The Yggdrasil SoI is the local-first cognitive-prosthesis software
+**Definition (15288 overlay).** The Mimer SoI is the local-first cognitive-prosthesis software
 system: the runtime (`app/`, `yggdrasil_runtime/`), its contracts and schemas, its system-owned
 durable artifacts (companion notes, receipts, governance records), and its rebuildable machine
 surfaces (object store, indexes, embeddings, outbox) — the three nested roles of
@@ -200,7 +200,7 @@ One view, reconciling both taxonomies (this is the model SBI-1 turns into an own
 
 ```
                         ┌─────────────────────────────────────────────┐
-   HUMAN (operator,     │              YGGDRASIL SoI                  │   EXTERNAL SYSTEMS
+   HUMAN (operator,     │                MIMER SoI                    │   EXTERNAL SYSTEMS
    authority locus)     │                                             │   (operational env.)
      │ intent/review    │  Human Experience ─ HIX ◄──────────────────┼── Obsidian (editor;
      ▼                  │  Cognitive Context ─ WSP · SFC             │    dual-class human

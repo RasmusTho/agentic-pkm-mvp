@@ -8,7 +8,7 @@ Source of truth: mixed
 Last reviewed: 2026-06-04
 Last verified against: `docs/STATUS.md`, `docs/ARCHITECTURE.md`, `docs/ROADMAP.md`, `docs/DOCS_INDEX.md`, `docs/HUMAN-FLOWS.md`, `docs/EVENTS.md`, `docs/TESTING.md`, `docs/CONTEXT_BUNDLES_RUNTIME/README.md`, closed issues #1559/#1565/#1566 (delivered via PRs #1574/#1577), closed bug #1576 (completed 2026-06-05), merged PR #1573, and `main` at `4a10d6cb`.
 
-# Major Roadmap Reset - Agentic PKM / Yggdrasil
+# Major Roadmap Reset - Agentic PKM / Mimer
 
 ## Reset Decision
 
