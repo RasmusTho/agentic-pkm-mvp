@@ -94,3 +94,34 @@ def test_append_note_falls_back_to_default_vault_when_env_blank(monkeypatch: pyt
     monkeypatch.setattr("app.mcp.vault_tools.write_note_relative", _fake_write)
     append_note(title="Contract Test", body="Body", vault_root=tmp_path)
     assert calls == ["Vault"]
+
+
+def test_append_note_blocked_by_denying_writeguard(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """#2953 AC: a denying WriteGuard blocks writes from ALL callers,
+    including ``app/mcp/vault_tools.py`` -- the issue's named live violator,
+    which had no caller-side ``assert_writes_allowed`` on `main` before this
+    fix. This exercises the REAL production path (``append_note`` ->
+    ``write_note_relative`` -> the guarded port), not a stubbed writer, so it
+    proves the port-level fix actually closes this specific caller.
+    """
+    from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
+
+    monkeypatch.setattr(
+        DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        lambda: {"state": "safe_mode", "reason": "test: deny all writes"},
+    )
+    monkeypatch.setattr(DEFAULT_WRITE_GUARD, "bootstrap_actions", frozenset())
+
+    with pytest.raises(WritesBlockedError) as exc:
+        append_note(title="Blocked Note", body="should not be written", vault_root=tmp_path)
+    assert exc.value.state == "safe_mode"
+
+    # The note file itself must never have been created (the guard fires
+    # inside write_note_relative before any note content is written; the
+    # containing directory may already exist -- append_note's own mkdir runs
+    # before reaching the guarded port, a pre-existing, out-of-scope detail
+    # unrelated to this issue's port-level WriteGuard assertion).
+    target_dir = tmp_path / "_mcp"
+    if target_dir.exists():
+        assert not any(target_dir.iterdir())

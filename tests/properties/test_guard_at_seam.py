@@ -1,4 +1,4 @@
-"""P-1/P-4 guard-at-seam properties (#2910).
+"""P-1/P-4 guard-at-seam properties (#2910, extended by #2953).
 
 P-1 `guard_asserted_at_write_seam`: WriteGuard is asserted *inside* every seam
 that can write the vault, never left to caller convention.
@@ -11,7 +11,7 @@ Derivation: ``docs/testing/invariant-synthesis-2026-07.md`` :: P-1, P-4;
 ``docs/architecture/formal-model.md`` §3 gap 1 / gap 4, §7 divergences
 F-A..F-F. Four seam-local fixes landed retail (#2808 panel writeback, #2809
 settings writeback, #2810 note_hygiene, #2877 vault-layout scaffolder) before
-this issue closed the remaining three named seams:
+#2910 closed the remaining three named seams:
 
 1. The knowledge write port itself (``app/knowledge/write_ops.py::
    write_note_from_absolute``) -- the shared root cause five other sites
@@ -21,6 +21,13 @@ this issue closed the remaining three named seams:
 3. Checkbox-rollback (``app/panel/checkbox_projection.py`` exception handler
    calling ``write_note_from_absolute`` to restore prior content) -- covered
    automatically once the port itself is guarded.
+
+#2953 closed a follow-on P-1 census gap discovered by the KA-05 (#2800) opus
+review: ``write_note_relative`` (the relative-path sibling port) was left
+unguarded at the port itself, with a live unguarded caller in
+``app/mcp/vault_tools.py``. This file now also censuses every
+``write_note_relative`` call site (mirroring the ``write_frontmatter``
+census) and registers that live violator as a fourth runtime P-1/P-4 seam.
 
 Builds on the P-2 machinery bootstrapped by #2909 (``tests/properties/
 _machinery.py``); the P-1/P-4 additions live in that module's clearly
@@ -35,7 +42,9 @@ import pytest
 from tests.properties._machinery import (
     REGISTERED_WRITE_SEAMS,
     WRITE_FRONTMATTER_SITE_CLASSIFICATION,
+    WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION,
     find_write_frontmatter_call_sites,
+    find_write_note_relative_call_sites,
 )
 
 pytest.importorskip("hypothesis")
@@ -87,14 +96,60 @@ def test_every_write_seam_asserts_writeguard() -> None:
     )
 
 
-def test_registered_write_seams_cover_the_three_named_gap1_sites() -> None:
-    """The P-1/P-4 runtime property registry names exactly the three sites the
-    issue scopes: the knowledge write port, identity-heal, and checkbox
-    rollback (formal-model.md gap 1's "remaining four sites" minus settings
-    writeback, already gated by #2809).
+def test_every_write_note_relative_seam_has_port_coverage() -> None:
+    """P-1 census gap closed (#2953): every ``write_note_relative`` call site
+    is classified in ``WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION`` as either
+    ``guarded_by_port`` (covered by construction now that the port itself
+    asserts WriteGuard) or ``guarded_by_caller`` (port coverage plus a
+    pre-existing caller-side assert) -- a NEW call site with neither
+    classification fails this gate instead of silently shipping an unguarded
+    seam, mirroring ``test_every_write_seam_asserts_writeguard``'s shape for
+    ``write_frontmatter``.
+    """
+    sites = find_write_note_relative_call_sites()
+    assert sites, "expected at least the known production write_note_relative call sites"
+
+    unregistered = [site for site in sites if site not in WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION]
+    assert not unregistered, (
+        "Unregistered write_note_relative call site(s) found -- classify each as "
+        "'guarded_by_port' or 'guarded_by_caller' in "
+        "WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION (tests/properties/_machinery.py) "
+        f"before merging: {unregistered}"
+    )
+
+    live_set = set(sites)
+    stale = [key for key in WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION if key not in live_set]
+    assert not stale, (
+        "WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION has stale entries no longer "
+        f"matching a real write_note_relative call site (line drift or removed site): {stale}"
+    )
+
+    bad_classification = [
+        (key, value)
+        for key, value in WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION.items()
+        if not (value.startswith("guarded_by_port") or value.startswith("guarded_by_caller"))
+    ]
+    assert not bad_classification, (
+        "Every classification must start with 'guarded_by_port' or "
+        f"'guarded_by_caller': {bad_classification}"
+    )
+
+
+def test_registered_write_seams_cover_the_named_gap1_and_gap2_sites() -> None:
+    """The P-1/P-4 runtime property registry names exactly the four sites
+    this issue and its predecessor scope: the knowledge write port,
+    identity-heal, checkbox rollback (formal-model.md gap 1's "remaining
+    four sites" minus settings writeback, already gated by #2809), plus the
+    #2953 P-1 census-gap fix's named live violator (``app/mcp/vault_tools.py``
+    via the relative-path port).
     """
     names = {seam.name for seam in REGISTERED_WRITE_SEAMS}
-    assert names == {"knowledge_write_port", "identity_heal", "checkbox_rollback"}
+    assert names == {
+        "knowledge_write_port",
+        "identity_heal",
+        "checkbox_rollback",
+        "mcp_vault_tools_append_note",
+    }
 
 
 # ---------------------------------------------------------------------------

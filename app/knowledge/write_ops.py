@@ -13,15 +13,17 @@ from app.knowledge.service import resolve_knowledge_port
 if TYPE_CHECKING:
     from app.write_guard import WriteGuard
 
-# Default action asserted at the knowledge write port (#2910,
-# formal-model.md §3 gap 1 / P-1). This is the shared root-cause seam:
-# ~20 production call sites reach the vault through ``write_note_from_absolute``
-# with no WriteGuard at the port itself -- some already assert caller-side
-# with their own distinct action string (defense-in-depth, e.g. #2808/#2809),
-# but several (promotion queue, vault layout, filesystem vault adapter, alpha
-# human flows) reached the vault completely unguarded. Asserting here with a
-# generic default action closes every one of those gaps in a single change,
-# and is safe/idempotent for callers that already asserted their own action.
+# Default action asserted at both knowledge write ports (#2910 for
+# ``write_note_from_absolute``, extended to ``write_note_relative`` by #2953,
+# formal-model.md §3 gap 1 / P-1). This is the shared root-cause seam: ~20
+# production call sites reach the vault through these two ports with no
+# WriteGuard at the port itself -- some already assert caller-side with their
+# own distinct action string (defense-in-depth, e.g. #2808/#2809), but several
+# (promotion queue, vault layout, filesystem vault adapter, alpha human flows,
+# and -- for the relative-path port -- ``app/mcp/vault_tools.py``) reached the
+# vault completely unguarded. Asserting here with a generic default action
+# closes every one of those gaps in a single change, and is safe/idempotent
+# for callers that already asserted their own action.
 KNOWLEDGE_WRITE_ACTION = "knowledge.write_note"
 
 
@@ -81,7 +83,32 @@ def write_note_relative(
     content: str,
     *,
     vault_root: Path | str,
+    action: str = KNOWLEDGE_WRITE_ACTION,
+    write_guard: "WriteGuard | None" = None,
 ) -> WriteReceipt:
+    # Guard-at-seam (#2953, extending #2910): assert WriteGuard inside this
+    # port too, before any path resolution or filesystem mutation, mirroring
+    # ``write_note_from_absolute`` exactly. Several production callers already
+    # assert caller-side with their own distinct action string (defense-in-
+    # depth, e.g. materialize_moment/materialize_promoted_memory/
+    # write_candidate_note) -- double-assert is harmless and stays valid. But
+    # at least one production caller (``app/mcp/vault_tools.py``) reached this
+    # relative-path port completely unguarded; asserting here with a generic
+    # default action closes that gap the same way #2910 closed it for the
+    # absolute-path port. ``action`` defaults to the generic port action but
+    # callers that need the #2877 named bootstrap escape pass their own escape
+    # action string through explicitly -- the escape lives in the guard's
+    # allow-list (``DEFAULT_BOOTSTRAP_ACTIONS`` in app/write_guard.py), never
+    # in an unconditional skip here. A denying guard still blocks
+    # unconditionally.
+    #
+    # Imported lazily for the same circular-import reason documented on
+    # ``write_note_from_absolute`` above (app.write_guard -> health_contract
+    # -> ... -> app.knowledge.write_ops).
+    from app.write_guard import DEFAULT_WRITE_GUARD
+
+    guard = write_guard or DEFAULT_WRITE_GUARD
+    guard.assert_writes_allowed(action)
     resolved_root = Path(vault_root).expanduser().resolve()
     locator = make_note_locator(note_rel_path)
     port = resolve_knowledge_port(vault_root=resolved_root, settings=_local_fs_settings())

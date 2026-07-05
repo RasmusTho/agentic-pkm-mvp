@@ -621,6 +621,106 @@ def find_write_frontmatter_call_sites(root: Path = APP_ROOT) -> list[tuple[str, 
 
 
 # ---------------------------------------------------------------------------
+# Registered write-note-relative census (closed, justified exception set)
+# ---------------------------------------------------------------------------
+#
+# ``write_note_relative`` (``app/knowledge/write_ops.py``) is the relative-path
+# sibling of the knowledge port (``write_note_from_absolute``). #2910 only
+# guarded the absolute-path port at the seam itself; #2953 closes the same
+# gap for this port (the P-1 census gap the issue names: a live unguarded
+# caller in ``app/mcp/vault_tools.py`` reached the vault through this helper
+# with no WriteGuard anywhere on its call path). Every production call site is
+# listed here so a NEW call site added later without port-or-caller coverage
+# fails this gate instead of silently shipping the next unguarded-seam
+# regression -- mirroring ``WRITE_FRONTMATTER_SITE_CLASSIFICATION``'s shape
+# exactly (closed set, one-line justification per entry, checked against
+# `main` @ #2953 implementation time).
+#
+# Classifications:
+#   "guarded_by_port"   -- the port itself (``write_note_relative``) now
+#                           asserts WriteGuard unconditionally before any I/O
+#                           (#2953), so every call site is guarded by
+#                           construction regardless of caller-side behavior.
+#   "guarded_by_caller" -- in addition to the port guard, the caller ALSO
+#                           asserts its own action string caller-side
+#                           (defense-in-depth, pre-dates #2953).
+WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
+    ("app/relevance/materialization.py", 66): (
+        "guarded_by_caller: materialize_moment asserts write_guard."
+        "assert_writes_allowed(MOMENT_MATERIALIZE_ACTION) immediately before "
+        "this call, in addition to the port's own guard (#2953)."
+    ),
+    ("app/agent_memory/materialization.py", 77): (
+        "guarded_by_caller: materialize_promoted_memory asserts write_guard."
+        "assert_writes_allowed(MEMORY_MATERIALIZATION_ACTION) immediately "
+        "before this call, in addition to the port's own guard (#2953)."
+    ),
+    ("app/knowledge_acquisition/candidate_writeback.py", 313): (
+        "guarded_by_caller: write_candidate_note asserts write_guard."
+        "assert_writes_allowed(CANDIDATE_WRITE_ACTION) immediately before "
+        "this call, in addition to the port's own guard (#2953)."
+    ),
+    ("app/eval/failure_capture.py", 258): (
+        "guarded_by_caller: the shared draft-write helper asserts "
+        "write_guard.assert_writes_allowed(FAILURE_CAPTURE_DRAFT_ACTION) "
+        "immediately before this call, in addition to the port's own guard "
+        "(#2953)."
+    ),
+    ("app/eval/failure_capture.py", 561): (
+        "guarded_by_caller: same shared draft-write helper as line 258 "
+        "(second draft-kind call site), same caller-side assert plus the "
+        "port's own guard (#2953)."
+    ),
+    ("app/services/commitment_persistence.py", 140): (
+        "guarded_by_caller: the persistence entrypoint asserts write_guard."
+        "assert_writes_allowed(COMMITMENT_PERSIST_ACTION) immediately before "
+        "this call, in addition to the port's own guard (#2953)."
+    ),
+    ("app/mcp/vault_tools.py", 115): (
+        "guarded_by_port: append_note had NO caller-side WriteGuard assert on "
+        "`main` before #2953 (the issue's named live violator) -- now closed "
+        "by the port's own unconditional guard-at-seam assertion, exactly the "
+        "way #2910 closed the absolute-path port's unguarded sites."
+    ),
+}
+
+
+def find_write_note_relative_call_sites(root: Path = APP_ROOT) -> list[tuple[str, int]]:
+    """AST-scan ``app/**/*.py`` for ``write_note_relative(...)`` call sites.
+
+    Matches direct-name calls to ``write_note_relative`` (imported by name
+    into each caller module, e.g. ``from app.knowledge.write_ops import
+    write_note_relative``), excluding the function's own ``def`` site.
+    Deliberately returns every site with no filtering -- classification
+    against ``WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION`` is the caller's job,
+    so this scanner itself cannot become a new escape hatch (#2953, mirrors
+    ``find_write_frontmatter_call_sites``).
+    """
+    sites: list[tuple[str, int]] = []
+    for path in sorted(root.rglob("*.py")):
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        try:
+            tree = ast.parse(source, filename=str(path))
+        except SyntaxError:
+            continue
+        rel = str(path.relative_to(REPO_ROOT))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "write_note_relative":
+                continue
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Name) and func.id == "write_note_relative":
+                sites.append((rel, node.lineno))
+            elif isinstance(func, ast.Attribute) and func.attr == "write_note_relative":
+                sites.append((rel, node.lineno))
+    return sites
+
+
+# ---------------------------------------------------------------------------
 # Registered write-seam descriptors for the P-1/P-4 runtime property
 # ---------------------------------------------------------------------------
 #
@@ -791,6 +891,30 @@ def _checkbox_rollback_snapshot(tmp_path: Path) -> dict[Path, bytes]:
     return {p: p.read_bytes() for p in sorted(vault.rglob("*")) if p.is_file()}
 
 
+def _mcp_vault_tools_invoke(tmp_path: Path, monkeypatch: "pytest.MonkeyPatch") -> _Callable[[], None]:
+    """The named live violator (#2953): ``app/mcp/vault_tools.py::append_note``
+    reaches ``write_note_relative`` with NO caller-side WriteGuard assert on
+    `main` -- the issue's concrete example of why the relative-path port
+    itself (not caller convention) must be the guarded seam. Exercising the
+    real ``append_note`` entrypoint (not calling ``write_note_relative``
+    directly) proves the port-level fix actually closes this specific caller.
+    """
+    from app.mcp.vault_tools import append_note
+
+    vault = tmp_path / "vault"
+    vault.mkdir(parents=True, exist_ok=True)
+
+    def _invoke() -> None:
+        append_note(title="Seam Note", body="original content", vault_root=vault)
+
+    return _invoke
+
+
+def _mcp_vault_tools_snapshot(tmp_path: Path) -> dict[Path, bytes]:
+    vault = tmp_path / "vault"
+    return {p: p.read_bytes() for p in sorted(vault.rglob("*")) if p.is_file()}
+
+
 REGISTERED_WRITE_SEAMS: tuple[RegisteredWriteSeam, ...] = (
     RegisteredWriteSeam(
         name="knowledge_write_port",
@@ -812,5 +936,12 @@ REGISTERED_WRITE_SEAMS: tuple[RegisteredWriteSeam, ...] = (
         guard_patch_target="app.write_guard.DEFAULT_WRITE_GUARD",
         invoke_factory=_checkbox_rollback_invoke,
         unchanged_paths=_checkbox_rollback_snapshot,
+    ),
+    RegisteredWriteSeam(
+        name="mcp_vault_tools_append_note",
+        action="knowledge.write_note",
+        guard_patch_target="app.write_guard.DEFAULT_WRITE_GUARD",
+        invoke_factory=_mcp_vault_tools_invoke,
+        unchanged_paths=_mcp_vault_tools_snapshot,
     ),
 )
