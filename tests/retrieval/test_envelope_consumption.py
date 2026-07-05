@@ -4,7 +4,7 @@ Binds AC4: the production seam consumed by ``app.api.routes.ask`` /
 ``app.activation.ask_synthesis.build_retrieval_candidates`` receives a schema-valid ContextEnvelope
 that carries no raw-vault/raw-index/storage field.
 
-Reference for the invariant SHAPE: ``yggdrasil_runtime/context.py::assemble_envelope`` (consumed,
+Reference for the invariant SHAPE: ``mimer_runtime/context.py::assemble_envelope`` (consumed,
 not imported).
 """
 

@@ -1,6 +1,6 @@
-"""Yggdrasil runtime vertical slice 1 — capture to bounded context.
+"""Mimer runtime vertical slice 1 — capture to bounded context.
 
-A clean, corpus-backed conformance harness implementing the first executable Yggdrasil
+A clean, corpus-backed conformance harness implementing the first executable Mimer
 architecture chain:
 
     capture -> MetadataBundle -> DRI segment -> retrieval prefilter -> RetrievalResult -> ContextEnvelope
@@ -21,7 +21,7 @@ only by the test suite via ``pythonpath = .`` (see ``pytest.ini``); no ``app/`` 
 It is therefore intentionally **excluded from the wheel** (``[tool.setuptools.packages.find]
 include = ["app*"]``) — shipping a conformance harness in the production artifact would contradict
 this slice's explicit boundary (corpus-backed harness, not an ``app/`` rewire; see INTEGRATION_MAP).
-When a future slice wires ``yggdrasil_runtime`` into the production pipeline, packaging is added then.
+When a future slice wires ``mimer_runtime`` into the production pipeline, packaging is added then.
 """
 
 from __future__ import annotations

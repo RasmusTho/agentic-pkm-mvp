@@ -1,7 +1,7 @@
 """Vault Action Layer — governed artifact placement and lifecycle actions.
 
 This module is the **first slice** of a broader Vault Action Layer for
-Yggdrasil.  The current implementation supports only one bounded action:
+Mimer.  The current implementation supports only one bounded action:
 Markdown note placement from the inbox zone to the workbench zone.
 
 Long-term direction

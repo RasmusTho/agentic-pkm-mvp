@@ -10,7 +10,7 @@ Binds the spec ACs to the production entrypoint ``app.retrieval.hybrid.hybrid_se
 - ``test_in_context_role_clamped`` — ``evidence_role_in_context`` never exceeds the intrinsic role
   (AC3).
 
-Reference implementation for the invariant SHAPE: ``yggdrasil_runtime/retrieval.py`` (consumed, not
+Reference implementation for the invariant SHAPE: ``mimer_runtime/retrieval.py`` (consumed, not
 imported).
 """
 

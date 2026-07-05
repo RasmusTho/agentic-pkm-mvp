@@ -5,7 +5,7 @@ dicts and not raw index access. This module assembles one from a
 :class:`app.retrieval.hybrid.ScopedRetrieval`, validated against
 ``schemas/context-envelope.schema.json``.
 
-It **mirrors the invariant SHAPE** of ``yggdrasil_runtime/context.py::assemble_envelope`` (the
+It **mirrors the invariant SHAPE** of ``mimer_runtime/context.py::assemble_envelope`` (the
 reference implementation) without importing that test-only package: ``access_mode`` is always
 ``bounded_context_only``; there is NO raw-vault/raw-index field anywhere in the payload; denied
 scopes are carried through content-free (class + reason only, no object/scope identity); useful

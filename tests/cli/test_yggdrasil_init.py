@@ -34,7 +34,7 @@ def test_yggdrasil_init_uses_scaffolder(monkeypatch, tmp_path) -> None:
         def scaffold(self):  # type: ignore[no-untyped-def]
             return {"root": [tmp_path], "created": [], "existed": []}
 
-    monkeypatch.setattr("app.cli.YggdrasilScaffolder", FakeScaffolder)
+    monkeypatch.setattr("app.cli.MimerScaffolder", FakeScaffolder)
     runner = CliRunner()
     result = runner.invoke(cli, ["yggdrasil-init", "--root", str(tmp_path)])
     assert result.exit_code == 0, result.output

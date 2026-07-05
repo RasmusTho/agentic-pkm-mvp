@@ -3,12 +3,12 @@ path (KERNEL-10, #2772).
 
 The three eval skeletons (``test_general_knowledge_crosses_clean``, ``test_rpg_not_confused_with_software``,
 ``test_private_not_in_work_results``) protect scope-contamination invariants over the synthetic
-corpus (#2551). Before KERNEL-10 they gated on ``require_future_runtime(yggdrasil_runtime...)`` and
+corpus (#2551). Before KERNEL-10 they gated on ``require_future_runtime(mimer_runtime...)`` and
 xfailed while that test-only reference package was the only enforcement.
 
 This adapter loads the same fixture corpus into the live ``app.retrieval.hybrid`` store and drives
 the production entrypoint (``scoped_hybrid_search`` under an active domain scope), so the skeletons
-run un-xfailed against the app runtime. It does NOT relocate ``yggdrasil_runtime`` into ``app/`` —
+run un-xfailed against the app runtime. It does NOT relocate ``mimer_runtime`` into ``app/`` —
 it is a thin test fixture over the real app path.
 
 Scope-vocabulary mapping: the corpus frontmatter uses ``scope_id`` (e.g.

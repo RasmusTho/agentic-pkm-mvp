@@ -17,7 +17,7 @@ from app.components.retrieval import embed_docs, embed_query
 from app.retrieval.hook_adapter import maybe_rerank
 
 # Conservative -> permissive ordering of evidence roles (semantic-dimensions.md). Mirrors
-# yggdrasil_runtime/retrieval.py::_EVIDENCE_ORDER — the reference for the invariant SHAPE. The
+# mimer_runtime/retrieval.py::_EVIDENCE_ORDER — the reference for the invariant SHAPE. The
 # in-context role may only be downgraded from the intrinsic role, never upgraded toward `evidence`.
 _EVIDENCE_ORDER = ("non_evidence", "inspiration", "analogy", "reference", "background", "evidence")
 
@@ -40,7 +40,7 @@ def _intrinsic_evidence_role(payload: dict[str, Any] | None) -> str:
 def _clamp_in_context(intrinsic: str, proposed: str | None = None) -> str:
     """Return an in-context evidence role that never exceeds the intrinsic role (non-upgrading).
 
-    Ported from ``yggdrasil_runtime/retrieval.py::_clamp_in_context``: defaults to the intrinsic
+    Ported from ``mimer_runtime/retrieval.py::_clamp_in_context``: defaults to the intrinsic
     role; a proposed value is honored only when it is ordinally lower-or-equal. Retrieval may
     downgrade an evidence role for the current context but must never upgrade it toward ``evidence``.
     """
@@ -57,7 +57,7 @@ class ScopeDenial:
 
     Records WHY and WHAT CLASS of flow would be needed WITHOUT identifying the denied content,
     scope, object, provenance, or even a per-document count — mirrors
-    ``yggdrasil_runtime/retrieval.py::ScopeDenial`` and validates against
+    ``mimer_runtime/retrieval.py::ScopeDenial`` and validates against
     ``schemas/_defs.schema.json :: scope_denial`` (via the retrieval-result / context-envelope
     contracts). A denial is never a silent drop and never leaks scope/object identity.
     """
@@ -423,7 +423,7 @@ def _denials_for_excluded(
     ineligible content is NEVER embedded or run through the scoring machinery; that restraint is the
     invariant itself). Aggregated by denial class so the result records that material WAS withheld
     without leaking object/scope identity, content, provenance, or a per-document count.
-    Mirrors ``yggdrasil_runtime/retrieval.py::_denials_for_excluded``.
+    Mirrors ``mimer_runtime/retrieval.py::_denials_for_excluded``.
 
     The live ``app/`` path has no suppression_state today, so only the ``cross_scope_no_flow`` class
     can actually occur; ``suppressed`` is intentionally NOT emitted (do not invent a class that

@@ -13,8 +13,8 @@ import pytest
 
 from tests.invariants._helpers import assert_validates
 
-from yggdrasil_runtime import capture
-from yggdrasil_runtime.metadata import MetadataBundle
+from mimer_runtime import capture
+from mimer_runtime.metadata import MetadataBundle
 
 
 def test_capture_bundle_validates_against_schema() -> None:

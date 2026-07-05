@@ -14,7 +14,7 @@ import pytest
 
 from tests.invariants._helpers import assert_validates
 
-from yggdrasil_runtime import capture, context, retrieval
+from mimer_runtime import capture, context, retrieval
 
 _ALPHA = "scope:work/project-alpha"
 # Any raw-access shaped field must never appear anywhere in the envelope payload.

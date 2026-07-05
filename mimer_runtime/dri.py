@@ -23,8 +23,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from yggdrasil_runtime import capture
-from yggdrasil_runtime.metadata import MetadataBundle
+from mimer_runtime import capture
+from mimer_runtime.metadata import MetadataBundle
 
 
 @dataclass(frozen=True)

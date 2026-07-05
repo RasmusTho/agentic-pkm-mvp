@@ -2,7 +2,7 @@
 
 Honesty gate for the runtime slice: prove the targeted skeletons were converted FOR REAL and the
 deliberately-left invariants remain xfail. The xfails are dynamic (require_future_runtime gates on a
-missing yggdrasil_runtime.<module>), so we assert by calling each skeleton directly:
+missing mimer_runtime.<module>), so we assert by calling each skeleton directly:
 - a targeted invariant's module exists -> its body runs and passes (no raise);
 - a residual invariant's module is absent -> require_future_runtime raises XFailed.
 
@@ -86,13 +86,13 @@ def test_expected_xfail_set_is_unchanged(slug: str) -> None:
 
 def test_targeted_modules_present() -> None:
     for mod in TARGETED_MODULES:
-        importlib.import_module(f"yggdrasil_runtime.{mod}")
+        importlib.import_module(f"mimer_runtime.{mod}")
 
 
 def test_residual_modules_absent() -> None:
     for mod in RESIDUAL_MODULES:
         with pytest.raises(ModuleNotFoundError):
-            importlib.import_module(f"yggdrasil_runtime.{mod}")
+            importlib.import_module(f"mimer_runtime.{mod}")
 
 
 def test_residue_counts_are_pinned() -> None:

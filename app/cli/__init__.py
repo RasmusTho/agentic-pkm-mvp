@@ -77,7 +77,7 @@ from app.llm.trace_inspect import (
     load_trace,
 )
 from app.settings.runtime import get_settings_bundle
-from app.settings.yggdrasil_scaffolder import YggdrasilScaffolder
+from app.settings.mimer_scaffolder import MimerScaffolder
 
 _AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
 _DOWNLOAD_DIR = Path("tmp/normalize")
@@ -962,7 +962,7 @@ def alpha_human_flows(
 def yggdrasil_init(root_dir: Path | None) -> None:
     yggdrasil_root = _resolve_yggdrasil_root(root_dir).expanduser()
     try:
-        result = YggdrasilScaffolder(root=yggdrasil_root).scaffold()
+        result = MimerScaffolder(root=yggdrasil_root).scaffold()
     except WritesBlockedError as exc:
         # Guard denied the scaffold action (#2877). The assertion precedes all
         # filesystem mutation, so nothing was created — surface a clean

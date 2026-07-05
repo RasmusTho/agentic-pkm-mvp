@@ -1,4 +1,4 @@
-"""Shared helpers for the Yggdrasil invariant test skeletons.
+"""Shared helpers for the Mimer invariant test skeletons.
 
 These tests are architecture *fitness* probes, not runtime tests. Static probes load the JSON
 schemas under ``schemas/`` and assert structural facts that are true today. Runtime probes call a
@@ -26,7 +26,7 @@ INVARIANT_REGISTRY = DOCS_DIR / "testing" / "invariant-tests.md"
 # (Capture -> MetadataBundle -> DRI segment -> retrieval prefilter -> RCA result -> ContextEnvelope).
 # Importing any of these raises ModuleNotFoundError today, which is what makes the runtime
 # skeletons honestly ``xfail`` instead of faking a pass.
-FUTURE_RUNTIME_PACKAGE = "yggdrasil_runtime"
+FUTURE_RUNTIME_PACKAGE = "mimer_runtime"
 
 
 def load_schema(name: str) -> dict[str, Any]:
@@ -80,7 +80,7 @@ def schema_registry() -> Any:
     The contract schemas cross-reference each other with relative ``$ref`` strings (e.g.
     ``_defs.schema.json#/$defs/...``); registering each resource under its absolute ``$id`` lets the
     validator resolve those refs without network access. Used by the runtime conformance tests that
-    validate live ``yggdrasil_runtime`` objects against their JSON schema.
+    validate live ``mimer_runtime`` objects against their JSON schema.
     """
     from referencing import Registry, Resource
 

@@ -123,7 +123,7 @@ def test_vault_note_writes_use_knowledge_port_helpers() -> None:
         REPO_ROOT / "app" / "services" / "note_uuid.py",
         REPO_ROOT / "app" / "settings" / "compiler.py",
         REPO_ROOT / "app" / "settings" / "writeback.py",
-        REPO_ROOT / "app" / "settings" / "yggdrasil_scaffolder.py",
+        REPO_ROOT / "app" / "settings" / "mimer_scaffolder.py",
         REPO_ROOT / "app" / "vault" / "layout.py",
         REPO_ROOT / "scripts" / "fs_watcher.py",
     }
