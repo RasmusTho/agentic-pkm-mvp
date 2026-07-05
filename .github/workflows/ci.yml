@@ -141,7 +141,11 @@ jobs:
           cat /tmp/ws-api.log || true
           exit 1
       - name: Smoke query
-        run: curl -fsS "http://localhost:8000/query?q=hello"
+        # NOTE: /query never existed under app/api/routes/ — this step 404'd
+        # unconditionally since >=2026-06-14 (issue #2819). /version is the
+        # currently-shipped, dependency-free route (no DB/vault/LLM required)
+        # that proves the API process actually booted and is serving.
+        run: curl -fsS "http://localhost:8000/version"
       - name: Dump API log on failure
         if: failure()
         run: cat /tmp/ws-api.log
