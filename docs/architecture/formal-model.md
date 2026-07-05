@@ -180,12 +180,17 @@ T-scaffold [operator/human: vault init, yggdrasil-init, layout-ensure]
   pre-selection provision through under safe_mode/unhealthy — a denying guard still blocks it, so
   this is a consulted seam, not "outside WG" (#2877). The knowledge write port itself now also
   asserts WG unconditionally (app/knowledge/write_ops.py::write_note_from_absolute, default action
-  "knowledge.write_note") — the scaffolder's own nested writes and its layout-ensure call thread
-  the "yggdrasil.scaffold" escape action through to the port so provisioning still survives
-  safe_mode/unhealthy end-to-end (#2910). The ingest-time layout-ensure call
-  (app/ingest/vault_alpha.py::run_vault_alpha_ingest_paths → ensure_vault_layout, ridden by the
-  watcher tick) has NO escape — a denying/raising guard there now degrades to the watcher's
-  existing skipped_writes_blocked accounting instead of crashing the tick (#2910).
+  "knowledge.write_note") — the scaffolder's own nested writes thread the "yggdrasil.scaffold"
+  escape action through to the port so provisioning still survives safe_mode/unhealthy end-to-end
+  (#2910). Layout-ensure provisioning (app/vault/layout.py's two create-if-missing writes, reached
+  by vault-layout-ensure CLI, uat seed, and ingest-time ensure_vault_layout) carries its own
+  registered escape "vault.layout_ensure" ∈ DEFAULT_BOOTSTRAP_ACTIONS: creating the FIRST
+  vault.layout.md is the write the guard's own health evaluation depends on
+  (load_health_settings → load_layout raises until the note exists), so the escape is checked
+  BEFORE snapshot evaluation — a registered bootstrap action survives an UNEVALUABLE guard, while
+  every non-registered action still fails closed on evaluation error (P-4). The watcher tick
+  additionally degrades any WritesBlockedError from inside ingest to its skipped_writes_blocked
+  accounting instead of crashing (#2910, defense-in-depth).
 T-settings-compile [operator: settings compile/watch]  (app/settings/writeback.py:23-42)
   post: V.settings @Settings/*.md ← compiled blocks ; ⚠ NO WG, NO event — Divergence F-B
 T-bootstrap-ddl [worker boot]  (app/services/outbox.py:68-73, called from outbox_worker.py:1027)

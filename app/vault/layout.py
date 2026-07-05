@@ -14,6 +14,17 @@ from app.knowledge.write_ops import write_note_from_absolute
 LAYOUT_NOTE_NAME = "vault.layout.md"
 SYSTEM_NOTE_TITLE = "Vault Structure – Human-First Orientation (Mimer)"
 
+# Registered bootstrap-escape action for layout provisioning (T-scaffold
+# "layout-ensure", #2910). Member of DEFAULT_BOOTSTRAP_ACTIONS in
+# app/write_guard.py: creating the FIRST vault.layout.md is the write the
+# guard's own health evaluation depends on (load_health_settings ->
+# get_vault_system_dir_rel -> load_layout raises until the note exists), so it
+# must carry the named escape or fresh-vault bootstrap deadlocks
+# (harness-selfverify promote-to-test smoke). All producers of this bootstrap
+# moment (vault-layout-ensure CLI, uat seed, ingest-time ensure_vault_layout,
+# the yggdrasil scaffolder's nested call) route through the writes below.
+LAYOUT_ENSURE_ACTION = "vault.layout_ensure"
+
 _SETTINGS_REL_PATH = Path("_system") / "settings" / "system-settings.yaml"
 _ALT_SETTINGS_REL_PATH = Path("@Settings") / "system-settings.yaml"
 
@@ -278,14 +289,16 @@ def _write_note_via_knowledge_port(
 ) -> None:
     resolved_root = vault_root.expanduser().resolve()
     resolved_path = path.expanduser().resolve()
-    if action is None:
-        write_note_from_absolute(resolved_path, content, vault_root=resolved_root)
-    else:
-        # Threaded through from a caller that already asserted its own guard
-        # action at an outer seam (#2910), e.g. the yggdrasil-init scaffolder's
-        # bootstrap-escape action -- pass it to the port so the escape still
-        # applies at this inner write instead of being re-denied.
-        write_note_from_absolute(resolved_path, content, vault_root=resolved_root, action=action)
+    # Both writes in this module are the create-if-missing halves of layout
+    # provisioning (T-scaffold "layout-ensure"), so they default to the
+    # registered LAYOUT_ENSURE_ACTION bootstrap escape (#2910) -- creating the
+    # FIRST layout note is the write the guard's own health evaluation depends
+    # on, so a non-escaped action here deadlocks fresh-vault bootstrap. An
+    # outer seam that already asserted its own registered action (the
+    # yggdrasil-init scaffolder) threads it through ``action`` instead.
+    write_note_from_absolute(
+        resolved_path, content, vault_root=resolved_root, action=action or LAYOUT_ENSURE_ACTION
+    )
 
 
 def load_or_create_layout(vault_root: Path, *, write_action: str | None = None) -> VaultLayout:
@@ -411,6 +424,7 @@ def ensure_vault_layout(vault_root: Path) -> VaultLayout:
 
 
 __all__ = [
+    "LAYOUT_ENSURE_ACTION",
     "LAYOUT_NOTE_NAME",
     "SYSTEM_NOTE_TITLE",
     "VaultLayout",

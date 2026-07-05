@@ -464,13 +464,15 @@ def run_watcher_tick(
     try:
         ingest_summary = run_vault_alpha_ingest_paths(vault_root, result.changed, force=False)
     except WritesBlockedError as exc:
-        # Guard-at-seam (#2910): run_vault_alpha_ingest_paths now reaches the
-        # knowledge write port's own WriteGuard assertion via
-        # ensure_vault_layout's idempotent layout-ensure writes (T-scaffold,
-        # formal-model.md §2.3), which previously wrote unguarded. A denying/
-        # raising guard here must degrade the same way the panel auto-exec
-        # loop below already does (skipped_writes_blocked), not crash the
-        # whole watcher tick -- ingest simply does not run this tick.
+        # Guard-at-seam defense-in-depth (#2910): the ingest path's own
+        # layout-ensure writes carry the registered "vault.layout_ensure"
+        # bootstrap escape (app/vault/layout.py), so under the default guard
+        # this branch is not reached for layout provisioning. It remains for
+        # any OTHER WriteGuard-gated write inside ingest (e.g. a caller-side
+        # "ensure uuid" heal) or a guard whose escape list was narrowed: a
+        # blocked ingest degrades to the same skipped_writes_blocked
+        # accounting the panel auto-exec loop below uses, never a crashed
+        # watcher tick.
         summary["skipped_writes_blocked"] += 1
         summary["ingested"] = 0
         messages.append(f"Watcher ingest blocked by write guard: {exc}")

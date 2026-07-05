@@ -192,6 +192,50 @@ def test_raising_guard_blocks_write(tmp_path_factory, seam_index: int) -> None:
         monkeypatch.undo()
 
 
+def test_registered_bootstrap_action_survives_unevaluable_guard() -> None:
+    """The named bootstrap escape short-circuits BEFORE snapshot evaluation
+    (#2910 harness-selfverify regression): on a brand-new vault the health
+    snapshot itself depends on state the bootstrap write creates
+    (vault.layout.md -> load_health_settings), so a registered bootstrap
+    action must pass even when guard evaluation itself raises -- otherwise
+    fresh-vault provisioning deadlocks. Only REGISTERED action strings get
+    this; it is the #2877 named-escape pattern, not a bypass.
+    """
+    from app.write_guard import DEFAULT_BOOTSTRAP_ACTIONS, WriteGuard
+
+    def _raising_snapshot() -> dict:
+        raise FileNotFoundError("vault.layout.md not found (simulated fresh vault)")
+
+    guard = WriteGuard(_raising_snapshot)
+    assert "vault.layout_ensure" in DEFAULT_BOOTSTRAP_ACTIONS
+    # Registered escape: passes without ever evaluating the raising snapshot.
+    guard.assert_writes_allowed("vault.layout_ensure")
+    guard.assert_writes_allowed("yggdrasil.scaffold")
+
+
+def test_unregistered_action_still_fails_closed_on_unevaluable_guard() -> None:
+    """P-4 counterpart of the escape-order change: for every NON-registered
+    action, a raising guard evaluation still blocks the write loudly -- the
+    escape-before-evaluation ordering must not widen fail-open behavior
+    beyond the named bootstrap list.
+    """
+    from app.write_guard import WriteGuard
+
+    def _raising_snapshot() -> dict:
+        raise FileNotFoundError("vault.layout.md not found (simulated fresh vault)")
+
+    guard = WriteGuard(_raising_snapshot)
+    with pytest.raises(FileNotFoundError):
+        guard.assert_writes_allowed("knowledge.write_note")
+
+    # And a guard whose escape list omits the action denies/raises as before,
+    # even for an action string that IS in the default list -- the escape is
+    # per-guard-instance policy, not a global constant lookup.
+    narrowed = WriteGuard(_raising_snapshot, bootstrap_actions=frozenset())
+    with pytest.raises(FileNotFoundError):
+        narrowed.assert_writes_allowed("vault.layout_ensure")
+
+
 def test_note_save_fc_exemption_is_named_not_silent() -> None:
     """F-C's fail-open exemption exists as a documented, named exception --
     not an absence of coverage. This test pins the exemption's presence in the
