@@ -27,16 +27,15 @@ All three MUST converge for all 7 topics (``durable_state_matches``).
 The **emitted outbox events** leg is asserted per each topic's declared
 ``_EmissionExpectation`` — never a silent empty-list compare:
 
-- IDEMPOTENT (``promote.intent.created``): emits >0 events on dispatch 1 (the
-  event_id-keyed ``_PROMOTION_DEDUP`` gate), deduped on dispatch 2. Non-vacuity
-  is enforced (emission count must be > 0).
+- IDEMPOTENT (all 5 emitting topics: ``ingest.object.created``,
+  ``ingest.vault.changed``, ``panel.scan.requested``, ``index.embedding.requested``,
+  ``promote.intent.created``): emits >0 events on dispatch 1, deduped on
+  dispatch 2 via a content-derived dedup key (never the envelope's random
+  ``event_id`` -- see the #2881 note below). Non-vacuity is enforced
+  (emission count must be > 0).
 - ZERO_BY_DESIGN (``ingest.object.deleted``, ``note.move.workbench``): the
   handler emits no outbox events; asserted as exactly zero after *both*
   dispatches (an explicit ``== []``, not a silent ``[] == []``).
-- KNOWN_NONIDEMPOTENT_2881 (``ingest.object.created``, ``ingest.vault.changed``,
-  ``panel.scan.requested``, ``index.embedding.requested``): the audit-emission
-  layer appends net-new events on redelivery (see the #2881 note below);
-  asserted as growth so a fix must re-classify the topic.
 
 Coverage is dynamic, not a hardcoded list: ``_dispatched_topics()`` walks
 ``_dispatch_topic``'s own if/elif chain via ``ast`` and resolves BOTH
@@ -46,50 +45,52 @@ newly dispatched topic in either form with no registered ``TOPIC_FIXTURES`` entr
 fails this harness loud rather than being silently skipped
 (``test_every_topic_has_a_fixture``).
 
-## Reported finding: outbox audit-emission helpers are not idempotent (#2881)
+## Fixed finding: outbox audit-emission helpers were not idempotent (#2881)
 
 Building this harness surfaced a real, pre-existing gap -- filed as its own issue
 (#2881) per this Issue's own "Out of Scope: making handlers idempotent that are
-not already... a discovered non-idempotent handler is a separate bug/issue",
-rather than silently choosing fixtures that dodge the codepath or widening this
-issue's scope to fix it.
+not already... a discovered non-idempotent handler is a separate bug/issue".
+That issue is now fixed; this harness asserts the fixed (convergent) behavior
+rather than the historical gap.
 
 ``app/outbox/events.py``'s audit-notification emit helpers
 (``_append_record_best_effort``, used by ``emit_index_object_embedded``,
-``emit_index_embedding_created``, ``emit_index_embedding_failed``) and
-``app/services/outbox.py::append_jsonl_outbox_event`` (used by the panel agent's
-``run_panel_intent_for_note``) append **unconditionally** to a JSONL audit sink
-with a fresh random ``event_id`` on every call -- there is no idempotency-key
-dedup at this layer (unlike the DB-backed ``write_outbox_event``, which dedups
-via KERNEL-02's mandatory idempotency key). ``derive_idempotency_key``'s own
-docstring already names this class of gap for the ``EVENT_ID_FINGERPRINT``
-scheme: "protects against double-insert of the same constructed event only, not
-logical replay ... move such topics to content-derived fingerprints as their
-semantics allow."
+``emit_index_embedding_created``, ``emit_index_embedding_failed``) previously
+appended **unconditionally** to a JSONL audit sink with a fresh random
+``event_id`` on every call -- there was no idempotency-key dedup at this layer
+(unlike the DB-backed ``write_outbox_event``, which dedups via KERNEL-02's
+mandatory idempotency key). ``derive_idempotency_key``'s own docstring named
+this class of gap for the ``EVENT_ID_FINGERPRINT`` scheme: "protects against
+double-insert of the same constructed event only, not logical replay ... move
+such topics to content-derived fingerprints as their semantics allow." #2881
+did exactly that: ``_append_record_best_effort`` now gates on
+``app.outbox.events._AUDIT_EMISSION_DEDUP``, keyed on
+``(event_name, object_id, content_fingerprint)`` rather than the envelope's
+random ``event_id`` -- a redelivered dispatch of the SAME observation (same
+object, same computed metrics/provenance) converges, while a genuinely new
+observation (content changed, a different error) still gets its own key and
+is not swallowed.
 
-Concretely, re-dispatching the same outbox row a second time (crash-retry,
-redelivery -- exactly what this harness simulates) produces a **second** audit
-JSONL line for ``ingest.object.created``, ``ingest.vault.changed``, and
-``index.embedding.requested``. ``panel.scan.requested`` has the same gap at the
-audit-emission layer (``sync.latency.summary``) *and* a more severe
-content-triggered instance: ``run_panel_intent_for_note`` re-emits N fresh
-``panel.intent.created`` events (one per AI-panel block found in the note) on
-every scan, unconditionally.
+``panel.scan.requested`` had the same class of gap at two distinct sites, both
+fixed by #2881: the ``sync.latency.summary`` audit append (gated by
+``app.workers.outbox_worker._PANEL_LATENCY_SUMMARY_DEDUP``, keyed on
+``note_uuid`` + the observation's own stable timestamps) and the more severe
+content-triggered instance, ``run_panel_intent_for_note`` re-emitting N fresh
+``panel.intent.created`` events (one per AI-panel block) on every scan (gated
+by ``app.agents.panel_agent.agent._PANEL_INTENT_DEDUP``, keyed on
+``note_uuid`` + the panel block's stable positional id + its raw content).
 
 The underlying store/vector-index/vault-file state for every one of these
 handlers IS idempotent (upsert keyed by stable id, content-diff-gated writes) --
-proven by the durable-state convergence assertion, which holds for all 7 topics.
-Only the audit/notification emission layer grows unboundedly on redelivery, so
-those four topics are classified KNOWN_NONIDEMPOTENT_2881 and the harness asserts
-their *actual, known* non-convergent emission behavior explicitly (net new audit
-lines on the second dispatch) so a fix lands as a visible, intentional
-re-classification linked to #2881, not a silent regression discovered later.
+proven by the durable-state convergence assertion, which holds for all 7
+topics. The audit/notification emission layer now converges too, so all 5
+emitting topics are classified IDEMPOTENT.
 
 ``panel.scan.requested``'s fixture deliberately uses a note with **no** AI panel
 blocks so the harness still exercises the real handler (file read, uuid
 resolution, object upsert, latency-audit emission) deterministically without an
-LLM/network dependency; the panel-intent-per-block re-emission is covered by
-#2881's own acceptance criteria, not duplicated here.
+LLM/network dependency; the panel-intent-per-block re-emission fix is verified
+by its own dedicated test in ``tests/agents/panel_agent/``, not duplicated here.
 """
 
 from __future__ import annotations
@@ -99,6 +100,7 @@ import enum
 import hashlib
 import inspect
 import json
+import os
 from pathlib import Path
 from typing import Any, Callable
 from uuid import UUID
@@ -196,9 +198,8 @@ def _dispatched_topics() -> list[str]:
 # silent coverage cap.
 #
 # Each fixture declares an ``_EmissionExpectation`` (IDEMPOTENT /
-# ZERO_BY_DESIGN / KNOWN_NONIDEMPOTENT_2881) describing how its emitted-outbox-
-# event leg must behave on the second dispatch given the *current* code (see the
-# module docstring and #2881).
+# ZERO_BY_DESIGN) describing how its emitted-outbox-event leg must behave on
+# the second dispatch (see the module docstring and #2881).
 # ---------------------------------------------------------------------------
 
 
@@ -212,14 +213,10 @@ class _EmissionExpectation(enum.Enum):
       all (e.g. a pure-logging no-op, or a handler whose only side effect is a
       vault write). Asserted as exactly zero events after both dispatches --
       not a silent empty-list compare.
-    - KNOWN_NONIDEMPOTENT_2881: the audit-emission layer appends a net-new
-      event on the second dispatch (tracked by #2881). Asserted as growth so a
-      fix flips the flag and this assertion fails loud until updated.
     """
 
     IDEMPOTENT = "idempotent"
     ZERO_BY_DESIGN = "zero_by_design"
-    KNOWN_NONIDEMPOTENT_2881 = "known_nonidempotent_2881"
 
 
 class _FixtureResult:
@@ -320,6 +317,20 @@ def _stub_consumer_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(consumer_module, "get_embedding_identity", lambda client=None: _STUB_IDENTITY)
 
 
+def _jsonl_emission_count() -> int:
+    """Non-vacuous ``emission_count`` proxy for JSONL-audit-sink topics.
+
+    Reads the same ``INDEX_OUTBOX_PATH`` the test function already pointed at
+    ``outbox_path`` (via ``monkeypatch.setenv``) -- deferred to call time
+    (not captured at fixture-setup time) so it reflects the sink's true state
+    after each dispatch, mirroring ``_snapshot_outbox_jsonl``.
+    """
+    path = Path(os.environ["INDEX_OUTBOX_PATH"])
+    if not path.exists():
+        return 0
+    return len([line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()])
+
+
 def _setup_ingest_object_created(vault_root: Path, monkeypatch: pytest.MonkeyPatch) -> _FixtureResult:
     _stub_indexer_embeddings(monkeypatch)
     # A real UUID: an invalid one is re-randomized on every call by
@@ -333,7 +344,8 @@ def _setup_ingest_object_created(vault_root: Path, monkeypatch: pytest.MonkeyPat
             "title": "Fixture Object",
             "content": "hello world",
             "source_ref": "Inbox/fixture-object.md",
-        }
+        },
+        emission_count=_jsonl_emission_count,
     )
 
 
@@ -353,7 +365,8 @@ def _setup_ingest_vault_changed(vault_root: Path, monkeypatch: pytest.MonkeyPatc
             "mtime": 123.0,
             "hash": "fixture-hash",
             "watcher": "harness",
-        }
+        },
+        emission_count=_jsonl_emission_count,
     )
 
 
@@ -395,9 +408,12 @@ def _setup_ingest_object_deleted(vault_root: Path, monkeypatch: pytest.MonkeyPat
 
 def _setup_panel_scan_requested(vault_root: Path, monkeypatch: pytest.MonkeyPatch) -> _FixtureResult:
     # No AI-instruction/actions/log fence blocks: find_panels() returns [] so
-    # zero panel.intent.created events are emitted (that re-emission gap is
-    # #2881's, not duplicated here). This fixture still exercises the real
-    # handler: file read, uuid resolution, object upsert, latency-audit emit.
+    # this fixture's only outbox emission is the sync.latency.summary audit
+    # line (deduped by #2881's _PANEL_LATENCY_SUMMARY_DEDUP). The separate
+    # panel.intent.created re-emission fix (also #2881) is covered by its own
+    # dedicated test in tests/agents/panel_agent/, not duplicated here -- this
+    # fixture still exercises the real handler: file read, uuid resolution,
+    # object upsert, latency-audit emit.
     _write_layout_note(vault_root)
     note_path = _write_note(
         vault_root,
@@ -412,7 +428,8 @@ def _setup_panel_scan_requested(vault_root: Path, monkeypatch: pytest.MonkeyPatc
             "mtime": 123.0,
             "hash": "fixture-hash",
             "watcher": "harness",
-        }
+        },
+        emission_count=_jsonl_emission_count,
     )
 
 
@@ -491,19 +508,24 @@ def _setup_index_embedding_requested(vault_root: Path, monkeypatch: pytest.Monke
     _stub_consumer_embeddings(monkeypatch)
     object_uuid = "77777777-7777-7777-7777-777777777777"
     ObjectStore().save_object(_domain_object_for_embedding(object_uuid), emit_outbox=False)
-    return _FixtureResult({"object_id": object_uuid})
+    return _FixtureResult({"object_id": object_uuid}, emission_count=_jsonl_emission_count)
 
 
 TOPIC_FIXTURES: dict[str, _TopicFixture] = {
     "ingest.object.created": _TopicFixture(
         "ingest.object.created",
         _setup_ingest_object_created,
-        emission=_EmissionExpectation.KNOWN_NONIDEMPOTENT_2881,
+        # #2881 fix: emit_index_object_embedded's audit append is now gated by
+        # app.outbox.events._AUDIT_EMISSION_DEDUP (content-derived key), so a
+        # redelivered dispatch of the same observation converges.
+        emission=_EmissionExpectation.IDEMPOTENT,
     ),
     "ingest.vault.changed": _TopicFixture(
         "ingest.vault.changed",
         _setup_ingest_vault_changed,
-        emission=_EmissionExpectation.KNOWN_NONIDEMPOTENT_2881,
+        # #2881 fix: same _AUDIT_EMISSION_DEDUP gate (delegates to
+        # handle_ingest_object_created -> emit_index_object_embedded).
+        emission=_EmissionExpectation.IDEMPOTENT,
     ),
     "ingest.object.deleted": _TopicFixture(
         "ingest.object.deleted",
@@ -516,7 +538,14 @@ TOPIC_FIXTURES: dict[str, _TopicFixture] = {
     "panel.scan.requested": _TopicFixture(
         "panel.scan.requested",
         _setup_panel_scan_requested,
-        emission=_EmissionExpectation.KNOWN_NONIDEMPOTENT_2881,
+        # #2881 fix: the sync.latency.summary audit append is now gated by
+        # app.workers.outbox_worker._PANEL_LATENCY_SUMMARY_DEDUP (content-
+        # derived key on note_uuid + observation timestamps). The separate
+        # panel.intent.created re-emission gap (this fixture has no panel
+        # blocks, so it isn't exercised here) is fixed independently in
+        # app.agents.panel_agent.agent._PANEL_INTENT_DEDUP, covered by its own
+        # dedicated test in tests/agents/panel_agent/.
+        emission=_EmissionExpectation.IDEMPOTENT,
     ),
     "promote.intent.created": _TopicFixture(
         "promote.intent.created",
@@ -535,7 +564,10 @@ TOPIC_FIXTURES: dict[str, _TopicFixture] = {
     "index.embedding.requested": _TopicFixture(
         "index.embedding.requested",
         _setup_index_embedding_requested,
-        emission=_EmissionExpectation.KNOWN_NONIDEMPOTENT_2881,
+        # #2881 fix: emit_index_embedding_created's audit append (via
+        # app.indexer.consumer.process_event) is now gated by the same
+        # _AUDIT_EMISSION_DEDUP content-derived key.
+        emission=_EmissionExpectation.IDEMPOTENT,
     ),
 }
 
@@ -718,8 +750,18 @@ def _reset_dispatch_state(monkeypatch: pytest.MonkeyPatch) -> None:
     are not polluted by a prior test/topic, and so promote.intent.created's
     dedup gate is exercised freshly by this test's own event_id rather than
     short-circuiting on a stale one from a previous test.
+
+    The #2881 fix added three more in-process content-derived dedup stores
+    (audit-emission layer only, not handler state): ``app.outbox.events``'s
+    ``_AUDIT_EMISSION_DEDUP`` (index.object.embedded / index.embedding.created
+    / index.embedding.failed JSONL audit append), ``app.agents.panel_agent
+    .agent``'s ``_PANEL_INTENT_DEDUP`` (panel.intent.created re-emission), and
+    this module's own ``_PANEL_LATENCY_SUMMARY_DEDUP`` (sync.latency.summary).
+    Each needs the same fresh-per-test reset for the same reason.
     """
     from app.stores import reset_store_backends
+    from app.agents.panel_agent import agent as panel_agent_module
+    from app.outbox import events as outbox_events_module
 
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.delenv("DATABASE_URL", raising=False)
@@ -727,12 +769,18 @@ def _reset_dispatch_state(monkeypatch: pytest.MonkeyPatch) -> None:
     object_store_module._MEMORY_STORE.clear()
     reset_store_backends()
     outbox_worker._EVENT_DEDUP._seen.clear()
+    outbox_worker._PANEL_LATENCY_SUMMARY_DEDUP.clear()
     promotion_consumer.reset_promotion_dedup_store()
+    outbox_events_module.reset_audit_emission_dedup_store()
+    panel_agent_module.reset_panel_intent_dedup_store()
     yield
     object_store_module._MEMORY_STORE.clear()
     reset_store_backends()
     outbox_worker._EVENT_DEDUP._seen.clear()
+    outbox_worker._PANEL_LATENCY_SUMMARY_DEDUP.clear()
     promotion_consumer.reset_promotion_dedup_store()
+    outbox_events_module.reset_audit_emission_dedup_store()
+    panel_agent_module.reset_panel_intent_dedup_store()
 
 
 @pytest.mark.parametrize("topic", sorted(TOPIC_FIXTURES))
@@ -745,11 +793,8 @@ def test_dispatch_twice_is_idempotent(
     production dispatch entrypoint used by both ``run_once`` and the daemon
     ``run()`` loop) rather than a per-handler helper, per the Issue's Verify:
     marker. Store rows and vault filesystem writes must converge for every
-    topic. Emitted outbox events must converge too, except for the four topics
-    where that is a known, separately-tracked gap (#2881, see module
-    docstring) -- those assert the actual current (non-convergent) behavior so
-    a future fix is a visible, intentional test change, not a silent
-    assumption this harness overlooked.
+    topic, and (as of the #2881 fix, see module docstring) emitted outbox
+    events converge too for every emitting topic.
     """
     fixture = TOPIC_FIXTURES[topic]
     vault_root = tmp_path / "vault"
@@ -826,27 +871,15 @@ def test_dispatch_twice_is_idempotent(
             f"topic {topic!r} IDEMPOTENT: the JSONL outbox-event log grew on the second dispatch: "
             f"before={after_first.outbox_events!r} after={after_second.outbox_events!r}"
         )
-    elif fixture.emission is _EmissionExpectation.ZERO_BY_DESIGN:
+    else:  # _EmissionExpectation.ZERO_BY_DESIGN
         # Assert the zero explicitly, both dispatches -- not a silent []==[].
         assert after_first.outbox_events == [] and after_second.outbox_events == [], (
             f"topic {topic!r} is marked ZERO_BY_DESIGN but emitted outbox events "
             f"(first={after_first.outbox_events!r} second={after_second.outbox_events!r}) -- "
-            "re-classify it as IDEMPOTENT (and assert convergence) or KNOWN_NONIDEMPOTENT_2881."
+            "re-classify it as IDEMPOTENT (and assert convergence) instead."
         )
         if emission_count_after_first is not None:
             assert emission_count_after_first == 0 and emission_count_after_second == 0, (
                 f"topic {topic!r} ZERO_BY_DESIGN reported non-zero emissions via its side channel: "
                 f"first={emission_count_after_first} second={emission_count_after_second}"
             )
-    else:  # _EmissionExpectation.KNOWN_NONIDEMPOTENT_2881
-        # Known gap (#2881): the audit-emission layer appends unconditionally
-        # with a fresh event_id, so the second dispatch grows the outbox-event
-        # log. Assert the actual current behavior (net new lines) rather than
-        # silently ignoring this dimension -- a fix for #2881 should re-classify
-        # this topic as IDEMPOTENT and this branch will then fail loud until the
-        # classification is updated.
-        assert len(after_second.outbox_events) > len(after_first.outbox_events), (
-            f"topic {topic!r} is marked KNOWN_NONIDEMPOTENT_2881 but no new outbox events were "
-            "emitted on the second dispatch -- if this handler was fixed, re-classify it as "
-            "IDEMPOTENT instead of leaving this assertion stale."
-        )

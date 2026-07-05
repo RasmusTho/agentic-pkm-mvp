@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, List
 from uuid import uuid4
 
+from app.components.concurrency import EventDedupStore
 from app.components.settings.panel_actions_loader import (
     PanelActionCatalog,
     load_panel_action_catalog,
@@ -18,10 +19,34 @@ from app.events.panel import (
     PanelIntentPayload,
 )
 from app.outbox.events import INDEX_OUTBOX_PATH
-from app.services.outbox import append_jsonl_outbox_event
+from app.services.outbox import append_jsonl_outbox_event, derive_idempotency_key, payload_fingerprint
 from app.objects import DomainObject, ObjectStore
 
 from .parser import ParsedAction, ParsedPanel, find_panels, parse_panel
+
+# In-process redelivery guard for panel.intent.created re-emission (#2881).
+# `run_panel_intent_for_note` re-parses the note's AI-panel blocks on every
+# `panel.scan.requested` dispatch; a redelivered scan of the SAME unchanged
+# note previously re-emitted N fresh events (one per panel block) because
+# each event's own `event_id` is random per construction. Keyed on
+# `(note_uuid, panel_id, raw_block content)` -- `panel_id` is the block's
+# stable positional identity from `find_panels` (`panel-1`, `panel-2`, ...)
+# and `raw_block` is the deterministic substring of note text the block was
+# parsed from, so the SAME observation (same note content, same block order)
+# maps to the same key, while genuinely new/changed panel content (edited
+# instruction/actions, a reordered or added block) gets its own key and is
+# never swallowed.
+_PANEL_INTENT_DEDUP = EventDedupStore()
+
+
+def reset_panel_intent_dedup_store() -> None:
+    """Test-only reset hook, mirroring `app.promotion.consumer.reset_promotion_dedup_store`."""
+    _PANEL_INTENT_DEDUP.clear()
+
+
+def _panel_intent_dedup_key(note_uuid: str, panel_id: str, raw_block: str | None) -> str:
+    fingerprint = payload_fingerprint({"raw_block": raw_block or ""})
+    return derive_idempotency_key("panel.intent.created", f"{note_uuid}:{panel_id}", fingerprint)
 
 
 def _read_note_from_store(note_uuid: str) -> DomainObject:
@@ -101,7 +126,15 @@ def run_panel_intent_for_note(
         )
         events.append(event)
         if write_outbox:
-            append_jsonl_outbox_event(resolved_outbox, event, default_source="panel_agent")
+            # Content-derived dedup (#2881): the handler side (executed-action
+            # filtering in `execute_panel_intent`) is already idempotent and
+            # untouched here -- only the notification/audit emission is gated,
+            # so a redelivered scan of the SAME unchanged panel block appends
+            # at most one panel.intent.created JSONL line, while a genuinely
+            # new/changed block (edited instruction/actions) still emits.
+            dedup_key = _panel_intent_dedup_key(note_uuid, block.panel_id, block.raw_block)
+            if not _PANEL_INTENT_DEDUP.seen(dedup_key):
+                append_jsonl_outbox_event(resolved_outbox, event, default_source="panel_agent")
     return events
 
 

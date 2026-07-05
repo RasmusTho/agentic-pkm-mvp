@@ -8,7 +8,7 @@ from pathlib import Path
 from app.agents.panel_agent.agent import run_panel_intent_for_note
 from app.agents.panel_agent.runtime import PanelRuntimeResult, execute_panel_intent
 from app.events.panel import PanelIntentEvent
-from app.services.outbox import EVENT_ID_FINGERPRINT, coerce_outbox_event, derive_idempotency_key, write_outbox_event
+from app.services.outbox import coerce_outbox_event, derive_idempotency_key, payload_fingerprint, write_outbox_event
 from app.objects import DomainObject, ObjectStore
 from scripts.yaml_roundtrip import load_frontmatter
 
@@ -83,10 +83,21 @@ def run_panel_note_execution(
             outbox_event = coerce_outbox_event(event, default_source="panel_agent")
             if outbox_event is None:
                 continue
+            # Content-derived key (#2881), not EVENT_ID_FINGERPRINT: the intent
+            # event's own `event_id` is random per construction, so keying on
+            # it would never let the DB's `ON CONFLICT (id) DO NOTHING` (KERNEL-02)
+            # dedup a redelivered scan of the same unchanged panel block. Keyed
+            # on the note + stable panel-block identity + panel payload content
+            # instead, mirroring the JSONL-sink dedup in
+            # `run_panel_intent_for_note` so both sinks converge on the same
+            # logical observation.
+            source_id = f"{outbox_event.payload.get('note', {}).get('uuid', '')}:{outbox_event.payload.get('panel', {}).get('panel_id', '')}"
             write_outbox_event(
                 outbox_event,
                 idempotency_key=derive_idempotency_key(
-                    outbox_event.event, outbox_event.event_id, EVENT_ID_FINGERPRINT
+                    outbox_event.event,
+                    source_id or outbox_event.event_id,
+                    payload_fingerprint(outbox_event.payload, exclude=("trace_id",)),
                 ),
             )
     # Thread the caller's already-resolved vault (the watcher/outbox-worker path

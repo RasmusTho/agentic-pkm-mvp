@@ -16,7 +16,7 @@ from uuid import UUID
 from app.agents.panel.filters import strip_ai_panels
 from app.agents.panel.writeback import strip_ai_status_block
 from app.agents.panel_agent.execution import refresh_panel_note_object, run_panel_note_execution
-from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
+from app.components.concurrency import EventDedupStore, OptimisticWriteGuard, VersionMismatch
 from app.events.sync import SyncChainCorrelationData, SyncLatencySummaryEvent
 from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_VAULT_CHANGED, NOTE_MOVE_WORKBENCH, PANEL_SCAN_REQUESTED, PROMOTE_INTENT_CREATED
 from app.events.schema import make_outbox_event
@@ -40,6 +40,7 @@ from app.services.outbox import (
     bootstrap,
     bump_outbox_attempts,
     derive_idempotency_key,
+    payload_fingerprint,
     poll_outbox_one,
     write_outbox_event,
 )
@@ -53,6 +54,17 @@ _WRITE_GUARD = OptimisticWriteGuard()
 
 _UNKNOWN_INSTANCE = "unknown"
 OUTBOX_EVENT_DEAD_LETTERED = "outbox.event.dead_lettered"
+
+# In-process dedup for the `sync.latency.summary` audit emission in
+# `handle_panel_scan_requested` (#2881). This JSONL append is unconditional
+# per dispatch with a fresh random `event_id`, so a redelivered
+# `panel.scan.requested` row previously appended a second summary line for
+# the SAME observation. Keyed on `(note_uuid, scan_requested_ts,
+# file_detection_ts)` -- the observation's own stable timestamps threaded
+# through the payload/event envelope on every dispatch of the same outbox
+# row -- deliberately excluding `runtime_start_ts`/`runtime_complete_ts`
+# (wall-clock at dispatch time, always fresh) from the key.
+_PANEL_LATENCY_SUMMARY_DEDUP = EventDedupStore()
 
 # Dead-letter reason for a dispatch-time schema violation (KERNEL-08, #2770).
 SCHEMA_VIOLATION_REASON = "schema_violation"
@@ -1037,30 +1049,51 @@ def handle_panel_scan_requested(
             file_detection_ts = scan_requested_ts
 
         if trace_id and file_detection_ts and scan_requested_ts:
-            correlation = SyncChainCorrelationData(
-                trace_id=trace_id,
-                note_uuid=note_uuid,
-                note_path=str(note_path.relative_to(resolved_root)),
-                file_detection_ts=file_detection_ts,
-                scan_requested_ts=scan_requested_ts,
-                runtime_start_ts=runtime_start_ts,
-            )
-            latency_payload = correlation.complete(completion_ts=runtime_complete_ts)
-            latency_event = SyncLatencySummaryEvent(
-                trace_id=trace_id,
-                payload=latency_payload,
-            )
-            outbox_path_obj = _outbox_audit_path()
-            outbox_path_obj.parent.mkdir(parents=True, exist_ok=True)
-            with outbox_path_obj.open("a", encoding="utf-8") as f:
-                f.write(latency_event.model_dump_json())
-                f.write("\n")
-            logger.info(
-                "latency summary emitted trace_id=%s note_uuid=%s end_to_end_ms=%s",
-                trace_id,
+            # Content-derived dedup (#2881): keyed on the observation's own
+            # stable timestamps (same across a redelivered dispatch of the
+            # same outbox row), never the wall-clock runtime_start/complete
+            # timestamps computed fresh on every dispatch.
+            summary_key = derive_idempotency_key(
+                "sync.latency.summary",
                 note_uuid,
-                latency_payload.end_to_end_ms,
+                payload_fingerprint(
+                    {
+                        "scan_requested_ts": scan_requested_ts,
+                        "file_detection_ts": file_detection_ts,
+                    }
+                ),
             )
+            if _PANEL_LATENCY_SUMMARY_DEDUP.seen(summary_key):
+                logger.debug(
+                    "latency summary skipped (duplicate observation) trace_id=%s note_uuid=%s",
+                    trace_id,
+                    note_uuid,
+                )
+            else:
+                correlation = SyncChainCorrelationData(
+                    trace_id=trace_id,
+                    note_uuid=note_uuid,
+                    note_path=str(note_path.relative_to(resolved_root)),
+                    file_detection_ts=file_detection_ts,
+                    scan_requested_ts=scan_requested_ts,
+                    runtime_start_ts=runtime_start_ts,
+                )
+                latency_payload = correlation.complete(completion_ts=runtime_complete_ts)
+                latency_event = SyncLatencySummaryEvent(
+                    trace_id=trace_id,
+                    payload=latency_payload,
+                )
+                outbox_path_obj = _outbox_audit_path()
+                outbox_path_obj.parent.mkdir(parents=True, exist_ok=True)
+                with outbox_path_obj.open("a", encoding="utf-8") as f:
+                    f.write(latency_event.model_dump_json())
+                    f.write("\n")
+                logger.info(
+                    "latency summary emitted trace_id=%s note_uuid=%s end_to_end_ms=%s",
+                    trace_id,
+                    note_uuid,
+                    latency_payload.end_to_end_ms,
+                )
     except Exception as exc:
         logger.warning("failed to emit latency summary: %s", exc)
 
