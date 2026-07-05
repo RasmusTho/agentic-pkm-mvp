@@ -47,7 +47,7 @@ APP_ROOT = REPO_ROOT / "app"
 # NEVER run against a real vault -- they are not part of this census.
 
 REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
-    ("app/services/indexer.py", 93): (
+    ("app/services/indexer.py", 125): (
         "T-materialize sink (handle_ingest_object_created): the INGEST_OBJECT_CREATED "
         "event that CAUSED this row is its own record -- emitting a second event here "
         "would be a duplicate, not completeness (formal-model.md T-materialize)."
