@@ -130,7 +130,22 @@ class PanelReceiptPersistenceError(RuntimeError):
     ``docs/architecture/formal-model.md :: 2.1``). The panel confirm route maps
     this to a withheld-ack 500, mirroring T-capture's
     ``authority_receipt_persistence_failed`` (``app/api/routes/capture.py``).
+
+    Carries the failed ``event_name`` and ``trace_id`` so the route can return a
+    trace-correlatable withheld-ack detail (T-capture returns ``trace_id`` in
+    its 500 body).
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        event_name: str | None = None,
+        trace_id: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.event_name = event_name
+        self.trace_id = trace_id
 
 
 @dataclass
@@ -610,7 +625,9 @@ def _emit_projection_event(
 
     if not emitted:
         raise PanelReceiptPersistenceError(
-            f"panel {event_name} receipt was not persisted to any outbox sink"
+            f"panel {event_name} receipt was not persisted to any outbox sink",
+            event_name=event_name,
+            trace_id=trace_id,
         )
     return evt.event_id
 

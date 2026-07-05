@@ -57,6 +57,7 @@ async def panel_confirm(request: ConfirmRequest) -> ConfirmResponse:
                     "accountability receipt could not be persisted; success "
                     "acknowledgement was withheld."
                 ),
+                "trace_id": exc.trace_id,
             },
         ) from exc
     except ValueError as exc:
