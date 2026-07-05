@@ -390,3 +390,76 @@ def test_transient_failures_do_not_dead_letter_legitimate_event(
     assert stored is not None
     audit_text = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
     assert outbox_worker.OUTBOX_EVENT_DEAD_LETTERED not in audit_text
+
+
+def _enqueue_with_event_id(event_id: str, key: str, *, marker: str = "m") -> str:
+    """Enqueue one outbox row with an explicit envelope ``event_id``.
+
+    The dedup guard keys on the envelope ``event_id`` (``_event_id_from_message``
+    reads ``message["event"].event_id``), so a shared ``event_id`` across two
+    distinct idempotency keys models a *duplicate emission* -- two separate rows
+    for one logical event, exactly the shape the audit-emission idempotency gap
+    (#2881) produces.
+    """
+    from app.events.models import new_event
+
+    event = new_event(
+        event_type="test.dedup.topic",  # unregistered -> no schema validation
+        payload={"marker": marker},
+        event_id=event_id,
+        trace_id="trace-dedup",
+        source="test.dedup",
+    )
+    return write_outbox_event(event, idempotency_key=key)
+
+
+def test_worker_acks_known_duplicate_event_id_row_no_stall(
+    tmp_path,
+    fake_conn: FakeOutboxConn,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #2963: a row whose ``event_id`` is already in the
+    in-process dedup set must still be acked (advanced past), never left queued
+    forever.
+
+    ``poll_outbox_one`` always returns the oldest un-acked row, so an un-acked
+    known-duplicate row is re-polled every tick, ``_EVENT_DEDUP.seen()`` keeps
+    returning True, and the loop ``continue``s forever on that same row -- a
+    silent head-of-line stall (a softer echo of the #2252 ``processed_total=0``
+    stall) that also starves every downstream row. Before the fix the duplicate
+    row is never acked; after it, the queue drains.
+    """
+    dispatched: list[str] = []
+
+    def record_dispatch(topic, payload, **kwargs):
+        dispatched.append(kwargs.get("event_id") or "")
+
+    monkeypatch.setattr(outbox_worker, "_dispatch_topic", record_dispatch)
+    monkeypatch.setattr(outbox_worker, "bootstrap", lambda: None)
+    monkeypatch.setattr(outbox_worker, "write_worker_heartbeat", lambda **_: None)
+    monkeypatch.setenv("WORKER_HEARTBEAT_INTERVAL", "9999")
+    # A vault must be bound or the loop no-vault-idles and never polls; dispatch
+    # is stubbed so no real vault filesystem access happens.
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault_root))
+
+    # Two rows share one event_id (a duplicate emission); a third distinct row
+    # sits behind them and must still drain -- proving no head-of-line stall.
+    _enqueue_with_event_id("evt-dup", "key-a", marker="first")
+    _enqueue_with_event_id("evt-dup", "key-b", marker="duplicate")
+    _enqueue_with_event_id("evt-distinct", "key-c", marker="downstream")
+    assert fake_conn.undelivered_count() == 3
+
+    outbox_worker.run(
+        interval=0.0,
+        heartbeat_interval=9999,
+        log_heartbeat_interval=None,
+        stop_after_ticks=6,
+    )
+
+    # All three rows advanced -- the known-duplicate did not head-of-line stall.
+    assert fake_conn.undelivered_count() == 0
+    # The duplicate dispatched exactly once; the distinct downstream row once.
+    assert dispatched.count("evt-dup") == 1
+    assert dispatched.count("evt-distinct") == 1
