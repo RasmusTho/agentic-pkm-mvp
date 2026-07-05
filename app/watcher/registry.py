@@ -1225,7 +1225,7 @@ def _run_spec_tick(
         scan_roots = derive_scope_roots(cfg.vault_path, spec.scope_glob)
     except FileNotFoundError as exc:
         # Static scope-prefix directory does not exist under the bound vault
-        # (e.g. WATCHER_SCOPE_GLOB="📥 Inbox/*.md" with no "📥 Inbox" folder).
+        # (e.g. an env scope glob naming a folder the vault does not have).
         # Fail loud (a warning naming the directory) rather than crashing the
         # tick loop or silently reporting a clean "healthy" tick (#2988).
         state.scope_status = "missing_prefix"
