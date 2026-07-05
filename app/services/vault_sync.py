@@ -229,7 +229,17 @@ def update_path(uuid_value: str, new_path: str) -> None:
         conn.commit()
 
 
-def delete_note(path: str, *, uuid_value: str | None = None) -> None:
+def delete_note(path: str, *, uuid_value: str | None = None) -> bool:
+    """Delete a note's derived rows and emit the deletion tombstone event.
+
+    Returns ``True`` when the ``ingest.object.deleted`` event was emitted
+    (a ``file_state`` row existed for the path and this was its uuid's last
+    remaining path), ``False`` otherwise. Callers that observe filesystem
+    deletions for notes never tracked in ``file_state`` (e.g. the watcher
+    tick path, whose vault-alpha ingest keys rows by note uuid without
+    writing ``file_state`` -- #2990) use the return value to decide whether
+    they must resolve the identity and emit the tombstone event themselves.
+    """
     resolved_path = str(Path(path).resolve())
     deleted = False
     remaining_for_uuid: int | None = None
@@ -280,6 +290,7 @@ def delete_note(path: str, *, uuid_value: str | None = None) -> None:
                 observation=str(deleted_version_mtime) if deleted_version_mtime is not None else None,
             )
         conn.commit()
+    return deleted and delete_payload is not None
 
 
 def upsert_object_from_note(path: str, frontmatter: dict[str, Any], body: str, fm_changed: bool, body_changed: bool) -> None:

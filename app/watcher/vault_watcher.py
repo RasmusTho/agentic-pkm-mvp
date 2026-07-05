@@ -15,8 +15,14 @@ from app.agents.panel.writeback import strip_ai_status_block
 from app.agents.panel_agent.policy import watcher_may_run_panel, watcher_panel_candidate
 from app.components.concurrency import DedupTaskQueue, OptimisticWriteGuard, SystemClock, VersionMismatch
 from app.ingest import vault_alpha as vault_alpha
-from app.services.companion_note import find_companion_by_content_hash, read_companion
+from app.services.companion_note import (
+    find_companion_by_content_hash,
+    find_companion_by_source_ref,
+    read_companion,
+)
+from app.events.types import INGEST_OBJECT_DELETED
 from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
+from app.services.outbox import insert_object_and_outbox
 from app.services.vault_sync import delete_note
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
@@ -329,6 +335,47 @@ class VaultWatcher:
         return current
 
 
+def _emit_watcher_delete_event(
+    deleted_path: Path,
+    *,
+    rel_deleted: Path,
+    vault_root: Path,
+    observed_mtime: float | None,
+) -> None:
+    """Emit the deletion tombstone for a note vault_sync.delete_note could
+    not identify (no file_state row -- i.e. a note ingested only through the
+    tick's vault-alpha path, which keys store rows by note uuid).
+
+    Identity resolution mirrors vault-alpha ingest's own uuid derivation
+    (``app.ingest.vault_alpha._derive_note_uuid``): the companion note, found
+    by source_ref (it survives the source note's deletion), carries the
+    canonical uuid; a note that never had a frontmatter/companion uuid was
+    keyed by the deterministic uuid5 of its vault-relative path, which
+    re-derives identically here. The payload is shaped exactly like
+    vault_sync.delete_note's so the worker's handle_ingest_object_deleted
+    consumes both indistinguishably. ``observed_mtime`` (the deleted
+    version's last snapshotted mtime) scopes the outbox idempotency key to
+    this filesystem observation: a crash-retried tick dedups, while a
+    delete->recreate->delete cycle emits both deletes.
+    """
+    companion = find_companion_by_source_ref(vault_root, str(rel_deleted))
+    companion_uuid = companion.uuid if companion else ""
+    note_uuid = vault_alpha._derive_note_uuid("", companion_uuid, rel_deleted)
+    payload = {
+        "path": str(deleted_path),
+        "deleted": True,
+        "reason": "vault_note_deleted",
+        "source": "vault_watcher.run_watcher_tick",
+        "uuid": note_uuid,
+    }
+    insert_object_and_outbox(
+        payload,
+        INGEST_OBJECT_DELETED,
+        None,
+        observation=str(observed_mtime) if observed_mtime is not None else None,
+    )
+
+
 def run_watcher_tick(
     *,
     vault_root: Path,
@@ -393,27 +440,44 @@ def run_watcher_tick(
     messages: list[str] = []
 
     # Reconcile watcher-detected filesystem deletions (#2990): the watcher
-    # never deletes vault files itself, only derived store rows. Delegate to
-    # the same production seam app.services.vault_sync.delete_note uses for
-    # app-initiated deletes (vault_sync.delete_note), so the watcher path
-    # gets identical uuid resolution (file_state lookup by path),
-    # tombstoning, and INGEST_OBJECT_DELETED emission -- and therefore the
-    # same idempotency: replaying a deletion for an already-purged path finds
-    # no file_state row and is a no-op. A rename surfaces here as delete(old)
-    # + a corresponding entry in result.changed for the new path, which the
-    # ingest step below handles as an ordinary create/update -- no special
-    # casing required. This must run even when there are no changed notes and
-    # regardless of the max-notes limit (that limit only bounds panel/ingest
-    # fan-out), so it runs unconditionally ahead of the changed==0 and
-    # limit-exceeded short-circuits below. dry_run must not purge anything.
-    if not dry_run:
+    # never deletes vault files itself, only derived store rows. First
+    # delegate to the same production seam app-initiated deletes use
+    # (vault_sync.delete_note): identical file_state-by-path uuid resolution,
+    # objects tombstoning, and INGEST_OBJECT_DELETED emission -- and its
+    # idempotency (replaying a deletion for an already-purged path finds no
+    # file_state row and no-ops). Notes ingested only through the tick's
+    # vault-alpha path are keyed by note uuid WITHOUT a file_state row, so
+    # delete_note cannot emit for them (returns False); for those, resolve
+    # the identity the same way ingest derives it -- companion note by
+    # source_ref (the durable path->uuid mapping that survives the note's
+    # deletion), else the deterministic uuid5(rel_path) fallback -- and emit
+    # a delete_note-compatible tombstone event directly. Idempotent on
+    # replay: the outbox idempotency key is scoped to this observation (the
+    # deleted version's last snapshotted mtime), and refresh_snapshot()
+    # below removes the path from the snapshot so later ticks never re-see
+    # the deletion. A rename surfaces as delete(old) + an entry in
+    # result.changed for the new path, which the ingest step below handles
+    # as an ordinary create/update -- no special-casing. This must run even
+    # when there are no changed notes and regardless of the max-notes limit
+    # (that bounds panel/ingest fan-out only), so it runs ahead of the
+    # changed==0 and limit-exceeded short-circuits below. dry_run must not
+    # purge anything.
+    if not dry_run and result.deleted:
+        prior_snapshot = load_snapshot(watcher.snapshot_path)
         for deleted_path in result.deleted:
             try:
                 rel_deleted = deleted_path.relative_to(vault_root)
             except ValueError:
                 rel_deleted = deleted_path
             try:
-                delete_note(str(deleted_path))
+                emitted = delete_note(str(deleted_path))
+                if not emitted:
+                    _emit_watcher_delete_event(
+                        deleted_path,
+                        rel_deleted=rel_deleted,
+                        vault_root=vault_root,
+                        observed_mtime=prior_snapshot.get(str(rel_deleted)),
+                    )
                 summary["deleted_purged"] += 1
             except Exception:
                 summary["errors"] += 1

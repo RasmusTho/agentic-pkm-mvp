@@ -198,7 +198,7 @@ def test_fs_delete_purges_index_rows(monkeypatch: pytest.MonkeyPatch) -> None:
 
     # --- Act: this is exactly what run_watcher_tick now calls for every
     # watcher-detected deleted path. ---
-    vault_sync.delete_note(path)
+    assert vault_sync.delete_note(path) is True
 
     assert len(emitted) == 1, "expected exactly one ingest.object.deleted emission"
     payload, topic, _trace = emitted[0]
@@ -226,7 +226,7 @@ def test_fs_delete_purges_index_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     # --- Idempotency: replaying the deletion for the same (now-purged) path
     # must be a no-op -- no file_state row left to match, so no new event. ---
     emitted.clear()
-    vault_sync.delete_note(path)
+    assert vault_sync.delete_note(path) is False
     assert emitted == [], "replaying a deletion for an already-purged path must not re-emit"
 
     # Replaying the purge itself (at-least-once redelivery) must also be a
@@ -256,7 +256,7 @@ def test_run_watcher_tick_emits_deleted_tombstones(tmp_path: Path, monkeypatch: 
     # First tick: establishes the snapshot with the note present. No
     # deletions yet, so the seam must not be called.
     calls: list[tuple[str,]] = []
-    monkeypatch.setattr(vault_watcher, "delete_note", lambda path, **kw: calls.append((path,)))
+    monkeypatch.setattr(vault_watcher, "delete_note", lambda path, **kw: (calls.append((path,)), True)[1])
 
     summary_first, _ = vault_watcher.run_watcher_tick(
         vault_root=vault,
@@ -324,7 +324,7 @@ def test_run_watcher_tick_dry_run_never_purges(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher_run.jsonl"))
 
     calls: list[tuple[str,]] = []
-    monkeypatch.setattr(vault_watcher, "delete_note", lambda path, **kw: calls.append((path,)))
+    monkeypatch.setattr(vault_watcher, "delete_note", lambda path, **kw: (calls.append((path,)), True)[1])
 
     vault_watcher.run_watcher_tick(
         vault_root=vault,
@@ -351,3 +351,126 @@ def test_run_watcher_tick_dry_run_never_purges(tmp_path: Path, monkeypatch: pyte
 
     assert summary["deleted"] == 1
     assert calls == [], "dry_run must never call the purge seam"
+
+
+def test_run_watcher_tick_falls_back_to_derived_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A note ingested only through the tick's vault-alpha path has no
+    file_state row, so delete_note cannot emit for it (returns False). The
+    tick must then resolve the identity the way vault-alpha ingest derived
+    it -- companion by source_ref when one survives, else the deterministic
+    uuid5(rel_path) fallback -- and emit a delete_note-compatible
+    ingest.object.deleted event itself."""
+    import uuid as _uuid
+
+    from app.ingest.vault_alpha import _VAULT_NOTE_UUID_NAMESPACE
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "Concepts" / "B.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text("Body", encoding="utf-8")
+
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "events.jsonl"))
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher_run.jsonl"))
+    snapshot_path = vault / ".state.json"
+
+    # delete_note reports it could not identify/emit (no file_state row).
+    monkeypatch.setattr(vault_watcher, "delete_note", lambda path, **kw: False)
+    emitted: list[tuple[dict, str, object]] = []
+    monkeypatch.setattr(
+        vault_watcher,
+        "insert_object_and_outbox",
+        lambda payload, topic, trace_id=None, **kw: emitted.append((payload, topic, kw.get("observation"))),
+    )
+
+    vault_watcher.run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=True,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+    )
+    assert emitted == []
+
+    time.sleep(0.01)
+    note.unlink()
+
+    summary, _ = vault_watcher.run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=True,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+    )
+
+    assert summary["deleted"] == 1
+    assert summary["deleted_purged"] == 1
+    assert len(emitted) == 1
+    payload, topic, observation = emitted[0]
+    assert topic == INGEST_OBJECT_DELETED
+    assert payload["deleted"] is True
+    assert payload["path"] == str(note)
+    # No companion survives for this note, so identity falls back to the
+    # exact uuid vault-alpha ingest derives for a note without a
+    # frontmatter/companion uuid: uuid5(namespace, rel_path).
+    assert payload["uuid"] == str(_uuid.uuid5(_VAULT_NOTE_UUID_NAMESPACE, "Concepts/B.md"))
+    # Idempotency key is scoped to the deleted version's last observed mtime.
+    assert observation is not None
+
+
+def test_run_watcher_tick_prefers_companion_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """When a companion note survives the deletion, its uuid (the canonical
+    ingest identity) wins over the uuid5 fallback."""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "Concepts" / "C.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text("Body", encoding="utf-8")
+
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "events.jsonl"))
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher_run.jsonl"))
+    snapshot_path = vault / ".state.json"
+
+    companion_uuid = str(uuid4())
+    monkeypatch.setattr(vault_watcher, "delete_note", lambda path, **kw: False)
+    monkeypatch.setattr(
+        vault_watcher,
+        "find_companion_by_source_ref",
+        lambda root, source_ref: (
+            type("C", (), {"uuid": companion_uuid})() if source_ref == "Concepts/C.md" else None
+        ),
+    )
+    emitted: list[dict] = []
+    monkeypatch.setattr(
+        vault_watcher,
+        "insert_object_and_outbox",
+        lambda payload, topic, trace_id=None, **kw: emitted.append(payload),
+    )
+
+    vault_watcher.run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=True,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+    )
+    time.sleep(0.01)
+    note.unlink()
+    vault_watcher.run_watcher_tick(
+        vault_root=vault,
+        snapshot_path=snapshot_path,
+        skip_panel=True,
+        emit_only=True,
+        dry_run=False,
+        max_notes=10,
+        force=False,
+    )
+
+    assert len(emitted) == 1
+    assert emitted[0]["uuid"] == companion_uuid
