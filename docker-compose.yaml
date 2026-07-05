@@ -99,6 +99,21 @@ services:
       # External-SSD TTS store (models/cache/logs) bind-mounted to a fixed container path.
       # Host root is machine-local (${TTS_HOST_ROOT} in .env.prod.local); defaults to a dev scratch dir.
       - "${TTS_HOST_ROOT:-./tmp/tts}:/data/tts"
+      # Shared runtime-artifact volume (#2991): api/worker/watcher each did their
+      # own `mkdir -p /app/tmp`, so the three containers had NO shared filesystem
+      # surface even though they all resolve the identical absolute heartbeat
+      # paths from config/runtime.defaults.env (WATCHER_HEARTBEAT_PATH,
+      # WORKER_HEARTBEAT_PATH, WATCHER_STATE_PATH, WATCHER_STOP_FILE,
+      # INDEX_OUTBOX_PATH). The api container's health check read its own
+      # container-local empty file and reported "not running (no heartbeat)"
+      # even when watcher/worker were alive — a structural false negative
+      # (issue #2991). This named volume is declared once in the base compose
+      # and is automatically namespaced per compose *project* (pkm-dev,
+      # pkm-test, pkm-prod each get their own independent volume instance), so
+      # channel isolation holds without any extra wiring. Test-channel paths
+      # move under /app/tmp-test (docker-compose.test.yml), which overrides
+      # this mount target to the same volume.
+      - "runtime-tmp:/app/tmp"
     command: ["/bin/bash", "-c", "mkdir -p /app/tmp && bash /app/scripts/start_api.sh"]
     environment:
       VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
@@ -160,6 +175,10 @@ services:
       # Colima to share /Users + /Volumes — see docs/ops/COLIMA_FULL_HOST_MOUNT.md.
       - "/Users:/Users"
       - "/Volumes:/Volumes"
+      # Shared runtime-artifact volume (#2991) — see the `api` service comment
+      # for the full rationale. Same named volume so worker's heartbeat/outbox
+      # writes land where the api/watcher containers can see them.
+      - "runtime-tmp:/app/tmp"
     command: ["/bin/bash", "-c", "mkdir -p /app/tmp && python -m app.workers.outbox_worker"]
     environment:
       VAULT_LAYOUT_NOTE_REL: ${VAULT_LAYOUT_NOTE_REL:-}
@@ -208,6 +227,10 @@ services:
       # Colima to share /Users + /Volumes — see docs/ops/COLIMA_FULL_HOST_MOUNT.md.
       - "/Users:/Users"
       - "/Volumes:/Volumes"
+      # Shared runtime-artifact volume (#2991) — see the `api` service comment
+      # for the full rationale. Same named volume so watcher's heartbeat/state
+      # writes land where the api/worker containers can see them.
+      - "runtime-tmp:/app/tmp"
     command: ["/bin/bash", "-c", "mkdir -p /app/tmp && python -m app.cli watcher run"]
     environment:
       - VAULT_LAYOUT_NOTE_REL=${VAULT_LAYOUT_NOTE_REL:-}
@@ -267,3 +290,7 @@ services:
 
 volumes:
   ollama:
+  # Shared api/worker/watcher runtime-artifact surface (#2991). Namespaced per
+  # compose project (pkm-dev, pkm-test, pkm-prod), so dev/test/prod each get
+  # their own isolated volume instance automatically.
+  runtime-tmp:

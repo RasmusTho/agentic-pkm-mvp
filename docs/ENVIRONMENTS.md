@@ -228,6 +228,7 @@ Environment separation MUST be explicit across the following surfaces.
 - The local `test` Compose/bootstrap lane uses `tmp-test/runtime.env` so regenerated service env does not leak into the default `prod` runtime env file.
 - Incidents and audit surfaces respect environment separation to prevent cross-environment contamination.
 - The `test` bootstrap path resets runtime state explicitly before startup and verification.
+- **Cross-container heartbeat visibility (#2991):** api/worker/watcher each resolve heartbeat/state paths to the identical absolute path (`/app/tmp/...` for `prod`/`dev`, `/app/tmp-test/...` for `test`), but each container previously did its own local `mkdir -p /app/tmp` — no filesystem was actually shared, so `/api/health` always saw its own container-local empty file and reported watcher/worker as not running even while they were alive. The base `docker-compose.yaml` now declares a `runtime-tmp` named volume mounted into api/worker/watcher at that shared path; Docker Compose namespaces named volumes per compose *project* (`pkm-dev`, `pkm-test`, `pkm-prod`), so each channel gets its own isolated volume instance automatically — no additional wiring needed for isolation.
 
 ### Settings and Policy Surfaces
 - Environment selection must resolve through explicit settings/runtime configuration, not through undocumented convention.
