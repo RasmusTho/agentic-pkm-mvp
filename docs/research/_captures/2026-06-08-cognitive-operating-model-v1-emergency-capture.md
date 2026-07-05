@@ -5,7 +5,7 @@ authority: supporting
 status: active
 created: 2026-06-08
 owner: Rasmus
-origin: ChatGPT discussion + Yggdrasil cognitive-load research waves
+origin: ChatGPT discussion + Mimer cognitive-load research waves
 agent_read_priority: P0-temporary
 canonical_for:
   - cognitive-load/emergency-capture
@@ -67,7 +67,7 @@ The system needs low-friction recovery after errors. Required concepts: human-re
 
 ### F5 — External communication and voice preservation
 
-Yggdrasil must support email, GitHub issues, documents, presentations, meeting notes, strategy text, comments, and public writing without normalizing Rasmus's voice into generic professional prose. Output-support modes: correct only; clarify; rewrite with intent lock.
+Mimer must support email, GitHub issues, documents, presentations, meeting notes, strategy text, comments, and public writing without normalizing Rasmus's voice into generic professional prose. Output-support modes: correct only; clarify; rewrite with intent lock.
 
 ### F6 — Emotional friction and task-startability
 
@@ -95,7 +95,7 @@ No cognitive aid should become default only because it is plausible in literatur
 
 ### F12 — External assistive-tool interoperability
 
-Yggdrasil should not become a closed assistive silo. Allow external TTS/STT, OS dictation, browser zoom/extensions, screen readers, Obsidian-compatible markdown, clean copy/export with provenance, keyboard-first and voice-first navigation.
+Mimer should not become a closed assistive silo. Allow external TTS/STT, OS dictation, browser zoom/extensions, screen readers, Obsidian-compatible markdown, clean copy/export with provenance, keyboard-first and voice-first navigation.
 
 ### F13 — Documentation control plane
 
@@ -112,7 +112,7 @@ Do not create one issue per miss. Capture this as one parent issue/document, the
 
 ## Minimal later issue hierarchy
 
-### Parent A: docs(architecture): create Yggdrasil cognitive-load documentation control plane
+### Parent A: docs(architecture): create Mimer cognitive-load documentation control plane
 
 Child issues: START_HERE, SYSTEM_MAP, ARCHITECTURE_INVARIANTS, CAPABILITY_REGISTRY, CONTRACT_INDEX, RESEARCH_INDEX, DECISION_LOG/ADR template, AGENT_CONTEXT/AGENTS.md, and doc-lint/status taxonomy.
 

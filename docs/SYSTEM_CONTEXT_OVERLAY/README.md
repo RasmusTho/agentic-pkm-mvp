@@ -13,7 +13,7 @@ deliberately unallocated) into bounded, independently mergeable tasks. The audit
 
 A vocabulary and classification **layer over the existing architecture**, not a redesign. It:
 
-- Names the Yggdrasil System of Interest (SoI) boundary, and the enabling-system /
+- Names the Mimer System of Interest (SoI) boundary, and the enabling-system /
   COTS-in-deployed-configuration / external-system distinction, in ISO/IEC/IEEE 15288 terms.
 - Resolves dual-listing contradictions (Ollama, Postgres, Docker/Colima) with a classification
   rule, not a rewrite of `docs/ARCHITECTURE.md`'s runtime wiring.

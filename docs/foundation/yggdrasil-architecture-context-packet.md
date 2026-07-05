@@ -1,6 +1,6 @@
 State: Draft architecture context packet. Preserves the #2533–#2552 synthesis. Docs-only; does not claim shipped runtime behavior.
 Doc role: Reference / architecture context packet
-Authority: Context-preservation summary for the Yggdrasil architecture-foundation backlog (#2533–#2552). It summarizes and links the doctrine, functional ontology, semantic distinctions, system breakdown, separation rules, and load-bearing invariants behind that backlog. It is subordinate to its owner docs: `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` on the target SBS, `docs/COGNITIVE_PROSTHESIS_CHARTER.md` and `docs/PROJECT_KERNEL.md` on product intent, and `docs/ARCHITECTURE.md` / `docs/STATUS.md` on current shipped behavior. It does not introduce new architecture decisions.
+Authority: Context-preservation summary for the Mimer architecture-foundation backlog (#2533–#2552). It summarizes and links the doctrine, functional ontology, semantic distinctions, system breakdown, separation rules, and load-bearing invariants behind that backlog. It is subordinate to its owner docs: `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` on the target SBS, `docs/COGNITIVE_PROSTHESIS_CHARTER.md` and `docs/PROJECT_KERNEL.md` on product intent, and `docs/ARCHITECTURE.md` / `docs/STATUS.md` on current shipped behavior. It does not introduce new architecture decisions.
 Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
@@ -40,11 +40,11 @@ This packet is intended to be stable. Changes to it should be intentional and tr
 
 ## 2. Final governing thesis
 
-> Yggdrasil is a cognitive prosthesis for a specific human: an extended-mind store for human-authored trails, plus a low-trust agentic interlocutor whose contributions must earn promotion. Its functional ontology is a scoped provenance-and-capability graph. A scope is simultaneously a cognitive frame, an audience boundary, a policy boundary, and a provenance context. Similarity may suggest relevance, but only typed CrossScopeFlow grants permit cross-scope use. Provenance carries justification; authority is a governed state transition; memory is reconstructive and revisable; agent memory is noncanonical by default. Deterministic components enforce these distinctions through metadata propagation, retrieval prefilters, authority-transition gates, audit traces, and regression tests.
+> Mimer is a cognitive prosthesis for a specific human: an extended-mind store for human-authored trails, plus a low-trust agentic interlocutor whose contributions must earn promotion. Its functional ontology is a scoped provenance-and-capability graph. A scope is simultaneously a cognitive frame, an audience boundary, a policy boundary, and a provenance context. Similarity may suggest relevance, but only typed CrossScopeFlow grants permit cross-scope use. Provenance carries justification; authority is a governed state transition; memory is reconstructive and revisable; agent memory is noncanonical by default. Deterministic components enforce these distinctions through metadata propagation, retrieval prefilters, authority-transition gates, audit traces, and regression tests.
 
 Clarifications:
 
-- Yggdrasil is **not** merely a database, note-search tool, RAG app, or chatbot wrapper.
+- Mimer is **not** merely a database, note-search tool, RAG app, or chatbot wrapper.
 - It is also **not** an oracle.
 - The human remains the locus of meaning and authority.
 - The system should reduce friction, not intelligence.
@@ -53,7 +53,7 @@ Clarifications:
 
 These are settled decisions, not open questions.
 
-1. **Standards are adapters, not the ontology.** PROV-O, SKOS, ABAC/ReBAC, MCP, OpenTelemetry, and similar standards may be used as implementation or interoperability adapters, but they do not define Yggdrasil's ontology by themselves.
+1. **Standards are adapters, not the ontology.** PROV-O, SKOS, ABAC/ReBAC, MCP, OpenTelemetry, and similar standards may be used as implementation or interoperability adapters, but they do not define Mimer's ontology by themselves.
 2. **`general_knowledge: true` is not a universal bypass.** General reusable knowledge can exist, but cross-scope use must be governed by typed flows — never by a global boolean that waves material across every scope.
 3. **Typed `CrossScopeFlow` replaces global cross-scope booleans.** Cross-scope movement must specify source scope, target scope, operation, evidence role, redaction, confirmation, expiry, audit, and provenance requirements.
 4. **`source_role`, `authority_state`, and `evidence_role` are orthogonal.** Do not collapse them into one field. Origin, standing, and reasoning-use answer different questions.
@@ -194,7 +194,7 @@ Epic: [#2533](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533) — stab
 | 1 | [#2553](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2553) | Create this self-contained architecture context packet. |
 | 2 | [#2534](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2534) | Stabilize `SYSTEM_BREAKDOWN_STRUCTURE.md` language and control-boundary ownership. |
 | 3 | [#2535](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2535) | Create traceability matrix from doctrine to implementation issues. |
-| 4 | [#2536](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2536) | Create concise Yggdrasil doctrine as repo-level north star. |
+| 4 | [#2536](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2536) | Create concise Mimer doctrine as repo-level north star. |
 | 5 | [#2537](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2537) | Define canonical functional ontology terms. |
 | 6 | [#2538](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2538) | Define orthogonal semantic dimensions. |
 | 7 | [#2539](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2539) | Define typed `CrossScopeFlow` and retire global `general_knowledge` bypass semantics. |

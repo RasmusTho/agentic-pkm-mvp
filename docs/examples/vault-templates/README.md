@@ -1,6 +1,6 @@
 # Vault Templates — Life-Wide Artifact Examples
 
-These are example Markdown templates for common life-wide artifact classes in the Yggdrasil / Agentic PKM.
+These are example Markdown templates for common life-wide artifact classes in the Mimer / Agentic PKM.
 
 **These are examples, not requirements.** Every note does not need frontmatter, and templates are not mandatory. Use them as a starting point when you want to apply the life-wide artifact taxonomy consistently.
 

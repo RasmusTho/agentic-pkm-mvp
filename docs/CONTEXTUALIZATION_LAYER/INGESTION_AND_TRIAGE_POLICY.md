@@ -6,7 +6,7 @@ Authority: Defines the ingestion pipeline states, per-pipeline capture-to-promot
 
 ## 1. Purpose
 
-This document defines the **ingestion and triage policy** for life-wide artifacts in the Yggdrasil / Agentic PKM.
+This document defines the **ingestion and triage policy** for life-wide artifacts in the Mimer / Agentic PKM.
 
 It exists because without an explicit triage policy, agents and automated processes may incorrectly promote AI summaries, source notes, shopping lists, screenshots, receipts, and ephemeral captures into durable knowledge — or silently discard source-authoritative material.
 

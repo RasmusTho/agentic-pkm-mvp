@@ -11,7 +11,7 @@ frameworks, editors, and models. Eleven principles; each earns its place by deri
 violations honestly, and names an automatic evaluation hook. A principle that could not name a hook
 did not get in (see `:: Rejected candidates`).
 
-Relationship to the doctrine: `00-yggdrasil-doctrine.md` states *what Yggdrasil is* and the
+Relationship to the doctrine: `00-yggdrasil-doctrine.md` states *what Mimer is* and the
 commitments that must not collapse — it remains the product north star and this constitution's
 superior. The constitution states *how any implementation of it must behave*, distilled from one
 full pass of formal modeling (RESEARCH-01/02), invariant synthesis (RESEARCH-03), and the kernel

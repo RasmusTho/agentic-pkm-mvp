@@ -1,6 +1,6 @@
 State: Repo-level architecture doctrine (north star). Docs-only; governs the architecture-foundation backlog (#2533–#2552). Does not claim shipped runtime behavior.
 Doc role: Foundation doctrine
-Authority: Concise statement of the load-bearing design commitments for Yggdrasil. It is the top of the doctrine → ontology → semantics → contracts chain and the operational north star for future humans and AI coding agents. Subordinate to its owner docs: `docs/COGNITIVE_PROSTHESIS_CHARTER.md` and `docs/PROJECT_KERNEL.md` on product intent, `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` on the target architecture, and `docs/ARCHITECTURE.md` / `docs/STATUS.md` on shipped behavior. It introduces no new architecture decisions; it distills the synthesis preserved in the context packet.
+Authority: Concise statement of the load-bearing design commitments for Mimer. It is the top of the doctrine → ontology → semantics → contracts chain and the operational north star for future humans and AI coding agents. Subordinate to its owner docs: `docs/COGNITIVE_PROSTHESIS_CHARTER.md` and `docs/PROJECT_KERNEL.md` on product intent, `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` on the target architecture, and `docs/ARCHITECTURE.md` / `docs/STATUS.md` on shipped behavior. It introduces no new architecture decisions; it distills the synthesis preserved in the context packet.
 Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
@@ -21,9 +21,9 @@ This doctrine is short on purpose. The full rationale lives in the
 lives in the [System Breakdown Structure](../SYSTEM_BREAKDOWN_STRUCTURE.md). This file states the
 commitments those documents exist to protect.
 
-## 1. What Yggdrasil is
+## 1. What Mimer is
 
-Yggdrasil is a **cognitive prosthesis for a specific human**: an extended-mind store for
+Mimer is a **cognitive prosthesis for a specific human**: an extended-mind store for
 human-authored trails, plus a **low-trust agentic interlocutor** whose contributions must earn
 promotion. It is a transactive-memory partner, not an oracle.
 
@@ -35,7 +35,7 @@ promotion. It is a transactive-memory partner, not an oracle.
   advisory by default and becomes durable human knowledge only through an explicit, governed
   promotion — never by accumulation, similarity, or repetition.
 
-Yggdrasil is **not** merely a database, note-search tool, RAG app, or chatbot wrapper, and it is
+Mimer is **not** merely a database, note-search tool, RAG app, or chatbot wrapper, and it is
 **not** an oracle.
 
 ## 2. The load-bearing commitments
@@ -64,7 +64,7 @@ These are settled, not open questions.
    which emits a receipt.
 7. **Standards are adapters, not the ontology.** PROV-O, SKOS, ABAC/ReBAC, MCP, OpenTelemetry, and
    similar standards may be used as implementation or interoperability adapters. They do not define
-   Yggdrasil's [functional ontology](../architecture/functional-ontology.md).
+   Mimer's [functional ontology](../architecture/functional-ontology.md).
 
 ## 3. Distinctions that must not collapse
 

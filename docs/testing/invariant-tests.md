@@ -1,6 +1,6 @@
-State: Canonical Yggdrasil invariant test registry. Docs-only control document for the architecture-foundation backlog (#2533–#2552); names the architecture fitness rules (invariants) that future runtime implementation must satisfy, and maps each to its principle, boundaries, contract/schema, ADR, fixture, enforcement posture, and eventual test path. Does not claim shipped runtime behavior.
+State: Canonical Mimer invariant test registry. Docs-only control document for the architecture-foundation backlog (#2533–#2552); names the architecture fitness rules (invariants) that future runtime implementation must satisfy, and maps each to its principle, boundaries, contract/schema, ADR, fixture, enforcement posture, and eventual test path. Does not claim shipped runtime behavior.
 Doc role: Testing / fitness registry (architecture fitness rules)
-Authority: Owns the canonical list of named architecture invariants (fitness probes) for the Yggdrasil foundation. For each invariant it answers: which doctrine principle it protects, which control boundaries own it, which contract/schema (if any) already expresses it, how it fails when violated, how it is currently enforced, and which test will eventually pin it. Subordinate to `docs/foundation/00-yggdrasil-doctrine.md`, `docs/architecture/functional-ontology.md`, `docs/architecture/semantic-dimensions.md`, `docs/architecture/cross-scope-flow.md`, `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`, and the per-invariant contracts under `docs/architecture/`. It does not set policy: OEF observes and evaluates; GOV owns normative policy and authority decisions.
+Authority: Owns the canonical list of named architecture invariants (fitness probes) for the Mimer foundation. For each invariant it answers: which doctrine principle it protects, which control boundaries own it, which contract/schema (if any) already expresses it, how it fails when violated, how it is currently enforced, and which test will eventually pin it. Subordinate to `docs/foundation/00-yggdrasil-doctrine.md`, `docs/architecture/functional-ontology.md`, `docs/architecture/semantic-dimensions.md`, `docs/architecture/cross-scope-flow.md`, `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`, and the per-invariant contracts under `docs/architecture/`. It does not set policy: OEF observes and evaluates; GOV owns normative policy and authority decisions.
 Owner: OEF — Observability, Evaluation & Fitness (registry); CES practice (rule lifecycle)
 Temporal class: strategic
 Review cadence: event-driven
@@ -8,7 +8,7 @@ Source of truth: canonical (invariant → probe mapping); subordinate to the doc
 Last reviewed: 2026-06-27
 Last verified against: docs/architecture/traceability-matrix.md, docs/foundation/00-yggdrasil-doctrine.md, docs/architecture/semantic-dimensions.md, docs/architecture/cross-scope-flow.md, docs/architecture/metadata-bundle.md, docs/architecture/context-envelope.md, docs/architecture/memory-model.md, docs/architecture/authority-transition-flow.md, docs/architecture/retrieval-contract.md, docs/boundaries/README.md, schemas/README.md
 
-# Yggdrasil Invariant Test Registry
+# Mimer Invariant Test Registry
 
 Parent epic: [#2533](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533) ·
 Registry issue: [#2550](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2550) ·
