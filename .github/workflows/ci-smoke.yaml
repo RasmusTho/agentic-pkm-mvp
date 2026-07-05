@@ -249,6 +249,8 @@ jobs:
             if [ "$rc" -ne 0 ]; then
               echo "docker compose ps"
               docker compose $compose_files ps || true
+              echo "migrate logs (tail=200)"
+              docker compose $compose_files logs --no-color --tail=200 migrate || true
               echo "worker logs (tail=200)"
               docker compose $compose_files logs --no-color --tail=200 worker || true
               echo "db logs (tail=120)"
@@ -392,6 +394,8 @@ jobs:
               latest_log=$(ls -1t tmp/verify_vaultwide_panel.*.log 2>/dev/null | head -n 1 || true)
               if [ -n "${latest_report:-}" ]; then echo "=== REPORT (tail 200) ==="; tail -n 200 "$latest_report" || true; fi
               if [ -n "${latest_log:-}" ]; then echo "=== LOG (tail 200) ==="; tail -n 200 "$latest_log" || true; fi
+              echo "migrate logs (tail=200)"
+              docker compose $compose_files logs --no-color --tail=200 migrate || true
               echo "watcher logs (tail=200)"
               docker compose $compose_files logs --no-color --tail=200 watcher || true
               echo "worker logs (tail=200)"
