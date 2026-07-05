@@ -344,6 +344,122 @@ declarative-schema-impossible and therefore live here as the source of truth.
 - **Related docs / contracts / ADRs:** [doctrine](../foundation/00-yggdrasil-doctrine.md) §2.7, [functional-ontology](../architecture/functional-ontology.md); ADR-0036.
 - **Related issues:** #2549, #2550.
 
+## Integration seam invariants (2026-07-05 whole-system pass)
+
+Extracted by the live integration audit
+[`docs/audits/MIMER_WHOLE_SYSTEM_INTEGRATION_2026-07-05.md`](../audits/MIMER_WHOLE_SYSTEM_INTEGRATION_2026-07-05.md)
+from observed seam failures on the running dev channel. These pin the *composition* of the chain
+`note → watcher → ingest → embed → index → retrieval → synthesis → surface → receipt`, not any single
+component. Minimal kernel: `retrieval_serves_durable_truth_fresh` + `watcher_deletions_reconcile` +
+`watcher_blindness_is_visible` (what enters the vault becomes retrievable; what leaves stops being
+retrievable; a blind ingester says so).
+
+### watcher_blindness_is_visible
+
+- **Purpose:** A running watcher whose scope matched zero files, or whose scope's static prefix
+  directory is missing under the bound vault, surfaces that in its heartbeat (`scope_status`) instead
+  of reporting healthy while ingesting nothing.
+- **Protected principle:** fail loud, never paper over; a component that observes nothing must say so.
+- **Affected boundaries:** watcher/ingest pipeline, OEF health surfaces.
+- **Expected failure mode:** vault layout drifts from configured scope; watcher ticks "healthy"
+  forever; no note ever reaches ingest; nothing signals it (observed live 2026-07-05, gap G1).
+- **Current enforcement:** `runtime_test` — delivered by #2988 / PR #3007.
+- **Runtime test path:** `tests/watcher/test_scope_zero_match_signal.py` (passes).
+- **Related docs / contracts / ADRs:** [OBSERVABILITY](../OBSERVABILITY.md) (heartbeat `scope_status`); audit G1.
+- **Related issues:** #2988.
+
+### watcher_idles_not_crashes_on_unusable_vault
+
+- **Purpose:** Enable-off due to vault status (idle/uninitialized, #2005 contract) idles the watcher
+  process; only an explicit `WATCHER_ENABLE≠1` may exit, and error text names the actual cause.
+- **Protected principle:** truthful failure attribution; idle contract (#2005).
+- **Affected boundaries:** watcher CLI, channel operability.
+- **Expected failure mode:** container crash-loop with a misleading env-var error on an uninitialized
+  vault (observed live on `pkm-test-watcher-1`, gap G6).
+- **Current enforcement:** `runtime_test` — delivered by #2992 / PR #3001.
+- **Runtime test path:** `tests/watcher/test_cli_idle_vs_disabled.py` (passes).
+- **Related issues:** #2992.
+
+### watcher_deletions_reconcile
+
+- **Purpose:** A filesystem deletion observed by the watcher eventually purges the object's derived
+  rows (tombstone path); vault reality and the durable index converge.
+- **Protected principle:** the vault filesystem is the source of truth; derived stores follow it in
+  both directions.
+- **Affected boundaries:** watcher/ingest, durable index, retrieval spine.
+- **Expected failure mode:** deleted/renamed notes persist as retrieval candidates indefinitely
+  (observed live: ask sources dominated by ghosts of deleted files, gap G4).
+- **Current enforcement:** in delivery — #2990 / PR #3008.
+- **Eventual test path:** `tests/watcher/test_watcher_deletion_reconciliation.py`.
+- **Related issues:** #2990.
+
+### retrieval_serves_durable_truth_fresh
+
+- **Purpose:** Every retrieval-serving substrate is a cache of the durable index with an explicit
+  generation/freshness contract; a row upserted to `store_vector_index` becomes retrievable without a
+  process restart (bounded staleness).
+- **Protected principle:** KERNEL-05 (serving substrates hold no independent truth), extended with
+  freshness.
+- **Affected boundaries:** retrieval spine (DRI/RCA).
+- **Expected failure mode:** fresh notes invisible to ask until API restart (observed live, gap G2).
+- **Current enforcement:** `runtime_test` — delivered by #2981 / PR #3003.
+- **Runtime test path:** `tests/invariants/test_retrieval_spine_invariants.py::test_retrieval_serves_durable_truth_fresh` (passes).
+- **Related issues:** #2981, #2980.
+
+### no_legacy_read_surfaces
+
+- **Purpose:** No API read surface consumes the legacy `objects`/`objects_embeddings` tables, and no
+  retrieval endpoint silently falls back to query-independent results on failure.
+- **Protected principle:** single canonical store generation (KERNEL-03/04 read-side); fail loud.
+- **Affected boundaries:** API surface, retrieval spine.
+- **Expected failure mode:** an endpoint returns identical plausible-looking results for any query
+  while its real substrate is empty (observed live on `/search`, gap G3).
+- **Current enforcement:** `runtime_test` — delivered by #2989 / PR #3009.
+- **Runtime test path:** `tests/api/test_search_canonical_substrate.py` (passes).
+- **Related issues:** #2989; dual-writer remainder #2901.
+
+### health_liveness_is_truthful
+
+- **Purpose:** `/api/health` watcher/worker liveness verdicts reflect actual cross-container process
+  state — heartbeat paths are structurally reachable by the reader, and stale files never report ok.
+- **Protected principle:** honest health signals (#2597); a health surface that cannot see its
+  subjects is worse than none.
+- **Affected boundaries:** OEF health, deployment topology.
+- **Expected failure mode:** permanent "not running (no heartbeat)" false negatives training operators
+  to ignore health (observed live, gap G5).
+- **Current enforcement:** `runtime_test` (integrated-runtime UAT, `RUN_INTEGRATED_RUNTIME_UAT=1`) —
+  delivered by #2991 / PR #3004.
+- **Runtime test path:** `tests/invariants/test_health_heartbeat_visibility.py` (passes).
+- **Related issues:** #2991, #2597.
+
+### embedding_completes_or_fails_loud_per_object
+
+- **Purpose:** An object whose text exceeds the embedding provider's real input tolerance is chunked
+  adaptively until it embeds (mean-pooled) or fails loud at a floor size; content-dependent provider
+  5xx must not permanently dead-letter a note on a char-budget guess.
+- **Protected principle:** every vault note is retrievable; provider limits are the runtime's problem,
+  not the note's.
+- **Affected boundaries:** embedding/index pipeline (SIP), retrieval spine.
+- **Expected failure mode:** token-dense chunks crash the provider inside the char budget; the note
+  dead-letters; `embedding_index` pins at `rebuild_required` (observed live, gap G10).
+- **Current enforcement:** open — #3045.
+- **Eventual test path:** `tests/llm/test_embed_adaptive_chunking.py`.
+- **Related issues:** #3045, #2110 (char-budget predecessor).
+
+### receipt_surfaces_writable_on_fresh_runtime
+
+- **Purpose:** Receipt append paths (ask-synthesis and successors) are writable by the runtime user on
+  a freshly created container; receipt-before-answer stays fail-loud, but the environment may not make
+  failure the default state.
+- **Protected principle:** receipts are load-bearing; an undeployable receipt surface takes the chat
+  surface down with it.
+- **Affected boundaries:** deployment topology, activation receipts.
+- **Expected failure mode:** image bakes root-owned `runtime/`; service runs uid 501; every `/api/ask`
+  500s after every deploy until a manual chown (observed live, gap G11).
+- **Current enforcement:** open — #3047.
+- **Eventual test path:** `tests/invariants/test_receipt_surface_writable.py`.
+- **Related issues:** #3047, #2968 (fail-loud posture, preserved).
+
 ## Schema-batch deferred invariants
 
 The [schemas/contracts batch](../../schemas/README.md) explicitly deferred a set of cross-field and
