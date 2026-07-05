@@ -16,7 +16,13 @@ transcript_available: false    # true if transcript has been imported
 authority:
   source_authoritative: false  # the YouTube video is the source; this note is a companion
   ai_generated: false
-  requires_review: false
+  requires_review: false        # AI-generated notes MUST set this true (see review_state below)
+
+# Canonical not-yet-reviewed posture (docs/CONCEPTS/STATE_AXES_CONTRACT.md;
+# token mapping decided in #2793). Any note carrying AI-generated content that
+# has not been human-reviewed MUST carry review_state: draft alongside
+# authority.requires_review: true (INGESTION_AND_TRIAGE_POLICY.md §3).
+review_state: draft            # draft | provisional | reviewed | protected | archived
 
 created: "{{date}}"
 updated: "{{date}}"
