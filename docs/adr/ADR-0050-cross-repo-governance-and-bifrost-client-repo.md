@@ -1,4 +1,4 @@
-State: Proposed (owner decision 2026-07-05). Establishes that constituent-surface repos are governed constituents of Yggdrasil, developed by the Builder System (not detached projects); names the native-app client repo **Bifrost**; and adopts **traditional Swedish spelling** for the ecosystem name register (**Heimdal**, **Bifrost**). Decision record only; creates no repo and moves no code. The mechanical rename across the corpus is a bounded enactment (#3060), deferred per the ADR-0044 rename precedent.
+State: Accepted (owner decision 2026-07-05; ratified 2026-07-06 via setup #3055). Establishes that constituent-surface repos are governed constituents of Yggdrasil, developed by the Builder System (not detached projects); names the native-app client repo **Bifrost**; and adopts **traditional Swedish spelling** for the ecosystem name register (**Heimdal**, **Bifrost**). Decision record only; creates no repo and moves no code. The mechanical rename across the corpus is a bounded enactment (#3060), deferred per the ADR-0044 rename precedent.
 Doc role: Decision record (ADR)
 Authority: Authoritative for (a) the cross-repo governance rule — how the Yggdrasil ecosystem spans more than one repository while keeping one governance authority, (b) the naming of the native-app client repo (**Bifrost**), and (c) the register's adoption of traditional Swedish spelling (Heimdal, Bifrost). Extends ADR-0044 (multi-repo precedent + Norse name register) and ADR-0049 §4 (topology C); amends the *spelling* of the register set in ADR-0043/0044. Does not create the repo, define any constituent's internals, or add a constituent (Bifrost hosts *clients* of Heimdal + Mimer; it is not a new constituent). Cross-repo scope + naming are owner-reserved (R-SOS / R-NAME) and recorded here as the owner's locked decision.
 Owner: Architecture / CES stewardship (Rasmus)
@@ -8,7 +8,7 @@ Source of truth: This ADR plus ADR-0049 §4 (native-app topology C), ADR-0044 (p
 # ADR-0050: Cross-repo governance + the Bifrost native-app repo; the name register adopts traditional Swedish spelling (Heimdal, Bifrost)
 
 **Date:** 2026-07-05
-**Status:** Proposed (owner decision 2026-07-05)
+**Status:** Accepted (owner decision 2026-07-05; ratified 2026-07-06 via setup #3055)
 
 ---
 
@@ -101,8 +101,11 @@ rarely-referenced vault label does not. No action; the collision is accepted and
 - The register's canonical spelling is Heimdal / Bifrost; the corpus rename runs as enactment #3060.
 - The Bifrost/test-vault collision is **owner-accepted** (no test-vault rename; the vault is rarely
   referenced); prose qualifies where needed. The `bifrost` repo is created **private** (owner, 2026-07-05).
-- Setup #3055 gains a concrete name and governance target; it remains `agent:needs-human` for repo
-  creation (visibility/location) and Builder-System scaffolding.
+- Setup #3055 is **delivered** (2026-07-06): the `bifrost` repo exists (private), its README declares it a
+  governed Yggdrasil constituent under ecosystem ADR/CES authority, and the Builder-System scaffolding —
+  `AGENTS.md` (inherited authority), Issue + PR contracts, delivery-skill routing + `_shared` contracts,
+  the label taxonomy, and Swift/iOS CI (build + test + lint) — is live in the repo. This ratification (this
+  edit) records AC4; #3055 no longer blocks B1–B3.
 
 ## When to revisit
 
