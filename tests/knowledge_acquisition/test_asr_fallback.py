@@ -107,6 +107,8 @@ def test_captionless_falls_back_to_asr(monkeypatch):
     assert outcome.record["caption_body"] == "hej world"
     assert outcome.record["metadata"]["title"] == "A Test Video"
     assert outcome.is_new is True
+    assert outcome.ok is True
+    assert outcome.failure is None
 
 
 def test_raw_record_shape_parity(monkeypatch):
@@ -155,6 +157,14 @@ def test_raw_record_shape_parity(monkeypatch):
     assert asr_record["provenance"]["acquisition_method"] == "asr"
     assert set(caption_record["provenance"].keys()) == set(asr_record["provenance"].keys())
 
+    # Value-level parity on shared fields: identical metadata key-set and
+    # identical plugin_version across the two paths (review round 1, minor 1).
+    assert set(caption_record["metadata"].keys()) == set(asr_record["metadata"].keys())
+    assert (
+        caption_record["provenance"]["plugin_version"]
+        == asr_record["provenance"]["plugin_version"]
+    )
+
     # Both carry the same identity/provenance/immutability/dedup contract
     # fields (KA-01 raw_record.py persist_raw_record defaults).
     for record in (caption_record, asr_record):
@@ -162,6 +172,160 @@ def test_raw_record_shape_parity(monkeypatch):
         assert "source_kind" in record
         assert "item_ref" in record
         assert "acquired_at" in record
+
+
+def test_asr_refetch_is_dedup_noop_despite_asr_drift(monkeypatch):
+    # BLOCKER regression (review round 1): faster-whisper output is
+    # non-deterministic (beam search, no seed), so the transcribed text CANNOT
+    # participate in content_identity — otherwise every re-fetch of the same
+    # unchanged captionless item mints a new object_id and re-pays the full
+    # download+transcription. The ASR-path identity is metadata-bound: re-fetch
+    # with unchanged upstream metadata must be a traced dedup no-op that never
+    # invokes the ASR chain, even when a hypothetical second transcription
+    # would produce different text.
+    info = _base_info(subtitles={}, automatic_captions={})
+    monkeypatch.setattr(plugin, "yt_dlp_extract_info", lambda url: info)
+
+    transcribe_calls: list[str] = []
+
+    def first_transcribe(source: str, *, trace_id: str | None = None):
+        transcribe_calls.append(source)
+        return _fake_transcribe_result(text="first run wording", language="en")(
+            source, trace_id=trace_id
+        )
+
+    monkeypatch.setattr(plugin, "transcribe_source", first_transcribe)
+    first = plugin.fetch(FAKE_URL)
+    assert first.is_new is True
+    assert transcribe_calls == [FAKE_URL]
+
+    # Second fetch: same unchanged item, but the stubbed ASR would return
+    # DIFFERENT text (simulating whisper's non-determinism). It must not even
+    # be invoked.
+    def second_transcribe(source: str, *, trace_id: str | None = None):
+        transcribe_calls.append(source)
+        return _fake_transcribe_result(text="second run DIFFERENT wording", language="en")(
+            source, trace_id=trace_id
+        )
+
+    monkeypatch.setattr(plugin, "transcribe_source", second_transcribe)
+    second = plugin.fetch(FAKE_URL)
+
+    assert second.is_new is False
+    assert second.object_id == first.object_id
+    assert second.content_identity == first.content_identity
+    # ASR chain was NOT invoked on the second call (cost profile restored).
+    assert transcribe_calls == [FAKE_URL]
+    # The dedup hit returns the original persisted record, first transcription
+    # preserved (immutability).
+    assert second.record["caption_body"] == "first run wording"
+
+
+def test_asr_metadata_change_new_record_prior_untouched(monkeypatch):
+    # Parity with KA-01's changed-content test: upstream metadata change on a
+    # captionless item yields a NEW record; the prior record is untouched.
+    info_v1 = _base_info(subtitles={}, automatic_captions={})
+    monkeypatch.setattr(plugin, "yt_dlp_extract_info", lambda url: info_v1)
+    monkeypatch.setattr(
+        plugin, "transcribe_source", _fake_transcribe_result(text="first transcript", language="en")
+    )
+    first = plugin.fetch(FAKE_URL)
+    assert first.is_new is True
+
+    info_v2 = _base_info(title="Updated Title", subtitles={}, automatic_captions={})
+    monkeypatch.setattr(plugin, "yt_dlp_extract_info", lambda url: info_v2)
+    monkeypatch.setattr(
+        plugin, "transcribe_source", _fake_transcribe_result(text="second transcript", language="en")
+    )
+    second = plugin.fetch(FAKE_URL)
+
+    assert second.is_new is True
+    assert second.object_id != first.object_id
+    assert second.content_identity != first.content_identity
+
+    from app.knowledge_acquisition.raw_record import get_raw_record
+
+    prior = get_raw_record(first.object_id)
+    assert prior is not None
+    assert prior["metadata"]["title"] == "A Test Video"
+    assert prior["caption_body"] == "first transcript"
+
+    updated = get_raw_record(second.object_id)
+    assert updated is not None
+    assert updated["metadata"]["title"] == "Updated Title"
+    assert updated["caption_body"] == "second transcript"
+
+
+def test_asr_failure_runtime_error_is_traced_not_raised(monkeypatch):
+    # MAJOR (review round 1): an ASR-chain failure (yt-dlp/faster-whisper
+    # missing, download failure → RuntimeError) must be loud, item-scoped, and
+    # traced — a failure outcome, never an unguarded raise, and no fabricated
+    # raw record (item stays retryable).
+    info = _base_info(subtitles={}, automatic_captions={})
+    monkeypatch.setattr(plugin, "yt_dlp_extract_info", lambda url: info)
+
+    def boom(source: str, *, trace_id: str | None = None):
+        raise RuntimeError("yt-dlp is not installed")
+
+    monkeypatch.setattr(plugin, "transcribe_source", boom)
+
+    outcome = plugin.fetch(FAKE_URL)  # must not raise
+
+    assert outcome.ok is False
+    assert outcome.failure is not None and "RuntimeError" in outcome.failure
+    assert outcome.is_new is False
+    assert outcome.object_id is None
+    assert outcome.record == {}
+
+    # Nothing was persisted: the identity slot is still free for a retry.
+    from app.knowledge_acquisition.raw_record import get_raw_record, raw_record_object_id
+
+    object_id = raw_record_object_id(
+        source_kind=plugin.SOURCE_KIND,
+        item_ref="abcdefghijk",
+        content_identity=outcome.content_identity,
+    )
+    assert get_raw_record(object_id) is None
+
+    # Retry with a working ASR chain succeeds and persists fresh.
+    monkeypatch.setattr(
+        plugin, "transcribe_source", _fake_transcribe_result(text="retry transcript", language="en")
+    )
+    retry = plugin.fetch(FAKE_URL)
+    assert retry.ok is True
+    assert retry.is_new is True
+    assert retry.record["caption_body"] == "retry transcript"
+
+
+def test_asr_failure_ffmpeg_calledprocesserror_is_traced_not_raised(monkeypatch):
+    # MAJOR (review round 1): ffmpeg failing inside the chain surfaces as
+    # subprocess.CalledProcessError — same posture: traced failure outcome,
+    # nothing persisted, no raise.
+    import subprocess
+
+    info = _base_info(subtitles={}, automatic_captions={})
+    monkeypatch.setattr(plugin, "yt_dlp_extract_info", lambda url: info)
+
+    def boom(source: str, *, trace_id: str | None = None):
+        raise subprocess.CalledProcessError(1, ["ffmpeg", "-i", "input"])
+
+    monkeypatch.setattr(plugin, "transcribe_source", boom)
+
+    outcome = plugin.fetch(FAKE_URL)  # must not raise
+
+    assert outcome.ok is False
+    assert outcome.failure is not None and "CalledProcessError" in outcome.failure
+    assert outcome.object_id is None
+    assert outcome.record == {}
+
+    from app.knowledge_acquisition.raw_record import get_raw_record, raw_record_object_id
+
+    object_id = raw_record_object_id(
+        source_kind=plugin.SOURCE_KIND,
+        item_ref="abcdefghijk",
+        content_identity=outcome.content_identity,
+    )
+    assert get_raw_record(object_id) is None
 
 
 def test_no_asr_when_captions_exist(monkeypatch):
