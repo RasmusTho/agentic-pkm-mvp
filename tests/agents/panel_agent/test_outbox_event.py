@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.agents.panel_agent.agent import run_panel_intent_for_note
+from app.agents.panel_agent.agent import reset_panel_intent_dedup_store, run_panel_intent_for_note
 from app.objects import DomainObject, ObjectStore
 
 
@@ -82,3 +82,69 @@ Do things.
     record = json.loads(lines[-1])
     assert record.get("event") == "panel.intent.created"
     assert record.get("payload", {}).get("panel", {}).get("panel_id") == "panel-1"
+
+
+def test_retried_scan_of_unchanged_note_emits_panel_intent_created_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2881 AC1: a retried scan against an unchanged note appends exactly one
+    ``panel.intent.created`` JSONL line, not N per dispatch.
+
+    Simulates the at-least-once redelivery this issue names as the most
+    severe instance: ``run_panel_intent_for_note`` re-parses the note's AI
+    panel blocks on every ``panel.scan.requested`` dispatch, and previously
+    re-emitted a fresh event (random ``event_id``) every single call with no
+    dedup. Calling it twice for the SAME unchanged note must append only once
+    to the JSONL audit sink; a changed note (edited instruction) must still
+    get its own new emission, proving this isn't over-dedup.
+    """
+    reset_panel_intent_dedup_store()
+    note_uuid = str(uuid4())
+    markdown = """%% AI:Start %%
+## AI-instruktion
+Do things.
+## AI-åtgärder
+- [x] Mapped Action
+%% AI:End %%
+"""
+    _seed_note(note_uuid, markdown)
+
+    settings_path = _settings_file(tmp_path)
+    outbox_path = tmp_path / "index-outbox.jsonl"
+    monkeypatch.setenv("PANEL_ACTIONS_PATH", str(settings_path))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setattr("app.agents.panel_agent.agent.INDEX_OUTBOX_PATH", outbox_path, raising=False)
+
+    # Dispatch 1: the initial scan.
+    first_events = run_panel_intent_for_note(note_uuid, trace_id="trace-panel-retry")
+    assert len(first_events) == 1
+
+    # Dispatch 2: a redelivery/retry of the SAME scan against the unchanged note.
+    second_events = run_panel_intent_for_note(note_uuid, trace_id="trace-panel-retry")
+    assert len(second_events) == 1, "the handler still returns the intent event for downstream execution"
+
+    lines = [line for line in outbox_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(lines) == 1, (
+        f"expected exactly one panel.intent.created JSONL line after a retried scan of an "
+        f"unchanged note, got {len(lines)}: {lines!r}"
+    )
+    record = json.loads(lines[0])
+    assert record.get("event") == "panel.intent.created"
+
+    # A genuinely changed panel (edited instruction) must still emit -- not swallowed.
+    changed_markdown = """%% AI:Start %%
+## AI-instruktion
+Do something different now.
+## AI-åtgärder
+- [x] Mapped Action
+%% AI:End %%
+"""
+    _seed_note(note_uuid, changed_markdown)
+    third_events = run_panel_intent_for_note(note_uuid, trace_id="trace-panel-retry")
+    assert len(third_events) == 1
+
+    lines_after_change = [line for line in outbox_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(lines_after_change) == 2, (
+        "a genuinely changed panel block must still get its own new JSONL emission, "
+        f"got {len(lines_after_change)}: {lines_after_change!r}"
+    )

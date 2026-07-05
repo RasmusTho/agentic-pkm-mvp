@@ -7,13 +7,53 @@ from pathlib import Path
 from typing import Any, Dict
 from uuid import UUID
 
+from app.components.concurrency import EventDedupStore
 from app.embedding_config import get_embed_dim
 from app.events.schema import make_outbox_event
 from app.llm.embeddings import EMBED_MODEL
-from app.services.outbox import EVENT_ID_FINGERPRINT, derive_idempotency_key, write_outbox_event
+from app.services.outbox import (
+    EVENT_ID_FINGERPRINT,
+    derive_idempotency_key,
+    payload_fingerprint,
+    write_outbox_event,
+)
 from app.settings.watcher_settings import load_watcher_settings
 
 logger = logging.getLogger(__name__)
+
+# In-process dedup for the JSONL audit/notification sink (#2881). Unlike
+# `write_outbox_event`'s DB-backed dedup (KERNEL-02, `id` primary key + ON
+# CONFLICT DO NOTHING, durable across restarts), this sink has no natural
+# dedup point of its own -- it is an append-only file. The audit-emission
+# helpers below (`_append_record_best_effort`) key on a content-derived
+# fingerprint (event name + object identity + the record's own stable
+# content, per `derive_idempotency_key`'s documented direction) rather than
+# the envelope's random `event_id`, so a redelivered dispatch of the SAME
+# observation appends at most once. In-process/TTL-bounded like the worker's
+# own `_EVENT_DEDUP` (`app/workers/outbox_worker.py`) and the promotion
+# consumer's `_PROMOTION_DEDUP` -- this is a redelivery-window guard, not a
+# durable ledger; a process restart re-opens the window, same as those.
+_AUDIT_EMISSION_DEDUP = EventDedupStore()
+
+
+def reset_audit_emission_dedup_store() -> None:
+    """Test-only reset hook, mirroring `app.promotion.consumer.reset_promotion_dedup_store`."""
+    _AUDIT_EMISSION_DEDUP.clear()
+
+
+def _audit_record_fingerprint_key(record: Dict[str, Any], *, event_name: str, object_id: str) -> str:
+    """Derive the audit-append dedup key for one JSONL record.
+
+    Excludes the envelope's volatile ``event_id``/``timestamp`` fields (fresh
+    on every construction, per `derive_idempotency_key`'s own documented gap
+    for `EVENT_ID_FINGERPRINT`) so a redelivered dispatch of the same logical
+    observation (same object, same computed metrics/provenance) maps to the
+    same key -- while a genuinely new observation (re-embedding after content
+    changed, a different error) still gets its own key and is not swallowed.
+    """
+    fingerprint = payload_fingerprint(record, exclude=("event_id", "timestamp", "trace_id"))
+    return derive_idempotency_key(event_name, object_id, fingerprint)
+
 
 def _try_writable_path(path: Path) -> bool:
     try:
@@ -92,6 +132,18 @@ def _append_record(record: Dict[str, Any]) -> None:
 
 
 def _append_record_best_effort(record: Dict[str, Any], *, event_name: str) -> None:
+    object_id = record.get("uuid")
+    if not object_id:
+        payload = record.get("payload")
+        object_id = payload.get("object_id") if isinstance(payload, dict) else None
+    dedup_key = _audit_record_fingerprint_key(record, event_name=event_name, object_id=str(object_id or "unknown"))
+    if _AUDIT_EMISSION_DEDUP.seen(dedup_key):
+        logger.debug(
+            "outbox audit append skipped (duplicate observation) event=%s object_id=%s",
+            event_name,
+            object_id,
+        )
+        return
     try:
         _append_record(record)
     except Exception:
