@@ -15,6 +15,7 @@ import yaml
 
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.filters import strip_ai_panels
+from app.agents.panel.writeback import strip_ai_status_block
 from app.ingest.config import resolve_ingest_config
 from app.index.outbox import append_jsonl
 from app.observability.ingest_meta import record_ingest_run
@@ -442,7 +443,7 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
     language = str(frontmatter.get("language") or frontmatter.get("lang") or "und")
     maturity = str(frontmatter.get("maturity") or "note")
     domain = str(frontmatter.get("domain") or "").strip() or "unscoped"
-    stripped_body = strip_ai_panels(body)
+    stripped_body = strip_ai_status_block(strip_ai_panels(body))
     stripped_text = stripped_body.strip()
     ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)
     text_sha256 = str(ingest_fingerprint.get("text_sha256") or "")
@@ -750,7 +751,7 @@ def _ingest_candidates(
             frontmatter_uuid_raw = _normalize_uuid(frontmatter.get("uuid") or frontmatter.get("id") or "")
             needs_uuid_write = not bool(frontmatter_uuid_raw)
             title = _frontmatter_title(frontmatter) or _derive_title(body, path)
-            stripped_text = strip_ai_panels(body).strip()
+            stripped_text = strip_ai_status_block(strip_ai_panels(body)).strip()
             ingest_fingerprint = _compute_ingest_fingerprint(stripped_text, path)
             frontmatter_uuid, frontmatter_invalid = _sanitize_uuid(frontmatter_uuid_raw)
             text_sha256 = str(ingest_fingerprint.get("text_sha256") or "")

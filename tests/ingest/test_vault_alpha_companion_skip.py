@@ -175,3 +175,57 @@ def test_layout_system_companion_dir_added_to_ignore_glob(tmp_path: Path, _mock_
     summary = run_vault_alpha_ingest(vault_root, max_notes=100, force=True)
 
     assert f"⚙️ System/companions/{note_uuid}.md" not in summary.processed_notes
+
+
+# ---------------------------------------------------------------------------
+# AI-status receipt callout must not perturb the ingest content_hash (KERNEL-06)
+# ---------------------------------------------------------------------------
+
+_AI_STATUS_CALLOUT_A = (
+    "\n"
+    "> [!info]- AI status\n"
+    "> - Executed: Draft summary (2026-07-04 19:08)\n"
+)
+_AI_STATUS_CALLOUT_B = (
+    "\n"
+    "> [!info]- AI status\n"
+    "> - Executed: Draft summary (2026-07-05 06:41)\n"
+)
+
+
+def test_ai_status_callout_does_not_change_content_hash(tmp_path: Path, _mock_env: None) -> None:
+    """A panel-writeback AI-status receipt callout appended to the note body
+    (outside the AI fence) must be stripped before hashing, so a re-ingest of a
+    note that only gained the receipt is a no-op — the companion content_hash is
+    invariant to the receipt's per-run timestamp.
+
+    Without ``strip_ai_status_block`` in the ingest path, the timestamped callout
+    changes ``text_sha256`` and the note is spuriously re-ingested every panel run.
+    """
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    note_uuid = "eeee5555-ffff-aaaa-bbbb-cccccccccccc"
+    note_path = vault_root / "Notes" / "receipt.md"
+    note_path.parent.mkdir(parents=True, exist_ok=True)
+    body = "Stable body that a panel run leaves untouched."
+    header = f"---\nuuid: {note_uuid}\ntitle: Receipt\n---\n"
+    note_path.write_text(f"{header}{body}\n", encoding="utf-8")
+
+    s1 = run_vault_alpha_ingest_paths(vault_root, [note_path])
+    assert s1.ingested == 1
+    companion = read_companion(vault_root, note_uuid)
+    assert companion is not None
+    baseline_hash = companion.content_hash
+    assert baseline_hash == _sha256(body)
+
+    # Simulate panel writeback appending a timestamped AI-status receipt callout.
+    note_path.write_text(f"{header}{body}\n{_AI_STATUS_CALLOUT_A}", encoding="utf-8")
+    s2 = run_vault_alpha_ingest_paths(vault_root, [note_path])
+    assert s2.ingested == 0, "receipt callout must be stripped — re-ingest is a no-op"
+    assert read_companion(vault_root, note_uuid).content_hash == baseline_hash
+
+    # A later panel run with a *different* receipt timestamp is still a no-op.
+    note_path.write_text(f"{header}{body}\n{_AI_STATUS_CALLOUT_B}", encoding="utf-8")
+    s3 = run_vault_alpha_ingest_paths(vault_root, [note_path])
+    assert s3.ingested == 0, "receipt-timestamp churn must not perturb content_hash"
+    assert read_companion(vault_root, note_uuid).content_hash == baseline_hash

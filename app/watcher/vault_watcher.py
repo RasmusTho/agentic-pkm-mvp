@@ -11,6 +11,7 @@ from pathlib import Path
 
 from app.agents.panel.agent import handle_note_update
 from app.agents.panel.filters import strip_ai_panels
+from app.agents.panel.writeback import strip_ai_status_block
 from app.agents.panel_agent.policy import watcher_may_run_panel, watcher_panel_candidate
 from app.components.concurrency import DedupTaskQueue, OptimisticWriteGuard, SystemClock, VersionMismatch
 from app.ingest import vault_alpha as vault_alpha
@@ -107,7 +108,7 @@ def _note_uuid_from_frontmatter(
         return companion_uuid
 
     if vault_root is not None and rel_path is not None and note_path is not None and body is not None:
-        stripped_text = strip_ai_panels(body).strip()
+        stripped_text = strip_ai_status_block(strip_ai_panels(body)).strip()
         text_sha256 = (
             hashlib.sha256(stripped_text.encode("utf-8")).hexdigest() if stripped_text else ""
         )
