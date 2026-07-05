@@ -305,6 +305,80 @@ def test_blocked_write_raises_writesblockederror_is_catchable() -> None:
 
 
 # ---------------------------------------------------------------------------
+# First-write-wins under extraction drift (opus review round 1 probe, pinned).
+# ---------------------------------------------------------------------------
+
+
+def test_rerun_with_drifted_summary_preserves_first_write(tmp_path: Path) -> None:
+    """Re-running the same content_identity with a DIFFERENT extraction output must not clobber
+    the already-written note: status is `already_exists`, the on-disk note stays byte-identical
+    to the first write (VERSION A preserved, VERSION B absent), and exactly one note exists.
+
+    `clear_registry()` between the two runs is the fresh-process-equivalent setup: without it,
+    KA-04's in-process idempotency cache would return the first extraction unchanged and mask
+    the drift this test exists to probe."""
+    vault_root = tmp_path / "vault"
+    vault = _vault(vault_root)
+
+    candidate_a = _assembled_candidate()
+    first = write_candidate_note(candidate_a, vault_context=vault, write_guard=_allowing_guard())
+    assert first.status == "written"
+    note_bytes_a = (vault_root / first.artifact_path).read_bytes()
+    assert b"A deterministic test summary." in note_bytes_a
+
+    # Fresh-process equivalent: wipe the extraction cache so the drifted summary genuinely
+    # re-runs rather than replaying the cached VERSION A extraction.
+    clear_registry()
+    summary_extractor.register(
+        complete=_stub_completion(
+            json.dumps({"summary": "A DRIFTED second summary.", "confidence": 0.9})
+        )
+    )
+    candidate_b = assemble_candidate(RAW_RECORD_FIXTURE)
+    assert candidate_b.summary_text() == "A DRIFTED second summary."
+    assert candidate_b.content_identity == candidate_a.content_identity
+
+    second = write_candidate_note(candidate_b, vault_context=vault, write_guard=_allowing_guard())
+    assert second.status == "already_exists"
+    assert second.artifact_path == first.artifact_path
+
+    # First write wins: byte-identical note, drifted text absent, exactly one note on disk.
+    note_bytes_after = (vault_root / first.artifact_path).read_bytes()
+    assert note_bytes_after == note_bytes_a
+    assert b"A DRIFTED second summary." not in note_bytes_after
+    assert len(list(vault_root.rglob("*.md"))) == 1
+
+
+def test_note_path_uses_full_identity_entropy() -> None:
+    """Regression (opus review round 1): the identity's scheme prefix must not consume the
+    16-char path window. Two `sha256:<hex>` identities sharing their first 16 raw characters
+    (including the constant `sha256:` prefix) but diverging afterwards must map to DIFFERENT
+    note paths — under the pre-fix slugging, both collapsed to `...-sha256-aaaaaaaaa.md`."""
+
+    def _candidate_with_identity(content_identity: str) -> Candidate:
+        return Candidate(
+            content_identity=content_identity,
+            source_kind="youtube_url",
+            item_ref="dQw4w9WgXcQ",
+            url="https://youtube.com/watch?v=dQw4w9WgXcQ",
+            title="A Test Video",
+            creator="Test Channel",
+            published="20260101",
+            acquisition_method="captions_manual",
+            transcript_available=True,
+            extractions=(),
+        )
+
+    shared_prefix = "sha256:aaaaaaaaa"  # 16 chars of the full string, 9 of hash payload
+    path_a = candidate_note_path(_candidate_with_identity(shared_prefix + "1" * 40))
+    path_b = candidate_note_path(_candidate_with_identity(shared_prefix + "2" * 40))
+
+    assert path_a != path_b
+    # And the scheme prefix itself never appears in the path segment.
+    assert "sha256" not in path_a.rsplit("/", 1)[-1]
+
+
+# ---------------------------------------------------------------------------
 # Assembly-level checks (re-derivation from raw, in-process; no durable
 # extraction handoff).
 # ---------------------------------------------------------------------------

@@ -184,10 +184,19 @@ def candidate_note_path(candidate: Candidate, *, sources_dir: str = DEFAULT_SOUR
     same candidate always targets the same path — the idempotency the spec's
     Restart/Durability posture requires ("same note path, same content
     identity").
+
+    The identity's scheme prefix (e.g. ``sha256:``) is stripped before the
+    16-char window is taken, so all 16 characters are hash payload. Slugging
+    the full ``sha256:<hex>`` string would spend 7 of the 16 characters on
+    the constant ``sha256-`` prefix, leaving only ~9 hex chars of
+    discriminating entropy — two identities differing after the 16th
+    character of the full string would collide onto the same path (opus
+    review round 1 finding on #2800).
     """
     safe_dir = _safe_rel_path(sources_dir)
     slug = _slug(candidate.title)
-    short_identity = _slug(candidate.content_identity)[:16] or "item"
+    identity_payload = candidate.content_identity.split(":", 1)[-1]
+    short_identity = _slug(identity_payload)[:16] or "item"
     return (PurePosixPath(safe_dir) / f"{slug}-{short_identity}.md").as_posix()
 
 
