@@ -17,6 +17,7 @@ from app.components.concurrency import DedupTaskQueue, OptimisticWriteGuard, Sys
 from app.ingest import vault_alpha as vault_alpha
 from app.services.companion_note import find_companion_by_content_hash, read_companion
 from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
+from app.services.vault_sync import delete_note
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
 from app.objects import ObjectStore
@@ -369,6 +370,8 @@ def run_watcher_tick(
 
     summary: Summary = {
         "changed": len(result.changed),
+        "deleted": len(result.deleted),
+        "deleted_purged": 0,
         "ingest_attempted": 0,
         "ingested": 0,
         "panel_candidates": 0,
@@ -388,6 +391,35 @@ def run_watcher_tick(
         "snapshot_path": str(watcher.snapshot_path),
     }
     messages: list[str] = []
+
+    # Reconcile watcher-detected filesystem deletions (#2990): the watcher
+    # never deletes vault files itself, only derived store rows. Delegate to
+    # the same production seam app.services.vault_sync.delete_note uses for
+    # app-initiated deletes (vault_sync.delete_note), so the watcher path
+    # gets identical uuid resolution (file_state lookup by path),
+    # tombstoning, and INGEST_OBJECT_DELETED emission -- and therefore the
+    # same idempotency: replaying a deletion for an already-purged path finds
+    # no file_state row and is a no-op. A rename surfaces here as delete(old)
+    # + a corresponding entry in result.changed for the new path, which the
+    # ingest step below handles as an ordinary create/update -- no special
+    # casing required. This must run even when there are no changed notes and
+    # regardless of the max-notes limit (that limit only bounds panel/ingest
+    # fan-out), so it runs unconditionally ahead of the changed==0 and
+    # limit-exceeded short-circuits below. dry_run must not purge anything.
+    if not dry_run:
+        for deleted_path in result.deleted:
+            try:
+                rel_deleted = deleted_path.relative_to(vault_root)
+            except ValueError:
+                rel_deleted = deleted_path
+            try:
+                delete_note(str(deleted_path))
+                summary["deleted_purged"] += 1
+            except Exception:
+                summary["errors"] += 1
+                messages.append(
+                    f"Warning: unable to reconcile deletion for {rel_deleted}"
+                )
 
     policy_allowed_paths: list[Path] = []
     for path in result.changed:
