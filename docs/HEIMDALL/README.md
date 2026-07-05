@@ -27,7 +27,6 @@ CES/ADR. Nothing here is shipped, and no GitHub work is created by it.
 | **A4** | [OWNER_DECISIONS.md](OWNER_DECISIONS.md) | What Fable may not decide + the captured owner decisions — *the guardrails* |
 | **A5** | [FABLE_WINDOW.md](FABLE_WINDOW.md) | Companion-doc pattern, model routing, scope boundaries — *how the window runs* |
 | **→** | [FABLE_COMPANION.md](FABLE_COMPANION.md) | **The Fable window's design output** (2026-07-05): the proposed design for all 8 OPEN problems, anchored in the voice-memo v1 vertical, plus an adversarial red-team pass and owner decisions a–k — *the design that unlocks the build* |
-| **→** | [WATCH_SELECTION_DESIGN_BRIEF.md](WATCH_SELECTION_DESIGN_BRIEF.md) | **Claude Design entry brief** for the watch/selection control surface (§9-k(b)): how the principal sees and steers what the agent watches — with the *markdown-first vs UI-first* principle as the central question |
 
 Read order: **A1 → A2 → A4 → A3 → A5 → FABLE_COMPANION** (container → names → guardrails → brief → mechanics → design).
 
