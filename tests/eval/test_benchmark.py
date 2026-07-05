@@ -419,3 +419,21 @@ class TestRegressionGateFailsLoud:
         # A clean pass on real thresholds must not regress.
         clean_scorecard = eval_run.build_scorecard(thresholds=thresholds)
         assert clean_scorecard["regression"] is False
+
+    def test_clean_pass_is_hermetic_to_leaked_scope(self, monkeypatch):
+        """#3016: the deterministic gate must ignore an ambient ``ASK_DOMAIN_SCOPE``.
+
+        The golden judgments are authored against the full seed corpus with no
+        domain scoping. A leaked ``ASK_DOMAIN_SCOPE`` (another test in the
+        not-pg lane, or an operator shell) used to prefilter every doc out,
+        drop precision@k to 0.0, and flip the clean pass to a spurious
+        regression — the intermittent red on this lane. The evaluator now
+        neutralizes the scope, so the clean scorecard stays green regardless of
+        process env / test ordering.
+        """
+        from app.eval import run as eval_run
+
+        monkeypatch.setenv("ASK_DOMAIN_SCOPE", "work")
+        thresholds = eval_run.load_thresholds()
+        clean_scorecard = eval_run.build_scorecard(thresholds=thresholds)
+        assert clean_scorecard["regression"] is False, clean_scorecard["failures"]
