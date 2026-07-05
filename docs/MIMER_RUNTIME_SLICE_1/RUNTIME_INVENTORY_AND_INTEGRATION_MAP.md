@@ -1,9 +1,9 @@
 ---
 name: Runtime Inventory and Integration Map
-description: Inspect existing capture/index/retrieval/context code and produce the yggdrasil_runtime integration map
+description: Inspect existing capture/index/retrieval/context code and produce the mimer_runtime integration map
 task_id: YRS1-01
-source_anchor: docs/YGGDRASIL_RUNTIME_SLICE_1/README.md :: Foundational design decision
-parent_capability: Yggdrasil Runtime Vertical Slice 1
+source_anchor: docs/MIMER_RUNTIME_SLICE_1/README.md :: Foundational design decision
+parent_capability: Mimer Runtime Vertical Slice 1
 prerequisites: []
 depends_on: []
 can_parallelize_with: []
@@ -14,14 +14,14 @@ can_parallelize_with: []
 ## Purpose
 
 Before any runtime code is written, produce the authoritative map of what exists and exactly which
-modules the new `yggdrasil_runtime` package will introduce, reuse, or deliberately leave untouched.
+modules the new `mimer_runtime` package will introduce, reuse, or deliberately leave untouched.
 This task changes no behavior; it removes ambiguity for tasks 2–8.
 
 ## What This Task Does
 
 - Inventories the legacy `app/` capture/index/retrieval/context code (the real entry points,
   data shapes, and where naked vectors / unbounded context exist today).
-- Confirms the `yggdrasil_runtime` package does not yet exist and pins its planned module layout to
+- Confirms the `mimer_runtime` package does not yet exist and pins its planned module layout to
   the exact entry points the xfail skeletons call (`tests/invariants/_helpers.py`,
   `tests/evals/_helpers.py`).
 - Decides, per module, build-new vs reuse-from-`app/` (e.g. an embedding/similarity helper), and
@@ -30,9 +30,9 @@ This task changes no behavior; it removes ambiguity for tasks 2–8.
 
 ## Concretely
 
-Produce `docs/YGGDRASIL_RUNTIME_SLICE_1/INTEGRATION_MAP.md` containing:
+Produce `docs/MIMER_RUNTIME_SLICE_1/INTEGRATION_MAP.md` containing:
 
-- A table: each `yggdrasil_runtime` module → its test-pinned entry point → reuse/new decision →
+- A table: each `mimer_runtime` module → its test-pinned entry point → reuse/new decision →
   `app/` references (if any).
 - The corpus loader plan: how `retrieve()` reads the five fixture groups and their frontmatter
   metadata (reuse `tests/evals/_helpers.py::load_corpus` semantics or a runtime equivalent).
@@ -50,15 +50,15 @@ Invariants). The map is the contract that keeps four+ child PRs coherent.
 
 ## Acceptance Criteria
 
-- [ ] `docs/YGGDRASIL_RUNTIME_SLICE_1/INTEGRATION_MAP.md` exists with the module→entry-point→decision
+- [ ] `docs/MIMER_RUNTIME_SLICE_1/INTEGRATION_MAP.md` exists with the module→entry-point→decision
   table covering `capture`, `dri`, `retrieval`, `cross_scope`, `context`, `metadata`.
-  - Verify: doc writeback at `docs/YGGDRASIL_RUNTIME_SLICE_1/INTEGRATION_MAP.md :: Module map`
+  - Verify: doc writeback at `docs/MIMER_RUNTIME_SLICE_1/INTEGRATION_MAP.md :: Module map`
 - [ ] The map names, for each later task, the exact xfail test(s) it converts and the static tests it
   must keep green (cross-checked against `docs/testing/invariant-tests.md`).
-  - Verify: doc writeback at `docs/YGGDRASIL_RUNTIME_SLICE_1/INTEGRATION_MAP.md :: Test conversion plan`
+  - Verify: doc writeback at `docs/MIMER_RUNTIME_SLICE_1/INTEGRATION_MAP.md :: Test conversion plan`
 - [ ] The corpus-as-runtime-store decision and the "legacy `app/` pipeline untouched" boundary are
   stated explicitly.
-  - Verify: doc writeback at `docs/YGGDRASIL_RUNTIME_SLICE_1/INTEGRATION_MAP.md :: Runtime store`
+  - Verify: doc writeback at `docs/MIMER_RUNTIME_SLICE_1/INTEGRATION_MAP.md :: Runtime store`
 
 ## How to Verify (Pre-Merge)
 
@@ -74,7 +74,7 @@ Invariants). The map is the contract that keeps four+ child PRs coherent.
 
 ## Related Docs
 
-- Parent: `docs/YGGDRASIL_RUNTIME_SLICE_1/README.md`
+- Parent: `docs/MIMER_RUNTIME_SLICE_1/README.md`
 - `tests/invariants/_helpers.py`, `tests/evals/_helpers.py`
 - `docs/testing/invariant-tests.md`
 

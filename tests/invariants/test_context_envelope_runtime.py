@@ -5,7 +5,7 @@ runtime-assembled envelope built from a real RetrievalResult over the corpus.
 
 Invariant registry: docs/testing/invariant-tests.md :: context_envelope_has_no_raw_vault_or_index_access,
 context_bundle_is_not_context_envelope, denied_scope_does_not_leak_identity
-Spec: docs/YGGDRASIL_RUNTIME_SLICE_1/CONTEXT_ENVELOPE_ASSEMBLY.md
+Spec: docs/MIMER_RUNTIME_SLICE_1/CONTEXT_ENVELOPE_ASSEMBLY.md
 """
 
 from __future__ import annotations

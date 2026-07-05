@@ -3,7 +3,7 @@ name: ContextEnvelope Assembly
 description: Assemble a bounded ContextEnvelope from a RetrievalResult — no raw vault/index access; references but does not replace ContextBundle
 task_id: YRS1-06
 source_anchor: docs/architecture/context-envelope.md :: bounded operating context
-parent_capability: Yggdrasil Runtime Vertical Slice 1
+parent_capability: Mimer Runtime Vertical Slice 1
 prerequisites: [YRS1-05]
 depends_on: [RETRIEVAL_RESULT_CANDIDATE_SEMANTICS.md]
 can_parallelize_with: []
@@ -19,7 +19,7 @@ ContextBundles.
 
 ## What This Task Does
 
-- Adds `yggdrasil_runtime/context.py` with
+- Adds `mimer_runtime/context.py` with
   `assemble_envelope(retrieval_result, *, active_workspace_id, active_scope_id, principal_id, user_intent)`
   returning a ContextEnvelope conforming to `schemas/context-envelope.schema.json`.
 - The envelope carries `access_mode="bounded_context_only"`, `allowed_capabilities`, `denied_scopes`
@@ -33,7 +33,7 @@ ContextBundles.
 ## Concretely
 
 ```python
-from yggdrasil_runtime import retrieval, context
+from mimer_runtime import retrieval, context
 r = retrieval.retrieve(query="state machine", active_scope_id="scope:work/project-alpha")
 env = context.assemble_envelope(
     r, active_workspace_id="ws-1", active_scope_id="scope:work/project-alpha",

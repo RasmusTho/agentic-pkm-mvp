@@ -1,6 +1,6 @@
 """Curation — the graduated-curation finding pipeline (G2).
 
-Spec: ``docs/YGGDRASIL_CAPABILITY_HARDENING/GRADUATED_CURATION.md``.
+Spec: ``docs/MIMER_CAPABILITY_HARDENING/GRADUATED_CURATION.md``.
 This slice (G2-1) ships the finding pipeline core (``CurationFinding``, the
 closed class enum, content-derived ``finding_id``) plus the vault-health lint
 checks and a read-only, WriteGuard-gated report note. Propose-only: this

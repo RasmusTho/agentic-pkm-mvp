@@ -3,7 +3,7 @@ name: Capture Emits MetadataBundle
 description: Capture boundary produces an object carrying a schema-conformant MetadataBundle with stamped scope and source role
 task_id: YRS1-02
 source_anchor: docs/architecture/metadata-bundle.md :: required fields
-parent_capability: Yggdrasil Runtime Vertical Slice 1
+parent_capability: Mimer Runtime Vertical Slice 1
 prerequisites: [YRS1-01]
 depends_on: [RUNTIME_INVENTORY_AND_INTEGRATION_MAP.md]
 can_parallelize_with: []
@@ -19,9 +19,9 @@ foundation type for the whole slice.
 
 ## What This Task Does
 
-- Adds `yggdrasil_runtime/metadata.py` with a `MetadataBundle` type conformant to
+- Adds `mimer_runtime/metadata.py` with a `MetadataBundle` type conformant to
   `schemas/metadata-bundle.schema.json` (the single shared bundle type for tasks 2–6).
-- Adds `yggdrasil_runtime/capture.py` with `capture(text: str, principal_id: str)` returning an object
+- Adds `mimer_runtime/capture.py` with `capture(text: str, principal_id: str)` returning an object
   exposing `.metadata_bundle`.
 - The emitted bundle carries `object_id`, `object_type="artifact"`, `scope_id`, `source_role`,
   `authority_state`, `evidence_role`, `sensitivity`, `suppression_state`, `created_by`, `created_at`,
@@ -32,7 +32,7 @@ foundation type for the whole slice.
 ## Concretely
 
 ```python
-from yggdrasil_runtime import capture
+from mimer_runtime import capture
 obj = capture.capture(text="a thought", principal_id="p-1")
 assert obj.metadata_bundle.scope_id        # stamped, e.g. "scope:work/project-alpha"
 assert obj.metadata_bundle.source_role     # e.g. "human_capture"
@@ -51,10 +51,10 @@ the architecture forbids.
 
 ## Acceptance Criteria
 
-- [ ] `yggdrasil_runtime.metadata.MetadataBundle` exists and a constructed bundle validates against
+- [ ] `mimer_runtime.metadata.MetadataBundle` exists and a constructed bundle validates against
   `schemas/metadata-bundle.schema.json` (required core set + three separate role fields).
   - Verify: `tests/invariants/test_metadata_bundle_runtime.py::test_capture_bundle_validates_against_schema`
-- [ ] `yggdrasil_runtime.capture.capture(text, principal_id)` returns an object whose
+- [ ] `mimer_runtime.capture.capture(text, principal_id)` returns an object whose
   `.metadata_bundle` has truthy `scope_id` and `source_role`.
   - Verify: `tests/invariants/test_metadata_bundle.py::test_capture_stamps_scope` (xfail → passing)
 - [ ] `scope_id` and `vault_id` are not treated as equivalent.

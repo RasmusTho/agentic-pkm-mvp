@@ -3,7 +3,7 @@ name: DRI Segment Carries Provenance
 description: Derived segments carry an inherited MetadataBundle with derived_from, scope, and provenance — no naked representation
 task_id: YRS1-03
 source_anchor: docs/architecture/functional-ontology.md :: Segment
-parent_capability: Yggdrasil Runtime Vertical Slice 1
+parent_capability: Mimer Runtime Vertical Slice 1
 prerequisites: [YRS1-02]
 depends_on: [CAPTURE_EMITS_METADATA_BUNDLE.md]
 can_parallelize_with: []
@@ -18,7 +18,7 @@ object inherits a MetadataBundle and preserves lineage back to its source artifa
 
 ## What This Task Does
 
-- Adds `yggdrasil_runtime/dri.py` with `derive_segment(artifact_id: str)` returning a segment whose
+- Adds `mimer_runtime/dri.py` with `derive_segment(artifact_id: str)` returning a segment whose
   `.metadata_bundle` carries `object_type="segment"`, a non-empty `derived_from`, an inherited
   `scope_id`, inherited `source_role`/`authority_state`, and non-empty `provenance_event_ids`.
 - Constructing a segment without a MetadataBundle is impossible by construction (the type requires it)
@@ -27,7 +27,7 @@ object inherits a MetadataBundle and preserves lineage back to its source artifa
 ## Concretely
 
 ```python
-from yggdrasil_runtime import dri
+from mimer_runtime import dri
 seg = dri.derive_segment(artifact_id="art-1")
 assert seg.metadata_bundle.derived_from          # e.g. ["art-1"]
 assert seg.metadata_bundle.scope_id              # inherited from the source artifact
@@ -45,7 +45,7 @@ then treat as permission.
 
 ## Acceptance Criteria
 
-- [ ] `yggdrasil_runtime.dri.derive_segment(artifact_id)` returns a segment whose bundle has truthy
+- [ ] `mimer_runtime.dri.derive_segment(artifact_id)` returns a segment whose bundle has truthy
   `derived_from`, `scope_id`, and `provenance_event_ids`.
   - Verify: `tests/invariants/test_metadata_bundle.py::test_provenance_survives_derivation` (xfail → passing)
 - [ ] A derived segment's `scope_id`/`source_role` are inherited from the source artifact, not

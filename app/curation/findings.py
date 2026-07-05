@@ -1,6 +1,6 @@
 """``CurationFinding`` data shape + the closed, versioned class enum.
 
-Spec: ``docs/YGGDRASIL_CAPABILITY_HARDENING/GRADUATED_CURATION.md`` §1.
+Spec: ``docs/MIMER_CAPABILITY_HARDENING/GRADUATED_CURATION.md`` §1.
 
 Design constraints carried over verbatim from the spec (do not relax these
 without an owner-ratified ADR):

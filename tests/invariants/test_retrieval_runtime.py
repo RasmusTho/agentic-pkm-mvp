@@ -6,7 +6,7 @@ private/general/RPG evals) by pinning that scope/policy eligibility is computed 
 
 Invariant registry: docs/testing/invariant-tests.md :: retrieve_scope_prefilter, similarity_not_permission,
 cross_scope_only_via_flow
-Spec: docs/YGGDRASIL_RUNTIME_SLICE_1/RETRIEVAL_PREFILTER_BEFORE_RANKING.md
+Spec: docs/MIMER_RUNTIME_SLICE_1/RETRIEVAL_PREFILTER_BEFORE_RANKING.md
 """
 
 from __future__ import annotations

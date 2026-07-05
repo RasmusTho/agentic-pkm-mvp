@@ -3,7 +3,7 @@ name: RetrievalResult Candidate Semantics
 description: Full RetrievalResult contract — admissibility states, non-upgrading evidence role, content-free denied list
 task_id: YRS1-05
 source_anchor: docs/architecture/retrieval-contract.md :: candidate semantics
-parent_capability: Yggdrasil Runtime Vertical Slice 1
+parent_capability: Mimer Runtime Vertical Slice 1
 prerequisites: [YRS1-04]
 depends_on: [RETRIEVAL_PREFILTER_BEFORE_RANKING.md]
 can_parallelize_with: []
@@ -19,7 +19,7 @@ content-free denied/escalated list — so retrieval produces *candidate evidence
 
 ## What This Task Does
 
-- Extends `yggdrasil_runtime/retrieval.py` so each candidate carries `admissibility_status` from the
+- Extends `mimer_runtime/retrieval.py` so each candidate carries `admissibility_status` from the
   surfaceable set (`candidate`/`admitted`/`redacted`/`requires_confirmation`) and an
   `evidence_role_in_context` that is ordinally `<=` its intrinsic `metadata_bundle.evidence_role`
   (never upgraded toward `evidence`).

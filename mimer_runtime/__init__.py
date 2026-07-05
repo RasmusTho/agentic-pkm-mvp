@@ -6,7 +6,7 @@ architecture chain:
     capture -> MetadataBundle -> DRI segment -> retrieval prefilter -> RetrievalResult -> ContextEnvelope
 
 This package is intentionally NOT a rewire of the legacy ``app/`` capture/index/retrieval
-pipeline (see ``docs/YGGDRASIL_RUNTIME_SLICE_1/INTEGRATION_MAP.md``). It operates over the
+pipeline (see ``docs/MIMER_RUNTIME_SLICE_1/INTEGRATION_MAP.md``). It operates over the
 synthetic anti-contamination corpus under ``tests/evals/fixtures/`` and an in-memory object
 store — no real vault, no durable mutation, no WriteGuard write path.
 
