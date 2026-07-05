@@ -107,6 +107,19 @@ def find_anchor_in_doc(doc_path: str, anchor_id: str) -> bool:
     if re.search(anchor_line_pattern, content, re.MULTILINE):
         return True
 
+    # Check for bullet anchors wrapped in emphasis/inline-code markers, with
+    # trailing text after the ID (e.g. `- **I-E2 (Idempotent handlers).**`,
+    # `- *ID* text`, `` - `ID` text``). Tolerates zero or more of `**`, `*`,
+    # `__`, `` ` `` between the bullet marker and the anchor ID, and an
+    # optional matching closing marker immediately after the ID (needed
+    # because `_`/backtick are word-adjacent to the ID and defeat `\b`).
+    emphasis_bullet_pattern = (
+        rf'(?:^|\n)\s*(?:\*|-|·)\s*(?:\*\*|__|\*|`)*\s*{re.escape(anchor_id)}'
+        rf'(?:\*\*|__|\*|`)?(?:\b|$)'
+    )
+    if re.search(emphasis_bullet_pattern, content, re.MULTILINE):
+        return True
+
     return False
 
 
