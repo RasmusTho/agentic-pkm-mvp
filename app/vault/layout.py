@@ -22,7 +22,7 @@ SYSTEM_NOTE_TITLE = "Vault Structure – Human-First Orientation (Mimer)"
 # must carry the named escape or fresh-vault bootstrap deadlocks
 # (harness-selfverify promote-to-test smoke). All producers of this bootstrap
 # moment (vault-layout-ensure CLI, uat seed, ingest-time ensure_vault_layout,
-# the yggdrasil scaffolder's nested call) route through the writes below.
+# the Mimer scaffolder's nested call) route through the writes below.
 LAYOUT_ENSURE_ACTION = "vault.layout_ensure"
 
 _SETTINGS_REL_PATH = Path("_system") / "settings" / "system-settings.yaml"

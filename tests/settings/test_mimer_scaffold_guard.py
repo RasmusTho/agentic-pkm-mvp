@@ -1,6 +1,6 @@
 """Guard-at-seam enforcement for the yggdrasil-init scaffolder (#2877).
 
-``YggdrasilScaffolder.scaffold`` provisions a brand-new Yggdrasil root
+``MimerScaffolder.scaffold`` provisions a brand-new Yggdrasil root
 (module folders + Mimer layout + @Settings notes) via raw ``mkdir`` and
 ``write_note_from_absolute`` with no WriteGuard, reached from the production
 ``yggdrasil-init`` CLI seam (``app/cli/__init__.py::yggdrasil_init``) —
@@ -23,7 +23,7 @@ import pytest
 from click.testing import CliRunner
 
 from app.cli import cli
-from app.settings.yggdrasil_scaffolder import SCAFFOLD_ACTION
+from app.settings.mimer_scaffolder import SCAFFOLD_ACTION
 from app.write_guard import DEFAULT_WRITE_GUARD
 
 pytestmark = pytest.mark.not_pg

@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from yggdrasil_runtime.metadata import MetadataBundle
+from mimer_runtime.metadata import MetadataBundle
 
 # Default active scope binding for capture (WSP would supply this at runtime). Distinct from any
 # vault id so scope_id != vault_id holds by construction.

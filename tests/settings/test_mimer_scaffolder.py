@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.settings.yggdrasil_scaffolder import YggdrasilScaffolder
+from app.settings.mimer_scaffolder import MimerScaffolder
 
 
 def test_scaffolder_writes_placeholder_via_knowledge_port(tmp_path: Path, monkeypatch) -> None:
@@ -18,9 +18,9 @@ def test_scaffolder_writes_placeholder_via_knowledge_port(tmp_path: Path, monkey
         resolved_path.write_text(content, encoding="utf-8")
         return None
 
-    monkeypatch.setattr("app.settings.yggdrasil_scaffolder.write_note_from_absolute", _fake_write_note)
+    monkeypatch.setattr("app.settings.mimer_scaffolder.write_note_from_absolute", _fake_write_note)
 
-    result = YggdrasilScaffolder(root=tmp_path).scaffold()
+    result = MimerScaffolder(root=tmp_path).scaffold()
 
     assert (mimer_root / "@Settings" / "global.md").exists()
     assert (mimer_root / "@Settings" / "system-settings.yaml").exists()

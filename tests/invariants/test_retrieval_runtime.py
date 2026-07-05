@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from tests.invariants._helpers import assert_validates
 
-from yggdrasil_runtime import cross_scope, retrieval
+from mimer_runtime import cross_scope, retrieval
 
 _ALPHA = "scope:work/project-alpha"
 

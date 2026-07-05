@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from yggdrasil_runtime.metadata import CANONICAL_AUTHORITY_STATES, MetadataBundle
+from mimer_runtime.metadata import CANONICAL_AUTHORITY_STATES, MetadataBundle
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES_DIR = REPO_ROOT / "tests" / "evals" / "fixtures"

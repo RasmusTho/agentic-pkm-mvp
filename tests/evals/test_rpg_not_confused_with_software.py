@@ -5,7 +5,7 @@ Issues: #2550 (registry), #2551 (corpus), #2552 (skeletons). App enforcement: #2
 
 Since KERNEL-10 the runtime assertion runs un-xfailed against the LIVE app retrieval path
 (``tests/evals/_app_adapter.py`` -> ``scoped_hybrid_search`` under an active scope), not the
-test-only ``yggdrasil_runtime`` reference.
+test-only ``mimer_runtime`` reference.
 """
 
 from __future__ import annotations

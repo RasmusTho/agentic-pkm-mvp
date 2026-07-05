@@ -17,7 +17,7 @@ from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 SCAFFOLD_ACTION = "yggdrasil.scaffold"
 
 
-class YggdrasilScaffolder:
+class MimerScaffolder:
     def __init__(self, root: Path | None = None) -> None:
         self.root = Path(root) if root is not None else Path.home() / "Yggdrasil"
 
@@ -27,15 +27,15 @@ class YggdrasilScaffolder:
         # The seam consults the guard; the named bootstrap escape lives in the
         # guard's allow-list, not in an unconditional skip here.
         write_guard.assert_writes_allowed(SCAFFOLD_ACTION)
-        yggdrasil_root = self.root.expanduser()
+        mimer_root_dir = self.root.expanduser()
         module_paths = {
-            "Mimer": yggdrasil_root / "Mimer",
-            "Hugin": yggdrasil_root / "Hugin",
-            "Munin": yggdrasil_root / "Munin",
-            "Ratatosk": yggdrasil_root / "Ratatosk",
-            "Brokkr": yggdrasil_root / "Brokkr",
-            "Tyr": yggdrasil_root / "Tyr",
-            "Heimdall": yggdrasil_root / "Heimdall",
+            "Mimer": mimer_root_dir / "Mimer",
+            "Hugin": mimer_root_dir / "Hugin",
+            "Munin": mimer_root_dir / "Munin",
+            "Ratatosk": mimer_root_dir / "Ratatosk",
+            "Brokkr": mimer_root_dir / "Brokkr",
+            "Tyr": mimer_root_dir / "Tyr",
+            "Heimdall": mimer_root_dir / "Heimdall",
         }
 
         created: list[Path] = []
@@ -100,7 +100,7 @@ class YggdrasilScaffolder:
             else:
                 created.append(folder_path)
 
-        return {"root": [yggdrasil_root], "created": created, "existed": list(set(existed))}
+        return {"root": [mimer_root_dir], "created": created, "existed": list(set(existed))}
 
     @classmethod
     def _load_layout_defaults(cls) -> dict:
@@ -149,4 +149,4 @@ class YggdrasilScaffolder:
         )
 
 
-__all__ = ["YggdrasilScaffolder"]
+__all__ = ["MimerScaffolder"]

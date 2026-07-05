@@ -1,4 +1,4 @@
-"""Shared helpers for the Yggdrasil anti-contamination eval skeletons.
+"""Shared helpers for the Mimer anti-contamination eval skeletons.
 
 Loads the synthetic fixture corpus under ``tests/evals/fixtures/`` (#2551) and parses each
 document's YAML frontmatter metadata block with a tiny stdlib parser (the metadata is flat
@@ -58,7 +58,7 @@ REQUIRED_META_KEYS: tuple[str, ...] = (
     "sensitivity",
 )
 
-FUTURE_RUNTIME_PACKAGE = "yggdrasil_runtime"
+FUTURE_RUNTIME_PACKAGE = "mimer_runtime"
 
 
 @dataclass(frozen=True)

@@ -24,7 +24,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 from uuid import uuid4
 
-from yggdrasil_runtime import corpus
+from mimer_runtime import corpus
 
 _WORD = re.compile(r"[a-z0-9]+")
 _EMPTY_SIGNALS: Mapping[str, Any] = MappingProxyType({})
@@ -137,7 +137,7 @@ def _lexical_score(query: str, text: str) -> float:
 
 def _is_eligible(doc: corpus.CorpusDoc, active_scope_id: str) -> bool:
     # Scope/policy eligibility: same active scope and not suppressed. Cross-scope inclusion is a
-    # governed CrossScopeFlow decision (yggdrasil_runtime.cross_scope), never an automatic similarity
+    # governed CrossScopeFlow decision (mimer_runtime.cross_scope), never an automatic similarity
     # result — so it is intentionally NOT part of the default prefilter here.
     bundle = doc.metadata_bundle
     return bundle.scope_id == active_scope_id and bundle.suppression_state == "visible"
