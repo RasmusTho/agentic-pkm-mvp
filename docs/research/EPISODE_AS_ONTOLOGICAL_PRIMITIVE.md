@@ -50,13 +50,11 @@ Yggdrasil is the extended mind (Clark & Chalmers), single-human, grounded in liv
 5. **Episodic → semantic: transformation / coexistence, not replacement** (multiple-trace / "no consolidation without representation"). Episode-specific, gist, and schema representations coexist with shifting dominance — mapping directly onto the machine-memory tiers in `docs/architecture/memory-model.md`. Nothing is overwritten.
 6. **Temporal structure: minimal.** `start` / `end` / `closed` state; no interval-algebra reasoner. Closure is the load-bearing property — it drives relevance decay (below).
 
-## Placement — recommendation + the one owner fork
+## Placement — RESOLVED (OD-1 = Artifact, owner ruling 2026-07-06)
 
-**Recommendation:** model `Episode` as a durable **Artifact** (Layer 3 of `COGNITIVE_ONTOLOGY.md`; a canonical, note-serialized entity when authored or confirmed) that *relates to* — does not merge with — `Context` (Layer 2). The relation is: an Episode is the durable, dated record that a `Context` (a live frame) was active during. Episodic memory : situation model :: Episode : Context.
+`Episode` is modelled as a durable **Artifact** (Layer 3 of `COGNITIVE_ONTOLOGY.md`; a canonical, note-serialized entity when authored or confirmed) that *relates to* — does not merge with — `Context` (Layer 2). The relation is: an Episode is the durable, dated record that a `Context` (a live frame) was active during. Episodic memory : situation model :: Episode : Context.
 
-**Owner fork (OD-1):** place `Episode` as a **Context Structure (Layer 2)** or as an **Artifact (Layer 3)**.
-- *Artifact (recommended):* gives it durable identity, note-serialization, and a canonical authority path (HKA / WriteGuard) — consistent with note-serialization (below). Cost: two situational concepts (Episode + Context) that must be kept distinct.
-- *Context Structure:* keeps all situational concepts in one ontology layer. Cost: Context Structures are frames, not durable dated particulars; forcing durability onto that layer strains it.
+The Artifact placement gives the Episode durable identity, note-serialization, and a canonical authority path (HKA / WriteGuard). The accepted cost is that Episode and `Context` are two situational concepts that must be kept distinct (durable dated record vs. present-tense frame); this document's relations section keeps them separate. The rejected alternative (Episode as a Layer-2 Context Structure) was declined because Context Structures are frames, not durable dated particulars, and forcing durability onto that layer strains it.
 
 ## Relations to existing concepts
 
@@ -122,8 +120,10 @@ Introducing a first-class entity and a semantic dimension is an ontology **resha
 
 ## Owner decisions
 
-- **OD-1 — Ontology-layer placement:** Episode as **Artifact (recommended)** vs **Context Structure**. See placement section for the consequence of each.
-- **OD-2 — Confirmed already:** note-serialized (one markdown note per episode), vault-canonical. Recorded here; reopen only if OD-1 forces otherwise.
+- **OD-1 — RESOLVED (owner, 2026-07-06):** Episode is an **Artifact** (Layer 3), not a Context Structure. See placement section.
+- **OD-2 — RESOLVED (owner):** note-serialized (one markdown note per episode), vault-canonical.
+
+Both owner decisions are now closed; the reshape is ready for enactment via ADR + canonical-ontology edits.
 
 ## Out of scope (downstream epics)
 
