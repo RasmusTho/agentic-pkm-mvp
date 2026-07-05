@@ -1,4 +1,5 @@
-"""`youtube_url` source plugin — required `fetch(item_ref)` operation (KA-01).
+"""`youtube_url` source plugin — required `fetch(item_ref)` operation
+(KA-01) plus the captionless ASR fallback (KA-02).
 
 Implements the plugin fetch operation defined in
 `docs/KNOWLEDGE_ACQUISITION/SOURCE_PLUGIN_CONTRACT.md` § Operations for the
@@ -17,8 +18,9 @@ Mechanism (per `YOUTUBE_SOURCE_SPEC.md` § Transcript acquisition, grounded in
 - The PO-token provider plugin (``bgutil-ytdlp-pot-provider``) is a declared
   local dependency of this egress path, wired through yt-dlp's extractor-args
   provider framework — not reimplemented here.
-- Captionless is a normal recorded outcome (KA-02 / ASR fallback consumes it
-  later); this task never raises for "no captions".
+- Captionless falls back to the existing `app.media.transcribe.transcribe_source`
+  faster-whisper chain (KA-02, `docs/KNOWLEDGE_ACQUISITION/ASR_FALLBACK_PATH.md`):
+  reused as-is, never invoked when a usable caption track exists.
 
 This module contains the only YouTube-shaped code in the platform
 (`SOURCE_PLUGIN_CONTRACT.md` § preamble). Everything downstream operates on the
@@ -34,6 +36,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.knowledge_acquisition.raw_record import RawRecordResult, persist_raw_record
+from app.media.transcribe import transcribe_source
 
 SOURCE_KIND = "youtube_url"
 
@@ -210,10 +213,16 @@ def fetch_caption_body(track_url: str) -> str:
         raise CaptionAcquisitionError(f"failed to download caption track: {exc}") from exc
 
 
-def compute_content_identity(*, metadata: dict[str, Any], caption: CaptionSelection) -> str:
-    """Hash of the acquired content itself (metadata + caption body), per
+def compute_content_identity(
+    *, metadata: dict[str, Any], caption: CaptionSelection, asr_text: str | None = None
+) -> str:
+    """Hash of the acquired content itself (metadata + transcript body), per
     SOURCE_PLUGIN_CONTRACT.md § Identity and dedup: distinguishes "re-fetched,
     unchanged" from "content changed upstream".
+
+    ``asr_text`` is populated only on the ASR fallback path (KA-02); the
+    caption path leaves it ``None`` and hashes ``caption.body`` as before, so
+    existing caption-path identities are unchanged by this addition.
     """
     fingerprint = {
         "title": metadata.get("title"),
@@ -222,6 +231,7 @@ def compute_content_identity(*, metadata: dict[str, Any], caption: CaptionSelect
         "caption_language": caption.language,
         "caption_method": caption.acquisition_method,
         "caption_body": caption.body,
+        "asr_text": asr_text,
     }
     encoded = json.dumps(fingerprint, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
@@ -232,17 +242,36 @@ class FetchOutcome:
     object_id: Any
     content_identity: str
     is_new: bool
-    acquisition_method: str  # "captions_manual" | "captions_auto" | "captionless"
+    acquisition_method: str  # "captions_manual" | "captions_auto" | "asr"
     language: str | None
     record: dict[str, Any] = field(default_factory=dict)
+
+
+def _run_asr_fallback(item_ref_or_url: str) -> dict[str, Any]:
+    """Run the captionless item through the existing faster-whisper chain.
+
+    Per `docs/KNOWLEDGE_ACQUISITION/ASR_FALLBACK_PATH.md`: reuse
+    `app.media.transcribe.transcribe_source` as-is (no internal changes,
+    diarization hook and model cache stay as they are). Only invoked when no
+    usable caption track exists — audio download engages the full media
+    anti-bot machinery, which is why ASR is the fallback, never the default.
+    """
+    result = transcribe_source(item_ref_or_url)
+    payload = result.get("payload") or {}
+    return {
+        "text": payload.get("text"),
+        "segments": payload.get("segments") or [],
+        "language": payload.get("language"),
+    }
 
 
 def fetch(item_ref_or_url: str) -> FetchOutcome:
     """The plugin's required `fetch(item_ref) -> RawEvidence` operation.
 
     Accepts either an explicit YouTube URL or a bare video id. Caption-first,
-    manual-preferred, original-language-only. Captionless is recorded as a
-    normal outcome (`acquisition_method: "captionless"`), never raised.
+    manual-preferred, original-language-only. A captionless item falls back
+    to the existing faster-whisper ASR chain (KA-02); ASR is never invoked
+    when a usable caption track exists.
     """
     video_id = extract_video_id(item_ref_or_url)
     info = yt_dlp_extract_info(item_ref_or_url)
@@ -271,10 +300,22 @@ def fetch(item_ref_or_url: str) -> FetchOutcome:
         "thumbnail": info.get("thumbnail"),
     }
 
-    content_identity = compute_content_identity(metadata=metadata, caption=caption)
-    # `acquisition_method` is always set when a track is available; `or` also
-    # narrows the type to `str` for the FetchOutcome contract.
-    acquisition_method = caption.acquisition_method or "captionless"
+    asr_transcript: dict[str, Any] | None = None
+    if caption.available:
+        # Usable caption track exists — ASR MUST NOT run (ASR_FALLBACK_PATH.md
+        # § Purpose: "never when a usable caption track exists").
+        content_identity = compute_content_identity(metadata=metadata, caption=caption)
+        acquisition_method = caption.acquisition_method or "captionless"
+        caption_language = caption.language
+        caption_body = caption.body
+    else:
+        asr_transcript = _run_asr_fallback(item_ref_or_url)
+        content_identity = compute_content_identity(
+            metadata=metadata, caption=caption, asr_text=asr_transcript.get("text")
+        )
+        acquisition_method = "asr"
+        caption_language = asr_transcript.get("language")
+        caption_body = asr_transcript.get("text")
 
     payload = {
         "source_kind": SOURCE_KIND,
@@ -282,8 +323,8 @@ def fetch(item_ref_or_url: str) -> FetchOutcome:
         "url": item_ref_or_url,
         "metadata": metadata,
         "acquisition_method": acquisition_method,
-        "caption_language": caption.language,
-        "caption_body": caption.body,
+        "caption_language": caption_language,
+        "caption_body": caption_body,
         "provenance": {
             "source_kind": SOURCE_KIND,
             "url": item_ref_or_url,
@@ -293,6 +334,15 @@ def fetch(item_ref_or_url: str) -> FetchOutcome:
             "plugin_version": "ka-01-v1",
         },
     }
+    if asr_transcript is not None:
+        # ASR-only fields: shape parity with the caption path is preserved
+        # above (identical top-level schema); this additive field carries the
+        # ASR quality note + timed segments the normalize stage (KA-03) reads
+        # for the ASR path, per REFINEMENT_PIPELINE_CONTRACT.md § normalized.
+        payload["asr_segments"] = asr_transcript.get("segments") or []
+        payload["quality_note"] = (
+            "asr: local faster-whisper transcription (fallback; no caption track available)"
+        )
 
     result: RawRecordResult = persist_raw_record(
         source_kind=SOURCE_KIND,
@@ -307,7 +357,7 @@ def fetch(item_ref_or_url: str) -> FetchOutcome:
         content_identity=result.content_identity,
         is_new=result.is_new,
         acquisition_method=acquisition_method,
-        language=caption.language,
+        language=caption_language,
         record=result.record,
     )
 

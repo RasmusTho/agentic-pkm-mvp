@@ -103,33 +103,30 @@ def test_translated_tracks_excluded(monkeypatch):
         assert translated_url not in requested_urls
 
 
-def test_captionless_is_normal_outcome(monkeypatch):
+def test_captionless_is_normal_outcome():
+    # Pure unit test of the caption-selection decision (KA-01). Since KA-02
+    # wired the ASR fallback into `fetch()`, a captionless `fetch()` call now
+    # proceeds to ASR rather than terminating here — that end-to-end wiring is
+    # covered by tests/knowledge_acquisition/test_asr_fallback.py. This test
+    # keeps asserting the pure selection decision without needing to stub the
+    # ASR chain.
     info = _base_info(subtitles={}, automatic_captions={})
-    monkeypatch.setattr(plugin, "yt_dlp_extract_info", lambda url: info)
-
-    caption_body_calls: list[str] = []
-    monkeypatch.setattr(
-        plugin,
-        "fetch_caption_body",
-        lambda url: caption_body_calls.append(url) or "should not be called",
-    )
 
     # Must not raise.
-    outcome = plugin.fetch(FAKE_URL)
+    selection = plugin.select_caption_track(info)
 
-    assert outcome.acquisition_method == "captionless"
-    assert outcome.language is None
-    assert caption_body_calls == []
-    assert outcome.record["metadata"]["title"] == "A Test Video"
-    assert outcome.is_new is True
+    assert selection.available is False
+    assert selection.language is None
+    assert selection.acquisition_method is None
 
 
-def test_foreign_video_translated_only_autocaptions_is_captionless(monkeypatch):
+def test_foreign_video_translated_only_autocaptions_is_captionless():
     # PR #2928 review round 1 BLOCKER regression fixture: a video whose known
     # language ("de") has NO track of its own, while automatic_captions carries
     # only auto-*translated* en/sv entries. The en/sv defaults must not be
     # consulted when the video language is known — the correct outcome is
-    # captionless, and no caption URL may ever be requested.
+    # captionless, and no caption URL may ever be requested. Pure unit test of
+    # `select_caption_track` (see test_captionless_is_normal_outcome for why).
     info = _base_info(
         language="de",
         subtitles={},
@@ -138,27 +135,21 @@ def test_foreign_video_translated_only_autocaptions_is_captionless(monkeypatch):
             "sv": [{"ext": "vtt", "url": "https://example.com/auto-sv-translated.vtt"}],
         },
     )
-    monkeypatch.setattr(plugin, "yt_dlp_extract_info", lambda url: info)
 
-    caption_body_calls: list[str] = []
-    monkeypatch.setattr(
-        plugin,
-        "fetch_caption_body",
-        lambda url: caption_body_calls.append(url) or "must not be called",
-    )
+    selection = plugin.select_caption_track(info)
 
-    outcome = plugin.fetch(FAKE_URL)
-
-    assert outcome.acquisition_method == "captionless"
-    assert outcome.language is None
-    assert caption_body_calls == []
+    assert selection.available is False
+    assert selection.language is None
 
 
-def test_unknown_language_autocaptions_never_requested(monkeypatch):
+def test_unknown_language_autocaptions_never_requested():
     # Conservative posture for videos with no detected language (documented in
     # select_caption_track): without the video's language we cannot tell an
     # original auto track from an auto-translated one, so the automatic pass is
     # skipped entirely — captionless, ASR fallback (KA-02) consumes it later.
+    # Pure unit test of `select_caption_track` (see
+    # test_captionless_is_normal_outcome for why this no longer goes through
+    # `fetch()`).
     info = _base_info(
         language=None,
         subtitles={},
@@ -166,20 +157,11 @@ def test_unknown_language_autocaptions_never_requested(monkeypatch):
             "en": [{"ext": "vtt", "url": "https://example.com/auto-en-maybe-translated.vtt"}],
         },
     )
-    monkeypatch.setattr(plugin, "yt_dlp_extract_info", lambda url: info)
 
-    caption_body_calls: list[str] = []
-    monkeypatch.setattr(
-        plugin,
-        "fetch_caption_body",
-        lambda url: caption_body_calls.append(url) or "must not be called",
-    )
+    selection = plugin.select_caption_track(info)
 
-    outcome = plugin.fetch(FAKE_URL)
-
-    assert outcome.acquisition_method == "captionless"
-    assert outcome.language is None
-    assert caption_body_calls == []
+    assert selection.available is False
+    assert selection.language is None
 
 
 def test_unknown_language_manual_track_accepted(monkeypatch):
