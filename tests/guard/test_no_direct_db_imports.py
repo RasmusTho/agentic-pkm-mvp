@@ -41,6 +41,13 @@ ALLOW_FILES = (
     # readiness reflects real dependency health (#2598). It consumes only the
     # bounded SELECT-1 ping, not the data layer.
     'app/health_contract.py',
+    # Heimdal observation log + per-consumer cursor store (#3039, Epic #3019
+    # slice A2). Same bounded pattern as the outbox/decisions/receipt-log
+    # entries above: a dedicated append-only log / cursor table, direct DSN
+    # connection, no ORM layer to route through.
+    'app/heimdal/observation_log.py',
+    'app/heimdal/cursor_store.py',
+    'app/heimdal/_backend.py',
 )
 
 def _allowed(p: Path) -> bool:
