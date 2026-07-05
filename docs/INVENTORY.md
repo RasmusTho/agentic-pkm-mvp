@@ -64,8 +64,28 @@ All commands run via `python -m app.cli <command>` (Click). `--json` switches to
 | `normalize SOURCE [--json --trace-id]` | app/cli/__init__.py:34-55 | Materialize file/URL, run the normalizer, emit the core object. | 0 on success, `FileNotFoundError` bubbles → exit 1. |
 | `classify OBJECT_ID [--json --trace-id]` | app/cli/__init__.py:57-74 | Classify an existing normalized object. | 0 on success, exception if object missing. |
 | `transcribe SOURCE [--json --trace-id]` | app/cli/__init__.py:76-94 | yt-dlp → ffmpeg → faster-whisper; writes an index-outbox audit entry (`kind=transcript`). | 0 on success, ffmpeg/yt-dlp errors → 1. |
+| `acquire-replay RAW_RECORD_ID --vault-root PATH [--assert-no-source-egress --json --trace-id]` | app/cli/__init__.py:525-585 | Knowledge Acquisition (KA-06, #2801): replays an existing `knowledge_acquisition.raw` record's derived levels (normalize → extract → candidate) with a runtime-enforced zero-source-egress guard; prints the per-stage replay receipt. | 0 when the replay is equivalent; exit 1 (`ClickException` / non-equivalent receipt) otherwise. |
 | `pipe SOURCE [--json --trace-id]` | app/cli/__init__.py:96-133 | Normalize → classify (+transcribe when audio/URL) and write aggregated JSONL audit log. | 0 on success, exit 1/2 on missing sources. |
 | `health [--json --trace-id]` | app/cli/__init__.py:135-147, app/cli/health.py | Local dependency checks (ffmpeg, yt-dlp, INDEX_OUTBOX_PATH, Ollama reachability). | 0 when `ok=true`, otherwise 1. |
+
+## Knowledge Acquisition (`app/knowledge_acquisition/`)
+Phase 2 vertical slice (epic #2795, KA-01..KA-06): `youtube_url` source plugin `fetch()` →
+`normalize()` → one schema-gated extractor → governed candidate `youtube_source_note` writeback,
+replayable end-to-end from immutable raw evidence with outbox stage events. `fetch()` is a library
+entry point, not a standalone CLI command in this slice; `acquire-replay` (above) is the one CLI
+surface the package ships. Pipeline ends at an unreviewed candidate note — no triage advancement,
+no indexing (deferred to epic #2314).
+
+| Module | Role |
+| --- | --- |
+| `youtube_plugin.py` | `youtube_url` source plugin (KA-01/#2796, KA-02/#2797): caption-first fetch (manual track preferred, original-language-only), ASR fallback via `app/media/transcribe.py` when captionless. Persists an immutable `knowledge_acquisition.raw` record keyed on `(source_kind, item_ref, content_identity)`. |
+| `raw_record.py` | Deterministic UUID5 `raw` record identity + persist/find/get against the canonical `app.objects` StorePort seam; dedup no-op on unchanged content. `emit_outbox=False` — the raw fetch is deliberately pre-pipeline. |
+| `normalize.py` | KA-03/#2798: deterministic `raw` → `normalized` transcript stage — VTT cue parsing + rolling-cue dedup for caption methods, direct segment read for `asr`; fail-loud on a non-empty body that normalizes to zero segments. |
+| `extraction_registry.py` | KA-04/#2799: open registry mapping an `extractor_id` to a schema-gated run function; `run_extractor` is the pipeline's one call site. |
+| `extractors/summary_extractor.py` | The `summary` extractor (KA-04/#2799): one schema-gated LLM call over a `normalized` transcript via `app/components/llm/constrained.py`, routed per `docs/LLM_ROUTING.md`. |
+| `candidate_writeback.py` | KA-05/#2800: candidate assembly (re-derives normalize + extraction in-process) + governed `youtube_source_note` companion-note write through `WriteGuard`, with mandated posture markers (`authority.requires_review: true`, `review_state: draft`). First-write-wins. |
+| `replay.py` | KA-06/#2801: replays every derived level from an existing `raw` record with a runtime-enforced zero-source-egress guard (raises on any source-egress seam reached during replay); emits per-stage outbox events and returns a typed, per-stage-equivalence-classed receipt. Backs the `acquire-replay` CLI command. |
+| `stage_events.py` | KA-06/#2801: stage-event emission (`knowledge_acquisition.stage.completed` / `.dead_lettered`) with deterministic idempotency keys; item-scoped extractor orchestration (`run_extractors`). |
 
 ## External tools and network calls
 - **yt-dlp** – downloads audio / m4a (`app/media/transcribe.py:22-39`).
@@ -73,6 +93,7 @@ All commands run via `python -m app.cli <command>` (Click). `--json` switches to
 - **faster-whisper** – local ASR with `_MODEL_CACHE` (`app/media/transcribe.py:68-99`).
 - **Ollama** – `/api/chat` and `/api/embeddings` (`app/agents/qa/agent.py:31-48`, `app/llm/embeddings.py:34-43`).
 - **httpx / requests** – also used for OpenAI/DeepSeek (`app/llm/adapter.py:16-47`, superseded — see Environment variables note above; canonical access is `app/components/llm/`).
+- **yt-dlp (metadata + caption tracks)** – `app/knowledge_acquisition/youtube_plugin.py::yt_dlp_extract_info`; egress posture `youtube.com` + `googlevideo.com`, logged-out, low volume, politeness sleeps. The PO-token provider plugin (`bgutil-ytdlp-pot-provider`) is a declared local dependency for the subtitle endpoint's PO-token enforcement, wired via yt-dlp's extractor-args provider framework.
 
 ## Index-outbox JSONL schema
 Defined in `app/index/outbox.py`. Each line contains at least:
