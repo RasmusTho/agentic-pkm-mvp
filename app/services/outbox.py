@@ -123,6 +123,24 @@ def _exec(conn: Any, sql: str, params: tuple = ()) -> Any:
     return _Dummy()
 
 
+def _row_value(row: Any, index: int, key: str | None = None) -> Any:
+    """Return a column value from a fetched row, tolerating either shape.
+
+    ``_open_conn()``'s plain-psycopg fallback yields tuple rows, but callers
+    (e.g. ``app.services.vault_sync``) may hand in a connection whose cursors
+    use a ``dict_row`` factory (``app.db.db.conn_rw``). Index into either
+    shape by the column's positional index or its select-list name. When
+    ``key`` is omitted (unaliased aggregate expressions such as ``count(*)``
+    whose dict key is unpredictable), fall back to positional order on the
+    dict's values.
+    """
+    if isinstance(row, dict):
+        if key is not None:
+            return row[key]
+        return list(row.values())[index]
+    return row[index]
+
+
 def bootstrap(conn: Any = None) -> None:
     """Initiera outbox-tabellen. Valfritt extern conn för tester.
 
@@ -368,7 +386,7 @@ def write_outbox_event(
         if hasattr(cur, "fetchone"):
             row = cur.fetchone()
             if row:
-                return str(row[0])
+                return str(_row_value(row, 0, "id"))
         return ""
     finally:
         if close:
@@ -403,13 +421,14 @@ def dead_letter_stats(conn: Any = None) -> dict[str, Any] | None:
         row = cur.fetchone() if hasattr(cur, "fetchone") else None
         if row is None:
             return None
-        dead_lettered = int(row[0])
+        dead_lettered = int(_row_value(row, 0))
         cur = _exec(
             conn,
             "select extract(epoch from (now() - min(created_at))) from outbox where delivered_at is null",
         )
         row = cur.fetchone() if hasattr(cur, "fetchone") else None
-        oldest_age = float(row[0]) if row and row[0] is not None else 0.0
+        oldest_value = _row_value(row, 0) if row else None
+        oldest_age = float(oldest_value) if oldest_value is not None else 0.0
         return {
             "dead_lettered_count": dead_lettered,
             "oldest_undelivered_age_seconds": max(oldest_age, 0.0),
@@ -434,7 +453,7 @@ def count_outbox_events(conn: Any = None) -> int | None:
         cur = _exec(conn, "select count(*) from outbox")
         if hasattr(cur, "fetchone"):
             row = cur.fetchone()
-            return int(row[0]) if row else 0
+            return int(_row_value(row, 0)) if row else 0
         return None
     except Exception:
         return None
@@ -536,8 +555,11 @@ def poll_outbox_one(
         row = cur.fetchone()
         if not row:
             return None
-        event = _coerce_event_from_db(row[2], row[1])
-        msg = {"id": str(row[0]), "topic": event.event_type, "payload": dict(event.payload), "event": event}
+        row_id = _row_value(row, 0, "id")
+        row_topic = _row_value(row, 1, "topic")
+        row_payload = _row_value(row, 2, "payload")
+        event = _coerce_event_from_db(row_payload, row_topic)
+        msg = {"id": str(row_id), "topic": event.event_type, "payload": dict(event.payload), "event": event}
         if handler:
             try:
                 handler(event.event_type, event.payload)
@@ -583,7 +605,7 @@ def bump_outbox_attempts(*args, **kwargs) -> int:
             row = cur.fetchone()
             if row:
                 try:
-                    return int(row[0])
+                    return int(_row_value(row, 0, "attempts"))
                 except (TypeError, ValueError):
                     return 0
         return 0

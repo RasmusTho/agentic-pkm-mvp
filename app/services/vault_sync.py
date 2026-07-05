@@ -10,7 +10,19 @@ from typing import Any, Optional
 import psycopg
 import yaml
 
-from app.db import conn_rw, ensure_schema
+# NOTE: app.db.conn_rw/ensure_schema resolve to the permanent psycopg-free
+# stub in app/db/sqlalchemy.py (introduced for the CI smoke path in #30),
+# which always raises RuntimeError("conn_rw unavailable in smoke sqlalchemy
+# stub") and no-ops ensure_schema. The real DB-backed implementation lives in
+# app.db.db (dict-row connections; applies app/db/migrations_obsidian.sql,
+# which is what actually creates public.objects/file_state/outbox) and is
+# what app/services/audit.py, app/services/decisions.py, and
+# app/store/membership_store.py already import directly. vault_sync imported
+# the stub instead, so every pg-marked caller of sync_markdown/handle_rename
+# either failed unconditionally (conn_rw) or hit UndefinedTable on a fresh DB
+# (ensure_schema no-op) once #2818 stopped silently skipping these tests
+# (#2937). Import the real implementation, matching the established pattern.
+from app.db.db import conn_rw, ensure_schema
 
 from app.events.models import new_trace_id
 from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_OBJECT_METADATA, INGEST_OBJECT_UPDATED
