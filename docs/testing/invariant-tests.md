@@ -771,6 +771,25 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 - **Related docs / contracts / ADRs:** [authority-transition-flow](../architecture/authority-transition-flow.md) §4, [PDM charter](../boundaries/PDM.md); ADR-0016, ADR-0032.
 - **Related issues:** #2547, #2550, #2552.
 
+### observation_episode_binding_survives
+
+- **Purpose:** An observation's `episode_ref` (the lived situation it originated in) and the referenced
+  Episode's closure state are preserved through every derivation — segment, projection, retrieval,
+  context assembly — just as `scope_binding` and provenance are.
+- **Protected principle:** matrix #3, #16 (provenance/context survives derivation); doctrine — an
+  artifact's lived context is part of what it means.
+- **Affected boundaries:** SIP, DRI, RCA, HKA.
+- **Required fixture / data:** a future capture/Episode runtime; the `episode_ref` dimension
+  ([semantic-dimensions](../architecture/semantic-dimensions.md)); [ADR-0051](../adr/ADR-0051-episode-as-ontological-primitive.md).
+- **Expected failure mode:** a segment/projection/retrieval result drops `episode_ref`, so an
+  observation can no longer be traced to the situation that produced it and closure-driven decay
+  cannot apply.
+- **Current enforcement:** `future_runtime` (Episode entity + dimension defined by ADR-0051; no
+  capture runtime or test skeleton yet — probe named for when the slice lands).
+- **Eventual test path:** `tests/invariants/test_episode_binding.py::test_observation_episode_binding_survives` (future).
+- **Related docs / contracts / ADRs:** [semantic-dimensions](../architecture/semantic-dimensions.md) (`episode_ref`), [functional-ontology](../architecture/functional-ontology.md) (`Episode`); ADR-0051, ADR-0029.
+- **Related issues:** none yet (downstream capture epic; grounded in [EPISODE_AS_ONTOLOGICAL_PRIMITIVE](../research/EPISODE_AS_ONTOLOGICAL_PRIMITIVE.md)).
+
 ## Coverage map (invariant → principle → test)
 
 | Invariant | Matrix principle(s) | Primary boundary | Enforcement | Test path |
@@ -802,6 +821,7 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 | authority_transition_state_is_consistent | #9 | GOV | schema + static | `tests/invariants/test_authority_transition.py` |
 | context_bundle_is_not_context_envelope | #7,#8 | RCA/CAO | schema + static | `tests/invariants/test_context_envelope.py` |
 | storage_write_is_not_authority_transition | #9,#12 | PDM/GOV | doc + xfail | `tests/invariants/test_authority_transition.py` (xfail) |
+| observation_episode_binding_survives | #3,#16 | SIP/DRI/RCA | future_runtime | `tests/invariants/test_episode_binding.py` (future) |
 | propose_when_uncertain | #17 | CAO/GOV/HIX | doc + xfail | `tests/invariants/test_context_envelope.py` (xfail) |
 | standards_are_adapters | #18 | EBF/SIP/CES | doc_only | `TBD` (CES review) |
 | connect_proposals_candidate_only | #9 | GOV/RCA | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/expansion/test_connect_findings.py` |

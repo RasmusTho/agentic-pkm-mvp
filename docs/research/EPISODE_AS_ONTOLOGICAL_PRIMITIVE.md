@@ -1,4 +1,4 @@
-State: CANDIDATE ontology-reshape proposal (advisory research artifact). Introduces a new first-class entity (`Episode`) and a new semantic dimension (`episode_ref`). Not enacted; adoption requires an owner CES/ADR step. Subordinate to the doctrine, the cognitive ontology, and owner contracts.
+State: Advisory research grounding for ADR-0051 (the normative enactment of the `Episode` entity and the `episode_ref` dimension, owner-accepted 2026-07-06). This doc supplies the academic grounding and the reconciliation; the binding decision lives in ADR-0051. Subordinate to the doctrine, the cognitive ontology, and owner contracts.
 Doc role: Research / candidate ontology proposal
 Temporal class: timeless (changes when semantics change, not when time passes)
 Review cadence: event-driven
@@ -8,7 +8,7 @@ Last verified against: docs/CONCEPTS/COGNITIVE_ONTOLOGY.md, docs/architecture/fu
 
 # The Episode as an Ontological Primitive
 
-> **Candidate.** This proposes a new first-class entity, `Episode`, as the contextual anchor of a knowledge artifact — the bounded, observer-relative lived situation an observation is *about the context of*. It is advisory until ratified by the owner through a CES/ADR reshape. It changes no runtime behavior and defines no contract on its own.
+> **Grounding doc.** This is the research grounding for `Episode` — the contextual anchor of a knowledge artifact: the bounded, observer-relative lived situation an observation is *about the context of*. The owner accepted it (OD-1 Artifact placement, OD-2 note-serialized) and it is enacted by [ADR-0051](../adr/ADR-0051-episode-as-ontological-primitive.md), which is the normative decision. This doc still changes no runtime behavior; the entity/dimension it describes are defined canonically by ADR-0051 and the ontology docs it edits.
 
 ## TL;DR
 
@@ -114,9 +114,9 @@ Against `docs/testing/invariant-tests.md`:
 - **WriteGuard is the confirm gate for canonical writes** — unchanged; episode segmentation sits below it (opt-out).
 - **Vault-canonical + outbox, not an event bus** — the Episode is a note-serialized vault entity; the outbox stays plumbing. "Event" as a term is reserved for Heimdal sensor-events and outbox plumbing, never for the Episode.
 
-## Reshape routing (CES/ADR)
+## Reshape routing (CES/ADR) — enacted
 
-Introducing a first-class entity and a semantic dimension is an ontology **reshape**, not a clarification. Per the repo's own rule it routes through a CES/ADR step and touches, on ratification: `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`, `docs/architecture/functional-ontology.md`, `docs/architecture/semantic-dimensions.md`, the invariant registry, and (likely) the `docs/HEIMDAL/` capture line. This candidate enacts none of them.
+Introducing a first-class entity and a semantic dimension is an ontology **reshape**, not a clarification. Per the repo's own rule it routed through a CES/ADR step: [ADR-0051](../adr/ADR-0051-episode-as-ontological-primitive.md) enacts it, editing `docs/architecture/functional-ontology.md` (§3, `Episode`), `docs/architecture/semantic-dimensions.md` (`episode_ref`), `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md` (Layer 3, `Episode`), and the invariant registry (`observation_episode_binding_survives`, `future_runtime`). The `docs/HEIMDAL/` capture line is downstream and left to the capture epic.
 
 ## Owner decisions
 

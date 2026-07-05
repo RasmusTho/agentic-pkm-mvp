@@ -47,3 +47,4 @@
 - [ADR-0048: Allowlisted mechanical-hygiene body edits move to `act` tier (Proposed — NOT enacted)](./ADR-0048-allowlisted-mechanical-hygiene-act-tier.md)
 - [ADR-0049: Heimdal as the ecosystem ingestion organ + v1 UI/UX enactment — markdown-first control surface, discrete-capture posture, one-shell app topology (Accepted)](./ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md)
 - [ADR-0050: Cross-repo governance + the Bifrost native-app repo; name register adopts traditional Swedish spelling (Heimdal, Bifrost) (Accepted)](./ADR-0050-cross-repo-governance-and-bifrost-client-repo.md)
+- [ADR-0051: Episode is a first-class Artifact — the contextual anchor of a knowledge artifact (Accepted)](./ADR-0051-episode-as-ontological-primitive.md)
