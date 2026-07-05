@@ -585,6 +585,36 @@ retrievable; a blind ingester says so).
 - **Related issues:** #2996 (EXP-3), #2998 (EXP-6, activation records + status ladder), #2980 (parent).
 - **Related issues:** #2996 (EXP-3), #2980 (parent).
 
+### curation_citations_resolve
+
+- **Purpose:** Every contradiction finding carries >=2 in-vault source references that resolve at
+  materialization time; unresolvable evidence voids the finding (no uncited "trust me" callouts).
+- **Protected principle:** a surfaced tension must be traceable to real, resolvable material — never
+  adjudicated, never asserted without a citable basis.
+- **Affected boundaries:** Curation finding pipeline (G2), Cognitive Expansion (sibling pass, shares
+  EXP-1's harness shape and EXP-2's declined-proposal ledger), retrieval spine (consumer only).
+- **Expected failure mode:** a contradiction finding materializes with a dangling/nonexistent source
+  link, or a candidate whose citation fails to resolve is silently dropped without any trace instead
+  of failing loudly.
+- **Current enforcement:** live — `app/curation/contradiction.py::run_contradiction_pass` resolves
+  both sides' source links against the vault filesystem before a `CurationFinding` is ever
+  constructed; an unresolvable citation raises `UnresolvableContradictionCitationError` (blocked
+  loudly, never silently emitted, never silently dropped without trace). The class
+  (`contradiction.claim_conflict`) was already a member of the closed `FindingClass` enum
+  (`app/curation/findings.py`, added by E1 #2986) and resolves to `FindingTrack.PROPOSE`
+  unconditionally via `track_for_class` — this slice reuses that class rather than minting a new one.
+  Materialization is delegated entirely to the existing propose-only writer
+  (`app.curation.proposal_writer.write_curation_proposals`); the pass itself never writes a
+  `[!contradiction]` callout — that callout is a body edit that only ever rides the confirmed
+  checkbox action (`semantic_curation_never_autowrites`'s sibling guarantee, enforced here by
+  `tests/curation/test_semantic_never_autowrites.py`). A declined contradiction finding is suppressed
+  on rerun via the shared `app.proposals.declined_ledger.DeclinedLedger`, identically to every other
+  proposal-emitting pass.
+- **Test path:** `tests/invariants/test_curation_invariants.py::test_citations_resolve`,
+  `tests/curation/test_contradiction_citations_resolve.py` (including
+  `test_declined_contradiction_suppressed`), `tests/curation/test_semantic_never_autowrites.py`.
+- **Related issues:** #2999 (G2-4), #2980 (parent).
+
 ## Schema-batch deferred invariants
 
 The [schemas/contracts batch](../../schemas/README.md) explicitly deferred a set of cross-field and
@@ -780,6 +810,7 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 | synthesis_carries_source_provenance | #4,#9 | GOV/RCA | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/expansion/test_create_draft_lifecycle.py` |
 | staged_drafts_invisible_to_retrieval | #1,#9 | RCA/GOV | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/expansion/test_create_draft_lifecycle.py` |
 | expansion_requires_activation_record | #9 | GOV | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/activation/test_expansion_gate_records.py` |
+| curation_citations_resolve | #3,#9 | GOV/RCA | static + runtime | `tests/invariants/test_curation_invariants.py`, `tests/curation/test_contradiction_citations_resolve.py` |
 
 ## Related documents
 
