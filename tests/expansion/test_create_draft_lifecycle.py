@@ -1,4 +1,5 @@
-"""#2996 (EXP-3) -- Create engine: overview + answer_note draft lifecycle.
+"""#2996 (EXP-3) / #2998 (EXP-5) -- Create engine: overview + answer_note +
+digest draft lifecycle.
 
 Spec: ``docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md`` §2, §5.
 
@@ -12,7 +13,8 @@ Covers every behavioral Acceptance Criterion from the issue:
   context (production-call-site enforcement over ``app.ingest.vault_alpha``).
 - AC4: an ignored draft expires after the declared staleness window, with an
   expiry receipt; expiry never errors.
-- Plus: no default output kind (fail-loud on an unsupported/invalid kind);
+- Plus (#2998, EXP-5): ``create.digest`` goes through the identical staged
+  lifecycle; no default output kind (fail-loud on a non-enum kind);
   activation-gate blocking never silently runs.
 """
 from __future__ import annotations
@@ -27,7 +29,6 @@ from app.expansion.create import (
     CreatePassReport,
     CreateRequest,
     ExpirySweepReport,
-    InvalidOutputKindError,
     OutputKind,
     SourceInput,
     UnresolvableCitationError,
@@ -156,19 +157,54 @@ def test_no_sources_blocks_loudly(tmp_path: Path) -> None:
         run_create_pass(request, vault_root=vault_root, outbox_path=outbox_path, write_guard=_allow_all_guard())
 
 
-def test_invalid_output_kind_fails_loud(tmp_path: Path) -> None:
-    """No default output kind: `create.digest` is a real enum member (spec
-    §2.1's three-row table) but is not yet implemented -- this slice must
-    refuse it loudly rather than silently degrade to overview/answer_note."""
+def test_digest_kind_is_supported_and_produces_a_draft(tmp_path: Path) -> None:
+    """`create.digest` (EXP-5, #2998) is now a fully implemented output kind:
+    an explicit-ask digest request goes through the identical staged-draft
+    lifecycle as overview/answer_note (activation gate -> citation validation
+    -> staging write -> receipt) -- no separate code path, no shortcut."""
+    from app.expansion.create import DigestActivityInput
+
     vault_root = tmp_path / "vault"
     vault_root.mkdir()
     outbox_path = tmp_path / "outbox.jsonl"
 
     sources = (_source("obj-a", "Some text.", "Some text."),)
-    request = CreateRequest(kind=OutputKind.DIGEST, title="Digest", sources=sources)
+    activity = DigestActivityInput(
+        period_label="2026-06-29..2026-07-05", moved=("a.md",), opened=("b.md",), quiet=("c.md",)
+    )
+    request = CreateRequest(
+        kind=OutputKind.DIGEST, title="Weekly digest", sources=sources, digest_activity=activity
+    )
 
-    with pytest.raises(InvalidOutputKindError):
-        run_create_pass(request, vault_root=vault_root, outbox_path=outbox_path, write_guard=_allow_all_guard())
+    report = run_create_pass(request, vault_root=vault_root, outbox_path=outbox_path, write_guard=_allow_all_guard())
+
+    assert report.activatable is True
+    assert report.draft_path is not None
+    draft_text = (vault_root / report.draft_path).read_text(encoding="utf-8")
+    assert "authority_state: proposal" in draft_text
+    assert "- [ ]" in draft_text
+    assert "- [x]" not in draft_text
+    assert "What moved" in draft_text
+    assert "a.md" in draft_text
+    assert "b.md" in draft_text
+    assert "c.md" in draft_text
+
+
+def test_invalid_output_kind_fails_loud_for_a_non_enum_value() -> None:
+    """No default output kind: constructing a request with a value outside
+    the closed `OutputKind` enum fails loud at construction (Enum
+    coercion) -- there is no third silent-fallback path for an unrecognized
+    kind string."""
+    with pytest.raises(ValueError):
+        OutputKind("create.not_a_real_kind")
+
+
+def test_supported_output_kinds_is_the_full_closed_enum() -> None:
+    """All three closed-enum members are implemented and supported -- no
+    kind is left half-built or silently unreachable."""
+    from app.expansion.create import SUPPORTED_OUTPUT_KINDS
+
+    assert SUPPORTED_OUTPUT_KINDS == frozenset(OutputKind)
 
 
 def test_writes_blocked_state_prevents_staging_write(tmp_path: Path) -> None:

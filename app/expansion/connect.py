@@ -55,6 +55,30 @@ posture):
 - **Already-linked pairs are never proposed.** A pair with an existing direct
   wikilink, or a 1-hop path through a shared linked note, is excluded before
   scope/cap logic runs.
+
+Cluster emergence (EXP-5, #2998, spec §1.1/§1.3 `connect.cluster_emergence`)
+extends this module with one additional finding class and its Create
+handoff:
+
+- **Cluster emergence is candidate-only, exactly like every other
+  ``connect.*`` class.** :func:`find_cluster_emergence` groups the SAME
+  same-scope, unlinked, related-pair candidates this pass already computes
+  into connected components (union-find over the accepted pair graph); a
+  component reaching ``min_cluster_size`` (default 3, spec §1.1: "cluster
+  member refs (>=3)") proposes a hub/overview note, never writes one. The
+  class is a member of :data:`app.curation.findings.CONNECT_FINDING_CLASSES`
+  and therefore inherits the same import-time disjointness-from-auto_fix
+  assertion -- this module adds no separate track override.
+- **The handoff is accept-then-create, never emergence-then-create.**
+  :func:`cluster_emergence_to_create_request` only ever converts an
+  ALREADY-ACCEPTED cluster finding (the caller supplies the finding plus
+  resolvable source text for each member) into a
+  :class:`app.expansion.create.CreateRequest` of kind
+  :data:`app.expansion.create.OutputKind.OVERVIEW` -- it never calls
+  ``run_create_pass`` itself and never runs on an unaccepted (still-proposed)
+  finding. Wiring the handoff trigger to the real acceptance path
+  (``app.expansion.accept``) is the caller's responsibility; this function is
+  the pure, testable conversion step.
 """
 from __future__ import annotations
 
@@ -62,12 +86,15 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import TYPE_CHECKING, Callable, Protocol
 
 from app.curation.findings import CurationFinding, FindingClass, LanguageVerdict, track_for_class
 from app.curation.proposal_writer import write_curation_proposals
 from app.retrieval.capability import RetrievalRequest, RetrievalResponse, retrieve
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
+
+if TYPE_CHECKING:
+    from app.expansion.create import CreateRequest, SourceInput
 
 # Reuses the same wikilink shape as app.curation.lint (`_WIKILINK_RE`) rather
 # than importing a private symbol across modules -- both patterns must stay
@@ -465,13 +492,223 @@ def run_connect_pass(
     )
 
 
+# --- cluster emergence (EXP-5, #2998) ----------------------------------------
+
+_DEFAULT_MIN_CLUSTER_SIZE = 3
+
+
+@dataclass(frozen=True)
+class ClusterEmergenceConfig:
+    """Bounds + policy knobs for cluster-emergence detection (spec §1.1)."""
+
+    min_cluster_size: int = _DEFAULT_MIN_CLUSTER_SIZE
+    max_clusters: int = 10
+    declined_ledger: DeclinedLedgerPort = field(default_factory=default_declined_ledger)
+
+
+def _union_find_clusters(pairs: list[tuple[str, str]]) -> list[frozenset[str]]:
+    """Group note identities into connected components over *pairs* (an
+    undirected relatedness graph) via a small, deterministic union-find.
+
+    Deterministic regardless of pair iteration order -- the resulting
+    components are order-independent sets, matching the same "unordered set"
+    discipline :func:`compute_connect_finding_id` already applies to a single
+    pair.
+    """
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            # Deterministic tie-break: lexicographically smaller root wins,
+            # so component identity never depends on pair traversal order.
+            if ra < rb:
+                parent[rb] = ra
+            else:
+                parent[ra] = rb
+
+    for a, b in pairs:
+        union(a, b)
+
+    members_by_root: dict[str, set[str]] = {}
+    for node in parent:
+        members_by_root.setdefault(find(node), set()).add(node)
+    return [frozenset(members) for members in members_by_root.values()]
+
+
+def compute_cluster_finding_id(*, member_uuids: frozenset[str]) -> str:
+    """Content-derived, order-independent finding id for a cluster-emergence
+    finding -- ``hash(class, unordered member-uuid set)`` (spec §1.2's
+    identity discipline, extended to an N-member set rather than a pair)."""
+    sorted_uuids = "\x1e".join(sorted(member_uuids))
+    digest_input = "\x1f".join([FindingClass.CONNECT_CLUSTER_EMERGENCE.value, sorted_uuids])
+    return hashlib.sha256(digest_input.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class ClusterEmergenceReport:
+    """Pass receipt for one cluster-emergence detection run."""
+
+    findings: tuple[CurationFinding, ...]
+    clusters_found: int
+    suppressed_by_decline: int
+    suppressed_by_cap: int
+
+
+def find_cluster_emergence(
+    related_unlinked_findings: tuple[CurationFinding, ...],
+    *,
+    config: ClusterEmergenceConfig | None = None,
+) -> ClusterEmergenceReport:
+    """Detect unnamed clusters reaching hub-worthiness from a Connect pass's
+    already-computed ``connect.related_unlinked`` findings (spec §1.1
+    ``connect.cluster_emergence``: "an unnamed cluster that has reached
+    hub-worthiness; proposes creating an overview/hub note").
+
+    Reuses the SAME accepted pair graph :func:`run_connect_pass` already
+    proposed (never re-queries retrieval, never re-derives relatedness) --
+    a cluster is a connected component of >= ``min_cluster_size`` distinct
+    note identities across those pairs. Candidate-only by construction: this
+    function returns :class:`CurationFinding` records (class
+    :data:`app.curation.findings.FindingClass.CONNECT_CLUSTER_EMERGENCE`,
+    which resolves to :data:`app.curation.findings.FindingTrack.PROPOSE`
+    unconditionally via ``track_for_class`` -- there is no branch here, or
+    anywhere, that materializes a cluster as an overview directly). Declined
+    clusters (by content-derived cluster finding_id) are suppressed exactly
+    like every other propose-track class.
+    """
+    config = config or ClusterEmergenceConfig()
+
+    pair_findings_by_id: dict[str, list[CurationFinding]] = {}
+    for finding in related_unlinked_findings:
+        if finding.finding_class != FindingClass.CONNECT_RELATED_UNLINKED:
+            continue
+        pair_findings_by_id.setdefault(finding.finding_id, []).append(finding)
+
+    pairs: list[tuple[str, str]] = []
+    span_by_uuid: dict[str, str] = {}
+    for group in pair_findings_by_id.values():
+        uuids = sorted({f.note_uuid for f in group})
+        if len(uuids) == 2:
+            pairs.append((uuids[0], uuids[1]))
+        for f in group:
+            span_by_uuid.setdefault(f.note_uuid, f.evidence[0] if f.evidence else f.note_uuid)
+
+    components = [c for c in _union_find_clusters(pairs) if len(c) >= config.min_cluster_size]
+    # Deterministic ordering: smallest sorted-member signature first, so
+    # truncation at max_clusters is reproducible across reruns.
+    components.sort(key=lambda members: tuple(sorted(members)))
+
+    findings: list[CurationFinding] = []
+    suppressed_by_decline = 0
+    suppressed_by_cap = 0
+    track = track_for_class(FindingClass.CONNECT_CLUSTER_EMERGENCE)
+
+    for members in components:
+        if len(findings) // max(config.min_cluster_size, 1) >= config.max_clusters and findings:
+            suppressed_by_cap += 1
+            continue
+        finding_id = compute_cluster_finding_id(member_uuids=members)
+        if config.declined_ledger.is_declined(finding_id):
+            suppressed_by_decline += 1
+            continue
+        member_list = sorted(members)
+        observed = f"{len(member_list)} notes ({', '.join(member_list)}) form an unnamed, densely related cluster"
+        proposed = "consider creating an overview/hub note over this cluster (uncertain theme label)"
+        for member in member_list:
+            evidence_entries = [span_by_uuid.get(member, member)]
+            evidence_entries.extend(
+                span_by_uuid.get(other, other) for other in member_list if other != member
+            )
+            findings.append(
+                CurationFinding(
+                    finding_id=finding_id,
+                    note_uuid=member,
+                    finding_class=FindingClass.CONNECT_CLUSTER_EMERGENCE,
+                    track=track,
+                    span="draft theme label: uncertain",
+                    observed=observed,
+                    proposed=proposed,
+                    evidence=tuple(evidence_entries),
+                    language_verdict=LanguageVerdict.UNKNOWN,
+                    reversal=None,
+                )
+            )
+
+    return ClusterEmergenceReport(
+        findings=tuple(findings),
+        clusters_found=len(components),
+        suppressed_by_decline=suppressed_by_decline,
+        suppressed_by_cap=suppressed_by_cap,
+    )
+
+
+def cluster_emergence_to_create_request(
+    cluster_finding_ids: frozenset[str] | list[str],
+    *,
+    member_sources: dict[str, "SourceInput"],
+    title: str,
+    language_policy: str | None = None,
+) -> "CreateRequest":
+    """Convert an ALREADY-ACCEPTED ``connect.cluster_emergence`` finding into
+    a :class:`app.expansion.create.CreateRequest` of kind
+    :data:`app.expansion.create.OutputKind.OVERVIEW` (spec §1.1 handoff: "an
+    unnamed cluster ... proposes creating an overview/hub note").
+
+    This function performs NO acceptance-state check of its own -- the caller
+    (the real acceptance path, ``app.expansion.accept``, or a CLI/panel
+    handler wired to it) is responsible for calling this ONLY after a human
+    has accepted the cluster finding's checkbox. It never calls
+    ``run_create_pass`` itself; it only builds the request, so the normal
+    Create draft lifecycle (activation gate -> citation validation -> staging
+    write -> human acceptance, EXP-3/EXP-4) governs the resulting overview
+    exactly like any other Create request -- the cluster handoff grants no
+    shortcut through that lifecycle.
+
+    ``member_sources`` must supply a :class:`app.expansion.create.SourceInput`
+    for every member uuid in *cluster_finding_ids* (the member set); a missing
+    member raises ``ValueError`` -- fail loud rather than silently synthesizing
+    an overview over a subset of the cluster.
+    """
+    from app.expansion.create import CreateRequest, OutputKind
+
+    member_uuids = frozenset(cluster_finding_ids)
+    if not member_uuids:
+        raise ValueError("cluster_emergence_to_create_request requires at least one member uuid")
+    missing = member_uuids - set(member_sources)
+    if missing:
+        raise ValueError(
+            f"member_sources is missing source input for cluster member(s) {sorted(missing)!r}; "
+            "refusing to synthesize an overview over an incomplete cluster"
+        )
+    sources = tuple(member_sources[uuid] for uuid in sorted(member_uuids))
+    return CreateRequest(
+        kind=OutputKind.OVERVIEW,
+        title=title,
+        sources=sources,
+        language_policy=language_policy,
+    )
+
+
 __all__ = [
     "CONNECT_EVIDENCE_ROLE",
+    "ClusterEmergenceConfig",
+    "ClusterEmergenceReport",
     "ConnectPassConfig",
     "ConnectPassReport",
     "CrossScopeFlow",
     "DeclinedLedgerPort",
+    "cluster_emergence_to_create_request",
+    "compute_cluster_finding_id",
     "compute_connect_finding_id",
     "default_declined_ledger",
+    "find_cluster_emergence",
     "run_connect_pass",
 ]

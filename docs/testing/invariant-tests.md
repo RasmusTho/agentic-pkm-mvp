@@ -568,13 +568,21 @@ retrievable; a blind ingester says so).
   precondition yields blocked-with-reason, never a silent run (no third "activate anyway" path).
 - **Protected principle:** the Expansion Activation Gate is the dormant→active flip's sole
   deterministic authority; no capability may self-activate.
-- **Affected boundaries:** Cognitive Expansion (Create), `app.activation.gate`.
+- **Affected boundaries:** Cognitive Expansion (Connect, Create), `app.activation.gate`,
+  `app.activation.expansion_records`.
 - **Expected failure mode:** a capability runs its cognition/write path despite a regressed
   admissibility/loop-precondition/observability input, because a call site bypassed the gate.
 - **Current enforcement:** live — `app/expansion/create.py::run_create_pass` evaluates
   `evaluate_create_activation` first and returns a non-activatable `CreatePassReport` (never raises,
-  never runs cognition or writes) when any gate input is blocked.
-- **Test path:** `tests/invariants/test_expansion_invariants.py::test_create_requires_activation_record`.
+  never runs cognition or writes) when any gate input is blocked. EXP-6 (#2998) adds one named
+  activation-gate record per capability contract (`app/activation/expansion_records.py`:
+  `connection_proposal` for Connect, `synthesis_note_proposal` for Create), each with its own
+  durable jsonl receipt (`runtime/activation/expansion_gate_receipts.jsonl`) — a regressed precondition
+  on either record yields `blocked-with-reason`, never a silent run.
+- **Test path:** `tests/invariants/test_expansion_invariants.py::test_create_requires_activation_record`,
+  `tests/invariants/test_expansion_invariants.py::test_requires_activation_record`,
+  `tests/activation/test_expansion_gate_records.py`.
+- **Related issues:** #2996 (EXP-3), #2998 (EXP-6, activation records + status ladder), #2980 (parent).
 - **Related issues:** #2996 (EXP-3), #2980 (parent).
 
 ## Schema-batch deferred invariants
@@ -771,7 +779,7 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 | create_never_autowrites_canonical | #9 | GOV/RCA | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/expansion/test_create_draft_lifecycle.py` |
 | synthesis_carries_source_provenance | #4,#9 | GOV/RCA | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/expansion/test_create_draft_lifecycle.py` |
 | staged_drafts_invisible_to_retrieval | #1,#9 | RCA/GOV | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/expansion/test_create_draft_lifecycle.py` |
-| expansion_requires_activation_record | #9 | GOV | static + runtime | `tests/invariants/test_expansion_invariants.py` |
+| expansion_requires_activation_record | #9 | GOV | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/activation/test_expansion_gate_records.py` |
 
 ## Related documents
 

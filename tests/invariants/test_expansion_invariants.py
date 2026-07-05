@@ -424,3 +424,44 @@ def test_accepted_note_keeps_provenance(tmp_path: Path) -> None:
             write_guard=guard,
         )
     assert not (vault_root / "accepted-topic-y.md").exists()
+
+
+def test_requires_activation_record() -> None:
+    """Fitness invariant: ``expansion_requires_activation_record`` (EXP-6, #2998).
+
+    Invariant registry: docs/testing/invariant-tests.md :: expansion_requires_activation_record.
+    Spec: docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md §4, §5, §6.
+
+    Production-call-site enforcement over BOTH Expansion capability records
+    (``connection_proposal`` for Connect, ``synthesis_note_proposal`` for
+    Create): each runs only under a green activation-gate record, and a
+    regressed precondition on EITHER record yields a deterministic
+    blocked-with-reason decision -- never a silent run. Full per-axis
+    coverage lives in ``tests/activation/test_expansion_gate_records.py``,
+    this invariant's ``Verify:`` target; this test is the one-assertion-pair
+    fitness probe co-located with its sibling Expansion invariants (mirrors
+    ``test_create_requires_activation_record``'s pattern, extended to the
+    record layer both capabilities now share).
+    """
+    from app.activation.expansion_records import (
+        build_connection_proposal_posture,
+        build_synthesis_note_proposal_posture,
+        evaluate_connection_proposal_activation,
+        evaluate_synthesis_note_proposal_activation,
+    )
+
+    green_connect = evaluate_connection_proposal_activation(["note-a"])
+    assert green_connect.activatable is True
+
+    regressed_connect = build_connection_proposal_posture(admissibility_declared=False)
+    blocked_connect = evaluate_connection_proposal_activation(["note-a"], posture=regressed_connect)
+    assert blocked_connect.activatable is False
+    assert "admissibility_undeclared" in blocked_connect.blocked_reasons
+
+    green_create = evaluate_synthesis_note_proposal_activation(["obj-a"])
+    assert green_create.activatable is True
+
+    regressed_create = build_synthesis_note_proposal_posture(loop_precondition_green=False)
+    blocked_create = evaluate_synthesis_note_proposal_activation(["obj-a"], posture=regressed_create)
+    assert blocked_create.activatable is False
+    assert "loop_precondition_not_green" in blocked_create.blocked_reasons

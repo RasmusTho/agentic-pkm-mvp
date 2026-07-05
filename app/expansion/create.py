@@ -1,17 +1,22 @@
-"""Create engine: overview + answer_note draft synthesis (EXP-3, #2996).
+"""Create engine: overview + answer_note + digest draft synthesis (EXP-3/EXP-5,
+#2996/#2998).
 
 Spec: ``docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md`` §2
-(EXP-3). Parent: #2980 (Capability Hardening / Cognitive Expansion). Turns
-admitted material into a reviewable synthesized artifact via the dormant
-``CompilationDraft``/``proposal_builders``/``run_multi_note_reasoning``
+(EXP-3, EXP-5). Parent: #2980 (Capability Hardening / Cognitive Expansion).
+Turns admitted material into a reviewable synthesized artifact via the
+dormant ``CompilationDraft``/``proposal_builders``/``run_multi_note_reasoning``
 machinery, activated through the Expansion Activation Gate
 (``app.activation.gate``) rather than rebuilt -- the second passage through
 that gate the ASK synthesis proof (#2022/#2026) already validated once.
 
-This slice implements exactly two output kinds (closed enum, no default):
-``create.overview`` (a synthesis/overview over a topic/cluster/note-set) and
-``create.answer_note`` (an ASK answer filed as a durable note with sources).
-``create.digest`` is out of scope (E7).
+This module implements all three output kinds (closed enum, no default):
+``create.overview`` (a synthesis/overview over a topic/cluster/note-set),
+``create.answer_note`` (an ASK answer filed as a durable note with sources),
+and ``create.digest`` (a bounded-period digest -- EXP-5, #2998; explicit-ask
+only through :func:`run_create_pass` in this slice). A moment may only ever
+materialize a digest *offer* checkbox, never a draft directly from tick
+context -- see :func:`build_digest_offer`, the G4 moment-offer wiring point
+this slice builds without depending on G4-1 landing.
 
 Hard invariants held by this module (do not relax without an owner-ratified
 ADR, mirroring ``app.expansion.connect``'s and
@@ -58,6 +63,19 @@ ADR, mirroring ``app.expansion.connect``'s and
   missing/unreadable staging dir or a malformed draft file; it removes only
   drafts past their declared ``expires`` timestamp and always emits an
   ``expansion.create.expired`` receipt per removed draft.
+- **A moment can only offer a digest, never generate one.** :func:`build_digest_offer`
+  is the ONLY function in this module that accepts tick/moment-style context.
+  It returns a :class:`DigestOffer` -- an inert, unchecked offer-checkbox
+  description -- and contains no code path that calls :func:`run_create_pass`
+  or otherwise materializes a draft. There is no configuration flag that
+  upgrades an offer into a run; a human must independently trigger
+  :func:`run_create_pass` with ``kind=OutputKind.DIGEST`` (the explicit-ask
+  path) after seeing the offer. This is the G4 moment-offer wiring point the
+  spec names (§2.1 "later optionally *offered* via a G4 moment -- offered,
+  never auto-run"); it does not depend on G4-1 (the state-diff gate) landing
+  because it never reads a live tick -- it accepts a plain period-bounds
+  input the caller (a future G4-1 tick or a manual CLI invocation alike) can
+  supply either way.
 """
 from __future__ import annotations
 
@@ -86,19 +104,22 @@ from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
 class OutputKind(str, Enum):
     """The Create output-kind enum (spec §2.1). Closed and versioned: adding a
-    member here is the only place a new kind may be minted. Only the two
-    members in :data:`SUPPORTED_OUTPUT_KINDS` are implemented this slice --
-    ``create.digest`` is deliberately listed (so the enum documents the full
-    design, per spec §2.1's three-row table) but is refused at runtime by
-    :func:`run_create_pass` until E7 (#2980) implements it."""
+    member here is the only place a new kind may be minted. All three members
+    are implemented and included in :data:`SUPPORTED_OUTPUT_KINDS`;
+    ``create.digest`` (EXP-5, #2998) is explicit-ask only through
+    :func:`run_create_pass` -- a moment may only ever produce an *offer* via
+    :func:`build_digest_offer`, never call ``run_create_pass`` directly."""
 
     OVERVIEW = "create.overview"
     ANSWER_NOTE = "create.answer_note"
     DIGEST = "create.digest"
 
 
-# This slice's closed subset -- the only kinds `run_create_pass` will build.
-SUPPORTED_OUTPUT_KINDS: frozenset[OutputKind] = frozenset({OutputKind.OVERVIEW, OutputKind.ANSWER_NOTE})
+# The closed subset `run_create_pass` will build. Anything outside this set
+# fails loud via `InvalidOutputKindError` -- no default kind (spec §2.1).
+SUPPORTED_OUTPUT_KINDS: frozenset[OutputKind] = frozenset(
+    {OutputKind.OVERVIEW, OutputKind.ANSWER_NOTE, OutputKind.DIGEST}
+)
 
 CREATE_CAPABILITY_ID = "synthesis_note_proposal"
 CREATE_SCOPE = "expansion.create.staging"
@@ -173,8 +194,31 @@ class SourceInput:
 
 
 @dataclass(frozen=True)
+class DigestActivityInput:
+    """One bounded-period activity bucket for a ``create.digest`` request
+    (spec §2.1: "what moved, what opened, what went quiet").
+
+    ``moved`` / ``opened`` / ``quiet`` are vault-relative note paths (or note
+    identities) the caller has already classified for the period -- this
+    module never re-derives vault activity itself; a digest is a synthesis
+    OVER already-known activity, the same way overview/answer_note synthesize
+    over already-admitted sources, never over data this module discovers on
+    its own initiative.
+    """
+
+    period_label: str  # human-legible period description, e.g. "2026-06-29..2026-07-05"
+    moved: tuple[str, ...] = field(default_factory=tuple)
+    opened: tuple[str, ...] = field(default_factory=tuple)
+    quiet: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
 class CreateRequest:
-    """Human-triggered Create request (spec §2.2 "trigger (human intent)")."""
+    """Human-triggered Create request (spec §2.2 "trigger (human intent)").
+
+    ``digest_activity`` is required (and only meaningful) for
+    ``kind=OutputKind.DIGEST``; other kinds ignore it.
+    """
 
     kind: OutputKind
     title: str
@@ -183,6 +227,7 @@ class CreateRequest:
     destination_hint: str | None = None
     language_policy: str | None = None  # explicit human choice, else dominant-source
     trace_id: str | None = None
+    digest_activity: DigestActivityInput | None = None
 
 
 @dataclass(frozen=True)
@@ -364,6 +409,8 @@ def _build_synthesis_body(
     if request.question:
         lines.append(f"**Question:** {request.question}")
         lines.append("")
+    if request.kind is OutputKind.DIGEST and request.digest_activity is not None:
+        lines.extend(_digest_activity_section(request.digest_activity))
     lines.append("## Sources")
     lines.append("")
     for source in sources:
@@ -373,6 +420,31 @@ def _build_synthesis_body(
             lines.append(f"> {span}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _digest_activity_section(activity: DigestActivityInput) -> list[str]:
+    """Render the digest's period-bounded activity buckets (spec §2.1: "what
+    moved, what opened, what went quiet") as a deterministic, citation-free
+    summary section -- the note-level ``## Sources`` block (built separately,
+    from ``request.sources``) is what carries the citation-checkable
+    structure; this section is a legible index over already-classified
+    activity, never a re-derivation of it."""
+
+    lines = [f"## Digest period: {activity.period_label}", ""]
+
+    def _bucket(title: str, items: tuple[str, ...]) -> list[str]:
+        out = [f"### {title}", ""]
+        if items:
+            out.extend(f"- {item}" for item in items)
+        else:
+            out.append("- (none)")
+        out.append("")
+        return out
+
+    lines.extend(_bucket("What moved", activity.moved))
+    lines.extend(_bucket("What opened", activity.opened))
+    lines.extend(_bucket("What went quiet", activity.quiet))
+    return lines
 
 
 def _run_cognition(request: CreateRequest) -> dict[str, Any]:
@@ -564,6 +636,79 @@ def run_create_pass(
     )
 
 
+# --- G4 moment-offer wiring point (EXP-5, #2998; offer-only) ----------------
+
+DIGEST_OFFER_EVENT = "expansion.create.digest_offered"
+
+
+@dataclass(frozen=True)
+class DigestOffer:
+    """An inert digest OFFER -- an unchecked checkbox description a moment
+    surface may materialize, never a draft.
+
+    This is the whole shape of the G4 wiring point (spec §2.1: "later
+    optionally *offered* via a G4 moment -- offered, never auto-run"): it
+    carries enough for a Panel/companion surface to render one checkbox
+    ("offer to generate a digest for <period>") and nothing that could be
+    mistaken for, or silently escalated into, a generated draft. There is no
+    ``draft_path`` field here -- offering a digest produces no file.
+    """
+
+    period_label: str
+    offer_label: str
+    moment_id: str | None
+
+
+def build_digest_offer(
+    *,
+    period_label: str,
+    moment_id: str | None = None,
+) -> DigestOffer:
+    """Build a digest OFFER from tick/moment-style context -- the ONLY
+    function in this module a moment surface may call for digests.
+
+    Deliberately takes no ``sources``/``digest_activity`` payload and returns
+    no draft/receipt-id-for-a-draft: there is nothing here a caller could
+    thread into :func:`run_create_pass` to make this call site auto-generate
+    a digest. Materializing the returned offer as an actual checkbox
+    (a propose-track write, mirroring ``app.curation.proposal_writer``) is
+    the caller's concern; checking that checkbox is a SEPARATE, later human
+    act that must independently invoke :func:`run_create_pass` with
+    ``kind=OutputKind.DIGEST`` -- offering is never running.
+    """
+
+    if not (period_label or "").strip():
+        raise ValueError("build_digest_offer requires a non-empty period_label")
+    return DigestOffer(
+        period_label=period_label,
+        offer_label=f"Offer: generate a digest for {period_label}?",
+        moment_id=moment_id,
+    )
+
+
+def emit_digest_offer_receipt(
+    offer: DigestOffer,
+    *,
+    outbox_path: Path,
+    trace_id: str | None = None,
+) -> str:
+    """Emit an observability receipt for a materialized digest offer
+    (never for a generated digest -- that receipt is
+    :data:`CREATE_PROPOSED_EVENT`, only reachable through the explicit-ask
+    :func:`run_create_pass` path)."""
+
+    return _emit_receipt(
+        DIGEST_OFFER_EVENT,
+        {
+            "period_label": offer.period_label,
+            "offer_label": offer.offer_label,
+            "moment_id": offer.moment_id,
+        },
+        outbox_path=outbox_path,
+        trace_id=trace_id,
+    )
+
+
 # --- expiry sweep -------------------------------------------------------------
 
 
@@ -655,11 +800,14 @@ __all__ = [
     "CREATE_SCOPE",
     "CREATE_STAGING_WRITE_ACTION",
     "DEFAULT_STALENESS_DAYS",
+    "DIGEST_OFFER_EVENT",
     "DRAFTS_SUBDIR",
     "SUPPORTED_OUTPUT_KINDS",
     "CreateBlockedError",
     "CreatePassReport",
     "CreateRequest",
+    "DigestActivityInput",
+    "DigestOffer",
     "ExpirySweepReport",
     "InvalidOutputKindError",
     "OutputKind",
@@ -667,6 +815,8 @@ __all__ = [
     "UnresolvableCitationError",
     "build_create_activation_posture",
     "build_create_candidates",
+    "build_digest_offer",
+    "emit_digest_offer_receipt",
     "evaluate_create_activation",
     "run_create_pass",
     "sweep_expired_drafts",
