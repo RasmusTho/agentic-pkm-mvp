@@ -1,4 +1,4 @@
-State: **Filed.** Parent feature issue **#2795** (validation hub, `agent:blocked` pending kernel-backlog sequencing); children **#2796–#2801** filed 2026-07-02 in dependency order. KA-01 (#2796) delivered via PR #2928 (2026-07-04); KA-02 (#2797) delivered via PR #2931 (captionless ASR fallback); KA-03 (#2798) delivered via PR #2932 (deterministic normalize stage); KA-04 (#2799) delivered (open extraction registry + `summary` extractor, this PR). KA-05–KA-06 (#2800–#2801) remain `agent:blocked` on their own unmet prerequisites.
+State: **Filed.** Parent feature issue **#2795** (validation hub, `agent:blocked` pending kernel-backlog sequencing); children **#2796–#2801** filed 2026-07-02 in dependency order. KA-01 (#2796) delivered via PR #2928 (2026-07-04); KA-02 (#2797) delivered via PR #2931 (captionless ASR fallback); KA-03 (#2798) delivered via PR #2932 (deterministic normalize stage); KA-04 (#2799) delivered (open extraction registry + `summary` extractor); KA-05 (#2800) delivered (candidate assembly + governed `youtube_source_note` writeback, this PR). KA-06 (#2801) remains `agent:blocked` on its own unmet prerequisites.
 Doc role: Parent-issue mirror (GitHub issue #2795 is the authoritative backlog/validation surface)
 Authority: None — this file mirrors the filed parent issue so the spec directory is self-describing; the live issue governs.
 
@@ -25,8 +25,9 @@ slice holds, the platform contracts are proven before any breadth is built.
 ## Sequencing and gates
 
 - KA-01 (#2796) delivered via PR #2928; KA-02 (#2797) delivered via PR #2931; KA-03 (#2798)
-  delivered via PR #2932. KA-04–KA-06 (#2799–#2801) remain `agent:blocked` until their own
-  prerequisites (KA-03 — now clear, KA-04, KA-05 respectively) clear, in dependency order.
+  delivered via PR #2932; KA-04 (#2799) delivered (open extraction registry + `summary`
+  extractor); KA-05 (#2800) delivered (candidate writeback, this PR). KA-06 (#2801) remains
+  `agent:blocked` until its own prerequisite (KA-05 — now clear) is reflected upstream.
 - Integration-fabric class decision #2794: resolved (Acquisition source, class 11) by the same
   docs PR that filed this issue set.
 - Review-posture vocabulary: posture-not-token pending #2793.
