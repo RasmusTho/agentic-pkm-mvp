@@ -34,7 +34,9 @@ def pytest_configure(config) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _sanitize_external_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def _sanitize_external_env(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """
     Ensure tests are hermetic and do not accidentally read from a user's real vault
     (e.g. iCloud-backed VAULT_ROOT), which can block filesystem opens and hang the suite.
@@ -53,8 +55,15 @@ def _sanitize_external_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LLM_CHAT_MODEL", "mock-chat")
     monkeypatch.setenv("LLM_EMBED_MODEL", "mock-embed")
 
-    monkeypatch.setenv("STORE_BACKEND", "memory")
-    monkeypatch.delenv("DATABASE_URL", raising=False)
+    # pg-marked tests must see the environment-provided DATABASE_URL (CI
+    # service container, local dev DB); stripping it here made every pg test
+    # in CI fall through to the machine-local 127.0.0.1:15432 default in
+    # tests/conftest.py::default_pg_dsn_for_pg_tests and skip or fail
+    # (#2818). Same guard pattern as
+    # tests/conftest.py::force_memory_store_for_non_pg.
+    if request.node.get_closest_marker("pg") is None:
+        monkeypatch.setenv("STORE_BACKEND", "memory")
+        monkeypatch.delenv("DATABASE_URL", raising=False)
 
     # Eval tests remain opt-in.
     monkeypatch.setenv("EVAL_LLM_MODE", "skip")

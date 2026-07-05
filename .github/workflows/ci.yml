@@ -150,7 +150,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: app
           POSTGRES_PASSWORD: app
@@ -175,8 +175,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r dev-requirements.txt
+      - name: Enable pgvector extension
+        # The pgvector/pgvector image ships the extension files but does not
+        # auto-enable it in the database. The root migration 202510241200
+        # declares `embedding VECTOR` unconditionally, so the `vector` type
+        # must exist before `alembic upgrade head`. This mirrors the repo's
+        # own prod-parity harness (tests/migrations/test_store_schema_parity.py):
+        # ENABLE_VECTOR stays at its repo-wide default (unset); the extension
+        # is created against the target DB directly. See #2818.
+        run: |
+          python -c "import os, psycopg; psycopg.connect(os.environ['DATABASE_URL'], autocommit=True).execute('CREATE EXTENSION IF NOT EXISTS vector')"
       - name: Upgrade database
-        run: alembic upgrade head || true
+        run: alembic upgrade head
       - name: Run tests
         shell: bash
         env:
