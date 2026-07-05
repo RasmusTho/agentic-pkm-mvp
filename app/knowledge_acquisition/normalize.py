@@ -7,18 +7,32 @@ source-agnostic shape for any acquired transcript, whatever the acquisition meth
 
 - Deterministic: same `raw` record in, byte-identical `normalized` output out. No network, no
   LLM calls, no clock/random dependence in the output.
-- Auto-caption normalization strips inline timing/styling tags, collapses consecutive duplicate
-  lines, and merges rolling cues that repeat trailing text into single segments with combined
-  start/end (the yt-dlp #1734 pattern the research memo names).
+- Auto-caption normalization strips inline timing/styling tags and collapses the rolling-cue
+  duplication (the yt-dlp #1734 pattern the research memo names): any line exactly repeating the
+  immediately preceding emitted line is dropped, and each surviving line keeps its own cue's
+  start/end timing.
 - Language is recorded as *detected*, never asserted; `acquisition_method` is propagated
   unchanged from the raw record.
 - Lineage stamps the raw record's `content_identity` plus this stage's version — no event is
   emitted here (`REFINEMENT_PIPELINE_CONTRACT.md` § Stage execution model names a stage-event
   requirement, but that wiring is KA-06 / #2801, a later slice; this stage is a pure transform).
 
-Both the caption path (`caption_body`: a VTT-shaped string) and the ASR path (`segments`: a list
-of `{start, end, text}` dicts, per `app/media/transcribe.py::run_asr`) funnel through the same
-`normalize()` entry point to the same `NormalizedSegment` / `NormalizedTranscript` shape.
+Dispatch is on the record's **declared** `acquisition_method` token — the discriminator the
+source spec owns — never on payload shape-sniffing. In the shipped `youtube_url` raw-record
+shape (KA-01 #2928; KA-02 PR #2931), an ASR record's `caption_body` holds the full *plain-text*
+ASR transcript while its timed segments live under `asr_segments`; sniffing `caption_body` first
+would VTT-parse prose to zero cues and silently discard the transcript. The paths converge on
+the same `NormalizedSegment` / `NormalizedTranscript` shape:
+
+- `captions_manual` / `captions_auto` → parse `caption_body` as VTT-shaped cues, strip inline
+  tags, dedup rolling cues;
+- `asr` → read the `asr_segments` list (`{start, end, text}` dicts, the
+  `app/media/transcribe.py::run_asr` shape) directly;
+- anything else (including `captionless`, which carries no transcript) → `NormalizeError`.
+
+Fail-loud guard: a record whose transcript body is non-empty but whose normalization yields zero
+segments raises `NormalizeError` (item-scoped, per the contract's loud stage-failure posture) —
+this stage never emits a superficially-valid empty artifact for a record that carried content.
 """
 
 from __future__ import annotations
@@ -30,9 +44,13 @@ from typing import Any
 STAGE_NAME = "normalize"
 STAGE_VERSION = 1
 
-# Acquisition methods declared by the youtube_url source spec
-# (YOUTUBE_SOURCE_SPEC.md; REFINEMENT_PIPELINE_CONTRACT.md § normalized).
-_CAPTION_METHODS = {"captions_manual", "captions_auto"}
+# Acquisition-method dispatch vocabulary, declared by the youtube_url source spec
+# (YOUTUBE_SOURCE_SPEC.md; REFINEMENT_PIPELINE_CONTRACT.md § normalized). Caption-method
+# records carry a VTT-shaped `caption_body`; ASR records carry timed `asr_segments`
+# (KA-02 PR #2931) with `caption_body` holding the plain-text transcript. Any other token
+# (including `captionless`, which has no transcript to normalize) fails loud in normalize().
+_CAPTION_METHODS = frozenset({"captions_manual", "captions_auto"})
+_ASR_METHOD = "asr"
 
 
 class NormalizeError(ValueError):
@@ -100,10 +118,15 @@ _DEFAULT_QUALITY_NOTE = "acquisition method not recognized; quality unknown"
 def normalize(raw_record: dict[str, Any]) -> NormalizedTranscript:
     """Normalize a `raw` transcript record into the shared `normalized` shape.
 
-    Dispatches on shape, not a hardcoded source check: a `caption_body` string is parsed as
-    caption cues (VTT-style) and rolling-cue deduped; a `segments` list (the ASR shape) is taken
-    as already-segmented and passed through the same downstream pipeline. Both converge on one
+    Dispatches on the record's declared `acquisition_method` token (contract-honest: the
+    discriminator is set by the source plugin per its source spec, never guessed from payload
+    shape). Caption methods parse `caption_body` as VTT-shaped cues with rolling-cue dedup;
+    `asr` reads the timed `asr_segments` list directly. Both converge on one
     `NormalizedTranscript` schema.
+
+    Raises `NormalizeError` (item-scoped, loud) for an unrecognized method token, and whenever
+    a record carrying a non-empty transcript body would otherwise normalize to zero segments —
+    an empty result from non-empty content is transcript loss, never a valid output.
     """
     acquisition_method = raw_record.get("acquisition_method")
     if not acquisition_method or not isinstance(acquisition_method, str):
@@ -113,13 +136,24 @@ def normalize(raw_record: dict[str, Any]) -> NormalizedTranscript:
     if not content_identity or not isinstance(content_identity, str):
         raise NormalizeError("raw_record.content_identity is required and must be a string")
 
-    caption_body = raw_record.get("caption_body")
-    asr_segments = raw_record.get("segments")
+    raw_body = raw_record.get("caption_body")
+    caption_body: str = raw_body if isinstance(raw_body, str) else ""
+    body_has_content = bool(caption_body.strip())
 
-    if caption_body:
-        raw_segments = parse_caption_cues(caption_body)
-        segments = dedup_rolling_cues(raw_segments)
-    elif asr_segments:
+    if acquisition_method in _CAPTION_METHODS:
+        if not body_has_content:
+            raise NormalizeError(
+                f"{acquisition_method} record has no caption_body to normalize "
+                "(malformed raw record: caption-method records always carry a caption track body)"
+            )
+        segments = dedup_rolling_cues(parse_caption_cues(caption_body))
+        if not segments:
+            raise NormalizeError(
+                "caption_body is non-empty but parsed to zero cues/segments — refusing to emit "
+                "an empty normalized artifact for a record that carried transcript content"
+            )
+    elif acquisition_method == _ASR_METHOD:
+        asr_segments = raw_record.get("asr_segments") or []
         segments = tuple(
             NormalizedSegment(
                 start=float(seg["start"]),
@@ -129,8 +163,18 @@ def normalize(raw_record: dict[str, Any]) -> NormalizedTranscript:
             for seg in asr_segments
         )
         segments = tuple(seg for seg in segments if seg.text)
+        if not segments and body_has_content:
+            raise NormalizeError(
+                "asr record has a non-empty transcript body but zero usable asr_segments — "
+                "refusing to emit an empty normalized artifact for a record that carried "
+                "transcript content"
+            )
     else:
-        segments = ()
+        raise NormalizeError(
+            f"unsupported acquisition_method for normalize: {acquisition_method!r} "
+            f"(caption methods: {sorted(_CAPTION_METHODS)}; asr: {_ASR_METHOD!r}; "
+            "'captionless' records carry no transcript and are not normalizable)"
+        )
 
     metadata = raw_record.get("metadata") or {}
     chapters = tuple(dict(ch) for ch in (metadata.get("chapters") or ()) if ch)
@@ -159,8 +203,9 @@ def normalize(raw_record: dict[str, Any]) -> NormalizedTranscript:
 _TIMESTAMP_RE = re.compile(
     r"(\d{2}:)?(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(\d{2}:)?(\d{2}):(\d{2})[.,](\d{3})"
 )
+# Matches any inline VTT tag: styling (`<c>`, `</c>`, `<b>`, `<c.colorE5E5E5>`) and karaoke
+# timestamps (`<00:00:00.500>`) alike.
 _INLINE_TAG_RE = re.compile(r"<[^>]*>")
-_KARAOKE_TIMESTAMP_RE = re.compile(r"<\d{2}:\d{2}:\d{2}[.,]\d{3}>")
 
 
 def _parse_timestamp(hours: str | None, minutes: str, seconds: str, millis: str) -> float:
@@ -176,9 +221,13 @@ def _normalize_whitespace(text: str) -> str:
 
 
 def _strip_cue_text_tags(line: str) -> str:
-    """Strip inline VTT timing/styling tags (karaoke timestamps, `<c>`/`<b>` etc.)."""
-    stripped = _KARAOKE_TIMESTAMP_RE.sub("", line)
-    stripped = _INLINE_TAG_RE.sub("", stripped)
+    """Strip inline VTT timing/styling tags (karaoke timestamps, `<c>`/`<b>` etc.).
+
+    Tags substitute as a single space — not the empty string — so adjacent words never join
+    when no whitespace precedes the tag (`foo<c>bar</c>` → "foo bar", not "foobar"); runs of
+    whitespace then collapse via `_normalize_whitespace`.
+    """
+    stripped = _INLINE_TAG_RE.sub(" ", line)
     return _normalize_whitespace(stripped)
 
 
@@ -193,10 +242,10 @@ def parse_caption_cues(caption_body: str) -> tuple[_RawCue, ...]:
     """Parse a VTT-shaped caption body into raw cues (tags stripped, blank lines dropped).
 
     Tolerant of the WEBVTT header, `Kind:`/`Language:` metadata lines, cue identifiers, and
-    cue settings after the timestamp line (`align:start position:0%`) — all ignored. Also
-    tolerant of bare `srv3`/`json3`-derived plain-text bodies with no timestamp lines at all: in
-    that case the whole body becomes a single untimed cue at (0.0, 0.0) rather than raising, since
-    a normalizer failure would dead-letter the whole item for a cosmetic format difference.
+    cue settings after the timestamp line (`align:start position:0%`) — all ignored. A body
+    with no recognizable timestamp lines (e.g. plain prose) yields zero cues; `normalize()`
+    turns that into a loud item-scoped `NormalizeError` for caption-method records rather than
+    silently emitting an empty transcript.
     """
     lines = caption_body.splitlines()
     cues: list[_RawCue] = []
