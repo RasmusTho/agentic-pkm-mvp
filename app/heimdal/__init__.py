@@ -13,6 +13,12 @@ Mimer-side integration points that substrate hands off to:
   (`docs/HEIMDAL/FABLE_COMPANION.md` §9 "Decision run" item 1): Heimdal emits
   entity *mentions* only; canonical resolution and the register itself live
   here, on Mimer's side of the seam.
+- `app/heimdal/consent_ledger.py` (#3042, Epic #3019 slice A5) -- the
+  append-only consent-grant ledger + the HEIM-3 capture-time check
+  (`admit_raw_evidence`, the one sanctioned signal->raw admission call),
+  seeded with the standing `self_record` grant (ADR-0049 §3 Posture A;
+  FABLE_COMPANION §6.1/§6.2; see
+  `docs/EVENTS.md :: Heimdal consent ledger v0 + capture-time check`).
 """
 
 from __future__ import annotations
