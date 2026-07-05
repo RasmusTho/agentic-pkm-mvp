@@ -96,6 +96,20 @@ SETTINGS_WRITE_RECEIPT = "settings.write.receipt"
 KNOWLEDGE_ACQUISITION_STAGE_COMPLETED = "knowledge_acquisition.stage.completed"
 KNOWLEDGE_ACQUISITION_STAGE_DEAD_LETTERED = "knowledge_acquisition.stage.dead_lettered"
 
+# Heimdal entity register v0 mutation events (Epic #3019 slice A1, #3038).
+# Register mutations (mint / merge / split / redirect-fold) are audit/lineage
+# events on the existing DB outbox, mirroring the Knowledge Acquisition stage
+# events above: NOT dispatched commands (no `outbox_worker._dispatch_topic`
+# branch, no topic-schema registration) — they record that a register
+# mutation happened, per FABLE_COMPANION.md §3.2 ("register mutations are
+# themselves receipted events"). Canonical identity storage is the `.md`
+# entity note (`app/heimdal/entity_register.py`); these events are the
+# auditable record of *how* the note changed, never a parallel store.
+HEIMDAL_REGISTER_ENTITY_MINTED = "heimdal.register.entity.minted"
+HEIMDAL_REGISTER_ENTITY_MERGED = "heimdal.register.entity.merged"
+HEIMDAL_REGISTER_ENTITY_SPLIT = "heimdal.register.entity.split"
+HEIMDAL_REGISTER_ENTITY_REDIRECT_RESOLVED = "heimdal.register.entity.redirect_resolved"
+
 __all__ = [
     "INGEST_OBJECT_CREATED",
     "INGEST_OBJECT_UPDATED",
@@ -172,4 +186,8 @@ __all__ = [
     "SETTINGS_WRITE_RECEIPT",
     "KNOWLEDGE_ACQUISITION_STAGE_COMPLETED",
     "KNOWLEDGE_ACQUISITION_STAGE_DEAD_LETTERED",
+    "HEIMDAL_REGISTER_ENTITY_MINTED",
+    "HEIMDAL_REGISTER_ENTITY_MERGED",
+    "HEIMDAL_REGISTER_ENTITY_SPLIT",
+    "HEIMDAL_REGISTER_ENTITY_REDIRECT_RESOLVED",
 ]
