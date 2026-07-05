@@ -42,10 +42,13 @@ posture):
   §1.2) via :func:`compute_connect_finding_id` -- a symmetric pair produces one
   finding_id regardless of iteration order, so reruns over an unchanged vault
   are no-ops. Every pass consults :class:`DeclinedLedgerPort` before emitting
-  a finding; E4 (the ledger itself, #2994's sibling slice) has not merged yet,
-  so the default port always returns "not declined" -- but the consultation
-  point is wired now so E4 only needs to supply a real port, never touch this
-  call site.
+  a finding, backed by the real declined-proposal ledger
+  (``app.proposals.declined_ledger.DeclinedLedger``, EXP-2 #2995): a declined
+  finding_id is suppressed and counted in the pass receipt
+  (``suppressed_by_decline``) until its content basis changes (a changed
+  span/basis mints a different finding_id automatically -- the ledger needs
+  no reset logic of its own). The ledger is derived/rebuildable suppression
+  state only; it is never indexed, retrieved, or admitted as context.
 - **Bounded surfacing.** :class:`ConnectPassConfig` caps findings per note and
   in total; a pass that would exceed a cap truncates deterministically
   (lowest finding_id first) rather than flooding panels.
@@ -85,28 +88,27 @@ _DEFAULT_RELATEDNESS_FLOOR = 0.55
 class DeclinedLedgerPort(Protocol):
     """Consultation point for "has the human already said no to this finding?"
 
-    E4 (#2994's sibling slice, the declined-proposal ledger) has not merged
-    yet. This pass is built to consult the ledger on every finding it would
-    otherwise emit, per spec §1.2 ("this pass must be built to consult it
-    once E4 lands -- wire the consultation point even if E4 merges after").
-    Until a real ledger exists, :func:`default_declined_ledger` is a
-    permanent-no-op implementation of this protocol: it never suppresses
-    anything, so today's behavior is unchanged, but the call site never has
-    to change when E4 ships a real backing store.
+    Backed by the real declined-proposal ledger
+    (``app.proposals.declined_ledger.DeclinedLedger``, EXP-2 #2995) via
+    :func:`default_declined_ledger`. Kept as a narrow structural Protocol
+    (rather than importing the concrete class into every call site) so this
+    pass, the G2 curation passes, and later E8's contradiction pass all
+    consult the identical one-method contract without coupling to
+    ``app.proposals``'s storage details.
     """
 
     def is_declined(self, finding_id: str) -> bool: ...
 
 
-class _NullDeclinedLedger:
-    """Default :class:`DeclinedLedgerPort`: nothing has ever been declined."""
-
-    def is_declined(self, finding_id: str) -> bool:  # noqa: ARG002 -- protocol shape
-        return False
-
-
 def default_declined_ledger() -> DeclinedLedgerPort:
-    return _NullDeclinedLedger()
+    """Construct the default :class:`DeclinedLedgerPort` -- the real,
+    file-backed ledger (``app.proposals.declined_ledger``), not a stub.
+    Import is deferred into the function body so a module that only wants
+    the Protocol shape (e.g. for typing or a test double) never pays for
+    importing ``app.proposals``."""
+    from app.proposals.declined_ledger import default_declined_ledger as _real_default
+
+    return _real_default()
 
 
 @dataclass(frozen=True)
