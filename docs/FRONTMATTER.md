@@ -92,6 +92,31 @@ System-written fields must be:
 - Backed by receipts (what wrote it, why, and under what intent).
 - Safe to ignore without losing meaning.
 
+### Cognitive Expansion synthesis-provenance keys (proposed, EXP-3/#2996)
+
+`docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md` §2.3/§2.4 (owner decision E2)
+proposes four system-owned frontmatter keys for Create's staged synthesis drafts and — once EXP-4
+(#2997) ships governed acceptance — the notes those drafts become. Proposed here per repo convention
+(bundled with the EXP-3 implementation PR, not deferred); the keys apply narrowly to
+machine-synthesized artifacts, not to ordinary human-authored notes:
+
+- `derived_by` — the generation mechanism, e.g. `synthesis` (Create's cross-note reasoning). Marks
+  the note as machine-derived so it stays visibly distinguishable from human prose (mirrors
+  `app.knowledge_compilation.proposal_builders._MACHINE_DERIVATIONS`'s existing use of the same
+  vocabulary for non-frontmatter provenance signals).
+- `authority_state` — `proposal` while staged (this slice only writes this value); a future accepted
+  state is EXP-4's concern.
+- `sources` — the list of cited source `uuid`s (or `path:`-fallback identities) the draft's SourceRefs
+  resolve against. Advisory lineage metadata, not a processing precondition, consistent with `uuid`'s
+  own advisory posture elsewhere in this doc.
+- `accepted_by` — reserved for EXP-4 (#2997): recorded only once a human acceptance receipt promotes
+  a draft to canonical. This slice (EXP-3) never writes this key — a staged, unaccepted draft has no
+  `accepted_by`.
+
+These keys are staging-only in this slice's actual write path (`app/expansion/create.py`); they
+appear here so the enum of accepted system-owned keys is documented before EXP-4 needs it, per this
+doc's existing pattern of naming guardrail fields (trust/review_state) without locking exact names.
+
 For active writing-surface notes, frontmatter should remain a bounded human-facing surface.
 It should not become the only durable home for:
 - execution traces,

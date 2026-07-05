@@ -88,9 +88,37 @@ class VaultAlphaSummary:
 
 _TEST_NOTE_REL = Path("Test") / "Alpha-HumanFlows.md"
 
+# System subfolders never indexed as knowledge -- ``companions`` is the
+# existing exclusion; ``drafts`` is the Create staging area
+# (``app.expansion.create.DRAFTS_SUBDIR``, EXP-3 #2996, spec
+# ``docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md`` §2.3:
+# "staging content is not indexed as knowledge and cannot be retrieved into
+# any context" -- the anti-laundering keystone). Kept as a plain tuple of
+# literal strings (not imported from app.expansion) so app.ingest never takes
+# an import dependency on app.expansion for a two-token exclusion list.
+_UNINDEXED_SYSTEM_SUBFOLDERS: tuple[str, ...] = ("companions", "drafts")
+
 
 def _is_locked_error(exc: Exception) -> bool:
     return isinstance(exc, OSError) and getattr(exc, "errno", None) == 35
+
+
+def _is_unindexed_system_path(rel_path: Path, *, system_root: Path) -> bool:
+    """True if *rel_path* falls under a system subfolder this ingest walk must
+    never index (spec ``staged_drafts_invisible_to_retrieval`` keystone).
+
+    Checks both the literal ``_system`` folder name and the vault's
+    configured system-dir name (``get_vault_system_dir_rel``), matching the
+    two-shape check the pre-existing companions exclusion already used.
+    """
+    parts = rel_path.parts[:2]
+    if len(parts) < 2:
+        return False
+    return parts in (
+        ("_system", subfolder) for subfolder in _UNINDEXED_SYSTEM_SUBFOLDERS
+    ) or parts in (
+        (system_root.parts[0], subfolder) for subfolder in _UNINDEXED_SYSTEM_SUBFOLDERS
+    )
 
 
 _LOCKED_FILES_LOG_ENV = "LOCKED_FILES_LOG_PATH"
@@ -376,7 +404,7 @@ def _select_candidates(
             if rel_display.startswith("."):
                 continue
             system_root = Path(get_vault_system_dir_rel(vault_root))
-            if rel_path.parts[:2] == ("_system", "companions") or rel_path.parts[:2] == (*system_root.parts[:1], "companions"):
+            if _is_unindexed_system_path(rel_path, system_root=system_root):
                 continue
             if not path.is_file():
                 continue
@@ -728,7 +756,7 @@ def _ingest_candidates(
             rel_path = path.relative_to(vault_root)
             rel_display = str(rel_path)
             system_root = Path(get_vault_system_dir_rel(vault_root))
-            if rel_path.parts[:2] == ("_system", "companions") or rel_path.parts[:2] == (*system_root.parts[:1], "companions"):
+            if _is_unindexed_system_path(rel_path, system_root=system_root):
                 continue
             if rel_display in processed:
                 continue

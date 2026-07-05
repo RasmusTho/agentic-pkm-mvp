@@ -575,7 +575,7 @@ truth, not a backlog.
 | Source Understanding lenses | `app/source_understanding/*` | **seam** (`/p0` route reachable, no runtime caller) | a consuming flow + admissibility |
 | Planner / next-action | `app/planner/*`, `app/orchestrator/*` | **dormant** (orchestrator imported only by CLI/smoke, not the three runtime services) | proven loop + commitment surfacing |
 | Commitment surfacing | `app/domain/commitments.py`, `app/commitments/*`, Companion workspace state/API/UI | **live read-side** (durable vault-backed commitment artifacts feed a read-only Companion projection; no mutation/transition affordance) | mutation, reminders, automatic closure, and CRE reach-out remain follow-ons |
-| Knowledge compilation / cross-note synthesis | `app/knowledge_compilation/*`, `app/reasoning/multi.py` | **dormant** (zero external importers / zero callers) | admissibility + governed writeback |
+| Knowledge compilation / cross-note synthesis | `app/knowledge_compilation/*`, `app/reasoning/multi.py`, `app/expansion/create.py` | **gated-active-via-contract** (EXP-3, #2996: `run_create_pass` is the first runtime caller of both `run_multi_note_reasoning` and `proposal_builders.build_compilation_draft`, activated through `app/activation/gate.py` at `proposal` authority — the gate's second proof after ASK #2026. Output is staging-only: a `create.overview`/`create.answer_note` draft under `_system/drafts/`, never a canonical write) | governed acceptance/writeback (EXP-4, #2997) to reach canonical |
 
 Definitions: **live** = consumed by a running service in normal operation; **seam** = built and
 registered but flag-gated or uncalled; **dormant** = code plus tests exist, no runtime invocation.

@@ -499,6 +499,74 @@ retrievable; a blind ingester says so).
   `tests/invariants/test_expansion_invariants.py::test_declined_not_reproposed`.
 - **Related issues:** #2995 (EXP-2), #2994 (EXP-1, consultation point), #2980 (parent).
 
+### create_never_autowrites_canonical
+
+- **Purpose:** No synthesis output reaches a canonical vault location without a human acceptance
+  receipt; the staging area (`_system/drafts/`, owner decision E1's recommended default) is the only
+  machine-writable destination for Create output, and staging is not canonical.
+- **Protected principle:** agents propose, human disposes — the field-differentiating moat.
+- **Affected boundaries:** Cognitive Expansion (Create), Knowledge compilation (draft contract),
+  WriteGuard.
+- **Expected failure mode:** a "helpful" slice writes the overview directly to the topic folder, or
+  acceptance is inferred from anything other than the human's checkbox.
+- **Current enforcement:** live — `app/expansion/create.py::run_create_pass` only ever writes under
+  the resolved system dir's `drafts` subfolder, gated by the named `expansion.create.stage_write`
+  WriteGuard action; there is no body-edit or canonical-location write path in this module.
+- **Test path:** `tests/invariants/test_expansion_invariants.py::test_create_never_autowrites_canonical`.
+- **Related issues:** #2996 (EXP-3), #2997 (EXP-4, governed acceptance — the only path to canonical),
+  #2980 (parent).
+
+### synthesis_carries_source_provenance
+
+- **Purpose:** Every synthesized draft and every accepted note carries resolvable SourceRefs
+  (per-section and note-level); citation-validation failure blocks the proposal loudly; provenance
+  survives acceptance permanently.
+- **Protected principle:** synthesis without traceable sources is unaccountable machine text — the
+  charter's "loss of provenance" failure mode, refused at construction.
+- **Affected boundaries:** Cognitive Expansion (Create), Knowledge compilation
+  (`proposal_builders`/`CompilationDraft`/`SourceRef`).
+- **Expected failure mode:** unsourced narrative ships; or sources are pruned at acceptance and the
+  note becomes untraceable machine text.
+- **Current enforcement:** live — `app/expansion/create.py::_validate_citations` blocks a draft
+  (`UnresolvableCitationError`) when a cited source does not resolve or a quoted span does not exist
+  verbatim in its source text; validation runs before any draft/context is built, never after a
+  silent prune.
+- **Test path:** `tests/invariants/test_expansion_invariants.py::test_synthesis_carries_source_provenance`,
+  `tests/expansion/test_create_draft_lifecycle.py`.
+- **Related issues:** #2996 (EXP-3), #2980 (parent).
+
+### staged_drafts_invisible_to_retrieval
+
+- **Purpose:** Staging-area content is never indexed as knowledge and never retrievable into any
+  context; unaccepted machine text cannot compound into future syntheses.
+- **Protected principle:** the anti-laundering keystone — mirrors "panel content is not indexed as
+  knowledge" (`docs/PANEL_AGENT.md:175`).
+- **Affected boundaries:** Ingest pipeline (`app.ingest.vault_alpha`), watcher, retrieval spine
+  (consumer side — never reachable).
+- **Expected failure mode:** silent self-amplification — drafts citing drafts.
+- **Current enforcement:** live — `app/ingest/vault_alpha.py`'s candidate-selection walk excludes the
+  Create staging subfolder (`_UNINDEXED_SYSTEM_SUBFOLDERS`, extending the pre-existing
+  `_system/companions` exclusion) at both the initial candidate scan and the resumable ingest loop;
+  `app/watcher/vault_watcher.py` already skips the entire `_system` tree unconditionally.
+- **Test path:** `tests/invariants/test_expansion_invariants.py::test_drafts_invisible_to_retrieval`,
+  `tests/expansion/test_create_draft_lifecycle.py::test_staged_draft_not_indexed_by_vault_alpha_ingest`.
+- **Related issues:** #2996 (EXP-3), #2980 (parent).
+
+### expansion_requires_activation_record
+
+- **Purpose:** Connect/Create passes run only under a green activation-gate record; a regressed
+  precondition yields blocked-with-reason, never a silent run (no third "activate anyway" path).
+- **Protected principle:** the Expansion Activation Gate is the dormant→active flip's sole
+  deterministic authority; no capability may self-activate.
+- **Affected boundaries:** Cognitive Expansion (Create), `app.activation.gate`.
+- **Expected failure mode:** a capability runs its cognition/write path despite a regressed
+  admissibility/loop-precondition/observability input, because a call site bypassed the gate.
+- **Current enforcement:** live — `app/expansion/create.py::run_create_pass` evaluates
+  `evaluate_create_activation` first and returns a non-activatable `CreatePassReport` (never raises,
+  never runs cognition or writes) when any gate input is blocked.
+- **Test path:** `tests/invariants/test_expansion_invariants.py::test_create_requires_activation_record`.
+- **Related issues:** #2996 (EXP-3), #2980 (parent).
+
 ## Schema-batch deferred invariants
 
 The [schemas/contracts batch](../../schemas/README.md) explicitly deferred a set of cross-field and
@@ -690,6 +758,10 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 | standards_are_adapters | #18 | EBF/SIP/CES | doc_only | `TBD` (CES review) |
 | connect_proposals_candidate_only | #9 | GOV/RCA | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/expansion/test_connect_findings.py` |
 | declined_findings_not_reproposed | #9 | GOV/RCA | static + runtime | `tests/proposals/test_declined_ledger.py`, `tests/invariants/test_expansion_invariants.py` |
+| create_never_autowrites_canonical | #9 | GOV/RCA | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/expansion/test_create_draft_lifecycle.py` |
+| synthesis_carries_source_provenance | #4,#9 | GOV/RCA | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/expansion/test_create_draft_lifecycle.py` |
+| staged_drafts_invisible_to_retrieval | #1,#9 | RCA/GOV | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/expansion/test_create_draft_lifecycle.py` |
+| expansion_requires_activation_record | #9 | GOV | static + runtime | `tests/invariants/test_expansion_invariants.py` |
 
 ## Related documents
 
