@@ -460,6 +460,23 @@ retrievable; a blind ingester says so).
 - **Eventual test path:** `tests/invariants/test_receipt_surface_writable.py`.
 - **Related issues:** #3047, #2968 (fail-loud posture, preserved).
 
+### connect_proposals_candidate_only
+
+- **Purpose:** `connect.*` classes map to propose-track by construction (no configuration can move
+  them); connect evidence enters downstream context clamped to `background` at most; no connect
+  output applies a link without the governed acceptance path (the checkbox).
+- **Protected principle:** agents propose, human disposes — Cognitive Expansion's moat.
+- **Affected boundaries:** Curation finding pipeline (G2), retrieval spine (consumer), Panel proposal
+  surface.
+- **Expected failure mode:** a `connect.*` class is added to `MECHANICAL_ALLOWLIST` (silently moves a
+  relationship-surfacing finding onto the auto-fix track), or a connect finding's supporting material
+  is cited as `evidence` rather than `background` in a downstream context.
+- **Current enforcement:** live — `app/curation/findings.py` (`CONNECT_FINDING_CLASSES` asserted
+  disjoint from `MECHANICAL_ALLOWLIST` at import time), `app/expansion/connect.py`.
+- **Test path:** `tests/invariants/test_expansion_invariants.py::test_connect_candidate_only`,
+  `tests/expansion/test_connect_findings.py`.
+- **Related issues:** #2994 (EXP-1), #2980 (parent).
+
 ## Schema-batch deferred invariants
 
 The [schemas/contracts batch](../../schemas/README.md) explicitly deferred a set of cross-field and
@@ -649,6 +666,7 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 | storage_write_is_not_authority_transition | #9,#12 | PDM/GOV | doc + xfail | `tests/invariants/test_authority_transition.py` (xfail) |
 | propose_when_uncertain | #17 | CAO/GOV/HIX | doc + xfail | `tests/invariants/test_context_envelope.py` (xfail) |
 | standards_are_adapters | #18 | EBF/SIP/CES | doc_only | `TBD` (CES review) |
+| connect_proposals_candidate_only | #9 | GOV/RCA | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/expansion/test_connect_findings.py` |
 
 ## Related documents
 
