@@ -271,3 +271,254 @@ def _memory_backend(monkeypatch: pytest.MonkeyPatch) -> None:
     objects_mod._MEMORY_STORE.clear()
     yield
     objects_mod._MEMORY_STORE.clear()
+
+
+# ===========================================================================
+# P-3 read-purity (#2911) -- APPEND-ONLY BLOCK, own section
+# ===========================================================================
+#
+# Everything below this marker belongs to P-3 (issue #2911). Do not interleave
+# P-1/P-4 seam-register or guard-stub material (#2910) into this section --
+# that is a sibling concurrently-delivered block; keep edits confined to this
+# one and expect a possible trivial rebase before merge.
+#
+# Derivation: ``docs/testing/invariant-synthesis-2026-07.md :: P-3`` (on
+# ``main`` since PR #2915 -- no anchor drift) and
+# ``docs/architecture/formal-model.md`` §3 invariant Q4 ("Read purity").
+#
+# Q4 is violated three ways today, all deliberately legal per the model's own
+# verdict ("the *undocumented* ones are the defect, not healing itself"):
+#
+#   1. uuid-heal reachable from ``GET /api/companion/workspace``: the real,
+#      correctly WriteGuard-gated write chain is
+#      ``app.services.artifact_identity.resolve_note_artifact_identity``
+#      (heal_missing_uuid=True by default) -> ``app.services.note_uuid
+#      .ensure_note_uuid`` -> ``DEFAULT_WRITE_GUARD.assert_writes_allowed
+#      ("ensure uuid")`` -> ``app.knowledge.write_ops.write_note_from_absolute``.
+#      (The `_writeguard_status()` helper in
+#      ``app/api/routes/companion.py`` that calls ``assert_writes_allowed(
+#      "companion.workspace.read")`` is a read-side health probe for a
+#      response field, NOT the write gate for this heal -- it is not
+#      registered as a heal transition because it never writes.)
+#   2. lazy identity-heal on vault load: ``VaultManager.load_last_active``
+#      (``app/vault/manager.py``) -> ``select_vault`` -> ``validate_vault``
+#      -> ``_ensure_frontmatter_id`` -> ``markdown_store.write_frontmatter``,
+#      gated only by role-based ``persist`` flags (``allow_shared_identity_heal``
+#      / ``allow_local_identity_heal``), NOT by WriteGuard -- this asymmetry
+#      with case 1 is intentional per the model and is pinned as-is (Out of
+#      Scope: "changing heal behavior").  Reachable from many GET routes that
+#      resolve the active vault on a cold manager (``_companion_vault_context_
+#      with_lazy_last_active`` in ``companion.py``; the independent lazy-load
+#      in ``app/api/routes/vault_resolution.py``), guarded so it only fires
+#      once per manager instance (``_LAST_ACTIVE_LOAD_ATTEMPTED_ATTR``).
+#   3. ASK's receipt appends to advisory J-sinks: ``POST /api/ask`` (not a GET
+#      route -- excluded from the route-walk by construction, ``"GET" not in
+#      route.methods``) drives ``app.agent_memory.recall_activation
+#      ._emit_recall_receipt`` (J.recall) and ``app.activation.ask_synthesis
+#      .emit_ask_synthesis_receipt`` (J.synthesis), both durable JSONL
+#      append-only sinks reached from a nominal "read" per the model. Recorded
+#      here as the registered advisory-sink list for completeness of the
+#      catalog even though POST routes are outside this property's route-walk.
+
+# Closed registry: (module_path, function_qualname) -> justification. Every
+# durable write reachable from a GET route must either be absent, or its
+# seam must appear here with a WriteGuard-gated=True/False classification and
+# a one-line justification -- mirroring REGISTERED_MIRRORS' closed-set shape.
+# The write CLASS (not the route path) is the registration key because the
+# same heal seam is reachable from several GET routes (documented per-entry).
+
+
+@dataclass(frozen=True)
+class HealTransition:
+    """One registered, legal durable write reachable from a GET/read route."""
+
+    seam: str  # "module.path::qualname" of the actual write call site
+    wg_gated: bool  # True iff WriteGuard.assert_writes_allowed guards this seam
+    justification: str
+    example_get_routes: tuple[str, ...]
+
+
+REGISTERED_HEAL_TRANSITIONS: dict[str, HealTransition] = {
+    "app.services.note_uuid::ensure_note_uuid": HealTransition(
+        seam="app.services.note_uuid::ensure_note_uuid",
+        wg_gated=True,
+        justification=(
+            "T-uuid-heal (formal-model.md Q4, case 1): heals a note missing "
+            "frontmatter.uuid on first read via resolve_note_artifact_identity. "
+            "WG-gated at the seam (assert_writes_allowed(\"ensure uuid\")) -- a "
+            "denying guard degrades to identity_state=unresolved_missing_uuid "
+            "instead of writing, per note_uuid.py / artifact_identity.py."
+        ),
+        example_get_routes=("/api/companion/workspace",),
+    ),
+    "app.vault.manager::VaultManager._ensure_frontmatter_id": HealTransition(
+        seam="app.vault.manager::VaultManager._ensure_frontmatter_id",
+        wg_gated=False,
+        justification=(
+            "Lazy identity-heal (formal-model.md Q4, case 2): vaultId/"
+            "localInstanceId healed during validate_vault on the first "
+            "cold-manager load_last_active(). Gated only by role-based "
+            "persist flags (allow_shared_identity_heal / "
+            "allow_local_identity_heal), NOT WriteGuard -- this is the "
+            "documented asymmetry with case 1; pinned as current reality, "
+            "not changed by this issue (Out of Scope)."
+        ),
+        example_get_routes=(
+            "/api/companion/workspace",
+            "/api/companion/now",
+            "/api/companion/vault/context",
+            "/api/companion/vault/notes",
+            "/api/companion/memory/review-queue",
+        ),
+    ),
+    "app.vault.app_local::AppLocalSettingsStore.save": HealTransition(
+        seam="app.vault.app_local::AppLocalSettingsStore.save",
+        wg_gated=False,
+        justification=(
+            "App-local registry bootstrap-on-first-read: AppLocalSettingsStore"
+            ".load() creates the missing .app-local.md file with a fresh "
+            "appInstallId the first time any GET route triggers "
+            "VaultManager.load_last_active() on a cold manager (app_local.py "
+            "load() calling self.save() when self.path does not exist yet). "
+            "Not WriteGuard-gated -- found by this property's route-walk "
+            "(previously undocumented, a genuine new Q4 instance this issue "
+            "pins as current reality rather than changes, per Out of Scope)."
+        ),
+        example_get_routes=(
+            "/api/companion/workspace",
+            "/api/companion/now",
+            "/api/companion/vault/context",
+        ),
+    ),
+}
+
+# Registered advisory J-sink append list (formal-model.md Q4, case 3). These
+# are durable append-only writes from a nominal "read" transition (T-ask), but
+# T-ask is a POST route and therefore never appears in this property's GET
+# route-walk. Recorded here so the read-purity catalog documents all three
+# known Q4 violations explicitly, per the issue scope, even though only cases
+# 1-2 are reachable from (and therefore asserted against) the GET route-walk.
+REGISTERED_ADVISORY_J_SINKS: dict[str, str] = {
+    "app.agent_memory.recall_activation::_emit_recall_receipt": (
+        "J.recall receipt append (advisory, FD-J, losable by declaration); "
+        "reached only via POST /api/ask -> ask graph recall node, never a "
+        "GET route."
+    ),
+    "app.activation.ask_synthesis::emit_ask_synthesis_receipt": (
+        "J.synthesis receipt append (advisory, FD-J, losable by declaration); "
+        "reached only via POST /api/ask -> ask graph synthesis node, never a "
+        "GET route."
+    ),
+}
+
+
+@dataclass
+class DurableWriteCall:
+    """One recorded call into a durable-write primitive during a GET request."""
+
+    seam: str
+    caller: str
+    args_repr: str
+
+
+def _immediate_caller_qualname() -> str:
+    """Best-effort ``module::qualname`` of the function that invoked the
+    wrapped primitive, walking past this module's own spy frames.
+
+    This is what makes the spy attribute writes to the REAL call site that
+    reached the primitive (e.g. ``app.services.note_uuid::ensure_note_uuid``)
+    rather than to the primitive itself -- a direct, out-of-band call to the
+    same primitive (as the fixture-proven negative test does) is honestly
+    attributed to ITS OWN caller and is therefore correctly unregistered.
+    """
+    import inspect
+
+    frame = inspect.currentframe()
+    try:
+        # Skip this function's own frame, then the immediate `traced_*`
+        # wrapper frame in this module -- the next frame up is the real caller.
+        outer = frame.f_back.f_back if frame and frame.f_back else None
+        if outer is None:
+            return "<unknown>"
+        module_name = outer.f_globals.get("__name__", "<unknown>")
+        qualname = outer.f_code.co_qualname if hasattr(outer.f_code, "co_qualname") else outer.f_code.co_name
+        return f"{module_name}::{qualname}"
+    finally:
+        del frame
+
+
+@dataclass
+class WriteSpy:
+    """Records every real production call into the two durable-write
+    primitives P-3 cares about, calling straight through to the original
+    implementation (spy, not stub/fake) -- mirrors ``EventSpy``'s shape.
+
+    Wraps:
+      - ``app.vault.markdown_settings.MarkdownSettingsStore.write_frontmatter``
+        (the lazy identity-heal write primitive, case 2)
+      - ``app.knowledge.write_ops.write_note_from_absolute`` (the uuid-heal
+        write primitive, case 1)
+
+    Each recorded call's ``seam`` is the REAL CALLER that reached the
+    primitive (introspected from the stack), not the primitive's own name --
+    so a registered heal is registered by "who legitimately reaches this
+    write", and a new/unexpected caller of the same primitive is correctly
+    unregistered (the fixture-proven negative in
+    ``test_read_purity.py::test_unregistered_route_write_fails`` depends on
+    this attribution).
+    """
+
+    calls: list[DurableWriteCall] = field(default_factory=list)
+
+    def record(self, seam: str, caller: str, args_repr: str) -> None:
+        self.calls.append(DurableWriteCall(seam=seam, caller=caller, args_repr=args_repr))
+
+    def seams_hit(self) -> frozenset[str]:
+        return frozenset(call.caller for call in self.calls)
+
+
+@contextmanager
+def spy_on_durable_writes(
+    monkeypatch: pytest.MonkeyPatch, spy: WriteSpy
+) -> Iterator[WriteSpy]:
+    """Wrap the REAL write-primitive seams with recording spies that still
+    delegate to the original implementation -- observe, don't fake."""
+    import app.vault.markdown_settings as markdown_settings_mod
+    import app.knowledge.write_ops as write_ops_mod
+
+    original_write_frontmatter = markdown_settings_mod.MarkdownSettingsStore.write_frontmatter
+    original_write_note_from_absolute = write_ops_mod.write_note_from_absolute
+
+    def traced_write_frontmatter(self: Any, path: Any, frontmatter: Any, *, body: Any = None) -> Any:
+        spy.record(
+            seam="app.vault.markdown_settings::MarkdownSettingsStore.write_frontmatter",
+            caller=_immediate_caller_qualname(),
+            args_repr=f"path={path!r}",
+        )
+        return original_write_frontmatter(self, path, frontmatter, body=body)
+
+    def traced_write_note_from_absolute(path: Any, content: Any, *, vault_root: Any) -> Any:
+        spy.record(
+            seam="app.knowledge.write_ops::write_note_from_absolute",
+            caller=_immediate_caller_qualname(),
+            args_repr=f"path={path!r}",
+        )
+        return original_write_note_from_absolute(path, content, vault_root=vault_root)
+
+    monkeypatch.setattr(
+        markdown_settings_mod.MarkdownSettingsStore, "write_frontmatter", traced_write_frontmatter
+    )
+    monkeypatch.setattr(write_ops_mod, "write_note_from_absolute", traced_write_note_from_absolute)
+    # note_uuid.py imported write_note_from_absolute directly into its module
+    # namespace, so patch the reference actually called from ensure_note_uuid.
+    import app.services.note_uuid as note_uuid_mod
+
+    monkeypatch.setattr(note_uuid_mod, "write_note_from_absolute", traced_write_note_from_absolute)
+    yield spy
+
+
+@pytest.fixture
+def write_spy(monkeypatch: pytest.MonkeyPatch) -> Iterator[WriteSpy]:
+    spy = WriteSpy()
+    with spy_on_durable_writes(monkeypatch, spy):
+        yield spy
