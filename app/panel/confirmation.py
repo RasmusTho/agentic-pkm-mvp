@@ -120,6 +120,19 @@ class UnknownProposalError(LookupError):
     pass
 
 
+class PanelReceiptPersistenceError(RuntimeError):
+    """Neither outbox sink persisted the panel.action.* accountability receipt.
+
+    Raised by :func:`_emit_projection_event` so
+    :meth:`PanelConfirmationService.confirm` withholds the success ack rather
+    than returning a ``receipt_id`` for a receipt that was never durable
+    (P-5 receipt-before-ack; T-panel-confirm,
+    ``docs/architecture/formal-model.md :: 2.1``). The panel confirm route maps
+    this to a withheld-ack 500, mirroring T-capture's
+    ``authority_receipt_persistence_failed`` (``app/api/routes/capture.py``).
+    """
+
+
 @dataclass
 class StagedProposal:
     artifact_id: str
@@ -558,27 +571,47 @@ def _emit_projection_event(
         payload=payload,
         trace_id=trace_id,
     )
-    # Write to JSONL audit log
+    # Receipt-before-ack (P-5, T-panel-confirm): the JSONL audit log is the
+    # required local accountability sink; the DB outbox is mirrored when a pg
+    # backend / DSN is configured (same pattern as panel_agent/runtime.py). At
+    # least one sink must persist the panel.action.* receipt before confirm()
+    # acknowledges — a swallowed failure that still returned event_id would ack
+    # a lost receipt. Mirrors capture.py::_emit_capture_event.
     resolved = outbox_path or _resolve_outbox_path()
+    emitted = False
     try:
-        append_jsonl_outbox_event(resolved, evt, default_source="panel_agent.confirmation")
-    except Exception:
-        logger.debug("projection event jsonl write skipped event=%s", event_name)
-    # Mirror to DB outbox when backend is pg (same pattern as panel_agent/runtime.py)
+        emitted = append_jsonl_outbox_event(
+            resolved, evt, default_source="panel_agent.confirmation"
+        )
+    except Exception as exc:
+        logger.warning(
+            "projection event jsonl write failed event=%s err=%s", event_name, exc
+        )
+
     backend = (os.getenv("STORE_BACKEND") or "").strip().lower()
     db_url = os.getenv("DATABASE_URL") or os.getenv("DB_DSN")
     if backend == "pg" or db_url:
         outbox_evt = coerce_outbox_event(evt, default_source="panel_agent.confirmation")
         if outbox_evt is not None:
             try:
-                write_outbox_event(
+                stored_id = write_outbox_event(
                     outbox_evt,
                     idempotency_key=derive_idempotency_key(
                         outbox_evt.event, outbox_evt.event_id, EVENT_ID_FINGERPRINT
                     ),
                 )
+                emitted = emitted or bool(stored_id)
             except Exception as exc:
-                logger.debug("projection event db outbox write skipped event=%s err=%s", event_name, exc)
+                logger.warning(
+                    "projection event db outbox write failed event=%s err=%s",
+                    event_name,
+                    exc,
+                )
+
+    if not emitted:
+        raise PanelReceiptPersistenceError(
+            f"panel {event_name} receipt was not persisted to any outbox sink"
+        )
     return evt.event_id
 
 
@@ -922,6 +955,7 @@ __all__ = [
     "ConfirmRequest",
     "ConfirmResponse",
     "PanelConfirmationService",
+    "PanelReceiptPersistenceError",
     "panel_staging_store_posture",
     "ProposalStore",
     "Receipt",
