@@ -83,3 +83,95 @@ def test_validate_source_anchors_rejects_missing_explicit_stable_anchor(
 
     assert ok is False
     assert errors == ["Anchor not found in docs/ROADMAP.md: PA2-FREEFORM"]
+
+
+def test_bold_bullet_anchor_found(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Emphasis-wrapped bullet anchors (bold, italic, inline-code) must resolve."""
+    monkeypatch.chdir(tmp_path)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "KERNEL.md").write_text(
+        "- **I-E2 (Idempotent handlers).** For every topic T: idempotent dispatch.\n",
+        encoding="utf-8",
+    )
+
+    ok, errors = validate_issue_body(
+        """
+## Source Anchors
+- `docs/KERNEL.md :: I-E2`
+"""
+    )
+
+    assert ok is True
+    assert errors == []
+
+
+def test_italic_and_inline_code_bullet_anchor_found(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Other emphasis variants (`*ID*`, `` `ID` ``, `__ID__`) also resolve."""
+    monkeypatch.chdir(tmp_path)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "REGISTER.md").write_text(
+        "- *ID-ONE* some description\n"
+        "- `ID-TWO` another description\n"
+        "- __ID-THREE__ yet another\n",
+        encoding="utf-8",
+    )
+
+    for anchor in ("ID-ONE", "ID-TWO", "ID-THREE"):
+        ok, errors = validate_issue_body(
+            f"""
+## Source Anchors
+- `docs/REGISTER.md :: {anchor}`
+"""
+        )
+        assert ok is True, errors
+        assert errors == []
+
+
+def test_validate_source_anchors_still_rejects_absent_emphasis_anchor(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """An anchor ID genuinely absent from the doc must still fail, emphasis or not."""
+    monkeypatch.chdir(tmp_path)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "KERNEL.md").write_text(
+        "- **I-E2 (Idempotent handlers).** For every topic T: idempotent dispatch.\n",
+        encoding="utf-8",
+    )
+
+    ok, errors = validate_issue_body(
+        """
+## Source Anchors
+- `docs/KERNEL.md :: I-E9`
+"""
+    )
+
+    assert ok is False
+    assert errors == ["Anchor not found in docs/KERNEL.md: I-E9"]
+
+
+def test_kernel_audit_invariant_ids_resolvable() -> None:
+    """Real-world instance: the kernel audit doc's bold-bullet invariant IDs
+    must resolve against the actual repo checkout (issue #2917 regression)."""
+    repo_root = Path(__file__).resolve().parents[2]
+    doc_path = repo_root / "docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md"
+    assert doc_path.exists(), f"expected kernel audit doc at {doc_path}"
+
+    ok, errors = validate_issue_body(
+        f"""
+## Source Anchors
+- `{doc_path.relative_to(repo_root)} :: I-E2`
+"""
+    )
+
+    assert ok is True
+    assert errors == []
