@@ -1,9 +1,9 @@
-State: Accepted (owner decision, 2026-07-04; RESEARCH-08 decision D2). Adopts a three-tier classification of **constituent interaction** in the acknowledged SoS (Yggdrasil the whole; Mimer + Heimdall constituents — ADR-0044) and names the **inbound governed-candidate event/evidence intake** shape that Heimdall's published-event stream requires. ADR-0020 (SFC) is left untouched. Per ADR-0043/#2886, the SoS relationship is **not** called "federation" (SFC owns that word); the relationship is acknowledged constituents interoperating via capability contracts. Enactment (the `docs/GLOSSARY.md` reconciliation; per-surface exposure-gate application) is deferred to follow-up issues; this ADR performs no doc edit.
+State: Accepted (owner decision, 2026-07-04; RESEARCH-08 decision D2). Adopts a three-tier classification of **constituent interaction** in the acknowledged SoS (Yggdrasil the whole; Mimer + Heimdal constituents — ADR-0044) and names the **inbound governed-candidate event/evidence intake** shape that Heimdal's published-event stream requires. ADR-0020 (SFC) is left untouched. Per ADR-0043/#2886, the SoS relationship is **not** called "federation" (SFC owns that word); the relationship is acknowledged constituents interoperating via capability contracts. Enactment (the `docs/GLOSSARY.md` reconciliation; per-surface exposure-gate application) is deferred to follow-up issues; this ADR performs no doc edit.
 Doc role: Decision record (ADR)
-Authority: Authoritative for the *decision* of how interactions between constituents of the acknowledged SoS are classified and governed, and for the intake shape by which one constituent's published output enters another as evidence. Naming/SoS scope stay owned by ADR-0044; SFC and ADR-0020 are unchanged. Design content: `docs/architecture/ecosystem-federation.md` § Interaction tiers (read through ADR-0044's conformance) and `docs/HEIMDALL/ECOSYSTEM_SOS_MODEL.md` §2 (event-log vs projection).
+Authority: Authoritative for the *decision* of how interactions between constituents of the acknowledged SoS are classified and governed, and for the intake shape by which one constituent's published output enters another as evidence. Naming/SoS scope stay owned by ADR-0044; SFC and ADR-0020 are unchanged. Design content: `docs/architecture/ecosystem-federation.md` § Interaction tiers (read through ADR-0044's conformance) and `docs/HEIMDAL/ECOSYSTEM_SOS_MODEL.md` §2 (event-log vs projection).
 Owner: Architecture / CES stewardship
 Temporal class: Durable decision (supersede via a new ADR only if the tier/intake rule is reversed or SFC's charter is extended to own inter-constituent topology).
-Source of truth: This ADR plus `docs/HEIMDALL/ECOSYSTEM_SOS_MODEL.md` §2, `docs/architecture/ecosystem-federation.md` § Interaction tiers, `docs/adr/ADR-0020-sfc-single-node-upgrade-path.md`, `docs/SYSTEM_BREAKDOWN_STRUCTURE.md:1077-1132` (SFC charter), `docs/boundaries/SFC.md`.
+Source of truth: This ADR plus `docs/HEIMDAL/ECOSYSTEM_SOS_MODEL.md` §2, `docs/architecture/ecosystem-federation.md` § Interaction tiers, `docs/adr/ADR-0020-sfc-single-node-upgrade-path.md`, `docs/SYSTEM_BREAKDOWN_STRUCTURE.md:1077-1132` (SFC charter), `docs/boundaries/SFC.md`.
 
 # ADR-0045: Constituent interaction rule — three tiers + governed-candidate event/evidence intake
 
@@ -14,7 +14,7 @@ Source of truth: This ADR plus `docs/HEIMDALL/ECOSYSTEM_SOS_MODEL.md` §2, `docs
 
 ## Context
 
-In the acknowledged SoS (ADR-0044: Yggdrasil the whole; Mimer + Heimdall constituents),
+In the acknowledged SoS (ADR-0044: Yggdrasil the whole; Mimer + Heimdal constituents),
 constituents interoperate. Two governance questions arise:
 
 - **Word collision.** "Federation" is already owned by **SFC** (Synchronization, Federation &
@@ -28,9 +28,9 @@ constituents interoperate. Two governance questions arise:
   reserves. And exposing a constituent's capability surface over the mesh is a new network-exposure
   shape that must pass the "explicit and proportionate" gate (`docs/SECURITY_TRUST_BOUNDARIES.md:37`).
 
-The concrete driver is **Heimdall**, the sensor constituent (ADR-0043): it *emits* an append-only
-stream of attributed events, which downstream constituents consume. `docs/HEIMDALL/ECOSYSTEM_SOS_MODEL.md`
-§2 already fixes the rule — Heimdall owns the fact stream; Mimer projects events into durable
+The concrete driver is **Heimdal**, the sensor constituent (ADR-0043): it *emits* an append-only
+stream of attributed events, which downstream constituents consume. `docs/HEIMDAL/ECOSYSTEM_SOS_MODEL.md`
+§2 already fixes the rule — Heimdal owns the fact stream; Mimer projects events into durable
 knowledge under its own governed-promotion rules and reads them as candidate evidence in its
 cognition (the Hugin facet), never as authority. This ADR names the interaction taxonomy that classifies that flow, per boundary audit §13
 routing (CES/`docs/architecture/SBS_OPERATIONALIZATION_PLAN.md`).
@@ -48,9 +48,9 @@ machinery:
 | **1** | A constituent holds derived state of another's content (caches, mirrors, subscriptions) | Adapter + explicit staleness/refresh contract; **must run ADR-0020's own validation obligation** (`docs/adr/ADR-0020-sfc-single-node-upgrade-path.md:31`) before build | SFC-adjacent; classification mandatory before build |
 | **2** | A constituent writes toward another's durable surface, or multi-write topology | Full capability-promotion path + GOV + SFC semantics | The ground ADR-0020 reserves; not licensed by the SoS framing |
 
-### 2. Inbound governed-candidate event/evidence intake (the Heimdall shape)
+### 2. Inbound governed-candidate event/evidence intake (the Heimdal shape)
 
-A constituent that **emits data toward** another (Heimdall's published-event stream → Mimer) is
+A constituent that **emits data toward** another (Heimdal's published-event stream → Mimer) is
 **not** Tier 0 (that is answer-on-request), **not** Tier 1 (holding another's content), and **not**
 Tier 2 (authoritative write). It is a distinct **inbound governed-candidate event/evidence intake**:
 the producer publishes attributed, provenance-bearing events; the consumer ingests them as
@@ -59,11 +59,11 @@ the producer publishes attributed, provenance-bearing events; the consumer inges
 conforms to the authority rule ("influence travels as evidence/candidates, never as direct
 authority") and to ADR-0039 (derived inputs are candidate context, not authority). It stays **outside**
 Tier 2 precisely because the producer never writes authoritatively into the consumer's surface — it
-matches `docs/HEIMDALL/ECOSYSTEM_SOS_MODEL.md` §2 (event log vs. projection) exactly.
+matches `docs/HEIMDAL/ECOSYSTEM_SOS_MODEL.md` §2 (event log vs. projection) exactly.
 
 ### 3. Authority boundary
 
-Each constituent holds domain authority in its own domain (Heimdall owns the fact stream; Mimer owns
+Each constituent holds domain authority in its own domain (Heimdal owns the fact stream; Mimer owns
 durable knowledge/memory and reasoning/orchestration); the human is apex. Published events are
 evidence to consumers, not facts imposed by fiat.
 
@@ -79,7 +79,7 @@ proportionate" gate **per-surface** (existing gate, applied — not a new one).
 Any `docs/GLOSSARY.md` reconciliation (ensuring "federation" reads as SFC-only and the SoS
 relationship is described as acknowledged-constituent interoperation, consistent with ADR-0043) and
 per-surface exposure-gate rows are follow-up work (#2891, aligned to ADR-0043's naming register). The
-concrete Heimdall intake contract lives with Heimdall's own enactment (`docs/HEIMDALL/**`, #2886), not
+concrete Heimdal intake contract lives with Heimdal's own enactment (`docs/HEIMDAL/**`, #2886), not
 here.
 
 ## Constraints honored
@@ -92,9 +92,9 @@ here.
 
 ## Consequences
 
-- Every constituent interaction gets a checkable classification before build; Heimdall's event stream
+- Every constituent interaction gets a checkable classification before build; Heimdal's event stream
   classifies immediately as inbound governed-candidate intake, keeping its data as evidence and off
-  the Tier-2 authoritative-write path — consistent with the merged Heimdall SoS model.
+  the Tier-2 authoritative-write path — consistent with the merged Heimdal SoS model.
 - Tier-1 interactions inherit ADR-0020's validation discipline automatically.
 - The "federation" word-collision is resolved by conforming to ADR-0043 (SFC owns the word), not by
   minting new vocabulary.
@@ -107,7 +107,7 @@ to own inter-constituent topology.
 
 ## References
 
-- `docs/adr/ADR-0043-heimdall-naming-and-norse-name-register.md`; `docs/HEIMDALL/ECOSYSTEM_SOS_MODEL.md` §2 (event log vs projection).
+- `docs/adr/ADR-0043-heimdall-naming-and-norse-name-register.md`; `docs/HEIMDAL/ECOSYSTEM_SOS_MODEL.md` §2 (event log vs projection).
 - `docs/architecture/ecosystem-federation.md` § Interaction tiers (read through ADR-0044's conformance).
 - `docs/adr/ADR-0020-sfc-single-node-upgrade-path.md` (unchanged); `docs/boundaries/SFC.md`; `docs/SYSTEM_BREAKDOWN_STRUCTURE.md:1077-1132`.
 - `docs/SECURITY_TRUST_BOUNDARIES.md:37` (exposure gate); ADR-0019 / ADR-0031 (governed writes); ADR-0039 (candidate-not-authority).

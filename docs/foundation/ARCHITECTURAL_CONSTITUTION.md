@@ -24,7 +24,7 @@ Two merged-or-in-flight framings collided on what "Yggdrasil" names:
 - **ADR-0043** (file on `main` via PR #2886; owner-decided 2026-07-04; ADR status: Proposed,
   enactment deferred): **Yggdrasil is the whole** — the acknowledged
   System-of-Systems in which the constituents hang: **Munin** (knowledge/memory), **Hugin**
-  (agent runtime), **Heimdall** (sensing/event capture). "Federation" stays reserved for the SFC
+  (agent runtime), **Heimdal** (sensing/event capture). "Federation" stays reserved for the SFC
   boundary's node/replication concern and is not the word for the constituent relationship.
 - `docs/architecture/ecosystem-federation.md` (RESEARCH-08 lineage, #2888/#2890/#2891): framed a
   "Personal Agentic Ecosystem" as apex with Yggdrasil as one constituent.
@@ -418,4 +418,4 @@ themselves law.
 - `docs/architecture/evolution-graph.md` (RESEARCH-04 — the sequencing this law layer serves)
 - `docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md` (CW/I/RQ derivations)
 - `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` + `docs/architecture/SBS_*` (boundary ownership; Part 8 failure modes cited throughout)
-- ADR-0043 + `docs/HEIMDALL/ECOSYSTEM_SOS_MODEL.md` (apex model); ADR-0013/0023/0032/0036/0042
+- ADR-0043 + `docs/HEIMDAL/ECOSYSTEM_SOS_MODEL.md` (apex model); ADR-0013/0023/0032/0036/0042

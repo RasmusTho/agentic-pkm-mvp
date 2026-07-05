@@ -1,8 +1,8 @@
 State: Advisory design proposal (Fable-5 architecture pass, 2026-07-04). Design only — no code, no shipped schemas, no GitHub work. Every load-bearing claim carries an SBS reconciliation tag (`[conform]` / `[extend]` / `[reshape]`); every `reshape` is a routed proposal to the owner via CES/ADR, never enacted here. Where this proposal and an owner doc disagree, the owner doc wins until the owner decides otherwise.
 Doc role: Ecosystem structure proposal (advisory)
-Inputs: docs/SYSTEM_BREAKDOWN_STRUCTURE.md; docs/boundaries/** (14 charters + CES); docs/foundation/00-yggdrasil-doctrine.md; docs/architecture/system-context-overlay.md; docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md; docs/HEIMDALL/** (A1/A3/A4/A5) + ADR-0043 (Proposed, PR #2888 open — input, not settled truth); docs/architecture/ecosystem-federation.md (RESEARCH-08, merged); docs/KNOWLEDGE_ACQUISITION/README.md; docs/DESIGN_PRINCIPLES.md; docs/MODULAR_ARCHITECTURE.md; ADR-0041; docs/RUNTIME_CORRECTNESS_KERNEL/README.md; docs/testing/invariant-tests.md (referenced).
+Inputs: docs/SYSTEM_BREAKDOWN_STRUCTURE.md; docs/boundaries/** (14 charters + CES); docs/foundation/00-yggdrasil-doctrine.md; docs/architecture/system-context-overlay.md; docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md; docs/HEIMDAL/** (A1/A3/A4/A5) + ADR-0043 (Proposed, PR #2888 open — input, not settled truth); docs/architecture/ecosystem-federation.md (RESEARCH-08, merged); docs/KNOWLEDGE_ACQUISITION/README.md; docs/DESIGN_PRINCIPLES.md; docs/MODULAR_ARCHITECTURE.md; ADR-0041; docs/RUNTIME_CORRECTNESS_KERNEL/README.md; docs/testing/invariant-tests.md (referenced).
 
-# Ecosystem Structure Proposal — one breakdown, Heimdall placed
+# Ecosystem Structure Proposal — one breakdown, Heimdal placed
 
 ---
 
@@ -22,12 +22,12 @@ root). This is a restoration, not an arbitrary rename.
 
 | OD | Decision (locked) |
 |---|---|
-| **OD-1** | **Yggdrasil = the whole / apex** (world-tree; nothing is metaphorically bigger). **Mimer** = the knowledge-and-cognition constituent (undivided). **Heimdall** = sensor. **Hugin/Munin** reserved (ravens; a future agent-runtime/knowledge split only if it ever passes the constituent test). **Pantheon-per-constituent** naming principle — Norse names for constituents + the ecosystem only; control boundaries keep their 3-letter codes; capabilities keep descriptive names. |
-| **OD-2** | Apex framing becomes **primary in current-state docs when Heimdall is *chartered*** (earlier clarity; accept the SoI-doc rewrite churn). |
+| **OD-1** | **Yggdrasil = the whole / apex** (world-tree; nothing is metaphorically bigger). **Mimer** = the knowledge-and-cognition constituent (undivided). **Heimdal** = sensor. **Hugin/Munin** reserved (ravens; a future agent-runtime/knowledge split only if it ever passes the constituent test). **Pantheon-per-constituent** naming principle — Norse names for constituents + the ecosystem only; control boundaries keep their 3-letter codes; capabilities keep descriptive names. |
+| **OD-2** | Apex framing becomes **primary in current-state docs when Heimdal is *chartered*** (earlier clarity; accept the SoI-doc rewrite churn). |
 | **OD-3** | Resolved by OD-1: Mimer is **one** constituent; no Munin/Hugin split. |
 | **OD-4** | **Charter the private bindings constituent now (thin):** a contract + a private home + the INV-EF1 burn-down as its backlog. |
-| **OD-5** | Promote the **three contracts** (event-bus, identity register, provenance/replay standard) at Heimdall design-acceptance; implementations stay module-lazy. |
-| **OD-6** | **Proportional, not maximal isolation.** The raw→published seam and raw-layer access controls are **designed-in from day one** (structural, upgradeable), but Heimdall's raw store does **not** get separate credentials/process/host isolation now — encryption + access control in the shared deployment. See the cross-cutting principle below. |
+| **OD-5** | Promote the **three contracts** (event-bus, identity register, provenance/replay standard) at Heimdal design-acceptance; implementations stay module-lazy. |
+| **OD-6** | **Proportional, not maximal isolation.** The raw→published seam and raw-layer access controls are **designed-in from day one** (structural, upgradeable), but Heimdal's raw store does **not** get separate credentials/process/host isolation now — encryption + access control in the shared deployment. See the cross-cutting principle below. |
 | **OD-7** | Adopt the naming scheme; carry **OD-1 + OD-3 + OD-7** in **one** superseding/amending ADR against ADR-0043. |
 | **OD-8** | **Hold PR #2888**, reconcile it with this structure, land **one** coherent ratification (this structure + Mimer naming + RESEARCH-08 D1/D2/D3 references; D4 orthogonal). |
 
@@ -38,10 +38,10 @@ root). This is a restoration, not an arbitrary rename.
 > (storage, compute, tokens are limited); but every system is *designed* with the seam/isolation in
 > mind from the start so the posture can be tightened without a redesign if the threat model rises.**
 
-Consequence for this proposal: Heimdall is not privacy-special-cased with heavy isolation; it gets
+Consequence for this proposal: Heimdal is not privacy-special-cased with heavy isolation; it gets
 the same proportional posture as Mimer and every future sibling. The structural seam (§4) stays —
 it is cheap to *design* and expensive to retrofit — while the *implementation* isolation is deferred
-and proportional. Heimdall's always-on-OFF default, event minimization, and event-triggered decay
+and proportional. Heimdal's always-on-OFF default, event minimization, and event-triggered decay
 (A-docs) directly serve cost-efficiency, not only privacy.
 
 ### Status of this doc
@@ -63,10 +63,10 @@ inside Mimer**, **not** a constituent. It acquires from *external public sources
 podcasts): no private-observation seam, no independent volatility clock beyond its EBF source
 plugins, and it lives in Mimer's runtime + authority chain. `[conform]`
 
-KAP and Heimdall are **symmetric as pipelines, asymmetric as structure**: both end at a hand-off
-artifact (KAP → *candidate*, Heimdall → *published event*), both feed the **one** GOV promotion gate,
+KAP and Heimdal are **symmetric as pipelines, asymmetric as structure**: both end at a hand-off
+artifact (KAP → *candidate*, Heimdal → *published event*), both feed the **one** GOV promotion gate,
 and both conform to the shared Layer-2 **provenance/replay standard**. So **KAP is the pathfinder** —
-it builds the acquire→hand-off→promote backbone *now* (batch, public sources) that Heimdall later
+it builds the acquire→hand-off→promote backbone *now* (batch, public sources) that Heimdal later
 **generalizes** to a streaming sensor. Practical rule for the YouTube epic: build provenance/replay,
 the candidate contract, and entity extraction **generalizably** (design as if a second consumer
 exists — because it does), even while implementations stay module-lazy (OD-5). KAP's spec phrase
@@ -79,12 +79,12 @@ the squirrel carrying messages up and down the tree). `[extend]`
 Refines the identity-register decision. The identity substrate is **not just speaker/person
 identity** — it is a **canonical entity register** for *people, organizations, projects, places,
 devices, and topics*, because the goal is to **link and connect everything** across systems (one
-canonical "Acme Corp" that both a YouTube-derived candidate and a Heimdall event reference). It is
+canonical "Acme Corp" that both a YouTube-derived candidate and a Heimdal event reference). It is
 the cross-system linking substrate that makes single-source-of-truth work *across* constituents.
 `[extend]`
 
 - **Decision (locked):** promote the **entity-register contract + a thin resolution interface now**
-  — both KAP (entity extraction) and Heimdall (attribution) are already consumers, so the
+  — both KAP (entity extraction) and Heimdal (attribution) are already consumers, so the
   module-lazy "wait for the second consumer" test is already met for the *contract*. The graph
   richness grows on top later; implementation stays proportional (cost-efficiency principle).
 - **Ownership:** Layer-2 substrate, owned by no constituent. It owns canonical **entity existence +
@@ -93,18 +93,18 @@ the cross-system linking substrate that makes single-source-of-truth work *acros
 
 ### Two-way communication + single-source-of-truth / system-of-record integrity
 
-Fable's "pure producer" framing is refined: Heimdall is the sole producer of the **event stream**
+Fable's "pure producer" framing is refined: Heimdal is the sole producer of the **event stream**
 (the fact-plane dependency is one-way), but constituents **communicate bidirectionally through
 contracts** (entity lookups, corrections, control/consent, enrichment) — never by reaching into
 another's internals (ECO-1). SSoT is preserved by one rule:
 
-> **One system-of-record per domain.** Heimdall is SoR for *observed events*; Mimer/HKA is SoR for
+> **One system-of-record per domain.** Heimdal is SoR for *observed events*; Mimer/HKA is SoR for
 > *durable human knowledge*; the entity register is SoR for *canonical entities*. Every other holder
 > is a **rebuildable projection**, never truth. No fact has two owning systems; cross-system
 > references are **by ID against the owner's SoR**, never by copy-as-truth. The only path to
 > canonical remains the one GOV promotion gate.
 
-Corrections sent *back* to a producer become **new records** (e.g. a correction to a Heimdall event
+Corrections sent *back* to a producer become **new records** (e.g. a correction to a Heimdal event
 is a new event — append-only intact, HEIM-1), never in-place edits. **Consequence for the substrate:**
 the Layer-2 **event-bus contract must support bidirectional / request-response**, not only
 fire-and-forget pub/sub.
@@ -115,13 +115,13 @@ fire-and-forget pub/sub.
 
 **Enactment note:** OD-9 (entity-register contract) joins OD-5's substrate-contract promotion set;
 ECO-11 and the bidirectional-bus requirement fold into the event-bus + provenance contracts designed
-at Heimdall design-acceptance. Still advisory; nothing built here.
+at Heimdal design-acceptance. Still advisory; nothing built here.
 
 ---
 
 ## 1. Executive summary
 
-**Recommended structure.** The apex is the **Personal Agentic Ecosystem** — an acknowledged System-of-Systems under one human apex authority, governed by contracts (CES/ADR), never by a runtime component. It has exactly three constituents today: **Yggdrasil** (the knowledge-and-cognition system — the current SoI, with all 14 control boundaries + CES intact inside it), **Heimdall** (the sensor — observation → attributed, append-only published events; its raw layer is the innermost private ring), and the **private bindings constituent** (proto; operator-bound configuration, born outside the public repo). Future private siblings (home automation, network) are slots, not builds. A thin **platform substrate** (event-bus contract, identity/entity register, provenance/replay standard, build/CI, container base, host topology) is owned by no constituent; promotion into it is owner-gated. KAP stays a capability inside Yggdrasil. Repo stays a monorepo with a hard internal seam until a named split-trigger fires.
+**Recommended structure.** The apex is the **Personal Agentic Ecosystem** — an acknowledged System-of-Systems under one human apex authority, governed by contracts (CES/ADR), never by a runtime component. It has exactly three constituents today: **Yggdrasil** (the knowledge-and-cognition system — the current SoI, with all 14 control boundaries + CES intact inside it), **Heimdal** (the sensor — observation → attributed, append-only published events; its raw layer is the innermost private ring), and the **private bindings constituent** (proto; operator-bound configuration, born outside the public repo). Future private siblings (home automation, network) are slots, not builds. A thin **platform substrate** (event-bus contract, identity/entity register, provenance/replay standard, build/CI, container base, host topology) is owned by no constituent; promotion into it is owner-gated. KAP stays a capability inside Yggdrasil. Repo stays a monorepo with a hard internal seam until a named split-trigger fires.
 
 **Recommended answer to "what is Yggdrasil":** Yggdrasil denotes the **knowledge-and-cognition constituent** — the current single system — not the whole ecosystem. This contradicts draft ADR-0043's D-NAME-WHOLE and is deliberately surfaced as owner decision OD-1 with full reasoning (§10).
 
@@ -135,14 +135,14 @@ The brief frames a two-way tension; the evidence shows **three** models:
 
 - **Model A** (SBS + ADR-0041 + INCOSE audit): Yggdrasil = a modular *single system*; 14 control boundaries; the internal decomposition is explicitly **not** an SoS (audit §3, settled; the owner paid 27-doc churn to remove that vocabulary).
 - **Model B1** (RESEARCH-08, merged): apex = Personal Agentic Ecosystem (acknowledged SoS, target-state, activation-gated); **Yggdrasil = a constituent** (the public knowledge/reasoning system); *no internal boundary is a constituent*; siblings are private-side systems.
-- **Model B2** (Heimdall A1 + draft ADR-0043, PR #2888 open): **Yggdrasil = the whole**; constituents = Munin (knowledge/memory), Hugin (agent-runtime), Heimdall (sensor).
+- **Model B2** (Heimdal A1 + draft ADR-0043, PR #2888 open): **Yggdrasil = the whole**; constituents = Munin (knowledge/memory), Hugin (agent-runtime), Heimdal (sensor).
 
-B1 and B2 agree the ecosystem is an acknowledged SoS with Heimdall as a peer constituent and a public/private seam. They **disagree** on the apex name, on Yggdrasil's referent, and — critically — on whether the knowledge/agent split is a constituent split. This proposal resolves the triangle by taking: the SoS apex from B1/B2 `[reshape → CES/ADR]`, the constituent set from B1 (Yggdrasil undivided) `[conform to audit §3]`, Heimdall's peer status from B1/B2 `[reshape → CES/ADR]`, and Model A unchanged **inside** Yggdrasil `[conform]`.
+B1 and B2 agree the ecosystem is an acknowledged SoS with Heimdal as a peer constituent and a public/private seam. They **disagree** on the apex name, on Yggdrasil's referent, and — critically — on whether the knowledge/agent split is a constituent split. This proposal resolves the triangle by taking: the SoS apex from B1/B2 `[reshape → CES/ADR]`, the constituent set from B1 (Yggdrasil undivided) `[conform to audit §3]`, Heimdal's peer status from B1/B2 `[reshape → CES/ADR]`, and Model A unchanged **inside** Yggdrasil `[conform]`.
 
 ### 2.2 Apex — Personal Agentic Ecosystem
 
-- **What it is:** an acknowledged SoS: constituents are independently meaningful, independently evolvable, deliberately assembled to serve **one human** (single-user invariant intact; constituent count grows, human count does not). `[reshape → CES/ADR — this is RESEARCH-08 D1 / Heimdall A1 §1, refined; routed, not enacted]`
-- **What it is not:** a runtime. Apex authority is exercised through Layer-1 governance: CES stewardship, ADRs, cross-constituent contracts (event contract, identity register, provenance standard, seam invariant). No orchestrator service, no shared mega-server. `[conform — Heimdall A1 §3 Layer 1]`
+- **What it is:** an acknowledged SoS: constituents are independently meaningful, independently evolvable, deliberately assembled to serve **one human** (single-user invariant intact; constituent count grows, human count does not). `[reshape → CES/ADR — this is RESEARCH-08 D1 / Heimdal A1 §1, refined; routed, not enacted]`
+- **What it is not:** a runtime. Apex authority is exercised through Layer-1 governance: CES stewardship, ADRs, cross-constituent contracts (event contract, identity register, provenance standard, seam invariant). No orchestrator service, no shared mega-server. `[conform — Heimdal A1 §3 Layer 1]`
 - **The SoS relation is "acknowledged constituents,"** never "federation" — that word is owned internally by the SFC control boundary and stays there. `[conform]`
 
 ### 2.3 Constituents
@@ -157,16 +157,16 @@ Each constituent is justified by the four tests the repo's contract-first, modul
 - **Contains:** all 14 control boundaries + CES (see §3), the correctness kernel, and **KAP** as an in-constituent acquisition capability (EBF class 11; ends at candidate; settled precedent). `[conform]`
 - **Public/private posture:** code and contracts public (operator-invariant per INV-EF1); all runtime data (vault, stores, receipts) private.
 
-#### C2 — Heimdall: the sensor constituent
+#### C2 — Heimdal: the sensor constituent
 
 - **Purpose (one line):** continuous, consent-gated observation of reality → attributed, timestamped, confidence- and provenance-carrying events; responsibility **ends at a published event**.
 - **Why it is its own constituent (all four tests pass):**
   - *Volatility clock:* sensor hardware, capture pipelines, ASR/vision models churn on a clock independent of knowledge-system churn — the fastest-moving surface in the ecosystem.
-  - *Ownership:* a pure producer. Every other constituent consumes its stream; it consumes no one's internals. A thing everyone reads from and that reads from no one is a peer source, not a submodule of one reader. `[reshape → CES/ADR — same reshape as Heimdall A1 §1; routed]`
+  - *Ownership:* a pure producer. Every other constituent consumes its stream; it consumes no one's internals. A thing everyone reads from and that reads from no one is a peer source, not a submodule of one reader. `[reshape → CES/ADR — same reshape as Heimdal A1 §1; routed]`
   - *Failure mode:* capture gaps and mis-attribution — categorically different from knowledge corruption, and neither side may take the other down.
-  - *Authority posture:* zero semantic authority (a Heimdall event is candidate evidence, never truth — HEIM-8) while holding **custody of the most-private raw data** in the ecosystem. Maximal privacy custody + minimal authority is the inverse of Yggdrasil's kernel; nesting them would smear the seam.
-- **Internal shape (sketch, not a 14-boundary clone):** capture adapters (consent-gated) → raw observation layer (encrypted, isolated, CrossScopeFlow-gated reads, bounded hard retention) → minimize/attribute/publish (resolving against the shared identity register) → append-only published stream. Heimdall *instantiates the boundary disciplines* (its own EBF-like adapters, PDM-like raw store, GOV-pattern consent enforcement, OEF-pattern self-observability) without importing or sharing the 14 boundary instances — those are Yggdrasil's internal law, not ecosystem law. `[extend]`
-- **What Heimdall does NOT own:** knowledge promotion, memory, agent action, the identity register (shared substrate), the bus (shared substrate), what downstream does with an event.
+  - *Authority posture:* zero semantic authority (a Heimdal event is candidate evidence, never truth — HEIM-8) while holding **custody of the most-private raw data** in the ecosystem. Maximal privacy custody + minimal authority is the inverse of Yggdrasil's kernel; nesting them would smear the seam.
+- **Internal shape (sketch, not a 14-boundary clone):** capture adapters (consent-gated) → raw observation layer (encrypted, isolated, CrossScopeFlow-gated reads, bounded hard retention) → minimize/attribute/publish (resolving against the shared identity register) → append-only published stream. Heimdal *instantiates the boundary disciplines* (its own EBF-like adapters, PDM-like raw store, GOV-pattern consent enforcement, OEF-pattern self-observability) without importing or sharing the 14 boundary instances — those are Yggdrasil's internal law, not ecosystem law. `[extend]`
+- **What Heimdal does NOT own:** knowledge promotion, memory, agent action, the identity register (shared substrate), the bus (shared substrate), what downstream does with an event.
 
 #### C3 — Private bindings constituent (proto)
 
@@ -183,19 +183,19 @@ Shared mechanisms every constituent needs and none may own. Promotion into this 
 
 | Substrate item | Shared vs constituent-owned | Notes |
 |---|---|---|
-| **Event-bus contract** (envelope, topics, idempotency, delivery/replay semantics) | **Shared (Layer 2)** — the *contract*; the transport implementation is the Heimdall capability window's open design (generalize the DB outbox vs stream-native — D-BACKBONE stays open) | Must generalize, not fork, the correctness-kernel discipline already being built (KERNEL-02 mandatory idempotency, KERNEL-08 topic schema registry, KERNEL-11 handler idempotency) `[extend]` |
+| **Event-bus contract** (envelope, topics, idempotency, delivery/replay semantics) | **Shared (Layer 2)** — the *contract*; the transport implementation is the Heimdal capability window's open design (generalize the DB outbox vs stream-native — D-BACKBONE stays open) | Must generalize, not fork, the correctness-kernel discipline already being built (KERNEL-02 mandatory idempotency, KERNEL-08 topic schema registry, KERNEL-11 handler idempotency) `[extend]` |
 | **Identity / entity register** | **Shared (Layer 2)** — owner-decided (D-IDENTITY) | Seam to name explicitly: the register owns *entity* identity (who/what exists — people, places, devices); **SIP keeps** semantic/provenance identity of knowledge artifacts and maps entity references. The register is upstream of SIP; neither forks the other `[extend]` |
-| **Provenance / replay standard** | **Shared (Layer 2)** — fixed guardrail | One standard both KAP (acquire→candidate) and Heimdall (observe→publish) conform to; raw evidence immutable + replayable through improved stages `[extend]` |
+| **Provenance / replay standard** | **Shared (Layer 2)** — fixed guardrail | One standard both KAP (acquire→candidate) and Heimdal (observe→publish) conform to; raw evidence immutable + replayable through improved stages `[extend]` |
 | **Build / CI skeleton** | **Shared** — constituent-agnostic; per-constituent gates compose onto it | `[conform]` |
 | **Container base / runtime image** | **Shared** base + per-constituent compose fragments | `[conform]` |
 | **Hardware / host topology** (Tailscale mesh, hosts) | **Shared enabling substrate** — transport and placement, never authority; sensor capture may pin dedicated hardware | `[conform]` |
-| **Stores / persistence** | **Constituent-owned** — Yggdrasil's PDM; Heimdall's raw store is a separate instance under PDM discipline | Never a shared database across constituents — a shared store would be a hidden authority channel `[extend]` |
+| **Stores / persistence** | **Constituent-owned** — Yggdrasil's PDM; Heimdal's raw store is a separate instance under PDM discipline | Never a shared database across constituents — a shared store would be a hidden authority channel `[extend]` |
 | **Observability** | **Constituent-owned** (OEF per constituent) + one future ecosystem capability: independent observation of a constituent's substrate from outside its failure domain | `[conform to RESEARCH-08 §Dual-role]` |
 
-### 2.5 Where Heimdall and KAP slot in — stated plainly
+### 2.5 Where Heimdal and KAP slot in — stated plainly
 
-- **Heimdall = constituent C2**, a peer of Yggdrasil, on the private side of the seam, publishing across it. It is **not** an EBF adapter of Yggdrasil, not a 15th control boundary, and not a subsystem of the knowledge system. From *Yggdrasil's* internal viewpoint, Heimdall's stream nonetheless enters through an **EBF adapter under the Integration Fabric authority rule** — external mechanisms are not authority — exactly like any attached system. Both statements are true at their own level; confusing the levels is the failure mode to guard.
-- **KAP = capability inside C1 (Yggdrasil)**, not a constituent: it shares Yggdrasil's runtime, deployment, and authority chain; it has no independent volatility clock beyond what EBF source plugins already isolate; its substance is public-source acquisition (no seam pressure). The symmetry with Heimdall is *contractual*, not structural: both end at a hand-off artifact (candidate / published event), both conform to the shared provenance/replay standard, both feed the **same** GOV promotion gate. `[conform to KAP spec + RESEARCH-08 TCD test 4a]`
+- **Heimdal = constituent C2**, a peer of Yggdrasil, on the private side of the seam, publishing across it. It is **not** an EBF adapter of Yggdrasil, not a 15th control boundary, and not a subsystem of the knowledge system. From *Yggdrasil's* internal viewpoint, Heimdal's stream nonetheless enters through an **EBF adapter under the Integration Fabric authority rule** — external mechanisms are not authority — exactly like any attached system. Both statements are true at their own level; confusing the levels is the failure mode to guard.
+- **KAP = capability inside C1 (Yggdrasil)**, not a constituent: it shares Yggdrasil's runtime, deployment, and authority chain; it has no independent volatility clock beyond what EBF source plugins already isolate; its substance is public-source acquisition (no seam pressure). The symmetry with Heimdal is *contractual*, not structural: both end at a hand-off artifact (candidate / published event), both conform to the shared provenance/replay standard, both feed the **same** GOV promotion gate. `[conform to KAP spec + RESEARCH-08 TCD test 4a]`
 
 ---
 
@@ -205,19 +205,19 @@ Shared mechanisms every constituent needs and none may own. Promotion into this 
 
 | ID | Boundary | Constituent | Ecosystem-facing role |
 |---|---|---|---|
-| HIX | Human Interaction & Intent | Yggdrasil | Human surfaces stay per-constituent; the ecosystem has no shared UI. Heimdall's consent/review surfaces are its own, HIX-patterned |
+| HIX | Human Interaction & Intent | Yggdrasil | Human surfaces stay per-constituent; the ecosystem has no shared UI. Heimdal's consent/review surfaces are its own, HIX-patterned |
 | WSP | Workspace, Scope & Principal Context | Yggdrasil | ActiveContextSet may later bind ecosystem-topology posture (which constituents are attached) — a binding, not new authority `[extend]` |
 | HKA | Human Knowledge & Artifact Substrate | Yggdrasil | Terminal target of ALL governed promotion — events and candidates alike become durable knowledge only here |
-| SIP | Semantic Identity & Provenance | Yggdrasil | Consumes the Layer-2 entity register; keeps semantic/provenance identity of artifacts; provenance chains resolve back through the shared standard to Heimdall raw evidence |
-| GOV | Governance, Policy, Authority & Receipts | Yggdrasil | Its governed-write/DecisionToken/receipt pattern is the *template* the cross-constituent contracts reuse (pattern export, not shared runtime); CrossScopeFlow grants gate Heimdall raw-layer reads |
-| EBF | External Boundary Fabric | Yggdrasil | **The ecosystem attachment fabric**: sibling constituents (Heimdall stream, future sibling servers) attach here as adapters under the IFC authority rule |
-| PDM | Persistence & Data Management | Yggdrasil | Per-constituent discipline; Heimdall's raw store is a separate PDM-patterned instance, never a shared DB |
+| SIP | Semantic Identity & Provenance | Yggdrasil | Consumes the Layer-2 entity register; keeps semantic/provenance identity of artifacts; provenance chains resolve back through the shared standard to Heimdal raw evidence |
+| GOV | Governance, Policy, Authority & Receipts | Yggdrasil | Its governed-write/DecisionToken/receipt pattern is the *template* the cross-constituent contracts reuse (pattern export, not shared runtime); CrossScopeFlow grants gate Heimdal raw-layer reads |
+| EBF | External Boundary Fabric | Yggdrasil | **The ecosystem attachment fabric**: sibling constituents (Heimdal stream, future sibling servers) attach here as adapters under the IFC authority rule |
+| PDM | Persistence & Data Management | Yggdrasil | Per-constituent discipline; Heimdal's raw store is a separate PDM-patterned instance, never a shared DB |
 | DRI | Derived Representation & Indexing | Yggdrasil | Projections of the event stream are DRI-class: rebuildable from the stream, never truth |
 | RCA | Retrieval & Context Assembly | Yggdrasil | Events surface to cognition as candidate evidence in ContextBundles, provenance intact |
 | MEM | Machine Memory & Learning | Yggdrasil | Events may spawn memory candidates; promotion semantics unchanged (advisory until promoted) |
 | CAO | Cognitive Capability & Agent Orchestration | Yggdrasil | Agents read events as evidence, never authority (HEIM-8); propose only |
 | EXE | Capability Execution & Automation | Yggdrasil | Actuation toward siblings/substrate crosses tool policy with the availability-impact declaration (RESEARCH-08); execution never self-authorizes, ecosystem-wide |
-| SFC | Synchronization, Federation & Consensus | Yggdrasil | **Intra-constituent distribution only** (replicas, nodes, causal ordering). Never the SoS relation. Sibling interaction is governed by the Tier-0/1/2 rule (RESEARCH-08 D2); Heimdall→Yggdrasil stream consumption is Tier-1 and must carry ADR-0020's delivery/idempotency/replay classification `[conform/extend]` |
+| SFC | Synchronization, Federation & Consensus | Yggdrasil | **Intra-constituent distribution only** (replicas, nodes, causal ordering). Never the SoS relation. Sibling interaction is governed by the Tier-0/1/2 rule (RESEARCH-08 D2); Heimdal→Yggdrasil stream consumption is Tier-1 and must carry ADR-0020's delivery/idempotency/replay classification `[conform/extend]` |
 | OEF | Observability, Evaluation & Fitness | Yggdrasil | Per-constituent observability; ecosystem-level fitness rules (§9) are OEF-patterned but CES-stewarded; independent substrate observation is a future sibling capability |
 | CES | Contract & Evolution Stewardship (practice) | Cross-cutting | **Extends upward**: CES stewards the Layer-1 ecosystem contracts (constituent charters, cross-constituent interface versions, the name register, the seam register) exactly as it stewards Product SBS contracts — still lean, still not runtime `[extend]` |
 
@@ -227,23 +227,23 @@ Shared mechanisms every constituent needs and none may own. Promotion into this 
 
 The seam is **one boundary with three concentric expressions**, not three seams. Sharpest innermost:
 
-1. **Ring 0 — Heimdall's raw observation layer (most private).** Raw capture of reality. Encrypted at rest, isolated, bounded hard retention; reads are policy-gated (CrossScopeFlow grant + receipt) for trusted downstream agents — not human-only, not open. Nothing here crosses outward except by governed grant. `[conform to D-PRIVACY]`
-2. **Ring 1 — the raw→published seam (the sharpest line in the diagram).** Only **minimized, attributed, published events** cross by default. This is the seam the sensor exists to hold, and the primary structural reason Heimdall is a constituent: the seam is *between systems*, enforceable by contract and process isolation, rather than a discipline inside one runtime. `[conform to charter FIXED 5]`
+1. **Ring 0 — Heimdal's raw observation layer (most private).** Raw capture of reality. Encrypted at rest, isolated, bounded hard retention; reads are policy-gated (CrossScopeFlow grant + receipt) for trusted downstream agents — not human-only, not open. Nothing here crosses outward except by governed grant. `[conform to D-PRIVACY]`
+2. **Ring 1 — the raw→published seam (the sharpest line in the diagram).** Only **minimized, attributed, published events** cross by default. This is the seam the sensor exists to hold, and the primary structural reason Heimdal is a constituent: the seam is *between systems*, enforceable by contract and process isolation, rather than a discipline inside one runtime. `[conform to charter FIXED 5]`
 3. **Ring 2 — the ecosystem's private data plane vs the public artifact plane (INV-EF1).** Everything running — events, vault content, memory, receipts, bindings — is the private data plane of one operator. The **public artifact plane is the monorepo**: operator-invariant code + contracts for the public-side constituents (strict in product scope; registered exceptions in builder/ops scope; secrets absolute everywhere). The private bindings constituent is the seam's other side made systematic. `[extend — adopts RESEARCH-08 INV-EF1, decision D3; not ratified here]`
 
-Consequences the structure encodes: constituent *code* may be public while its *state* is private; Heimdall's raw store and the bindings constituent are private by substance and can never migrate to the public plane; a published event is private-plane data (ecosystem-internal), not public data — nothing becomes public without a separate, owner-level act.
+Consequences the structure encodes: constituent *code* may be public while its *state* is private; Heimdal's raw store and the bindings constituent are private by substance and can never migrate to the public plane; a published event is private-plane data (ecosystem-internal), not public data — nothing becomes public without a separate, owner-level act.
 
 ---
 
 ## 5. Event-log vs projection — the data flow
 
-Heimdall extends the repo's settled rule (retrieval is not truth; memory is advisory; projections are rebuildable) **upstream to the point of observation** `[extend]`. The append-only stream is canonical *for what was observed* — never for what is true or known:
+Heimdal extends the repo's settled rule (retrieval is not truth; memory is advisory; projections are rebuildable) **upstream to the point of observation** `[extend]`. The append-only stream is canonical *for what was observed* — never for what is true or known:
 
 ```
  reality
    │  consent-gated capture (opt-in per place/session; third parties marked/degraded)
    ▼
- ┌──────────────────────────── HEIMDALL (C2) ────────────────────────────┐
+ ┌──────────────────────────── HEIMDAL (C2) ────────────────────────────┐
  │  RAW OBSERVATION LAYER (Ring 0: encrypted, isolated, hard retention,  │
  │  CrossScopeFlow-gated reads + receipts)                               │
  │        │ minimize · attribute (Layer-2 identity register)             │
@@ -272,15 +272,15 @@ Heimdall extends the repo's settled rule (retrieval is not truth; memory is advi
           └╌╌▶ future siblings subscribe to the same stream (target-state)
 ```
 
-Load-bearing properties: (a) the stream is upstream of every read-model and downstream of nothing; (b) both acquisition paths (Heimdall, KAP) converge on **one** promotion gate — there is exactly one door to canonical `[conform — fixed invariants 3 + 4]`; (c) attribution errors are corrected by *new* events, never edits `[conform — HEIM-1]`; (d) losing every read-model loses no observed fact; losing the stream loses no accepted knowledge.
+Load-bearing properties: (a) the stream is upstream of every read-model and downstream of nothing; (b) both acquisition paths (Heimdal, KAP) converge on **one** promotion gate — there is exactly one door to canonical `[conform — fixed invariants 3 + 4]`; (c) attribution errors are corrected by *new* events, never edits `[conform — HEIM-1]`; (d) losing every read-model loses no observed fact; losing the stream loses no accepted knowledge.
 
 ---
 
 ## 6. Alternatives considered
 
-### Alternative A — "Yggdrasil = the whole" (Heimdall A1 / draft ADR-0043 as written)
+### Alternative A — "Yggdrasil = the whole" (Heimdal A1 / draft ADR-0043 as written)
 
-Apex = Yggdrasil-as-SoS; constituents = Munin (knowledge/memory), Hugin (agent-runtime), Heimdall (sensor).
+Apex = Yggdrasil-as-SoS; constituents = Munin (knowledge/memory), Hugin (agent-runtime), Heimdal (sensor).
 
 *For:* maximal metaphor coherence (constituents hang in the world-tree; the ravens report to the watchman's horn); matches the owner's captured 2026-07-04 in-principle naming decision; "Yggdrasil" keeps naming the biggest thing.
 
@@ -296,11 +296,11 @@ Even the "clean" ones argue: RCA exists to feed CAO; MEM is machine memory *for*
 
 *Verdict:* the metaphor is buyable only at the price of a structurally unsound constituent split or a permanently two-level name. Rejected; surfaced as OD-1 option B because the naming half is genuinely the owner's call.
 
-### Alternative B — "No SoS": Heimdall as a 15th boundary / EBF-attached capture subsystem inside the single system
+### Alternative B — "No SoS": Heimdal as a 15th boundary / EBF-attached capture subsystem inside the single system
 
 *For:* smallest possible structure; zero apex machinery; no new governance layer; Model A untouched.
 
-*Against:* fixed invariant 2 says the public/private seam is the **sharpest** boundary and the sensor carries the most-private raw data. A boundary sharper than any internal boundary cannot live *inside* the system whose boundaries it out-sharpens — the raw layer's isolation requirement (separate encryption/credential/process posture, D-PRIVACY) is precisely what internal control boundaries do not provide (they are explicitly "not necessarily runtime services"). It also buries the dependency direction (everyone reads Heimdall; Heimdall reads no one — a peer-source signature), erases the independent volatility clock of capture hardware/models, and contradicts the owner's prior sibling decision. Rejected.
+*Against:* fixed invariant 2 says the public/private seam is the **sharpest** boundary and the sensor carries the most-private raw data. A boundary sharper than any internal boundary cannot live *inside* the system whose boundaries it out-sharpens — the raw layer's isolation requirement (separate encryption/credential/process posture, D-PRIVACY) is precisely what internal control boundaries do not provide (they are explicitly "not necessarily runtime services"). It also buries the dependency direction (everyone reads Heimdal; Heimdal reads no one — a peer-source signature), erases the independent volatility clock of capture hardware/models, and contradicts the owner's prior sibling decision. Rejected.
 
 **Why the recommendation beats both:** it is the smallest structure in which every fixed invariant has a *structural* (not merely disciplinary) home — the seam gets a between-systems boundary, the event log gets a pure producer, governed writes keep one gate, the correctness kernel keeps one runtime, and the single human stays apex.
 
@@ -310,7 +310,7 @@ Even the "clean" ones argue: RCA exists to feed CAO; MEM is machine memory *for*
 
 Rules first — names never drive structure:
 
-1. **Norse names attach only to constituents and the ecosystem.** Control boundaries keep their 3-letter codes (HIX…OEF, CES); capabilities keep descriptive names (human-first naming). This prevents the alias-drift that produced the Heimdall/OEF collision.
+1. **Norse names attach only to constituents and the ecosystem.** Control boundaries keep their 3-letter codes (HIX…OEF, CES); capabilities keep descriptive names (human-first naming). This prevents the alias-drift that produced the Heimdal/OEF collision.
 2. **One name register** (carry ADR-0043 §5's register forward, amended per below) remains the collision guard; reassignment requires a superseding ADR.
 3. **Environments/vaults stay mutable and never hardcoded** (unchanged).
 
@@ -320,7 +320,7 @@ Recommended assignments (consistent with the recommended structure; final call i
 |---|---|---|
 | **Yggdrasil** | The knowledge-and-cognition constituent (C1) | Zero-churn continuity with the entire doc/code corpus (`yggdrasil_runtime/`, doctrine, SBS, SoI). Recommended referent — OD-1 |
 | **Personal Agentic Ecosystem** | The apex | Descriptive primary name (human-first). A Norse apex alias is *optional and deferrable*; if wanted, mint from the register's free pool (e.g. **Asgard** — the operator's realm) via a small ADR. Do not block structure on it |
-| **Heimdall** | The sensor constituent (C2) | Keep — the watchman metaphor is exact, the A-docs already use it, and the observability alias reverts to boundary code **OEF** (that half of ADR-0043 is kept as-is) |
+| **Heimdal** | The sensor constituent (C2) | Keep — the watchman metaphor is exact, the A-docs already use it, and the observability alias reverts to boundary code **OEF** (that half of ADR-0043 is kept as-is) |
 | **Hugin / Munin** | **Reserved, unassigned** | Do not attach to non-constituents. Reserve Hugin for an agent-runtime constituent *if it ever passes the constituent test* (a real split-trigger), Munin likewise for a knowledge-side split. Reserving beats retiring (keeps the raven metaphor available) and beats assigning (avoids names outrunning structure) |
 | **Mimer** | Deprecated alias → Yggdrasil's knowledge surface | As ADR-0043 already proposes |
 | **Ratatosk** | Optional alias for KAP | The squirrel carrying messages up and down the tree; register already holds it for ingest/pipeline. Cosmetic; take or leave |
@@ -334,25 +334,25 @@ If the owner instead ratifies **Yggdrasil = whole** (OD-1 option B), this scheme
 
 ## 8. Repo topology + split-triggers
 
-**Posture: monorepo with a hard internal seam.** `[conform — Heimdall A1 §4]` Constituent code gets a top-level home (e.g. `heimdall/` beside `app/` + `yggdrasil_runtime/`) with import-boundary enforcement (lint/CI) so the seam is mechanical, not aspirational. Cross-constituent interaction goes through published contracts only.
+**Posture: monorepo with a hard internal seam.** `[conform — Heimdal A1 §4]` Constituent code gets a top-level home (e.g. `heimdal/` beside `app/` + `yggdrasil_runtime/`) with import-boundary enforcement (lint/CI) so the seam is mechanical, not aspirational. Cross-constituent interaction goes through published contracts only.
 
 **Refinement:** the monorepo rule applies to **public-side** constituents. The private bindings constituent is *born outside* the repo — private-by-substance content is never "split out," it never enters. `[extend]`
 
-**Split-triggers** (adopt Heimdall A1's five `[conform]`; any acceptance is owner-gated, R-SPLIT):
+**Split-triggers** (adopt Heimdal A1's five `[conform]`; any acceptance is owner-gated, R-SPLIT):
 
-1. **Independent release cadence** — Heimdall must ship/roll back on a clock that fights Yggdrasil's.
-2. **Isolation requirement** — the privacy/threat model requires the raw layer in a separately deployable, separately credentialed process/host. ⚠️ *This one is live on day one:* D-PRIVACY's "encrypted + isolated" posture arguably fires it for Heimdall's **raw store** (not its code) immediately — surfaced as OD-6 rather than silently assumed.
+1. **Independent release cadence** — Heimdal must ship/roll back on a clock that fights Yggdrasil's.
+2. **Isolation requirement** — the privacy/threat model requires the raw layer in a separately deployable, separately credentialed process/host. ⚠️ *This one is live on day one:* D-PRIVACY's "encrypted + isolated" posture arguably fires it for Heimdal's **raw store** (not its code) immediately — surfaced as OD-6 rather than silently assumed.
 3. **Independent scaling / hardware** — sensor capture pins dedicated hardware the monorepo deployment cannot express.
 4. **Ownership divergence** — a distinct agent-fleet owns a constituent end-to-end.
 5. **Blast-radius containment** — a fault class in one constituent can take others down at build/deploy time.
 
-**Concrete tripwires to watch (proposal-specific):** Heimdall's CI wall-time dominating the shared pipeline (trigger 5's early smell); capture-model updates needing same-day deploys while Yggdrasil is mid-promotion (trigger 1); a second host in the mesh dedicated to capture (trigger 3).
+**Concrete tripwires to watch (proposal-specific):** Heimdal's CI wall-time dominating the shared pipeline (trigger 5's early smell); capture-model updates needing same-day deploys while Yggdrasil is mid-promotion (trigger 1); a second host in the mesh dedicated to capture (trigger 3).
 
 ---
 
 ## 9. Proposed fitness invariants for the new structure
 
-Style of `docs/testing/invariant-tests.md`; each = name + one line + enforcement level. Heimdall-internal invariants HEIM-1..8 stay owned by the capability charter; these are **ecosystem-structure** invariants.
+Style of `docs/testing/invariant-tests.md`; each = name + one line + enforcement level. Heimdal-internal invariants HEIM-1..8 stay owned by the capability charter; these are **ecosystem-structure** invariants.
 
 | ID | Invariant (one line) | Enforcement |
 |---|---|---|
@@ -378,15 +378,15 @@ Each is the owner's call; options + consequences; recommendations flagged, never
 - **Option B: Yggdrasil = the whole (SoS),** per draft ADR-0043. *Consequences:* metaphor-maximal and matches the 2026-07-04 in-principle decision; but forces either the structurally unsound Munin/Hugin constituent split (§6 Alt A) or a new name + mass re-referencing for the current system, and re-introduces "Yggdrasil is an SoS" post-ADR-0041.
 - **Option C: dual-scope** ("Yggdrasil" means both, disambiguated by context). *Consequences:* zero immediate churn, permanent ambiguity — the exact disease the boundary-language guardrails exist to prevent. Not recommended.
 
-**OD-2 — Ratify the apex, and its activation semantics.** The Personal Agentic Ecosystem as acknowledged SoS (refines RESEARCH-08 D1). *Option A (recommended):* ratify now with the bridge/target posture — current-state docs unchanged; ecosystem framing becomes primary when the first non-Yggdrasil constituent **runs** (Heimdall v1 capturing), not when it is chartered. *Option B:* chartering Heimdall counts as activation → immediate reframing churn across SoI-stating docs. *Option C:* decline; Heimdall becomes Alt-B-style internal capture — conflicts fixed invariant 2.
+**OD-2 — Ratify the apex, and its activation semantics.** The Personal Agentic Ecosystem as acknowledged SoS (refines RESEARCH-08 D1). *Option A (recommended):* ratify now with the bridge/target posture — current-state docs unchanged; ecosystem framing becomes primary when the first non-Yggdrasil constituent **runs** (Heimdal v1 capturing), not when it is chartered. *Option B:* chartering Heimdal counts as activation → immediate reframing churn across SoI-stating docs. *Option C:* decline; Heimdal becomes Alt-B-style internal capture — conflicts fixed invariant 2.
 
-**OD-3 — Constituent posture of the knowledge/agent split.** *Option A (recommended):* one constituent now; Hugin/Munin names reserved; an agent-runtime split becomes a future split-trigger question with evidence. *Option B:* ratify Munin/Hugin as constituents per Heimdall A1 → must answer §6 Alt A's unassignable-boundary problem explicitly (where do GOV/WSP/HIX/EBF/SFC/OEF live?). *Consequence of A:* draft ADR-0043's constituent register needs amendment (bundle with OD-1/OD-7).
+**OD-3 — Constituent posture of the knowledge/agent split.** *Option A (recommended):* one constituent now; Hugin/Munin names reserved; an agent-runtime split becomes a future split-trigger question with evidence. *Option B:* ratify Munin/Hugin as constituents per Heimdal A1 → must answer §6 Alt A's unassignable-boundary problem explicitly (where do GOV/WSP/HIX/EBF/SFC/OEF live?). *Consequence of A:* draft ADR-0043's constituent register needs amendment (bundle with OD-1/OD-7).
 
-**OD-4 — Charter the private bindings constituent now, or leave it proto?** *Option A (recommended):* charter it (thin: a contract + a private home + the INV-EF1 burn-down as its backlog) — it is the seam's other side and Heimdall's raw-layer config will need it immediately. *Option B:* leave proto until Heimdall implementation forces it. *Consequence of B:* Heimdall bindings accrete in `.env`/ops-script form and migrate later at higher cost.
+**OD-4 — Charter the private bindings constituent now, or leave it proto?** *Option A (recommended):* charter it (thin: a contract + a private home + the INV-EF1 burn-down as its backlog) — it is the seam's other side and Heimdal's raw-layer config will need it immediately. *Option B:* leave proto until Heimdal implementation forces it. *Consequence of B:* Heimdal bindings accrete in `.env`/ops-script form and migrate later at higher cost.
 
-**OD-5 — Substrate promotion timing (R-PROMOTE).** Promote now: the *contracts* for event bus, identity register, provenance standard (paper Layer-2, no shared runtime yet)? *Option A (recommended):* promote the three contracts at Heimdall design-acceptance; implementations stay module-lazy. *Option B:* defer all promotion until two constituents demonstrably need each item. *Consequence of B:* Heimdall v1 builds Heimdall-private identity/provenance, guaranteeing a later migration against D-IDENTITY's intent.
+**OD-5 — Substrate promotion timing (R-PROMOTE).** Promote now: the *contracts* for event bus, identity register, provenance standard (paper Layer-2, no shared runtime yet)? *Option A (recommended):* promote the three contracts at Heimdal design-acceptance; implementations stay module-lazy. *Option B:* defer all promotion until two constituents demonstrably need each item. *Consequence of B:* Heimdal v1 builds Heimdal-private identity/provenance, guaranteeing a later migration against D-IDENTITY's intent.
 
-**OD-6 — Is D-PRIVACY already split-trigger 2 for Heimdall's raw store?** *Option A (recommended):* yes for the **data/process plane** — raw store runs separately credentialed/isolated from birth — while code stays in the monorepo (trigger applies to deployment, not repo). *Option B:* no — raw store starts inside the shared deployment with encryption only. *Consequence of B:* cheaper start; the seam is disciplinary, not structural, until a migration.
+**OD-6 — Is D-PRIVACY already split-trigger 2 for Heimdal's raw store?** *Option A (recommended):* yes for the **data/process plane** — raw store runs separately credentialed/isolated from birth — while code stays in the monorepo (trigger applies to deployment, not repo). *Option B:* no — raw store starts inside the shared deployment with encryption only. *Consequence of B:* cheaper start; the seam is disciplinary, not structural, until a migration.
 
 **OD-7 — Adopt the naming scheme (§7) and amend the name register.** Options: adopt as proposed / adopt with Norse apex name minted now / keep ADR-0043's register unchanged (implies OD-1 option B). Consequence: whichever way, **one** superseding/amending ADR should carry OD-1 + OD-3 + OD-7 together — they are one naming coherence decision.
 
@@ -400,14 +400,14 @@ Each is the owner's call; options + consequences; recommendations flagged, never
 |---|---|---|---|
 | 1 | Apex = Personal Agentic Ecosystem, acknowledged SoS, governance-by-contract (Layer 1, not runtime) | **reshape** | CES/ADR via OD-2 (refines RESEARCH-08 D1; reconcile with PR #2888) |
 | 2 | Yggdrasil denotes the knowledge-and-cognition constituent (C1), not the whole | **reshape** | CES/ADR via OD-1 + OD-7 (amends/supersedes draft ADR-0043 D-NAME-WHOLE) |
-| 3 | Heimdall is a sibling constituent, not a subsystem of the knowledge system | **reshape** | CES/ADR — same reshape Heimdall A1 §1 routes; carried, not re-decided |
+| 3 | Heimdal is a sibling constituent, not a subsystem of the knowledge system | **reshape** | CES/ADR — same reshape Heimdal A1 §1 routes; carried, not re-decided |
 | 4 | Knowledge/agent split is NOT a constituent split; Munin/Hugin reserved, unassigned | **conform** (audit §3, RESEARCH-08 claim 4) / **reshape** vs draft ADR-0043 register | OD-3, bundled into the OD-7 ADR |
 | 5 | All 14 boundaries + CES remain Yggdrasil-internal; boundaries grouped, not redefined | **conform** | none |
 | 6 | CES stewardship extends upward to Layer-1 ecosystem contracts | **extend** | CES practice update at enactment |
-| 7 | Heimdall's stream enters Yggdrasil via EBF adapter under the IFC authority rule; Tier-1 classification obligation applies | **conform** (IFC, EBF charter) / **extend** (tier rule = RESEARCH-08 D2) | ECO-8 adoption rides D2 |
-| 8 | Event-log-vs-projection extended upstream to observation; one GOV promotion gate for events and candidates | **extend** / **conform** (fixed invariants 3–4) | Heimdall capability window designs the contract |
+| 7 | Heimdal's stream enters Yggdrasil via EBF adapter under the IFC authority rule; Tier-1 classification obligation applies | **conform** (IFC, EBF charter) / **extend** (tier rule = RESEARCH-08 D2) | ECO-8 adoption rides D2 |
+| 8 | Event-log-vs-projection extended upstream to observation; one GOV promotion gate for events and candidates | **extend** / **conform** (fixed invariants 3–4) | Heimdal capability window designs the contract |
 | 9 | Layer-2 substrate: bus contract, identity register, provenance standard shared; stores/observability constituent-owned | **extend** | R-PROMOTE per item via ADR (OD-5) |
-| 10 | Bus contract generalizes the correctness-kernel outbox discipline (KERNEL-02/08/11); kernel invariants untouched | **conform** (fixed invariant 5) / **extend** (generalization) | Heimdall window D-BACKBONE design |
+| 10 | Bus contract generalizes the correctness-kernel outbox discipline (KERNEL-02/08/11); kernel invariants untouched | **conform** (fixed invariant 5) / **extend** (generalization) | Heimdal window D-BACKBONE design |
 | 11 | Entity register upstream of SIP; SIP keeps artifact semantic/provenance identity | **extend** | Contract design at enactment; watch the SIP-fork failure mode |
 | 12 | KAP stays an in-constituent capability (EBF class 11, ends at candidate) | **conform** | none |
 | 13 | Public/private seam = three concentric expressions; INV-EF1 adopted as ECO-2 | **extend** | RESEARCH-08 D3 (owner) |
@@ -448,9 +448,9 @@ Same image as `ecosystem_structure_sketch.svg` (sibling file in this scratchpad)
   <text x="322" y="102" fill="#b02a2a" font-size="11" font-weight="bold">PUBLIC / PRIVATE SEAM — sharpest boundary</text>
   <text x="322" y="115" fill="#b02a2a" font-size="10">only minimized, attributed, published events cross by default</text>
 
-  <!-- ======== HEIMDALL (private side, top-left) ======== -->
+  <!-- ======== HEIMDAL (private side, top-left) ======== -->
   <rect x="20" y="122" width="276" height="178" rx="8" fill="#fbeeee" stroke="#8f2d2d" stroke-width="1.6"/>
-  <text x="158" y="141" fill="#6e1f1f" font-size="13" font-weight="bold" text-anchor="middle">HEIMDALL — sensor constituent</text>
+  <text x="158" y="141" fill="#6e1f1f" font-size="13" font-weight="bold" text-anchor="middle">HEIMDAL — sensor constituent</text>
   <text x="158" y="155" fill="#6e1f1f" font-size="10" text-anchor="middle">Event Capture &amp; Attribution · ends at a published event</text>
 
   <rect x="32" y="164" width="120" height="30" rx="4" fill="#ffffff" stroke="#b98585"/>
@@ -555,7 +555,7 @@ Same image as `ecosystem_structure_sketch.svg` (sibling file in this scratchpad)
   <text x="244" y="528" fill="#556" font-size="8.5" text-anchor="middle">one canonical &#8220;who/what&#8221;</text>
   <rect x="322" y="498" width="140" height="42" rx="4" fill="#ffffff" stroke="#8a97b0"/>
   <text x="392" y="515" fill="#2c3a55" font-size="9.5" text-anchor="middle" font-weight="bold">provenance / replay standard</text>
-  <text x="392" y="528" fill="#556" font-size="8.5" text-anchor="middle">shared by Heimdall + KAP</text>
+  <text x="392" y="528" fill="#556" font-size="8.5" text-anchor="middle">shared by Heimdal + KAP</text>
   <rect x="474" y="498" width="118" height="42" rx="4" fill="#ffffff" stroke="#8a97b0"/>
   <text x="533" y="515" fill="#2c3a55" font-size="9.5" text-anchor="middle" font-weight="bold">build / CI skeleton</text>
   <text x="533" y="528" fill="#556" font-size="8.5" text-anchor="middle">per-constituent gates compose</text>

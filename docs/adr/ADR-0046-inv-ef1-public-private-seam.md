@@ -3,7 +3,7 @@ the decision to adopt INV-EF1, the two-scope public/private operator-invariance 
 a per-item register and a `public_seam_lint.py` enforcement hook. Enactment (the lint script itself,
 the register, PR-workflow wiring, and the owner-doc rows in `docs/PRIVACY.md` and
 `docs/SECURITY_TRUST_BOUNDARIES.md`) is deferred to follow-up issues; this ADR performs no code
-change and no enforcement change. Constituent model per ADR-0044 (Yggdrasil = the whole; Mimer + Heimdall constituents): "the public Yggdrasil tree" here means the whole ecosystem's public monorepo, and the deferred `yggdrasil_runtime/`→Mimer rename does not change INV-EF1's scope rule.
+change and no enforcement change. Constituent model per ADR-0044 (Yggdrasil = the whole; Mimer + Heimdal constituents): "the public Yggdrasil tree" here means the whole ecosystem's public monorepo, and the deferred `yggdrasil_runtime/`→Mimer rename does not change INV-EF1's scope rule.
 Doc role: Decision record (ADR)
 Authority: Authoritative for the *decision* of whether, and in what shape, a public/private
 confidentiality rule governs the public Yggdrasil tree. The invariant's design content — the
@@ -168,7 +168,7 @@ issue(s):
   touching those surfaces, effective once the lint hook is wired (follow-up 1).
 - D4 (MCP topology stance) and D1/D2 (SoI target-state, interaction-tier rule) stand independently;
   this decision does not presuppose or block any of them.
-- The operator's incoming **Heimdall** sensor system, a constituent of the acknowledged SoS
+- The operator's incoming **Heimdal** sensor system, a constituent of the acknowledged SoS
   (per ADR-0044), makes the private-side binding split immediately load-bearing rather than
   hypothetical: its sensor/device/endpoint bindings are exactly INV-EF1 category (iii)/(v)
   private-side material.

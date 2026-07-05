@@ -9,7 +9,7 @@ Authority: Evidence-based design of the ecosystem/SoS seam, read through the rat
 > pass `docs/architecture/ECOSYSTEM_STRUCTURE_PROPOSAL.md`, PR #2914) and its siblings ADR-0045/46/47:
 > the acknowledged SoS is named **Yggdrasil** (the whole / apex, not a constituent); its constituents
 > are **Mimer** (knowledge-and-cognition, undivided — the current system, reverted to its original
-> name), **Heimdall** (sensor), and a thin **private-bindings** constituent; **Hugin/Munin are
+> name), **Heimdal** (sensor), and a thin **private-bindings** constituent; **Hugin/Munin are
 > reserved, not constituents** (the Munin/Hugin split of an earlier ADR-0043 draft was found
 > structurally unsound and dropped). "Federation" is reserved for SFC and is **not** used for the SoS
 > relationship — the relationship is acknowledged constituents interoperating via capability
@@ -83,7 +83,7 @@ model had to respect, and which ADR-0044's ratification honors:
 
 - the repo contains **zero** references to any concrete sibling system — Home Assistant and
   OPNsense appear nowhere in docs or code; the ecosystem has exactly one real operator-built
-  constituent today (**Mimer**), with **Heimdall** (the sensor constituent) incoming;
+  constituent today (**Mimer**), with **Heimdal** (the sensor constituent) incoming;
 - the owner paid 27-doc churn *the same day* to remove SoS vocabulary internally
   (ADR-0041/0042) — reintroducing it carelessly would recreate the ambiguity that churn bought
   down;
@@ -100,7 +100,7 @@ applies one level up, at ecosystem scope:
   control boundaries, CES, correctness kernel, KAP). Every current-state doc keeps saying so.
 - **Ecosystem-level SoS: Yggdrasil** — the apex/whole this artifact designs the seam for, ratified
   by ADR-0044 rather than left as a target-only framing: Yggdrasil is already the name of the
-  acknowledged SoS today, with **Mimer** as its present sole real constituent and **Heimdall** +
+  acknowledged SoS today, with **Mimer** as its present sole real constituent and **Heimdal** +
   **private-bindings** attaching next. The activation condition that mattered while the naming was
   still open — the first real sibling attaching through a capability contract — has been overtaken
   by the naming ratification; it remains relevant only for *when the multi-constituent ecosystem
@@ -119,7 +119,7 @@ role, attached to the *deployment binding*, not the product name.
 
 | Ecosystem role | Test | Members today | Members at target |
 | --- | --- | --- | --- |
-| **Constituent** | Independently operable + independently sourced/maintained + jointly purposed via contract, under the operator's apex authority | **Mimer** (the public knowledge-and-cognition system: `app/`, `mimer_runtime/`, contracts, schemas — the SoI of `docs/architecture/system-context-overlay.md`); **Heimdall** (sensor constituent, incoming) | Mimer + Heimdall + **private personal-environment siblings**: home automation, network, personal infra/data systems — sourced by the TCD heuristic (§ TCD heuristic), attached via capability contracts |
+| **Constituent** | Independently operable + independently sourced/maintained + jointly purposed via contract, under the operator's apex authority | **Mimer** (the public knowledge-and-cognition system: `app/`, `mimer_runtime/`, contracts, schemas — the SoI of `docs/architecture/system-context-overlay.md`); **Heimdal** (sensor constituent, incoming) | Mimer + Heimdal + **private personal-environment siblings**: home automation, network, personal infra/data systems — sourced by the TCD heuristic (§ TCD heuristic), attached via capability contracts |
 | **Proto-constituent (exists, unnamed)** | Operator-bound state the ecosystem cannot run without, currently scattered and unsystematized | The **private binding surface**: gitignored `.env*` files, host launchd jobs and `ops/host-setup` realities, the BuilderOps Vault, operator memory | Systematized as the **first private sibling** — the private-bindings constituent (ADR-0044) that resolves every personal binding the public tree may not carry (§ Public/private invariant) |
 | **External system** (operational environment) | Vendor-operated; the ecosystem interoperates via contracts; no operator lifecycle control | Obsidian (dual-class by design), iCloud/sync transports, cloud LLM/embedding APIs (incl. Gemini fallback, ADR-0023), acquisition sources, telemetry consumers (`docs/architecture/system-context-overlay.md:72`) | Same set; membership churns with vendor choices |
 | **Enabling system** | Supports constituent lifecycles; not part of operating capability | Builder System incl. GitHub/CI, Docker/Colima, Tailscale mesh + host provisioning, ops scripts (`docs/architecture/system-context-overlay.md:71`) | Same classes. Tailscale gains a second *relation* at target (transport between constituents) — it stays enabling/transport, never authority |
@@ -152,7 +152,7 @@ flowchart TB
       reasoning, knowledge-graph, document"]
     end
     subgraph PRIV["Private seam (operator-bound)"]
-      HD["Heimdall — sensor constituent
+      HD["Heimdal — sensor constituent
       (incoming; event/evidence intake into Mimer)"]
       B["Private-bindings constituent (exists today,
       scattered) -> first sibling: bindings,
@@ -191,7 +191,7 @@ flowchart TB
   EN ---|run and provision constituents, never authority| ECO
 ```
 
-Dashed edges are target-state or not-yet-attached (Heimdall is incoming; the OSS siblings do not
+Dashed edges are target-state or not-yet-attached (Heimdal is incoming; the OSS siblings do not
 exist today). Solid edges exist now. Every edge into Mimer crosses an EBF-tier adapter under the
 Integration Fabric authority rule; no edge carries semantic authority without contract promotion
 (§ Capability boundary).
@@ -222,7 +222,7 @@ Five properties make the boundary stable:
    authority over the durable surface without explicit contract promotion; a code change, a new
    adapter, or a new vendor relationship is not a promotion (`docs/INTEGRATION_FABRIC_CONTRACT.md:92-94`).
    At ecosystem level this generalizes cleanly: **siblings hold domain authority in their own
-   domains** (a home-automation sibling owns device state; Heimdall owns the fact stream); **Mimer
+   domains** (a home-automation sibling owns device state; Heimdal owns the fact stream); **Mimer
    holds knowledge/reasoning authority**; the human is apex authority everywhere in Yggdrasil.
    Cross-constituent influence travels as evidence/candidates through contracts, never as direct
    authority (ADR-0045).
@@ -389,7 +389,7 @@ Worked classification of the directive's examples: home automation → sibling b
 network/personal infra → sibling by tests 2+3; knowledge acquisition → in-tree by test 4a
 (precedent above); TTS → in-tree embedded libraries (already settled: SoI components,
 `docs/architecture/system-context-overlay.md:69`); the private bindings surface → sibling by test
-2 (it *is* the seam's other side); Heimdall (sensing) → sibling constituent by design (ADR-0044),
+2 (it *is* the seam's other side); Heimdal (sensing) → sibling constituent by design (ADR-0044),
 not scored by this heuristic since its constituent status is already decided.
 
 This heuristic is advisory until adopted; if adopted, its home is a short addition to the TCD
@@ -516,7 +516,7 @@ the **three-tier classification of constituent interaction**:
 | **2** | A constituent writes toward another's durable surface, or multi-write topology | Full IFC promotion path + GOV + SFC semantics | Exactly the ground ADR-0020 reserves; **not licensed** by the SoS framing |
 
 ADR-0045 additionally names a fourth, distinct shape outside this table: **inbound governed-candidate
-event/evidence intake** — a constituent that *emits* data toward another (Heimdall's published-event
+event/evidence intake** — a constituent that *emits* data toward another (Heimdal's published-event
 stream → Mimer) is not Tier 0/1/2; the producer publishes attributed, provenance-bearing events and
 the consumer ingests them as candidates/evidence, promoting to durable knowledge only through its own
 governed path (WriteGuard → DecisionToken → governed promotion → AuthorityReceipt).
@@ -542,7 +542,7 @@ claim is classified against `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` and `docs/archi
 | --- | --- | --- |
 | 1 | Ecosystem-level lifecycle-role table (constituent / proto-constituent / external / enabling / COTS, one level above the settled four-class rule) | **Extend** — new view; no boundary touched; classification rule unchanged |
 | 2 | Mimer remains the current-state knowledge-and-cognition SoI, internally unchanged; every current-state doc keeps describing Mimer's internals as before | **Conform** |
-| 3 | Yggdrasil as the ecosystem's acknowledged-SoS apex, with Mimer + Heimdall + private-bindings as its constituents | **Reshape — ratified** (D1, ADR-0044). Enacted as a naming/model decision; the `mimer_runtime/` code/doc rename was completed separately (#3011 + doc clusters) |
+| 3 | Yggdrasil as the ecosystem's acknowledged-SoS apex, with Mimer + Heimdal + private-bindings as its constituents | **Reshape — ratified** (D1, ADR-0044). Enacted as a naming/model decision; the `mimer_runtime/` code/doc rename was completed separately (#3011 + doc clusters) |
 | 4 | No internal Mimer boundary is a constituent; "agent runtime / integration fabric" read as capability-domain labels; future physical separation stays with ADR-0016 + `SBS_ROADMAP.md` Phase 4/5 | **Conform** — restates audit §3 verdict and existing machinery; coins no vocabulary |
 | 5 | Private binding surface named as proto-constituent / first-sibling target | **Extend** — names existing unowned reality; creating the sibling is follow-up work |
 | 6 | Capability boundary = contract set; five-surface grouping view over existing enumerations | **Extend** — view only; `CAPABILITY_CONTRACT_MODEL.md` and IFC stay authoritative |
@@ -572,7 +572,7 @@ historical decision record as originally drafted; each subsection now opens with
 **Resolved: ratified, ADR-0044 (2026-07-04).** The owner ratified the ecosystem SoS, naming the
 apex **Yggdrasil** — a stronger outcome than Option 1 below anticipated: rather than a target-state
 frame gated on a future sibling attaching, Yggdrasil is ratified as the apex *now*, with **Mimer**
-(the renamed current-state SoI), **Heimdall**, and private-bindings as its constituents. The
+(the renamed current-state SoI), **Heimdal**, and private-bindings as its constituents. The
 activation-condition framing in Option 1 is superseded by this naming ratification; see § Ecosystem
 model.
 
@@ -597,7 +597,7 @@ was the adoption shape.
 
 **Resolved: ratified, ADR-0045 (2026-07-04).** Option 1 was adopted as designed: the three-tier
 interaction-tier rule (§ Interaction tiers) plus a fourth, distinct shape — inbound
-governed-candidate event/evidence intake, the concrete shape Heimdall's published-event stream
+governed-candidate event/evidence intake, the concrete shape Heimdal's published-event stream
 requires. ADR-0020 and SFC's charter are untouched. "Federation" is confirmed SFC-only; the
 glossary entry is enacted in this PR.
 
