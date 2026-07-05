@@ -461,9 +461,23 @@ def run_watcher_tick(
         return summary, messages
 
     summary["ingest_attempted"] = summary["changed"]
-    ingest_summary = run_vault_alpha_ingest_paths(vault_root, result.changed, force=False)
-    summary["ingested"] = ingest_summary.ingested
-    summary["errors"] += ingest_summary.errors
+    try:
+        ingest_summary = run_vault_alpha_ingest_paths(vault_root, result.changed, force=False)
+    except WritesBlockedError as exc:
+        # Guard-at-seam (#2910): run_vault_alpha_ingest_paths now reaches the
+        # knowledge write port's own WriteGuard assertion via
+        # ensure_vault_layout's idempotent layout-ensure writes (T-scaffold,
+        # formal-model.md §2.3), which previously wrote unguarded. A denying/
+        # raising guard here must degrade the same way the panel auto-exec
+        # loop below already does (skipped_writes_blocked), not crash the
+        # whole watcher tick -- ingest simply does not run this tick.
+        summary["skipped_writes_blocked"] += 1
+        summary["ingested"] = 0
+        messages.append(f"Watcher ingest blocked by write guard: {exc}")
+        ingest_summary = None
+    if ingest_summary is not None:
+        summary["ingested"] = ingest_summary.ingested
+        summary["errors"] += ingest_summary.errors
 
     if not skip_panel and policy_allowed_paths:
         store = ObjectStore()

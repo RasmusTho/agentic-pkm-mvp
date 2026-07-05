@@ -9,7 +9,7 @@ def test_scaffolder_writes_placeholder_via_knowledge_port(tmp_path: Path, monkey
     writes: list[str] = []
     mimer_root = tmp_path / "Mimer"
 
-    def _fake_write_note(path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
+    def _fake_write_note(path: Path, content: str, *, vault_root: Path | None = None, **_kwargs):  # type: ignore[no-untyped-def]
         resolved_root = (vault_root or tmp_path).resolve()
         resolved_path = Path(path).resolve()
         rel = resolved_path.relative_to(resolved_root).as_posix()

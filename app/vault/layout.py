@@ -273,13 +273,22 @@ def _render_layout_note(layout: VaultLayout) -> str:
     return f"---\n{frontmatter}\n---\n\n{body}"
 
 
-def _write_note_via_knowledge_port(vault_root: Path, path: Path, content: str) -> None:
+def _write_note_via_knowledge_port(
+    vault_root: Path, path: Path, content: str, *, action: str | None = None
+) -> None:
     resolved_root = vault_root.expanduser().resolve()
     resolved_path = path.expanduser().resolve()
-    write_note_from_absolute(resolved_path, content, vault_root=resolved_root)
+    if action is None:
+        write_note_from_absolute(resolved_path, content, vault_root=resolved_root)
+    else:
+        # Threaded through from a caller that already asserted its own guard
+        # action at an outer seam (#2910), e.g. the yggdrasil-init scaffolder's
+        # bootstrap-escape action -- pass it to the port so the escape still
+        # applies at this inner write instead of being re-denied.
+        write_note_from_absolute(resolved_path, content, vault_root=resolved_root, action=action)
 
 
-def load_or_create_layout(vault_root: Path) -> VaultLayout:
+def load_or_create_layout(vault_root: Path, *, write_action: str | None = None) -> VaultLayout:
     vault_root = vault_root.expanduser()
 
     try:
@@ -353,11 +362,13 @@ def load_or_create_layout(vault_root: Path) -> VaultLayout:
     )
 
     note_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_note_via_knowledge_port(vault_root, note_path, _render_layout_note(layout))
+    _write_note_via_knowledge_port(
+        vault_root, note_path, _render_layout_note(layout), action=write_action
+    )
     return layout
 
 
-def ensure_system_note(vault_root: Path, system_folder: str) -> Path:
+def ensure_system_note(vault_root: Path, system_folder: str, *, write_action: str | None = None) -> Path:
     note_path = _system_note_path(vault_root, system_folder)
     if note_path.exists():
         return note_path
@@ -366,13 +377,16 @@ def ensure_system_note(vault_root: Path, system_folder: str) -> Path:
         vault_root,
         note_path,
         "# System Notes\n\nThis folder contains system configuration and operational notes.\n",
+        action=write_action,
     )
     return note_path
 
 
-def ensure_vault_layout_report(vault_root: Path) -> tuple[VaultLayout, bool, list[str]]:
+def ensure_vault_layout_report(
+    vault_root: Path, *, write_action: str | None = None
+) -> tuple[VaultLayout, bool, list[str]]:
     vault_root = vault_root.expanduser()
-    layout = load_or_create_layout(vault_root)
+    layout = load_or_create_layout(vault_root, write_action=write_action)
     warnings: list[str] = []
 
     folders = set(layout.root_folders)
@@ -385,7 +399,7 @@ def ensure_vault_layout_report(vault_root: Path) -> tuple[VaultLayout, bool, lis
             continue
         (vault_root / folder).mkdir(parents=True, exist_ok=True)
 
-    ensure_system_note(vault_root, layout.system_folder)
+    ensure_system_note(vault_root, layout.system_folder, write_action=write_action)
 
     migrated = False
     return layout, migrated, warnings

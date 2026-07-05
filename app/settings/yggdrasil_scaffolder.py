@@ -88,7 +88,11 @@ class YggdrasilScaffolder:
         else:
             existed.append(system_settings)
 
-        layout, _, _ = ensure_vault_layout_report(mimer_root)
+        # Pass the scaffold's own bootstrap-escape action through so the
+        # nested layout/system-note writes survive safe_mode/unhealthy too
+        # (#2910) -- otherwise the port's own guard assertion inside those
+        # writes would re-deny what this seam's own check already allowed.
+        layout, _, _ = ensure_vault_layout_report(mimer_root, write_action=SCAFFOLD_ACTION)
         for folder in [layout.system_folder, layout.inbox_folder, layout.desk_folder]:
             folder_path = mimer_root / folder
             if folder_path.exists():
@@ -122,14 +126,27 @@ class YggdrasilScaffolder:
         )
         resolved_root = vault_root.expanduser().resolve()
         resolved_path = placeholder.expanduser().resolve()
-        write_note_from_absolute(resolved_path, content, vault_root=resolved_root)
+        # Pass the scaffold's own bootstrap-escape action through to the port
+        # (#2910): the port now asserts WG with its own default action, which
+        # is NOT on the bootstrap allow-list, so passing SCAFFOLD_ACTION here
+        # is what lets a genuine pre-vault-selection provision survive
+        # safe_mode/unhealthy after the seam-level check in scaffold() above
+        # already passed -- otherwise the port's own assertion would re-deny
+        # the write the outer seam just allowed through.
+        write_note_from_absolute(resolved_path, content, vault_root=resolved_root, action=SCAFFOLD_ACTION)
 
     @classmethod
     def _write_default_system_settings(cls, path: Path) -> None:
         defaults = cls._load_layout_defaults()
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = yaml.safe_dump(defaults, sort_keys=False, allow_unicode=True)
-        write_note_from_absolute(path.expanduser().resolve(), payload, vault_root=path.parent.parent.expanduser().resolve())
+        # See _write_settings_placeholder above: same bootstrap-escape pass-through.
+        write_note_from_absolute(
+            path.expanduser().resolve(),
+            payload,
+            vault_root=path.parent.parent.expanduser().resolve(),
+            action=SCAFFOLD_ACTION,
+        )
 
 
 __all__ = ["YggdrasilScaffolder"]

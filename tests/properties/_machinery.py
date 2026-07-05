@@ -412,6 +412,69 @@ REGISTERED_ADVISORY_J_SINKS: dict[str, str] = {
 }
 
 
+# =============================================================================
+# APPEND-ONLY SECTION -- P-1/P-4 guard-at-seam machinery (#2910)
+# =============================================================================
+#
+# Everything below this banner belongs to #2910 (P-1 `guard_asserted_at_write_
+# seam` / P-4 `guards_fail_closed`). Keep additions inside this section so a
+# concurrent sibling (#2911, heal-transition/advisory-sink machinery) rebases
+# cleanly against the P-2 section above. Do not reorder or interleave with
+# the P-2 content above the banner.
+#
+# Derivation: docs/testing/invariant-synthesis-2026-07.md :: P-1, P-4;
+# docs/architecture/formal-model.md §3 gap 1 / gap 4, §7 F-A..F-F.
+
+from dataclasses import dataclass as _dataclass  # noqa: E402
+from typing import Callable as _Callable  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# Registered write-frontmatter census (closed, justified exception set)
+# ---------------------------------------------------------------------------
+#
+# ``MarkdownSettingsStore.write_frontmatter`` is a SECOND vault-write primitive
+# alongside the knowledge port (``write_note_from_absolute``) -- it does not
+# route through the port at all, so the port's own guard-at-seam assertion
+# (#2910) does not cover it. Every production call site is listed here with
+# its guard classification, so a new caller cannot silently add an unguarded
+# frontmatter write. This is a closed set: adding a new call site requires a
+# reviewed classification in the same PR, mirroring REGISTERED_MIRRORS' rule.
+#
+# Classifications:
+#   "guarded"      -- the call site (or its direct, same-transition caller) is
+#                      already covered by an ``assert_writes_allowed`` in the
+#                      same seam module -- verified against `main` @ #2910.
+#   "out_of_scope" -- writes a store outside the vault content plane Sigma
+#                      (formal-model.md §2.3), e.g. the app-local device
+#                      registry, not a Human Knowledge Artifact.
+WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
+    ("app/ports/filesystem_vault_adapter.py", 44): (
+        "guarded: FilesystemVaultAdapter.ensure_uuid calls this class's OWN "
+        "write_frontmatter method (line 60), which routes through "
+        "write_note_from_absolute (the knowledge port, line 74) -- covered by "
+        "the port's own guard-at-seam assertion (#2910), not the "
+        "MarkdownSettingsStore primitive this census is otherwise about."
+    ),
+    ("app/vault/manager.py", 642): (
+        "guarded: _ensure_frontmatter_id asserts DEFAULT_WRITE_GUARD."
+        "assert_writes_allowed('vault.identity_heal') immediately before this "
+        "call (#2910 identity-heal fix); a denying/raising guard raises before "
+        "reaching this line."
+    ),
+    ("app/vault/settings_service.py", 362): (
+        "guarded: SettingsService.set_effective_setting asserts "
+        "DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_WRITE_ACTION) "
+        "earlier in the same method before persist=True reaches this write."
+    ),
+    ("app/vault/app_local.py", 153): (
+        "out_of_scope: AppLocalSettingsStore persists the app-local device "
+        "registry (default_app_local_settings_path(), typically an XDG data "
+        "dir) -- a machine-local app config store outside the vault content "
+        "plane Sigma (formal-model.md sec 2.3), not a Human Knowledge Artifact."
+    ),
+}
+
+
 @dataclass
 class DurableWriteCall:
     """One recorded call into a durable-write primitive during a GET request."""
@@ -522,3 +585,232 @@ def write_spy(monkeypatch: pytest.MonkeyPatch) -> Iterator[WriteSpy]:
     spy = WriteSpy()
     with spy_on_durable_writes(monkeypatch, spy):
         yield spy
+
+
+def find_write_frontmatter_call_sites(root: Path = APP_ROOT) -> list[tuple[str, int]]:
+    """AST-scan ``app/**/*.py`` for ``*.write_frontmatter(...)`` call sites.
+
+    Matches any attribute call named ``write_frontmatter`` (the method lives on
+    ``MarkdownSettingsStore``; production callers reach it via
+    ``self.markdown_store.write_frontmatter(...)`` or equivalent), excluding
+    the method's own ``def`` site. Deliberately returns every site with no
+    filtering -- classification against
+    ``WRITE_FRONTMATTER_SITE_CLASSIFICATION`` is the caller's job, so this
+    scanner itself cannot become a new escape hatch.
+    """
+    sites: list[tuple[str, int]] = []
+    for path in sorted(root.rglob("*.py")):
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        try:
+            tree = ast.parse(source, filename=str(path))
+        except SyntaxError:
+            continue
+        rel = str(path.relative_to(REPO_ROOT))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "write_frontmatter":
+                continue
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Attribute) and func.attr == "write_frontmatter":
+                sites.append((rel, node.lineno))
+    return sites
+
+
+# ---------------------------------------------------------------------------
+# Registered write-seam descriptors for the P-1/P-4 runtime property
+# ---------------------------------------------------------------------------
+#
+# Each entry names a real production seam this issue's scope covers, plus a
+# zero-argument callable (built by ``invoke_factory``) that drives that seam's
+# real write attempt over a fixture. ``given(seam=sampled_from(...))`` (the
+# spec's own vocabulary) samples this registry so both P-1 (denying guard ->
+# atomic block) and P-4 (raising guard -> fail-closed, loud) exercise every
+# named seam identically.
+
+
+@_dataclass(frozen=True)
+class RegisteredWriteSeam:
+    name: str
+    action: str
+    guard_patch_target: str  # dotted path to the WriteGuard instance to patch
+    invoke_factory: _Callable[[Path, "pytest.MonkeyPatch"], _Callable[[], None]]
+    unchanged_paths: _Callable[[Path], dict[Path, bytes]]
+
+
+def _knowledge_port_invoke(tmp_path: Path, monkeypatch: "pytest.MonkeyPatch") -> _Callable[[], None]:
+    """The knowledge write port itself (#2910 scope item 1)."""
+    from app.knowledge.write_ops import write_note_from_absolute
+
+    vault = tmp_path / "vault"
+    vault.mkdir(parents=True, exist_ok=True)
+    note = vault / "seam-note.md"
+    note.write_text("original\n", encoding="utf-8")
+
+    def _invoke() -> None:
+        write_note_from_absolute(note, "changed\n", vault_root=vault)
+
+    return _invoke
+
+
+def _knowledge_port_snapshot(tmp_path: Path) -> dict[Path, bytes]:
+    vault = tmp_path / "vault"
+    return {p: p.read_bytes() for p in sorted(vault.rglob("*")) if p.is_file()}
+
+
+def _identity_heal_invoke(tmp_path: Path, monkeypatch: "pytest.MonkeyPatch") -> _Callable[[], None]:
+    """Identity-heal via ``VaultManager._ensure_frontmatter_id`` (#2910 scope
+    item 2) -- the exact seam the issue names ("identity-heal via
+    write_frontmatter"), called directly so the raised ``WritesBlockedError``
+    carries the guard's real state/reason.
+
+    A companion assertion (``test_identity_heal_blocked_surfaces_as_invalid_
+    vault_context`` below) separately pins ``validate_vault``'s own
+    except-clause wrapping of that same exception into a loud, non-crashing
+    ``VaultContext(status="invalid")`` -- both behaviors matter, but the
+    shared P-1/P-4 properties need the seam's own raised error untouched.
+    """
+    from app.vault.manager import VaultManager
+
+    vault = tmp_path / "vault"
+    settings_dir = vault / "settings"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    vault_md = settings_dir / "vault.md"
+    vault_md.write_text(
+        "---\nschema: design-handoff.vault.v1\nvaultName: Seam\n---\nBody\n",
+        encoding="utf-8",
+    )
+
+    manager = VaultManager()
+    frontmatter = {"schema": "design-handoff.vault.v1", "vaultName": "Seam"}
+
+    def _invoke() -> None:
+        manager._ensure_frontmatter_id(
+            vault_md,
+            frontmatter,
+            key="vaultId",
+            prefix="vault",
+            body="Body\n",
+            persist=True,
+        )
+
+    return _invoke
+
+
+def _identity_heal_snapshot(tmp_path: Path) -> dict[Path, bytes]:
+    vault = tmp_path / "vault"
+    return {p: p.read_bytes() for p in sorted(vault.rglob("*")) if p.is_file()}
+
+
+def _checkbox_rollback_invoke(tmp_path: Path, monkeypatch: "pytest.MonkeyPatch") -> _Callable[[], None]:
+    """Checkbox-projection rollback write (#2910 scope item 3).
+
+    Forces ``run_panel_note_execution`` to raise after the checkbox has been
+    projected, so ``CheckboxProjectionService._project_locked``'s exception
+    handler reaches its compensating ``write_note_from_absolute(note_path,
+    rollback_text, ...)`` call -- covered automatically once the port itself
+    is guarded (issue scope item 3's stated mechanism), not by a second
+    caller-side assert in the handler.
+    """
+    import app.panel.checkbox_projection as projection_module
+    from app.panel.checkbox_projection import (
+        CheckboxProjectionIdempotencyStore,
+        CheckboxProjectionRequest,
+        CheckboxProjectionService,
+        extract_panel_selectable_options,
+    )
+
+    vault = tmp_path / "vault"
+    vault.mkdir(parents=True, exist_ok=True)
+    note = vault / "panel.md"
+    note.write_text(
+        "---\nuuid: seam-note\n---\n\n"
+        "%% AI:Start %%\n## AI-instruktion\nDo it.\n## AI-åtgärder\n"
+        "- [ ] Send email <!--ai:option_id=opt_1--> <!--ai:id=send.email--> "
+        "<!--ai:proposed=1-->\n%% AI:End %%\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    monkeypatch.setattr(
+        projection_module,
+        "run_panel_note_execution",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("seam property forced failure")),
+    )
+    monkeypatch.setattr(
+        projection_module,
+        "refresh_panel_note_object",
+        lambda *a, **k: None,
+    )
+
+    def _invoke() -> None:
+        content = note.read_text(encoding="utf-8")
+        from app.text.helpers import content_hash as _content_hash
+
+        options = extract_panel_selectable_options(
+            content, artifact_id="seam-note", note_path="panel.md", content_hash=_content_hash(content)
+        )
+        option = next(o for o in options if o.option_id == "opt_1")
+        service = CheckboxProjectionService(idempotency_store=CheckboxProjectionIdempotencyStore())
+        request = CheckboxProjectionRequest(
+            artifact_id="seam-note",
+            note_path="panel.md",
+            panel_id=option.panel_id,
+            option_id="opt_1",
+            expected_content_hash=option.content_hash,
+            expected_source_hash=option.source_hash,
+            idempotency_key="idem-seam-property",
+        )
+        response = service._project_locked(request, "panel.md")
+        # A blocked write returns a "blocked" response instead of raising --
+        # the service's own contract catches WritesBlockedError at its own
+        # caller-side check (checkbox_projection.py's "panel.checkbox_
+        # projection" action, BEFORE the projected write or the rollback
+        # write are ever reached) and converts it to a response object (see
+        # CheckboxProjectionService._project_locked). Re-raise a
+        # WritesBlockedError carrying the ORIGINAL guard state/reason (parsed
+        # back out of the response) so the shared P-1/P-4 assertions can
+        # treat every registered seam uniformly without a synthetic state.
+        if response.status == "blocked":
+            from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
+
+            snapshot = DEFAULT_WRITE_GUARD.snapshot_fn()
+            raise WritesBlockedError(
+                str(snapshot.get("state") or "blocked"),
+                response.block_reason,
+                "panel.checkbox_projection",
+            )
+
+    return _invoke
+
+
+def _checkbox_rollback_snapshot(tmp_path: Path) -> dict[Path, bytes]:
+    vault = tmp_path / "vault"
+    return {p: p.read_bytes() for p in sorted(vault.rglob("*")) if p.is_file()}
+
+
+REGISTERED_WRITE_SEAMS: tuple[RegisteredWriteSeam, ...] = (
+    RegisteredWriteSeam(
+        name="knowledge_write_port",
+        action="knowledge.write_note",
+        guard_patch_target="app.write_guard.DEFAULT_WRITE_GUARD",
+        invoke_factory=_knowledge_port_invoke,
+        unchanged_paths=_knowledge_port_snapshot,
+    ),
+    RegisteredWriteSeam(
+        name="identity_heal",
+        action="vault.identity_heal",
+        guard_patch_target="app.write_guard.DEFAULT_WRITE_GUARD",
+        invoke_factory=_identity_heal_invoke,
+        unchanged_paths=_identity_heal_snapshot,
+    ),
+    RegisteredWriteSeam(
+        name="checkbox_rollback",
+        action="knowledge.write_note",
+        guard_patch_target="app.write_guard.DEFAULT_WRITE_GUARD",
+        invoke_factory=_checkbox_rollback_invoke,
+        unchanged_paths=_checkbox_rollback_snapshot,
+    ),
+)
