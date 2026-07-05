@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Optional, Sequence
 from uuid import UUID
@@ -14,6 +15,8 @@ from app.objects import ObjectStore
 from app.services.decisions import insert_decision, latest_decision
 from app.services.audit import audit_event
 from app.services import llm as llm_service
+
+logger = logging.getLogger(__name__)
 
 AGENT = "set_evaluator"
 
@@ -95,7 +98,24 @@ def evaluate_object(object_id: str, *, trace_id: str, threshold: float = 0.8) ->
             trace_id,
         )
     except Exception:
-        pass
+        # P-5 receipt-before-ack (#2912): an evaluate decision whose
+        # accountability record cannot be persisted was never decided. This
+        # used to be a bare `except Exception: pass` that re-swallowed at the
+        # call site what #2788 made fail-loud in insert_decision() itself
+        # (D-7-adjacent residue, docs/architecture/runtime-semantics.md ::
+        # Divergences D-7). No caller of evaluate_object()/run() (the
+        # LangGraph `_act` node in app/agents/set_evaluator/graph.py, the CLI
+        # dispatcher in app/agents/runner.py, and the backfill job loop in
+        # app/jobs/backfill.py) currently catches or tolerates a swallowed
+        # failure here, so log-and-raise matches the existing
+        # propagate-uncaught contract instead of inventing a new
+        # degraded-result shape.
+        logger.exception(
+            "set_evaluator decision write failed object_id=%s trace_id=%s",
+            object_id,
+            trace_id,
+        )
+        raise
 
     return out
 
