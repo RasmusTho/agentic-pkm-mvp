@@ -84,10 +84,24 @@ fi
 echo "waiting ${INITIAL_WAIT}s before first check (CI runs ~4-5 min; not polling through it)..."
 sleep "$INITIAL_WAIT"
 
+# Dedupe rule (see CI_WAIT_CONTRACT.md): GitHub keeps every check-run record for a head SHA, so a
+# re-run after a body/config fix leaves BOTH the stale failed record and the newer successful one
+# for the same check NAME on the same SHA. Classifying on the raw list fails closed on a check that
+# has already gone green on its latest run (observed live on PR #2915 and #2924: `pr-contract`
+# failure+success on one SHA). Before pending/conclusion classification, keep only the LATEST
+# record per check-run `name` — ranked by `started_at` (fallback `id` on a tie/missing timestamp) —
+# and classify off that deduped set only. A genuinely failed LATEST record still fails closed.
+DEDUPE_LATEST_PER_NAME='
+  [.check_runs[]]
+  | group_by(.name)
+  | map(sort_by([(.started_at // ""), .id]) | last)
+'
+
 # Fetch check-runs once per iteration into a single guarded response, then derive BOTH the
-# pending set and the failed conclusions from it. Fail CLOSED: a fetch error, an unparseable
-# body, or zero attached checks never falls through to success — it retries until the deadline,
-# then times out (exit 2). The conclusion classification only runs on a response we trust.
+# pending set and the failed conclusions from the deduped (latest-per-name) set. Fail CLOSED: a
+# fetch error, an unparseable body, or zero attached checks never falls through to success — it
+# retries until the deadline, then times out (exit 2). The conclusion classification only runs on
+# a response we trust.
 deadline=$(( $(date +%s) + TIMEOUT - INITIAL_WAIT ))
 failed=""
 while :; do
@@ -99,7 +113,7 @@ while :; do
   elif [ "$count" -eq 0 ]; then
     echo "no check-runs attached to $SHA yet; waiting..."
   else
-    pending=$(printf '%s' "$resp" | jq -r '[.check_runs[] | select(.status!="completed") | .name] | join(", ")')
+    pending=$(printf '%s' "$resp" | jq -r "${DEDUPE_LATEST_PER_NAME} | [.[] | select(.status!=\"completed\") | .name] | join(\", \")")
     if [ -n "$pending" ]; then
       echo "still running: $pending"
     else
@@ -114,8 +128,9 @@ while :; do
       elif [ "${stotal:-0}" -gt 0 ] && [ "$sstate" = "pending" ]; then
         echo "classic commit statuses still pending; waiting..."
       else
-        # Both surfaces resolved — derive failures from the SAME trusted responses (fail closed).
-        failed=$(printf '%s' "$resp" | jq -r '[.check_runs[] | select(.conclusion!=null and .conclusion!="success" and .conclusion!="skipped" and .conclusion!="neutral") | "\(.name): \(.conclusion)"] | join("; ")')
+        # Both surfaces resolved — derive failures from the SAME trusted responses (fail closed),
+        # classifying off the latest record per check-run name only.
+        failed=$(printf '%s' "$resp" | jq -r "${DEDUPE_LATEST_PER_NAME} | [.[] | select(.conclusion!=null and .conclusion!=\"success\" and .conclusion!=\"skipped\" and .conclusion!=\"neutral\") | \"\(.name): \(.conclusion)\"] | join(\"; \")")
         if [ "${stotal:-0}" -gt 0 ] && [ "$sstate" != "success" ]; then
           failed="${failed:+$failed; }classic commit status=$sstate"
         fi
