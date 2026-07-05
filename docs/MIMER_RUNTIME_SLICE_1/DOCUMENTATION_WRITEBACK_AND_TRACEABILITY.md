@@ -3,7 +3,7 @@ name: Documentation Writeback and Traceability
 description: Update the invariant registry and traceability matrix to reflect runtime enforcement; close the parent epic
 task_id: YRS1-08
 source_anchor: docs/architecture/traceability-matrix.md :: rows 1-7
-parent_capability: Yggdrasil Runtime Vertical Slice 1
+parent_capability: Mimer Runtime Vertical Slice 1
 prerequisites: [YRS1-07]
 depends_on: [CONVERT_INVARIANT_XFAILS_TO_PASSING.md]
 can_parallelize_with: []
@@ -29,7 +29,7 @@ it carries the parent-epic closure handoff.
   **8** (projection is not evidence) are left-xfail invariants NOT in this slice — do not touch them.
   Re-derive the row set from the registry at implementation time rather than trusting these numbers blindly.
 - Updates any runtime contract doc to record the implemented slice (notably the architecture context
-  packet's "first runtime vertical slice" status, and a one-line pointer to the `yggdrasil_runtime`
+  packet's "first runtime vertical slice" status, and a one-line pointer to the `mimer_runtime`
   package).
 - Posts the final validation receipt to the parent epic and closes it, reconciling the README
   `State:` line and the parent-issue local surface.
@@ -75,14 +75,14 @@ delivered truth.
   projection, which remain xfail).
   - Verify: doc writeback at `docs/architecture/traceability-matrix.md` rows 1, 2, 3, 5, 6, 7, 16
 - [ ] The architecture context packet records the first runtime vertical slice as delivered, with a
-  pointer to `yggdrasil_runtime`.
+  pointer to `mimer_runtime`.
   - Verify: doc writeback at `docs/foundation/yggdrasil-architecture-context-packet.md :: runtime slice status`
 - [ ] No architecture contradiction is introduced.
   - Verify: `pytest -q tests/invariants tests/evals` stays green (the static doc-consistency probes,
     e.g. `test_oef_charter_states_observability_not_policy`, stay green).
 - [ ] Parent epic closed with a final validation receipt; README `State:` and
   `PARENT_FEATURE_ISSUE` surface reconciled.
-  - Verify: doc writeback at `docs/YGGDRASIL_RUNTIME_SLICE_1/README.md :: State`
+  - Verify: doc writeback at `docs/MIMER_RUNTIME_SLICE_1/README.md :: State`
 
 ## How to Verify (Pre-Merge)
 

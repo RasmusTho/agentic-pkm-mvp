@@ -4,7 +4,7 @@ These complement the auto-converting skeleton ``test_metadata_bundle.py::test_ca
 by validating the *runtime-built* bundle against the JSON schema and pinning the scope!=vault rule.
 
 Invariant registry: docs/testing/invariant-tests.md :: metadata_bundle_required, store_no_naked_vectors
-Contract: docs/architecture/metadata-bundle.md (#2544). Spec: docs/YGGDRASIL_RUNTIME_SLICE_1/CAPTURE_EMITS_METADATA_BUNDLE.md
+Contract: docs/architecture/metadata-bundle.md (#2544). Spec: docs/MIMER_RUNTIME_SLICE_1/CAPTURE_EMITS_METADATA_BUNDLE.md
 """
 
 from __future__ import annotations

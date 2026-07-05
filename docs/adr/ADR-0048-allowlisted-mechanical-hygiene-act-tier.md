@@ -6,7 +6,7 @@
 - **Date:** 2026-07-05
 - **Deciders:** Rasmus (owner) — pending
 - **Relates to:** `docs/CAPABILITY_CONTRACT_MODEL.md :: Proportional governance tiers` (#1881),
-  `docs/YGGDRASIL_CAPABILITY_HARDENING/GRADUATED_CURATION.md` (R1 design), audit ruling R1
+  `docs/MIMER_CAPABILITY_HARDENING/GRADUATED_CURATION.md` (R1 design), audit ruling R1
   (`docs/research/yggdrasil-fable5-audit.md` §IX)
 
 ## Context

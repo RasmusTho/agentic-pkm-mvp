@@ -1,26 +1,26 @@
 ---
 name: Runtime Slice 1 Integration Map
-description: Authoritative module → entry-point → build/reuse map for the yggdrasil_runtime package, the corpus-as-runtime-store decision, and the test conversion plan for tasks 2–8
+description: Authoritative module → entry-point → build/reuse map for the mimer_runtime package, the corpus-as-runtime-store decision, and the test conversion plan for tasks 2–8
 task_id: YRS1-01
-source_anchor: docs/YGGDRASIL_RUNTIME_SLICE_1/README.md :: Foundational design decision
-parent_capability: Yggdrasil Runtime Vertical Slice 1
+source_anchor: docs/MIMER_RUNTIME_SLICE_1/README.md :: Foundational design decision
+parent_capability: Mimer Runtime Vertical Slice 1
 ---
 
 # Runtime Slice 1 — Integration Map
 
 State: Inventory complete (YRS1-01 / #2579). No behavior change. This map is the contract that keeps
-the tasks 2–8 child PRs coherent: it pins the exact `yggdrasil_runtime` module shape, the
+the tasks 2–8 child PRs coherent: it pins the exact `mimer_runtime` module shape, the
 corpus-as-runtime-store decision, and which xfail each later task converts.
 
-This map is subordinate to `docs/YGGDRASIL_RUNTIME_SLICE_1/README.md` (the capability spec). Where
+This map is subordinate to `docs/MIMER_RUNTIME_SLICE_1/README.md` (the capability spec). Where
 the README and this file agree, the README wins; this file only adds implementation-level detail and
 the legacy `app/` inventory the README does not carry.
 
 ## Foundational decision (confirmed)
 
-- **Build a new top-level `yggdrasil_runtime` package.** The xfail skeletons import
-  `yggdrasil_runtime.<module>` (see `tests/invariants/_helpers.py::FUTURE_RUNTIME_PACKAGE` and
-  `tests/evals/_helpers.py::FUTURE_RUNTIME_PACKAGE`, both literally `"yggdrasil_runtime"`). The
+- **Build a new top-level `mimer_runtime` package.** The xfail skeletons import
+  `mimer_runtime.<module>` (see `tests/invariants/_helpers.py::FUTURE_RUNTIME_PACKAGE` and
+  `tests/evals/_helpers.py::FUTURE_RUNTIME_PACKAGE`, both literally `"mimer_runtime"`). The
   package does **not** exist today — confirmed by the 18 dynamic xfails in
   `pytest -q tests/invariants tests/evals` (all xfail via `require_future_runtime`, none via a static
   `@pytest.mark.xfail`).
@@ -38,7 +38,7 @@ the legacy `app/` inventory the README does not carry.
 (`tests/evals/_helpers.py::GROUPS`). No real vault, no DB, no durable mutation, no WriteGuard write
 path.
 
-- `yggdrasil_runtime.corpus` loads the fixtures and parses their flat `key: value` frontmatter,
+- `mimer_runtime.corpus` loads the fixtures and parses their flat `key: value` frontmatter,
   reusing the semantics of `tests/evals/_helpers.py::parse_frontmatter` / `load_corpus` /
   `load_group` (a runtime equivalent — the runtime package must not import from `tests/`). Required
   metadata keys per `tests/evals/_helpers.py::REQUIRED_META_KEYS`: `scope_id`, `sphere`,
@@ -49,18 +49,18 @@ path.
 
 ## Module map
 
-Each `yggdrasil_runtime` module, its test-pinned entry point (verbatim from the skeletons), the
+Each `mimer_runtime` module, its test-pinned entry point (verbatim from the skeletons), the
 build/reuse decision, and the legacy `app/` reference (context only — not a dependency).
 
 | Module | Entry point (pinned by tests) | Returns / asserts | Decision | Legacy `app/` reference (context only) |
 | --- | --- | --- | --- | --- |
-| `yggdrasil_runtime.metadata` | `MetadataBundle` dataclass/model | conforms to `schemas/metadata-bundle.schema.json`; fields incl. `object_id`, `object_type`, `scope_id`, `source_role`, `authority_state`, `evidence_role`, `sensitivity`, provenance, `derived_from` | **NEW** (shared type; Task 2 defines, tasks 3–6 import) | `app/context_bundles/schema.py` (Pydantic style precedent only) |
-| `yggdrasil_runtime.corpus` | `load_corpus()` / `load_group(group)` runtime equivalent | `MetadataBundle`-carrying docs from `tests/evals/fixtures/` | **NEW** (mirrors `tests/evals/_helpers.py` semantics; no `tests/` import) | `app/index/ingest_md.py` (frontmatter ingest precedent) |
-| `yggdrasil_runtime.capture` | `capture(text: str, principal_id: str)` | obj `.metadata_bundle.scope_id`, `.metadata_bundle.source_role` | **NEW** | `app/capture/writer.py::generate_notes` (no bundle today) |
-| `yggdrasil_runtime.dri` | `derive_segment(artifact_id: str)` | segment `.metadata_bundle.derived_from`, `.metadata_bundle.scope_id`, `.metadata_bundle.provenance_event_ids` (all on the embedded bundle) | **NEW** | `app/index/ingest_md.py`, `app/store/vector_index.py` (naked rep today) |
-| `yggdrasil_runtime.cross_scope` | `evaluate(source_scope, target_scope, operation, flow)` | decision `.allowed: bool`, `.evidence_role_in_target` (when allowed) | **NEW** | `app/governance/*` (CrossScopeFlow not modeled today) |
-| `yggdrasil_runtime.retrieval` | `retrieve(query: str, active_scope_id: str)` | result `.candidate_items[]`, each `.metadata_bundle.scope_id/.evidence_role`, `.admissibility_status`, `.evidence_role_in_context` | **NEW** (Task 4 prefilter+rank; Task 5 candidate semantics — co-owned) | `app/components/retrieval.py::search`, `app/store/vector_index.py::VectorIndex.search_by_text` (rank-only, no scope prefilter) |
-| `yggdrasil_runtime.context` | `assemble_envelope(retrieval_result, *, active_workspace_id, active_scope_id, principal_id, user_intent)` | ContextEnvelope conforming to `schemas/context-envelope.schema.json` | **NEW** | `app/context_bundles/schema.py::ContextBundle` (referenced, **never replaced**) |
+| `mimer_runtime.metadata` | `MetadataBundle` dataclass/model | conforms to `schemas/metadata-bundle.schema.json`; fields incl. `object_id`, `object_type`, `scope_id`, `source_role`, `authority_state`, `evidence_role`, `sensitivity`, provenance, `derived_from` | **NEW** (shared type; Task 2 defines, tasks 3–6 import) | `app/context_bundles/schema.py` (Pydantic style precedent only) |
+| `mimer_runtime.corpus` | `load_corpus()` / `load_group(group)` runtime equivalent | `MetadataBundle`-carrying docs from `tests/evals/fixtures/` | **NEW** (mirrors `tests/evals/_helpers.py` semantics; no `tests/` import) | `app/index/ingest_md.py` (frontmatter ingest precedent) |
+| `mimer_runtime.capture` | `capture(text: str, principal_id: str)` | obj `.metadata_bundle.scope_id`, `.metadata_bundle.source_role` | **NEW** | `app/capture/writer.py::generate_notes` (no bundle today) |
+| `mimer_runtime.dri` | `derive_segment(artifact_id: str)` | segment `.metadata_bundle.derived_from`, `.metadata_bundle.scope_id`, `.metadata_bundle.provenance_event_ids` (all on the embedded bundle) | **NEW** | `app/index/ingest_md.py`, `app/store/vector_index.py` (naked rep today) |
+| `mimer_runtime.cross_scope` | `evaluate(source_scope, target_scope, operation, flow)` | decision `.allowed: bool`, `.evidence_role_in_target` (when allowed) | **NEW** | `app/governance/*` (CrossScopeFlow not modeled today) |
+| `mimer_runtime.retrieval` | `retrieve(query: str, active_scope_id: str)` | result `.candidate_items[]`, each `.metadata_bundle.scope_id/.evidence_role`, `.admissibility_status`, `.evidence_role_in_context` | **NEW** (Task 4 prefilter+rank; Task 5 candidate semantics — co-owned) | `app/components/retrieval.py::search`, `app/store/vector_index.py::VectorIndex.search_by_text` (rank-only, no scope prefilter) |
+| `mimer_runtime.context` | `assemble_envelope(retrieval_result, *, active_workspace_id, active_scope_id, principal_id, user_intent)` | ContextEnvelope conforming to `schemas/context-envelope.schema.json` | **NEW** | `app/context_bundles/schema.py::ContextBundle` (referenced, **never replaced**) |
 
 **Reuse-trivially candidate:** a cosine/lexical similarity helper. `app/store/vector_index.py::VectorIndex._cosine`
 is a pure function precedent; the slice prefers a simple deterministic **lexical** score after
@@ -68,7 +68,7 @@ prefilter (README: no embeddings/vector DB sophistication), so a tiny local scor
 rather than importing the legacy class.
 
 **Do NOT create these submodules** (their xfails must stay xfail — future slices):
-`yggdrasil_runtime.authority`, `.storage`, `.execution`, `.memory`, `.agent`, `.scope`, `.sync`,
+`mimer_runtime.authority`, `.storage`, `.execution`, `.memory`, `.agent`, `.scope`, `.sync`,
 `.projection`, `.observability`. Because `require_future_runtime` xfails only when the *exact* target
 module (or an ancestor) is missing, leaving these absent keeps their skeletons honestly xfail even
 after the package root exists.
@@ -103,7 +103,7 @@ green:
 
 (Restated from README "Cross-Task Invariants" — the load-bearing ones for keeping PRs coherent.)
 
-- **Single MetadataBundle type.** One `yggdrasil_runtime.metadata.MetadataBundle`. Task 2 defines it;
+- **Single MetadataBundle type.** One `mimer_runtime.metadata.MetadataBundle`. Task 2 defines it;
   tasks 3–6 import, never redefine.
 - **Prefilter-before-ranking is monotone under enrichment.** Task 5 may only narrow/annotate, never
   widen, Task 4's eligible set; `scope_policy_prefiltered` stays `true` end to end.
@@ -136,5 +136,5 @@ slice work.
   can reach store/index directly; the new ContextEnvelope must carry bounded context only (no raw
   vault/index access).
 
-A full re-wire of the legacy pipeline onto `yggdrasil_runtime` is a **future** decision, explicitly
+A full re-wire of the legacy pipeline onto `mimer_runtime` is a **future** decision, explicitly
 not part of slice 1.

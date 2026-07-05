@@ -1,6 +1,6 @@
 """Vault-health lint (G2-1) -- read-only, propose-track, report-note output.
 
-Spec: ``docs/YGGDRASIL_CAPABILITY_HARDENING/GRADUATED_CURATION.md`` §5, §6.
+Spec: ``docs/MIMER_CAPABILITY_HARDENING/GRADUATED_CURATION.md`` §5, §6.
 
 Invariants held by this module:
 

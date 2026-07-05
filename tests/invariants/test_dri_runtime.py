@@ -5,7 +5,7 @@ by validating segment-bundle schema conformance, inheritance from the source, an
 construction guarantee.
 
 Invariant registry: docs/testing/invariant-tests.md :: provenance_survives_derivation, store_no_naked_vectors
-Spec: docs/YGGDRASIL_RUNTIME_SLICE_1/DRI_SEGMENT_CARRIES_PROVENANCE.md
+Spec: docs/MIMER_RUNTIME_SLICE_1/DRI_SEGMENT_CARRIES_PROVENANCE.md
 """
 
 from __future__ import annotations

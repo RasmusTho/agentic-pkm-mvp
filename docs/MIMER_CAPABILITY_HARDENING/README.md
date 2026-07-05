@@ -7,7 +7,7 @@ Review cadence: event-driven
 Source of truth: mixed — cites current code (`path:line`) and owner rulings; design content is proposal until ratified
 Last reviewed: 2026-07-05 (second design pass)
 
-# Yggdrasil Capability Hardening — program spec
+# Mimer Capability Hardening — program spec
 
 **Mandate (reordered 2026-07-05).** The north star is **Cognitive Expansion: Connect + Create** —
 the charter's second class of value (`docs/COGNITIVE_PROSTHESIS_CHARTER.md` §2.1), dormant until

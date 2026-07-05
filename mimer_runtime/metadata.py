@@ -4,7 +4,7 @@ Single source of truth for the semantic/provenance envelope every usable runtime
 conformant with ``schemas/metadata-bundle.schema.json`` (shared enums in ``schemas/_defs.schema.json``).
 Tasks 2-6 all use *this* type — a second, divergent bundle shape anywhere would break
 ``store_no_naked_vectors`` and candidate-identity single-source (see
-``docs/YGGDRASIL_RUNTIME_SLICE_1/README.md`` :: Cross-Task Invariants).
+``docs/MIMER_RUNTIME_SLICE_1/README.md`` :: Cross-Task Invariants).
 
 Design rules enforced here:
 

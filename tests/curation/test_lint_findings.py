@@ -1,6 +1,6 @@
 """#2986 (G2-1) -- vault-health lint pipeline.
 
-Spec: ``docs/YGGDRASIL_CAPABILITY_HARDENING/GRADUATED_CURATION.md`` §5, §6.
+Spec: ``docs/MIMER_CAPABILITY_HARDENING/GRADUATED_CURATION.md`` §5, §6.
 
 Covers:
 - idempotent rerun over an unchanged fixture vault (identical finding ids,

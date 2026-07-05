@@ -1,6 +1,6 @@
 """#2986 (G2-1) -- ``finding_id`` is content-derived and stable across reruns.
 
-Spec: ``docs/YGGDRASIL_CAPABILITY_HARDENING/GRADUATED_CURATION.md`` §1:
+Spec: ``docs/MIMER_CAPABILITY_HARDENING/GRADUATED_CURATION.md`` §1:
 ``finding_id = hash(note_uuid, class, span, proposed_change)``.
 """
 from __future__ import annotations

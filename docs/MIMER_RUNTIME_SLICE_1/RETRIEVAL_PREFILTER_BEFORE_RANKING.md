@@ -3,7 +3,7 @@ name: Retrieval Prefilter Before Ranking
 description: Scope/policy eligibility prefilter precedes ranking; cross-scope crossing only via typed CrossScopeFlow
 task_id: YRS1-04
 source_anchor: docs/architecture/retrieval-contract.md :: scope eligibility precedes ranking
-parent_capability: Yggdrasil Runtime Vertical Slice 1
+parent_capability: Mimer Runtime Vertical Slice 1
 prerequisites: [YRS1-03]
 depends_on: [DRI_SEGMENT_CARRIES_PROVENANCE.md]
 can_parallelize_with: []
@@ -19,10 +19,10 @@ typed CrossScopeFlow — not because an embedding is close.
 
 ## What This Task Does
 
-- Adds `yggdrasil_runtime/cross_scope.py` with
+- Adds `mimer_runtime/cross_scope.py` with
   `evaluate(source_scope, target_scope, operation, flow)` returning a decision with `.allowed: bool`
   and (when allowed) `.evidence_role_in_target`. With `flow=None` any cross-scope operation is denied.
-- Adds `yggdrasil_runtime/retrieval.py` with `retrieve(query: str, active_scope_id: str)` that:
+- Adds `mimer_runtime/retrieval.py` with `retrieve(query: str, active_scope_id: str)` that:
   1. loads candidates from the fixture corpus,
   2. **prefilters** to the eligible set (active scope, plus any scope reachable via an explicit flow)
      **before** ranking,
@@ -34,7 +34,7 @@ typed CrossScopeFlow — not because an embedding is close.
 ## Concretely
 
 ```python
-from yggdrasil_runtime import retrieval, cross_scope
+from mimer_runtime import retrieval, cross_scope
 
 r = retrieval.retrieve(query="telemetry state machine", active_scope_id="scope:work/project-alpha")
 # Even though Project Beta is highly similar, admitted candidates are Alpha-only:
@@ -74,7 +74,7 @@ site, is what makes that impossible.
 ## Import-gate side effect (must keep CI green)
 
 `require_future_runtime("retrieval", …)` xfails on the **module**, not per test. The moment this task
-creates `yggdrasil_runtime/retrieval.py`, **every** retrieval-backed skeleton stops xfail-ing and runs
+creates `mimer_runtime/retrieval.py`, **every** retrieval-backed skeleton stops xfail-ing and runs
 its real assertions in this same PR — not only the prefilter tests, but also the two nominally-YRS1-05
 tests:
 
@@ -107,7 +107,7 @@ applies to `cross_scope` (general-knowledge eval) — but not to `context`, whic
   Note: the bare monotonicity + RPG skeletons must already pass here (import-gate note), only the
   richer enrichment is deferred.
 - The full policy engine, GOV receipts, AuthorityTransition runtime.
-- Parent-scope aggregation (`yggdrasil_runtime.scope`) — left xfail.
+- Parent-scope aggregation (`mimer_runtime.scope`) — left xfail.
 - Embedding/reranking sophistication — a trivial similarity helper is sufficient.
 
 ## Related Docs

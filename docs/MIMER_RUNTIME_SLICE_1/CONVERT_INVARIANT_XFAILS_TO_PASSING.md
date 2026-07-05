@@ -3,7 +3,7 @@ name: Convert Invariant Xfails to Passing
 description: Verify the targeted xfails pass and the deliberately-left xfails remain explicit; lock the green suite as a gate
 task_id: YRS1-07
 source_anchor: docs/testing/invariant-tests.md :: Coverage map
-parent_capability: Yggdrasil Runtime Vertical Slice 1
+parent_capability: Mimer Runtime Vertical Slice 1
 prerequisites: [YRS1-06]
 depends_on: [CONTEXT_ENVELOPE_ASSEMBLY.md]
 can_parallelize_with: []
@@ -20,7 +20,7 @@ repeatable gate.
 ## What This Task Does
 
 - Runs the full `pytest -q tests/invariants tests/evals` and confirms the eight targeted xfails now
-  pass via real assertions (they auto-flip once the `yggdrasil_runtime` modules exist, because
+  pass via real assertions (they auto-flip once the `mimer_runtime` modules exist, because
   `require_future_runtime` imports the now-present module and runs the body).
 - Confirms the deliberately-left invariants are still xfail (promotion, authority transition,
   execution, sync, parent aggregation, projection, observability, storage-write, propose-when-uncertain).

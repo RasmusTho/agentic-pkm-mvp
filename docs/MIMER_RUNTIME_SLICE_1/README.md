@@ -1,7 +1,7 @@
-# Yggdrasil Runtime Vertical Slice 1 — Capture to Bounded Context
+# Mimer Runtime Vertical Slice 1 — Capture to Bounded Context
 
 State: **DELIVERED (2026-06-28).** All child issues #2579–#2586 merged to `main`; parent epic
-**#2578** closed. The chain is implemented as the `yggdrasil_runtime` package (capture → MetadataBundle
+**#2578** closed. The chain is implemented as the `mimer_runtime` package (capture → MetadataBundle
 → DRI segment → retrieval prefilter → RetrievalResult → ContextEnvelope), corpus-backed over
 `tests/evals/fixtures/`. Acceptance surface: `pytest -q tests/invariants tests/evals` — the eight
 targeted invariants pass; the nine deliberately-left future-slice invariants remain xfail (locked by
@@ -13,7 +13,7 @@ record enforcement status — no Builder System / BuilderOps authority is create
 
 ## Purpose
 
-Convert the *first narrow subset* of the Yggdrasil architecture contracts into executable runtime
+Convert the *first narrow subset* of the Mimer architecture contracts into executable runtime
 behavior, and turn the supporting xfail invariant/eval skeletons into honestly passing tests. The
 goal is not to build the system — it is to make the first architecture chain executable and prove the
 spine end to end:
@@ -22,13 +22,13 @@ spine end to end:
 Capture → MetadataBundle → DRI segment → Retrieval prefilter → RCA result → ContextEnvelope
 ```
 
-## Foundational design decision — corpus-backed slice, new `yggdrasil_runtime` package
+## Foundational design decision — corpus-backed slice, new `mimer_runtime` package
 
 The xfail skeletons (`tests/invariants/_helpers.py`, `tests/evals/_helpers.py`) import a **new
-top-level package `yggdrasil_runtime`** and call exact entry points. They xfail *only* while that
+top-level package `mimer_runtime`** and call exact entry points. They xfail *only* while that
 package is absent; the moment it exists, their real assertions run. This slice therefore:
 
-1. **Builds a clean `yggdrasil_runtime` package** implementing those exact entry points. It does
+1. **Builds a clean `mimer_runtime` package** implementing those exact entry points. It does
    **not** rewire the legacy `app/` capture/index/retrieval pipeline (that pipeline stays as-is; it
    is out of scope).
 2. **Operates over the synthetic anti-contamination corpus** at `tests/evals/fixtures/` (the five
@@ -44,13 +44,13 @@ This keeps the slice narrow, makes every xfail target reachable, and honors ever
 
 | Module | Entry point | Returns (attributes asserted by tests) |
 | --- | --- | --- |
-| `yggdrasil_runtime.capture` | `capture(text: str, principal_id: str)` | obj with `.metadata_bundle.scope_id`, `.metadata_bundle.source_role` |
-| `yggdrasil_runtime.dri` | `derive_segment(artifact_id: str)` | segment with `.metadata_bundle.derived_from`, `.metadata_bundle.scope_id`, `.metadata_bundle.provenance_event_ids` (all on the embedded bundle — no top-level duplicates) |
-| `yggdrasil_runtime.retrieval` | `retrieve(query: str, active_scope_id: str)` | result with `.candidate_items[]`, each `.metadata_bundle.scope_id`, `.metadata_bundle.evidence_role`, `.admissibility_status`, `.evidence_role_in_context` |
-| `yggdrasil_runtime.cross_scope` | `evaluate(source_scope, target_scope, operation, flow)` | decision with `.allowed: bool`, `.evidence_role_in_target` (when allowed) |
-| `yggdrasil_runtime.context` (new test) | `assemble_envelope(retrieval_result, *, active_workspace_id, active_scope_id, principal_id, user_intent)` | ContextEnvelope conforming to `schemas/context-envelope.schema.json` |
+| `mimer_runtime.capture` | `capture(text: str, principal_id: str)` | obj with `.metadata_bundle.scope_id`, `.metadata_bundle.source_role` |
+| `mimer_runtime.dri` | `derive_segment(artifact_id: str)` | segment with `.metadata_bundle.derived_from`, `.metadata_bundle.scope_id`, `.metadata_bundle.provenance_event_ids` (all on the embedded bundle — no top-level duplicates) |
+| `mimer_runtime.retrieval` | `retrieve(query: str, active_scope_id: str)` | result with `.candidate_items[]`, each `.metadata_bundle.scope_id`, `.metadata_bundle.evidence_role`, `.admissibility_status`, `.evidence_role_in_context` |
+| `mimer_runtime.cross_scope` | `evaluate(source_scope, target_scope, operation, flow)` | decision with `.allowed: bool`, `.evidence_role_in_target` (when allowed) |
+| `mimer_runtime.context` (new test) | `assemble_envelope(retrieval_result, *, active_workspace_id, active_scope_id, principal_id, user_intent)` | ContextEnvelope conforming to `schemas/context-envelope.schema.json` |
 
-A shared `yggdrasil_runtime.metadata.MetadataBundle` type, conformant with
+A shared `mimer_runtime.metadata.MetadataBundle` type, conformant with
 `schemas/metadata-bundle.schema.json`, underlies all of the above. No naked vectors/chunks.
 
 ## Runtime slice scope
@@ -66,7 +66,7 @@ machine memory runtime; memory promotion; durable mutation; AuthorityTransition 
 runtime beyond references/stubs; sync/federation; external tool execution; broad agent orchestration;
 full policy engine; production UI overhaul; real cross-vault automation beyond test fixtures;
 embeddings/reranking sophistication beyond what is already available and trivial. Parent-scope
-aggregation (`yggdrasil_runtime.scope`) and replica sync (`yggdrasil_runtime.sync`) are **not** built
+aggregation (`mimer_runtime.scope`) and replica sync (`mimer_runtime.sync`) are **not** built
 here — their xfails stay xfail.
 
 ## Source-of-truth docs
@@ -150,11 +150,11 @@ The order is one flat chain — do not start a task before its predecessor's con
 
 ## Cross-Task Invariants / Interaction Safety
 
-Tasks 2–6 share the `yggdrasil_runtime` package and a single data spine; tasks 4 and 5 co-own the
+Tasks 2–6 share the `mimer_runtime` package and a single data spine; tasks 4 and 5 co-own the
 same `retrieve()` function. The following invariants must hold *across* tasks:
 
 - **Single MetadataBundle type.** Tasks 2–6 all use one
-  `yggdrasil_runtime.metadata.MetadataBundle`. A second, divergent bundle shape anywhere breaks
+  `mimer_runtime.metadata.MetadataBundle`. A second, divergent bundle shape anywhere breaks
   `store_no_naked_vectors` and candidate-identity single-source. Task 2 defines it; later tasks
   import it, never redefine it.
 - **Prefilter-before-ranking is monotone under enrichment.** Task 4 establishes that the candidate
@@ -181,7 +181,7 @@ re-cut before proceeding.
 
 ## Acceptance criteria (capability-level)
 
-- [ ] `yggdrasil_runtime` package exists with `capture`, `dri`, `retrieval`, `cross_scope`,
+- [ ] `mimer_runtime` package exists with `capture`, `dri`, `retrieval`, `cross_scope`,
   `context`, and `metadata` modules implementing the pinned signatures.
   - Verify: `pytest -q tests/invariants tests/evals`
 - [ ] All eight targeted invariants — **nine xfail test nodes** (`cross_scope_only_via_flow` covers
