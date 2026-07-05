@@ -125,6 +125,29 @@ class _FakeConn:
         return None
 
 
+@pytest.fixture(autouse=True)
+def _stub_tick_ingest(monkeypatch: pytest.MonkeyPatch):
+    """Isolate these tests from the process-global stores.
+
+    run_watcher_tick's ingest step (run_vault_alpha_ingest_paths) writes to
+    the process-global object store and vector index; letting it run for the
+    tmp-vault notes here advances the global store-generation token (#2981)
+    and pollutes downstream in-process suites (seen on CI: the eval golden
+    benchmark's seeded corpus was force-rebuilt away mid-run, tripping the
+    regression gate). These tests exercise deletion reconciliation, not
+    ingest, so stub the ingest seam with a truthful summary.
+    """
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        vault_watcher,
+        "run_vault_alpha_ingest_paths",
+        lambda vault_root, paths, force=False: SimpleNamespace(
+            ingested=len(list(paths)), errors=0
+        ),
+    )
+
+
 def _seed_file_state(conn: _FakeConn, *, object_id: str, path: str) -> None:
     conn.objects[object_id] = {"id": object_id, "kind": "note", "path": path}
     conn.file_state[path] = {
