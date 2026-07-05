@@ -2,7 +2,7 @@ State: Advisory research artifact (RESEARCH-02, issue #2780, epic #2778; 2026-07
 Doc role: Reference (architecture analysis)
 Authority: Evidence-based; anchors verified against live code by two dedicated mutation-surface sweeps (API routes; CLI/worker/agent initiators) plus the RESEARCH-01 semantics baseline. Where this model and an owner doc disagree, the divergence is listed — the owner doc wins until resolved.
 
-# Yggdrasil Formal Model — State, Transitions, Invariants, Consistency, Failure Domains
+# Mimer Formal Model — State, Transitions, Invariants, Consistency, Failure Domains
 
 The smallest complete formal model of the running system. Types and semantics come from
 `docs/architecture/runtime-semantics.md` (RESEARCH-01, including the ratified D-2/D-4/D-6

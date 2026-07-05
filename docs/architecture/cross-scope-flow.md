@@ -1,4 +1,4 @@
-State: Canonical Yggdrasil CrossScopeFlow model. Docs-only architecture/policy contract for the foundation backlog (#2533–#2552); defines governed cross-scope knowledge movement/use and retires global `general_knowledge` bypass semantics. Does not claim shipped runtime behavior.
+State: Canonical Mimer CrossScopeFlow model. Docs-only architecture/policy contract for the foundation backlog (#2533–#2552); defines governed cross-scope knowledge movement/use and retires global `general_knowledge` bypass semantics. Does not claim shipped runtime behavior.
 Doc role: Architecture / policy contract
 Authority: Owns the model for moving or using knowledge across scope boundaries. Establishes that cross-scope use is a typed, directional, operation-specific governed grant — never a boolean and never a consequence of similarity. Subordinate to `docs/foundation/00-yggdrasil-doctrine.md`, `docs/architecture/functional-ontology.md`, and `docs/architecture/semantic-dimensions.md`; later schema/policy work is owned by the contract issues (#2544–#2548).
 Owner: Architecture spine
@@ -8,7 +8,7 @@ Source of truth: canonical (CrossScopeFlow model); subordinate to doctrine, onto
 Last reviewed: 2026-06-26
 Last verified against: docs/foundation/00-yggdrasil-doctrine.md, docs/architecture/functional-ontology.md, docs/architecture/semantic-dimensions.md, docs/foundation/yggdrasil-architecture-context-packet.md
 
-# Yggdrasil CrossScopeFlow
+# Mimer CrossScopeFlow
 
 Parent epic: [#2533](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533)
 

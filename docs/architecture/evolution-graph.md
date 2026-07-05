@@ -2,7 +2,7 @@ State: Advisory research artifact (RESEARCH-04, issue #2782, epic #2778; 2026-07
 Doc role: Reference (architecture evolution analysis)
 Authority: Evidence-based; node inventory reconciled against open epics (#2762, #2314, #2143, #2561, #2655, #1956, #2778, #2813), the SBS target (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md`, `docs/architecture/SBS_ROADMAP.md`), the kernel audit backlog, and the RESEARCH-01/02 artifacts. Where this artifact and an owner doc disagree, the owner doc wins.
 
-# Yggdrasil Evolution Graph — Capabilities, Prerequisites, Risk, Optionality
+# Mimer Evolution Graph — Capabilities, Prerequisites, Risk, Optionality
 
 The roadmap is chronological; sequencing decisions need a different artifact: a graph whose nodes
 are capabilities and whose edges are prerequisites, so each candidate step exposes what it unlocks,

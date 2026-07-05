@@ -1,4 +1,4 @@
-State: Canonical Yggdrasil ContextEnvelope contract. Docs-only architecture/schema contract for the foundation backlog (#2533–#2552); defines the bounded operating context handed to an agent. Pairs with `schemas/context-envelope.schema.json`. Does not claim shipped runtime behavior.
+State: Canonical Mimer ContextEnvelope contract. Docs-only architecture/schema contract for the foundation backlog (#2533–#2552); defines the bounded operating context handed to an agent. Pairs with `schemas/context-envelope.schema.json`. Does not claim shipped runtime behavior.
 Doc role: Architecture / contract
 Authority: Owns the `ContextEnvelope` contract — the boundary between RCA/GOV/WSP/MEM and CAO/agents. The machine-readable form is `schemas/context-envelope.schema.json`; this doc is its prose mirror. `ContextEnvelope` is a **new** contract; it composes, and does not replace, the existing RCA `ContextBundle` (`docs/contracts/CONTEXT_BUNDLE.md`). Subordinate to `docs/foundation/00-yggdrasil-doctrine.md` and `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`.
 Owner: Architecture spine
@@ -8,7 +8,7 @@ Source of truth: canonical (ContextEnvelope contract); subordinate to doctrine a
 Last reviewed: 2026-06-27
 Last verified against: docs/architecture/metadata-bundle.md, docs/architecture/semantic-dimensions.md, docs/architecture/cross-scope-flow.md, docs/contracts/CONTEXT_BUNDLE.md, docs/boundaries/RCA.md, docs/boundaries/CAO.md, schemas/context-envelope.schema.json
 
-# Yggdrasil ContextEnvelope
+# Mimer ContextEnvelope
 
 Parent epic: [#2533](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533) ·
 Contract issue: [#2545](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2545) ·

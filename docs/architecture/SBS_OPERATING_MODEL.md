@@ -67,7 +67,7 @@ This matrix is the **source-of-truth verification matrix** required for SBS oper
 
 ## 3. Builder System Boundary And Work Classification
 
-Yggdrasil has two related but distinct systems:
+Mimer has two related but distinct systems:
 
 - **Product/Runtime System** - the human-first cognitive platform described by `docs/PROJECT_KERNEL.md`,
   `docs/COGNITIVE_PROSTHESIS_CHARTER.md`, current runtime owner docs, and the target SBS in

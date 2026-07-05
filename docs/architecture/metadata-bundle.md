@@ -1,4 +1,4 @@
-State: Canonical Yggdrasil metadata bundle contract. Docs-only architecture/schema contract for the foundation backlog (#2533–#2552); defines the required semantic/provenance envelope every usable object carries. Pairs with `schemas/metadata-bundle.schema.json`. Does not claim shipped runtime behavior.
+State: Canonical Mimer metadata bundle contract. Docs-only architecture/schema contract for the foundation backlog (#2533–#2552); defines the required semantic/provenance envelope every usable object carries. Pairs with `schemas/metadata-bundle.schema.json`. Does not claim shipped runtime behavior.
 Doc role: Architecture / contract
 Authority: Owns the field families, required fields, value families, and conditional rules of the metadata bundle — the physical envelope that carries the [semantic dimensions](semantic-dimensions.md) for every [functional-ontology](functional-ontology.md) object. The machine-readable contract is `schemas/metadata-bundle.schema.json`; this doc is its prose mirror. Subordinate to `docs/foundation/00-yggdrasil-doctrine.md`, `docs/architecture/functional-ontology.md`, and `docs/architecture/semantic-dimensions.md`.
 Owner: Architecture spine
@@ -8,13 +8,13 @@ Source of truth: canonical (metadata bundle contract); subordinate to doctrine, 
 Last reviewed: 2026-07-01
 Last verified against: docs/architecture/functional-ontology.md, docs/architecture/semantic-dimensions.md, docs/architecture/cross-scope-flow.md, docs/foundation/00-yggdrasil-doctrine.md, schemas/metadata-bundle.schema.json
 
-# Yggdrasil Metadata Bundle
+# Mimer Metadata Bundle
 
 Parent epic: [#2533](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533) ·
 Contract issue: [#2544](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2544) ·
 Schema: [`schemas/metadata-bundle.schema.json`](../../schemas/metadata-bundle.schema.json)
 
-The metadata bundle is the **required semantic/provenance envelope for every usable Yggdrasil
+The metadata bundle is the **required semantic/provenance envelope for every usable Mimer
 object**. The system cannot enforce ontology, provenance, scope, authority, memory, retrieval, or
 projection boundaries unless every usable object carries this metadata. This document defines the
 field families and rules; the machine-checkable form is

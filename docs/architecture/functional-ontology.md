@@ -1,6 +1,6 @@
-State: Canonical Yggdrasil functional ontology. Docs-only architecture contract for the foundation backlog (#2533–#2552); names the objects the system reasons about. Does not claim shipped runtime behavior.
+State: Canonical Mimer functional ontology. Docs-only architecture contract for the foundation backlog (#2533–#2552); names the objects the system reasons about. Does not claim shipped runtime behavior.
 Doc role: Architecture / functional ontology
-Authority: Owns the canonical names and system consequences of Yggdrasil's functional objects (scope, artifact, claim, memory, provenance, proposal, capability, authority, projection, execution). Future schemas, contracts, and code reference these terms instead of inventing parallel ones. Subordinate to `docs/foundation/00-yggdrasil-doctrine.md` (doctrine) and `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` (boundaries); each term names its owning Level 2 control boundary defined there.
+Authority: Owns the canonical names and system consequences of Mimer's functional objects (scope, artifact, claim, memory, provenance, proposal, capability, authority, projection, execution). Future schemas, contracts, and code reference these terms instead of inventing parallel ones. Subordinate to `docs/foundation/00-yggdrasil-doctrine.md` (doctrine) and `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` (boundaries); each term names its owning Level 2 control boundary defined there.
 Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
@@ -8,11 +8,11 @@ Source of truth: canonical (ontology terms); subordinate to doctrine and SBS
 Last reviewed: 2026-06-26
 Last verified against: docs/foundation/00-yggdrasil-doctrine.md, docs/foundation/yggdrasil-architecture-context-packet.md, docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/architecture/SBS_BOUNDARY_REGISTER.md
 
-# Yggdrasil Functional Ontology
+# Mimer Functional Ontology
 
 Parent epic: [#2533](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2533)
 
-This document names the objects Yggdrasil can reason about and fixes their meaning so future code
+This document names the objects Mimer can reason about and fixes their meaning so future code
 does not invent parallel terms for scope, memory, artifact, claim, provenance, proposal, capability,
 and authority. It is **not a glossary-only cleanup**: every term carries system consequences —
 an owning control boundary, key metadata, the semantic dimensions it must preserve, and a

@@ -1,6 +1,6 @@
 State: Boundary-charter index. Docs-only control-boundary contracts for the architecture-foundation backlog (#2533–#2552). Does not claim shipped runtime behavior.
 Doc role: Architecture / boundary-charter index
-Authority: Index and entry point for the Yggdrasil boundary charters. Owns the list of Level 2 control boundaries and the CES stewardship practice, and routes to each charter. Subordinate to `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` (boundary definitions), `docs/foundation/00-yggdrasil-doctrine.md`, and `docs/architecture/traceability-matrix.md`.
+Authority: Index and entry point for the Mimer boundary charters. Owns the list of Level 2 control boundaries and the CES stewardship practice, and routes to each charter. Subordinate to `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` (boundary definitions), `docs/foundation/00-yggdrasil-doctrine.md`, and `docs/architecture/traceability-matrix.md`.
 Owner: Architecture spine / CES practice
 Temporal class: strategic
 Review cadence: event-driven
@@ -15,7 +15,7 @@ Template: [\_template.md](_template.md)
 
 ## Why boundary charters exist
 
-The [System Breakdown Structure](../SYSTEM_BREAKDOWN_STRUCTURE.md) defines Yggdrasil's Level 2
+The [System Breakdown Structure](../SYSTEM_BREAKDOWN_STRUCTURE.md) defines Mimer's Level 2
 control boundaries, but a list of boundaries is not enough to stop ownership drift. Each boundary
 needs a repeatable charter that answers, concretely:
 

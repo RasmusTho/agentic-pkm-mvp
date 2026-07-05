@@ -10,15 +10,15 @@ Last verified against: docs/MODULAR_ARCHITECTURE.md, docs/CONTEXTUALIZATION_LAYE
 
 # Semantic System Architecture — Map
 
-This document is the semantic spine for Yggdrasil. It exists because the system's semantics have grown across many strong but distributed contracts (Contextualization Layer, Companion UI, governance, runtime, machine mirrors, receipts, ontology), and the boundaries between them need one explicit, reviewable place to attach.
+This document is the semantic spine for Mimer. It exists because the system's semantics have grown across many strong but distributed contracts (Contextualization Layer, Companion UI, governance, runtime, machine mirrors, receipts, ontology), and the boundaries between them need one explicit, reviewable place to attach.
 
 It is a docs-only integration artifact. It does not introduce new runtime behavior, new schema, or new events. It names the semantic layers, states who owns each, and draws the authority and flow topology that connects them.
 
 ## Relationship to the system-of-systems spine
 
-`docs/MODULAR_ARCHITECTURE.md` decomposes Yggdrasil **structurally** into eight runtime subsystems (Human Surface, Knowledge & Artifact, Runtime Projection, Capability, Agent/Orchestration, Governance/Authority, Integration Fabric, Observability/Fitness).
+`docs/MODULAR_ARCHITECTURE.md` decomposes Mimer **structurally** into eight runtime subsystems (Human Surface, Knowledge & Artifact, Runtime Projection, Capability, Agent/Orchestration, Governance/Authority, Integration Fabric, Observability/Fitness).
 
-This document decomposes Yggdrasil **semantically** into seven semantic layers (ontology, artifact model, representation, governance/authority, runtime, machine mirror, UI projection). The two views are complementary, not competing:
+This document decomposes Mimer **semantically** into seven semantic layers (ontology, artifact model, representation, governance/authority, runtime, machine mirror, UI projection). The two views are complementary, not competing:
 
 - The system-of-systems spine answers *"which subsystem runs this?"*
 - This map answers *"what does this mean, what is authoritative, and how does meaning flow and mutate?"*
