@@ -213,3 +213,93 @@ def test_distinct_from_memory_queue(vault: Path) -> None:
     assert "from app.agent_memory.review_queue import" not in source
     assert "from app.agent_memory.materialization import" not in source
     assert "materialize_promoted_memory(" not in source
+
+
+# ---------------------------------------------------------------------------
+# Path-injection hardening -- caller-controlled draft_id must never escape
+# <system_dir>/eval_drafts/ (CodeQL py/path-injection, #2871 review finding)
+# ---------------------------------------------------------------------------
+
+
+def _plant_victim_note(vault: Path) -> Path:
+    """A pending-draft-shaped note OUTSIDE eval_drafts/ that a traversal
+    draft_id would reach. Its content must never change."""
+    victim = vault / "Inbox" / "victim.md"
+    victim.parent.mkdir(parents=True, exist_ok=True)
+    victim.write_text(
+        "---\nartifact_class: eval_draft_case\ndraft_id: victim\nkind: schema_violation\n"
+        "status: pending\ncreated_at: '2026-01-01T00:00:00Z'\n"
+        "source_event:\n  topic: t\n  event_id: e\n---\n\n# Victim\n",
+        encoding="utf-8",
+    )
+    return victim
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    [
+        "../../Inbox/victim",
+        "..",
+        "../victim",
+        "a/../b",
+        "/etc/passwd",
+        "victim.md",
+        "a.b",
+        "",
+        "   ",
+        "a" * 200,
+    ],
+)
+def test_traversal_draft_id_is_refused_at_domain_seam(vault: Path, bad_id: str) -> None:
+    """read_draft/promote_draft/reject_draft refuse traversal or malformed
+    draft ids before any filesystem access outside eval_drafts/."""
+    from app.eval.failure_capture import (
+        PromotionDecisionError,
+        is_valid_draft_id,
+        promote_draft,
+        reject_draft,
+    )
+
+    victim = _plant_victim_note(vault)
+    original = victim.read_text(encoding="utf-8")
+
+    assert not is_valid_draft_id(bad_id)
+    assert read_draft(vault, bad_id) is None
+
+    with pytest.raises(PromotionDecisionError):
+        promote_draft(vault, bad_id, decided_by="rasmus:reviewer")
+    with pytest.raises(PromotionDecisionError):
+        reject_draft(vault, bad_id, decided_by="rasmus:reviewer")
+
+    assert victim.read_text(encoding="utf-8") == original
+
+
+def test_traversal_draft_id_is_refused_via_api(vault: Path) -> None:
+    """A URL-encoded traversal draft_id through the real decision route is
+    refused and touches nothing outside eval_drafts/."""
+    victim = _plant_victim_note(vault)
+    original = victim.read_text(encoding="utf-8")
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/eval-drafts/..%2F..%2FInbox%2Fvictim/decision",
+        json={"action": "promote", "decided_by": "rasmus:reviewer"},
+    )
+    # Route-level outcome may be 404 (no route match for the encoded
+    # separator) or 409 (refused at the domain seam) -- either way the
+    # decision must be refused and the victim untouched.
+    assert resp.status_code in (404, 409), resp.text
+    assert victim.read_text(encoding="utf-8") == original
+
+    on_disk = read_draft(vault, "victim")
+    assert on_disk is None  # 'victim' does not exist inside eval_drafts/
+
+
+def test_valid_draft_id_still_round_trips(vault: Path) -> None:
+    """Hardening must not break the generated-id happy path."""
+    from app.eval.failure_capture import is_valid_draft_id
+
+    draft = _draft_schema_violation(vault, trace_id="trace-ok", event_id="evt-ok")
+    assert draft is not None
+    assert is_valid_draft_id(draft.draft_id)
+    assert read_draft(vault, draft.draft_id) is not None
