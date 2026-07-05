@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/heimdal.consent.granted.v1.schema.json",
+  "title": "heimdal.consent.granted payload (v1, contract-stub)",
+  "description": "CONTRACT-STUB (Epic #3019 slice A4, #3041; FABLE_COMPANION §11#3, §6.1): schema-representable now, no runtime producer/consumer lands with this slice. The consent ledger runtime (grants table, standing self_record grant, capture-time check) is A5 -- out of scope here. This schema fixes the shape a future grant-issuance event will carry so the consent.grant_ref referenced by heimdal.observation.published.v1 (HEIM-3) resolves to a well-defined record once the ledger runtime lands.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["grant_ref", "basis", "granted_at"],
+  "properties": {
+    "grant_ref": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable identity of the issued grant; the value later referenced by consent.grant_ref on published observation events."
+    },
+    "basis": {
+      "type": "string",
+      "enum": ["self_record", "place_optin", "session_optin"],
+      "description": "Grant basis (§1.3/§6.1). v1 build-now: self_record. Place/session grants: contract-stub (§11#4)."
+    },
+    "granted_by": {
+      "type": ["string", "null"],
+      "description": "Who granted consent (operator identity, in v1 the single-user operator)."
+    },
+    "granted_at": {
+      "type": "string",
+      "minLength": 1,
+      "description": "ISO-8601 timestamp of the grant."
+    },
+    "scope_ref": {
+      "type": ["string", "null"],
+      "description": "Optional place/session scope the grant is bound to (§6.1 place_optin/session_optin, v2)."
+    }
+  }
+}

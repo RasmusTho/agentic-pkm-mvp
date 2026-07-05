@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/heimdal.consent.revoked.v1.schema.json",
+  "title": "heimdal.consent.revoked payload (v1, contract-stub)",
+  "description": "CONTRACT-STUB (Epic #3019 slice A4, #3041; FABLE_COMPANION §11#3, §6.4): schema-representable now, no runtime producer/consumer lands with this slice. The consent ledger runtime (A5) is out of scope here. Per §6.4, revocation does not unpublish already-published events (append-only, HEIM-1): it names the covered episodes so projections MUST suppress covered content going forward (suppression_state).",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["grant_ref", "revoked_at"],
+  "properties": {
+    "grant_ref": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The grant_ref being revoked (matches a prior heimdal.consent.granted grant_ref)."
+    },
+    "revoked_at": {
+      "type": "string",
+      "minLength": 1,
+      "description": "ISO-8601 timestamp of the revocation."
+    },
+    "covered_episode_ids": {
+      "type": ["array", "null"],
+      "items": { "type": "string" },
+      "description": "Episodes covered by this grant whose already-published content projections MUST suppress (§6.4). Append-only: the observation log itself is never rewritten."
+    },
+    "reason": {
+      "type": ["string", "null"],
+      "description": "Optional free-text reason for the revocation."
+    }
+  }
+}
