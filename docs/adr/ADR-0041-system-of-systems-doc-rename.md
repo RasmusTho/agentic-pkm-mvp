@@ -21,7 +21,7 @@ the file's title asserts a "system of systems," but what the document actually d
 **modular, authority-separated single system with volatility isolation** — an internal decomposition
 (the 8-subsystem spine) that fails every INCOSE SoS taxon's operational- and managerial-independence
 test. The one INCOSE-defensible SoS reading is the operator's *assembled environment*
-(Yggdrasil + Obsidian + iCloud, `docs/ARCHITECTURE.md:198`), which this document is not about.
+(Yggdrasil + Obsidian + iCloud, `docs/ARCHITECTURE.md:239`), which this document is not about.
 
 SBI-1 already added a `System of Systems` glossary entry and a one-paragraph overlay note to the
 file (`docs/architecture/system-context-overlay.md`, `docs/GLOSSARY.md`) that removes the ambiguity

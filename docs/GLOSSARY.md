@@ -49,7 +49,7 @@ Brief definitions for recurring concepts.
   managerially-independent constituents, which the internal subsystems fail
   (`docs/MODULAR_ARCHITECTURE.md:26` states they are "not separate deployments, services,
   or processes"). The one INCOSE-defensible SoS reading in the repo is the operator's assembled
-  environment (Yggdrasil + Obsidian + iCloud, `docs/ARCHITECTURE.md:198`). Whether to rename
+  environment (Yggdrasil + Obsidian + iCloud, `docs/ARCHITECTURE.md:239`). Whether to rename
   `docs/MODULAR_ARCHITECTURE.md` on the strength of that reading is an **open owner
   decision** (audit §15 Q2, routed to `docs/SYSTEM_CONTEXT_OVERLAY/ROUTE_RESHAPE_DECISIONS_TO_OWNER.md`,
   SBI-8) — this entry links the question rather than settling it. See also

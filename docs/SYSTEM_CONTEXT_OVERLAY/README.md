@@ -152,7 +152,7 @@ matter:
   `docs/architecture/SBS_BOUNDARY_REGISTER.md`, `docs/architecture/SBS_TRANSITION_DEBT.md`
 - `docs/boundaries/README.md`, `docs/architecture/traceability-matrix.md`, `docs/GLOSSARY.md`,
   `docs/ARCHITECTURE.md`, `docs/DOCS_INDEX.md`
-- Companion thread: `FABLE5_PROMPT_INFRA_DOMAIN_AND_MCP_TOPOLOGY.md` (owns the dual-role
+- Companion thread: `docs/architecture/ecosystem-federation.md` (owns the dual-role
   infrastructure stance and MCP topology question — SBI-1 names and links, decides nothing)
 - Sibling issue: #2825 (`docs/ARCHITECTURE.md` `context_dimensions` owner-gap)
 - Sibling audit: `docs/audits/DOC_STALENESS_CONSOLIDATION_2026-07-02.md` (Wave-B deferred rows,

@@ -49,7 +49,7 @@ the audit already resolved):
    apply to the internal decomposition (the spine subsystems fail every SoS taxon's
    independent-operability test, `docs/MODULAR_ARCHITECTURE.md:26`) per the 2026-07-03
    audit §3 — cited as advisory, not settling; (iii) the one INCOSE-defensible SoS reading is the
-   operator's assembled environment (Yggdrasil + Obsidian + iCloud, `docs/ARCHITECTURE.md:198`),
+   operator's assembled environment (Yggdrasil + Obsidian + iCloud, `docs/ARCHITECTURE.md:239`),
    and the doc-title question (rename `docs/MODULAR_ARCHITECTURE.md` or keep it) is an
    open owner decision (audit §15 Q2) — the entry links there instead of settling it. Add a
    one-paragraph overlay note to `docs/MODULAR_ARCHITECTURE.md` linking to the new
@@ -133,7 +133,7 @@ described two incompatible ways because no doc owns the classification rule).
 - The infra classification column itself (SBI-2) and the spine↔SBS crosswalk rows (SBI-3) — this
   task defines the vocabulary and model those tasks apply; it does not populate their tables.
 - The dual-role infrastructure stance and MCP topology question — explicitly deferred to
-  `FABLE5_PROMPT_INFRA_DOMAIN_AND_MCP_TOPOLOGY.md` per audit §2 and §14; this task names and links,
+  `docs/architecture/ecosystem-federation.md` per audit §2 and §14; this task names and links,
   decides nothing.
 - Any new function-ID register or FBS artifact (settled "do nothing" at the audit's skeptic gate).
 
