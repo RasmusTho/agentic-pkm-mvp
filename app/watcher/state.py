@@ -82,6 +82,8 @@ class WatcherState:
     outbox_offset: int = 0
     dynamic_sleep_seconds: float | None = None
     last_emitted_event_at: float | None = None
+    scope_status: str = "ok"
+    last_scope_warning: float | None = None
 
     @classmethod
     def load(cls, path: Path) -> WatcherState:
@@ -108,6 +110,8 @@ class WatcherState:
             outbox_offset=int(data.get("outbox_offset") or 0),
             dynamic_sleep_seconds=_sanitize_ts(data.get("dynamic_sleep_seconds")),
             last_emitted_event_at=_sanitize_ts(data.get("last_emitted_event_at")),
+            scope_status=str(data.get("scope_status") or "ok"),
+            last_scope_warning=_sanitize_ts(data.get("last_scope_warning")),
         )
 
     def save(self, path: Path) -> None:
@@ -129,6 +133,8 @@ class WatcherState:
             "outbox_offset": self.outbox_offset,
             "dynamic_sleep_seconds": self.dynamic_sleep_seconds,
             "last_emitted_event_at": self.last_emitted_event_at,
+            "scope_status": self.scope_status,
+            "last_scope_warning": self.last_scope_warning,
         }
         path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 

@@ -639,6 +639,7 @@ def _build_watchers_payload(
             "errors_total": state.errors,
             "rate_limited_total": state.rate_limited,
             "enqueue_failures_total": state.enqueue_failures_total,
+            "scope_status": state.scope_status,
         }
         if state.last_trace_id:
             payload[spec.name]["last_trace_id"] = state.last_trace_id
@@ -647,10 +648,42 @@ def _build_watchers_payload(
     return payload
 
 
+def _overall_watcher_status(states: Mapping[str, WatcherState]) -> str:
+    """Roll per-watcher scope visibility up into the top-level heartbeat status.
+
+    Any watcher that is running blind (zero-match) or misconfigured
+    (missing scope-prefix directory) degrades the whole registry heartbeat so
+    health surfaces can distinguish "running and seeing files" from "running
+    and blind" (#2988).
+    """
+    if any(state.scope_status != "ok" for state in states.values()):
+        return "degraded"
+    return "running"
+
+
 def _warn_once_per_minute(state: WatcherState, message: str, *, now: float) -> None:
     if state.last_stop_warning is None or now - state.last_stop_warning >= 60:
         print(message)
         state.last_stop_warning = now
+
+
+def _warn_scope_once_per_interval(
+    state: WatcherState,
+    message: str,
+    *,
+    now: float,
+    interval: float,
+) -> None:
+    """Log a scope-visibility warning at most once per `interval` seconds.
+
+    Distinct from `_warn_once_per_minute` (which guards the stop-file warning)
+    so scope warnings and stop-file warnings do not clobber each other's
+    cooldown windows.
+    """
+    window = interval if interval and interval > 0 else 60.0
+    if state.last_scope_warning is None or now - state.last_scope_warning >= window:
+        logger.warning(message)
+        state.last_scope_warning = now
 
 
 def _summary_line(
@@ -1188,7 +1221,25 @@ def _run_spec_tick(
         state.save(_state_path(cfg.state_dir, spec.name))
         raise FileNotFoundError(f"Vault path not found: {cfg.vault_path}")
 
-    scan_roots = derive_scope_roots(cfg.vault_path, spec.scope_glob)
+    try:
+        scan_roots = derive_scope_roots(cfg.vault_path, spec.scope_glob)
+    except FileNotFoundError as exc:
+        # Static scope-prefix directory does not exist under the bound vault
+        # (e.g. WATCHER_SCOPE_GLOB="📥 Inbox/*.md" with no "📥 Inbox" folder).
+        # Fail loud (a warning naming the directory) rather than crashing the
+        # tick loop or silently reporting a clean "healthy" tick (#2988).
+        state.scope_status = "missing_prefix"
+        summary["scope_status"] = "missing_prefix"
+        summary["scope_missing_detail"] = str(exc)
+        summary["scope_glob"] = spec.scope_glob
+        _warn_scope_once_per_interval(
+            state,
+            f"WATCHER_SCOPE_MISSING_PREFIX: watcher={spec.name} scope_glob={spec.scope_glob!r} {exc}",
+            now=now,
+            interval=cfg.summary_interval,
+        )
+        return _finalize_spec_tick(cfg, state, summary, tick_start, None, spec.name)
+
     active_states = states or {spec.name: state}
     changed_entries, scanned_paths = _collect_changed_entries(
         cfg,
@@ -1198,6 +1249,22 @@ def _run_spec_tick(
         scan_roots=scan_roots,
         states=active_states,
     )
+
+    if int(summary.get("scanned_files", 0)) == 0:
+        # The scope glob's directory exists, but the tick matched zero
+        # candidate files — the watcher is running but blind (#2988).
+        state.scope_status = "zero_match"
+        summary["scope_status"] = "zero_match"
+        _warn_scope_once_per_interval(
+            state,
+            f"WATCHER_SCOPE_ZERO_MATCH: watcher={spec.name} scope_glob={spec.scope_glob!r} "
+            f"matched 0 files across scan_roots={[str(root) for root in scan_roots]}",
+            now=now,
+            interval=cfg.summary_interval,
+        )
+    else:
+        state.scope_status = "ok"
+        summary["scope_status"] = "ok"
 
     summary["changed_in_tick"] = len(changed_entries)
     state.changed_detected += len(changed_entries)
@@ -1272,7 +1339,7 @@ def run_registry_once(config_path: Path) -> dict[str, dict[str, object]]:
     enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
     write_registry_heartbeat(
         path=cfg.heartbeat_path,
-        status="running",
+        status=_overall_watcher_status(states),
         watchers=_build_watchers_payload(cfg.specs, states),
         outbox_path=cfg.outbox_path,
         vault_path=cfg.vault_path,
