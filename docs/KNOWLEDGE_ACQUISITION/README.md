@@ -1,4 +1,4 @@
-State: Specification directory (target-state framing; contracts filed via PR #2786). **Phase 2 issue set filed 2026-07-02**: parent feature issue #2795, children #2796–#2801. KA-01 (#2796) delivered via PR #2928; KA-02 (#2797) and KA-03 (#2798) unblocked to `agent:ready`; KA-04–KA-06 (#2799–#2801) remain `agent:blocked` pending their own prerequisites. See `PARENT_FEATURE_ISSUE.md`. Fabric class decision resolved via #2794 (Acquisition source, class 11).
+State: Specification directory (target-state framing; contracts filed via PR #2786). **Phase 2 issue set filed 2026-07-02**: parent feature issue #2795, children #2796–#2801. KA-01 (#2796) delivered via PR #2928; KA-03 (#2798) delivered (deterministic normalize stage). KA-02 (#2797) in progress in parallel; KA-04–KA-06 (#2799–#2801) remain `agent:blocked` pending their own prerequisites. See `PARENT_FEATURE_ISSUE.md`. Fabric class decision resolved via #2794 (Acquisition source, class 11).
 Doc role: Capability specification directory
 Authority: Defines the Knowledge Acquisition Platform capability boundary — source plugins, the acquisition refinement pipeline, and the extraction registry — and its reconciliation with existing owner contracts. It does not redefine ingestion/triage policy, the artifact taxonomy, state axes, promotion semantics, or the retrieval/embedding architecture; those remain with their owner docs.
 
@@ -153,7 +153,7 @@ own `SBS Impact` block per `SBS_OPERATING_MODEL.md` §5 (Definition of Ready).
 | --- | --- | --- |
 | 0 | Research memo (`RESEARCH_2026-07.md`) | PR #2786 |
 | 1 | Platform contracts (this directory) | PR #2786 |
-| 2 | Vertical slice: one explicit YouTube URL → metadata → caption-first transcript → normalized artifact → one extractor → candidate + companion note, replayable | filed: #2795 + #2796–#2801; KA-01 (#2796) delivered (PR #2928), KA-02/KA-03 (#2797/#2798) `agent:ready`, KA-04–KA-06 (#2799–#2801) `agent:blocked` on their own prerequisites; TCD-routed per task spec |
+| 2 | Vertical slice: one explicit YouTube URL → metadata → caption-first transcript → normalized artifact → one extractor → candidate + companion note, replayable | filed: #2795 + #2796–#2801; KA-01 (#2796) delivered (PR #2928), KA-03 (#2798) delivered (normalize stage), KA-02 (#2797) in progress in parallel, KA-04–KA-06 (#2799–#2801) `agent:blocked` on their own prerequisites; TCD-routed per task spec |
 | 3 | Generalize: second source (e.g. podcast RSS or local media file) implements `SOURCE_PLUGIN_CONTRACT` unchanged | issues after Phase 2 acceptance |
 | 4 | Continuous discovery: subscription/playlist sync, scheduling, dedup at scale | last, by design |
 
