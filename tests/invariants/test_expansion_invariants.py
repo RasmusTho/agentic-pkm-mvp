@@ -187,3 +187,162 @@ def test_declined_not_reproposed(tmp_path: Path) -> None:
     )
     assert second.findings == ()
     assert second.suppressed_by_decline == 1
+
+
+def _create_source(object_id: str, text: str, span: str):
+    from app.expansion.create import SourceInput
+
+    return SourceInput(
+        object_id=object_id,
+        note_path=f"{object_id}.md",
+        text=text,
+        quoted_spans=(span,),
+        language="en",
+        review_state="reviewed",
+    )
+
+
+def test_create_never_autowrites_canonical(tmp_path: Path) -> None:
+    """Fitness invariant: ``create_never_autowrites_canonical`` (EXP-3, #2996).
+
+    Invariant registry: docs/testing/invariant-tests.md :: create_never_autowrites_canonical.
+    Spec: docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md §2.3, §6.
+
+    Production-call-site enforcement: running the real ``run_create_pass``
+    end to end never writes anywhere outside the staging directory -- no
+    canonical vault location gains a new file, and the staged draft carries
+    an unchecked (never auto-checked) acceptance checkbox. Acceptance to
+    canonical is EXP-4's scope (#2997), not reachable from this pass.
+    """
+    from app.expansion.create import CreateRequest, OutputKind, run_create_pass
+    from app.write_guard import WriteGuard
+
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    # A pre-existing canonical note, to prove the pass never touches it.
+    canonical_note = vault_root / "topic-x.md"
+    canonical_note.write_text("---\nuuid: canonical-1\n---\n\n# Topic X\n", encoding="utf-8")
+    outbox_path = tmp_path / "outbox.jsonl"
+    guard = WriteGuard(snapshot_fn=lambda: {"state": "healthy", "reason": None})
+
+    before_files = {p: p.read_text(encoding="utf-8") for p in vault_root.rglob("*.md")}
+
+    sources = (_create_source("obj-a", "Alpha body about topic X.", "Alpha body about topic X."),)
+    request = CreateRequest(kind=OutputKind.OVERVIEW, title="Topic X overview", sources=sources)
+    report = run_create_pass(request, vault_root=vault_root, outbox_path=outbox_path, write_guard=guard)
+
+    assert report.activatable is True
+    # The pre-existing canonical note is byte-identical -- untouched.
+    assert canonical_note.read_text(encoding="utf-8") == before_files[canonical_note]
+    # The only new file lives under the staging dir, never beside canonical notes.
+    draft_path = vault_root / report.draft_path
+    assert "drafts" in draft_path.parts
+    assert draft_path.parent != vault_root
+    draft_text = draft_path.read_text(encoding="utf-8")
+    assert "- [x]" not in draft_text
+    assert "authority_state: proposal" in draft_text
+
+
+def test_synthesis_carries_source_provenance(tmp_path: Path) -> None:
+    """Fitness invariant: ``synthesis_carries_source_provenance`` (EXP-3, #2996).
+
+    Invariant registry: docs/testing/invariant-tests.md :: synthesis_carries_source_provenance.
+    Spec: docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md §2.2, §2.4, §6.
+
+    Production-call-site enforcement: every synthesized draft's staged note
+    carries its full `sources:` list in frontmatter (resolvable SourceRefs),
+    and an unresolvable citation blocks the draft loudly rather than shipping
+    an unsourced narrative.
+    """
+    from app.expansion.create import (
+        CreateRequest,
+        OutputKind,
+        UnresolvableCitationError,
+        run_create_pass,
+    )
+    from app.write_guard import WriteGuard
+
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    outbox_path = tmp_path / "outbox.jsonl"
+    guard = WriteGuard(snapshot_fn=lambda: {"state": "healthy", "reason": None})
+
+    sources = (
+        _create_source("obj-a", "Alpha body about topic X.", "Alpha body about topic X."),
+        _create_source("obj-b", "Beta body also about topic X.", "Beta body also about topic X."),
+    )
+    request = CreateRequest(kind=OutputKind.ANSWER_NOTE, title="Topic X answer", sources=sources)
+    report = run_create_pass(request, vault_root=vault_root, outbox_path=outbox_path, write_guard=guard)
+
+    draft_text = (vault_root / report.draft_path).read_text(encoding="utf-8")
+    for source in sources:
+        assert source.object_id in draft_text
+
+    # An unresolvable citation blocks loudly -- never a silently pruned claim.
+    bad_sources = (
+        _create_source("obj-c", "Gamma body.", "a span that was never written"),
+    )
+    bad_request = CreateRequest(kind=OutputKind.OVERVIEW, title="Bad", sources=bad_sources)
+    with pytest.raises(UnresolvableCitationError):
+        run_create_pass(bad_request, vault_root=vault_root, outbox_path=outbox_path, write_guard=guard)
+
+
+def test_drafts_invisible_to_retrieval(tmp_path: Path) -> None:
+    """Fitness invariant: ``staged_drafts_invisible_to_retrieval`` (EXP-3, #2996).
+
+    Invariant registry: docs/testing/invariant-tests.md :: staged_drafts_invisible_to_retrieval.
+    Spec: docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md §2.3, §6.
+
+    Production-call-site enforcement: a staged Create draft is never among
+    the real ingest candidate set (`app.ingest.vault_alpha._select_candidates`)
+    that feeds the object store / index -- the anti-laundering keystone. This
+    is the same exclusion mechanism that already protects `_system/companions`,
+    extended to also cover the Create staging subfolder.
+    """
+    from app.expansion.create import CreateRequest, OutputKind, run_create_pass
+    from app.ingest.vault_alpha import _select_candidates
+    from app.write_guard import WriteGuard
+
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    outbox_path = tmp_path / "outbox.jsonl"
+    guard = WriteGuard(snapshot_fn=lambda: {"state": "healthy", "reason": None})
+
+    sources = (_create_source("obj-a", "Alpha body about topic X.", "Alpha body about topic X."),)
+    request = CreateRequest(kind=OutputKind.OVERVIEW, title="Invisible draft", sources=sources)
+    report = run_create_pass(request, vault_root=vault_root, outbox_path=outbox_path, write_guard=guard)
+    draft_path = vault_root / report.draft_path
+    assert draft_path.exists()
+
+    candidates, _ = _select_candidates(
+        vault_root, include_folders=None, ignore_glob=(), include_test_note=True, max_notes=0
+    )
+    candidate_paths = {p.relative_to(vault_root) for p in candidates}
+    assert draft_path.relative_to(vault_root) not in candidate_paths
+
+
+def test_create_requires_activation_record(tmp_path: Path) -> None:
+    """Fitness invariant: ``expansion_requires_activation_record`` (EXP-3, #2996).
+
+    Invariant registry: docs/testing/invariant-tests.md :: expansion_requires_activation_record.
+    Spec: docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md §4, §6.
+
+    A regressed activation posture (declared admissibility withdrawn) yields
+    a deterministic blocked-with-reason decision -- never a silent run --
+    proven directly against ``app.activation.gate.evaluate_activation`` using
+    the exact posture ``app.expansion.create`` declares.
+    """
+    from app.activation.gate import evaluate_activation
+    from app.expansion.create import build_create_activation_posture, build_create_candidates, OutputKind
+
+    sources = (_create_source("obj-a", "Alpha body.", "Alpha body."),)
+    candidates = build_create_candidates(sources)
+
+    posture = build_create_activation_posture(OutputKind.OVERVIEW)
+    green = evaluate_activation(posture, candidates)
+    assert green.activatable is True
+
+    regressed = posture.model_copy(update={"admissibility_declared": False})
+    blocked = evaluate_activation(regressed, candidates)
+    assert blocked.activatable is False
+    assert "admissibility_undeclared" in blocked.blocked_reasons
