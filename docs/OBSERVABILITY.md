@@ -28,6 +28,7 @@ The `/api/health` response now includes an `authority_spine` key with bounded op
 - Worker heartbeat default: `tmp/worker_heartbeat.json` (override with `WORKER_HEARTBEAT_PATH`).
 - Freshness thresholds: `WATCHER_HEARTBEAT_STALE_SECONDS` / `WORKER_HEARTBEAT_STALE_SECONDS` (defaults: 60s).
 - Heartbeats with malformed JSON or future timestamps are treated as invalid and surface `status` values like `malformed`/`future`.
+- Registry watcher scope visibility (#2988): each watcher entry in the registry heartbeat carries `scope_status` (`ok` | `zero_match` | `missing_prefix`). A tick whose scope glob matches zero files, or whose static scope-prefix directory does not exist under the bound vault, sets the per-watcher `scope_status` and degrades the top-level heartbeat `status` from `running` to `degraded`, with a warning logged at most once per `WATCHER_SUMMARY_INTERVAL`. This distinguishes "running and seeing files" from "running and blind"; scan semantics are unchanged.
 
 Tests: `tests/api/test_health_failures.py::test_health_handles_malformed_heartbeat_json`, `tests/api/test_health_failures.py::test_health_handles_future_heartbeat_timestamp`
 
