@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from uuid import UUID
 
 from app.agents.panel.filters import strip_ai_panels
 from app.agents.panel.writeback import strip_ai_status_block
@@ -26,7 +27,7 @@ from app.events.topic_schema_registry import (
     validate_topic_payload,
 )
 from app.indexer.consumer import process_event as process_indexer_event
-from app.outbox.events import INDEX_EMBEDDING_REQUESTED
+from app.outbox.events import DEFAULT_EMBEDDING_VIEW, INDEX_EMBEDDING_REQUESTED
 from app.observability.tracer import start_span
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path, write_worker_heartbeat
 from app.services.indexer import handle_ingest_object_created
@@ -413,14 +414,81 @@ def _trace_id_from_envelope(envelope: object) -> str | None:
     return str(raw) if raw else None
 
 
+def _purge_vectors_for_deleted_object(object_id: UUID) -> int:
+    """Purge every vector row for ``object_id`` from the durable index.
+
+    Mirrors ``app/indexer/consumer.py::_purge_vectors``: resolves the process
+    vector-index singleton lazily (so tests can monkeypatch
+    ``app.stores.get_vector_index`` without import-order games) and treats a
+    missing/failing purge primitive as zero rows purged rather than raising,
+    so a delete event never crash-loops the worker.
+    """
+    from app.stores import get_vector_index
+
+    idx = get_vector_index()
+    purge = getattr(idx, "purge_vectors", None)
+    if purge is None:
+        return 0
+    try:
+        return purge(object_id, view=DEFAULT_EMBEDDING_VIEW)
+    except Exception:
+        logger.exception(
+            "purge_vectors raised while handling ingest delete event object_id=%s",
+            object_id,
+        )
+        return 0
+
+
 def handle_ingest_object_deleted(payload: Mapping[str, Any]) -> None:
-    # Explicit no-op cleanup hook for delete events. Downstream index cleanup can
-    # be added here later without changing worker dispatch contracts.
+    """Purge the deleted object's vectors from the durable index (T-delete).
+
+    D-2 tombstone semantics are preserved: this handler only removes rows
+    from ``store_vector_index`` (all views for the object, since neither
+    store backend's ``purge_vectors`` filters by view -- see
+    ``app/stores/memory.py``/``app/stores/pg.py``); it never touches or
+    deletes the ``store_objects`` row, which stays as a ``path=NULL``
+    tombstone per ``tests/properties/test_tombstone_lineage.py`` (D-2,
+    pinned by PR #2943).
+
+    Idempotent under at-least-once redelivery: purging an object with no
+    vector rows (already purged by a prior delivery, or never indexed) is a
+    documented no-op on both store backends (``purge_vectors`` returns 0
+    instead of raising) -- see KERNEL-11's harness registration for this
+    topic in ``tests/workers/test_handler_idempotency_harness.py``.
+
+    In-process cache coherence for the retrieval hybrid store
+    (``app/retrieval/hybrid.py``) is handled by the existing rebuild seam,
+    not here: per KERNEL-05 (``docs/RUNTIME_CORRECTNESS_KERNEL/
+    RETRIEVAL_READS_DURABLE_INDEX.md``), the in-process cache is a
+    cache-through of the durable index rebuilt via
+    ``rebuild_from_durable_index()`` at process warm / explicit rebuild, the
+    same seam ``handle_ingest_object_created`` and the indexer consumer rely
+    on for their own purge+upsert writes -- this handler does not need its
+    own bespoke cache-eviction path to stay consistent with that contract.
+    """
+    raw_uuid = payload.get("uuid")
+    object_id: UUID | None = None
+    if raw_uuid:
+        try:
+            object_id = UUID(str(raw_uuid))
+        except (ValueError, AttributeError, TypeError):
+            object_id = None
+
+    purged = 0
+    if object_id is not None:
+        purged = _purge_vectors_for_deleted_object(object_id)
+    else:
+        logger.warning(
+            "ingest delete event missing a resolvable uuid; skipping vector purge path=%s",
+            payload.get("path"),
+        )
+
     logger.info(
-        "handled ingest delete event uuid=%s path=%s deleted=%s",
+        "handled ingest delete event uuid=%s path=%s deleted=%s purged_vectors=%s",
         payload.get("uuid"),
         payload.get("path"),
         payload.get("deleted"),
+        purged,
     )
 
 

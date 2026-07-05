@@ -25,17 +25,15 @@ port of its own). ``services/decisions.py::insert_decision``/
 in-process path (``_MEM_DECISIONS``), so the decision-survival half of this
 property exercises real, unmodified production code, not a re-implementation.
 
-Known, confirmed production gap (named, not silently worked around):
-``app.workers.outbox_worker.handle_ingest_object_deleted`` is an EXPLICIT
-no-op (see its docstring/comment) -- no automatic consumer purges vectors on
-``ingest.object.deleted`` today, even though formal-model.md's T-delete
-postcondition states ``purge_vectors(P.vectors) [indexer path]``. This
-property therefore exercises the real, callable ``purge_vectors`` primitive
-directly as part of the delete transition's asserted postcondition (matching
-the formal model's stated contract for what a delete transition guarantees),
-while documenting here -- not hiding -- that the automatic wiring from the
-outbox worker's delete handler to that primitive does not exist yet. That
-wiring gap is an app/ change and out of scope for this tests-only issue.
+``app.workers.outbox_worker.handle_ingest_object_deleted`` (#2944) now wires
+the ``ingest.object.deleted`` event emitted by ``vault_sync.delete_note`` to
+the real ``purge_vectors`` primitive, closing formal-model.md's T-delete
+postcondition (``purge_vectors(P.vectors) [indexer path]``). This property
+drives the REAL consumer dispatch path
+(``app.workers.outbox_worker._dispatch_topic``) with the event
+``delete_note`` actually emitted, rather than calling ``purge_vectors``
+directly -- proving the end-to-end wiring, not just the primitive in
+isolation.
 
 ``audit_event`` (``app/services/audit.py``) is a genuine, unconditional no-op
 under the explicit memory backend ("best-effort... silently no-ops for
@@ -243,8 +241,9 @@ def _delete_note(monkeypatch: pytest.MonkeyPatch, conn: _FakeConn, path: str, ob
 def test_delete_leaves_anchored_tombstone(monkeypatch: pytest.MonkeyPatch) -> None:
     """Deleting a note leaves an objects tombstone (path=NULL); pre-existing
     decisions/audit rows anchored to that object_id survive intact and
-    non-orphaned; the real, callable vector-purge primitive removes the
-    object's vectors as the formal model's T-delete postcondition states.
+    non-orphaned; dispatching the real emitted ``ingest.object.deleted``
+    event through the real worker consumer path purges the object's vectors,
+    as the formal model's T-delete postcondition states (#2944).
     """
     object_id = str(uuid4())
     path = "/vault/notes/property-note.md"
@@ -324,15 +323,44 @@ def test_delete_leaves_anchored_tombstone(monkeypatch: pytest.MonkeyPatch) -> No
     # at the call-site level either. ---
     assert any(call["object_id"] == object_id for call in audited_calls)
 
-    # --- Assert: vectors purged. The real, callable purge_vectors primitive
-    # is exercised directly here because no automatic consumer wires
-    # ingest.object.deleted -> purge_vectors today (outbox_worker's
-    # handle_ingest_object_deleted is an explicit no-op) -- see module
-    # docstring "Known, confirmed production gap". This still proves the
-    # primitive the formal model's T-delete names actually does the purge. ---
-    purged = vector_index.purge_vectors(UUID(object_id), view="default")
-    assert purged == 1
+    # --- Assert: vectors purged via the REAL consumer path (#2944). Dispatch
+    # the event that was ACTUALLY emitted by delete_note (not a hand-built
+    # payload) through outbox_worker's real, production dispatch entrypoint --
+    # this proves the end-to-end wiring from ingest.object.deleted to
+    # purge_vectors, not just the primitive in isolation. ---
+    import app.stores as stores_module
+    from app.events.models import new_event
+    from app.events.types import INGEST_OBJECT_DELETED
+    from app.workers import outbox_worker
+
+    # handle_ingest_object_deleted resolves the vector index via a lazy
+    # ``from app.stores import get_vector_index`` inside the function (so
+    # tests can retarget it without import-order games) -- patch the source
+    # attribute the fresh import binds to, so the handler purges THIS test's
+    # vector_index instance (already seeded above) rather than the separate
+    # process-global singleton.
+    monkeypatch.setattr(stores_module, "get_vector_index", lambda: vector_index)
+
+    envelope = new_event(event_type=INGEST_OBJECT_DELETED, payload=dict(payload))
+    message = {
+        "id": "property-row-1",
+        "topic": INGEST_OBJECT_DELETED,
+        "payload": payload,
+        "event": envelope,
+        "timestamp": envelope.created_at,
+    }
+    outbox_worker._dispatch_topic(
+        INGEST_OBJECT_DELETED,
+        payload,
+        trace_id="trace-seed",
+        message=message,
+        event_id=outbox_worker._event_id_from_message(message),
+    )
+
     assert vector_index.count_vectors() == 0
+    assert vector_index.purge_vectors(UUID(object_id), view="default") == 0, (
+        "vector row must already be purged by the real consumer dispatch -- redelivery is a no-op"
+    )
 
 
 # ---------------------------------------------------------------------------
