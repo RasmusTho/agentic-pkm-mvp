@@ -1,4 +1,4 @@
-State: Proposed (owner decisions captured 2026-07-05; ratifies the §9-k reshape from `docs/HEIMDAL/FABLE_COMPANION.md` plus the three v1 UI/UX enactment decisions from the Heimdal UI/UX design thread). Records the owner's locked decisions; performs no code change and creates no runtime. Enactment is issue-first, deferred to follow-ups.
+State: Accepted (ratified 2026-07-06 by owner instruction to deliver Epic A #3019; owner decisions captured 2026-07-05; ratifies the §9-k reshape from `docs/HEIMDAL/FABLE_COMPANION.md` plus the three v1 UI/UX enactment decisions from the Heimdal UI/UX design thread). Records the owner's locked decisions; performs no code change and creates no runtime. Enactment is issue-first, deferred to follow-ups.
 Doc role: Decision record (ADR)
 Authority: Authoritative for (a) the Heimdal↔Mimer ingestion boundary (Heimdal = the ecosystem ingestion organ), and (b) the v1 human-facing UI/UX posture for Heimdal (markdown-first control surface, capture posture, native-app topology). Extends ADR-0044's constituent structure; reshapes the §5 records-of-reality-vs-authored-content boundary in FABLE_COMPANION and moves KAP's acquisition front-end from Mimer to Heimdal. Does not redefine Mimer's internals. SoS scope + the capture/privacy posture are owner-reserved (R-SOS / R-EXTERNAL) and recorded here as the owner's locked decision, not an agent's.
 Owner: Architecture / CES stewardship (Rasmus)
@@ -8,7 +8,7 @@ Source of truth: This ADR plus `docs/HEIMDAL/FABLE_COMPANION.md` §9-k + §11 (t
 # ADR-0049: Heimdal as the ecosystem ingestion organ + v1 UI/UX enactment (markdown-first control surface, discrete-capture posture, one-shell app topology)
 
 **Date:** 2026-07-05
-**Status:** Proposed (owner decisions locked 2026-07-05; ratification pending review)
+**Status:** Accepted (owner decisions locked 2026-07-05; ratified 2026-07-06 by owner instruction to deliver Epic A #3019)
 
 ---
 
