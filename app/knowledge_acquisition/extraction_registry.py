@@ -171,6 +171,21 @@ def clear_registry() -> None:
     _RESULTS.clear()
 
 
+def clear_extraction_results() -> None:
+    """Drop every cached extraction result while keeping extractors registered.
+
+    The replay path's "delete every derived level" hook for the `extracted`
+    level (KA-06 #2801, `REFINEMENT_PIPELINE_CONTRACT.md` § Lineage and
+    replay): extraction artifacts are not durably persisted in this slice
+    (see module docstring scope note), so the in-process result cache IS the
+    derived level, and clearing it forces a genuine fresh re-run on the next
+    `run_extractor` call. Registered extractor specs are deliberately left
+    untouched — replay re-runs the registered pipeline, it does not
+    de-register it.
+    """
+    _RESULTS.clear()
+
+
 def run_extractor(extractor_id: str, normalized: Mapping[str, Any]) -> ExtractionResult:
     """Run the extractor registered under `extractor_id` against a `normalized` artifact.
 
@@ -239,6 +254,7 @@ __all__ = [
     "ExtractorRunFn",
     "ExtractorSpec",
     "UnknownExtractorError",
+    "clear_extraction_results",
     "clear_registry",
     "register_extractor",
     "registered_extractor",

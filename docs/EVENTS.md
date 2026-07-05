@@ -282,6 +282,52 @@ Operator visibility:
 - the event is emitted separately from the original topic so it does not re-enter the transient
   retry path.
 
+### `knowledge_acquisition.stage.completed`
+
+Emitted by the Knowledge Acquisition refinement pipeline (KA-06, #2801) when a refinement
+stage transition succeeds: `normalize`, each extractor run, and `candidate`. A **lineage/
+audit** event, NOT a dispatched command — nothing consumes it as a command that mutates
+state; it records that a stage transition happened, per
+`docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md` § Stage execution model / §
+Lineage and replay. It is therefore deliberately absent from
+`app/workers/outbox_worker.py::_dispatch_topic` and from the topic-schema registry
+(`schemas/events/*`); the coverage test enumerates only dispatched topics, so this topic is
+out of its scope by construction.
+
+Deterministic idempotency key (KERNEL-02, via `derive_idempotency_key`): keyed on
+`(stage, stage_version, content_identity)` — plus `extractor_id` for extractor runs so two
+extractors over the same content never collide. Re-running an unchanged stage at an
+unchanged version re-derives the SAME key (idempotent no-op: exactly one row); a stage
+version bump derives a DISTINCT key (a stage improvement re-runs the stage and is a
+genuinely new lineage event, never swallowed against the old row).
+
+Payload fields (in addition to the envelope):
+- `stage` (`string`): `normalize` | `extracted` | `candidate`.
+- `stage_version` (`int`): the stage's / extractor's version.
+- `content_identity` (`string`): the `raw` record's `content_identity` this artifact descends from.
+- `extractor_id` (`string`, extractor runs only): the extractor that produced the artifact.
+- `model_identity` (`object`, extractor runs only): `{provider, model}` lineage of the resolved LLM route.
+- `artifact_path` (`string`, `candidate` stage only): the vault-relative note path.
+
+### `knowledge_acquisition.stage.dead_lettered`
+
+Emitted by the Knowledge Acquisition refinement pipeline (KA-06, #2801) when a stage fails
+for one item: the loud, durable record that THIS item failed at THIS stage. Item-scoped —
+a sibling item or sibling extractor is unaffected (contract § Stage execution model: "loud
+and item-scoped: it dead-letters that item at that stage without blocking other items or
+other extractors"). Distinct from `outbox.event.dead_lettered`, which is the worker's
+DB-row dispatch-poison signal; this event is a KA stage-pipeline compute failure, never a
+queued row the worker is dispatching. Like the completed event, it is lineage/audit — not a
+dispatched command — and registers no schema. Its deterministic key is content-scoped
+(fingerprint `<scope>:<stage_version>:dead_letter`), so a duplicate delivery of the same
+failure dedups to one audit row.
+
+Payload fields (in addition to the envelope):
+- `stage` (`string`), `stage_version` (`int`), `content_identity` (`string`): as above.
+- `extractor_id` (`string`, extractor-stage failures only).
+- `reason` (`string`): failure class, e.g. `extraction_failed`.
+- `error` (`string`): the underlying error string, preserved for triage (never swallowed).
+
 ### `panel.intent.created`
 
 Emitted when an AI panel is parsed for a note and actions are mapped.

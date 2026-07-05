@@ -523,6 +523,69 @@ def transcribe(source: str, as_json: bool, trace_id: Optional[str]) -> None:
 
 
 @cli.command(
+    name="acquire-replay",
+    help="Replay a KA raw record's derived levels (normalize -> extract -> candidate) with "
+    "zero source egress (KA-06).\n\nExample:\n  python -m app.cli acquire-replay <raw_id> "
+    "--vault-root ./vault --assert-no-source-egress",
+)
+@click.argument("raw_record_id")
+@click.option(
+    "--vault-root",
+    "vault_root",
+    required=True,
+    help="Vault root the candidate note is written to (first-write-wins).",
+)
+@click.option(
+    "--assert-no-source-egress",
+    "assert_no_source_egress",
+    is_flag=True,
+    help="Assert zero source egress (always enforced; the flag makes the guarantee explicit).",
+)
+@click.option("--json", "as_json", is_flag=True, help="Also print the JSON receipt to stdout.")
+@click.option("--trace-id", default=None, help="Attach a trace id to the run.")
+def acquire_replay(
+    raw_record_id: str,
+    vault_root: str,
+    assert_no_source_egress: bool,
+    as_json: bool,
+    trace_id: Optional[str],
+) -> None:
+    """Thin wrapper over `app.knowledge_acquisition.replay.run_replay` (the testable core).
+
+    Prints the human-readable receipt lines, optionally the structured JSON receipt, and
+    exits nonzero when the replay is not equivalent.
+    """
+    from app.knowledge_acquisition.replay import ReplayError, run_replay
+    from app.vault.manager import VaultContext
+
+    trace_id = with_trace_id(trace_id)
+    vault_context = VaultContext(
+        status="selected",
+        active_vault_id="cli-replay",
+        active_vault_name="CLI Replay Vault",
+        active_vault_path=str(vault_root),
+    )
+    try:
+        receipt = run_replay(
+            raw_record_id,
+            vault_context=vault_context,
+            # Always-on: the egress guard installs regardless; the flag only surfaces the
+            # guarantee explicitly in the printed receipt.
+            assert_no_source_egress=True,
+            trace_id=trace_id,
+        )
+    except ReplayError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    for line in receipt.to_lines():
+        click.echo(line)
+    if as_json:
+        click.echo(json.dumps(receipt.as_dict(), ensure_ascii=False))
+    if not receipt.equivalent:
+        raise SystemExit(1)
+
+
+@cli.command(
     help="Run full pipeline (normalize -> classify -> optional transcribe). Accepts file, URL, or audio/YouTube."
 )
 @click.argument("source")
