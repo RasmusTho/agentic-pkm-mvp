@@ -47,6 +47,7 @@ class _FakeClient:
         self.get_calls: list[tuple[str, dict[str, Any]]] = []
         self.post_calls: list[tuple[str, dict[str, Any]]] = []
         self.post_header_calls: list[tuple[str, dict[str, str] | None]] = []
+        self.post_timeout_calls: list[tuple[str, float | None]] = []
         self.delete_calls: list[tuple[str, dict[str, Any] | None]] = []
 
     def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
@@ -61,9 +62,11 @@ class _FakeClient:
         *,
         json: dict[str, Any],
         headers: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         self.post_calls.append((url, json))
         self.post_header_calls.append((url, headers))
+        self.post_timeout_calls.append((url, timeout))
         if self.post_error:
             raise self.post_error
         return self.post_responses.get(url, {})

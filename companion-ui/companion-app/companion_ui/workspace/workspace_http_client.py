@@ -114,11 +114,20 @@ class WorkspaceHttpClient:
         *,
         json: dict[str, Any],
         headers: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
-        """POST request to the runtime API. Raises WorkspaceClientError on failure."""
+        """POST request to the runtime API. Raises WorkspaceClientError on failure.
+
+        ``timeout`` lets a caller override the client's default timeout for a
+        single request (e.g. a long-running operator route) without changing
+        the timeout used by every other POST route on this client (#2993).
+        """
         full_url = self._base_url + url
         try:
-            request_kwargs: dict[str, Any] = {"json": json, "timeout": self._timeout}
+            request_kwargs: dict[str, Any] = {
+                "json": json,
+                "timeout": timeout if timeout is not None else self._timeout,
+            }
             if headers is not None:
                 request_kwargs["headers"] = headers
             resp = httpx.post(full_url, **request_kwargs)
