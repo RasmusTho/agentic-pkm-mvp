@@ -1,4 +1,4 @@
-State: Accepted (owner-settled decision recorded 2026-06-20; ratified into owner docs by #2317). Records the standing embedding-egress posture: Ollama-primary with a dimension-matched (768) Google Gemini auto-fallback that writes a MIXED-IDENTITY, reconcilable vector, and the controlled supersession of the prior no-generic-fallback invariant in `docs/EMBEDDINGS.md`. **Numbering note:** the governing issue #2317 originally named this "ADR-0015", but ADR-0015 through ADR-0022 were already taken on `origin/main` (the SBS series). This record uses the next free number, **ADR-0023**; its sibling retrieval-topology ADR is **ADR-0024**, and **ADR-0025** is reserved for sibling issue #2318.
+State: Accepted (owner-settled decision recorded 2026-06-20; ratified into owner docs by #2317). Records the standing embedding-egress posture: Ollama-primary with a dimension-matched (768) Google Gemini auto-fallback that writes a MIXED-IDENTITY, reconcilable vector, and the controlled supersession of the prior no-generic-fallback invariant in `docs/EMBEDDINGS.md`. **Numbering note:** the governing issue #2317 originally named this "ADR-0015", but ADR-0015 through ADR-0022 were already taken on `origin/main` (the SBS series). This record uses the next free number, **ADR-0023**; its sibling retrieval-topology ADR is **ADR-0024**, and **ADR-0025** is reserved for sibling issue #2318. **Fallback-dimension pin SUPERSEDED by ADR-0052 (2026-07-06):** the BGE-M3 primary-model switch moves the embedding identity from 768 to 1024 dims; the Gemini fallback is re-pinned to `output_dimensionality=1024`. The topology (Ollama-primary + Gemini fallback) and the mixed-identity/reconcile discipline (CTI-1/2/3) below are **retained** — only the pinned dimension value changes.
 Doc role: Decision record (ADR)
 Authority: Authoritative for the embedding-egress posture (primary provider, fallback provider, and the conditions under which fallback is permitted). The governing reference for the dimension-matched (768), mixed-identity-but-reconcilable Gemini exception to the EMBEDDINGS no-generic-fallback rule.
 Owner: Architecture / Embedding & retrieval posture
@@ -8,7 +8,9 @@ Source of truth: This ADR for the decision; `docs/EMBEDDINGS.md` and `docs/LLM_R
 # ADR-0023: Embedding egress — Ollama-primary with dimension-matched, mixed-identity Gemini auto-fallback
 
 **Date:** 2026-06-20
-**Status:** Accepted (owner-settled decision)
+**Status:** Accepted (owner-settled decision). Fallback-dimension pin (768) superseded by
+[ADR-0052](./ADR-0052-embedding-fallback-repin-1024-bge-m3.md) (2026-07-06, re-pinned to 1024 for the
+BGE-M3 primary-model switch); topology and mixed-identity/reconcile discipline (CTI-1/2/3) unchanged.
 
 ---
 
