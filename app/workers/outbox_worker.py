@@ -18,7 +18,16 @@ from app.agents.panel.writeback import strip_ai_status_block
 from app.agents.panel_agent.execution import refresh_panel_note_object, run_panel_note_execution
 from app.components.concurrency import EventDedupStore, OptimisticWriteGuard, VersionMismatch
 from app.events.sync import SyncChainCorrelationData, SyncLatencySummaryEvent
-from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_VAULT_CHANGED, NOTE_MOVE_WORKBENCH, PANEL_SCAN_REQUESTED, PROMOTE_INTENT_CREATED
+from app.events.types import (
+    INGEST_OBJECT_CREATED,
+    INGEST_OBJECT_DELETED,
+    INGEST_VAULT_CHANGED,
+    KNOWLEDGE_ACQUISITION_STAGE_COMPLETED,
+    KNOWLEDGE_ACQUISITION_STAGE_DEAD_LETTERED,
+    NOTE_MOVE_WORKBENCH,
+    PANEL_SCAN_REQUESTED,
+    PROMOTE_INTENT_CREATED,
+)
 from app.events.schema import make_outbox_event
 from app.events.topic_schema_registry import (
     TopicSchemaViolation,
@@ -54,6 +63,26 @@ _WRITE_GUARD = OptimisticWriteGuard()
 
 _UNKNOWN_INSTANCE = "unknown"
 OUTBOX_EVENT_DEAD_LETTERED = "outbox.event.dead_lettered"
+
+# KA-07 (#3107): observability signals emitted by the stage-event consumer
+# route below. Distinct from the KA-06 producer topics
+# (`knowledge_acquisition.stage.completed` / `...dead_lettered`, which this
+# worker now dispatches) -- these are the WORKER's own audit trail of having
+# handled one of those events, mirroring `OUTBOX_EVENT_DEAD_LETTERED` above
+# (the worker's dispatch-poison signal) rather than reusing the KA producer's
+# topic name for a different concern.
+KA_CANDIDATE_READY_FOR_TRIAGE = "knowledge_acquisition.candidate.ready_for_triage"
+KA_STAGE_DEAD_LETTER_SURFACED = "knowledge_acquisition.stage.dead_letter_surfaced"
+
+# In-process redelivery-window guard for the two KA consumer signals' JSONL
+# audit append, mirroring `app.outbox.events._AUDIT_EMISSION_DEDUP` and this
+# module's own `_PANEL_LATENCY_SUMMARY_DEDUP`: a fast-path window, not the
+# durable idempotency source of truth (that is the DB-outbox row's
+# deterministic `id` + `ON CONFLICT DO NOTHING` when the DB outbox is
+# enabled). Without this gate the JSONL sink (unlike the DB outbox) has no
+# dedup of its own and would grow one line per redelivery even though the
+# durable DB row still converges to one.
+_KA_CONSUMER_SIGNAL_DEDUP = EventDedupStore()
 
 # In-process dedup for the `sync.latency.summary` audit emission in
 # `handle_panel_scan_requested` (#2881). This JSONL append is unconditional
@@ -410,6 +439,10 @@ def _dispatch_topic(
                 "trace_id": trace_id,
             }
         )
+    elif topic == KNOWLEDGE_ACQUISITION_STAGE_COMPLETED:
+        handle_knowledge_acquisition_stage_completed(payload, trace_id=trace_id)
+    elif topic == KNOWLEDGE_ACQUISITION_STAGE_DEAD_LETTERED:
+        handle_knowledge_acquisition_stage_dead_lettered(payload, trace_id=trace_id)
     else:
         logger.debug("worker skipping unsupported topic=%s trace_id=%s", topic, trace_id)
 
@@ -486,6 +519,203 @@ def handle_ingest_object_deleted(payload: Mapping[str, Any]) -> None:
         payload.get("path"),
         payload.get("deleted"),
         purged,
+    )
+
+
+# KA stage-scope this candidate's terminal artifact is written at (`REFINEMENT_
+# PIPELINE_CONTRACT.md` § Stage execution model): `stage.completed` events fire
+# for `normalize` and every extractor run too, but only a `candidate`-stage
+# completion means a candidate note now exists and is eligible to advance
+# toward triage. Intermediate stages are traced (dispatched, logged) but their
+# bounded downstream action is a deliberate no-op -- there is no candidate yet
+# to mark ready.
+_KA_CANDIDATE_STAGE = "candidate"
+
+
+def _ka_stage_scope(payload: Mapping[str, Any]) -> str:
+    """The same identity segment KA-06's producer folds into its idempotency key.
+
+    Mirrors ``app.knowledge_acquisition.stage_events._stage_scope``: an
+    extractor run is scoped by ``{stage}:{extractor_id}``, a bare stage
+    (``normalize``, ``candidate``) by the stage name alone. Recomputing it here
+    (rather than importing the KA-layer private helper) keeps this worker-side
+    consumer decoupled from the KA producer module's internals while deriving
+    an identical scope string from the same payload fields the producer put on
+    the wire.
+    """
+    stage = str(payload.get("stage") or "")
+    extractor_id = payload.get("extractor_id")
+    return f"{stage}:{extractor_id}" if extractor_id else stage
+
+
+def _emit_ka_consumer_signal(
+    event_type: str,
+    *,
+    content_identity: str,
+    fingerprint: str,
+    payload: Mapping[str, Any],
+    trace_id: str | None,
+) -> None:
+    """Durable, item-scoped observability signal for a handled KA stage event.
+
+    Mirrors ``_dead_letter_outbox_message``'s dual-write shape (JSONL audit
+    sink always; DB outbox additionally when enabled) rather than an
+    in-process cache: KERNEL-02/11 treat an in-memory dedup set as a fast-path
+    only, never the idempotency source of truth (it is lost on restart). The
+    idempotency key is derived through the single shared KERNEL-02 helper
+    (``derive_idempotency_key``) from the SAME ``(topic, content_identity,
+    stage-scope:stage_version)`` fingerprint the KA-06 producer already used
+    to key its own emission -- so redelivery of the identical producer event
+    reproduces the identical consumer-signal key and dedups to one row via
+    ``ON CONFLICT (id) DO NOTHING``, without this worker needing its own
+    ad-hoc scheme or a volatile cache.
+    """
+    key = derive_idempotency_key(event_type, content_identity, fingerprint)
+    if _KA_CONSUMER_SIGNAL_DEDUP.seen(key):
+        logger.debug(
+            "KA consumer signal skipped (duplicate delivery) event_type=%s content_identity=%s",
+            event_type,
+            content_identity,
+        )
+        return
+
+    event = make_outbox_event(
+        event_type,
+        source="worker",
+        trace_id=trace_id,
+        payload=dict(payload),
+    )
+    try:
+        append_jsonl_outbox_event(_outbox_audit_path(), event, default_source="worker")
+        if _use_db_outbox():
+            write_outbox_event(event, idempotency_key=key)
+    except Exception:
+        # Best-effort observability signal: a failure here must never re-block
+        # the outbox poll loop or fail the dispatch of the KA stage event
+        # itself (these are audit-only side effects).
+        logger.exception(
+            "worker failed to record KA consumer signal event_type=%s content_identity=%s",
+            event_type,
+            content_identity,
+        )
+
+
+def handle_knowledge_acquisition_stage_completed(
+    payload: Mapping[str, Any], *, trace_id: str | None = None
+) -> None:
+    """Consume ``knowledge_acquisition.stage.completed`` (KA-06 → KA-07, #3107).
+
+    Bounded, minimal downstream action -- NOT the triage engine
+    (`INGESTION_AND_TRIAGE_POLICY.md`/`CONTEXTUALIZATION_LAYER` own that,
+    docs-only target state; out of scope here per the Issue). Only the
+    ``candidate`` stage (the pipeline's terminal stage, where a candidate note
+    now exists per `CANDIDATE_WRITEBACK.md`) has a concrete action: emit a
+    durable, item-scoped ``knowledge_acquisition.candidate.ready_for_triage``
+    observability signal marking the candidate eligible for triage pickup.
+    Every other stage (`normalize`, each extractor run) is a traced no-op --
+    dispatched and logged, no signal emitted -- because there is no candidate
+    yet to mark ready.
+
+    Idempotent: the emitted signal's key is derived from the same
+    ``(content_identity, stage-scope, stage_version)`` fingerprint the
+    producer used, so redelivery of the same stage-completed event converges
+    on the durable DB-outbox row (when enabled) via ``ON CONFLICT DO NOTHING``
+    -- no duplicate signal for a duplicate delivery.
+    """
+    stage = str(payload.get("stage") or "")
+    content_identity = payload.get("content_identity")
+    if not isinstance(content_identity, str) or not content_identity:
+        logger.warning(
+            "knowledge_acquisition.stage.completed missing content_identity; skipping stage=%s",
+            stage,
+        )
+        return
+
+    if stage != _KA_CANDIDATE_STAGE:
+        logger.debug(
+            "knowledge_acquisition.stage.completed traced, no downstream action "
+            "(non-terminal stage) stage=%s content_identity=%s trace_id=%s",
+            stage,
+            content_identity,
+            trace_id,
+        )
+        return
+
+    stage_version = payload.get("stage_version")
+    fingerprint = f"{_ka_stage_scope(payload)}:{stage_version}"
+    _emit_ka_consumer_signal(
+        KA_CANDIDATE_READY_FOR_TRIAGE,
+        content_identity=content_identity,
+        fingerprint=fingerprint,
+        payload={
+            "content_identity": content_identity,
+            "stage": stage,
+            "stage_version": stage_version,
+            "artifact_path": payload.get("artifact_path"),
+        },
+        trace_id=trace_id,
+    )
+    logger.info(
+        "knowledge_acquisition candidate ready for triage content_identity=%s trace_id=%s",
+        content_identity,
+        trace_id,
+    )
+
+
+def handle_knowledge_acquisition_stage_dead_lettered(
+    payload: Mapping[str, Any], *, trace_id: str | None = None
+) -> None:
+    """Consume ``knowledge_acquisition.stage.dead_lettered`` (KA-06 → KA-07, #3107).
+
+    Item-scoped surfacing only: this handler never raises, so a dead-lettered
+    stage failure for one item never blocks dispatch of sibling items' events
+    (`REFINEMENT_PIPELINE_CONTRACT.md` § Stage execution model: "loud and
+    item-scoped ... without blocking other items or other extractors" --
+    the same invariant KA-06's producer upholds at emission time; this
+    consumer preserves it at dispatch time too). Surfaces a durable,
+    observable ``knowledge_acquisition.stage.dead_letter_surfaced`` signal
+    (JSONL audit sink + DB outbox when enabled) distinct from the worker's own
+    dispatch-poison signal (``OUTBOX_EVENT_DEAD_LETTERED``) -- this is a KA
+    stage COMPUTE failure the producer already recorded, never a queued
+    outbox row exhausting dispatch attempts.
+
+    Idempotent by the same content-derived key scheme as the completed-event
+    handler above: redelivery of the same dead-letter event reproduces the
+    same key and dedups.
+    """
+    stage = str(payload.get("stage") or "")
+    content_identity = payload.get("content_identity")
+    if not isinstance(content_identity, str) or not content_identity:
+        logger.warning(
+            "knowledge_acquisition.stage.dead_lettered missing content_identity; "
+            "surfacing degraded, stage=%s",
+            stage,
+        )
+        content_identity = ""
+
+    stage_version = payload.get("stage_version")
+    fingerprint = f"{_ka_stage_scope(payload)}:{stage_version}:dead_letter_surfaced"
+    _emit_ka_consumer_signal(
+        KA_STAGE_DEAD_LETTER_SURFACED,
+        content_identity=content_identity or "unknown",
+        fingerprint=fingerprint,
+        payload={
+            "content_identity": content_identity,
+            "stage": stage,
+            "stage_version": stage_version,
+            "extractor_id": payload.get("extractor_id"),
+            "reason": payload.get("reason"),
+            "error": payload.get("error"),
+        },
+        trace_id=trace_id,
+    )
+    logger.warning(
+        "knowledge_acquisition stage dead-letter surfaced content_identity=%s stage=%s "
+        "reason=%s trace_id=%s",
+        content_identity,
+        stage,
+        payload.get("reason"),
+        trace_id,
     )
 
 

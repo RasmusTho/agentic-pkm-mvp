@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/knowledge_acquisition.stage.dead_lettered.v1.schema.json",
+  "title": "knowledge_acquisition.stage.dead_lettered payload (v1)",
+  "description": "Payload of the knowledge_acquisition.stage.dead_lettered outbox event. Producer: app/knowledge_acquisition/stage_events.py::emit_stage_dead_letter (stage, stage_version, content_identity, reason, error, optional extractor_id). Consumer (KA-07, #3107): app/workers/outbox_worker.py::handle_knowledge_acquisition_stage_dead_lettered -- surfaces a durable, item-scoped observability signal and never raises, so one item's dead-letter never blocks a sibling item's dispatch.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["stage", "stage_version", "content_identity", "reason", "error"],
+  "properties": {
+    "stage": { "type": "string", "enum": ["normalize", "extracted", "candidate"] },
+    "stage_version": { "type": "integer" },
+    "content_identity": { "type": "string", "minLength": 1 },
+    "reason": { "type": "string", "minLength": 1 },
+    "error": { "type": "string" },
+    "extractor_id": { "type": ["string", "null"] }
+  }
+}

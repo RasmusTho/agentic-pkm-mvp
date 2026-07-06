@@ -22,17 +22,19 @@ objects/file_state/vector index + vault writes):
   ``purge_vectors``+``upsert`` and a double-insert on redelivery is caught here;
 - **vault writes** — the tmp vault tree (hashed per file).
 
-All three MUST converge for all 7 topics (``durable_state_matches``).
+All three MUST converge for all 9 topics (``durable_state_matches``).
 
 The **emitted outbox events** leg is asserted per each topic's declared
 ``_EmissionExpectation`` — never a silent empty-list compare:
 
-- IDEMPOTENT (all 5 emitting topics: ``ingest.object.created``,
+- IDEMPOTENT (7 emitting topics: ``ingest.object.created``,
   ``ingest.vault.changed``, ``panel.scan.requested``, ``index.embedding.requested``,
-  ``promote.intent.created``): emits >0 events on dispatch 1, deduped on
-  dispatch 2 via a content-derived dedup key (never the envelope's random
-  ``event_id`` -- see the #2881 note below). Non-vacuity is enforced
-  (emission count must be > 0).
+  ``promote.intent.created``, ``knowledge_acquisition.stage.completed``,
+  ``knowledge_acquisition.stage.dead_lettered``): emits >0 events on dispatch 1,
+  deduped on dispatch 2 via a content-derived dedup key (never the envelope's
+  random ``event_id`` -- see the #2881 note below, and the KA-07 (#3107) note
+  in ``app.workers.outbox_worker._KA_CONSUMER_SIGNAL_DEDUP`` for the two KA
+  topics). Non-vacuity is enforced (emission count must be > 0).
 - ZERO_BY_DESIGN (``ingest.object.deleted``, ``note.move.workbench``): the
   handler emits no outbox events; asserted as exactly zero after *both*
   dispatches (an explicit ``== []``, not a silent ``[] == []``).
@@ -511,6 +513,44 @@ def _setup_index_embedding_requested(vault_root: Path, monkeypatch: pytest.Monke
     return _FixtureResult({"object_id": object_uuid}, emission_count=_jsonl_emission_count)
 
 
+def _setup_ka_stage_completed(vault_root: Path, monkeypatch: pytest.MonkeyPatch) -> _FixtureResult:
+    """KA-07 (#3107): a ``candidate``-stage completion emits the bounded
+    ``knowledge_acquisition.candidate.ready_for_triage`` observability signal.
+
+    Uses the ``candidate`` stage deliberately (not ``normalize``/an extractor
+    run) -- only the terminal stage has a concrete downstream action per
+    ``handle_knowledge_acquisition_stage_completed``'s module contract; any
+    other stage is a traced no-op and would make the IDEMPOTENT emission
+    assertion vacuous.
+    """
+    return _FixtureResult(
+        {
+            "stage": "candidate",
+            "stage_version": 1,
+            "content_identity": "sha256:ka07-fixture-candidate",
+            "artifact_path": "Sources/ka07-fixture.md",
+        },
+        emission_count=_jsonl_emission_count,
+    )
+
+
+def _setup_ka_stage_dead_lettered(vault_root: Path, monkeypatch: pytest.MonkeyPatch) -> _FixtureResult:
+    """KA-07 (#3107): a dead-lettered stage event is surfaced as a durable,
+    item-scoped observability signal (``knowledge_acquisition.stage.
+    dead_letter_surfaced``) on every dispatch, never raising."""
+    return _FixtureResult(
+        {
+            "stage": "extracted",
+            "stage_version": 2,
+            "content_identity": "sha256:ka07-fixture-dead-letter",
+            "extractor_id": "summary",
+            "reason": "extraction_failed",
+            "error": "fixture induced failure",
+        },
+        emission_count=_jsonl_emission_count,
+    )
+
+
 TOPIC_FIXTURES: dict[str, _TopicFixture] = {
     "ingest.object.created": _TopicFixture(
         "ingest.object.created",
@@ -569,13 +609,29 @@ TOPIC_FIXTURES: dict[str, _TopicFixture] = {
         # _AUDIT_EMISSION_DEDUP content-derived key.
         emission=_EmissionExpectation.IDEMPOTENT,
     ),
+    "knowledge_acquisition.stage.completed": _TopicFixture(
+        "knowledge_acquisition.stage.completed",
+        _setup_ka_stage_completed,
+        # KA-07 (#3107): the bounded candidate.ready_for_triage signal is keyed
+        # via derive_idempotency_key on the same (content_identity, stage
+        # scope, stage_version) fingerprint the KA-06 producer used, so
+        # redelivery converges to one row via ON CONFLICT DO NOTHING.
+        emission=_EmissionExpectation.IDEMPOTENT,
+    ),
+    "knowledge_acquisition.stage.dead_lettered": _TopicFixture(
+        "knowledge_acquisition.stage.dead_lettered",
+        _setup_ka_stage_dead_lettered,
+        # KA-07 (#3107): the dead_letter_surfaced signal is keyed the same way;
+        # redelivery of the same stage failure dedups to one surfaced row.
+        emission=_EmissionExpectation.IDEMPOTENT,
+    ),
 }
 
 
 def test_every_topic_has_a_fixture() -> None:
     """A registered dispatch topic with no fixture must fail loud, never skip silently."""
     dispatched = set(_dispatched_topics())
-    assert len(dispatched) >= 7, f"expected at least the 7 known dispatch topics, got {dispatched}"
+    assert len(dispatched) >= 9, f"expected at least the 9 known dispatch topics, got {dispatched}"
     assert dispatched == set(TOPIC_FIXTURES), (
         "TOPIC_FIXTURES must cover exactly the live _dispatch_topic table -- "
         f"dispatched={sorted(dispatched)} fixtures={sorted(TOPIC_FIXTURES)}. "
@@ -770,6 +826,7 @@ def _reset_dispatch_state(monkeypatch: pytest.MonkeyPatch) -> None:
     reset_store_backends()
     outbox_worker._EVENT_DEDUP._seen.clear()
     outbox_worker._PANEL_LATENCY_SUMMARY_DEDUP.clear()
+    outbox_worker._KA_CONSUMER_SIGNAL_DEDUP.clear()
     promotion_consumer.reset_promotion_dedup_store()
     outbox_events_module.reset_audit_emission_dedup_store()
     panel_agent_module.reset_panel_intent_dedup_store()
@@ -778,6 +835,7 @@ def _reset_dispatch_state(monkeypatch: pytest.MonkeyPatch) -> None:
     reset_store_backends()
     outbox_worker._EVENT_DEDUP._seen.clear()
     outbox_worker._PANEL_LATENCY_SUMMARY_DEDUP.clear()
+    outbox_worker._KA_CONSUMER_SIGNAL_DEDUP.clear()
     promotion_consumer.reset_promotion_dedup_store()
     outbox_events_module.reset_audit_emission_dedup_store()
     panel_agent_module.reset_panel_intent_dedup_store()
