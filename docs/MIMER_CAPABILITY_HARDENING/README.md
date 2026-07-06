@@ -72,14 +72,21 @@ The audit is dated 2026-07-05; the correctness-kernel wave merged the same day a
    Tightening is one config edit, never a rebuild.
 3. **Expansion forward → this README's ordering**, with the true dependency graph below.
 
-## One remaining collision (owner ADR required — flagged, not resolved here)
+## Collision resolved — BGE-M3 vs the dimension-matched fallback
 
-- **BGE-M3 (1024-dim) vs ADR-0023's dimension-matched fallback (768).** R2's switch to BGE-M3
-  changes `EmbeddingIdentity` (`app/components/embeddings.py:30-35`) to 1024 dims, breaking the
-  dim-matched Gemini fallback pin (`docs/EMBEDDINGS.md :: Fallback rule`). A superseding ADR must
-  re-pin the fallback to `output_dimensionality=1024` (recommended) or accept a fallback-less
-  window. *(The R1 tier-table collision is now covered by draft ADR-0048; the egress posture is
-  covered by the reshaped decision 3 below.)*
+- **BGE-M3 (1024-dim) vs ADR-0023's dimension-matched fallback (768) — RESOLVED by ADR-0052
+  (Accepted, 2026-07-06).** R2's switch to BGE-M3 changes `EmbeddingIdentity`
+  (`app/components/embeddings/legacy.py` — the live implementation reached via
+  `app.components.embeddings`; the package `__init__.py` shadows the flat `app/components/embeddings.py`
+  module of the same name, a pre-existing repo quirk unrelated to this decision) to 1024 dims. Option
+  (a) was ratified: the Gemini fallback re-pins to `output_dimensionality=1024` — the adapter passes
+  the caller's resolved `dim` straight through rather than a hardcoded literal, so the fallback stays
+  dimension-matched automatically once the primary identity moves. The G3-1 implementation slice
+  (#2984) shipped the `bge-m3` profile as a SELECTABLE mechanism (not the flipped default); see
+  `docs/adr/ADR-0052-embedding-fallback-repin-1024-bge-m3.md` and
+  `docs/runbooks/RUNBOOK_BGE_M3_CUTOVER.md` for the operator cutover procedure. *(The R1 tier-table
+  collision is now covered by draft ADR-0048; the egress posture is covered by the reshaped decision
+  3 below.)*
 
 ## Program architecture — how the pieces compose
 

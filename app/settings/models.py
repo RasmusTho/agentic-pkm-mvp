@@ -201,7 +201,10 @@ class QaLLMSettings(BaseModel):
 class EmbeddingProfile(BaseModel):
     provider: str = Field(default="mock", description="Embedding provider identifier (mock|ollama|http).")
     model: str = Field(default="nomic-embed-text:latest", description="Embedding model identifier.")
-    dim: int = Field(default=1536, description="Embedding dimension for this profile.")
+    # Matches app/embedding_config.py::DEFAULT_EMBED_DIM (768) — closes the
+    # EMBED_DIM/DEFAULT_EMBED_DIM drift (#2296/#2297) rather than layering a
+    # third stale value alongside it. See docs/EMBEDDINGS.md :: EMBED_DIM.
+    dim: int = Field(default=768, description="Embedding dimension for this profile.")
     normalize: bool = Field(default=True, description="Apply L2 normalization when true.")
     primary_provider: str | None = Field(
         default=None,
@@ -220,13 +223,56 @@ class EmbeddingProfile(BaseModel):
             "Operator can also set EMBED_FALLBACK_PROVIDER env var (env wins over profile)."
         ),
     )
+    no_prefix: bool = Field(
+        default=True,
+        description=(
+            "True when the model family requires no query/passage prefix formatting "
+            "(docs/EMBEDDINGS.md :: Model-specific formatting). Both nomic-embed-text "
+            "and BGE-M3 are no-prefix models; recorded per-profile so this is not "
+            "re-litigated per call site if an E5-family (prefix-requiring) profile is "
+            "added later."
+        ),
+    )
+    max_input_chars: int | None = Field(
+        default=None,
+        description=(
+            "Recommended EMBED_MAX_INPUT_CHARS value for this profile (see "
+            "app/llm/embeddings.py::_embedding_max_input_chars). This is "
+            "descriptive/advisory, not auto-applied: the actual chunking budget "
+            "is still read from the EMBED_MAX_INPUT_CHARS env var at call time. "
+            "Operators activating a profile whose max_input_chars differs from "
+            "the built-in default (6000, tuned for nomic-embed-text's ~2k-token "
+            "window) must also set EMBED_MAX_INPUT_CHARS explicitly — see the "
+            "cutover runbook (docs/ops/BGE_M3_CUTOVER_RUNBOOK.md)."
+        ),
+    )
 
 
 class EmbeddingProfiles(BaseModel):
     default_profile: str = Field(default="default", description="Profile name to use when unspecified.")
     profiles: Dict[str, EmbeddingProfile] = Field(
-        default_factory=dict,
-        description="Named embedding profiles keyed by profile name.",
+        default_factory=lambda: {
+            "bge-m3": EmbeddingProfile(
+                provider="ollama",
+                model="bge-m3",
+                dim=1024,
+                normalize=True,
+                no_prefix=True,
+                # ~8192-token window (vs. nomic-embed-text's ~2k) allows a larger
+                # in-budget chunk before the mean-pooling fallback kicks in,
+                # producing better long-note vectors. See docs/EMBEDDINGS.md ::
+                # Oversized input handling.
+                max_input_chars=24000,
+            ),
+        },
+        description=(
+            "Named embedding profiles keyed by profile name. Registering the "
+            "'bge-m3' profile here makes it SELECTABLE (EMBED_PROFILE=bge-m3 or "
+            "default_profile: bge-m3 in runtime/settings/embeddings.yaml); it is "
+            "not the shipped default and activating it is an explicit operator "
+            "action gated on pulling bge-m3 into Ollama and running a full "
+            "re-index (docs/ops/BGE_M3_CUTOVER_RUNBOOK.md, ADR-0052, #2984)."
+        ),
     )
 
 

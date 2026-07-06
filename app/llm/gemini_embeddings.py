@@ -4,11 +4,18 @@ Implements ``embed_gemini_text`` using raw httpx (no google-generativeai SDK)
 following the same HTTP call style as the Ollama adapter in ``app/llm/embeddings.py``.
 
 The active model is ``gemini-embedding-001`` (stable, text).  It defaults to 3072
-dims; this adapter requests ``output_dimensionality=768`` (camelCase, nested under
+dims; this adapter requests ``output_dimensionality=<dim>`` (camelCase, nested under
 ``embedContentConfig`` — the REST form, *not* the SDK snake_case which is silently
-ignored by REST and would return the default 3072-dim vector).  Because the dim is
-non-default the returned vector is L2-renormalized before return (required for
-``gemini-embedding-001`` at non-default dims).
+ignored by REST and would return the default 3072-dim vector), where ``dim`` is
+whatever dimension the caller resolves (``_embed_single`` / ``PROVIDER_REGISTRY``
+pass through the same ``dim`` used for the primary provider — see
+``app/llm/embeddings.py``). The dimension is therefore always pinned to match the
+active embedding identity: **768** for the shipped ``nomic-embed-text`` default
+(ADR-0023), or **1024** once an operator activates the ``bge-m3`` profile
+(ADR-0052, #2984) — the fallback dim tracks the primary dim by construction, it is
+never a hardcoded literal here. Because the dim is non-default the returned vector
+is L2-renormalized before return (required for ``gemini-embedding-001`` at
+non-default dims).
 
 Secret handling (CTI-4):
   Key is resolved from ``GEMINI_API_KEY`` (preferred) then ``GOOGLE_API_KEY``.

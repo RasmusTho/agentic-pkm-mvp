@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import asdict, is_dataclass
 from typing import Any
 
 from app.agents.panel.filters import strip_ai_panels
@@ -16,12 +15,21 @@ EMBED_PIPELINE_VERSION = "v1"
 
 
 def _embedding_identity_dict(identity: Any) -> dict[str, Any]:
+    """Project an EmbeddingIdentity to the documented W3-SPINE-01 provenance
+    shape: provider/model/dim/normalize only (docs/DB_SCHEMA.md ::
+    store_vector_index). Explicitly enumerated (not a raw asdict/vars dump) so
+    additive identity-note fields such as ``no_prefix`` (#2984, call-site
+    metadata, not a persisted provenance field) never silently widen this
+    stored contract."""
     if identity is None:
         return {}
-    if is_dataclass(identity):
-        return dict(asdict(identity))
     if isinstance(identity, dict):
-        return dict(identity)
+        return {
+            "provider": identity.get("provider"),
+            "model": identity.get("model"),
+            "dim": identity.get("dim"),
+            "normalize": identity.get("normalize"),
+        }
     return {
         "provider": getattr(identity, "provider", None),
         "model": getattr(identity, "model", None),

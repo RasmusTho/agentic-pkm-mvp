@@ -6,7 +6,21 @@ from typing import Iterable, Sequence
 
 from app.settings import settings
 
-DEFAULT_EMBED_DIM = 1536
+# Documented/operative shipped default (docs/EMBEDDINGS.md :: EMBED_DIM): matches
+# the local `nomic-embed-text` native dimension and the dimension-matched Gemini
+# `gemini-embedding-001` @ 768 fallback (ADR-0023). This closes the historical
+# EMBED_DIM/DEFAULT_EMBED_DIM code drift (#2296/#2297) — the runtime constant
+# now matches the documented default instead of a stale 1536.
+#
+# BGE_M3_EMBED_DIM (1024) is the dimension for the owner-ratified BUT NOT YET
+# SHIPPED BGE-M3 primary-model switch (ADR-0052, #2984/H4). It does not change
+# DEFAULT_EMBED_DIM: activating BGE-M3 is an explicit operator action (select
+# the `bge-m3` embedding profile or set EMBED_MODEL=bge-m3 + EMBED_DIM=1024),
+# never an automatic default flip, because it requires BGE-M3 pulled into the
+# operator's Ollama and a full re-index (docs/EMBEDDINGS.md :: Dim-change
+# re-index). See docs/ops/BGE_M3_CUTOVER_RUNBOOK.md for the operator procedure.
+DEFAULT_EMBED_DIM = 768
+BGE_M3_EMBED_DIM = 1024
 
 
 def get_embed_dim() -> int:
