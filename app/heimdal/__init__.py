@@ -25,6 +25,15 @@ Mimer-side integration points that substrate hands off to:
   FABLE_COMPANION.md` §9-k). Canonical control state, not the append-only
   observation log (HEIM-1 unaffected) and not a promotion authority
   (HEIM-8 unaffected).
+- `app/heimdal/raw_store.py` + `app/heimdal/capture_adapter.py` (#3025,
+  Epic #3019 slice A6) -- the voice-memo capture adapter (the *watch* seam,
+  the only component that touches the iCloud Shortcut folder) and the
+  encrypted-at-rest raw-evidence store it writes to. Admits a file only
+  under an active consent grant via `admit_raw_evidence`, stamps
+  provenance (`content_identity`, `capture_chain`, `sensor`, `consent`) in
+  the same durable write (KERNEL-06), and deletes the source only after
+  confirmed durable persistence (see
+  `docs/EVENTS.md :: Heimdal raw-evidence store + voice-memo capture adapter`).
 """
 
 from __future__ import annotations

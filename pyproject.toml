@@ -37,6 +37,7 @@ dependencies = [
     "alembic>=1.13",
     "aiosqlite>=0.20",
     "redis>=5.0",
+    "cryptography>=42.0",
     # Settings / config
     "pydantic-settings>=2.5",
     "python-dotenv>=1.0",

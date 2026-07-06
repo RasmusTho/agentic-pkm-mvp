@@ -288,6 +288,64 @@ Contract:
   revocation → raw-erasure / published-event-suppression propagation
   (§11#14, contract-stub).
 
+## Heimdal raw-evidence store + voice-memo capture adapter (§11#5 — delivered #3025)
+
+`app/heimdal/raw_store.py` + `app/heimdal/capture_adapter.py` (#3025, Epic
+#3019 slice A6; ratified by
+`docs/adr/ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md` §1;
+specified by `docs/HEIMDAL/FABLE_COMPANION.md` §11#5).
+
+The *watch* seam: `app/heimdal/capture_adapter.py` is the only component
+that touches the iCloud Shortcut folder or deletes a source file. It
+watches the folder for new voice-memo files (discrete capture, posture A),
+admits each one under an active consent grant, encrypts it at rest, and
+writes it to its own append-only table (`heimdal_raw_record`, migration
+`d5a8e2f1b6c3`).
+
+Contract:
+
+- **Consent admission is the one enforcement point (HEIM-3), reused not
+  reimplemented.** The adapter calls
+  `app.heimdal.consent_ledger.admit_raw_evidence(scope=...)` directly — it
+  does not resolve grants itself. No active grant propagates
+  `ConsentRefusedError` un-caught: the candidate file is left in the
+  watched folder (not deleted, not silently dropped), so the ledger stays
+  the only signal→raw gate no capture route can bypass.
+- **Sensor registration (T5 mitigation).** The adapter's identity
+  (`sensor = {adapter, version, device}`) must be registered
+  (`register_sensor`) before it may admit any file — an unregistered
+  identity refuses loudly (`UnregisteredSensorError`).
+- **Encrypted at rest.** Raw bytes are encrypted with AES-256-GCM
+  (`app.heimdal.raw_store.encrypt_raw_bytes`) before the durable write;
+  plaintext never reaches the store. The key is a caller-supplied 32-byte
+  value from `HEIMDAL_RAW_STORE_KEY` — a missing key refuses loudly
+  (`RawStoreKeyMissingError`), never falling back to writing plaintext.
+- **Provenance stamped in the same durable write (KERNEL-06).**
+  `insert_raw_record` writes `content_identity` (sha256 of the raw
+  evidence, the KAP-compatible join key), `capture_chain`
+  (`["ios_voice_memos", "icloud_drive", "folder_watch"]` for v1), `sensor`,
+  and `consent` (the resolved `grant_ref`) in the single INSERT that lands
+  the ciphertext — there is no separate "stamp provenance later" step.
+- **Append-only (HEIM-1).** Same discipline as `heimdal_observation_log` /
+  `heimdal_consent_grant`: the Python store exposes no update/delete
+  function, and the Postgres backend installs an identical
+  reject-mutation trigger (migration `d5a8e2f1b6c3`).
+- **Idempotent by `content_identity`.** Re-admitting the same raw evidence
+  (e.g. a crash-retry before delete-after-ingest fired) does not create a
+  duplicate row — a unique index (Postgres) / in-process dict (memory)
+  makes a repeat `insert_raw_record` call for the same hash return the
+  existing row instead of writing a second one.
+- **Delete-after-confirmed-ingest.** The source file is removed only after
+  the durable write returns successfully. If the write fails, the source
+  file is retained and the failure is loud (raised + logged) — the
+  operator's only copy is never destroyed on a failed admission.
+- **No direct DB imports across boundaries.** Other constituents never
+  import `app.heimdal.raw_store` and query the table directly.
+- **Out of scope for this slice:** the gated *read* path over the raw store
+  (§11#6, a later slice, A7); ASR / transcription / attribution / publish
+  (A7 onward); always-on/ambient adapters, place/session grants, direct
+  device→host transfer (all v2); a second modality.
+
 ## Event catalog (selected)
 
 ## Interpretation rules

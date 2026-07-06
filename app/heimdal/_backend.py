@@ -7,7 +7,7 @@ extend it. This module reimplements just the fail-loud backend-selection
 semantics that convention establishes (``STORE_BACKEND=memory|pg`` override,
 else resolve from ``DATABASE_URL``/``DB_DSN``, and a configured-but-
 unreachable Postgres must raise rather than silently degrade to memory -- the
-KERNEL-03 / I-S4 precedent), scoped to `app.heimdal`'s own two tables instead
+KERNEL-03 / I-S4 precedent), scoped to `app.heimdal`'s own tables instead
 of routing through the deprecated shared provider.
 """
 
