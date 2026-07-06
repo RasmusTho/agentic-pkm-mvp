@@ -5,6 +5,14 @@ description: "Staged workflow: move a candidate commit into the isolated test ch
 
 # Promote to Test
 
+> **Status: the test-channel stage of the TARGET gated-`stable` model (deferred promotion
+> hardening).** Prod currently tracks `main` directly per
+> `docs/RELEASE_CHANNELS/README.md §Promotion model` and
+> [ADR-0040](../../../docs/adr/ADR-0040-prod-promotion-ref-main-interim.md); `origin/stable` is
+> **dormant** and is not an ancestor of `origin/main`. This skill's test-channel mechanics are
+> current and safe to run; the prod-facing handoff to `promote-test-to-prod` is not yet the live
+> baseline — confirm with the operator before invoking.
+
 Use this skill to advance a candidate commit into the **test channel** before considering prod promotion. This is the mandatory first stage of the normal promotion path.
 
 Read `docs/RELEASE_CHANNELS/README.md` (§Current direction: prod baseline before promotion hardening and §Channel model) and `docs/ENVIRONMENTS.md` (§Code vs Environment Separation) before running. Those docs define the channel model this skill consumes.
@@ -46,14 +54,18 @@ Before executing any step, confirm every binding in the table below is correct:
 
 ## What this skill does
 
-1. **Channel isolation preflight.** Confirm the compose project is `pkm-test`, `PKM_ENVIRONMENT` resolves to `test`, the vault root is not the prod vault, and the DB is `app_test` (port 15434). Abort if any check fails.
+1. **Channel isolation preflight.** Before any stack mutation, invoke the shipped read-only guard:
+   ```bash
+   python -m app.release_channels.channel_isolation_preflight docker-compose.test.yml test
+   ```
+   This fail-closes when the compose overlay's effective env bindings (`PKM_ENVIRONMENT`, `DATABASE_URL`, `DB_DSN`) do not resolve to the test channel (`docs/RELEASE_CHANNELS/README.md §Compose/env binding invariant`). In addition, confirm the compose project is `pkm-test`, the vault root is not the prod vault, and the DB is `app_test` (port 15434). Abort if the guard or any manual check fails.
 
 2. **Candidate ref confirmation.** Confirm the candidate commit is resolvable and is the intended ref for test promotion. Record it as `test-candidate` in the receipt.
 
 3. **Test checkout.** Verify the test promotion is running from a worktree or checkout pinned to the candidate ref, not the prod checkout. The prod process must not be affected.
 
 4. **Test-scoped prepare.** Run the equivalent of `prepare-promotion` scoped to the test channel:
-   - Diff the candidate commit against the current test baseline (last test-promoted commit or `main~1` as appropriate).
+   - Diff the candidate commit against the current test baseline, resolved in this order: (1) the candidate SHA recorded in the latest receipt under `ops/test-promotions/`, if one exists; (2) an operator-supplied baseline ref; (3) the candidate's merge-base with `main` (`git merge-base <candidate> main`) if neither of the above is available.
    - Enumerate migrations not yet applied to `app_test`.
    - Classify each migration as reversible or forward-only (per `docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`).
    - Produce a test promotion plan at `ops/test-promotions/YYYY-MM-DD-<short-sha>.md`.
@@ -91,17 +103,11 @@ CI and scripted UAT can satisfy the verification function of this skill **only w
 
 If these conditions are met, step 6 may be replaced by referencing the CI/UAT receipt instead of re-running verification locally. The receipt must still be stored under `ops/test-promotions/` (local ops storage — the directory is gitignored per the #2081 receipts-are-local policy, so a repo-committed receipt is not expected) and linked in the test promotion plan.
 
+**Current-state note (ADR-0040-era baseline):** as of `docs/RELEASE_CHANNELS/README.md §Future promotion hardening`, `.github/workflows/harness-selfverify.yml` runs the harness (IR-v1 UAT, channel preflight, bootstrap smoke, fault injection) but writes **no** receipt, and `ops/test-promotions/` does not exist yet. CI/UAT cannot yet substitute for a live test run under this section — this path is not yet satisfiable until CI emits the candidate-SHA receipt described above.
+
 ## Emergency bypass (direct dev→prod)
 
-Direct dev→prod is **not the default path** and must not be used for normal promotions.
-
-If an emergency or hotfix requires bypassing the test stage, the operator must:
-1. Explicitly invoke `promote-test-to-prod` with `--bypass-test-receipt`.
-2. Provide a written risk note explaining why the test stage was skipped.
-3. Acknowledge that the promotion is unverified in test.
-4. The bypass produces a **risk receipt** (not a verification receipt) that is permanently attached to the prod promotion plan.
-
-The bypass receipt does not grant immunity from rollback requirements. If verify-promotion fails after a bypassed promotion, rollback is still mandatory.
+Direct dev→prod is **not the default path** and must not be used for normal promotions. The bypass gate — invocation flag, required risk note, and risk-receipt shape — is defined and governed by `promote-test-to-prod §Required evidence before prod promotion`. This skill does not redefine it; if the test stage must be skipped, invoke `promote-test-to-prod` directly per that section.
 
 ## Pre-conditions
 

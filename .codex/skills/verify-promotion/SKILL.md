@@ -5,6 +5,15 @@ description: "Verify that prod is healthy and functionally correct after a promo
 
 # Verify Promotion
 
+> **Status: step 1 below describes the TARGET gated-`stable` model (deferred promotion
+> hardening).** Prod currently tracks `main` directly per
+> `docs/RELEASE_CHANNELS/README.md §Promotion model` and
+> [ADR-0040](../../../docs/adr/ADR-0040-prod-promotion-ref-main-interim.md); `origin/stable` is
+> **dormant** and is not an ancestor of `origin/main`. Under the current baseline, do **not**
+> assert the running prod ref equals `origin/stable` — that false-FAILs a healthy prod and routes
+> to a rollback against a dormant, diverged ref. Compare against the current promotion ref
+> (`main`) instead; see step 1.
+
 Use this skill immediately after `execute-promotion` succeeds, and again after `rollback-promotion`. Its sole job is to confirm the running prod channel is healthy and report any failures clearly.
 
 Do not use this skill to:
@@ -16,9 +25,19 @@ Do not use this skill to:
 
 Read `docs/HEALTH.md` before running — it owns the health contract that this skill exercises. The release-channels validation path in `docs/RELEASE_CHANNELS/README.md` (Validation / acceptance path) defines what "accepted" means at the capability level; this skill covers the runtime verification step.
 
+Verifying a promotion is Builder System boundary work: the verification receipt is a Builder System
+governance artifact, while prod's health and behavior are Product/Runtime truth. Use
+`docs/architecture/SBS_OPERATING_MODEL.md` to route SBS impact, owner-doc writeback, and
+fitness-rule evidence without treating the verification receipt itself as runtime memory or
+Product truth.
+
+This skill is **prod-scoped**: it verifies the running prod channel only. Do not run it against
+the test channel (`promote-to-test` runs its own test-scoped verification directly — see that
+skill's §Test-scoped verify — because this skill's checks assume `PKM_ENVIRONMENT=prod`).
+
 ## What this skill does
 
-1. Confirms the running prod process's code ref matches the protected `origin/stable` (`git rev-parse origin/stable` == reported version in health endpoint or settings-explain output).
+1. Confirms the running prod process's code ref matches the current **promotion ref** per `docs/RELEASE_CHANNELS/README.md §Promotion model` — today that ref is `main` (interim baseline, [ADR-0040](../../../docs/adr/ADR-0040-prod-promotion-ref-main-interim.md)): `git rev-parse origin/main` == reported version in health endpoint or settings-explain output. Under the future gated model this becomes `origin/stable`. Do not compare against `origin/stable` while it remains dormant — it is not an ancestor of `origin/main` and a match against it is not a meaningful health signal today.
 2. Confirms the prod Postgres container is healthy (port 15432 responsive, outbox consumer running, no error state in worker heartbeat).
 3. Runs `python -m app.cli status` against the prod channel and confirms all components report healthy.
 4. Runs `python -m app.cli settings-explain` against the prod channel and confirms the resolved environment is `prod`, the vault root is the real vault, and the DB resolves to the prod DB.
@@ -47,7 +66,7 @@ If `--plan` is provided, the verification receipt is appended to it. If not, it 
 ## What PASS means
 
 All of the following are true:
-- Code ref matches `stable`.
+- Code ref matches the current promotion ref (`main` under the ADR-0040 interim baseline; `origin/stable` under the future gated model — see step 1).
 - Status and settings-explain both report env=prod, correct vault, correct DB.
 - Postgres healthy, outbox consumer healthy, watcher heartbeat within cadence.
 - No stuck or errored events from the promotion window.
