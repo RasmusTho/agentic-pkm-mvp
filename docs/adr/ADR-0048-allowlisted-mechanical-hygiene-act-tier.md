@@ -1,10 +1,13 @@
-# ADR-0048: Allowlisted mechanical-hygiene body edits move to `act` tier (Proposed)
+# ADR-0048: Allowlisted mechanical-hygiene body edits move to `act` tier (Accepted)
 
-- **Status:** Proposed — DRAFT for owner ratification. **NOT enacted.** Until ratified, the ratified
-  #1881 rule stands unchanged: *all* body edits to canonical notes are `ask-you`, and the
-  mechanical-hygiene engine (GRADUATED_CURATION slice G2-2) ships propose-only.
-- **Date:** 2026-07-05
-- **Deciders:** Rasmus (owner) — pending
+- **Status:** Accepted — ratified by the owner 2026-07-06. The tier-table amendment is enacted in
+  `docs/CAPABILITY_CONTRACT_MODEL.md` (`Proportional governance tiers`). The mechanical-hygiene
+  engine still ships propose-only until GRADUATED_CURATION slice G2-3 flips it: this ADR makes that
+  flip governance-legal; it does not perform it.
+- **Ratified:** 2026-07-06 — Rasmus (owner) ratified this ADR; the row + carve-out sentence are
+  applied to `docs/CAPABILITY_CONTRACT_MODEL.md`.
+- **Date:** 2026-07-05 (proposed); 2026-07-06 (accepted)
+- **Deciders:** Rasmus (owner)
 - **Relates to:** `docs/CAPABILITY_CONTRACT_MODEL.md :: Proportional governance tiers` (#1881),
   `docs/MIMER_CAPABILITY_HARDENING/GRADUATED_CURATION.md` (R1 design), audit ruling R1
   (`docs/research/yggdrasil-fable5-audit.md` §IX)
