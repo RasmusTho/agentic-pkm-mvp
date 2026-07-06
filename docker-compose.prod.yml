@@ -21,6 +21,12 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app@db:5432/app}
       DB_DSN: ${DB_DSN:-postgresql+psycopg://app:app@db:5432/app}
 
+  heimdal-capture-watch:
+    environment:
+      PKM_ENVIRONMENT: prod
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app@db:5432/app}
+      DB_DSN: ${DB_DSN:-postgresql+psycopg://app:app@db:5432/app}
+
   companion-ui:
     ports: !override
       - "${COMPANION_UI_BIND_HOST:-127.0.0.1}:8113:8113"
