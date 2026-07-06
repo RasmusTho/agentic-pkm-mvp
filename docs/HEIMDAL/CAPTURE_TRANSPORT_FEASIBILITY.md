@@ -59,6 +59,17 @@ iOS — unlike watchOS — has full background-audio support, unrestricted `Netw
 
 Pendant hardware (Omi/Bee-class, BLE → phone with background audio) *can* stream continuously — but that is **Posture B (ambient/always-on)**, owner-deferred and GDPR/third-party-consent weighted. Noted for completeness; not a v1 option.
 
+### Complementary channel: Siri / App Intents (low priority)
+
+Siri is a useful *addition* to the trigger surface, not a transport model on the axis above and not a replacement for the voice-memo path. Two shapes:
+
+- **Hands-free trigger.** "Hey Siri, &lt;phrase&gt;" reaches surfaces the Action Button cannot — HomePod, CarPlay, AirPods, across-the-room. But the **stock Shortcuts "Record Audio" action cannot stop hands-free** (it requires a screen tap — [Apple discussions](https://discussions.apple.com/thread/254636190), [AppleVis](https://applevis.com/forum/ios-ipados/it-possible-duplicate-record-siri-shortcut-make-it-stop)). Fully hands-free audio start/stop needs a **custom App Intent** (or a third-party app such as Just Press Record) — i.e. it comes essentially free once the B3 native client exists, not before with stock actions.
+- **Short structured-text capture.** An `AppIntent` with a dictated parameter (`requestValueDialog`, iOS 18+) gives *"Hey Siri, log to Heimdal"* → Siri asks *"What's the note?"* → the app receives the spoken **text**, fully hands-free ([Apple WWDC26 s343](https://developer.apple.com/videos/play/wwdc2026/343/), [createwithswift](https://www.createwithswift.com/customizing-an-app-intent/)).
+
+**Architectural caveat — Siri hands you a transcript, not audio.** A Siri capture bypasses Heimdal's raw seam: it yields Apple's own ASR transcript (on-device on recent chips, otherwise Apple servers), **not** the raw `.m4a`. No diarization, no speaker attribution, no local Whisper, no raw-store lineage. So Siri fits **quick structured notes/tasks** — a complementary *modality*, not a substitute for long-form attributed memos. Egress stays inside the already-acknowledged Apple trust boundary (§9-h class), so it is **not** a new R-EXTERNAL surface.
+
+**Fit:** this is an App-Intents capability of the **B3 native client**, not a separate build. Low priority; add it to B3's intent surface once the app exists. It does not change the Model 1/2/3 recommendation below.
+
 ## Decision table
 
 | Dimension | **Model 1** Watch→file→iCloud (shipped) | **Model 2** iPhone-tier stream + file fallback | **Model 3** Watch direct stream |
