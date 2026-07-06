@@ -37,6 +37,16 @@ class Settings(BaseSettings):
     debug: bool = False
     api_key: str | None = None
     companion_trusted_proxy_hosts: str = ""
+    # Companion UI container(s) trusted as the runtime's own server-side proxy
+    # for the loopback/API-key-gated vault-selection routes (#3102). In the
+    # documented docker-compose topology the browser reaches the api only via the
+    # companion-ui container over the bridge network, so neither hop is loopback
+    # and onboarding 401'd. Comma-separated hostnames/IPs/CIDRs; a hostname (e.g.
+    # the compose service name `companion-ui`) is resolved to its bridge
+    # address(es) and trusted by construction. Empty disables the escape hatch
+    # (loopback/API-key gate only). This trusts the container's *own* call, not
+    # the browser it forwards — see app/auth.py :: _is_trusted_companion_ui_proxy.
+    companion_ui_proxy_hosts: str = ""
     rate_limit_enabled: bool = False
     rate_limit_redis_url: str | None = None
     rate_limit_default: str = "60/minute"

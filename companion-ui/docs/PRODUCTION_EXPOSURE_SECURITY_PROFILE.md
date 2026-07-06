@@ -4,7 +4,7 @@ description: Network exposure, auth, CSRF/CORS, rendering, and authority posture
 doc_role: Security exposure profile
 authority: Companion UI exposure-security companion to LOCAL_ACCESS_MODEL; does not implement runtime hardening.
 owner: Companion UI / security architecture
-last_reviewed: 2026-06-04
+last_reviewed: 2026-07-06
 source_contracts:
   - companion-ui/docs/LOCAL_ACCESS_MODEL.md
   - companion-ui/docs/VAULT_MARKDOWN_RENDERER_CONTRACT.md
@@ -51,6 +51,29 @@ Future non-loopback posture:
 - make token rotation a local operator action;
 - scope tokens to Companion UI/API access only;
 - require a separate implementation issue for token/session behavior.
+
+## Deployment topology trust (containerized)
+
+In the documented `docker compose` deployment the browser reaches the runtime
+API only through the `companion-ui` container (same-origin proxy over the Docker
+bridge network). The loopback/API-key-gated vault-selection routes therefore
+trust the `companion-ui` container's own server-side proxy call by construction
+(#3102), resolved from `COMPANION_UI_PROXY_HOSTS` (default: the compose service
+name `companion-ui`). See `companion-ui/docs/LOCAL_ACCESS_MODEL.md ::
+Containerized Deployment Proxy Trust` for the full rule.
+
+Posture:
+
+- The trust is scoped to the resolved companion-ui container address and judges
+  the immediate peer only; it never looks through `X-Forwarded-For` to the
+  browser. An unrelated non-loopback/bridge/LAN caller still requires the API
+  key (the #2706 anti-spoofing hardening is preserved).
+- The browser→`companion-ui` hop stays the network trust boundary, governed by
+  the UI bind (loopback default; LAN/Tailscale only via `CUI_BIND_LAN=1` on
+  trusted devices). LAN exposure of the UI transitively reaches vault selection
+  through the trusted proxy — treat LAN/Tailnet as trusted-device only.
+- This does not add token/session/CORS support; those remain future non-loopback
+  hardening (below).
 
 ## CSRF, CORS, and session assumptions
 

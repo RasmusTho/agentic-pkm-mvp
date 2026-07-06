@@ -121,6 +121,14 @@ services:
       VAULT_INBOX_DIR_REL: ${VAULT_INBOX_DIR_REL:-}
       VAULT_DESK_DIR_REL: ${VAULT_DESK_DIR_REL:-}
       LLM_PROVIDER: ${LLM_PROVIDER}
+      # Trust the companion-ui container's own server-side proxy call to the
+      # loopback/API-key-gated vault-selection routes (#3102). The browser never
+      # reaches the api directly in this topology — the companion-ui container
+      # relays over the bridge network and is never loopback, so onboarding 401'd.
+      # The runtime resolves this compose service name to its bridge address and
+      # trusts that immediate peer by construction (app/auth.py ::
+      # _is_trusted_companion_ui_proxy). Override/clear it to opt out.
+      COMPANION_UI_PROXY_HOSTS: ${COMPANION_UI_PROXY_HOSTS:-companion-ui}
       # Agentic Lab canvas surface gate (app/api/routes/canvas.py). Default off so
       # prod stays disabled; export CANVAS_ENABLED=1 to enable for dev/UAT.
       CANVAS_ENABLED: ${CANVAS_ENABLED:-0}

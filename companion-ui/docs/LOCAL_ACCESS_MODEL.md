@@ -4,7 +4,7 @@ description: Localhost, LAN, Tailscale, token, and CSRF posture for Companion UI
 doc_role: Access model / security posture
 authority: Binding docs-first access model for Companion UI browser dev/staging and future production hardening.
 owner: Companion UI / product architecture
-last_reviewed: 2026-05-19
+last_reviewed: 2026-07-06
 source_contracts:
   - companion-ui/docs/COMPANION_UI_TARGET_ARCHITECTURE.md
   - companion-ui/docs/REAL_NOTE_WORKSPACE_DEV_PAGE.md
@@ -72,6 +72,36 @@ Minimum posture for LAN/Tailscale dev use:
 Future production posture for non-loopback access should add token/session
 auth before treating the surface as supported beyond trusted-device personal
 use.
+
+## Containerized Deployment Proxy Trust
+
+In the documented `docker compose` deployment the browser never talks to the
+runtime API directly. It talks to the `companion-ui` container, which relays the
+same-origin `/api/companion/*` calls to the `api` container over the Docker
+bridge network. Neither hop is loopback, so the loopback/API-key-gated
+vault-selection routes (`/vault/browse`, `/vault/select`, `/vault/initialize`)
+returned `401` on every onboarding action — the picker was unreachable in the
+shipped topology (#3102).
+
+Rules (implemented, #3102):
+
+- The runtime trusts the `companion-ui` container's own server-side proxy call
+  to those routes by construction. It resolves `COMPANION_UI_PROXY_HOSTS`
+  (comma-separated hostnames/IPs/CIDRs; default the compose service name
+  `companion-ui`) to the container's bridge address and authorises a request
+  whose immediate peer is that container.
+- This trusts the container's *own* call only. It does **not** look through
+  `X-Forwarded-For` to launder the (non-loopback) browser address into loopback,
+  and it is scoped to the resolved companion-ui address — an unrelated bridge or
+  LAN peer that forges `X-Forwarded-For: 127.0.0.1` is still rejected (the #2706
+  anti-spoofing posture is preserved).
+- The browser→`companion-ui` hop remains the trust boundary and is still governed
+  by the UI bind: loopback by default, LAN/Tailscale only with the explicit
+  `CUI_BIND_LAN=1` operator opt-in on trusted devices. Enabling `CUI_BIND_LAN=1`
+  therefore also makes vault selection reachable from that LAN/Tailnet through
+  the trusted proxy; treat the network as trusted-device only, as above.
+- Set `COMPANION_UI_PROXY_HOSTS=` (empty) to opt out and fall back to the plain
+  loopback/API-key gate.
 
 ## Token or Session Auth Option
 

@@ -6358,6 +6358,8 @@ def _render_vault_selection_required_section(payload: object) -> str:
               autocomplete="off">
           </div>
           <ul class="vault-picker-list" data-testid="vault-picker-list">{rows_html}</ul>
+          <p class="vault-picker-select-error" data-testid="vault-picker-select-error"
+            role="alert" hidden></p>
           {initialize_html}
           {footer_html}
         </div>
@@ -6448,10 +6450,40 @@ def _render_vault_picker_script() -> str:
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
+    // Human-visible failure surface for recents-row selection (#3102). Without
+    // this a failed /vault/select (e.g. a 401 in the containerized topology, or
+    // a genuinely invalid path) only stamped a data-* attribute on the button —
+    // invisible to the user, who saw the screen appear to do nothing. Route the
+    // error into a live-region so onboarding failures are actionable, not silent.
+    var selectError = picker.querySelector('[data-testid="vault-picker-select-error"]');
+    // selectVault is shared by the recents rows AND the filesystem-mode "Open"
+    // affordance, but the recents-mode error surface is hidden while the
+    // folder browser is open. Route the failure to whichever surface is
+    // currently visible so a failed "Open" from the browser is not stamped into
+    // a hidden node (#3102): the filesystem-mode error banner while browsing,
+    // else the recents-mode banner.
+    function activeSelectErrorSurface() {
+      if (picker.getAttribute('data-active-mode') === 'filesystem') {
+        return picker.querySelector('[data-testid="vault-picker-fs-error"]');
+      }
+      return selectError;
+    }
+    function showSelectError(message) {
+      var surface = activeSelectErrorSurface();
+      if (!surface) { return; }
+      surface.hidden = false;
+      surface.textContent = message;
+    }
+    function clearSelectError() {
+      if (selectError) { selectError.hidden = true; selectError.textContent = ''; }
+      var fsErr = picker.querySelector('[data-testid="vault-picker-fs-error"]');
+      if (fsErr) { fsErr.hidden = true; fsErr.textContent = ''; }
+    }
     // Shared select-a-vault dispatch — the existing vault.select authority. Used
     // by both the recents rows and the filesystem-mode "Open" affordance.
     function selectVault(path, button) {
       if (!path) { return; }
+      clearSelectError();
       if (button) {
         button.setAttribute('data-submitting', 'true');
         button.setAttribute('data-affordance-status', 'pending');
@@ -6459,10 +6491,12 @@ def _render_vault_picker_script() -> str:
       jsonPost('/api/companion/vault/select', { path: path })
         .then(function() { window.location.reload(); })
         .catch(function(err) {
+          var message = String(err && err.message || err);
+          showSelectError(message);
           if (button) {
             button.removeAttribute('data-submitting');
             button.setAttribute('data-affordance-status', 'blocked');
-            button.setAttribute('data-submit-error', String(err && err.message || err));
+            button.setAttribute('data-submit-error', message);
           }
         });
     }
@@ -14329,12 +14363,13 @@ def render_index_html(
       font-size: var(--text-sm);
       padding: 6px 10px;
     }}
-    .vault-picker-fs-row-error, .vault-picker-fs-error {{
+    .vault-picker-fs-row-error, .vault-picker-fs-error, .vault-picker-select-error {{
       color: var(--fg-2, #aebfce);
       font-family: var(--font-ui);
       font-size: var(--text-xs, 11px);
       margin: 2px 0 0;
     }}
+    .vault-picker-select-error {{ color: var(--danger, #e06c75); margin-top: 6px; }}
     .vault-picker-fs-empty {{ color: var(--fg-3); font-family: var(--font-ui); font-size: var(--text-sm); margin: 0; }}
     .vault-picker-fs-footer {{ color: var(--fg-3); font-family: var(--font-ui); font-size: var(--text-sm); }}
   </style>
