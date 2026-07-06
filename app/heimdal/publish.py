@@ -23,13 +23,33 @@ FABLE_COMPANION §4.2, ``source_id`` = the observation id and the fingerprint
 should include ``stage_versions`` so a crash-retry of the same publication
 (same observation, same stage versions) dedups, while a revision (new/changed
 stage_versions) or correction produces a distinct key and a new row.
+
+Full-payload assembly + validation (Epic #3019 slice A10, #3030). ``publish_observation``
+above stays the low-level, schema-agnostic append primitive that earlier
+slices' own tests exercise directly with deliberately partial payloads (A2's
+plumbing tests, A3's quarantine tests) -- it is not rewritten here.
+:func:`assemble_observation_payload` and :func:`publish_full_observation` are
+this slice's addition: they build the complete ``heimdal.observation.published.v1``
+payload per FABLE_COMPANION §1.3 (identity, bitemporal time, actors,
+provenance families) from the upstream stage outputs (A8 ``TranscriptResult``,
+A9 ``AttributionResult``), validate it against the registered schema (A4,
+``app.events.topic_schema_registry.validate_topic_payload`` -- the same
+choke point ``app.services.outbox.write_outbox_event`` uses for every other
+registered topic, reused verbatim) BEFORE insert, and stamp
+``provenance.content_hash`` in the same call that derives the idempotency key
+and appends the row (KERNEL-06: provenance stamped in the same durable
+write). A malformed payload raises :class:`TopicSchemaViolation` before any
+insert is attempted -- fail loud, never insert-then-validate.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping, Optional
+import hashlib
+import json
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from app.events.schema import make_outbox_event
+from app.events.topic_schema_registry import validate_topic_payload
 from app.services.outbox import derive_idempotency_key, payload_fingerprint
 
 from .cursor_store import advance_cursor, get_cursor
@@ -140,6 +160,192 @@ def publish_observation(
     return append_observation(envelope, idempotency_key=idempotency_key)
 
 
+# ---------------------------------------------------------------------------
+# Full-payload assembly + validated publish (A10, #3030)
+# ---------------------------------------------------------------------------
+
+
+def canonical_content_hash(content: Any) -> str:
+    """sha256 of the canonicalized published content (FABLE_COMPANION §1.3 provenance).
+
+    ``content_hash`` is "sha256 of the canonicalized published content,
+    stamped in the same durable write as the event" (conform to KERNEL-06) --
+    distinct from ``content_identity`` (the hash of the RAW evidence, minted
+    upstream by :mod:`app.heimdal.raw_store`). Canonicalization mirrors
+    :func:`app.services.outbox.payload_fingerprint`'s convention (sorted-key
+    JSON, ``default=str`` for non-JSON-native values) so the same published
+    content always hashes identically regardless of dict key order. Returns
+    the ``"sha256:<hex>"`` form used throughout this payload family (mirrors
+    ``content_identity``'s own prefix convention).
+    """
+    canonical = json.dumps(content, sort_keys=True, ensure_ascii=False, default=str)
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
+
+
+def _attribution_to_dict(attribution: Any) -> Dict[str, Any]:
+    if isinstance(attribution, Mapping):
+        return dict(attribution)
+    # Duck-types app.heimdal.attribution_stage.Attribution (a frozen dataclass)
+    # without importing that module -- avoids a hard dependency edge from the
+    # publish seam onto one specific stage's dataclass shape; any object
+    # exposing these attributes assembles the same way.
+    return {
+        "mention_id": attribution.mention_id,
+        "role": attribution.role,
+        "resolution": attribution.resolution,
+        "basis": attribution.basis,
+        "confidence": getattr(attribution, "confidence", None),
+    }
+
+
+def _entity_mention_to_dict(mention: Any) -> Dict[str, Any]:
+    if isinstance(mention, Mapping):
+        return dict(mention)
+    return {
+        "mention_id": mention.mention_id,
+        "surface_form": mention.surface_form,
+        "resolution": mention.resolution,
+        "kind_hint": getattr(mention, "kind_hint", None),
+        "confidence": getattr(mention, "confidence", None),
+        "span": getattr(mention, "span", None),
+    }
+
+
+def assemble_observation_payload(
+    *,
+    observation_id: str,
+    episode_id: str,
+    observed_at_start: str,
+    attributions: Sequence[Any],
+    confidence: Mapping[str, Any],
+    provenance: Mapping[str, Any],
+    consent: Mapping[str, Any],
+    sensitivity: str = "private",
+    sequence: Optional[int] = None,
+    revision_of: Optional[str] = None,
+    supersedes: Optional[str] = None,
+    observed_at_end: Optional[str] = None,
+    clock_basis: Optional[str] = None,
+    captured_at: Optional[str] = None,
+    entity_mentions: Optional[Sequence[Any]] = None,
+    modality: Optional[str] = None,
+    content: Optional[str] = None,
+    content_structure: Optional[Mapping[str, Any]] = None,
+    raw_ref: Optional[str] = None,
+    withheld: Optional[Sequence[Mapping[str, Any]]] = None,
+    scope_hint: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Assemble one ``heimdal.observation.published.v1`` payload (FABLE_COMPANION §1.3).
+
+    Pure assembly: builds the field-family shape (identity, bitemporal time,
+    actors, entities, content, confidence, provenance, sensitivity/consent)
+    from already-computed stage outputs -- it does not call the ASR (A8) or
+    attribution (A9) stages itself, and it does not validate or publish (see
+    :func:`publish_full_observation` for the validating, publishing
+    entrypoint that wraps this). ``attributions``/``entity_mentions`` accept
+    either the stage dataclasses (``app.heimdal.attribution_stage.Attribution``
+    / ``EntityMention``) or plain dicts, so callers do not need an extra
+    conversion step. ``provenance.content_hash`` is intentionally NOT set
+    here -- :func:`publish_full_observation` stamps it in the same durable
+    write as the append (KERNEL-06), using this payload's own ``content``
+    field as the canonicalized published content.
+    """
+    if not isinstance(observation_id, str) or not observation_id.strip():
+        raise ValueError(f"observation_id must be a non-empty string, got {observation_id!r}")
+    if not isinstance(episode_id, str) or not episode_id.strip():
+        raise ValueError(f"episode_id must be a non-empty string, got {episode_id!r}")
+    if not attributions:
+        raise ValueError(
+            "assemble_observation_payload requires at least one attribution "
+            "(FABLE_COMPANION §1.3 payload rule 1)"
+        )
+
+    provenance_block: Dict[str, Any] = dict(provenance)
+    if raw_ref is not None:
+        provenance_block.setdefault("raw_ref", raw_ref)
+
+    payload: Dict[str, Any] = {
+        "observation_id": observation_id,
+        "episode_id": episode_id,
+        "sequence": sequence,
+        "revision_of": revision_of,
+        "supersedes": supersedes,
+        "observed_at_start": observed_at_start,
+        "observed_at_end": observed_at_end,
+        "clock_basis": clock_basis,
+        "captured_at": captured_at,
+        "attributions": [_attribution_to_dict(a) for a in attributions],
+        "entity_mentions": [_entity_mention_to_dict(m) for m in entity_mentions] if entity_mentions else [],
+        "modality": modality,
+        "content": content,
+        "content_structure": dict(content_structure) if content_structure is not None else None,
+        "raw_ref": raw_ref,
+        "withheld": [dict(w) for w in withheld] if withheld else [],
+        "confidence": dict(confidence),
+        "provenance": provenance_block,
+        "sensitivity": sensitivity,
+        "scope_hint": scope_hint,
+        "consent": dict(consent),
+    }
+    return payload
+
+
+def publish_full_observation(
+    *,
+    topic: str,
+    payload: Dict[str, Any],
+    source: str,
+    stage_versions: Mapping[str, Any] | None = None,
+    trace_id: Optional[str] = None,
+    meta: Optional[Dict[str, Any]] = None,
+) -> ObservationRow | None:
+    """Validate and publish one fully-assembled observation payload (A10, #3030).
+
+    The validating counterpart to :func:`publish_observation`: stamps
+    ``provenance.content_hash`` (sha256 of the canonicalized ``content``,
+    KERNEL-06) onto a copy of ``payload``, validates the result against the
+    registered ``heimdal.observation.published.v1`` schema
+    (``app.events.topic_schema_registry.validate_topic_payload`` -- the same
+    choke point ``app.services.outbox.write_outbox_event`` uses, reused
+    verbatim), and ONLY THEN appends it via :func:`publish_observation`. A
+    malformed payload raises :class:`app.events.topic_schema_registry.TopicSchemaViolation`
+    before any insert is attempted -- fail loud, never insert-then-validate.
+
+    Revision-aware idempotency (delegated to :func:`publish_observation`):
+    ``payload["observation_id"]`` is the fingerprint's ``source_id`` and
+    ``stage_versions`` folds into the content fingerprint
+    (:func:`observation_fingerprint`), so a re-processed revision of the same
+    raw evidence (different ``stage_versions`` and/or a new ``revision_of``/
+    ``supersedes`` value) derives a distinct, non-colliding key and always
+    produces a new row, while a crash-retry of the identical revision dedups
+    to the existing row (returns ``None``).
+    """
+    observation_id = payload.get("observation_id")
+    if not isinstance(observation_id, str) or not observation_id.strip():
+        raise ValueError(
+            f"publish_full_observation requires payload['observation_id'] to be a "
+            f"non-empty string, got {observation_id!r}"
+        )
+
+    stamped = dict(payload)
+    provenance_block = dict(stamped.get("provenance") or {})
+    provenance_block["content_hash"] = canonical_content_hash(stamped.get("content"))
+    stamped["provenance"] = provenance_block
+
+    validate_topic_payload(topic, stamped)
+
+    return publish_observation(
+        topic=topic,
+        observation_id=observation_id,
+        payload=stamped,
+        source=source,
+        stage_versions=stage_versions,
+        trace_id=trace_id,
+        meta=meta,
+    )
+
+
 def read_observations_for_consumer(consumer_id: str, *, limit: int | None = None) -> List[ObservationRow]:
     """Read the next unread observations for ``consumer_id``, without advancing its cursor.
 
@@ -180,9 +386,12 @@ def consume_observations(consumer_id: str, *, limit: int | None = None) -> List[
 
 __all__ = [
     "advance_cursor_for_consumer",
+    "assemble_observation_payload",
+    "canonical_content_hash",
     "consume_observations",
     "derive_observation_idempotency_key",
     "observation_fingerprint",
+    "publish_full_observation",
     "publish_observation",
     "read_observations_for_consumer",
 ]
