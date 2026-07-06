@@ -41,24 +41,29 @@ comes from the compiled task policy; env vars supply defaults only when the poli
 
 - `LLM_PROVIDER`
   - Supported: `ollama`, `gemini`, `mock` (registry also includes `deterministic`). `gemini`
-    (`gemini-embedding-001` @ `output_dimensionality=768`, L2-renormalized) is the sanctioned
+    (`gemini-embedding-001` @ `output_dimensionality=768`, L2-renormalized — **re-pinned to 1024**
+    once the BGE-M3 primary-model migration lands, see below) is the sanctioned
     dimension-matched fallback provider — see the *Fallback rule* section below.
   - Used as the **fallback** primary-provider source when `EMBED_PRIMARY_PROVIDER` is unset.
 - `EMBED_PRIMARY_PROVIDER`
   - The primary embedding provider used for normal dispatch. Precedence: `EMBED_PRIMARY_PROVIDER` (env) > embedding-profile `primary_provider` > profile `provider` > `LLM_PROVIDER`. When unset, behavior is unchanged (falls back to `LLM_PROVIDER`).
   - Setting this changes the embedding **identity** (provider) and therefore requires a vector-index rebuild — see *Change policy* and the re-index path.
 - `EMBED_FALLBACK_PROVIDER`
-  - Optional secondary provider consulted only after the primary embed path exhausts its retry budget. A **dimension-matched (768), L2-renormalized** fallback is required; its write is **MIXED-IDENTITY** (carries the fallback provider's identity) and **reconcilable**, with the query path always using the primary identity (`docs/EMBEDDING_RELIABILITY/README.md` CTI-1/2/3). The sanctioned posture is Ollama-primary with a Gemini `gemini-embedding-001` @ `output_dimensionality=768` fallback per `docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`; when no Gemini key is present (`GEMINI_API_KEY` or `GOOGLE_API_KEY`), the object is dead-lettered locally and no Google egress occurs. See the disciplined-fallback / reconcile path tracked by the Embedding Reliability capability (issue #2292) and the *Fallback rule* section below.
+  - Optional secondary provider consulted only after the primary embed path exhausts its retry budget. A **dimension-matched, L2-renormalized** fallback is required; its write is **MIXED-IDENTITY** (carries the fallback provider's identity) and **reconcilable**, with the query path always using the primary identity (`docs/EMBEDDING_RELIABILITY/README.md` CTI-1/2/3). The sanctioned posture is Ollama-primary with a Gemini `gemini-embedding-001` fallback per `docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`, currently pinned at `output_dimensionality=768` to match the shipped `nomic-embed-text` primary; `docs/adr/ADR-0052-embedding-fallback-repin-1024-bge-m3.md` (owner-ratified 2026-07-06) records the **decision** to re-pin this to `output_dimensionality=1024` for the upcoming BGE-M3 primary-model switch — the runtime re-pin itself lands with the BGE-M3 identity migration (H4/#2984), not before. When no Gemini key is present (`GEMINI_API_KEY` or `GOOGLE_API_KEY`), the object is dead-lettered locally and no Google egress occurs. See the disciplined-fallback / reconcile path tracked by the Embedding Reliability capability (issue #2292) and the *Fallback rule* section below.
 - `OLLAMA_HOST`
   - Example: `http://host.docker.internal:11434`
 - `EMBED_MODEL`
-  - Example (default local): `nomic-embed-text:latest`
+  - Example (default local): `nomic-embed-text:latest`. Planned primary-model switch to BGE-M3
+    (1024 dims) is tracked by H4/#2984 per `docs/adr/ADR-0052-embedding-fallback-repin-1024-bge-m3.md`;
+    not yet the shipped default.
 - `EMBED_DIM`
   - **Documented/operative default: `768`** — matching both the local `nomic-embed-text` native
     dimension and the dimension-matched Gemini `gemini-embedding-001` @ 768 fallback
     (`docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`). This is the **configured/requested**
     dimension the runtime asserts against, and it must equal the active embedding identity's
-    dimension.
+    dimension. **Forward note:** the owner-ratified BGE-M3 migration (`docs/adr/ADR-0052-embedding-fallback-repin-1024-bge-m3.md`)
+    will move this default to `1024` alongside the primary-model switch and the matching Gemini
+    fallback re-pin; that runtime change and the full re-index are H4/#2984's scope, not shipped yet.
   - **Runtime-constant caveat:** the in-code constant `app/embedding_config.py::DEFAULT_EMBED_DIM`
     (mirrored by `settings.embed_dim`) currently still defaults to `1536`. Aligning that runtime
     constant to `768` is a **separate runtime change tracked by #2296 / #2297 and is out of scope for
@@ -139,9 +144,11 @@ This identity must be:
 
 **Disciplined, dim-matched fallback is permitted** as an availability bridge. The constraints are:
 
-- The fallback provider must be pinned to the **same dimension** as the primary (e.g., Gemini
+- The fallback provider must be pinned to the **same dimension** as the primary (currently Gemini
   `gemini-embedding-001` with `output_dimensionality=768`, L2-renormalized, to match Ollama
-  `nomic-embed-text` @ 768). A provider returning a different dim fails the upsert via
+  `nomic-embed-text` @ 768; re-pinning to `output_dimensionality=1024` is the owner-ratified decision
+  in `docs/adr/ADR-0052-embedding-fallback-repin-1024-bge-m3.md`, landing alongside the BGE-M3 primary
+  switch per H4/#2984 — not yet shipped). A provider returning a different dim fails the upsert via
   `assert_embed_dim` — it never silently writes.
 - A fallback-written index is **mixed-identity** (vectors from different providers occupy different
   vector spaces). This state is surfaced loudly by `index doctor` as an error and is reconcilable —
@@ -160,9 +167,13 @@ detection, reconcile/re-index migration path, and dim-change rebuild path.
 **Chosen Gemini model:** `gemini-embedding-001` with `output_dimensionality=768`, L2-renormalized
 (dimension-matched to `nomic-embed-text`). Free tier; key supplied via `GEMINI_API_KEY` or
 `GOOGLE_API_KEY`. (`text-embedding-004` was retired January 14, 2026; `gemini-embedding-001` is the
-active stable model.)
+active stable model.) **Forward re-pin (owner-ratified, not yet shipped):** `docs/adr/ADR-0052-embedding-fallback-repin-1024-bge-m3.md`
+records the decision to move this to `output_dimensionality=1024` (same MRL-truncation +
+L2-renormalize mechanism) once the BGE-M3 primary-model migration (H4/#2984) lands; the Gemini free
+tier remains unaffected by the dimension change, so fallback egress cost stays negligible.
 
-The remainder of this section records the underlying ADR-0023 posture the runtime implements against.
+The remainder of this section records the underlying ADR-0023 posture the runtime implements against
+(currently at 768 dims; re-pinned to 1024 by ADR-0052 once H4/#2984 ships).
 
 Embeddings do not allow **generic** provider fallback, but they **do** allow one sanctioned
 **dimension-matched, reconcilable** fallback. This reconciles the historical no-generic-fallback
@@ -206,6 +217,16 @@ should fail or require an index rebuild.
 > The runtime change that registers and wires the Gemini adapter and fallback orchestration is
 > tracked by #2292 / #2296 / #2297 and is out of scope for the ADR-0023 docs ratification; this
 > section records the accepted posture that runtime work implements against.
+
+> **Forward decision (ADR-0052, not yet shipped).** The owner has ratified switching the primary
+> embedding model to **BGE-M3 at 1024 dimensions** (replacing `nomic-embed-text`@768) for
+> Swedish/multilingual retrieval quality on this vault, and re-pinning the Gemini fallback to
+> `output_dimensionality=1024` so the dimension-matched, mixed-identity, reconcilable fallback bridge
+> above continues to hold at the new primary dimension. See
+> `docs/adr/ADR-0052-embedding-fallback-repin-1024-bge-m3.md`. The mixed-identity/reconcile discipline
+> (CTI-1/2/3) is unchanged — only the pinned dimension value moves from 768 to 1024. The actual
+> `EmbeddingIdentity`/`EMBED_DIM`/provider-wiring change and the full re-index are implementation work
+> tracked by H4/#2984, gated on this ADR; no `app/` change is made by ADR-0052 itself.
 
 ### Why identity matters
 

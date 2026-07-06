@@ -19,7 +19,7 @@
 - [ADR-0020: Declare SFC now with single-node/no-op posture until federation is scheduled](./ADR-0020-sfc-single-node-upgrade-path.md)
 - [ADR-0021: Treat CES as architecture stewardship practice, not a runtime peer subsystem](./ADR-0021-ces-architecture-stewardship-practice.md)
 - [ADR-0022: Treat OEF as first-class but non-authoritative](./ADR-0022-oef-first-class-non-authoritative.md)
-- [ADR-0023: Embedding egress — Ollama-primary with dimension-matched, mixed-identity Gemini auto-fallback](./ADR-0023-embedding-egress-gemini-fallback.md)
+- [ADR-0023: Embedding egress — Ollama-primary with dimension-matched, mixed-identity Gemini auto-fallback (fallback-dimension pin superseded by ADR-0052; topology/reconcile discipline retained)](./ADR-0023-embedding-egress-gemini-fallback.md)
 - [ADR-0024: Retrieval topology — in-memory hybrid serving, weighted linear fusion, durable-spine direction](./ADR-0024-retrieval-topology.md)
 - [ADR-0025: Memory authority & direct-write policy](./ADR-0025-memory-authority-direct-write-policy.md)
 - [ADR-0026: Yggdrasil as cognitive prosthesis](./ADR-0026-yggdrasil-as-cognitive-prosthesis.md)
@@ -47,3 +47,4 @@
 - [ADR-0048: Allowlisted mechanical-hygiene body edits move to `act` tier (Proposed — NOT enacted)](./ADR-0048-allowlisted-mechanical-hygiene-act-tier.md)
 - [ADR-0049: Heimdal as the ecosystem ingestion organ + v1 UI/UX enactment — markdown-first control surface, discrete-capture posture, one-shell app topology (Accepted)](./ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md)
 - [ADR-0050: Cross-repo governance + the Bifrost native-app repo; name register adopts traditional Swedish spelling (Heimdal, Bifrost) (Accepted)](./ADR-0050-cross-repo-governance-and-bifrost-client-repo.md)
+- [ADR-0052: Embedding fallback re-pin to 1024 dims for the BGE-M3 primary-model switch — supersedes ADR-0023's fallback dimension pin (Accepted)](./ADR-0052-embedding-fallback-repin-1024-bge-m3.md)
