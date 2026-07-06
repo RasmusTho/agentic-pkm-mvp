@@ -264,6 +264,61 @@ services:
       timeout: 2s
       retries: 10
 
+  # Heimdal capture-watch (#3098, follow-up to #3094/#3025): drives the
+  # voice-memo capture adapter against a real watched folder (an
+  # iCloud-synced Shortcut destination). Same shape as `watcher` above —
+  # full host-filesystem mount so the watched folder resolves at its native
+  # host path, DB access for the raw-store write path, Compose-supervised
+  # restart. `HEIMDAL_CAPTURE_WATCH_DIR` and `HEIMDAL_RAW_STORE_KEY` are
+  # never given a real default (only an empty-string compose fallback, so
+  # parsing this shared base file never hard-fails for unrelated services):
+  # the watched folder differs per host and the encryption key is an
+  # operator-provisioned secret. Left unset, the container fails loud at
+  # runtime (see the environment block below), not at compose-parse time.
+  heimdal-capture-watch:
+    build:
+      context: .
+      args:
+        VCS_REF: ${VCS_REF:-unknown}
+        BUILT_AT: ${BUILT_AT:-unknown}
+    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}
+    working_dir: /app
+    user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
+    env_file:
+      - ./config/runtime.defaults.env
+      - path: ${WATCHER_RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
+    volumes:
+      - "/Users:/Users"
+      - "/Volumes:/Volumes"
+      - "runtime-tmp:/app/tmp"
+    command: ["/bin/bash", "-c", "mkdir -p /app/tmp && python -m app.cli heimdal capture-watch"]
+    environment:
+      # No `:?required` guard here (unlike docker-compose.watcher.yml's
+      # standalone VAULT_ROOT) -- this is the shared base file every service
+      # loads, so a hard-required var here would break `docker compose up`
+      # for the whole stack on any host that hasn't set it. Missing values
+      # fail loud instead inside the container: `CaptureRuntimeConfig.from_env()`
+      # raises `CaptureRuntimeConfigError`, and `resolve_raw_store_key()`
+      # raises `RawStoreKeyMissingError` -- both surface via this service's
+      # own healthcheck/restart loop, not by blocking unrelated services.
+      HEIMDAL_CAPTURE_WATCH_DIR: ${HEIMDAL_CAPTURE_WATCH_DIR:-}
+      HEIMDAL_CAPTURE_INTERVAL_SECONDS: ${HEIMDAL_CAPTURE_INTERVAL_SECONDS:-}
+      HEIMDAL_RAW_STORE_KEY: ${HEIMDAL_RAW_STORE_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"from app.heimdal.capture_runtime import CaptureRuntimeConfig; from app.heimdal.raw_store import resolve_raw_store_key; CaptureRuntimeConfig.from_env(); resolve_raw_store_key()\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
   companion-ui:
     build:
       context: .

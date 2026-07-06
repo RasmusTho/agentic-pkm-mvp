@@ -77,7 +77,7 @@ CHANNEL_SPECS: dict[str, dict[str, Any]] = {
 }
 
 #: Services inside a compose overlay that carry channel env vars.
-CHANNEL_SERVICES = ("api", "worker", "watcher")
+CHANNEL_SERVICES = ("api", "worker", "watcher", "heimdal-capture-watch")
 
 #: Env keys whose effective value decides which channel's DB a service writes to.
 CHANNEL_CRITICAL_DSN_KEYS = ("DATABASE_URL", "DB_DSN")

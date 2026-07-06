@@ -68,6 +68,14 @@ services:
       VAULT_INBOX_DIR_REL: "📥 Inbox"
       VAULT_DESK_DIR_REL: "🛠️ Workbench"
 
+  heimdal-capture-watch:
+    volumes:
+      - "runtime-tmp:/app/tmp-test"
+    environment:
+      PKM_ENVIRONMENT: test
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
+      DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
+
   companion-ui:
     ports: !override
       - "${COMPANION_UI_BIND_HOST:-127.0.0.1}:8112:8112"

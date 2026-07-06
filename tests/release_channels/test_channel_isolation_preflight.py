@@ -217,6 +217,12 @@ def test_correct_test_compose_is_accepted(tmp_path: Path) -> None:
               PKM_ENVIRONMENT: test
               DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
               DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
+
+          heimdal-capture-watch:
+            environment:
+              PKM_ENVIRONMENT: test
+              DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
+              DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
         """,
     )
 
@@ -246,6 +252,11 @@ def test_correct_test_compose_summary_confirms_pass(tmp_path: Path) -> None:
               DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
               DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
           watcher:
+            environment:
+              PKM_ENVIRONMENT: test
+              DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
+              DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
+          heimdal-capture-watch:
             environment:
               PKM_ENVIRONMENT: test
               DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
@@ -395,6 +406,11 @@ def test_test_compose_with_single_omitted_dsn_key_is_rejected(tmp_path: Path) ->
               PKM_ENVIRONMENT: test
               DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
               DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
+          heimdal-capture-watch:
+            environment:
+              PKM_ENVIRONMENT: test
+              DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
+              DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
         """,
     )
 
@@ -508,6 +524,11 @@ def test_absent_channel_service_is_still_checked(tmp_path: Path) -> None:
               PKM_ENVIRONMENT: test
               DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
               DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
+          heimdal-capture-watch:
+            environment:
+              PKM_ENVIRONMENT: test
+              DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
+              DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
         """,
     )
 
@@ -574,6 +595,11 @@ services:
       - path: ${RUNTIME_ENV_FILE:-./tmp/runtime.env}
         required: false
   watcher:
+    env_file:
+      - ./config/runtime.defaults.env
+      - path: ${RUNTIME_ENV_FILE:-./tmp/runtime.env}
+        required: false
+  heimdal-capture-watch:
     env_file:
       - ./config/runtime.defaults.env
       - path: ${RUNTIME_ENV_FILE:-./tmp/runtime.env}
@@ -692,6 +718,11 @@ def test_bare_key_superseded_by_later_definition_resolves(tmp_path: Path) -> Non
               - ./unset.env
               - ./final.env
           watcher:
+            env_file:
+              - ./config/runtime.defaults.env
+              - ./unset.env
+              - ./final.env
+          heimdal-capture-watch:
             env_file:
               - ./config/runtime.defaults.env
               - ./unset.env
@@ -1104,7 +1135,7 @@ def test_db_only_test_overlay_fails_closed_on_dsn_fallback(tmp_path: Path) -> No
         "back to prod base DSNs, but the preflight passed."
     )
     violating_services = {v.service for v in result.violations}
-    assert violating_services == {"api", "worker", "watcher"}
+    assert violating_services == {"api", "worker", "watcher", "heimdal-capture-watch"}
 
 
 def test_partial_service_set_flags_declared_and_absent_services(
@@ -1130,9 +1161,9 @@ def test_partial_service_set_flags_declared_and_absent_services(
 
     assert not result.ok
     violating_services = {v.service for v in result.violations}
-    assert violating_services == {"api", "worker", "watcher"}, (
-        f"Expected api (wrong PKM_ENVIRONMENT) plus absent worker/watcher "
-        f"(prod DSN fallback) to be flagged, got: {violating_services}"
+    assert violating_services == {"api", "worker", "watcher", "heimdal-capture-watch"}, (
+        f"Expected api (wrong PKM_ENVIRONMENT) plus absent worker/watcher/"
+        f"heimdal-capture-watch (prod DSN fallback) to be flagged, got: {violating_services}"
     )
 
 
