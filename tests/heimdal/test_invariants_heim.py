@@ -129,8 +129,15 @@ def test_heim_1_append_only_truth() -> None:
 #   (extends it upstream to the sensor).
 # Affected boundaries: Heimdal pipeline; SIP, DRI on projection.
 # Enforcement level (§8): schema_enforced at enactment (required provenance
-#   family) + future_runtime (projection-side chain check).
+#   family) + runtime_test (projection-side chain check).
 # Future test path (§8): tests/invariants/test_heimdal_stream.py::test_provenance_survives
+#
+# NOTE: the projection-side half is ALREADY discharged for real by A11
+# (app.heimdal.candidate_projection.project_pending_candidates, #3031) -- see
+# tests/heimdal/test_projector.py::test_provenance_chain_survives for the full
+# suite. This skeleton calls the real production path directly rather than
+# re-xfailing a discharged invariant (that would be a regression: it must
+# keep passing, not silently revert).
 
 
 def test_heim_2_provenance_family_required_in_schema() -> None:
@@ -142,15 +149,61 @@ def test_heim_2_provenance_family_required_in_schema() -> None:
 
 
 def test_heim_2_provenance_survives() -> None:
-    # future_runtime half (reserved): Mimer projection-side chain check
-    # (derived_from intact through projection) is not built.
-    runtime = require_future_heimdal_runtime(
-        "projection_chain",
-        "Mimer projection-side provenance-chain check not implemented yet; protects "
-        "heim_provenance_survives / HEIM-2 (#3033).",
-    )
-    projection = runtime.project(observation_id="obs-1")
-    assert projection.derived_from == "obs-1"
+    # Real production path (discharged by A11, #3031) -- must PASS, never
+    # xfail. Drives the actual projector call site directly
+    # (project_pending_candidates), the same function
+    # tests/heimdal/test_projector.py exercises. Self-manages its temp vault
+    # (mirrors test_heim_7_decay_event_triggered's tmp_dir pattern below) so
+    # this function stays callable with zero arguments -- the completeness
+    # gate (test_discharged_skeleton_actually_passes) invokes every
+    # discharged skeleton directly, not through pytest fixture injection.
+    from app.heimdal.candidate_projection import project_pending_candidates
+    from app.heimdal.cursor_store import reset_memory_cursor_store
+    from app.heimdal.observation_log import reset_memory_observation_log
+    from app.heimdal.publish import publish_observation
+    from app.vault.manager import VaultContext
+    from app.write_guard import WriteGuard
+
+    tmp_dir = Path(__file__).resolve().parent / "_tmp_heim2_vault"
+    reset_memory_observation_log()
+    reset_memory_cursor_store()
+    try:
+        publish_observation(
+            topic="heimdal.observation.published",
+            observation_id="obs-1",
+            payload={
+                "observation_id": "obs-1",
+                "episode_id": "obs-1",
+                "content": "hello",
+                "provenance": {
+                    "content_identity": "sha256:obs-1",
+                    "raw_ref": "raw-1",
+                    "capture_chain": ["ios_voice_memos", "icloud_drive", "folder_watch"],
+                },
+            },
+            source="heimdal.capture",
+            stage_versions={"asr": "1.0"},
+        )
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        vault_context = VaultContext(status="selected", active_vault_path=str(tmp_dir))
+        results = project_pending_candidates(
+            vault_context=vault_context,
+            write_guard=WriteGuard(lambda: {"state": "healthy"}),
+        )
+        assert len(results) == 1
+        assert results[0].status == "written"
+
+        note_path = tmp_dir / results[0].artifact_path
+        raw = note_path.read_text(encoding="utf-8")
+        assert "derived_from: obs-1" in raw
+        assert "content_identity: sha256:obs-1" in raw
+        assert "raw_ref: raw-1" in raw
+    finally:
+        import shutil
+
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        reset_memory_observation_log()
+        reset_memory_cursor_store()
 
 
 # ---------------------------------------------------------------------------
@@ -581,7 +634,7 @@ HEIM_REGISTRY: dict[str, dict[str, str]] = {
     },
     "HEIM-2": {
         "slug": "heim_provenance_survives",
-        "enforcement": "schema_enforced (at enactment) + future_runtime",
+        "enforcement": "schema_enforced (at enactment) + runtime_test (delivered, A11 #3031)",
         "future_test_path": "tests/invariants/test_heimdal_stream.py::test_provenance_survives",
     },
     "HEIM-3": {
@@ -650,6 +703,7 @@ HEIM_REGISTRY: dict[str, dict[str, str]] = {
 # A5, A6). Their skeleton test in THIS module must PASS -- an xfail here
 # would mean an already-built enforcement silently regressed.
 DISCHARGED_HEIM_TEST_NAMES = {
+    "HEIM-2": "test_heim_2_provenance_survives",
     "HEIM-3": "test_heim_3_consent_gated_capture",
     "HEIM-7": "test_heim_7_decay_event_triggered",
     "HEIM-8": "test_heim_8_projection_stamps_noncanonical",
@@ -661,7 +715,6 @@ DISCHARGED_HEIM_TEST_NAMES = {
 # does not silently report green ahead of the runtime.
 RESERVED_HEIM_XFAIL_NAMES = {
     "HEIM-1": "test_heim_1_append_only_truth",
-    "HEIM-2": "test_heim_2_provenance_survives",
     "HEIM-4": "test_heim_4_seam_minimization",
     "HEIM-5": "test_heim_5_policy_gated_raw_access",
     "HEIM-6": "test_heim_6_attribution_honesty",
