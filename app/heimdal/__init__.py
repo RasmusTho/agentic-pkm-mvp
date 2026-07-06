@@ -41,6 +41,14 @@ Mimer-side integration points that substrate hands off to:
   raw evidence without passing the allowlist, and every successful read
   appends an audit receipt in the same call (see
   `docs/EVENTS.md :: Heimdal gated raw-read path`).
+- `app/heimdal/capture_note.py` (#3035, Epic #3019 slice A15) -- the J0
+  capture-note + receipt: a captured memo lands as a dated vault note
+  (companion-note style) whose `status:` frontmatter walks
+  `captured` -> `processing` -> `in-vault` in place, carrying the A8
+  transcript and A9 attribution/entity-mentions so it is self-describing
+  without a UI; the receipt is a read-only lens over the note's own
+  `status:` (see
+  `docs/EVENTS.md :: Heimdal capture-note + receipt / J0`).
 """
 
 from __future__ import annotations
