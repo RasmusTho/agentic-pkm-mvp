@@ -178,7 +178,7 @@ The multilingual risk is the *model*, not the architecture. We run `nomic-embed-
 | `multilingual-e5-large` | 1024 | strong SV | dim change → full re-index |
 | `EmbeddingGemma-300m` | 768 | dim-matched → **cheapest migration** | no dim change |
 
-Metrics: SV-only, EN-only, and cross-lingual recall@k on a hand-labelled Niflheim query set, fusion held fixed. **BGE-M3 is the recommended target** (self-host, Swedish, and its native sparse output could *replace or complement* our separate BM25 stage — a structural simplification). **Guards:** (a) no public source has Swedish-specific numbers, so our eval is the decider; (b) any model change alters `EmbeddingIdentity` (`app/components/embeddings.py:30-35`) and forces a full re-index under the mixed-identity/reconcile discipline (ADR-0023) — a real cost to weigh against `EmbeddingGemma`'s cheaper dim-matched path. **Decision (§IX).**
+Metrics: SV-only, EN-only, and cross-lingual recall@k on a hand-labelled Niflheim query set, fusion held fixed. **BGE-M3 is the recommended target** (self-host, Swedish, and its native sparse output could *replace or complement* our separate BM25 stage — a structural simplification). **Guards:** (a) no public source has Swedish-specific numbers, so our eval is the decider; (b) any model change alters `EmbeddingIdentity` (`app/components/embeddings/legacy.py :: EmbeddingIdentity`) and forces a full re-index under the mixed-identity/reconcile discipline (ADR-0023) — a real cost to weigh against `EmbeddingGemma`'s cheaper dim-matched path. **Decision (§IX).**
 
 ---
 
@@ -227,7 +227,7 @@ At a ~100–500-note bilingual vault: runtime ≈ free (local); a *weekly* Fable
 
 **Mimer (this repo):**
 - Retrieval: `app/retrieval/capability.py:44-159` (typed contract), `app/retrieval/hybrid.py:27,39-50,212,433,459-480`, `docs/RETRIEVAL.md:58-71,119-132`, `docs/adr/ADR-0024-retrieval-topology.md:17`, epic #2314.
-- Vector store / embeddings: `app/stores/pg.py:447,97-106,767-802`, `docs/EMBEDDINGS.md:50-67,160-174`, `app/components/embeddings.py:30-35`, ADR-0023.
+- Vector store / embeddings: `app/stores/pg.py:447,97-106,767-802`, `docs/EMBEDDINGS.md:50-67,160-174`, `app/components/embeddings/legacy.py :: EmbeddingIdentity`, ADR-0023.
 - Write authority / agents: `app/write_guard.py:40-73`, `docs/PANEL_AGENT.md:178-189`, `docs/LANGGRAPH_AGENT_ARCHITECTURE.md:428-437`.
 - Routing: `app/components/llm/router.py:41`, `docs/LLM.md:20-54`, `docs/LLM_ROUTING.md:16-49`.
 - Proactivity / governance: `app/relevance/`, `app/watcher/relevance_tick.py`, `docs/HUMAN_FLOW_TO_RUNTIME_MAP.md:53`, `docs/architecture/cross-scope-flow.md:22-87`, proportional governance #1881, 27-invariant registry `docs/testing/invariant-tests.md`.

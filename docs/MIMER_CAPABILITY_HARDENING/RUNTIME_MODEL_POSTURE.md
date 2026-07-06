@@ -13,7 +13,7 @@ Current reality: runtime chat cognition knows four providers — `_KNOWN_PROVIDE
 "ollama", "openai", "deepseek"}` (`app/components/llm/router.py:41`) — with the execution ladder in
 `app/llm/adapter.py:40-94` (`mock`/`ollama`/`openai`/`deepseek`; `openai` and `deepseek` both speak
 the chat-completions shape). The embeddings side separately allowlists `{"mock","ollama","openai",
-"deepseek","deterministic","gemini"}` (`app/components/embeddings.py:14`). The model registry
+"deepseek","deterministic","gemini"}` (`app/components/embeddings/legacy.py :: _SUPPORTED_EMBED_PROVIDERS`). The model registry
 (`docs/settings/models/registry.yaml`) carries OpenAI chat descriptors but nothing Anthropic.
 **Anthropic is absent from every layer**, and — more importantly — the provider allowlist is
 maintained independently at N sites. R4 makes paid models a routable tier; this spec designs it so
@@ -71,7 +71,7 @@ own mechanism before the provider lands:
   required (`ANTHROPIC_API_KEY`…), excluded model families.
 - Code keeps its local frozensets (no runtime YAML dependency in hot paths) but a **static test**
   asserts every allowlist in the codebase equals the census projection:
-  `router.py:41 _KNOWN_PROVIDERS`, `app/components/embeddings.py:14 _SUPPORTED_EMBED_PROVIDERS`,
+  `router.py:41 _KNOWN_PROVIDERS`, `app/components/embeddings/legacy.py :: _SUPPORTED_EMBED_PROVIDERS`,
   the `adapter.py` ladder branches, the registry compiler's accepted providers, health-check
   provider probes (`docs/LLM_ROUTING.md :: How to debug routing`), and `docs/LLM.md`'s documented
   set. Drift fails CI with the site named.

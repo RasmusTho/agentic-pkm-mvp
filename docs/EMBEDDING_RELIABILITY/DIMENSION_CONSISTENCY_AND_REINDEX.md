@@ -180,7 +180,7 @@ CTI-2 says fallback is non-terminal and reconcilable. This task is the mechanism
 - Doctor logic: `app/index/doctor.py` — `diagnose_index()` (line 51)
 - Doctor CLI: `app/cli/index_doctor.py`
 - Rebuild CLI: `app/cli/index_rebuild.py` — `rebuild` command + `_record_failure` helper (line 150)
-- Embedding identity: `app/components/embeddings.py` — `EmbeddingIdentity`, `get_embedding_identity()`
+- Embedding identity: `app/components/embeddings/legacy.py` — `EmbeddingIdentity`, `get_embedding_identity()`
 - Dim guardrail: `app/embedding_config.py` — `assert_embed_dim()` (line 36)
 - Multi-vault / per-vault dims: epic #2143
 - Events: `docs/EVENTS.md` (`index.embedding.created`, `index.embedding.failed`)
