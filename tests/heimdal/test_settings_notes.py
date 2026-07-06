@@ -37,6 +37,7 @@ from app.heimdal.settings_notes import (
     SETTINGS,
     SETTINGS_NOTE_SPECS,
     SOURCE_CONFIG,
+    STEERING_LOG,
     WATCHLIST,
     FieldSpec,
     SectionSpec,
@@ -87,6 +88,7 @@ def test_schema_and_authority_split() -> None:
         "watchlist",  # watchlist.md
         "never",  # never.md
         "interests",  # interests.md
+        "steering_log",  # steering.log.md
         "source",  # sources/*.md
         "consent",  # consent.md
         "settings",  # settings.md
@@ -157,6 +159,7 @@ def test_note_spec_rejects_zero_sections() -> None:
         (WATCHLIST, {}),
         (NEVER_LIST, {}),
         (INTERESTS, {}),
+        (STEERING_LOG, {}),
         (SOURCE_CONFIG, {"source_id": "youtube"}),
         (CONSENT, {}),
         (SETTINGS, {}),
