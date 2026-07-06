@@ -82,7 +82,7 @@ def _dispatched_topics() -> list[str]:
 
 def test_every_dispatched_topic_has_schema() -> None:
     dispatched = _dispatched_topics()
-    assert len(dispatched) >= 7, f"expected at least the 7 known KERNEL-08 topics, got {dispatched}"
+    assert len(dispatched) >= 9, f"expected at least the 9 known KERNEL-08 topics, got {dispatched}"
 
     missing = [topic for topic in dispatched if not is_registered_topic(topic)]
     assert not missing, (

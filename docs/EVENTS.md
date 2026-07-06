@@ -625,9 +625,12 @@ that, still docs-only target state): only a `candidate`-stage completion (the pi
 terminal stage, where a candidate note now exists) emits a durable
 `knowledge_acquisition.candidate.ready_for_triage` observability signal (JSONL audit sink +
 DB outbox row when enabled); `normalize`/extractor-run completions are traced (dispatched,
-logged) with no further action, since there is no candidate yet to mark ready. This topic
-still registers no topic schema (KERNEL-08, `schemas/events/*`) — only the dispatch route
-was added.
+logged) with no further action, since there is no candidate yet to mark ready. Because the
+topic is now dispatched, KA-07 also registered its KERNEL-08 topic schema
+(`schemas/events/knowledge_acquisition.stage.completed.v1.schema.json`), so
+`emit_stage_completed` now hard-validates its payload against that schema and stamps
+`meta.payload_schema` at write time via `write_outbox_event` (required fields: `stage`,
+`stage_version`, `content_identity`).
 
 Deterministic idempotency key (KERNEL-02, via `derive_idempotency_key`): keyed on
 `(stage, stage_version, content_identity)` — plus `extractor_id` for extractor runs so two
@@ -659,7 +662,11 @@ queued row the worker is dispatching. KA-07 (#3107) added the consumer route
 (`handle_knowledge_acquisition_stage_dead_lettered`): it surfaces a durable, item-scoped
 `knowledge_acquisition.stage.dead_letter_surfaced` observability signal (JSONL audit sink +
 DB outbox row when enabled) and never raises, so a dead-lettered item never blocks dispatch
-of a sibling item's event. This topic still registers no schema (KERNEL-08). Its
+of a sibling item's event. Because the topic is now dispatched, KA-07 also registered its
+KERNEL-08 topic schema (`schemas/events/knowledge_acquisition.stage.dead_lettered.v1.schema.json`),
+so `emit_stage_dead_letter` now hard-validates its payload against that schema and stamps
+`meta.payload_schema` at write time via `write_outbox_event` (required fields: `stage`,
+`stage_version`, `content_identity`, `reason`, `error`). Its
 deterministic key is content-scoped (fingerprint `<scope>:<stage_version>:dead_letter`), so
 a duplicate delivery of the same failure dedups to one audit row; the consumer's surfaced
 signal re-derives its own key from the same fingerprint shape and dedups identically.

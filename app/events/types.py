@@ -96,8 +96,12 @@ SETTINGS_WRITE_RECEIPT = "settings.write.receipt"
 # downstream action -- NOT the triage engine (see docs/EVENTS.md ::
 # Knowledge Acquisition stage events, and
 # docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md § Stage
-# execution model / § Lineage and replay). They still register no topic
-# schema (KERNEL-08) -- only the dispatch route was added.
+# execution model / § Lineage and replay). Because they are now dispatched,
+# KA-07 also registered their KERNEL-08 topic schemas
+# (`schemas/events/knowledge_acquisition.stage.{completed,dead_lettered}.v1.schema.json`),
+# so `emit_stage_completed` / `emit_stage_dead_letter` now hard-validate their
+# payloads against those schemas and get `meta.payload_schema` stamped at write
+# time via `write_outbox_event`.
 KNOWLEDGE_ACQUISITION_STAGE_COMPLETED = "knowledge_acquisition.stage.completed"
 KNOWLEDGE_ACQUISITION_STAGE_DEAD_LETTERED = "knowledge_acquisition.stage.dead_lettered"
 

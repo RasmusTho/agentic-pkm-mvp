@@ -19,15 +19,23 @@ Design decisions (binding for this slice):
   append (that seam is non-idempotent, #2881), no worker `_dispatch_topic` branch.
 
 - **These topics are lineage/audit, not commands mutating pipeline state.** They record
-  that a stage transition happened, per the contract's lineage/replay model, and this
-  module registers no topic schema (`schemas/events/*`) for them. KA-07 (#3107) added the
-  first CONSUMER for both topics in `outbox_worker._dispatch_topic`
+  that a stage transition happened, per the contract's lineage/replay model. KA-07 (#3107)
+  added the first CONSUMER for both topics in `outbox_worker._dispatch_topic`
   (`handle_knowledge_acquisition_stage_completed` /
   `handle_knowledge_acquisition_stage_dead_lettered`), but that consumer's downstream
   action is deliberately bounded and minimal (a durable observability signal — candidate
   ready-for-triage / dead-letter surfaced) — never the full triage engine, and it never
   mutates a `raw`/`normalized`/`candidate` artifact this module produced. See
   `docs/EVENTS.md` § these two topics for the consumer contract.
+
+  Because they are now dispatched, KA-07 also registered their KERNEL-08 topic schemas
+  (`schemas/events/knowledge_acquisition.stage.{completed,dead_lettered}.v1.schema.json`),
+  so the `write_outbox_event` calls in `emit_stage_completed` / `emit_stage_dead_letter`
+  below now hard-validate the payload against the registered schema and stamp
+  `meta.payload_schema` at write time. A payload-shape change to these emitters must stay
+  within the registered schema (or bump it) or it will raise `TopicSchemaViolation` at the
+  producer — the `stage`/`stage_version`/`content_identity` fields (plus `reason`/`error`
+  for the dead-letter topic) are required by the schema.
 
 - **Deterministic keys stable across replay, distinct across stage-version bumps.** The
   completion key for a stage transition is derived from
