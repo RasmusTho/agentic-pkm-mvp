@@ -6456,15 +6456,28 @@ def _render_vault_picker_script() -> str:
     // invisible to the user, who saw the screen appear to do nothing. Route the
     // error into a live-region so onboarding failures are actionable, not silent.
     var selectError = picker.querySelector('[data-testid="vault-picker-select-error"]');
+    // selectVault is shared by the recents rows AND the filesystem-mode "Open"
+    // affordance, but the recents-mode error surface is hidden while the
+    // folder browser is open. Route the failure to whichever surface is
+    // currently visible so a failed "Open" from the browser is not stamped into
+    // a hidden node (#3102): the filesystem-mode error banner while browsing,
+    // else the recents-mode banner.
+    function activeSelectErrorSurface() {
+      if (picker.getAttribute('data-active-mode') === 'filesystem') {
+        return picker.querySelector('[data-testid="vault-picker-fs-error"]');
+      }
+      return selectError;
+    }
     function showSelectError(message) {
-      if (!selectError) { return; }
-      selectError.hidden = false;
-      selectError.textContent = message;
+      var surface = activeSelectErrorSurface();
+      if (!surface) { return; }
+      surface.hidden = false;
+      surface.textContent = message;
     }
     function clearSelectError() {
-      if (!selectError) { return; }
-      selectError.hidden = true;
-      selectError.textContent = '';
+      if (selectError) { selectError.hidden = true; selectError.textContent = ''; }
+      var fsErr = picker.querySelector('[data-testid="vault-picker-fs-error"]');
+      if (fsErr) { fsErr.hidden = true; fsErr.textContent = ''; }
     }
     // Shared select-a-vault dispatch — the existing vault.select authority. Used
     // by both the recents rows and the filesystem-mode "Open" affordance.
@@ -14350,12 +14363,13 @@ def render_index_html(
       font-size: var(--text-sm);
       padding: 6px 10px;
     }}
-    .vault-picker-fs-row-error, .vault-picker-fs-error {{
+    .vault-picker-fs-row-error, .vault-picker-fs-error, .vault-picker-select-error {{
       color: var(--fg-2, #aebfce);
       font-family: var(--font-ui);
       font-size: var(--text-xs, 11px);
       margin: 2px 0 0;
     }}
+    .vault-picker-select-error {{ color: var(--danger, #e06c75); margin-top: 6px; }}
     .vault-picker-fs-empty {{ color: var(--fg-3); font-family: var(--font-ui); font-size: var(--text-sm); margin: 0; }}
     .vault-picker-fs-footer {{ color: var(--fg-3); font-family: var(--font-ui); font-size: var(--text-sm); }}
   </style>

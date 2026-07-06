@@ -238,3 +238,24 @@ def test_failed_selection_shows_visible_error() -> None:
     assert "showSelectError(" in select_body, (
         "selectVault must surface failures via the visible picker error element"
     )
+
+
+def test_filesystem_open_failure_routes_error_to_visible_surface() -> None:
+    """selectVault is shared by the recents rows and the filesystem-mode "Open"
+    affordance. The recents error surface is hidden while browsing folders, so
+    the failure must route to the visible filesystem-mode error banner instead
+    of a hidden node (the browse->open path is the primary onboarding path)."""
+
+    html = handle_get(
+        query_string="note_path=note.md",
+        client=_PickerClient(_PICKER_PAYLOAD),
+        api_base_url="http://127.0.0.1:18001",
+    )
+
+    # The picker tracks its active mode, and the shared error surfacing is
+    # mode-aware: in filesystem mode it targets the visible fs-error banner.
+    start = html.index("function activeSelectErrorSurface(")
+    end = html.index("function showSelectError(", start)
+    surface_fn = html[start:end]
+    assert "'filesystem'" in surface_fn
+    assert "vault-picker-fs-error" in surface_fn
