@@ -19,19 +19,19 @@ Covers:
   (``test_channel_isolation_preflight_covers_new_service``,
   ``test_real_prod_and_test_compose_still_pass_preflight``).
 
-No import of ``app.heimdal.capture_runtime`` here: this PR is sequenced
-ahead of #3095 (the PR that adds that module) merging to `main`, so only the
-compose YAML and the preflight's own service registry are exercised.
+Reuses `app.release_channels.channel_isolation_preflight`'s own
+`_load_compose` (rather than a second, independently-maintained
+`!override`/`!reset`-tolerant YAML loader) so this test parses compose files
+exactly the way the real preflight guard does.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import yaml
-
 from app.release_channels.channel_isolation_preflight import (
     CHANNEL_SERVICES,
+    _load_compose,
     check_compose_channel_isolation,
 )
 
@@ -44,28 +44,8 @@ _TEST_COMPOSE = _REPO_ROOT / "docker-compose.test.yml"
 _SERVICE = "heimdal-capture-watch"
 
 
-class _ComposeLoader(yaml.SafeLoader):
-    """Tolerates compose's `!override` / `!reset` merge tags (treated as plain values)."""
-
-
-def _passthrough(loader: yaml.SafeLoader, node: yaml.Node):
-    if isinstance(node, yaml.ScalarNode):
-        return loader.construct_scalar(node)
-    if isinstance(node, yaml.SequenceNode):
-        return loader.construct_sequence(node)
-    return loader.construct_mapping(node)
-
-
-_ComposeLoader.add_constructor("!override", _passthrough)
-_ComposeLoader.add_constructor("!reset", _passthrough)
-
-
-def _load(compose: Path) -> dict:
-    return yaml.load(compose.read_text(encoding="utf-8"), Loader=_ComposeLoader)
-
-
 def _service(compose: Path, name: str = _SERVICE) -> dict:
-    return _load(compose)["services"][name]
+    return _load_compose(compose)["services"][name]
 
 
 def test_base_service_defined() -> None:
@@ -110,6 +90,11 @@ def test_channel_overlays_bind_expected_environment() -> None:
     test = _service(_TEST_COMPOSE)
     assert test["environment"]["PKM_ENVIRONMENT"] == "test"
     assert "app_test" in test["environment"]["DATABASE_URL"]
+    # #2991 test-channel runtime-artifact-path convention: api/worker/watcher
+    # all remap to /app/tmp-test in this file; heimdal-capture-watch matches
+    # even though it writes no artifacts under /app/tmp today, so it doesn't
+    # silently regress the moment it grows one (e.g. a future heartbeat file).
+    assert "runtime-tmp:/app/tmp-test" in test["volumes"]
 
 
 def test_channel_isolation_preflight_covers_new_service() -> None:
@@ -132,3 +117,16 @@ def test_real_prod_and_test_compose_still_pass_preflight() -> None:
 
     test_result = check_compose_channel_isolation(_TEST_COMPOSE, "test")
     assert test_result.ok, test_result.summary()
+
+
+def test_deploy_script_recreates_the_new_service() -> None:
+    """`scripts/deploy_channel.sh` must pull/recreate this service like its siblings.
+
+    Otherwise a prod image update ships new code to api/worker/watcher but
+    heimdal-capture-watch keeps running its old image indefinitely --
+    unversioned drift the standard promotion path would silently miss.
+    """
+    text = (_REPO_ROOT / "scripts" / "deploy_channel.sh").read_text(encoding="utf-8")
+    for line in text.splitlines():
+        if line.strip().startswith(("compose pull", "compose up -d --force-recreate")):
+            assert _SERVICE in line, line

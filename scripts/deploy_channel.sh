@@ -296,13 +296,13 @@ if [ -n "${current_sha}" ]; then
 fi
 write_pin "${pin_file}" "${target_sha}"
 
-compose pull api worker watcher companion-ui
-compose up -d --force-recreate api worker watcher companion-ui
+compose pull api worker watcher heimdal-capture-watch companion-ui
+compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui
 health_gate || {
   echo "health gate failed; attempting rollback to previous pin" >&2
   if [ -n "${current_sha}" ]; then
     write_pin "${pin_file}" "${current_sha}"
-    compose up -d --force-recreate api worker watcher companion-ui || true
+    compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui || true
   fi
   exit 1
 }

@@ -69,6 +69,8 @@ services:
       VAULT_DESK_DIR_REL: "🛠️ Workbench"
 
   heimdal-capture-watch:
+    volumes:
+      - "runtime-tmp:/app/tmp-test"
     environment:
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test

@@ -306,7 +306,7 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"from app.heimdal.capture_runtime import CaptureRuntimeConfig; CaptureRuntimeConfig.from_env()\""]
+      test: ["CMD-SHELL", "python -c \"from app.heimdal.capture_runtime import CaptureRuntimeConfig; from app.heimdal.raw_store import resolve_raw_store_key; CaptureRuntimeConfig.from_env(); resolve_raw_store_key()\""]
       interval: 30s
       timeout: 5s
       retries: 5
