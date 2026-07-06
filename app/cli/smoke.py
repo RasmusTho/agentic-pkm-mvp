@@ -34,8 +34,22 @@ def _default_env(outbox: Path) -> None:
     os.environ.setdefault("POLICY_ENFORCE", "1")
     os.environ.setdefault("PANEL_AGENT_PIPELINE", "planner")
     os.environ.setdefault("LLM_PROVIDER", "mock")
-    os.environ.setdefault("EMBED_DIM", "1536")
+    os.environ.setdefault("EMBED_DIM", "768")
     os.environ["INDEX_OUTBOX_PATH"] = str(outbox)
+    # The smoke commands seed their own deterministic corpus into a fresh store
+    # and must not inherit an ambient in-process store singleton. When smoke runs
+    # in-process after other work in the same interpreter (e.g. CliRunner in the
+    # test suite, or a long-lived process invoking smoke), the lru_cached memory
+    # VectorIndex retains the embedding identity captured by the previous
+    # occupant. Seeding then fails the single-identity guard with a spurious
+    # "embedding identity mismatch" (e.g. a leaked provider=test/dim=4 identity
+    # vs the smoke runtime's provider=mock). Drop the in-memory store singleton up
+    # front so the seed always resolves the current runtime identity, not a stale
+    # one. DB-safe: reset_memory_store_backend never truncates any Postgres DB, so
+    # running smoke on a host with a reachable DB cannot destroy real data.
+    from app.stores import reset_memory_store_backend
+
+    reset_memory_store_backend()
 
 
 def _validate_settings() -> None:
