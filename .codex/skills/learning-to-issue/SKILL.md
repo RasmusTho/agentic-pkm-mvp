@@ -110,7 +110,7 @@ Do not apply `agent:ready` unless every AC has a resolvable `Verify:` target and
 
 **Issue body (all cases):** use the body template from `.codex/skills/_shared/ISSUE_CONTRACT.md`, with the learning-specific requirements above (`## Context` links the source record; `## Applies learning` filled, e.g. `Applies learning from \`BuilderOps LearningSignal <id>\``).
 
-After creation, add to Project `Agent Delivery Control Plane` and verify Status matches the chosen readiness state.
+Run the add-item / Set Project Status operations from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md`. After creation, add to Project `Agent Delivery Control Plane` and verify Status matches the chosen readiness state.
 
 ## Raw-intake normalization path
 
@@ -141,7 +141,7 @@ Signs a raw-intake issue needs normalization:
    ```
 5. Fix title if needed:
    ```bash
-   gh issue edit <N> --repo <owner/repo> --title "type:task: <bounded outcome>"
+   gh issue edit <N> --repo <owner/repo> --title "<type>: <bounded outcome>"
    ```
 6. Verify:
    ```bash

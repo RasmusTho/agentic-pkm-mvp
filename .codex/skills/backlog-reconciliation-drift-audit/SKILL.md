@@ -6,6 +6,8 @@ description: "Periodically reconcile docs, Issues, Project state, PRs, and owner
 # Backlog Reconciliation Drift Audit
 
 You are a backlog reconciliation and drift-audit agent for a repo-first, docs-as-code software system.
+This is a Builder System workflow; Product/Runtime SBS impact routes via
+`docs/architecture/SBS_OPERATING_MODEL.md` (see `.codex/skills/README.md`).
 
 Your job is to periodically reconcile docs, GitHub Issues, Project state, merged PRs, and owner docs so backlog truth stays stable over time.
 Treat closed PR cards as part of lifecycle truth, not as an afterthought.
@@ -67,7 +69,7 @@ For each inspected doc item or issue, classify exactly one state:
 - `blocked / needs-human`
 - `not actionable`
 
-For each drift case, recommend one concrete corrective action only:
+Execute safe corrections and report receipts; recommend (without executing) only where `escalate human decision` applies. For each drift case, identify one concrete corrective action only:
 
 - `create issue`
 - `update issue`
@@ -88,11 +90,21 @@ For each drift case, recommend one concrete corrective action only:
 - Roadmap should remain forward-looking.
 - Status may note delivery, but lasting truth belongs in the owner doc.
 - GitHub remains the canonical backlog-state surface.
-- Treat Project `Status` as the primary lifecycle signal.
-- Treat `agent:ready` as the pickup qualifier for `Status=Ready`, not as a substitute for `In Progress`, `Review`, or `Done`.
-- For PR cards, follow the canonical lifecycle truth matrix (`.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md`) as the single source: open draft → `In Progress`; open non-draft with review requested → `Review`; open non-draft without review requested → `In Progress`.
+- Treat Project `Status` as the primary lifecycle signal; run Project reads/mutations per
+  `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md`.
+- Treat `agent:ready` and other agent-state labels per `.codex/skills/_shared/LABEL_TAXONOMY.md` as
+  the canonical label semantics; `agent:ready` is the pickup qualifier for `Status=Ready`, not a
+  substitute for `In Progress`, `Review`, or `Done`.
+- For Issue and PR cards, follow `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md` as the single
+  source for required Project Status. Skills reference this file instead of carrying their own copy;
+  do not restate its rows here — an open non-draft PR legitimately projects to `Review` via the
+  shipped Project automation regardless of whether review was explicitly requested, and that is not
+  drift.
 - Prefer one repair action per drift class when the same correction repeats across multiple items; do not churn the board with separate micro-fixes when a batched audit can close the gap.
-- If full-project scan is slow or blocked by API latency, run a targeted audit for open issues, open PRs, recently merged PRs, and recently closed-unmerged PRs, then report that fallback explicitly.
+- If full-project scan is slow or blocked by API latency, route bulk reads via `gh api` REST rather
+  than GraphQL (shared API budget guidance: `.codex/skills/_shared/CI_WAIT_CONTRACT.md`,
+  `AGENTS.md :: Parallel-agent execution`); run a targeted audit for open issues, open PRs, recently
+  merged PRs, and recently closed-unmerged PRs, then report that fallback explicitly.
 
 
 ## Capturing learning

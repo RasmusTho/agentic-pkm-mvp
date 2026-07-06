@@ -14,11 +14,9 @@ Merge remains owned by `verification-and-closure`.
 
 ## Canonical workflow position
 
-Hot path:
-`Docs -> Feature issue -> Slice issue -> Agent -> Publish PR -> CI -> Slice verification -> Merge -> Feature validation -> Acceptance -> Owner Doc`
-
-Conditional readiness-repair path:
-`Docs -> Feature issue -> Slice issue -> Agent -> Publish PR -> PR integration -> CI -> Slice verification -> Merge -> Feature validation -> Acceptance -> Owner Doc`
+See `.codex/skills/README.md :: Workflow map` for the canonical chain (this is the same chain at
+slice/feature granularity). `pr-integration` sits on the conditional readiness-repair path — only
+when the PR still needs readiness or repair work before verification.
 
 ## First context to load
 
@@ -92,9 +90,11 @@ Declare exactly one outcome:
 
 ## Lifecycle Truth Rules During Integration
 
-- active work remains `In Progress`
-- move to `Review` only when review handoff is explicit
-- do not mark lifecycle `Done` in this stage
+Project Status for the Issue and PR follows `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md` as the
+single source (an open non-draft PR legitimately projects to `Review` via the shipped Project
+automation — do not treat that as drift). Stage-specific rules on top of the matrix:
+
+- do not mark the Issue's lifecycle `Done` in this stage
 - do not close the governing Issue in this stage
 - do not merge the PR in this stage
 

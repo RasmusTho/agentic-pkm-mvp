@@ -12,7 +12,7 @@ This is the backlog-intake lane, not the maintenance repair lane.
 
 ## Canonical workflow
 
-`Docs -> Feature issue or slice issue -> Project -> Issue maintenance -> Agent -> PR -> PR integration -> CI -> Slice verification -> Merge -> Feature validation -> Acceptance -> Owner Doc`
+See `.codex/skills/README.md :: Workflow map` for the canonical chain; this is the backlog-intake lane, not the maintenance repair lane, and issue maintenance is part of the conditional path, not the hot path.
 
 Plus: periodic reconciliation.
 
@@ -99,10 +99,12 @@ Skill-specific rule: if an AC cannot carry a resolvable `Verify:` target, the AC
 - Preferred format:
   - `docs/PANEL_AGENT.md :: PA2-FREEFORM`
   - `docs/ROADMAP.md :: ORCHV2-TDD`
-  - `docs/STATUS.md :: SETTINGS-PROVENANCE`
+  - `docs/STATUS.md :: SEP-11`
 - Prefer stable anchor IDs over prose fragments.
 
 ## Project rules
+
+Run the add-item / Set Project Status operations from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md`.
 
 - Add each new Issue to Project `Agent Delivery Control Plane`.
 - Set Status appropriately:

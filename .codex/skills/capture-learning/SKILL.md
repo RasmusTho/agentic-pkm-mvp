@@ -36,7 +36,7 @@ All three are required:
 2. **Upstream artifact** — the named artifact that could absorb the fix. Examples:
    - `AGENTS.md §Governance lane`
    - `.codex/skills/issue-to-code/SKILL.md`
-   - `docs/templates/ task-contract template`
+   - `.codex/skills/_shared/ISSUE_CONTRACT.md` (task-contract sections)
    - `docs/architecture/SBS_OPERATING_MODEL.md :: Builder System Artifact And Workflow Map`
    - `"unknown — flag for retro"` (last resort only)
 3. **Source** — which skill or moment noticed it (e.g. `issue-to-code`, `verification-and-closure`, `human`)
@@ -46,7 +46,7 @@ All three are required:
 Create one `LearningSignal` through the BuilderOps CLI. Use `signal_type=workflow_divergence`
 unless a more specific workflow signal type is clearly better.
 
-Suggested command shape:
+Suggested command shape (`<agent-id>` is the invoking agent, e.g. `codex`, `claude`):
 
 ```bash
 python -m app.cli builderops create-learning-signal \
@@ -58,7 +58,7 @@ Upstream artifact: <path or section>" \
   --signal-type workflow_divergence \
   --source-ref "github_issue:#<issue>" \
   --source-ref "repo_doc:<upstream-artifact-path>" \
-  --created-by codex \
+  --created-by "<agent-id>" \
   --idempotency-key "learning:<YYYY-MM-DD>:<issue-or-context>:<short-slug>" \
   --json
 ```

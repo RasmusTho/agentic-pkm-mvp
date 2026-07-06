@@ -5,18 +5,16 @@ description: "Dev-time work in the agentic-pkm-mvp repo (Agentic PKM / Yggdrasil
 
 # Agentic PKM Dev Skill
 
+This is a Builder System workflow; Product/Runtime SBS impact routes via
+`docs/architecture/SBS_OPERATING_MODEL.md` (see `.codex/skills/README.md`).
+
 ## First context to load
 
-- Always read `agentic-pkm-mvp/AGENTS.md` first. It is the canonical repo builder-agent policy.
+- Always read `AGENTS.md` first. It is the canonical repo builder-agent policy.
+- Reading order and the SoT hierarchy live in `AGENTS.md :: Reading order`; do not restate them here.
 - Prefer SoT docs over README. The README may be stale.
 - Use `docs/DOCS_INDEX.md` and `docs/PROJECT_KERNEL.md` as the entry points for current documentation.
-
-## SoT hierarchy (summary)
-
-1. Current SoT docs (identified via `docs/DOCS_INDEX.md` after reading `AGENTS.md`)
-2. Dev policy and workflow: `AGENTS.md`, `docs/development/DEV_WORKFLOW.md`
-3. Domain chapters: `docs/DATA_MODEL.md`, `docs/FRONTMATTER.md`, etc.
-4. Historical or archived docs: `docs/archive/*`, `docs/legacy/*`
+- Historical or archived docs: `docs/archive/*`.
 
 ## Default working loop
 
@@ -38,7 +36,10 @@ description: "Dev-time work in the agentic-pkm-mvp repo (Agentic PKM / Yggdrasil
 ## Typical commands (verify before running)
 
 - Install: `python -m pip install -e .`
-- Tests: `pytest -q -m "not pg"`
+- Validation baseline (required pre-merge gate for code-affecting changes; see
+  `docs/development/DEV_WORKFLOW.md :: Validation baseline` for the full, current command set):
+  `ruff check app tests`, `mypy app`, `pytest -q -m "not pg"`
+- When `.codex/skills/**` changed: `python3 scripts/lint_skills_consistency.py`
 - Alpha runtime: `make alpha-up` then `python -m scripts.alpha_e2e`
 
 ## Capturing learning

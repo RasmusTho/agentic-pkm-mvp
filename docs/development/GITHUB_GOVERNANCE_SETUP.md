@@ -137,6 +137,8 @@ Approved docs-authoring surfaces:
 - `.github/ISSUE_TEMPLATE/*.yml`
 - `.github/pull_request_template.md`
 - `.github/workflows/issue-pr-governance.yml`
+- `companion-ui/docs/`
+- `companion-ui/design_handoff/`
 
 Rules:
 
@@ -194,7 +196,7 @@ Recommended syntax in the Issue body:
 
 - `docs/PANEL_AGENT.md :: PA2-FREEFORM`
 - `docs/ROADMAP.md :: ORCHV2-TDD`
-- `docs/STATUS.md :: SETTINGS-PROVENANCE`
+- `docs/STATUS.md :: SEP-11`
 
 Recommended source-anchor style in docs when a stable item ID is warranted:
 

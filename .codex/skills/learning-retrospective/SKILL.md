@@ -119,13 +119,13 @@ In autonomous maintenance mode:
 ### Step 6: Record retrospective completion
 
 After human responds (regardless of how many proposals are accepted), append a BuilderOps receipt
-targeting the processed LearningSignals:
+targeting the processed LearningSignals (`<agent-id>` is the invoking agent, e.g. `codex`, `claude`):
 
 ```bash
 python -m app.cli builderops append-receipt \
   --summary "Learning retrospective YYYY-MM-DD" \
   --event-type learning_retrospective \
-  --actor codex \
+  --actor "<agent-id>" \
   --occurred-at "<UTC timestamp>" \
   --target-ref "builderops_object:<learning-signal-id>" \
   --action retrospective_review \

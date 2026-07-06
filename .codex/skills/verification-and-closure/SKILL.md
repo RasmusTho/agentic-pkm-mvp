@@ -217,8 +217,11 @@ When all prerequisites are met:
 
 ## Lifecycle Rules During Verification
 
-- open or draft PR without explicit review handoff remains `In Progress`
-- `Review` is reserved for the review handoff state
+Project Status for the Issue and PR follows `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md` as the
+single source (an open non-draft PR legitimately projects to `Review` via the shipped Project
+automation — do not treat that as drift). Merge-stage-specific rules on top of the matrix:
+
+- do not mark lifecycle `Done` before merge
 - if project/PR automation already projected `Done`, verify that state rather than writing it again
 - only apply the fallback `Done` mutation when the item still needs terminal projection
 

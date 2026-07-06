@@ -14,8 +14,8 @@ That includes PR lifecycle truth, not only Issue lifecycle truth.
 This is a cold-path maintenance role, not a hot-path implementation routine.
 Use `docs/development/PR_HOT_PATH.md` for normal PR delivery and `docs/development/PARENT_ISSUE_CLOSURE.md` when a delivered parent issue actually needs closure.
 
-You operate between:
-`Docs -> Issue -> Project -> Issue maintenance -> Agent -> PR -> CI -> Verification -> Project/doc closure -> Owner Doc`
+See `.codex/skills/README.md :: Workflow map` for the canonical chain: issue maintenance sits on the
+conditional path (`Issue maintenance -> Agent`), not the hot path.
 
 ## Use this skill when
 
@@ -281,7 +281,7 @@ Use this when the user asks for a maintenance run across everything not done.
 
 1. Resolve repo:
    - If repo not given, ask for `owner/repo`.
-   - If user says they are the owner, resolve the username via GitHub app `list_installed_accounts` and use that as owner.
+   - If user says they are the owner, resolve the username via `gh api user --jq .login` or infer it from `git remote` (prefer the GitHub app account resolver when available, but do not depend on it).
 2. **Pre-flight Project-state audit.** Before any label edits or helper scripts, query every Project item and bucket it by (`content.state`, `Status`). Flag every cell that violates the lifecycle truth matrix. This audit is independent of any reconciliation helper and must be executed directly via GraphQL:
 
    ```bash
