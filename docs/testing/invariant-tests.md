@@ -812,6 +812,23 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 | expansion_requires_activation_record | #9 | GOV | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/activation/test_expansion_gate_records.py` |
 | curation_citations_resolve | #3,#9 | GOV/RCA | static + runtime | `tests/invariants/test_curation_invariants.py`, `tests/curation/test_contradiction_citations_resolve.py` |
 
+## Heimdal invariants (HEIM-1..14) — sibling registry
+
+The Heimdal constituent (Epic #3019, ADR-0049) keeps its own fitness-invariant registry rather than
+duplicating entries here: **`docs/HEIMDAL/FABLE_COMPANION.md` §8** is canonical for HEIM-1..14 —
+purpose, protected principle, affected boundaries, and declared enforcement level
+(`schema_enforced` / `static_test` / `future_runtime` / `xfail_runtime_skeleton`) per invariant. This
+registry's enforcement-category vocabulary (above) is shared verbatim; only the invariant list itself
+is Heimdal-owned to avoid two registries drifting on the same rows.
+
+§8 reserves `tests/invariants/test_heimdal_*.py` as each invariant's eventual test home (none of those
+files exist yet). The interim skeleton landing (#3033, Epic A slice A13) lives at
+[`tests/heimdal/test_invariants_heim.py`](../../tests/heimdal/test_invariants_heim.py): one skeleton
+per HEIM-1..14, each xfail (honestly, via a Heimdal-local `require_future_heimdal_runtime` guard mirroring
+[`tests/invariants/_helpers.py::require_future_runtime`](../../tests/invariants/_helpers.py)) or, where
+Heimdal slices A3/A5/A6 already discharge the invariant for real (HEIM-3, HEIM-8, HEIM-9), calling the
+real production path directly so a regression would fail the test rather than silently re-xfail.
+
 ## Related documents
 
 - [Traceability matrix](../architecture/traceability-matrix.md) — principle → contract → **this registry** → test → issue
