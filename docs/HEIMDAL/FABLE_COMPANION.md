@@ -396,8 +396,8 @@ House style per `docs/testing/invariant-tests.md`. All entries are `future_runti
 - **Purpose:** Relevance decay fires on triggering events, not merely age; the raw layer's bounded hard retention executes regardless and its execution is receipted (deletion is a governed, auditable act).
 - **Protected principle:** Charter FIXED #7 (D-RETENTION).
 - **Affected boundaries:** Heimdal raw store lifecycle; GOV (deletion receipts).
-- **Enforcement level:** `future_runtime` (v1 ships the hard-retention bound as an ops job + receipt; decay model is v2 — declared).
-- **Future test path:** `tests/invariants/test_heimdal_retention.py::test_decay_event_triggered`.
+- **Enforcement level:** `future_runtime` for the hard-retention-bound half — **delivered (#3032, Epic #3019 slice A12)**. `app.heimdal.retention.enforce_hard_retention_bound` reads the bound from `_heimdal/settings.md` (`retention_window_days`, A14 markdown-first substrate, fail-loud when unset) and hard-deletes every raw record past it via the one governed exception to `heimdal_raw_record`'s append-only trigger (`app.heimdal.raw_store.hard_delete_raw_record`), pairing every deletion with a durable `heimdal_raw_deletion_receipt` row in the same operation (migration `a3f9d1c6e2b8`) — no silent hard delete. The event-triggered **decay model** itself remains `future_runtime` / v2 — declared, not built here.
+- **Future test path:** `tests/invariants/test_heimdal_retention.py::test_decay_event_triggered` (reserved for the v2 decay-model half; the hard-retention-bound half is covered today by `tests/heimdal/test_retention.py::test_hard_retention_bound_and_receipt` and `tests/heimdal/test_invariants_heim.py::test_heim_7_decay_event_triggered`).
 
 ### heim_not_authority (HEIM-8)
 
@@ -601,7 +601,7 @@ Minimal ordered build list to ship the vertical: capture → raw → ASR → att
 | 10 | **Mimer projector** — cursor consumer; projects events into bundle-carrying candidate artifacts (`requires_review: true`, noncanonical, capture scope, provenance chain) entering existing triage | build-now | The read-model that proves the seam. |
 | 11 | **Governed promotion gate** — events → canonical knowledge only via authority transition | contract-stub (conform to the existing xfail skeleton; HEIM-8 rides it) | No new gate built; the existing GOV path is the gate. |
 | 12 | **Correction events runtime** (fold logic in projector, correction UI action) | contract-stub | Schema in #3; runtime lands with the first real disambiguation need. |
-| 13 | **Retention** — bounded hard-retention ops job + deletion receipts | build-now (the bound) / contract-stub (event-triggered decay model) | D-RETENTION's hard bound is a privacy control, not a nicety. |
+| 13 | **Retention** — bounded hard-retention ops job + deletion receipts | **delivered (#3032)** (the bound) / contract-stub (event-triggered decay model) | D-RETENTION's hard bound is a privacy control, not a nicety. `app.heimdal.retention.enforce_hard_retention_bound` (migration `a3f9d1c6e2b8`); window read from `_heimdal/settings.md` (A14). |
 | 14 | **Revocation + suppression propagation** | contract-stub | Trivial in v1 (self-consent); must exist on paper before v2 ambient. |
 | 15 | **Invariant test skeletons** — HEIM-1..14 as xfail/static per §8 | build-now (skeletons) | Verify-the-verifier: the invariants land with the runtime, not after it. |
 

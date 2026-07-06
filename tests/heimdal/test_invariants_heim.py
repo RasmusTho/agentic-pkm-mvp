@@ -287,18 +287,52 @@ def test_heim_6_attribution_honesty() -> None:
 # Enforcement level (§8): future_runtime (v1 ships the hard-retention bound
 #   as an ops job + receipt; decay model is v2 -- declared).
 # Future test path (§8): tests/invariants/test_heimdal_retention.py::test_decay_event_triggered
+#
+# NOTE: HEIM-7's hard-retention-bound half is ALREADY discharged for real by
+# A12 (app.heimdal.retention.enforce_hard_retention_bound, #3032) -- see
+# tests/heimdal/test_retention.py. This skeleton calls the real production
+# path directly rather than re-xfailing a discharged invariant (that would
+# be a regression: it must keep passing, not silently revert). The
+# event-triggered DECAY MODEL itself remains a v2 contract-stub -- only the
+# bounded hard-retention execution is discharged here.
 
 
 def test_heim_7_decay_event_triggered() -> None:
-    runtime = require_future_heimdal_runtime(
-        "retention",
-        "Hard-retention ops job + deletion receipt not implemented yet; protects "
-        "heim_decay_event_triggered / HEIM-7 (#3033). Decay-on-trigger model is v2 "
-        "-- declared gap per §8, not silent.",
+    # Real production path (discharged by A12, #3032) -- must PASS, never
+    # xfail. The bounded hard-retention job runs regardless of decay signals
+    # and every deletion (here: none, since the store is empty) is honestly
+    # receipted.
+    from app.heimdal import retention as retention_module
+    from app.heimdal.raw_store import reset_memory_raw_store
+    from app.heimdal.settings_notes import (
+        DEFAULT_SETTINGS_DIR,
+        SETTINGS,
+        SettingsNote,
+        write_settings_note,
     )
-    receipt = runtime.enforce_hard_retention_bound()
-    assert receipt.deleted_count >= 0
-    assert receipt.receipted is True
+    from app.write_guard import WriteGuard
+
+    tmp_dir = Path(__file__).resolve().parent / "_tmp_heim7_vault"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        reset_memory_raw_store()
+        retention_module.reset_memory_deletion_receipts()
+        write_settings_note(
+            tmp_dir,
+            SettingsNote(spec=SETTINGS, values={"retention_window_days": 30}),
+            settings_dir=DEFAULT_SETTINGS_DIR,
+            write_guard=WriteGuard(lambda: {"state": "healthy"}),
+        )
+
+        receipt = retention_module.enforce_hard_retention_bound(vault_root=tmp_dir)
+        assert receipt.deleted_count >= 0
+        assert receipt.receipted is True
+    finally:
+        import shutil
+
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        reset_memory_raw_store()
+        retention_module.reset_memory_deletion_receipts()
 
 
 # ---------------------------------------------------------------------------
@@ -617,6 +651,7 @@ HEIM_REGISTRY: dict[str, dict[str, str]] = {
 # would mean an already-built enforcement silently regressed.
 DISCHARGED_HEIM_TEST_NAMES = {
     "HEIM-3": "test_heim_3_consent_gated_capture",
+    "HEIM-7": "test_heim_7_decay_event_triggered",
     "HEIM-8": "test_heim_8_projection_stamps_noncanonical",
     "HEIM-9": "test_heim_9_observed_content_is_not_instruction",
 }
@@ -630,7 +665,6 @@ RESERVED_HEIM_XFAIL_NAMES = {
     "HEIM-4": "test_heim_4_seam_minimization",
     "HEIM-5": "test_heim_5_policy_gated_raw_access",
     "HEIM-6": "test_heim_6_attribution_honesty",
-    "HEIM-7": "test_heim_7_decay_event_triggered",
     "HEIM-10": "test_heim_10_bitemporal_honesty",
     "HEIM-11": "test_heim_11_attribution_resolves_in_register",
     "HEIM-12": "test_heim_12_declared_egress",

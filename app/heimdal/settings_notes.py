@@ -318,6 +318,25 @@ SETTINGS = SettingsNoteSpec(
                 FieldSpec("schema_version", FIELD_AGENT_AUTHORED, "settings schema version this note conforms to"),
             ),
         ),
+        SectionSpec(
+            "retention",
+            (
+                FieldSpec(
+                    "retention_window_days",
+                    FIELD_HUMAN_EDITABLE,
+                    "D-RETENTION hard-retention bound in days (Charter FIXED #7): the "
+                    "operator-set window past which the hard-retention ops job "
+                    "(app.heimdal.retention) hard-deletes raw records, regardless of "
+                    "decay signals. Read markdown-first, not from hidden config.",
+                ),
+                FieldSpec(
+                    "last_enforced_at",
+                    FIELD_AGENT_AUTHORED,
+                    "last time the hard-retention ops job ran (informational only; the "
+                    "durable audit trail is the deletion-receipt table, not this field)",
+                ),
+            ),
+        ),
     ),
 )
 

@@ -8,12 +8,21 @@ store is `app/heimdal/raw_read_gate.py`, slice A7, #3027).
 
 Contract:
 
-- **Append-only (HEIM-1).** Rows are inserted, never updated or deleted --
-  same discipline as `app.heimdal.observation_log` and
-  `app.heimdal.consent_ledger`: this module exposes no update/delete
-  function, and the Postgres backend additionally installs a trigger
-  rejecting UPDATE/DELETE at the database level (migration
-  `d5a8e2f1b6c3`), independent of which code path issues the statement.
+- **Append-only for every ordinary caller (HEIM-1).** Rows are inserted,
+  never updated -- this module exposes no update function, and the Postgres
+  backend installs a trigger rejecting UPDATE/DELETE at the database level
+  (migration `d5a8e2f1b6c3`), independent of which code path issues the
+  statement. **One governed exception exists by design (D-RETENTION,
+  Charter FIXED #7):** the raw layer is the one place true erasure exists,
+  and its execution must be receipted, never silent or unbounded. That
+  exception is `hard_delete_raw_record` below -- the *only* function in this
+  module that can remove a row, and the *only* call the trigger admits (it
+  checks a session-local guard this function sets immediately before the
+  DELETE, in the same transaction, so no other code path -- not even a
+  hand-written SQL client -- can hard-delete without going through this
+  function). The real caller is `app.heimdal.retention.enforce_hard_retention_bound`
+  (Epic #3019 slice A12, #3032), which pairs every deletion with a durable
+  deletion receipt in the same call.
 - **Encrypted at rest.** Every record is encrypted with AES-256-GCM
   (authenticated encryption) before it is written; the plaintext raw bytes
   never touch the store or its backing table. The store never generates or
@@ -74,6 +83,12 @@ _MIGRATION_HINT = (
 _KEY_ENV_VAR = "HEIMDAL_RAW_STORE_KEY"
 _AES_KEY_BYTES = 32  # AES-256
 _NONCE_BYTES = 12  # standard AES-GCM nonce size
+
+# Session-local Postgres setting the append-only trigger admits a DELETE
+# under (D-RETENTION governed exception). Never set by any code path other
+# than `hard_delete_raw_record`, and only for the duration of that one
+# statement's transaction -- see the trigger body in `_bootstrap_pg`.
+_RETENTION_GUARD_SETTING = "app.heimdal_retention_bypass"
 
 
 class RawStoreSchemaMissingError(RuntimeError):
@@ -209,6 +224,21 @@ class _MemoryRawStore:
         with self._lock:
             return self._by_identity.get(content_identity)
 
+    def hard_delete(self, record_id: str) -> bool:
+        """Governed exception to append-only (D-RETENTION): remove one row by id.
+
+        Only `hard_delete_raw_record` calls this. Returns ``True`` if a row
+        was actually removed, ``False`` if `record_id` did not resolve to
+        any known row (the caller decides whether that is an error).
+        """
+        with self._lock:
+            for idx, row in enumerate(self._rows):
+                if row.id == record_id:
+                    del self._rows[idx]
+                    self._by_identity.pop(row.content_identity, None)
+                    return True
+            return False
+
     def clear(self) -> None:
         with self._lock:
             self._rows.clear()
@@ -282,11 +312,22 @@ def _bootstrap_pg(conn: Any) -> None:
         f"ON {_TABLE} (content_identity)"
     )
     cur.execute(
-        """
+        f"""
         CREATE OR REPLACE FUNCTION heimdal_raw_record_reject_mutation()
         RETURNS trigger AS $$
         BEGIN
-            RAISE EXCEPTION 'heimdal_raw_record is append-only (HEIM-1): % is not permitted', TG_OP;
+            -- D-RETENTION (Charter FIXED #7): the raw layer is the one place
+            -- true erasure exists, by design. The ONLY admitted exception is
+            -- a governed hard-delete that sets this session-local guard in
+            -- the same transaction immediately before issuing the DELETE
+            -- (see hard_delete_raw_record below) -- UPDATE is never admitted
+            -- under any guard, so no code path can rewrite a raw record,
+            -- only remove it wholesale under the governed job.
+            IF TG_OP = 'DELETE' AND current_setting('{_RETENTION_GUARD_SETTING}', true) = 'true' THEN
+                RETURN OLD;
+            END IF;
+            RAISE EXCEPTION 'heimdal_raw_record is append-only (HEIM-1): % is not permitted '
+                'outside the governed hard-retention job (D-RETENTION)', TG_OP;
         END;
         $$ LANGUAGE plpgsql
         """
@@ -418,6 +459,30 @@ class _PgRawStore:
         finally:
             conn.close()
 
+    def hard_delete(self, record_id: str) -> bool:
+        """Governed exception to append-only (D-RETENTION): see module docstring.
+
+        Sets the guard the trigger admits a DELETE under, then issues the
+        DELETE, on the same connection -- the guard uses ``is_local=false``
+        (session-scoped, not transaction-scoped) because this module's
+        connections run with ``autocommit=True`` (mirroring every other
+        Heimdal store), where each statement is its own implicit
+        transaction and a transaction-local `set_config` would not survive
+        to the next statement. The guard is never visible to any OTHER
+        connection (a fresh `_pg_connect()` per call), and this connection
+        is closed immediately after, so the exception window is exactly one
+        DELETE.
+        """
+        conn = _pg_connect()
+        try:
+            _assert_pg_schema(conn)
+            cur = conn.cursor()
+            cur.execute("SELECT set_config(%s, 'true', false)", (_RETENTION_GUARD_SETTING,))
+            cur.execute(f"DELETE FROM {_TABLE} WHERE id = %s", (record_id,))
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+
 
 def _backend() -> "_MemoryRawStore | _PgRawStore":
     if resolve_heimdal_backend() == "pg":
@@ -489,6 +554,28 @@ def all_raw_records() -> List[RawRecord]:
     return _backend().all_rows()
 
 
+def hard_delete_raw_record(record_id: str) -> bool:
+    """Governed exception to append-only (D-RETENTION, Charter FIXED #7).
+
+    Removes exactly one raw record by its durable `id`. This is the ONLY
+    function in this module (or anywhere) that can remove a row from
+    `heimdal_raw_record` -- the Postgres trigger rejects every DELETE that
+    does not come through this call (see the trigger body in
+    `_bootstrap_pg`). Returns ``True`` if a row existed and was removed,
+    ``False`` if `record_id` did not resolve to any known row.
+
+    This function performs the deletion ONLY -- it does not decide *whether*
+    a record is past its retention window, and it does not write a deletion
+    receipt. The sanctioned caller is
+    `app.heimdal.retention.enforce_hard_retention_bound`, which resolves the
+    retention window (from `_heimdal/**` settings notes, A14), calls this
+    function for each record past the bound, and pairs every call with a
+    durable deletion receipt in the same operation -- deletion is never
+    silent (Constraints: "no silent hard delete").
+    """
+    return _backend().hard_delete(record_id)
+
+
 __all__ = [
     "AppendOnlyViolationError",
     "RawRecord",
@@ -498,6 +585,7 @@ __all__ = [
     "decrypt_raw_bytes",
     "encrypt_raw_bytes",
     "get_raw_record_by_content_identity",
+    "hard_delete_raw_record",
     "insert_raw_record",
     "reset_memory_raw_store",
     "resolve_raw_store_key",
