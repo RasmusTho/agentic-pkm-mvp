@@ -161,3 +161,13 @@ Reconciliation notes first: D13/D14 (vault *binding*) and #2143 (multi-vault reg
 | T6 | Doc-truth hygiene batch (G7): Heimdal charter `State:` headers, ADR-0044 enacted-rename note, #3023 stale hedge edit, `api/openapi.yaml` staleness disposition; add closure-caveat to #3019 re the #3095 wiring gap | — | Each named header/body reflects shipped reality; #3019 thread carries the caveat |
 
 Handoff: T1 is an owner decision, not decomposition — it routes to the owner directly. T2–T6 route through `feature-breakdown`/`docs-to-issue` after T1 lands (or immediately for T3/T4/T6, which are T1-independent).
+
+## §11 Owner rulings (2026-07-06, post-audit)
+
+The owner ruled the §9 decision the same day. Recorded here so the audit is not read as an open question:
+
+- **Vault write model → interim posture, not ADR-first (§9 Option 2 chosen over the recommended Option 1).** Concurrent same-note writes stay silent-last-write-wins for now; the full multi-writer vault-consistency model is a dedicated ADR gated on **B2**. Recorded in **`docs/adr/ADR-0053-interim-vault-multiwriter-posture.md`**; full decision tracked at **#3114** (the seven cover-items of §2). T1 is therefore *split*: interim (done, ADR-0053) + full (deferred to #3114).
+- **B1 write scope → unconstrained.** The iPhone shell may read/write any note from day one, including human prose notes — the full risk window is accepted for the B1 wave and owned in ADR-0053.
+- **Client contract (T2) → commit the design-of-record as-is.** The owner's `APP_TOPOLOGY_AND_PLATFORMS.md` is committed at **`docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md`** (topology/platform design B1 is verified against). Note this is the *topology* contract; the machine-facing note-shape contract (G3) remains open T2 work.
+
+Unchanged: T3 (append-guard, INV-VW2), T4/T5 (cross-repo Builder writeback), T6 (doc-truth batch) remain decision-independent follow-ups.
