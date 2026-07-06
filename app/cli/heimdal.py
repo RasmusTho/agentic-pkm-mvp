@@ -47,10 +47,17 @@ def capture_watch(once: bool, max_ticks: int | None) -> None:
 
     if once:
         result = run_capture_tick(cfg)
-        summary = {
-            "admitted": len(result.admitted) if result is not None else 0,
-            "refused": len(result.refused) if result is not None else 0,
-        }
+        if result is None:
+            # `None` means the tick itself failed (e.g. the watch dir became
+            # unreadable mid-scan) -- distinct from a real, successful empty
+            # tick. Reporting {"admitted": 0, "refused": 0} here would be a
+            # false-success signal for a manually-invoked diagnostic command;
+            # fail loud instead, matching Heimdal's posture everywhere else.
+            raise click.ClickException(
+                "Tick failed -- see the logged error for details. "
+                "The watch directory may be unreadable or unavailable."
+            )
+        summary = {"admitted": len(result.admitted), "refused": len(result.refused)}
         click.echo(json.dumps(summary, ensure_ascii=False))
         return
 

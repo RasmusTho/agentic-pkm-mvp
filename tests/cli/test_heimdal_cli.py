@@ -12,6 +12,7 @@ the real path, not just a stubbed dependency.
 from __future__ import annotations
 
 import json
+import os
 import secrets
 from pathlib import Path
 
@@ -70,3 +71,36 @@ def test_capture_watch_once_admits_real_file(monkeypatch: pytest.MonkeyPatch, tm
     # file was deleted after confirmed ingest (delete-after-confirmed-ingest).
     assert len(all_raw_records()) == 1
     assert not memo.exists()
+
+
+@pytest.mark.skipif(
+    hasattr(os, "getuid") and os.getuid() == 0,
+    reason="root ignores chmod 0o000, so this permission-based repro doesn't trigger as root",
+)
+def test_capture_watch_once_fails_loud_on_tick_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A genuine tick failure (unreadable watch dir) must not report fake success.
+
+    `run_capture_tick` returns `None` when the tick itself fails (not a
+    per-file admission failure) -- e.g. the watch directory becomes
+    unreadable mid-scan (`Path.iterdir()` raises `PermissionError`, which
+    happens outside `run_watch_cycle`'s per-file try/except). `--once` must
+    surface that as a failure, not as `{"admitted": 0, "refused": 0}` (which
+    is indistinguishable from a real, healthy empty tick).
+    """
+    watch_dir = tmp_path / "unreadable"
+    watch_dir.mkdir()
+    watch_dir.chmod(0o000)
+    monkeypatch.setenv("HEIMDAL_CAPTURE_WATCH_DIR", str(watch_dir))
+
+    try:
+        runner = CliRunner()
+        result = runner.invoke(cli, ["heimdal", "capture-watch", "--once"])
+
+        assert result.exit_code != 0, (
+            f"Expected a non-zero exit on tick failure, got 0 with output: {result.output}"
+        )
+        assert '"admitted": 0' not in result.output
+    finally:
+        watch_dir.chmod(0o755)
