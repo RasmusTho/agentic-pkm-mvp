@@ -40,6 +40,16 @@ class EmbeddingIdentity:
     model: str
     dim: int
     normalize: bool = True
+    # Identity note (not part of the mixed-identity comparison tuple used by
+    # index doctor/reconcile, which keys on provider/model/dim/normalize only):
+    # whether this model family requires no query/passage prefix formatting
+    # (docs/EMBEDDINGS.md :: Model-specific formatting). Both the shipped
+    # nomic-embed-text default and the BGE-M3 profile (ADR-0052, #2984) are
+    # no-prefix models, unlike E5-family models. Recorded here once so the
+    # question of "does this call site need query:/passage: formatting" is
+    # not re-litigated per call site if a prefix-requiring model is added
+    # later.
+    no_prefix: bool = True
 
     def __post_init__(self) -> None:
         # Ollama treats an untagged model name as its `:latest` tag. Persisting the
@@ -226,7 +236,8 @@ def resolve_embedding_identity(profile: str | None = None, override_model: str |
         model = _resolve_embedding_model(provider, override_model, cfg.model)
         dim = cfg.dim or get_embed_dim()
         normalize = cfg.normalize if cfg.normalize is not None else True
-        return EmbeddingIdentity(provider=provider, model=model, dim=dim, normalize=normalize)
+        no_prefix = cfg.no_prefix if getattr(cfg, "no_prefix", None) is not None else True
+        return EmbeddingIdentity(provider=provider, model=model, dim=dim, normalize=normalize, no_prefix=no_prefix)
 
     # No profile matched: honor EMBED_PRIMARY_PROVIDER (env) > LLM_PROVIDER (Codex P2).
     provider = _resolve_embedding_provider_name(override_provider or get_primary_provider())

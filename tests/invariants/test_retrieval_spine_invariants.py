@@ -7,10 +7,17 @@
   KERNEL-05 cache-through contract (docs/RUNTIME_CORRECTNESS_KERNEL/
   RETRIEVAL_READS_DURABLE_INDEX.md); changes only WHEN a rebuild happens,
   never what is eligible.
+
+- embedding_identity_converges_post_reindex (G3-1, #2984): after a BGE-M3
+  identity migration + reconcile, index doctor reports exactly one embedding
+  identity. Any mixed-identity window during migration must be surfaced
+  LOUDLY (as a doctor `issue`, not merely absorbed into a `warning` or
+  silently ignored) — never a silent partial migration.
 """
 
 from __future__ import annotations
 
+import os
 from uuid import UUID, uuid4
 
 import pytest
@@ -83,3 +90,140 @@ def test_retrieval_serves_durable_truth_fresh() -> None:
         "purge still served after the freshness bound"
     )
     assert str(kept) in ids
+
+
+def _pg_available() -> bool:
+    import psycopg
+
+    from app.db.dsn import resolve_dsn
+
+    url = resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+    try:
+        conn = psycopg.connect(url, connect_timeout=1)
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+@pytest.mark.pg
+def test_identity_converges(tmp_path, monkeypatch) -> None:
+    """embedding_identity_converges_post_reindex (G3-1, #2984): a mixed-identity
+    window (old nomic-embed-text @768 rows alongside new bge-m3 @1024 rows) is
+    surfaced loudly by index doctor as an `issue` (never silent); after
+    `index reconcile` converges the non-primary rows, doctor reports exactly
+    one identity."""
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+
+    import json
+    from dataclasses import asdict
+
+    import psycopg
+    from click.testing import CliRunner
+
+    from app.cli.index_rebuild import index as index_cli
+    from app.db.dsn import resolve_dsn
+    from app.index import doctor as doctor_mod
+    from app.stores import pg as pg_store
+    import app.cli.index_rebuild as reconcile_mod
+
+    def _dsn() -> str:
+        return resolve_dsn() or os.getenv("DATABASE_URL", "postgresql://app:app@127.0.0.1:15432/app")
+
+    monkeypatch.setenv("DATABASE_URL", _dsn())
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    reset_store_backends()
+    pg_store._TABLES_READY = False
+    pg_store._ensure_tables()
+    pg_store.truncate_pg_tables()
+    doctor_mod.reset_diagnose_cache()
+
+    old_identity = EmbeddingIdentity(provider="ollama", model="nomic-embed-text:latest", dim=1024, normalize=True)
+    new_identity = EmbeddingIdentity(provider="ollama", model="bge-m3:latest", dim=1024, normalize=True)
+
+    class _StubClient:
+        identity = new_identity
+
+        def embed_text(self, text: str) -> list[float]:
+            base = float(len(text) % 7 + 1)
+            return [base] * new_identity.dim
+
+    def _seed_row(dsn: str, identity: EmbeddingIdentity, *, text: str) -> str:
+        # Writes store_vector_index directly, bypassing VectorIndex.upsert()'s
+        # single-identity-per-write guardrail, so a mixed-identity index can be
+        # constructed (mirrors tests/cli/test_index_reconcile.py::_seed_row).
+        oid = uuid4()
+        with psycopg.connect(dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO store_objects (object_id, kind, source_ref, payload, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s::jsonb, now(), now())
+                    """,
+                    (oid, "note", "tests/identity-converges", json.dumps({"text": text})),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO store_vector_index (
+                        object_id, kind, source_ref, payload, embedding,
+                        dim, model, provider, normalize, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, now())
+                    """,
+                    (
+                        oid,
+                        "note",
+                        "tests/identity-converges",
+                        json.dumps({"text": text}),
+                        [0.1] * identity.dim,
+                        identity.dim,
+                        identity.model,
+                        identity.provider,
+                        identity.normalize,
+                    ),
+                )
+            conn.commit()
+        return str(oid)
+
+    try:
+        with psycopg.connect(_dsn()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO vector_index_meta (id, identity_json, updated_at)
+                    VALUES (1, %s, now())
+                    ON CONFLICT (id) DO UPDATE SET identity_json = EXCLUDED.identity_json, updated_at = now()
+                    """,
+                    (json.dumps(asdict(new_identity)),),
+                )
+            conn.commit()
+
+        _seed_row(_dsn(), old_identity, text="pre-migration row")
+        _seed_row(_dsn(), new_identity, text="post-migration row")
+
+        # Mid-migration: mixed identity must be LOUD (an issue), never silent.
+        doctor_mod.reset_diagnose_cache()
+        mid_migration = doctor_mod.diagnose_index()
+        assert len(mid_migration.get("mixed_identities") or []) > 1
+        assert any("Mixed embedding identities" in issue for issue in mid_migration.get("issues") or []), (
+            "embedding_identity_converges_post_reindex violated: mixed identity "
+            "during migration was not surfaced as a loud doctor issue"
+        )
+
+        monkeypatch.setattr(reconcile_mod, "get_embedding_client", lambda *a, **k: _StubClient())
+        runner = CliRunner()
+        result = runner.invoke(index_cli, ["reconcile", "--json"])
+        assert result.exit_code == 0, result.output
+
+        doctor_mod.reset_diagnose_cache()
+        post_migration = doctor_mod.diagnose_index()
+        mixed_after = post_migration.get("mixed_identities") or []
+        assert len(mixed_after) <= 1, (
+            "embedding_identity_converges_post_reindex violated: doctor still "
+            f"reports more than one identity post-reconcile: {mixed_after}"
+        )
+    finally:
+        doctor_mod.reset_diagnose_cache()
+        pg_store.truncate_pg_tables()
+        reset_store_backends()

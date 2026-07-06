@@ -167,3 +167,22 @@ def reset_store_backends() -> None:
         truncate_pg_tables()
     except Exception:
         pass
+
+
+def reset_memory_store_backend() -> None:
+    """Drop only the in-process MEMORY store singletons (object/vector/relation).
+
+    DB-SAFE: unlike ``reset_store_backends``, this never calls
+    ``truncate_pg_tables`` and never touches any Postgres backend, so it is safe
+    to call from a production code path even when a real DB is reachable. It only
+    clears the ``lru_cache`` holding the in-memory instances so the next
+    ``get_vector_index()`` / ``get_object_store()`` builds a fresh memory store
+    with no leaked embedding identity from an earlier occupant of the same
+    interpreter (see ``app/cli/smoke.py`` — the smoke commands seed their own
+    corpus into a fresh in-memory store and must not inherit an ambient
+    singleton's identity).
+    """
+    try:
+        _memory_instances.cache_clear()
+    except Exception:
+        pass
