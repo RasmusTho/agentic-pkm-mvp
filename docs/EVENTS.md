@@ -613,21 +613,31 @@ Operator visibility:
 ### `knowledge_acquisition.stage.completed`
 
 Emitted by the Knowledge Acquisition refinement pipeline (KA-06, #2801) when a refinement
-stage transition succeeds: `normalize`, each extractor run, and `candidate`. A **lineage/
-audit** event, NOT a dispatched command — nothing consumes it as a command that mutates
-state; it records that a stage transition happened, per
+stage transition succeeds: `normalize`, each extractor run, and `candidate`. A lineage/audit
+event recording that a stage transition happened, per
 `docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md` § Stage execution model / §
-Lineage and replay. It is therefore deliberately absent from
-`app/workers/outbox_worker.py::_dispatch_topic` and from the topic-schema registry
-(`schemas/events/*`); the coverage test enumerates only dispatched topics, so this topic is
-out of its scope by construction.
+Lineage and replay. KA-06 shipped it deliberately unconsumed; KA-07 (#3107) added the first
+consumer route in `app/workers/outbox_worker.py::_dispatch_topic`
+(`handle_knowledge_acquisition_stage_completed`). The consumer's downstream action is
+bounded and minimal, NOT the triage engine
+(`docs/KNOWLEDGE_ACQUISITION/INGESTION_AND_TRIAGE_POLICY.md`/CONTEXTUALIZATION_LAYER own
+that, still docs-only target state): only a `candidate`-stage completion (the pipeline's
+terminal stage, where a candidate note now exists) emits a durable
+`knowledge_acquisition.candidate.ready_for_triage` observability signal (JSONL audit sink +
+DB outbox row when enabled); `normalize`/extractor-run completions are traced (dispatched,
+logged) with no further action, since there is no candidate yet to mark ready. This topic
+still registers no topic schema (KERNEL-08, `schemas/events/*`) — only the dispatch route
+was added.
 
 Deterministic idempotency key (KERNEL-02, via `derive_idempotency_key`): keyed on
 `(stage, stage_version, content_identity)` — plus `extractor_id` for extractor runs so two
 extractors over the same content never collide. Re-running an unchanged stage at an
 unchanged version re-derives the SAME key (idempotent no-op: exactly one row); a stage
 version bump derives a DISTINCT key (a stage improvement re-runs the stage and is a
-genuinely new lineage event, never swallowed against the old row).
+genuinely new lineage event, never swallowed against the old row). The consumer's
+`ready_for_triage` signal re-derives its own key from the same
+`(content_identity, stage-scope, stage_version)` fingerprint the producer used, so
+redelivery of the identical stage-completed event converges to a single signal.
 
 Payload fields (in addition to the envelope):
 - `stage` (`string`): `normalize` | `extracted` | `candidate`.
@@ -645,10 +655,14 @@ a sibling item or sibling extractor is unaffected (contract § Stage execution m
 and item-scoped: it dead-letters that item at that stage without blocking other items or
 other extractors"). Distinct from `outbox.event.dead_lettered`, which is the worker's
 DB-row dispatch-poison signal; this event is a KA stage-pipeline compute failure, never a
-queued row the worker is dispatching. Like the completed event, it is lineage/audit — not a
-dispatched command — and registers no schema. Its deterministic key is content-scoped
-(fingerprint `<scope>:<stage_version>:dead_letter`), so a duplicate delivery of the same
-failure dedups to one audit row.
+queued row the worker is dispatching. KA-07 (#3107) added the consumer route
+(`handle_knowledge_acquisition_stage_dead_lettered`): it surfaces a durable, item-scoped
+`knowledge_acquisition.stage.dead_letter_surfaced` observability signal (JSONL audit sink +
+DB outbox row when enabled) and never raises, so a dead-lettered item never blocks dispatch
+of a sibling item's event. This topic still registers no schema (KERNEL-08). Its
+deterministic key is content-scoped (fingerprint `<scope>:<stage_version>:dead_letter`), so
+a duplicate delivery of the same failure dedups to one audit row; the consumer's surfaced
+signal re-derives its own key from the same fingerprint shape and dedups identically.
 
 Payload fields (in addition to the envelope):
 - `stage` (`string`), `stage_version` (`int`), `content_identity` (`string`): as above.

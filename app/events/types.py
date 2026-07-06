@@ -88,11 +88,16 @@ RELATION_MISSING = "relation.missing"
 SETTINGS_WRITE_RECEIPT = "settings.write.receipt"
 
 # Knowledge Acquisition refinement-pipeline stage events (KA-06, #2801).
-# Stage-transition lineage/audit events on the existing DB outbox — NOT dispatched
-# commands: they are never branched on in `outbox_worker._dispatch_topic`, carry no
-# handler, and register no schema (see docs/EVENTS.md :: Knowledge Acquisition stage
-# events, and docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md § Stage
-# execution model / § Lineage and replay).
+# Stage-transition lineage/audit events on the existing DB outbox. KA-06 left
+# them deliberately unconsumed (lineage/audit only); KA-07 (#3107) added the
+# first consumer route in `outbox_worker._dispatch_topic`
+# (`handle_knowledge_acquisition_stage_completed` /
+# `handle_knowledge_acquisition_stage_dead_lettered`) with a bounded, minimal
+# downstream action -- NOT the triage engine (see docs/EVENTS.md ::
+# Knowledge Acquisition stage events, and
+# docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md § Stage
+# execution model / § Lineage and replay). They still register no topic
+# schema (KERNEL-08) -- only the dispatch route was added.
 KNOWLEDGE_ACQUISITION_STAGE_COMPLETED = "knowledge_acquisition.stage.completed"
 KNOWLEDGE_ACQUISITION_STAGE_DEAD_LETTERED = "knowledge_acquisition.stage.dead_lettered"
 

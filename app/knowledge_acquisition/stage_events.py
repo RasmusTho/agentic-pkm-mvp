@@ -18,12 +18,16 @@ Design decisions (binding for this slice):
   helper `derive_idempotency_key`. No parallel event path, no `app.outbox.events` JSONL
   append (that seam is non-idempotent, #2881), no worker `_dispatch_topic` branch.
 
-- **These topics are lineage/audit, NOT dispatched commands.** Nothing consumes them as
-  a command that mutates state; they record that a stage transition happened, per the
-  contract's lineage/replay model. They are therefore deliberately absent from
-  `outbox_worker._dispatch_topic` and from the topic-schema registry
-  (`schemas/events/*`) — adding either would invent a dispatched-command path the
-  contract does not ask for.
+- **These topics are lineage/audit, not commands mutating pipeline state.** They record
+  that a stage transition happened, per the contract's lineage/replay model, and this
+  module registers no topic schema (`schemas/events/*`) for them. KA-07 (#3107) added the
+  first CONSUMER for both topics in `outbox_worker._dispatch_topic`
+  (`handle_knowledge_acquisition_stage_completed` /
+  `handle_knowledge_acquisition_stage_dead_lettered`), but that consumer's downstream
+  action is deliberately bounded and minimal (a durable observability signal — candidate
+  ready-for-triage / dead-letter surfaced) — never the full triage engine, and it never
+  mutates a `raw`/`normalized`/`candidate` artifact this module produced. See
+  `docs/EVENTS.md` § these two topics for the consumer contract.
 
 - **Deterministic keys stable across replay, distinct across stage-version bumps.** The
   completion key for a stage transition is derived from

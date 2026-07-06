@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/knowledge_acquisition.stage.completed.v1.schema.json",
+  "title": "knowledge_acquisition.stage.completed payload (v1)",
+  "description": "Payload of the knowledge_acquisition.stage.completed outbox event. Producer: app/knowledge_acquisition/stage_events.py::emit_stage_completed (stage, stage_version, content_identity, optional extractor_id/model_identity/artifact_path). Consumer (KA-07, #3107): app/workers/outbox_worker.py::handle_knowledge_acquisition_stage_completed -- a bounded downstream action (candidate-stage completions emit a ready-for-triage observability signal; other stages are a traced no-op).",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["stage", "stage_version", "content_identity"],
+  "properties": {
+    "stage": { "type": "string", "enum": ["normalize", "extracted", "candidate"] },
+    "stage_version": { "type": "integer" },
+    "content_identity": { "type": "string", "minLength": 1 },
+    "extractor_id": { "type": ["string", "null"] },
+    "model_identity": { "type": ["object", "null"] },
+    "artifact_path": { "type": ["string", "null"] }
+  }
+}
