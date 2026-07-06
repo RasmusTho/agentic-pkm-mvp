@@ -3,8 +3,8 @@
 Slice A6 of Epic #3019 (Heimdal v1). Ratified by
 `docs/adr/ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md` §1 and
 specified by `docs/HEIMDAL/FABLE_COMPANION.md` §11#5/§11#6 (voice-memo
-capture adapter writes the raw record; the gated *read* path over this store
-is a later slice, A7 -- out of scope here).
+capture adapter writes the raw record; the gated *read* path over this
+store is `app/heimdal/raw_read_gate.py`, slice A7, #3027).
 
 Contract:
 
@@ -44,9 +44,10 @@ Backend selection mirrors `app.heimdal.observation_log` /
 (or no Postgres DSN configured) uses an in-process append-only list; a
 resolvable Postgres DSN uses the real ``heimdal_raw_record`` table.
 
-Out of scope for this slice: the gated read path (A7, allowlist + receipt
-evaluation over this table); key management/rotation (v1 uses one
-process-lifetime key from an env var); ASR / transcription.
+Out of scope for this slice: key management/rotation (v1 uses one
+process-lifetime key from an env var); ASR / transcription. The gated read
+path (allowlist + receipt evaluation over this table) is
+`app/heimdal/raw_read_gate.py` (A7, #3027).
 """
 
 from __future__ import annotations

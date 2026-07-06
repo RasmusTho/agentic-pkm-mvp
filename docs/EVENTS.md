@@ -342,9 +342,51 @@ Contract:
 - **No direct DB imports across boundaries.** Other constituents never
   import `app.heimdal.raw_store` and query the table directly.
 - **Out of scope for this slice:** the gated *read* path over the raw store
-  (§11#6, a later slice, A7); ASR / transcription / attribution / publish
-  (A7 onward); always-on/ambient adapters, place/session grants, direct
-  device→host transfer (all v2); a second modality.
+  (§11#6, a later slice, A7 — delivered, see below); ASR / transcription /
+  attribution / publish (A7 onward); always-on/ambient adapters,
+  place/session grants, direct device→host transfer (all v2); a second
+  modality.
+
+## Heimdal gated raw-read path (§11#6 — delivered #3027, HEIM-5)
+
+`app/heimdal/raw_read_gate.py` (#3027, Epic #3019 slice A7; ratified by
+`docs/adr/ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md` §11;
+specified by `docs/HEIMDAL/FABLE_COMPANION.md` §11#6). Sits over the raw
+store built by A6 (`app/heimdal/raw_store.py`) and enforces `heim_policy_
+gated_raw_access` (HEIM-5): "raw-layer reads require a CrossScopeFlow grant
+and emit a receipt; no ungoverned raw read path exists in any surface."
+
+Contract:
+
+- **Opaque `raw_ref` handle.** `raw_ref_for(record)` mints
+  `"heimraw:<uuid>"` from a durable `RawRecord`; callers outside this
+  module never see or pass `source_path`, a DB row shape, or the table
+  name. `read_raw_record` is the only function that resolves a `raw_ref`
+  back to bytes.
+- **Allowlist gate (interim CrossScopeFlow stand-in, declared HEIM-5
+  gap).** `read_raw_record(raw_ref, reader=..., purpose=...)` refuses
+  loudly (`RawReadRefusedError`) unless `reader` is on
+  `HEIMDAL_RAW_READ_ALLOWLIST` (comma-separated reader ids; unset raises
+  `RawReadAllowlistMissingError` — never default-allow every reader).
+  Full CrossScopeFlow grant evaluation replacing this allowlist check is
+  v2; the receipt contract does not change when that lands. Grants do not
+  compose: this gate governs read only — export is a distinct, separately
+  gated operation (T2 mitigation, ADR-0049 §11 SBS Impact).
+- **Receipt on every successful read (HEIM-1).** A successful read appends
+  exactly one `heimdal_raw_read_receipt` row (who: `reader`; what:
+  `raw_ref` + `content_identity`, never `source_path`; when: `read_at`;
+  why: `purpose`) in the same call that returns plaintext — there is no
+  "read now, receipt later" step. A refused read raises before any
+  decryption is attempted and writes no receipt.
+- **Append-only receipts.** Same discipline as the raw store: no
+  update/delete API; the Postgres backend installs an identical
+  reject-mutation trigger (migration `f1c7e2a9b4d6`).
+- **No direct DB imports across boundaries.** Other constituents never
+  import `app.heimdal.raw_read_gate` and query the receipt table directly.
+- **Out of scope for this slice:** full CrossScopeFlow grant evaluation
+  (v2, declared HEIM-5 gap); export (its own operation); ASR / attribution
+  / publish stages that will become the gate's first real callers;
+  cryptographic erasure (v2).
 
 ## Event catalog (selected)
 

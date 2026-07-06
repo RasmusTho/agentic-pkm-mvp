@@ -34,6 +34,13 @@ Mimer-side integration points that substrate hands off to:
   the same durable write (KERNEL-06), and deletes the source only after
   confirmed durable persistence (see
   `docs/EVENTS.md :: Heimdal raw-evidence store + voice-memo capture adapter`).
+- `app/heimdal/raw_read_gate.py` (#3027, Epic #3019 slice A7) -- the gated
+  read path over the raw store: an opaque `raw_ref` handle plus an
+  allowlist + receipt gate enacting HEIM-5 (`heim_policy_gated_raw_access`)
+  as an interim CrossScopeFlow stand-in (declared gap). No caller reads
+  raw evidence without passing the allowlist, and every successful read
+  appends an audit receipt in the same call (see
+  `docs/EVENTS.md :: Heimdal gated raw-read path`).
 """
 
 from __future__ import annotations
