@@ -262,17 +262,44 @@ CONSENT = SettingsNoteSpec(
     rel_path="consent.md",
     authority=AUTHORITY_CONTROL_STATE,
     description=(
-        "Human-editable grant/revoke control surface (FABLE_COMPANION §6.1). "
-        "The append-only consent LEDGER (HEIM-1) is a separate, evented "
-        "mechanism this note's `grants` field expresses intent toward -- "
-        "this note does not replace or reimplement the ledger."
+        "Read-mostly readout mirroring the append-only consent LEDGER "
+        "(HEIM-1, FABLE_COMPANION §6.1, ratified by ADR-0049 §2/§3). The "
+        "ledger (`app.heimdal.consent_ledger`) is the sole mechanism and "
+        "source of record; this note is the legible lens over it -- "
+        "`grants` and `last_ledger_sync` are agent-authored (rebuilt from "
+        "the ledger by `app.heimdal.consent_surface.write_consent_readout` "
+        "every time), never a channel for a human edit to mutate consent "
+        "independently of the ledger (Epic #3019 slice A19, #3044). The "
+        "`withhold_span_review` and `retention_erasure` sections are "
+        "B-shaped: present so Posture B inherits a working surface, inert "
+        "in v1."
     ),
     sections=(
         SectionSpec(
             "grants",
             (
-                FieldSpec("grants", FIELD_HUMAN_EDITABLE, "declared grants: scope, basis, capture_profile"),
-                FieldSpec("last_ledger_sync", FIELD_AGENT_AUTHORED, "last time this note was reconciled against the ledger"),
+                FieldSpec("grants", FIELD_AGENT_AUTHORED, "active ledger grants, mirrored verbatim (read-mostly)"),
+                FieldSpec("last_ledger_sync", FIELD_AGENT_AUTHORED, "last time this note was rebuilt from the ledger"),
+            ),
+        ),
+        SectionSpec(
+            "withhold_span_review",
+            (
+                FieldSpec(
+                    "withhold_span_review",
+                    FIELD_AGENT_AUTHORED,
+                    "B-shaped, present-but-dormant in v1: third-party withhold-span review queue/state",
+                ),
+            ),
+        ),
+        SectionSpec(
+            "retention_erasure",
+            (
+                FieldSpec(
+                    "retention_erasure",
+                    FIELD_AGENT_AUTHORED,
+                    "B-shaped, present-but-dormant in v1: retention/erasure control state",
+                ),
             ),
         ),
     ),
