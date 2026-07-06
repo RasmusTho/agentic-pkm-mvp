@@ -98,10 +98,13 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "event-emission and object-materialization -- see formal-model.md T-materialize); "
         "this call is the eventual T-materialize-equivalent write for the API path."
     ),
-    ("app/ingest/vault_alpha.py", 527): (
+    ("app/ingest/vault_alpha.py", 555): (
         "Legacy vault-alpha ingest path: keeps classifier/normalizer flows working "
         "against the memory backend during tests/alpha runs; the alpha ingest pipeline "
-        "emits its own ingest event upstream of this call in the same run."
+        "emits its own ingest event upstream of this call in the same run. Line drifted "
+        "527 -> 555 (site unchanged); re-pinned by #3034 (A14) as a directly-related "
+        "repair -- the census gate only fires when this machinery is touched, so the "
+        "pre-existing drift surfaced on the first Heimdal PR to edit it."
     ),
     ("app/knowledge_acquisition/raw_record.py", 118): (
         "KA-01 immutable raw record (pre-pipeline by design): emitting the default "
@@ -681,6 +684,19 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "`main` before #2953 (the issue's named live violator) -- now closed "
         "by the port's own unconditional guard-at-seam assertion, exactly the "
         "way #2910 closed the absolute-path port's unguarded sites."
+    ),
+    ("app/heimdal/entity_register.py", 290): (
+        "guarded_by_caller: EntityRegister._write_entry asserts write_guard."
+        "assert_writes_allowed(REGISTER_WRITE_ACTION) immediately before this "
+        "call, in addition to the port's own guard (#3038, Epic #3019 A1) -- "
+        "classification added by #3034 (A14) as a directly-related repair of "
+        "a pre-existing census gap left unregistered by #3038's PR (#3069)."
+    ),
+    ("app/heimdal/settings_notes.py", 531): (
+        "guarded_by_caller: write_settings_note passes write_guard through to "
+        "write_note_relative, which asserts write_guard.assert_writes_allowed"
+        "(action) at the port itself before any I/O (#2953); callers such as "
+        "apply_agent_update never bypass this seam (#3034, Epic #3019 A14)."
     ),
 }
 

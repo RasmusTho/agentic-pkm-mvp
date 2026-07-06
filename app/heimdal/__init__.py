@@ -19,6 +19,12 @@ Mimer-side integration points that substrate hands off to:
   seeded with the standing `self_record` grant (ADR-0049 §3 Posture A;
   FABLE_COMPANION §6.1/§6.2; see
   `docs/EVENTS.md :: Heimdal consent ledger v0 + capture-time check`).
+- `app/heimdal/settings_notes.py` (#3034, Epic #3019 slice A14) is the
+  writable `_heimdal/**` markdown control-surface substrate + schema
+  (ADR-0049 §2 "markdown-first control surface"; `docs/HEIMDAL/
+  FABLE_COMPANION.md` §9-k). Canonical control state, not the append-only
+  observation log (HEIM-1 unaffected) and not a promotion authority
+  (HEIM-8 unaffected).
 """
 
 from __future__ import annotations
