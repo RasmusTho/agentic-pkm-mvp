@@ -22,6 +22,7 @@ from app.planner.schema import Plan, PlanMetadata, PlanStep, new_plan_id
 from app.cli.panel import panel as panel_cli
 from app.cli.health_contract import emit_health_contract_status
 from app.cli.watcher import vault_watcher_run, vault_watcher_daemon, watcher_group
+from app.cli.heimdal import heimdal_group
 from app.cli.index_rebuild import index as index_cli
 from app.cli.llm_doctor import llm as llm_cli
 from app.cli import index_doctor  # noqa: F401 -- register index doctor command
@@ -1853,6 +1854,7 @@ cli.add_command(panel_cli, name="panel")
 cli.add_command(watcher_group, name="watcher")
 cli.add_command(vault_watcher_run)
 cli.add_command(vault_watcher_daemon)
+cli.add_command(heimdal_group, name="heimdal")
 
 @cli.command(name="embed-probe", help="Sanity-check embeddings provider model + dimension.")
 @click.option("--profile", default="default", show_default=True, help="Embedding profile (default or deterministic/test)")
