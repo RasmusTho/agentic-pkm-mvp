@@ -48,6 +48,10 @@ ALLOW_FILES = (
     'app/heimdal/observation_log.py',
     'app/heimdal/cursor_store.py',
     'app/heimdal/_backend.py',
+    # Consent ledger v0 (#3042, Epic #3019 slice A5). Same bounded pattern as
+    # the observation log / cursor store above: a dedicated append-only
+    # grants table, direct DSN connection, no ORM layer to route through.
+    'app/heimdal/consent_ledger.py',
 )
 
 def _allowed(p: Path) -> bool:

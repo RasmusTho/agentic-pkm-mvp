@@ -236,6 +236,57 @@ document and §1.3 are now consistent prose/schema mirrors of each other).
 - **Out of scope for this slice:** the consent ledger runtime (A5); the corrected/revision fold logic
   (§11#12/§11#14); the entity register runtime (A1, already landed, #3038); the observation log /
   cursor mechanics (A2, already landed, #3039); capture, ASR, projector.
+## Heimdal consent ledger v0 + capture-time check (HEIM-3)
+
+`app/heimdal/consent_ledger.py` (#3042, Epic #3019 slice A5; ratified by
+`docs/adr/ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md` §3;
+specified by `docs/HEIMDAL/FABLE_COMPANION.md` §6.1/§6.2/§8 HEIM-3).
+
+An append-only ledger of consent grants and revocations (its own table,
+`heimdal_consent_grant`, migration `c4f7a1b2d9e3`), seeded with the standing
+`self_record` grant (v1 Posture A — "the act of deliberately recording is
+the grant", FABLE_COMPANION §6.1 basis 1). Grants are appended; a
+revocation is a NEW row (`basis='revocation'`, `revokes_grant_ref` naming
+the lapsed grant) — never an edit of the grant it lapses, same HEIM-1
+discipline as `heimdal_observation_log`, enforced by an identical
+DB-level append-only trigger.
+
+Contract:
+
+- **Capture-time check (HEIM-3), the one enforcement point.**
+  `admit_raw_evidence(scope=...)` is the *only* sanctioned signal→raw
+  admission call: it resolves an active grant for the scope BEFORE
+  returning an admission decision. No active grant raises
+  `ConsentRefusedError` loudly (never a silent drop). A future capture
+  adapter (§11#5) is required to call this function rather than
+  reimplement grant resolution — that is what keeps this the only
+  signal→raw path, so no capture route can bypass the ledger.
+- **`consent.grant_ref` stamping.** `stamp_consent_block(grant, ...)`
+  builds the `consent` block (`basis`, `granted_by`, `granted_at`,
+  `third_party`, `grant_ref`) every raw record and published event must
+  carry, per FABLE_COMPANION §1.1's field family.
+- **B-shaped fields present-but-dormant.** Every grant record carries
+  `vad_gate`, `third_party`, `retention`, and `erasure` fields, populated
+  with v1-inert defaults (`vad_gate.enabled = False`,
+  `third_party.policy = "degrade"`, no retention/erasure runtime), so
+  enabling Posture B later is a grant + adapter change, not a schema
+  redesign (ADR-0049 §3).
+- **Grant/revocation events reference the observation-log topic family by
+  value only.** `heimdal.consent.granted` / `heimdal.consent.revoked`
+  (FABLE_COMPANION §6.1) are referenced as string constants
+  (`CONSENT_GRANTED_TOPIC` / `CONSENT_REVOKED_TOPIC`) in this module; the
+  canonical `app/events/types.py` topic constants and the runtime wiring
+  that actually publishes them onto `heimdal_observation_log` belong to
+  sibling slice A4 (event contract schemas), not this module.
+- **No direct DB imports across boundaries.** Other constituents reference
+  consent by `grant_ref`, never by importing `app.heimdal.consent_ledger`
+  and querying the table directly.
+- **Out of scope for this slice:** the capture adapter itself (§11#5), ASR,
+  third-party voice detection/degradation runtime (§6.3), place/session
+  grant runtime (contract-stub only — `grant_consent(basis=...)` accepts
+  `session_optin`/`place_optin` values but no adapter issues them yet),
+  revocation → raw-erasure / published-event-suppression propagation
+  (§11#14, contract-stub).
 
 ## Event catalog (selected)
 
