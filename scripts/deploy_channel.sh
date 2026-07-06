@@ -234,6 +234,31 @@ health_gate() {
   curl -fsS --max-time 3 "http://127.0.0.1:${ui_port}/healthz" >/dev/null
 }
 
+capture_watch_gate() {
+  # Surface a broken heimdal-capture-watch (e.g. missing/invalid HEIMDAL_RAW_STORE_KEY, which
+  # its own healthcheck fails loud on) at deploy time instead of letting it sit unhealthy and
+  # silent. Deliberately does NOT roll back api/worker: capture-watch runs its own
+  # healthcheck/restart loop and must not block unrelated services (docker-compose.yaml). A
+  # failure here fails the deploy loudly (non-zero exit) after the api deploy is already recorded.
+  local cid deadline status
+  cid="$(compose ps -q heimdal-capture-watch 2>/dev/null | head -1)"
+  if [ -z "${cid}" ]; then
+    echo "capture-watch gate: heimdal-capture-watch container not found after deploy" >&2
+    return 1
+  fi
+  deadline=$(( $(date +%s) + 120 ))
+  while [ "$(date +%s)" -lt "${deadline}" ]; do
+    status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${cid}" 2>/dev/null || echo missing)"
+    case "${status}" in
+      healthy) return 0 ;;
+      unhealthy) echo "capture-watch gate: container unhealthy — check HEIMDAL_RAW_STORE_KEY / HEIMDAL_CAPTURE_WATCH_DIR for channel ${channel}" >&2; return 1 ;;
+    esac
+    sleep 3
+  done
+  echo "capture-watch gate: heimdal-capture-watch did not become healthy within 120s (last status: ${status})" >&2
+  return 1
+}
+
 version_gate() {
   local version_json health_json version_sha health_sha
   version_json="$(curl -fsS --max-time 5 "http://127.0.0.1:${api_port}/version")"
@@ -309,3 +334,7 @@ health_gate || {
 version_gate
 scripts/companion_ui_postdeploy_smoke.sh "${channel}"
 record_receipt
+capture_watch_gate || {
+  echo "deploy: heimdal-capture-watch is not healthy (api/worker left in place and receipt recorded); resolve its config and re-check" >&2
+  exit 1
+}
