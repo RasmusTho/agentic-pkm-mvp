@@ -440,6 +440,53 @@ Contract:
   consent-revocation-triggered deletion runtime; cryptographic erasure of
   published event content.
 
+## Heimdal capture-note + receipt / J0 (delivered #3035)
+
+`app/heimdal/capture_note.py` (#3035, Epic #3019 slice A15; ratified by
+`docs/adr/ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md` §2;
+specified by `docs/HEIMDAL/FABLE_COMPANION.md` §9-k). Enacts journey J0
+(capture → receipt): a captured voice memo lands as a **dated vault note**
+that is the record — the note, not any UI, holds the truth.
+
+Contract:
+
+- **One dated note per captured memo.** `record_capture` writes a
+  companion-note-style markdown note at a deterministic path
+  (`_heimdal/captures/YYYY-MM-DD-<memo_id>.md`, `capture_note_rel_path`) as
+  soon as a memo is admitted — before ASR/attribution have run. The note
+  exists and is readable at that point (fitness rule: UUID/UI is not a
+  render gate).
+- **`status:` frontmatter walks the pipeline, monotonically.** Exactly
+  `captured` → `processing` → `in-vault` (`STATUS_ORDER`), agent-authored
+  (pipeline-driven, never human-editable — mirrors the field-authority
+  split in `app.heimdal.settings_notes`). `write_capture_note` refuses
+  (`CaptureNoteStatusError`) any write whose target status ranks lower
+  than the note's current on-disk status; the note is updated **in
+  place** at each transition (`record_processing`, `record_in_vault`),
+  never rewritten as a new file.
+- **Self-describing without a UI.** `record_processing` folds in the A8
+  `TranscriptResult` (on-device transcript + segments); `record_in_vault`
+  folds in the A9 `AttributionResult` (self-record speaker attribution +
+  entity mentions, three-state resolution). Both are written into the
+  note's frontmatter and human-readable body — opening the raw file in
+  Obsidian shows the full record with no UI involved.
+- **The receipt is a lens, not a capability.** `build_capture_receipt`
+  projects a `CaptureNote`'s own `status`/transcript-presence/
+  attribution-presence into a small read-only `CaptureReceipt`. It
+  performs no write and resolves no state beyond what the note already
+  carries — removing the "receipt UI" leaves the note fully functional
+  (ADR-0049 §2: "the UI is a lens").
+- **Governed write, no hand-rolled YAML.** Every write goes through
+  `app.knowledge.write_ops.write_note_relative` +
+  `app.write_guard.DEFAULT_WRITE_GUARD` (action
+  `heimdal.capture_note.write`), and frontmatter is parsed/dumped via
+  `scripts.yaml_roundtrip` — mirroring `app.services.companion_note` and
+  `app.heimdal.settings_notes` exactly.
+- **Out of scope for this slice:** always-on/ambient capture note shape
+  (posture B); segment-granular multi-note-per-episode writes (v2); the
+  Mimer projection of the memo into a candidate (A11); native-app receipt
+  rendering (Obsidian-usable markdown only in v1).
+
 ## Event catalog (selected)
 
 ## Interpretation rules
