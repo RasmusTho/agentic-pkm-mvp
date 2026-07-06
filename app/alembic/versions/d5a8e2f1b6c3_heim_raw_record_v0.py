@@ -27,7 +27,8 @@ This does not touch `heimdal_observation_log` / `heimdal_consent_grant` --
 the raw store is its own append-only table; the capture adapter reads an
 active grant from the consent ledger and writes exactly one row here per
 admitted memo (Out of scope for this slice per FABLE_COMPANION §11#6: the
-gated *read* path over this table is a later slice, A7).
+gated *read* path over this table is `heimdal_raw_read_receipt`, migration
+`f1c7e2a9b4d6`, slice A7, #3027).
 
 Forward-only, following the KERNEL-04/KERNEL-05/HEIM-1 precedent: schema-
 owning migrations in this repo have no downgrade path for their tables.
