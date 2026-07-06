@@ -25,8 +25,30 @@ directions, not just the human-edit direction).
 Note inventory (governing Issue's file list), each a `SettingsNoteSpec`:
 
 - `watchlist.md`   -- what Heimdal actively watches (sources, folders, feeds).
+                       Epic #3019 slice A18 (#3043) adds in-flow "watch this"
+                       durable body-line appends (chat or item transport) via
+                       `app.heimdal.interest_steering.append_watch`, alongside
+                       this note's existing structured `watched` frontmatter
+                       field.
 - `never.md`       -- explicit never-list / exclusions (highest-priority veto).
+                       A18 adds in-flow "never this" durable body-line
+                       appends via `app.heimdal.interest_steering.append_never`,
+                       the `never.md` counterpart to `append_watch` above.
 - `interests.md`   -- interest weights that steer relevance, not authority.
+                       Epic #3019 slice A18 (#3043) extends this note's
+                       agent-authored columns with `confidence`/`evidence`/
+                       `decay`; the human-editable `weights` column is
+                       untouched by that slice.
+- `steering.log.md` -- post-hoc steering trail (A18, #3043): "less of this" /
+                       "mute" / "wrong" append immutable lines to this
+                       note's body. The one note in this registry whose
+                       `authority` is `AUTHORITY_APPEND_ONLY_LOG` rather than
+                       `AUTHORITY_CONTROL_STATE` -- see
+                       `app.heimdal.interest_steering` for the append path
+                       and the body-preserving frontmatter-patch mechanism
+                       this note kind requires (`write_settings_note`'s
+                       generic `render_note` would otherwise discard prior
+                       appended lines on every bookkeeping update).
 - `sources/*.md`   -- per-source filter/config (one note per configured source).
 - `consent.md`     -- the append-only-*ledger*-referencing consent surface
                        (FABLE_COMPANION §6.1); the ledger itself stays
@@ -93,8 +115,14 @@ _VALID_FIELD_AUTHORITIES = frozenset({FIELD_HUMAN_EDITABLE, FIELD_AGENT_AUTHORED
 AUTHORITY_CONTROL_STATE = "control_state"  # canonical control state; no promotion authority (HEIM-8)
 AUTHORITY_REFERENCED_SUBSTRATE = "referenced_substrate"  # e.g. entities/*.md: owned elsewhere (Mimer/A1)
 AUTHORITY_DURABLE_SLICE = "durable_slice"  # e.g. attention/*.md: durable slice of a partly UI-only surface
+AUTHORITY_APPEND_ONLY_LOG = "append_only_log"  # e.g. steering.log.md: immutable trail, no in-place rewrite
 _VALID_AUTHORITIES = frozenset(
-    {AUTHORITY_CONTROL_STATE, AUTHORITY_REFERENCED_SUBSTRATE, AUTHORITY_DURABLE_SLICE}
+    {
+        AUTHORITY_CONTROL_STATE,
+        AUTHORITY_REFERENCED_SUBSTRATE,
+        AUTHORITY_DURABLE_SLICE,
+        AUTHORITY_APPEND_ONLY_LOG,
+    }
 )
 
 
@@ -227,13 +255,51 @@ INTERESTS = SettingsNoteSpec(
     kind="interests",
     rel_path="interests.md",
     authority=AUTHORITY_CONTROL_STATE,
-    description="Interest weights that steer relevance (not authority -- never/consent still veto).",
+    description=(
+        "Interest weights that steer relevance (not authority -- never/consent "
+        "still veto). Epic #3019 slice A18 (#3043): `weights` is human-editable "
+        "and a hand-edit is explicit intent that outranks inference -- the "
+        "`confidence`/`evidence`/`decay` columns are agent-authored derived "
+        "bookkeeping and must never overwrite a human weight edit "
+        "(`apply_agent_update` enforces this generically for every note kind)."
+    ),
     sections=(
         SectionSpec(
             "weights",
             (
                 FieldSpec("weights", FIELD_HUMAN_EDITABLE, "named interest -> weight map, human-tunable"),
                 FieldSpec("observed_signal", FIELD_AGENT_AUTHORED, "agent-observed engagement signal, informational only"),
+                FieldSpec("confidence", FIELD_AGENT_AUTHORED, "agent-derived confidence per named interest, informational only"),
+                FieldSpec("evidence", FIELD_AGENT_AUTHORED, "agent-collected evidence refs per named interest, informational only"),
+                FieldSpec("decay", FIELD_AGENT_AUTHORED, "agent-computed decay/staleness signal per named interest, informational only"),
+            ),
+        ),
+    ),
+)
+
+STEERING_LOG = SettingsNoteSpec(
+    kind="steering_log",
+    rel_path="steering.log.md",
+    authority=AUTHORITY_APPEND_ONLY_LOG,
+    description=(
+        "Post-hoc steering trail (Epic #3019 slice A18, #3043): 'less of "
+        "this' / 'mute' / 'wrong' signals append immutable lines to this "
+        "note's body -- never rewritten, never reordered, no update/delete "
+        "path (mirrors HEIM-1's append-only discipline, applied to a vault "
+        "note instead of the DB-backed observation log). The frontmatter "
+        "carries only agent-authored bookkeeping about the log itself; the "
+        "steering entries are body lines, appended via "
+        "`app.heimdal.interest_steering.append_steering_log_line` through "
+        "the governed `append_note_relative` seam, never through "
+        "`write_settings_note` (which replaces a note's full content and "
+        "would violate append-only)."
+    ),
+    sections=(
+        SectionSpec(
+            "log",
+            (
+                FieldSpec("entry_count", FIELD_AGENT_AUTHORED, "agent-maintained count of appended steering lines"),
+                FieldSpec("last_appended", FIELD_AGENT_AUTHORED, "timestamp of the most recent appended steering line"),
             ),
         ),
     ),
@@ -418,6 +484,7 @@ SETTINGS_NOTE_SPECS: Mapping[str, SettingsNoteSpec] = {
         WATCHLIST,
         NEVER_LIST,
         INTERESTS,
+        STEERING_LOG,
         SOURCE_CONFIG,
         CONSENT,
         SETTINGS,
@@ -631,6 +698,7 @@ def apply_agent_update(
 __all__ = [
     "ARTIFACT_CLASS",
     "ATTENTION_DAY",
+    "AUTHORITY_APPEND_ONLY_LOG",
     "AUTHORITY_CONTROL_STATE",
     "AUTHORITY_DURABLE_SLICE",
     "AUTHORITY_REFERENCED_SUBSTRATE",
@@ -647,6 +715,7 @@ __all__ = [
     "SETTINGS_NOTE_SPECS",
     "SETTINGS_NOTE_WRITE_ACTION",
     "SOURCE_CONFIG",
+    "STEERING_LOG",
     "SectionSpec",
     "SettingsNote",
     "SettingsNoteError",
