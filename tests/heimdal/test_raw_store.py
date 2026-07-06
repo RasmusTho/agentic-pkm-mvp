@@ -220,15 +220,29 @@ def test_get_raw_record_by_content_identity() -> None:
 
 
 def test_no_mutation_method_exported() -> None:
+    """HEIM-1 with the one declared D-RETENTION exception (#3032, Epic #3019
+    slice A12): no `update*` surface exists at all, and the only `delete*`
+    surface is `hard_delete_raw_record` -- the governed hard-retention
+    exception (Charter FIXED #7), never a silent/ungoverned mutation path.
+    See the module docstring and `app.heimdal.retention.enforce_hard_retention_bound`,
+    the sole sanctioned caller."""
     public_names = {name for name in dir(raw_store) if not name.startswith("_")}
-    mutating_names = {name for name in public_names if "update" in name or "delete" in name}
-    assert mutating_names == set(), f"unexpected mutation surface exported: {mutating_names}"
+    updating_names = {name for name in public_names if "update" in name}
+    deleting_names = {name for name in public_names if "delete" in name}
+    assert updating_names == set(), f"unexpected update surface exported: {updating_names}"
+    assert deleting_names == {"hard_delete_raw_record"}, (
+        f"unexpected delete surface exported: {deleting_names}"
+    )
 
 
 def test_no_mutation_method_on_resolved_backend() -> None:
+    """The resolved backend itself exposes no generic `update`; `hard_delete`
+    is the one named, governed D-RETENTION exception (not a generic
+    `delete`), matching `raw_store.hard_delete_raw_record` above."""
     backend = raw_store._backend()
     assert not hasattr(backend, "update")
     assert not hasattr(backend, "delete")
+    assert hasattr(backend, "hard_delete")
 
 
 @pytest.mark.pg

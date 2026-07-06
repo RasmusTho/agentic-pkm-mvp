@@ -61,6 +61,11 @@ ALLOW_FILES = (
     # pattern as the raw store above: a dedicated append-only receipt
     # table, direct DSN connection, no ORM layer to route through.
     'app/heimdal/raw_read_gate.py',
+    # Hard-retention deletion-receipt log (#3032, Epic #3019 slice A12). Same
+    # bounded pattern as the raw-read receipt log above: a dedicated
+    # append-only receipt table, direct DSN connection, no ORM layer to
+    # route through.
+    'app/heimdal/retention.py',
 )
 
 def _allowed(p: Path) -> bool:

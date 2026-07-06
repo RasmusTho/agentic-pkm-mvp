@@ -388,6 +388,58 @@ Contract:
   / publish stages that will become the gate's first real callers;
   cryptographic erasure (v2).
 
+## Heimdal hard-retention ops job + deletion receipts (§11#13 — delivered #3032, HEIM-7)
+
+`app/heimdal/retention.py` (#3032, Epic #3019 slice A12; ratified by
+`docs/adr/ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md`;
+specified by `docs/HEIMDAL/FABLE_COMPANION.md` §11#13). Enacts Charter
+FIXED #7 / D-RETENTION: the raw layer is the one place true erasure exists
+by design, and its execution must be a governed, auditable, receipted act.
+
+Contract:
+
+- **Bounded hard-retention, executed regardless of decay signals.**
+  `enforce_hard_retention_bound()` hard-deletes every raw record in
+  `app.heimdal.raw_store` whose `ingested_at` is older than the configured
+  window — unconditionally on age, not gated on any relevance-decay
+  signal (§11#13: "build-now (the bound) / contract-stub (event-triggered
+  decay model)").
+- **Markdown-first policy (A14).** The retention window
+  (`retention_window_days`) is read from `_heimdal/settings.md`
+  (`app.heimdal.settings_notes.SETTINGS`), never a hidden store or
+  env-var-only knob. An unset or non-positive window raises
+  `RetentionWindowMissingError` — this job never assumes a default bound
+  for an irreversible act.
+- **Deletion is never silent.** Every hard delete is paired, in the same
+  operation, with exactly one durable `heimdal_raw_deletion_receipt` row
+  (what: `record_id` + `content_identity`; when: `deleted_at`; why:
+  `reason` — always `"hard_retention_bound"` in v1; `retention_window_days`
+  names the bound in force). A `RetentionEnforcementReceipt` is returned
+  from every run, including the zero-deletions case (an honestly-receipted
+  no-op, never a silent skip).
+- **The one governed exception to append-only (D-RETENTION).**
+  `app.heimdal.raw_store.hard_delete_raw_record` is the ONLY function that
+  can remove a `heimdal_raw_record` row. The Postgres trigger
+  (`heimdal_raw_record_reject_mutation`, updated by migration
+  `a3f9d1c6e2b8`) rejects every UPDATE unconditionally and every DELETE
+  *unless* the session-local setting `app.heimdal_retention_bypass` is
+  `'true'` in the same transaction — a guard only that one function sets,
+  immediately before the DELETE, so no other code path (including a
+  hand-written SQL client) can hard-delete a raw record outside the
+  governed job.
+- **The observation log is untouched.** Retention operates on raw evidence
+  and deletion receipts only; `app.heimdal.observation_log` (HEIM-1,
+  append-only) and its projections are never read or written by this
+  module. A published event's `raw_ref` becomes a **declared dangling
+  reference** after its raw record is deleted — `app.heimdal.raw_read_gate.
+  read_raw_record` already raises `RawReadRefusedError` (declared-absent,
+  never a silent `None`) for any `raw_ref` that does not resolve to a known
+  record, so A7's gate needed no change for this slice.
+- **Out of scope for this slice (v2 contract-stubs, §11#13/#14):**
+  event-triggered relevance decay (the decay-model half of HEIM-7);
+  consent-revocation-triggered deletion runtime; cryptographic erasure of
+  published event content.
+
 ## Event catalog (selected)
 
 ## Interpretation rules
