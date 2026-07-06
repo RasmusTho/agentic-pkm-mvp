@@ -6358,6 +6358,8 @@ def _render_vault_selection_required_section(payload: object) -> str:
               autocomplete="off">
           </div>
           <ul class="vault-picker-list" data-testid="vault-picker-list">{rows_html}</ul>
+          <p class="vault-picker-select-error" data-testid="vault-picker-select-error"
+            role="alert" hidden></p>
           {initialize_html}
           {footer_html}
         </div>
@@ -6448,10 +6450,27 @@ def _render_vault_picker_script() -> str:
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
+    // Human-visible failure surface for recents-row selection (#3102). Without
+    // this a failed /vault/select (e.g. a 401 in the containerized topology, or
+    // a genuinely invalid path) only stamped a data-* attribute on the button —
+    // invisible to the user, who saw the screen appear to do nothing. Route the
+    // error into a live-region so onboarding failures are actionable, not silent.
+    var selectError = picker.querySelector('[data-testid="vault-picker-select-error"]');
+    function showSelectError(message) {
+      if (!selectError) { return; }
+      selectError.hidden = false;
+      selectError.textContent = message;
+    }
+    function clearSelectError() {
+      if (!selectError) { return; }
+      selectError.hidden = true;
+      selectError.textContent = '';
+    }
     // Shared select-a-vault dispatch — the existing vault.select authority. Used
     // by both the recents rows and the filesystem-mode "Open" affordance.
     function selectVault(path, button) {
       if (!path) { return; }
+      clearSelectError();
       if (button) {
         button.setAttribute('data-submitting', 'true');
         button.setAttribute('data-affordance-status', 'pending');
@@ -6459,10 +6478,12 @@ def _render_vault_picker_script() -> str:
       jsonPost('/api/companion/vault/select', { path: path })
         .then(function() { window.location.reload(); })
         .catch(function(err) {
+          var message = String(err && err.message || err);
+          showSelectError(message);
           if (button) {
             button.removeAttribute('data-submitting');
             button.setAttribute('data-affordance-status', 'blocked');
-            button.setAttribute('data-submit-error', String(err && err.message || err));
+            button.setAttribute('data-submit-error', message);
           }
         });
     }
