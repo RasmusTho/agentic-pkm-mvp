@@ -308,6 +308,32 @@ Not every artifact is primary in this sense.
 Mirrors, indexes, and other derivative system structures may support primary artifacts without
 becoming their ontological equals.
 
+### Episode
+
+An episode is a durable, note-serialized record of a bounded, observer-relative lived situation —
+the meeting, the walk, the debugging session — that a set of observations is the context of.
+
+Problem solved:
+- observations, notes, and captures are *about* something that happened, but the lived situation
+  that produced them has had no first-class home; without it, episodic memory has nothing to be
+  episodic about, and relevance cannot expire when a situation closes.
+
+An episode is represented as a situation model indexed on five dimensions — time, space, causation,
+goal, and protagonist. Observations attach to it (via `episode_ref`); it binds upward to
+projects/areas through its goal dimension.
+
+An episode is a cognitive construct (observer-relative), and it is:
+- distinct from a Context — a present-tense frame; the episode is the durable, dated record that a
+  context was active during,
+- distinct from a Heimdal sensor event — a discrete sensing act; many events compose into one
+  episode,
+- distinct from a moment (which surfaces it) and a workspace (which is ephemeral).
+
+Episode boundaries may be proposed by capture and stand by default; the human's only action is a
+re-cut (merge/split/re-time/re-label), never an approval. Grounded in event-segmentation and
+episodic-memory theory; enacted by [ADR-0051](../adr/ADR-0051-episode-as-ontological-primitive.md),
+grounded in [EPISODE_AS_ONTOLOGICAL_PRIMITIVE](../research/EPISODE_AS_ONTOLOGICAL_PRIMITIVE.md).
+
 ### Projection
 
 A projection is a bounded representation of an artifact created for a specific surface, operation,

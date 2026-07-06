@@ -116,6 +116,22 @@ boundaries are defined in the [System Breakdown Structure](../SYSTEM_BREAKDOWN_S
 - **Invariant:** TBD ([#2550](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2550)) —
   scope_binding propagated through segment/projection/retrieval.
 
+### `episode_ref`
+
+- **Question:** In what bounded lived situation (`Episode`) did this originate?
+- **Value families:** zero or more `episode_id`s; `unbound` when no episode is known. A binding
+  proposed by capture (opt-out segmentation) is `pending` until accepted or re-cut — see
+  [ADR-0051](../adr/ADR-0051-episode-as-ontological-primitive.md).
+- **Owning boundary:** SIP (situation identity/provenance); honored by RCA (retrieval, and
+  closure-driven relevance decay) and MEM.
+- **Required field:** `episode_ref`.
+- **Must NOT be inferred:** authority, evidence admissibility, scope membership, or permission to
+  cross a scope. Belonging to an Episode is context, not standing; `episode_ref` is **orthogonal to
+  `evidence_role`** and never upgrades it, and a `pending` (unconfirmed) binding is not authority.
+- **Invariant:** TBD — `episode_ref` and the Episode's closure state preserved through
+  segment/projection/retrieval; registered as `observation_episode_binding_survives` in the
+  [invariant registry](../testing/invariant-tests.md).
+
 ### `suppression_state`
 
 - **Question:** Is this currently withheld, redacted, or tombstoned from surfacing/use?
@@ -178,6 +194,7 @@ boundaries are defined in the [System Breakdown Structure](../SYSTEM_BREAKDOWN_S
 | `evidence_role` | What may it do in reasoning? | GOV (admissibility) | `evidence_role` | from source/authority; retrieve/cite rights |
 | `sensitivity` | How confidential? | GOV | `sensitivity` | evidence role, authority |
 | `scope_binding` | Which scope(s)? | WSP / GOV | `scope_binding` | cross-scope permission |
+| `episode_ref` | In what lived situation did this originate? | SIP | `episode_ref` | authority, evidence, scope, cross-scope permission |
 | `suppression_state` | Withheld/redacted/tombstoned? | GOV | `suppression_state` | erasure of meaning/provenance |
 | `memory_state` | Memory-lifecycle position? | MEM / GOV | `memory_state` | canonical authority / evidence |
 | `sync_state` | Replication/convergence status? | SFC | `sync_state` | authority, scope, evidence |
