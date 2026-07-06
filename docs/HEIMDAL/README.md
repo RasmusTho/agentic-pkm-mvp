@@ -27,8 +27,9 @@ CES/ADR. Nothing here is shipped, and no GitHub work is created by it.
 | **A4** | [OWNER_DECISIONS.md](OWNER_DECISIONS.md) | What Fable may not decide + the captured owner decisions — *the guardrails* |
 | **A5** | [FABLE_WINDOW.md](FABLE_WINDOW.md) | Companion-doc pattern, model routing, scope boundaries — *how the window runs* |
 | **→** | [FABLE_COMPANION.md](FABLE_COMPANION.md) | **The Fable window's design output** (2026-07-05): the proposed design for all 8 OPEN problems, anchored in the voice-memo v1 vertical, plus an adversarial red-team pass and owner decisions a–k — *the design that unlocks the build* |
+| **⇢ B3** | [CAPTURE_TRANSPORT_FEASIBILITY.md](CAPTURE_TRANSPORT_FEASIBILITY.md) | **Downstream decision-support** (2026-07-06): Apple-ecosystem transport feasibility (Watch→Mac Mini) feeding the blocked Bifrost **B3** ([#3026](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3026)) owner decision — three transport models + decision table + two gating experiments. Conforms to the shipped v1 clean-folder capture (#3025); extends the §7.1/§9-h direct-transfer v2 item. Advisory. |
 
-Read order: **A1 → A2 → A4 → A3 → A5 → FABLE_COMPANION** (container → names → guardrails → brief → mechanics → design).
+Read order: **A1 → A2 → A4 → A3 → A5 → FABLE_COMPANION** (container → names → guardrails → brief → mechanics → design). `CAPTURE_TRANSPORT_FEASIBILITY` is downstream of that window — read it when scoping B3 transport.
 
 > **Naming update (2026-07-05):** the Munin/Hugin split below is superseded by **ADR-0044** (PR #2920):
 > the whole = **Yggdrasil**; the knowledge-and-cognition constituent is **Mimer** (undivided, the
