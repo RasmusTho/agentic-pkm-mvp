@@ -52,8 +52,16 @@ _TEST_KEY = bytes.fromhex(secrets.token_hex(32))
 
 
 @pytest.fixture(autouse=True)
-def _reset_raw_store(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("STORE_BACKEND", "memory")
+def _reset_raw_store(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+    # Mirror tests/conftest.py::force_memory_store_for_non_pg: only non-pg
+    # tests force the in-process memory backend. pg-marked tests must exercise
+    # the real Postgres backend so their inserted rows actually persist and the
+    # subsequent UPDATE/DELETE can trigger the append-only guard (HEIM-1);
+    # forcing memory here would make insert_raw_record write a memory-only row
+    # whose id matches zero Postgres rows, turning the trigger assertion into a
+    # vacuous no-op.
+    if request.node.get_closest_marker("pg") is None:
+        monkeypatch.setenv("STORE_BACKEND", "memory")
     reset_memory_raw_store()
     reset_memory_raw_read_receipts()
     yield
