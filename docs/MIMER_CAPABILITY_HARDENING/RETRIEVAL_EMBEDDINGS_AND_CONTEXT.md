@@ -51,7 +51,7 @@ is a later optimization *only if* rebuild latency ever hurts, measured not assum
 ## 2. G3 — BGE-M3 identity migration (R2: switch now; eval after, not before)
 
 R2 removes the pre-benchmark: switch to BGE-M3, then measure. The migration is an
-`EmbeddingIdentity` change (`app/components/embeddings.py:30-35`) — provider stays `ollama`, model
+`EmbeddingIdentity` change (`app/components/embeddings/legacy.py :: EmbeddingIdentity`) — provider stays `ollama`, model
 becomes `bge-m3` (Ollama-served, dense output), **dim 768 → 1024**, normalize true. Under
 `docs/EMBEDDINGS.md :: Change policy` this forces a full re-index; the mixed-identity/reconcile
 discipline (ADR-0023, `index doctor` + `index reconcile`) is the migration rail — this is exactly

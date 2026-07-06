@@ -20,8 +20,8 @@ Note: `text-embedding-004` was retired (deprecated January 14, 2026); the active
 ## What This Task Does
 
 1. Adds `app/llm/gemini_embeddings.py` — an httpx-based Gemini embedding adapter following the same HTTP call style as the existing Ollama adapter in `app/llm/embeddings.py` (`httpx.post`, `_extract_error_detail`, `_parse_vector`, `assert_embed_dim`, timeout via `LLM_TIMEOUT`).
-2. Registers the adapter under the `"gemini"` provider name in the provider registry (EMBEDREL-03) with the `GeminiEmbeddingAdapter` class implementing `EmbeddingClientProtocol` from `app/components/embeddings.py`.
-3. Adds `"gemini"` to `_SUPPORTED_EMBED_PROVIDERS` in `app/components/embeddings.py` (line 14).
+2. Registers the adapter under the `"gemini"` provider name in the provider registry (EMBEDREL-03) with the `GeminiEmbeddingAdapter` class implementing `EmbeddingClientProtocol` from `app/components/embeddings/legacy.py`.
+3. Adds `"gemini"` to `_SUPPORTED_EMBED_PROVIDERS` in `app/components/embeddings/legacy.py`.
 4. Wires `"gemini"` into `_embed_single` in `app/llm/embeddings.py` (or the equivalent registry dispatch introduced by EMBEDREL-03) so that `embed_text(provider="gemini", ...)` routes to the adapter.
 5. Makes the Gemini provider probeable via `app/cli/embed_probe.py` — `embed-probe --provider gemini` (the `--provider` flag selects the adapter directly; there is no built-in `gemini` profile) should reach the adapter; with no key set it should report unavailable rather than crash.
 6. Adds `tests/llm/test_gemini_embeddings.py` — all tests mock httpx; no real network calls or real key required in CI.
@@ -82,7 +82,7 @@ The operator chose Gemini as the auto-fallback provider specifically to handle O
   - Verify: `tests/llm/test_gemini_embeddings.py::test_request_payload_format` — asserts `httpx.post` call args match the expected endpoint and JSON body, specifically `embedContentConfig.outputDimensionality == 768` (camelCase, nested); `test_response_vector_extracted_from_embedding_values` — asserts extraction from `{"embedding": {"values": [...]}}` and that the returned vector is L2-normalized (norm ≈ 1.0).
 - [ ] Dim guardrail: if the API returns a vector whose length != 768 (i.e., the `embedContentConfig.outputDimensionality=768` request was ignored and the model's default 3072 was returned), `assert_embed_dim` raises and the caller receives a `ValueError` (not a silent wrong-dim vector). This guards against API drift where the dimensionality parameter is not honoured.
   - Verify: `tests/llm/test_gemini_embeddings.py::test_wrong_dim_raises_value_error` — mocks a 3072-element response vector (simulating the API ignoring `outputDimensionality`), asserts `ValueError` raised.
-- [ ] `"gemini"` is added to `_SUPPORTED_EMBED_PROVIDERS` in `app/components/embeddings.py` (line 14 in the current file).
+- [ ] `"gemini"` is added to `_SUPPORTED_EMBED_PROVIDERS` in `app/components/embeddings/legacy.py`.
   - Verify: `tests/components/test_embeddings.py::test_gemini_in_supported_providers` — asserts `"gemini" in _SUPPORTED_EMBED_PROVIDERS`.
 - [ ] `EMBED_GEMINI_MODEL` env var controls the model name (default `gemini-embedding-001`); an optional `GEMINI_BASE_URL` env var overrides the API base URL (for test isolation).
   - Verify: `tests/llm/test_gemini_embeddings.py::test_embed_gemini_model_env_override` — sets `EMBED_GEMINI_MODEL=custom-model`, asserts request uses that model; `test_gemini_base_url_override` — sets `GEMINI_BASE_URL`, asserts httpx.post targets that base.
@@ -98,7 +98,7 @@ The operator chose Gemini as the auto-fallback provider specifically to handle O
 3. Run `pytest tests/cli/test_embed_probe.py::test_probe_gemini_provider_no_key -v`.
 4. Confirm no import of `google-generativeai` or `google.generativeai` anywhere in the new files (the adapter uses httpx only, matching the Ollama adapter style).
 5. Grep for the test API key value used in fixtures — it must not appear in any log output captured by the test suite.
-6. Confirm `_SUPPORTED_EMBED_PROVIDERS` in `app/components/embeddings.py` contains `"gemini"`.
+6. Confirm `_SUPPORTED_EMBED_PROVIDERS` in `app/components/embeddings/legacy.py` contains `"gemini"`.
 
 ## Out of Scope
 
@@ -115,7 +115,7 @@ The operator chose Gemini as the auto-fallback provider specifically to handle O
 - `docs/EMBEDDING_RELIABILITY/README.md` — CTI-1 (dim guardrail) and CTI-4 (secret-gated egress)
 - `docs/EMBEDDINGS.md` — normative embedding spec; embedding identity, dim guardrail, fallback rule
 - `app/llm/embeddings.py` — existing Ollama adapter to match in style (httpx.post, _extract_error_detail, _parse_vector, assert_embed_dim, LLM_TIMEOUT)
-- `app/components/embeddings.py` — `EmbeddingClientProtocol`, `EmbeddingIdentity`, `_SUPPORTED_EMBED_PROVIDERS`
+- `app/components/embeddings/legacy.py` — `EmbeddingClientProtocol`, `EmbeddingIdentity`, `_SUPPORTED_EMBED_PROVIDERS`
 - `app/llm/endpoints.py` — endpoint resolution pattern for reference
 - `app/cli/embed_probe.py` — probe CLI that must reach the adapter
 - `docs/EMBEDDING_RELIABILITY/PLUGGABLE_PROVIDER_REGISTRY.md` — EMBEDREL-03, the registry this adapter registers into (prerequisite)

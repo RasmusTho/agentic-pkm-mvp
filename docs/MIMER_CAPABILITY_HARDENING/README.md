@@ -77,8 +77,7 @@ The audit is dated 2026-07-05; the correctness-kernel wave merged the same day a
 - **BGE-M3 (1024-dim) vs ADR-0023's dimension-matched fallback (768) — RESOLVED by ADR-0052
   (Accepted, 2026-07-06).** R2's switch to BGE-M3 changes `EmbeddingIdentity`
   (`app/components/embeddings/legacy.py` — the live implementation reached via
-  `app.components.embeddings`; the package `__init__.py` shadows the flat `app/components/embeddings.py`
-  module of the same name, a pre-existing repo quirk unrelated to this decision) to 1024 dims. Option
+  `app.components.embeddings`, re-exported by the package `__init__.py`) to 1024 dims. Option
   (a) was ratified: the Gemini fallback re-pins to `output_dimensionality=1024` — the adapter passes
   the caller's resolved `dim` straight through rather than a hardcoded literal, so the fallback stays
   dimension-matched automatically once the primary identity moves. The G3-1 implementation slice

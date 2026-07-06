@@ -120,7 +120,7 @@ joins those already-shipped primitives.
    write, making egress to Google fully visible.
 
 6. **CTI-3 invariant — query path unchanged.** This task does NOT touch
-   `app/components/embeddings.py::get_embedding_client`, `resolve_embedding_identity`,
+   `app/components/embeddings/legacy.py :: get_embedding_client`, `resolve_embedding_identity`,
    or any ASK/retrieval call site. The `EMBED_PRIMARY_PROVIDER` path that the
    query uses is untouched. Queries always embed with the primary identity;
    fallback-written document vectors are knowingly-degraded matches until
@@ -482,7 +482,7 @@ single concrete anchor.
 - `app/outbox/events.py` — `emit_index_object_embedded` (line 154, accepts
   `meta=` kwarg at line 164); `emit_index_embedding_failed` (line 187);
   `DEFAULT_EMBEDDING_VIEW`
-- `app/components/embeddings.py` — `EmbeddingIdentity`; `get_embedding_identity`;
+- `app/components/embeddings/legacy.py` — `EmbeddingIdentity`; `get_embedding_identity`;
   `_SUPPORTED_EMBED_PROVIDERS` (must include `"gemini"` per EMBEDREL-03/04)
 - `app/llm/embeddings.py` — `get_fallback_provider()` (added by EMBEDREL-03)
 - `app/llm/embed_queue.py` — `embed_with_retry`, `EmbedDeadLetterError` (added

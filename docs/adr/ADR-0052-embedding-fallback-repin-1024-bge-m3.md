@@ -3,7 +3,7 @@ Doc role: Decision record (ADR)
 Authority: Authoritative for the embedding-egress dimension pin (primary model/dim, fallback provider/dim). Supersedes `docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`'s `output_dimensionality=768` pin; ADR-0023's mixed-identity/reconcile discipline (CTI-1/2/3) remains intact and unchanged.
 Owner: Architecture / Embedding & retrieval posture
 Temporal class: Durable decision (supersede via a new ADR, do not edit in place). Revisit if the primary model, its dimension, or the fallback shape contract changes again.
-Source of truth: This ADR for the decision; `docs/EMBEDDINGS.md` carries the operational mirror. `app/components/embeddings.py::EmbeddingIdentity` and `app/llm/embeddings.py` are the runtime projection, updated by the H4 implementation slice (#2984), not by this ADR.
+Source of truth: This ADR for the decision; `docs/EMBEDDINGS.md` carries the operational mirror. `app/components/embeddings/legacy.py :: EmbeddingIdentity` and `app/llm/embeddings.py` are the runtime projection, updated by the H4 implementation slice (#2984), not by this ADR.
 
 # ADR-0052: Embedding fallback re-pin to 1024 dims for the BGE-M3 primary-model switch
 
@@ -25,7 +25,7 @@ The Fable-5 second-brain audit (`docs/research/yggdrasil-fable5-audit.md`) and t
 primary embedding model to replace `nomic-embed-text`, specifically for **Swedish/multilingual retrieval
 quality** on this vault's bilingual SV/EN corpus (G3-1, `docs/MIMER_CAPABILITY_HARDENING/RETRIEVAL_EMBEDDINGS_AND_CONTEXT.md`).
 BGE-M3's dense embedding output is **1024-dimensional**, which changes `EmbeddingIdentity`
-(`app/components/embeddings.py:30-35`, the frozen `provider`/`model`/`dim`/`normalize` tuple) from
+(`app/components/embeddings/legacy.py :: EmbeddingIdentity`, the frozen `provider`/`model`/`dim`/`normalize` tuple) from
 `dim=768` to `dim=1024`.
 
 This directly breaks ADR-0023's sanctioned fallback: a fallback pinned to `output_dimensionality=768`
@@ -90,7 +90,7 @@ Concretely:
 
 ## What this ADR does not do
 
-- **No code change.** `app/components/embeddings.py::EmbeddingIdentity`, `app/llm/embeddings.py`, and
+- **No code change.** `app/components/embeddings/legacy.py :: EmbeddingIdentity`, `app/llm/embeddings.py`, and
   the runtime `EMBED_DIM` / `EMBED_MODEL` defaults are unchanged by this ADR. The actual BGE-M3
   identity migration, `EMBED_DIM` alignment, and full vector-index re-index are implementation work
   tracked by the sibling issue (H4 / #2984), gated on this ADR.
@@ -151,6 +151,6 @@ Reopen and re-decide (a new ADR) if any of these change:
   (a)/(b), and the practical caveats (EMBED_DIM/DEFAULT_EMBED_DIM drift, mode-formatting,
   EMBED_MAX_INPUT_CHARS) for the H4 implementation slice to address
 - `docs/EMBEDDINGS.md :: Fallback rule` — the operational mirror updated alongside this ADR
-- `app/components/embeddings.py :: EmbeddingIdentity` (30-35) — the runtime identity type H4 will
+- `app/components/embeddings/legacy.py :: EmbeddingIdentity` — the runtime identity type H4 will
   update
 - `app/llm/embeddings.py` — the provider-aware embedding implementation H4 will update

@@ -22,8 +22,8 @@ Replace the hardcoded `if provider == "mock" / elif provider == "ollama" / raise
 3. Refactors `_embed_single` to dispatch via `PROVIDER_REGISTRY[provider](...)` instead of the if/elif chain.
 4. Adds `EMBED_PRIMARY_PROVIDER` and `EMBED_FALLBACK_PROVIDER` env vars, resolved in `app/llm/embeddings.py` via new helpers `get_primary_provider()` and `get_fallback_provider()`. Fallback defaults to `None` (no-op until task 5 wires the runtime).
 5. Extends `EmbeddingProfile` in `app/settings/models.py` with optional `primary_provider: str | None` and `fallback_provider: str | None` fields (both defaulting to `None`), so per-environment provider selection is possible through the settings bundle (`runtime/settings/embeddings.yaml`).
-6. Extends `resolve_embedding_identity()` in `app/components/embeddings.py` to read the `primary_provider` field from the resolved profile (alongside the existing `provider` field), preserving precedence: `override_provider` > profile `primary_provider` > profile `provider` > env.
-7. Updates `_SUPPORTED_EMBED_PROVIDERS` in `app/components/embeddings.py` to include `"gemini"` as a declared-but-not-yet-functional name so resolution does not silently normalize it to `"mock"` when the adapter is registered later.
+6. Extends `resolve_embedding_identity()` in `app/components/embeddings/legacy.py` to read the `primary_provider` field from the resolved profile (alongside the existing `provider` field), preserving precedence: `override_provider` > profile `primary_provider` > profile `provider` > env.
+7. Updates `_SUPPORTED_EMBED_PROVIDERS` in `app/components/embeddings/legacy.py` to include `"gemini"` as a declared-but-not-yet-functional name so resolution does not silently normalize it to `"mock"` when the adapter is registered later.
 8. Adds the dim guardrail: when a registered adapter is looked up, `_embed_single` still calls `assert_embed_dim` on the returned vector (unchanged from current behavior), preserving CTI-1.
 
 This task does **not** implement the Gemini adapter, does not invoke fallback at runtime, and does not change any observable behavior for the `mock` and `ollama` paths.
@@ -122,10 +122,10 @@ The current `_embed_single` requires editing `if/elif` branches to add any provi
 - [ ] `get_primary_provider()` and `get_fallback_provider()` helpers exist in `app/llm/embeddings.py`; `get_primary_provider()` reads `EMBED_PRIMARY_PROVIDER`, falls back to `get_provider()` (i.e., `LLM_PROVIDER`); `get_fallback_provider()` reads `EMBED_FALLBACK_PROVIDER` and returns `None` when unset.
   - Verify: `tests/llm/test_provider_registry.py::test_get_primary_provider_falls_back_to_llm_provider` and `tests/llm/test_provider_registry.py::test_get_fallback_provider_returns_none_when_unset`
 
-- [ ] `resolve_embedding_identity()` in `app/components/embeddings.py` prefers `primary_provider` over `provider` when both are present on the resolved profile; `override_provider` still wins over both.
+- [ ] `resolve_embedding_identity()` in `app/components/embeddings/legacy.py` prefers `primary_provider` over `provider` when both are present on the resolved profile; `override_provider` still wins over both.
   - Verify: `tests/llm/test_provider_registry.py::test_resolve_embedding_identity_prefers_primary_provider_field`
 
-- [ ] `"gemini"` is in `_SUPPORTED_EMBED_PROVIDERS` in `app/components/embeddings.py` so `_resolve_embedding_provider_name("gemini")` returns `"gemini"` (not `"mock"`).
+- [ ] `"gemini"` is in `_SUPPORTED_EMBED_PROVIDERS` in `app/components/embeddings/legacy.py` so `_resolve_embedding_provider_name("gemini")` returns `"gemini"` (not `"mock"`).
   - Verify: `tests/llm/test_provider_registry.py::test_gemini_name_not_normalized_to_mock`
 
 - [ ] The dim guardrail (`assert_embed_dim`) still fires when a registry-dispatched adapter returns a wrong-dim vector.
@@ -140,7 +140,7 @@ The current `_embed_single` requires editing `if/elif` branches to add any provi
 2. `pytest tests/llm/ -x` — no regressions in existing tests.
 3. Read `app/llm/embeddings.py::_embed_single`: confirm no `if provider ==` or `elif provider ==` branches remain.
 4. Read `app/settings/models.py::EmbeddingProfile`: confirm `primary_provider` and `fallback_provider` fields present with `None` defaults.
-5. Read `app/components/embeddings.py::_SUPPORTED_EMBED_PROVIDERS`: confirm `"gemini"` is in the set.
+5. Read `app/components/embeddings/legacy.py :: _SUPPORTED_EMBED_PROVIDERS`: confirm `"gemini"` is in the set.
 6. Confirm `get_primary_provider()` and `get_fallback_provider()` are exported in `app/llm/embeddings.py::__all__`.
 
 ## Out of Scope
@@ -160,7 +160,7 @@ The current `_embed_single` requires editing `if/elif` branches to add any provi
 - LLM endpoints: `docs/LLM.md`
 - Settings models: `app/settings/models.py` (`EmbeddingProfile`, `EmbeddingProfiles`)
 - Dispatch site: `app/llm/embeddings.py` (lines 220-241, `_embed_single`)
-- Identity resolution: `app/components/embeddings.py` (`resolve_embedding_identity`, `_SUPPORTED_EMBED_PROVIDERS`)
+- Identity resolution: `app/components/embeddings/legacy.py` (`resolve_embedding_identity`, `_SUPPORTED_EMBED_PROVIDERS`)
 
 ## Related GitHub Issues
 
