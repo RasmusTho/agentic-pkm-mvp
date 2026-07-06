@@ -1,0 +1,419 @@
+"""Entity confirmation surface tests — Epic #3019 slice A17 (JE, #3037).
+
+Covers the governing Issue's three acceptance criteria:
+
+- `test_merge_writes_redirect_and_is_reversible` -- a confirmed merge writes
+  `merged_from:` (target) + a redirect (`merged_into` on the source) and is
+  reversible via `split()` (red-team F5, exercising the REAL
+  `app.heimdal.entity_register.EntityRegister.merge`/`split`, not a mock).
+- `test_midband_routes_to_queue` -- mid-band mentions (confidence in
+  `[LOW_THRESHOLD, HIGH_THRESHOLD)`) route to the `entities/review.md` queue.
+- `test_high_band_auto_links` -- above `HIGH_THRESHOLD`, a mention auto-links
+  with no human step (no queue write, no register mutation).
+
+Plus negative/completeness coverage: low-band/unresolved mentions produce no
+routing action; a `reject` decision clears the queue without touching the
+register; idempotent re-application of an already-applied decision is a
+no-op; queuing twice for the same mention replaces rather than duplicates.
+
+No network, no real Postgres: mirrors `tests/heimdal/test_entity_register.py`'s
+temp-vault-fixture convention (`VaultContext` over `tmp_path`, `FakeOutboxConn`
+in-memory outbox emulation) -- every test exercises the real production
+`EntityRegister.merge`/`split` and the real `entities/review.md` note
+read/write path, never a mock of either.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from app.heimdal.attribution_stage import (
+    RESOLUTION_AMBIGUOUS,
+    RESOLUTION_RESOLVED,
+    RESOLUTION_UNRESOLVED,
+    EntityMention,
+)
+from app.heimdal.entity_confirm import (
+    HIGH_THRESHOLD,
+    LOW_THRESHOLD,
+    EntityConfirmError,
+    ReviewDecision,
+    RoutingDecision,
+    apply_human_review_decisions,
+    pending_review_entries,
+    queue_for_review,
+    route_mention,
+)
+from app.heimdal.entity_register import (
+    KIND_PERSON,
+    LIFECYCLE_CANONICAL,
+    LIFECYCLE_MERGED,
+    EntityRegister,
+)
+from app.heimdal.settings_notes import (
+    DEFAULT_SETTINGS_DIR,
+    ENTITY_REVIEW,
+    SettingsNote,
+    write_settings_note,
+)
+from app.vault.manager import VaultContext
+from app.write_guard import WriteGuard
+
+pytestmark = pytest.mark.not_pg
+
+
+# ---------------------------------------------------------------------------
+# Shared fixtures (mirrors test_entity_register.py)
+# ---------------------------------------------------------------------------
+
+
+class _FakeCursor:
+    def __init__(self, rows: list[tuple]):
+        self._rows = rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return list(self._rows)
+
+
+class FakeOutboxConn:
+    """In-memory emulation of the keyed outbox insert (PK-conflict semantics),
+    identical shape to test_entity_register.py's own fake."""
+
+    def __init__(self) -> None:
+        self.rows: dict[str, dict[str, Any]] = {}
+
+    def execute(self, sql: str, params: tuple = ()) -> _FakeCursor:
+        text = " ".join(sql.lower().split())
+        if text.startswith("insert into outbox (id,"):
+            assert "on conflict (id) do nothing" in text
+            row_id, topic, payload, created_at, attempts = params
+            if row_id in self.rows:
+                return _FakeCursor([])
+            self.rows[row_id] = {
+                "id": row_id,
+                "topic": topic,
+                "payload": payload,
+                "created_at": created_at,
+                "delivered_at": None,
+                "attempts": attempts,
+            }
+            return _FakeCursor([(row_id,)])
+        raise AssertionError(f"unexpected SQL shape reached the outbox: {text!r}")
+
+    def close(self) -> None:  # pragma: no cover - psycopg parity
+        pass
+
+    def rows_for(self, topic: str) -> list[dict[str, Any]]:
+        return [r for r in self.rows.values() if r["topic"] == topic]
+
+
+def _vault_root(tmp_path: Path) -> Path:
+    root = tmp_path / "vault"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _vault_context(root: Path) -> VaultContext:
+    return VaultContext(
+        status="selected",
+        active_vault_id="vault-test",
+        active_vault_name="Vault Test",
+        active_vault_path=str(root),
+    )
+
+
+def _allowing_guard() -> WriteGuard:
+    return WriteGuard(lambda: {"state": "healthy"})
+
+
+def _register(vault_root: Path, *, conn: Any = None) -> EntityRegister:
+    return EntityRegister(
+        vault_context=_vault_context(vault_root),
+        write_guard=_allowing_guard(),
+        conn=conn if conn is not None else FakeOutboxConn(),
+    )
+
+
+def _mention(
+    *,
+    resolution: str,
+    confidence: float | None,
+    surface_form: str = "Anna",
+    mention_id: str = "mention:test-1",
+) -> EntityMention:
+    return EntityMention(
+        mention_id=mention_id,
+        surface_form=surface_form,
+        resolution=resolution,
+        kind_hint="person",
+        confidence=confidence,
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC: a confirmed merge writes `merged_from:` + a redirect and is reversible
+# via `split()`.
+# ---------------------------------------------------------------------------
+
+
+def test_merge_writes_redirect_and_is_reversible(tmp_path: Path) -> None:
+    vault_root = _vault_root(tmp_path)
+    conn = FakeOutboxConn()
+    register = _register(vault_root, conn=conn)
+
+    anna = register.mint_canonical("Anna Svensson", kind=KIND_PERSON, aliases=["Anna"])
+    anna_gym = register.mint_canonical("Anna från gymmet", kind=KIND_PERSON, aliases=["Anna G"])
+
+    # Queue a mid-band mention, then confirm the merge via a one-line note
+    # edit in entities/review.md's human-editable `decisions` field -- the
+    # ruling mechanism this module provides, not a bespoke API.
+    mention = _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=0.75, mention_id="mention:merge-1")
+    entry = queue_for_review(
+        vault_root,
+        mention,
+        candidate_entity_ids=[anna_gym, anna],
+    )
+
+    note = SettingsNote(
+        spec=ENTITY_REVIEW,
+        values={
+            "pending": [e.to_dict() for e in pending_review_entries(vault_root)],
+            "decisions": [
+                ReviewDecision(
+                    queue_entry_id=entry.queue_entry_id,
+                    action="merge",
+                    from_id=anna_gym,
+                    into_id=anna,
+                ).to_dict()
+            ],
+        },
+    )
+    write_settings_note(vault_root, note, settings_dir=DEFAULT_SETTINGS_DIR, write_guard=_allowing_guard())
+
+    applied = apply_human_review_decisions(vault_root, register=register)
+    assert len(applied) == 1
+    assert applied[0].merged is True
+    assert applied[0].action == "merge"
+
+    # Redirect: the source note carries `merged_into` (append-only — HEIM-1).
+    source_entry = register.get_entry(anna_gym)
+    assert source_entry is not None
+    assert source_entry.lifecycle == LIFECYCLE_MERGED
+    assert source_entry.merged_into == anna
+    assert register.resolve_redirects(anna_gym) == anna
+
+    # `merged_from:` — the target-side complement of the redirect.
+    target_entry = register.get_entry(anna)
+    assert target_entry is not None
+    assert anna_gym in target_entry.merged_from
+
+    # The queue entry is cleared once the ruling is applied.
+    assert pending_review_entries(vault_root) == ()
+
+    # Idempotent: re-applying (no new decisions/pending) does nothing.
+    again = apply_human_review_decisions(vault_root, register=register)
+    assert again == ()
+
+    # Reversible via split() (F5) — A1's own mechanism, not reimplemented.
+    new_ids = register.split(anna, {"Anna från gymmet": ["Anna från gymmet", "Anna G"]})
+    assert len(new_ids) == 1
+    restored_anna_gym = new_ids[0]
+
+    assert register.resolve_redirects(anna_gym) == restored_anna_gym
+    assert register.resolve_redirects(anna_gym) != anna
+
+    # merged_from on the original target no longer claims the reversed id.
+    target_after_split = register.get_entry(anna)
+    assert target_after_split is not None
+    assert anna_gym not in target_after_split.merged_from
+
+    # The restored entity carries the reclaimed merged_from record.
+    restored_entry = register.get_entry(restored_anna_gym)
+    assert restored_entry is not None
+    assert restored_entry.lifecycle == LIFECYCLE_CANONICAL
+    assert anna_gym in restored_entry.merged_from
+
+
+def test_reject_decision_clears_queue_without_register_mutation(tmp_path: Path) -> None:
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+
+    anna = register.mint_canonical("Anna Svensson", kind=KIND_PERSON, aliases=["Anna"])
+    other = register.mint_canonical("Anna Karlsson", kind=KIND_PERSON, aliases=["Anna K"])
+
+    mention = _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=0.7, mention_id="mention:reject-1")
+    entry = queue_for_review(vault_root, mention, candidate_entity_ids=[anna, other])
+
+    note = SettingsNote(
+        spec=ENTITY_REVIEW,
+        values={
+            "pending": [e.to_dict() for e in pending_review_entries(vault_root)],
+            "decisions": [ReviewDecision(queue_entry_id=entry.queue_entry_id, action="reject").to_dict()],
+        },
+    )
+    write_settings_note(vault_root, note, settings_dir=DEFAULT_SETTINGS_DIR, write_guard=_allowing_guard())
+
+    applied = apply_human_review_decisions(vault_root, register=register)
+    assert len(applied) == 1
+    assert applied[0].action == "reject"
+    assert applied[0].merged is False
+
+    # No register mutation: neither entity was merged/redirected.
+    assert register.get_entry(anna).lifecycle == LIFECYCLE_CANONICAL
+    assert register.get_entry(other).lifecycle == LIFECYCLE_CANONICAL
+    assert pending_review_entries(vault_root) == ()
+
+
+def test_review_decision_rejects_invalid_action() -> None:
+    with pytest.raises(EntityConfirmError):
+        ReviewDecision(queue_entry_id="review:x", action="bogus")
+
+
+def test_review_decision_merge_requires_ids() -> None:
+    with pytest.raises(EntityConfirmError):
+        ReviewDecision(queue_entry_id="review:x", action="merge")
+
+
+# ---------------------------------------------------------------------------
+# AC: mid-band mentions route to the entities/review.md queue.
+# ---------------------------------------------------------------------------
+
+
+def test_midband_routes_to_queue(tmp_path: Path) -> None:
+    vault_root = _vault_root(tmp_path)
+
+    mid_mention = _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=0.75, mention_id="mention:mid-1")
+    decision = route_mention(mid_mention)
+    assert decision == RoutingDecision.QUEUE_FOR_REVIEW
+
+    entry = queue_for_review(vault_root, mid_mention, candidate_entity_ids=["ent:a", "ent:b"])
+    assert entry.queue_entry_id == f"review:{mid_mention.mention_id}"
+
+    pending = pending_review_entries(vault_root)
+    assert len(pending) == 1
+    assert pending[0].mention_id == mid_mention.mention_id
+    assert pending[0].confidence == 0.75
+    assert pending[0].candidate_entity_ids == ("ent:a", "ent:b")
+
+    # The note is real markdown on disk at entities/review.md, not only an
+    # in-memory return value.
+    review_path = vault_root / DEFAULT_SETTINGS_DIR / "entities" / "review.md"
+    assert review_path.exists()
+    text = review_path.read_text(encoding="utf-8")
+    assert "entity_review" in text
+    assert mid_mention.mention_id in text
+
+
+def test_midband_boundaries_are_inclusive_of_high_exclusive(tmp_path: Path) -> None:
+    # Exactly at LOW_THRESHOLD: still mid-band (inclusive lower bound).
+    at_low = _mention(resolution=RESOLUTION_RESOLVED, confidence=LOW_THRESHOLD, mention_id="mention:low-edge")
+    assert route_mention(at_low) == RoutingDecision.QUEUE_FOR_REVIEW
+
+    # Just below HIGH_THRESHOLD: still mid-band.
+    just_under_high = _mention(
+        resolution=RESOLUTION_RESOLVED, confidence=HIGH_THRESHOLD - 0.01, mention_id="mention:high-edge"
+    )
+    assert route_mention(just_under_high) == RoutingDecision.QUEUE_FOR_REVIEW
+
+
+def test_queue_for_review_replaces_stale_entry_for_same_mention(tmp_path: Path) -> None:
+    vault_root = _vault_root(tmp_path)
+    mention = _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=0.65, mention_id="mention:dup-1")
+
+    queue_for_review(vault_root, mention, candidate_entity_ids=["ent:a"])
+    queue_for_review(vault_root, mention, candidate_entity_ids=["ent:a", "ent:c"])
+
+    pending = pending_review_entries(vault_root)
+    assert len(pending) == 1
+    assert pending[0].candidate_entity_ids == ("ent:a", "ent:c")
+
+
+def test_queue_for_review_requires_confidence(tmp_path: Path) -> None:
+    vault_root = _vault_root(tmp_path)
+    mention = _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=None, mention_id="mention:no-conf")
+    with pytest.raises(EntityConfirmError):
+        queue_for_review(vault_root, mention)
+
+
+# ---------------------------------------------------------------------------
+# AC: above the high threshold, a mention auto-links with no human step.
+# ---------------------------------------------------------------------------
+
+
+def test_high_band_auto_links(tmp_path: Path) -> None:
+    vault_root = _vault_root(tmp_path)
+
+    high_mention = _mention(resolution=RESOLUTION_RESOLVED, confidence=0.95, mention_id="mention:high-1")
+    decision = route_mention(high_mention)
+    assert decision == RoutingDecision.AUTO_LINK
+
+    # No human step: nothing is written to the review queue for a high-band
+    # mention (the caller simply does not call queue_for_review/confirm for
+    # AUTO_LINK -- there is no code path here that queues it).
+    assert pending_review_entries(vault_root) == ()
+    review_path = vault_root / DEFAULT_SETTINGS_DIR / "entities" / "review.md"
+    assert not review_path.exists()
+
+
+def test_high_band_boundary_is_inclusive(tmp_path: Path) -> None:
+    exactly_high = _mention(resolution=RESOLUTION_RESOLVED, confidence=HIGH_THRESHOLD, mention_id="mention:exact-high")
+    assert route_mention(exactly_high) == RoutingDecision.AUTO_LINK
+
+
+# ---------------------------------------------------------------------------
+# Negative / completeness coverage.
+# ---------------------------------------------------------------------------
+
+
+def test_unresolved_mention_never_routes(tmp_path: Path) -> None:
+    unresolved = _mention(resolution=RESOLUTION_UNRESOLVED, confidence=0.5, mention_id="mention:unresolved-1")
+    assert route_mention(unresolved) == RoutingDecision.NO_ACTION
+
+
+def test_low_band_mention_produces_no_action(tmp_path: Path) -> None:
+    low = _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=0.4, mention_id="mention:low-1")
+    assert route_mention(low) == RoutingDecision.NO_ACTION
+
+
+def test_mention_with_no_confidence_produces_no_action() -> None:
+    no_confidence = _mention(resolution=RESOLUTION_AMBIGUOUS, confidence=None, mention_id="mention:no-conf-2")
+    assert route_mention(no_confidence) == RoutingDecision.NO_ACTION
+
+
+def test_apply_decisions_is_idempotent_and_skips_unknown_ids(tmp_path: Path) -> None:
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+
+    a = register.mint_canonical("Alpha")
+    b = register.mint_canonical("Beta")
+
+    # A decision referencing a queue_entry_id that was never queued (stale /
+    # already-applied) is skipped, not an error -- re-running is always safe.
+    note = SettingsNote(
+        spec=ENTITY_REVIEW,
+        values={
+            "pending": [],
+            "decisions": [
+                ReviewDecision(queue_entry_id="review:mention:ghost", action="merge", from_id=a, into_id=b).to_dict()
+            ],
+        },
+    )
+    write_settings_note(vault_root, note, settings_dir=DEFAULT_SETTINGS_DIR, write_guard=_allowing_guard())
+
+    applied = apply_human_review_decisions(vault_root, register=register)
+    assert applied == ()
+    # Untouched: no merge happened for the ghost decision.
+    assert register.get_entry(a).lifecycle == LIFECYCLE_CANONICAL
+    assert register.get_entry(b).lifecycle == LIFECYCLE_CANONICAL
+
+
+def test_apply_human_review_decisions_no_note_yet_is_a_noop(tmp_path: Path) -> None:
+    vault_root = _vault_root(tmp_path)
+    register = _register(vault_root)
+    assert apply_human_review_decisions(vault_root, register=register) == ()

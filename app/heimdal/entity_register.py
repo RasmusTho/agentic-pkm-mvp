@@ -23,9 +23,12 @@ Design decisions (binding for this slice):
   dispatched command (no worker branch, no schema registration).
 - **Append-only truth (HEIM-1).** `merge()` and `split()` never delete or
   edit a prior identity in place: a merge marks the source entity
-  `lifecycle: merged` with a `merged_into` redirect and leaves its note on
-  disk; a split creates NEW entities and marks the merged entity redirects
-  as reversed (`split_of` / superseded), so `test_split_reverses_merge` can
+  `lifecycle: merged` with a `merged_into` redirect (and leaves its note on
+  disk), and marks the target entity's `merged_from` with the source id
+  appended (Epic #3019 slice A17, #3037: the target-side complement of the
+  redirect); a split creates NEW entities and marks the merged entity
+  redirects as reversed (`split_of` / superseded), removing the reversed id
+  from the old target's `merged_from`, so `test_split_reverses_merge` can
   assert the pre-merge identities are restored under `resolve_redirects`.
 - **Three-state resolution (HEIM-6 / HEIM-11).** `resolve()` returns exactly
   one of `ResolvedRef`, `AmbiguousCandidates`, or `UnresolvedProvisional` —
@@ -157,6 +160,7 @@ class RegisterEntry:
     aliases: tuple[str, ...] = ()
     lifecycle: str = LIFECYCLE_PROVISIONAL
     merged_into: str | None = None
+    merged_from: tuple[str, ...] = ()
     split_from: str | None = None
     created: str = field(default_factory=_now_iso)
     updated: str = field(default_factory=_now_iso)
@@ -174,6 +178,8 @@ class RegisterEntry:
         }
         if self.merged_into is not None:
             data["merged_into"] = self.merged_into
+        if self.merged_from:
+            data["merged_from"] = list(self.merged_from)
         if self.split_from is not None:
             data["split_from"] = self.split_from
         return data
@@ -187,6 +193,7 @@ class RegisterEntry:
             aliases=tuple(data.get("aliases") or ()),
             lifecycle=str(data.get("lifecycle", LIFECYCLE_PROVISIONAL)),
             merged_into=data.get("merged_into"),
+            merged_from=tuple(data.get("merged_from") or ()),
             split_from=data.get("split_from"),
             created=str(data.get("created", _now_iso())),
             updated=str(data.get("updated", _now_iso())),
@@ -430,11 +437,17 @@ class EntityRegister:
 
         Marks `from_id`'s entry `lifecycle: merged` with `merged_into =
         into_id` (append-only: the source note is never deleted, only
-        redirected — HEIM-1). Callers are the human-confirmation call site;
-        this method performs the mutation once confirmation has already
-        happened (matching §9-g "human-confirmed by default": the
-        confirmation gate lives at the caller, this is the mechanism).
-        Emits `heimdal.register.entity.merged`.
+        redirected — HEIM-1), and marks `into_id`'s entry with `from_id`
+        appended to `merged_from` — the target-side complement of the
+        source's redirect (Epic #3019 slice A17, #3037: "a confirmed merge
+        writes `merged_from:` plus a redirect"). Both sides of the merge are
+        reversible via `split()` (red-team F5): a split re-points the
+        source's `merged_into` and removes it from the target's
+        `merged_from`, so neither field ever asserts a stale relationship.
+        Callers are the human-confirmation call site; this method performs
+        the mutation once confirmation has already happened (matching §9-g
+        "human-confirmed by default": the confirmation gate lives at the
+        caller, this is the mechanism). Emits `heimdal.register.entity.merged`.
         """
         source = self._read_entry(from_id)
         target = self._read_entry(into_id)
@@ -456,6 +469,7 @@ class EntityRegister:
             aliases=source.aliases,
             lifecycle=LIFECYCLE_MERGED,
             merged_into=into_id,
+            merged_from=source.merged_from,
             split_from=source.split_from,
             created=source.created,
             updated=_now_iso(),
@@ -475,6 +489,7 @@ class EntityRegister:
             aliases=folded_aliases,
             lifecycle=target.lifecycle,
             merged_into=target.merged_into,
+            merged_from=tuple(dict.fromkeys((*target.merged_from, from_id))),
             split_from=target.split_from,
             created=target.created,
             updated=_now_iso(),
@@ -535,19 +550,12 @@ class EntityRegister:
             if e.lifecycle == LIFECYCLE_MERGED and e.merged_into == entity_id
         ]
 
+        reclaimed_merged_from: list[str] = []
+
         for new_label, alias_subset in partition_criteria.items():
             alias_subset = list(alias_subset)
             new_entity_id = _new_canonical_id()
-            new_entry = RegisterEntry(
-                entity_id=new_entity_id,
-                kind=original.kind,
-                label=new_label,
-                aliases=tuple(dict.fromkeys([new_label, *alias_subset])),
-                lifecycle=LIFECYCLE_CANONICAL,
-                split_from=entity_id,
-            )
-            self._write_entry(new_entry)
-            new_ids.append(new_entity_id)
+            reversed_children: list[str] = []
 
             for alias in alias_subset:
                 if alias in remaining_aliases:
@@ -572,6 +580,20 @@ class EntityRegister:
                         updated=_now_iso(),
                     )
                     self._write_entry(re_pointed)
+                    reversed_children.append(child.entity_id)
+                    reclaimed_merged_from.append(child.entity_id)
+
+            new_entry = RegisterEntry(
+                entity_id=new_entity_id,
+                kind=original.kind,
+                label=new_label,
+                aliases=tuple(dict.fromkeys([new_label, *alias_subset])),
+                lifecycle=LIFECYCLE_CANONICAL,
+                merged_from=tuple(reversed_children),
+                split_from=entity_id,
+            )
+            self._write_entry(new_entry)
+            new_ids.append(new_entity_id)
 
             self._emit(
                 HEIMDAL_REGISTER_ENTITY_SPLIT,
@@ -586,7 +608,12 @@ class EntityRegister:
             )
 
         # `entity_id` itself: keep it canonical, but its alias set shrinks to
-        # whatever was not partitioned away (append-only — never deleted).
+        # whatever was not partitioned away (append-only — never deleted), and
+        # `merged_from` drops any child ids just reclaimed by a new split
+        # entity above (they no longer redirect through `entity_id`).
+        remaining_merged_from = tuple(
+            m for m in original.merged_from if m not in reclaimed_merged_from
+        )
         updated_original = RegisterEntry(
             entity_id=original.entity_id,
             kind=original.kind,
@@ -594,6 +621,7 @@ class EntityRegister:
             aliases=tuple(remaining_aliases),
             lifecycle=original.lifecycle,
             merged_into=original.merged_into,
+            merged_from=remaining_merged_from,
             split_from=original.split_from,
             created=original.created,
             updated=_now_iso(),
