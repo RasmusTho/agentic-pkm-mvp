@@ -634,6 +634,24 @@ def acquire_youtube_cmd(
     if as_json:
         click.echo(json.dumps(receipt.as_dict(), ensure_ascii=False))
     if not receipt.ok:
+        # Loud, item-scoped failure (AC3): a dead-lettered extractor OR a WriteGuard-blocked
+        # candidate write means NO candidate note was written — surface why, then exit nonzero.
+        if receipt.blocked:
+            blocked_stage = next(
+                (s for s in receipt.stages if s.status == "blocked"), None
+            )
+            reason = blocked_stage.detail if blocked_stage else "candidate write blocked"
+            click.echo(
+                f"acquire FAILED: candidate write blocked by WriteGuard — no note written "
+                f"({reason})",
+                err=True,
+            )
+        elif receipt.dead_lettered:
+            click.echo(
+                f"acquire FAILED: stage(s) dead-lettered: {', '.join(receipt.dead_lettered)} "
+                "— no candidate note written",
+                err=True,
+            )
         raise SystemExit(1)
 
 

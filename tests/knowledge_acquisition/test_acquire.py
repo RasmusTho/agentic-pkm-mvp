@@ -173,6 +173,15 @@ def _allowing_guard() -> WriteGuard:
     return WriteGuard(lambda: {"state": "healthy"})
 
 
+def _denying_guard() -> WriteGuard:
+    """A WriteGuard that denies the candidate write (runtime in safe_mode/unhealthy).
+
+    `safe_mode` is in `WRITE_BLOCKED_STATES`, so `assert_writes_allowed` raises
+    `WritesBlockedError` for the (non-bootstrap) candidate-write action — the real
+    reachable state a degraded runtime produces."""
+    return WriteGuard(lambda: {"state": "safe_mode", "reason": "runtime degraded (test)"})
+
+
 # ---------------------------------------------------------------------------
 # AC1: end-to-end new-URL acquisition — fetch -> persist raw -> normalize ->
 # extract(summary) -> candidate note written, one stage event per transition.
@@ -409,6 +418,100 @@ def test_acquire_youtube_normalize_failure_dead_letters_and_raises(
     assert payload["stage"] == "normalize"
     assert payload["reason"] == "normalize_failed"
     assert payload["error"]
+
+
+def test_acquire_youtube_writeguard_blocked_is_not_ok_no_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A WriteGuard-BLOCKED candidate write (runtime in safe_mode/unhealthy) is a real
+    reachable state and must NEVER read as success: `receipt.ok` is False, the blocked stage
+    is recorded, no candidate note is written, and no stage.completed/dead_lettered event is
+    emitted for the candidate (mirrors run_replay's blocked handling — a governed refusal, not
+    a compute dead-letter; the item stays cleanly re-runnable)."""
+    _stub_caption_fetch(monkeypatch)
+    conn = FakeOutboxConn()
+    vault = _vault(tmp_path / "vault")
+
+    receipt = acquire_youtube(
+        FAKE_URL, vault_context=vault, write_guard=_denying_guard(), conn=conn
+    )
+
+    assert receipt.ok is False
+    assert receipt.blocked is True
+    assert receipt.dead_lettered == ()  # blocked is NOT a dead-letter
+    candidate_stage = next(s for s in receipt.stages if s.stage == "candidate")
+    assert candidate_stage.status == "blocked"
+    assert candidate_stage.detail  # loud: the block reason is preserved
+
+    # No candidate note written.
+    assert list((tmp_path / "vault").rglob("*.md")) == []
+    # No dead-letter event, and no candidate stage.completed event (upstream stages fired).
+    assert conn.rows_for(STAGE_DEAD_LETTERED_TOPIC) == []
+    completed = conn.rows_for(STAGE_COMPLETED_TOPIC)
+    stages_completed = {json.loads(r["payload"])["payload"]["stage"] for r in completed}
+    assert "candidate" not in stages_completed
+    assert stages_completed == {"normalize", "extracted"}
+
+    # as_dict surfaces the blocked flag for the CLI/JSON receipt.
+    assert receipt.as_dict()["blocked"] is True
+    assert receipt.as_dict()["ok"] is False
+
+
+def test_acquire_youtube_cli_exits_nonzero_on_blocked_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Through the Click CLI: a blocked candidate receipt exits nonzero with a clear message
+    (regression guard for the silent-success bug — a blocked write previously exited 0).
+
+    The entrypoint is stubbed to return a pre-built blocked receipt so this isolates the CLI's
+    receipt-handling/exit logic without a real Postgres connection (the real DB path is covered
+    by `test_acquire_youtube_writeguard_blocked_is_not_ok_no_note`, which drives the actual
+    `acquire_youtube` core with a denying guard and a fake conn)."""
+    from click.testing import CliRunner
+
+    from app.cli import cli
+    from app.knowledge_acquisition.acquire import AcquireStageReceipt, AcquisitionReceipt
+    import app.knowledge_acquisition.acquire as acquire_mod
+
+    blocked_receipt = AcquisitionReceipt(
+        source_kind="youtube_url",
+        item_ref=VIDEO_ID,
+        raw_record_id="00000000-0000-0000-0000-000000000000",
+        content_identity="sha256:blocked-fixture",
+        is_new_raw=True,
+        acquisition_method="captions_manual",
+        stages=(
+            AcquireStageReceipt(stage="raw", status="persisted"),
+            AcquireStageReceipt(stage="normalize", status="ok"),
+            AcquireStageReceipt(
+                stage="extracted", status="ok", extractor_id="summary", extractor_version=1
+            ),
+            AcquireStageReceipt(
+                stage="candidate",
+                status="blocked",
+                detail="Writes blocked for 'knowledge_acquisition.candidate_writeback' while in 'safe_mode' state",
+            ),
+        ),
+        blocked=True,
+    )
+
+    def stub_acquire(url_or_id, **kwargs):
+        return blocked_receipt
+
+    monkeypatch.setattr(acquire_mod, "acquire_youtube", stub_acquire)
+
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir(parents=True, exist_ok=True)
+
+    runner = CliRunner(mix_stderr=False)
+    result = runner.invoke(
+        cli,
+        ["acquire-youtube", FAKE_URL, "--vault-root", str(vault_root)],
+    )
+
+    assert result.exit_code == 1
+    assert "blocked" in (result.stderr or "").lower()
+    assert list(vault_root.rglob("*.md")) == []
 
 
 # ---------------------------------------------------------------------------

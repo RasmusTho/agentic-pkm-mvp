@@ -142,10 +142,16 @@ class AcquisitionReceipt:
     acquisition_method: str
     stages: tuple[AcquireStageReceipt, ...]
     dead_lettered: tuple[str, ...] = ()
+    blocked: bool = False
 
     @property
     def ok(self) -> bool:
-        return not self.dead_lettered
+        # A governed WriteGuard denial (``blocked``) is NOT a stage dead-letter, but it is
+        # still a non-ok acquisition: no candidate note was written. Mirrors
+        # ``replay.run_replay``, which folds a blocked candidate write into ``equivalent=False``
+        # via ``_candidate_equivalence`` returning ``(False, "none")`` so ``acquire-replay``
+        # exits nonzero. A blocked write must never read as success.
+        return not self.dead_lettered and not self.blocked
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -157,6 +163,7 @@ class AcquisitionReceipt:
             "acquisition_method": self.acquisition_method,
             "ok": self.ok,
             "dead_lettered": list(self.dead_lettered),
+            "blocked": self.blocked,
             "stages": [s.as_dict() for s in self.stages],
         }
 
@@ -341,9 +348,14 @@ def acquire_youtube(
             f"{content_identity!r}: {exc}"
         ) from exc
 
-    if write_result.status == "blocked":
-        # A governed WriteGuard denial is not a stage transition: no event, loud reason kept
-        # on the receipt, item stays re-runnable (mirrors run_replay's identical handling).
+    candidate_blocked = write_result.status == "blocked"
+    if candidate_blocked:
+        # A governed WriteGuard denial is not a stage transition: no stage.completed event,
+        # no dead-letter (the write was refused, not a compute failure — the item stays
+        # cleanly re-runnable on the next attempt). But it IS a non-ok acquisition: no
+        # candidate note was written, so `receipt.ok` must be False and the CLI must exit
+        # nonzero. Mirrors run_replay, which folds "blocked" into equivalent=False with no
+        # event and no dead-letter.
         stages.append(
             AcquireStageReceipt(
                 stage=CANDIDATE_STAGE, status="blocked", detail=write_result.reason
@@ -375,6 +387,7 @@ def acquire_youtube(
         is_new_raw=outcome.is_new,
         acquisition_method=outcome.acquisition_method,
         stages=tuple(stages),
+        blocked=candidate_blocked,
     )
 
 
