@@ -587,6 +587,75 @@ def acquire_replay(
 
 
 @cli.command(
+    name="acquire-youtube",
+    help="Acquire a NEW YouTube URL end-to-end: fetch -> persist raw -> normalize -> "
+    "extract -> candidate note, emitting one KA-06 stage event per transition (#3106).\n\n"
+    "Example:\n  python -m app.cli acquire-youtube https://youtu.be/ID --vault-root ./vault",
+)
+@click.argument("url_or_id")
+@click.option(
+    "--vault-root",
+    "vault_root",
+    required=True,
+    help="Vault root the candidate note is written to (first-write-wins).",
+)
+@click.option("--json", "as_json", is_flag=True, help="Also print the JSON receipt to stdout.")
+@click.option("--trace-id", default=None, help="Attach a trace id to the run.")
+def acquire_youtube_cmd(
+    url_or_id: str,
+    vault_root: str,
+    as_json: bool,
+    trace_id: Optional[str],
+) -> None:
+    """Thin wrapper over `app.knowledge_acquisition.acquire.acquire_youtube` (the testable core).
+
+    Fails loud (nonzero exit) when `DATABASE_URL`/`DB_DSN` is unset (stage-event emission
+    requires a configured runtime Postgres outbox), or when any stage dead-letters.
+    """
+    from app.knowledge_acquisition.acquire import AcquisitionError, DatabaseNotConfiguredError, acquire_youtube
+    from app.vault.manager import VaultContext
+
+    trace_id = with_trace_id(trace_id)
+    vault_context = VaultContext(
+        status="selected",
+        active_vault_id="cli-acquire",
+        active_vault_name="CLI Acquire Vault",
+        active_vault_path=str(vault_root),
+    )
+    try:
+        receipt = acquire_youtube(url_or_id, vault_context=vault_context, trace_id=trace_id)
+    except DatabaseNotConfiguredError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except AcquisitionError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    for line in receipt.to_lines():
+        click.echo(line)
+    if as_json:
+        click.echo(json.dumps(receipt.as_dict(), ensure_ascii=False))
+    if not receipt.ok:
+        # Loud, item-scoped failure (AC3): a dead-lettered extractor OR a WriteGuard-blocked
+        # candidate write means NO candidate note was written — surface why, then exit nonzero.
+        if receipt.blocked:
+            blocked_stage = next(
+                (s for s in receipt.stages if s.status == "blocked"), None
+            )
+            reason = blocked_stage.detail if blocked_stage else "candidate write blocked"
+            click.echo(
+                f"acquire FAILED: candidate write blocked by WriteGuard — no note written "
+                f"({reason})",
+                err=True,
+            )
+        elif receipt.dead_lettered:
+            click.echo(
+                f"acquire FAILED: stage(s) dead-lettered: {', '.join(receipt.dead_lettered)} "
+                "— no candidate note written",
+                err=True,
+            )
+        raise SystemExit(1)
+
+
+@cli.command(
     help="Run full pipeline (normalize -> classify -> optional transcribe). Accepts file, URL, or audio/YouTube."
 )
 @click.argument("source")
