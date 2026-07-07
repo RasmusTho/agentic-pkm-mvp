@@ -16,8 +16,12 @@ can_parallelize_with: [Dehardcode Wave One]
 Make the prompt md files real (SET-6). Today the ask prompt's source of truth is the Python
 constant `DEFAULT_ASK_SYSTEM_PROMPT` (`app/settings/models.py:285-296`); the compiler key exists
 but no vault prompt note does; `docs/settings/prompts/*.v1.md` self-declare as descriptive
-mirrors; and the loader that would read them (`app/components/settings/prompts_loader.py:53-103`)
-has zero callers — dead code that looks like a capability.
+mirrors. The loader that reads them (`app/components/settings/prompts_loader.py:53-103`) is
+**not** dead — `app/settings/validate.py:238` calls it inside `validate_settings()`, which is
+wired to the live `GET /api/settings/validate` route and a CI check. It validates the mirror
+files' shape only; the answer path (`app/agents/ask/utils.py`) never reads them. This task closes
+that gap by making the answer path read the vault file — it does not delete the loader outright
+(see What This Task Does and Out of Scope).
 
 ## What This Task Does
 
@@ -30,9 +34,12 @@ has zero callers — dead code that looks like a capability.
   and gives it the same treatment, or records exactly why it stays code-owned (schema-binding
   I-C3 coupling may justify code ownership for the output-schema half; the instruction text still
   migrates).
-- Deletes `app/components/settings/prompts_loader.py` (dead) and either deletes
-  `docs/settings/prompts/*` or regenerates them as clearly marked, generated projections of the
-  vault/runtime truth — never a hand-maintained "keep in sync" mirror again.
+- Migrates `validate_settings()`'s prompt-shape check (`app/settings/validate.py:238`) to validate
+  the new canonical `<vault>/settings/prompts/*.md` files instead of `docs/settings/prompts/*`,
+  preserving the live `/api/settings/validate` route and the CI check. Only once that migration
+  lands does `app/components/settings/prompts_loader.py` and the old `docs/settings/prompts/*`
+  registry become genuinely unused — delete them then, not before, and confirm via the same import
+  scan the AC below names.
 - Adds the drift check (DOCTOR): any remaining mirror artifact is compared against its source in
   CI; divergence fails visibly.
 
@@ -58,8 +65,13 @@ is truth, constant is seed.
   - Verify: `tests/settings/test_prompts_as_settings.py::test_ask_prompt_resolves_from_vault`
     (enforcement AC — asserts resolution through the production ask path,
     `app/agents/ask/utils.py`, not the settings model in isolation)
-- [ ] `prompts_loader.py` is deleted; no dangling imports.
-  - Verify: `tests/settings/test_prompts_as_settings.py::test_dead_loader_removed` (import scan)
+- [ ] `/api/settings/validate` and its CI check validate the new canonical prompt files, not the
+      retired `docs/settings/prompts/*`; only then is `prompts_loader.py` deleted with no
+      remaining callers.
+  - Verify: `tests/settings/test_prompts_as_settings.py::test_validate_reads_canonical_prompts`
+    (enforcement AC — asserts the production `/api/settings/validate` route, not `validate_settings()`
+    in isolation) + `tests/settings/test_prompts_as_settings.py::test_loader_removed_once_unused`
+    (import scan, run only after the migration AC above is green)
 - [ ] `docs/settings/prompts/*` are deleted or generated-and-marked; the drift check exists and
       fails on manufactured divergence.
   - Verify: `tests/architecture/test_prompt_mirror_drift.py::test_mirrors_are_generated_or_absent`
