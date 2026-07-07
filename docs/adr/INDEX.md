@@ -52,3 +52,4 @@
 - [ADR-0053: Interim multi-writer vault-write posture — accept last-write-wins for B1, decide the full model before B2 (Superseded by ADR-0055)](./ADR-0053-interim-vault-multiwriter-posture.md)
 - [ADR-0054: The Episode Resolution Engine is a Mimer organ — Heimdal contributes single-stream boundary proposals (Accepted)](./ADR-0054-episode-resolution-engine-is-a-mimer-organ.md)
 - [ADR-0055: Multi-writer vault-consistency model — stale-detection + conflict-copy for rewritten notes, per-note-class posture (Accepted)](./ADR-0055-vault-multiwriter-consistency-model.md)
+- [ADR-0056: One hub Mimer client contract; HTTP-API + direct-FS transports; external app agents join the writer set (Accepted)](./ADR-0056-mimer-client-contract-and-transports.md)
