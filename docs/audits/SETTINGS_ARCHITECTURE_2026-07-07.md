@@ -1,4 +1,4 @@
-State: Advisory audit snapshot, 2026-07-07. Anchors reflect `origin/main` (8d871f9c) at the audit date. Subordinate to `docs/DOCS_INDEX.md` and owner contracts; owner docs win on disagreement. No executable spec directory yet — the target design in §5 awaits an owner ruling before `feature-breakdown` produces one.
+State: Advisory audit snapshot, 2026-07-07. Anchors reflect `origin/main` (8d871f9c) at the audit date. Subordinate to `docs/DOCS_INDEX.md` and owner contracts; owner docs win on disagreement. Owner ruled Option B (§5) the same day; executable form is `docs/SETTINGS_SPINE/` (parent feature issue #3156, children #3159-#3166).
 Doc role: Reference (audit snapshot)
 Authority: Evidence-based structural analysis of the settings architecture across Yggdrasil (core runtime, Companion UI, Heimdal, Mimer client contract, app-local/instance layer). Every claim carries a `file:line` or doc anchor. Advisory only.
 
@@ -58,8 +58,13 @@ Three owner-adjacent docs each present a different location as canonical without
 Highest-signal groups (full table in explorer evidence, §8):
 - **Prompts:** ask system prompt SoT is the Python constant `DEFAULT_ASK_SYSTEM_PROMPT`
   (`app/settings/models.py:285-296`); the compiler key is registered but no `vault/@Settings/agents/ask.md`
-  exists; `docs/settings/prompts/*.v1.md` are self-declared descriptive mirrors and the loader that
-  would read them (`app/components/settings/prompts_loader.py:53-103`) has **zero callers** — dead code.
+  exists; `docs/settings/prompts/*.v1.md` are self-declared descriptive mirrors. The loader
+  (`app/components/settings/prompts_loader.py:53-103`) is **not** dead — `app/settings/validate.py:238`
+  calls it inside `validate_settings()`, which is wired to the live `GET /api/settings/validate`
+  route (`app/api/routes/settings_validate.py`) and CI. But that call path only validates the
+  registry/mirror files' shape; the answer path (`app/agents/ask/utils.py`) never reads them — so
+  the mirror-vs-source gap is real (the files are validated, never consulted at answer time), even
+  though the loader itself is live code, not dead code.
 - **Models/voices:** `REASONING_MODEL`/`MERGE_LLM_MODEL` env defaults `llama3.1:8b`
   (`app/reasoning/provider.py:101`, `app/components/llm/router.py:76`); all TTS voices/toggles env-only
   (`app/tts/config.py:39-73`), no pydantic settings class at all.
@@ -79,7 +84,10 @@ Highest-signal groups (full table in explorer evidence, §8):
 of actual selection; nothing reconciles it with `AppLocalSettingsStore.last_active_vault_ref` and
 the live `VaultManager` context. `WATCHER_VAULT_PATH` is read once at watcher boot and never
 rebinds on UI vault selection — a capture can succeed while invisible to ingest (named gap,
-`docs/ENVIRONMENTS.md:94-108`, #3119).
+`docs/ENVIRONMENTS.md:94-108`). #3119 (which named this gap) closed 2026-07-07 via PR #3126, but
+that fix only adds a visible `ingest_binding` warning surface (`diverged`/`unbound`/`unknown`) —
+it does not rebind. The live rebind is not yet built and is tracked under the open epic #2143
+(instance manages multiple vaults).
 
 ### F5 — Receipts are inconsistent across writers
 
@@ -91,14 +99,14 @@ human-editable settings file without a durable receipt is a posture violation.
 
 ### F6 — Two `system-settings.schema.json`, one orphaned and diverged
 
-`schemas/system-settings.schema.json` is the wired one (`app/vault/markdown_settings.py:12`).
+`schemas/system-settings.schema.json` is the wired one (`app/services/settings.py:12`, `SCHEMA_PATH`).
 `docs/schema/system-settings.schema.json` has zero code references, a looser shape, and a
 different field name (`active_edit_grace_s` vs the canonical `inactive_grace_s`,
 `app/services/settings.py:58`).
 
 ### F7 — No single settings owner doc; docs contradict on authority direction
 
-`docs/DOCS_INDEX.md:598` (SETTINGS.md, "with known debt, forward-looking areas") and `:301`
+`docs/DOCS_INDEX.md:301` (SETTINGS.md, "with known debt, forward-looking areas") and `:598`
 (VAULT_AND_SETTINGS_CONTEXT.md) own two disjoint halves; `vault-settings-roadmap.md` records the
 central service as simultaneously delivered-foundation and unmet-DoD (`:110-123` vs `:42-57`).
 
@@ -119,9 +127,10 @@ central service as simultaneously delivered-foundation and unmet-DoD (`:110-123`
 
 - **RQ1 (actual vs documented SoT):** §1 table. Documented SoT ("vault markdown") holds for stack B
   and Heimdal; is false at runtime for stack C (F1); stacks A/D are undocumented-as-settings.
-- **RQ2 (mirror-vs-source gaps):** Confirmed. `docs/settings/prompts/*` are mirrors, loader dead
-  (F3). Same pattern: `docs/schema/system-settings.schema.json` (F6) and `runtime/settings/*.yaml`
-  in an uncompiled container (F1) — three surfaces that look authoritative and are not.
+- **RQ2 (mirror-vs-source gaps):** Confirmed. `docs/settings/prompts/*` are mirrors, validated but
+  never consulted at answer time (F3). Same pattern: `docs/schema/system-settings.schema.json` (F6)
+  and `runtime/settings/*.yaml` in an uncompiled container (F1) — three surfaces that look
+  authoritative and are not.
 - **RQ3 (documented design vs implementation):** Design exists across three docs with three
   locations (F2); the ingestion promise is implemented but unwired (F1); the "settings tiering"
   operator/lab profile exists (`app/settings/tiering.py:8-10`) but most tunables never reach any
@@ -130,8 +139,11 @@ central service as simultaneously delivered-foundation and unmet-DoD (`:110-123`
   (identity, vault registry, last-active) vs vault scopes (shared/local), precedence
   built-in → app-local → vault-shared → vault-local → runtime
   (`VAULT_AND_SETTINGS_CONTEXT.md:80-104`). Gaps: env vars act as de-facto pre-vault settings
-  outside this model (D); instance.yaml duplicates vault identity (F4); R5 (#2312, open) —
-  whether the runtime may scaffold `settings/*.md` into a personal vault on init.
+  outside this model (D); instance.yaml duplicates vault identity (F4). R5 (#2312) is **not**
+  open — it closed 2026-06-24 with Option A shipped and documented
+  (`docs/ENVIRONMENTS.md:56`, "Scaffolding placement decision"): scaffold only on explicit
+  `initialize`, never on `select`/open. The target design in §5 conforms to this existing
+  decision rather than proposing a new one.
 - **RQ5 (prior decisions status):** Persistence-≠-read-only (#2590/#2629) partially enacted —
   stack B writable+receipted, but most md surfaces still read-only (§2 read-only list in explorer
   evidence). Storage-substrate framework conformed to by app-local/vault split. ADR-0056/Mimer
@@ -191,10 +203,11 @@ Minimal kernel = SET-1 + SET-2 + SET-3; the rest is defense in depth.
    silent defaults (SET-1).
 4. **Sequencing (boot → vault).** env bootstrap → instance md → `no_vault` idle (unchanged,
    #2005) → vault selected → vault settings load + **rebind subscribers via `VaultChangedEvent`**
-   (closes #3119) → watcher ingests subsequent edits. Settings that exist pre-vault stay
-   instance-scoped; nothing vault-scoped is needed to boot (SET-5 already guarantees this).
-   Vault init scaffolds `settings/` per R5 — recommend resolving #2312 as "yes, scaffold on
-   explicit init only, never on open".
+   (the remaining scope of the open epic #2143 — #3119 already closed with a partial
+   visible-signal fix, not the rebind) → watcher ingests subsequent edits. Settings that exist
+   pre-vault stay instance-scoped; nothing vault-scoped is needed to boot (SET-5 already
+   guarantees this). Vault init scaffolds `settings/` per the already-shipped R5/#2312 decision
+   (Option A, `docs/ENVIRONMENTS.md:56`) — explicit init only, never on open; no new ruling needed.
 5. **De-hardcoding.** Migrate the F3 inventory into the registry incrementally, operator/lab
    tier-gated, highest user-meaning first: prompts (md in `settings/prompts/` becomes the SoT,
    code constant becomes the seeded default), model/voice routing, rerank/thresholds, watcher
@@ -211,11 +224,10 @@ Minimal kernel = SET-1 + SET-2 + SET-3; the rest is defense in depth.
 | S2 | Canonicalize one settings location; migrate A/C/health sources; compat-read old paths one release with loud deprecation (SET-2) | CI gate test `tests/architecture/test_settings_single_location.py`; grep gate on new paths | Resolves F2 doc contradiction across SETTINGS/ENVIRONMENTS/VAULT_AND_SETTINGS_CONTEXT |
 | S3 | Unify receipts: compiler/auto-heal, watcher delta, agent writes all emit `SettingsWriteReceipt` (SET-3) | `tests/vault/test_settings_receipt_durable.py` extended to every writer | Extends #2475 UI-boundary receipt work |
 | S4 | Single default registry; collapse duplicated env defaults (SET-4) | one declaration site per key; divergence test | New; fixes LLM_TIMEOUT/WATCHER_ENABLE splits |
-| S5 | Vault-selection rebind for watcher + all vault-scoped consumers (SET-7) | test: select vault via API → watcher ingest binding follows | **Extends #3119** (named gap) |
-| S6 | Prompts-as-settings: `settings/prompts/*.md` become runtime SoT; delete dead loader + mirrors (SET-6) | ask prompt edited in vault md changes `/api/ask` behavior; drift check for remaining mirrors | Enacts prompt-contract-mirror memory; supersedes `docs/settings/prompts/` |
+| S5 | Vault-selection rebind for watcher + all vault-scoped consumers (SET-7) | test: select vault via API → watcher ingest binding follows | **Extends #2143** (open epic); #3119 already closed with a partial visible-signal fix (PR #3126), not the rebind |
+| S6 | Prompts-as-settings: `settings/prompts/*.md` become runtime SoT; delete the unused prompt loader + mirrors once superseded (SET-6) | ask prompt edited in vault md changes `/api/ask` behavior; drift check for remaining mirrors | Enacts prompt-contract-mirror memory; supersedes `docs/settings/prompts/` |
 | S7 | De-hardcode wave 1 (models/voices/rerank/thresholds/watcher tunables), tier-gated | each migrated key visible in `settings explain` with origin | Extends `vault-settings-roadmap.md :: extract configurable hardcoded values`; TTS voice decision (#1702) becomes a setting |
 | S8 | Owner-doc consolidation + schema cleanup (F6, F7) | DOCS_INDEX single owner row; orphan schema deleted | docs-authoring lane |
-| — | Resolve R5 (#2312) scaffolding question | owner ruling recorded | existing open issue, do not duplicate |
 
 S1 and S2 are ordered first because everything else lands on the spine they define. Handoff to
 `feature-breakdown` after the owner rules on §5 (a spec directory before the ruling would encode
@@ -233,6 +245,19 @@ an undecided design).
   state is a rebuildable projection of md sources (DRI-classified), never the only copy of meaning.
 - **No reshape proposed.** Consolidating four stacks into one service is implementation
   convergence inside existing boundaries, not a boundary change.
+- **Residual boundary question (flagged, not resolved here).** `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`
+  assigns "which vault is bound" and device/context posture to WSP's `ActiveContextSet` as a
+  governed set of bindings — explicitly replacing a free-standing `activeVault` scalar — and
+  treats a vault re-point as a GOV-governed decision when authority-bearing. Folding
+  `lastActiveVaultRef`/machine-role into the generic instance-settings surface (§5 point 1) must
+  not silently regress that into an ordinary WriteGuard-gated settings-field write; the
+  implementation should keep the WSP-governed re-point path distinct even where it is stored
+  alongside instance settings. Similarly, the compiler's auto-heal writing back into vault
+  markdown (a DRI-classified derived layer mutating HKA-owned source content, F5) is folded into
+  "one write path, gated where authority-bearing" without an explicit ruling on whether
+  derived-writes-into-source should continue under the merged spine — implementers should treat
+  this as an open sub-question for SETTINGS-04/SETTINGS-08, not an already-settled convergence
+  detail.
 
 ## 8. Evidence provenance
 
