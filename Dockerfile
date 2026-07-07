@@ -38,6 +38,26 @@ RUN chmod +x scripts/start_api.sh
 # command is denied on the root-owned /app and the process crash-loops.
 RUN mkdir -p /app/tmp && chmod 1777 /app/tmp
 
+# Pre-create /app/runtime with open perms for the same reason (#3047): every
+# `app/**` module that defaults a receipt/state path to a relative
+# `runtime/<subdir>/...` (ask_synthesis, expansion_records, agent_memory,
+# relevance, builderops, dispatcher, orientation, panel, proposals — see
+# `git grep 'Path("runtime/'` for the current set) resolves it under `/app`
+# (the compose `working_dir`). `/app/runtime` does not exist in the repo (every
+# subdir is `.gitignore`d) so `COPY . .` above never bakes it; without this
+# step the *first* write from a fresh container calls
+# `path.parent.mkdir(parents=True, exist_ok=True)` against the root-owned
+# `/app`, which is denied under the host-uid-remapped runtime user and fails
+# every request that touches a receipt (observed: POST /api/ask 500s via
+# app/activation/ask_synthesis.py::emit_ask_synthesis_receipt).
+# This is the general chokepoint for this defect class under the current
+# image-bake-chown mechanism: a *new* root-owned runtime-writable surface
+# should get its own `mkdir -p /app/<path> && chmod 1777 /app/<path>` line
+# here rather than a bespoke per-module fix (e.g. #3118's heartbeat files on
+# the shared `runtime-tmp` volume mounted at /app/tmp, which this same
+# pattern already covers).
+RUN mkdir -p /app/runtime && chmod 1777 /app/runtime
+
 EXPOSE 8000
 
 CMD ["/app/scripts/start_api.sh"]
