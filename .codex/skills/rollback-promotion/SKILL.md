@@ -66,7 +66,7 @@ Rolling back therefore follows the same governed-PR path as a promotion:
    reversible migration reversal completes. `stable-prev` remains the rollback
    target/anchor; it is not the final detached prod checkout when branch protection
    creates a merge commit.
-7. Restarts the prod process with `make prod-start-full` — the canonical prod startup that enforces all four prod runtime-binding elements (compose overlay, `pkm-prod` project namespace, `PKM_ENVIRONMENT=prod`, and the `.env.prod.local`-resolved vault root) per `docs/RELEASE_CHANNELS/README.md §Prod runtime binding`. Do not use `make prod-down && make prod-up` — `prod-up` alone does not enforce the full binding.
+7. Restarts the prod process with `make prod-start-full` — the canonical prod startup that enforces all four prod runtime-binding elements (compose overlay, `pkm-prod` project namespace, `PKM_ENVIRONMENT=prod`, and the `.env.prod.local`-resolved vault root) per `docs/RELEASE_CHANNELS/README.md §Prod runtime binding`. Do not use separate down/up Make targets — a bare up target alone does not enforce the full binding.
 8. Appends the rollback receipt to the promotion plan file: timestamp, revert PR
    URL, `stable-prev` rollback target, failed promotion checkout used for migration
    reversal, merged `origin/stable` rollback commit, which migrations were reversed,
