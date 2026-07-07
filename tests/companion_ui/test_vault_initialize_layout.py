@@ -29,6 +29,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.api.routes.companion as companion_module
+import app.vault.manager as vault_manager_module
 from app.api.app import app
 from app.vault.app_local import AppLocalSettingsStore
 from app.vault.manager import VaultManager
@@ -65,6 +66,14 @@ def manager_no_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> VaultMa
     monkeypatch.setenv("DESIGN_HANDOFF_APP_LOCAL_SETTINGS", str(app_local_path))
     mgr = VaultManager(app_local_store=AppLocalSettingsStore(app_local_path))
     monkeypatch.setattr(companion_module, "get_vault_manager", lambda: mgr)
+    # The capture path resolves its vault through app.vault.manager's module-level
+    # _GLOBAL_MANAGER singleton (via vault_resolution), NOT companion_module's
+    # reference — so patching only the companion reference leaves capture reading
+    # a stale singleton that an earlier test may have created, and the post-init
+    # capture lands in the wrong vault. Bind the singleton to this fresh manager so
+    # every get_vault_manager() caller agrees; monkeypatch restores it on teardown,
+    # which also isolates this test from prior pollution.
+    monkeypatch.setattr(vault_manager_module, "_GLOBAL_MANAGER", mgr, raising=False)
     if hasattr(mgr, companion_module._LAST_ACTIVE_LOAD_ATTEMPTED_ATTR):
         delattr(mgr, companion_module._LAST_ACTIVE_LOAD_ATTEMPTED_ATTR)
     return mgr
