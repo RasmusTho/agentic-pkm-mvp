@@ -54,9 +54,9 @@ Before executing any step, confirm every binding in the table below is correct:
 
 ## What this skill does
 
-1. **Channel isolation preflight.** Before any stack mutation, invoke the shipped read-only guard:
+1. **Channel isolation preflight.** Before any stack mutation, invoke the shipped read-only guard against the test checkout's own compose file (never a dev-tree copy — pass the full path, do not rely on cwd):
    ```bash
-   python -m app.release_channels.channel_isolation_preflight docker-compose.test.yml test
+   python -m app.release_channels.channel_isolation_preflight <test-checkout>/docker-compose.test.yml test
    ```
    This fail-closes when the compose overlay's effective env bindings (`PKM_ENVIRONMENT`, `DATABASE_URL`, `DB_DSN`) do not resolve to the test channel (`docs/RELEASE_CHANNELS/README.md §Compose/env binding invariant`). In addition, confirm the compose project is `pkm-test`, the vault root is not the prod vault, and the DB is `app_test` (port 15434). Abort if the guard or any manual check fails.
 

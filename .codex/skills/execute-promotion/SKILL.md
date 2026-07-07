@@ -72,9 +72,9 @@ This preflight is **fail-closed**: if stable is not an ancestor of the candidate
 2. Validates the plan: every required section from the promotion plan contract present, all operator acknowledgment checkboxes ticked. Abort if validation fails.
 3. **Ancestry preflight**: runs `git merge-base --is-ancestor origin/stable <candidate-sha>`. Aborts with reconciliation-PR instruction if it fails.
 4. Records the current `stable` ref as `stable-prev` (pointer file in `ops/promotions/`) before moving anything.
-5. **Channel isolation preflight.** Before any stack mutation — including opening the governed PR below — invoke the shipped read-only guard:
+5. **Channel isolation preflight.** Before any stack mutation — including opening the governed PR below — invoke the shipped read-only guard against the prod checkout's own compose file (never a dev-tree copy — pass the full path, do not rely on cwd):
    ```bash
-   python -m app.release_channels.channel_isolation_preflight docker-compose.prod.yml prod
+   python -m app.release_channels.channel_isolation_preflight <prod-checkout>/docker-compose.prod.yml prod
    ```
    This fail-closes when the compose overlay's effective env bindings (`PKM_ENVIRONMENT`, `DATABASE_URL`, `DB_DSN`) do not resolve to the prod channel (`docs/RELEASE_CHANNELS/README.md §Compose/env binding invariant`). Abort if the guard fails — do not open the PR in step 6 until it passes.
 6. Opens a governed PR targeting `stable` from the candidate branch. Waits for required status checks (`smoke`, `smoke-docker`, `pr-contract`) to pass per `_shared/CI_WAIT_CONTRACT.md`, then waits for the operator to merge. Records the merged PR URL in the promotion receipt.
@@ -119,7 +119,7 @@ verify-promotion
 - Always run the ancestry preflight (`git merge-base --is-ancestor`) before any stable movement. Fail closed if it does not pass.
 - Always record `stable-prev` before opening the stable PR. This is the rollback anchor.
 - Never skip a migration that the plan lists. Never apply a migration the plan does not list.
-- Never use the dev checkout for prod operations — separate worktrees per `DEFINE_CONCURRENCY_RULE`.
+- Never use the dev checkout for prod operations — separate worktrees per `docs/RELEASE_CHANNELS/DEFINE_CONCURRENCY_RULE.md`.
 - Never directly push or force-push to `stable`. The governed PR is the only permitted path for advancing the protected branch.
 
 ## Authority order for decisions
