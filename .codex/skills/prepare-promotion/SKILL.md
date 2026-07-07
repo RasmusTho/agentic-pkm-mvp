@@ -5,6 +5,13 @@ description: "Produce a promotion plan that diffs main against stable, enumerate
 
 # Prepare Promotion
 
+> **Status: describes the TARGET gated-`stable` model (deferred promotion hardening).** Prod
+> currently tracks `main` directly per `docs/RELEASE_CHANNELS/README.md §Promotion model` and
+> [ADR-0040](../../../docs/adr/ADR-0040-prod-promotion-ref-main-interim.md); `origin/stable` is
+> **dormant** and is not an ancestor of `origin/main`. Do not run this skill against the current
+> baseline without explicit operator direction — see README §Current direction and §Promotion
+> model before invoking.
+
 Use this skill before any `execute-promotion` run. Its sole job is to produce a reviewable promotion plan. It does not move any ref, apply any migration, or restart any process.
 
 Do not use this skill to:
@@ -27,7 +34,7 @@ memory or Product truth.
 2. Resolves the target `main` commit the operator wants to promote to.
 3. Diffs the two refs and enumerates every PR merged since `stable`.
 4. For each included PR: extracts title, link, and any associated GitHub Issue; checks whether ACs are marked satisfied on the Issue; notes any open verification gaps.
-5. Enumerates migration files committed since `stable` that have not yet been applied to the prod DB (`pkm_prod` container, port 15432). For each migration: reads its reversibility marker (per `docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`) and flags forward-only ones explicitly.
+5. Enumerates migration files committed since `stable` that have not yet been applied to the prod DB (`app` DB, compose project `pkm-prod`, port 15432). For each migration: reads its reversibility marker (per `docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`) and flags forward-only ones explicitly.
 6. Diffs settings/env defaults between the two refs and notes any operator-visible config changes.
 7. Assembles risk notes: forward-only migrations, PRs without full AC verification, any cross-channel touchpoints visible in the diff, and a **vault-settings preflight** of the prod vault (`app.vault.promotion_preflight.vault_settings_preflight`, or `python -m app.cli vault preflight --path <prod vault>`). If the vault is `uninitialized` (predates the vault-settings foundation), record a required `python -m app.cli vault init --path <prod vault>` step as a **blocking** risk — otherwise the watcher fail-exits on startup (the #1991 prod failure mode).
 8. Writes the promotion plan to `ops/promotions/YYYY-MM-DD-<short-sha>.md` using the required sections from `DEFINE_PROMOTION_PLAN_CONTRACT`.
@@ -60,7 +67,7 @@ Per `docs/RELEASE_CHANNELS/DEFINE_PROMOTION_PLAN_CONTRACT.md`:
 The `prepare-promotion ...` command below is a skill invocation, not an installed shell binary — it names this skill's entry contract and arguments.
 
 ```
-# From the prod checkout (not the dev checkout — separate worktree per DEFINE_CONCURRENCY_RULE)
+# From the prod checkout (not the dev checkout — separate worktree per docs/RELEASE_CHANNELS/DEFINE_CONCURRENCY_RULE.md)
 prepare-promotion [--target <sha-or-ref>]
 
 # Review the produced plan at ops/promotions/YYYY-MM-DD-<short-sha>.md

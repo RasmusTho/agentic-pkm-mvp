@@ -5,6 +5,12 @@ description: "Roll prod back through the protected stable branch: merge the gove
 
 # Rollback Promotion
 
+> **Status: describes the TARGET gated-`stable` model (deferred promotion hardening).** Prod
+> currently tracks `main` directly per `docs/RELEASE_CHANNELS/README.md §Promotion model` and
+> [ADR-0040](../../../docs/adr/ADR-0040-prod-promotion-ref-main-interim.md); `origin/stable` is
+> **dormant** and is not an ancestor of `origin/main`. A revert PR against dormant `stable` is not
+> meaningful under the current baseline — confirm with the operator before invoking.
+
 Use this skill when `execute-promotion` fails or when `verify-promotion` returns FAIL after a promotion. Its job is to return prod to the last known-good state as defined by the rollback contract.
 
 Do not use this skill to:
@@ -47,7 +53,7 @@ Rolling back therefore follows the same governed-PR path as a promotion:
 
 1. Reads the promotion plan (`ops/promotions/YYYY-MM-DD-<short-sha>.md`) to determine: the previous `stable` ref (`stable-prev`), the promotion PR or merge commit, the migration delta, and which migrations were applied before the failure.
 2. Confirms `stable-prev` is resolvable and is different from the current `stable`. Abort if not — the rollback anchor is missing and operator intervention is required.
-3. Opens a revert PR targeting `stable` (reverting the promotion merge commit, or targeting `stable-prev` via a rollback branch). Records the revert PR URL. Waits for required status checks to pass and operator to merge.
+3. Opens a revert PR targeting `stable` (reverting the promotion merge commit, or targeting `stable-prev` via a rollback branch). Records the revert PR URL. Waits for required status checks to pass per `_shared/CI_WAIT_CONTRACT.md`, then waits for the operator to merge.
 4. Fetches `origin/stable` after the revert PR merges and records the merged rollback
    commit SHA, but keeps the prod checkout on the failed promotion commit while
    migration reversal runs.
@@ -60,7 +66,7 @@ Rolling back therefore follows the same governed-PR path as a promotion:
    reversible migration reversal completes. `stable-prev` remains the rollback
    target/anchor; it is not the final detached prod checkout when branch protection
    creates a merge commit.
-7. Restarts the prod process (`make prod-down && make prod-up`).
+7. Restarts the prod process with `make prod-start-full` — the canonical prod startup that enforces all four prod runtime-binding elements (compose overlay, `pkm-prod` project namespace, `PKM_ENVIRONMENT=prod`, and the `.env.prod.local`-resolved vault root) per `docs/RELEASE_CHANNELS/README.md §Prod runtime binding`. Do not use separate down/up Make targets — a bare up target alone does not enforce the full binding.
 8. Appends the rollback receipt to the promotion plan file: timestamp, revert PR
    URL, `stable-prev` rollback target, failed promotion checkout used for migration
    reversal, merged `origin/stable` rollback commit, which migrations were reversed,

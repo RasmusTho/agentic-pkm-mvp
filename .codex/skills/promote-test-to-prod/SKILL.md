@@ -5,6 +5,13 @@ description: "Staged workflow: promote a test-verified candidate commit to prod/
 
 # Promote Test to Prod
 
+> **Status: describes the TARGET gated-`stable` model (deferred promotion hardening).** Prod
+> currently tracks `main` directly per `docs/RELEASE_CHANNELS/README.md §Promotion model` and
+> [ADR-0040](../../../docs/adr/ADR-0040-prod-promotion-ref-main-interim.md); `origin/stable` is
+> **dormant** and is not an ancestor of `origin/main`. This skill's entire prod-facing stage
+> cannot run against the current baseline without explicit operator direction — see README
+> §Current direction and §Promotion model before invoking.
+
 Use this skill to advance a **test-verified** candidate commit to the prod channel. This is the second and final stage of the normal promotion path.
 
 Read `docs/RELEASE_CHANNELS/README.md` (§Current direction, §Promotion contract, §Channel model) and `docs/ENVIRONMENTS.md` (§Code vs Environment Separation) before running.
@@ -86,9 +93,9 @@ Before any prod mutation, confirm every prod binding in the table below is corre
 
 5. **Prod-scoped execute.** Invoke `execute-promotion` with the acknowledged plan:
    - Records `stable-prev` before moving anything.
-   - Moves the `stable` ref to the candidate SHA.
+   - Advances `stable` via the governed PR targeting `stable` (the merge commit becomes the new `stable` HEAD — never a direct ref write; see `execute-promotion §Stable-branch protection and PR-based advancement`).
    - Applies migrations to `app` (port 15432).
-   - Restarts the prod process (`make prod-start-full VAULT_ROOT=<path>`).
+   - Restarts the prod process with `make prod-start-full`. Vault root is resolved from the operator-configured `.env.prod.local` (configured once per machine per `docs/RELEASE_CHANNELS/README.md §Current direction`) — do not restate `VAULT_ROOT` inline on the command.
 
 6. **Prod-scoped verify.** Invoke `verify-promotion` against the prod channel:
    - Confirms `PKM_ENVIRONMENT=prod`, vault=real vault, DB=`app`.

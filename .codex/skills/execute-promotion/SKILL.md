@@ -5,6 +5,13 @@ description: "Execute a reviewed promotion plan: move the stable ref, apply migr
 
 # Execute Promotion
 
+> **Status: describes the TARGET gated-`stable` model (deferred promotion hardening).** Prod
+> currently tracks `main` directly per `docs/RELEASE_CHANNELS/README.md §Promotion model` and
+> [ADR-0040](../../../docs/adr/ADR-0040-prod-promotion-ref-main-interim.md); `origin/stable` is
+> **dormant** and is not an ancestor of `origin/main`. Do not run this skill against the current
+> baseline without explicit operator direction — see README §Current direction and §Promotion
+> model before invoking.
+
 Use this skill only after `prepare-promotion` has produced a complete plan and the operator has reviewed and ticked all acknowledgment checkboxes.
 
 Do not use this skill to:
@@ -15,6 +22,12 @@ Do not use this skill to:
 ## Capability boundary
 
 Read `docs/RELEASE_CHANNELS/README.md` (Promotion contract) and `docs/RELEASE_CHANNELS/DEFINE_PROMOTION_PLAN_CONTRACT.md` before running. The plan is the contract. If the plan is incomplete or has un-ticked acknowledgment checkboxes, abort.
+
+Executing a promotion is Builder System boundary work: the governed PR, migration run, and receipts
+are Builder System governance artifacts, while the code and schema changes they apply may be
+Product/Runtime changes. Use `docs/architecture/SBS_OPERATING_MODEL.md` to route SBS impact,
+owner-doc writeback, transition debt, and fitness-rule evidence without treating the promotion
+receipt itself as runtime memory or Product truth.
 
 ## Stable-branch protection and PR-based advancement
 
@@ -59,19 +72,24 @@ This preflight is **fail-closed**: if stable is not an ancestor of the candidate
 2. Validates the plan: every required section from the promotion plan contract present, all operator acknowledgment checkboxes ticked. Abort if validation fails.
 3. **Ancestry preflight**: runs `git merge-base --is-ancestor origin/stable <candidate-sha>`. Aborts with reconciliation-PR instruction if it fails.
 4. Records the current `stable` ref as `stable-prev` (pointer file in `ops/promotions/`) before moving anything.
-5. Opens a governed PR targeting `stable` from the candidate branch. Waits for required status checks (`smoke`, `smoke-docker`, `pr-contract`) to pass and operator to merge. Records the merged PR URL in the promotion receipt.
-6. Updates the prod checkout's HEAD to the new `stable` (`git -C <prod-checkout> fetch && git -C <prod-checkout> checkout stable`).
-7. Applies reversible migrations to the prod DB (port 15432) in forward order. Applies forward-only migrations only after confirming the operator acknowledged them in the plan. Stops and calls for rollback if any migration fails.
-8. Restarts the prod process (`make prod-down && make prod-up` or equivalent).
-9. Appends the promotion execution receipt to the plan file: timestamp, operator, merged PR URL, which ref moved, which migrations applied, process restart confirmation.
-10. Reports to the operator: "Promotion executed. Run verify-promotion to confirm health."
+5. **Channel isolation preflight.** Before any stack mutation — including opening the governed PR below — invoke the shipped read-only guard against the prod checkout's own compose file (never a dev-tree copy — pass the full path, do not rely on cwd):
+   ```bash
+   python -m app.release_channels.channel_isolation_preflight <prod-checkout>/docker-compose.prod.yml prod
+   ```
+   This fail-closes when the compose overlay's effective env bindings (`PKM_ENVIRONMENT`, `DATABASE_URL`, `DB_DSN`) do not resolve to the prod channel (`docs/RELEASE_CHANNELS/README.md §Compose/env binding invariant`). Abort if the guard fails — do not open the PR in step 6 until it passes.
+6. Opens a governed PR targeting `stable` from the candidate branch. Waits for required status checks (`smoke`, `smoke-docker`, `pr-contract`) to pass per `_shared/CI_WAIT_CONTRACT.md`, then waits for the operator to merge. Records the merged PR URL in the promotion receipt.
+7. Updates the prod checkout's HEAD to the new `stable` (`git -C <prod-checkout> fetch && git -C <prod-checkout> checkout stable`).
+8. Applies reversible migrations to the prod DB (port 15432) in forward order. Applies forward-only migrations only after confirming the operator acknowledged them in the plan. Stops and calls for rollback if any migration fails.
+9. Restarts the prod process with `make prod-start-full` — the canonical prod startup that enforces all four prod runtime-binding elements (compose overlay, `pkm-prod` project namespace, `PKM_ENVIRONMENT=prod`, and the `.env.prod.local`-resolved vault root) per `docs/RELEASE_CHANNELS/README.md §Prod runtime binding`. Do not use separate down/up Make targets — a bare up target alone does not enforce the full binding.
+10. Appends the promotion execution receipt to the plan file: timestamp, operator, merged PR URL, which ref moved, which migrations applied, process restart confirmation.
+11. Reports to the operator: "Promotion executed. Run verify-promotion to confirm health."
 
 ## Pre-conditions
 
 - A complete promotion plan produced by `prepare-promotion` exists and all operator acknowledgments are ticked.
 - `git merge-base --is-ancestor origin/stable <candidate-sha>` passes (ancestry preflight; see above).
 - The prod Postgres container is running (`make prod-up` healthy).
-- The prod checkout (separate worktree, per `DEFINE_CONCURRENCY_RULE`) is available.
+- The prod checkout (separate worktree, per `docs/RELEASE_CHANNELS/DEFINE_CONCURRENCY_RULE.md`) is available.
 - `origin/stable` resolves to the current prod commit.
 
 ## Operator steps
@@ -101,7 +119,7 @@ verify-promotion
 - Always run the ancestry preflight (`git merge-base --is-ancestor`) before any stable movement. Fail closed if it does not pass.
 - Always record `stable-prev` before opening the stable PR. This is the rollback anchor.
 - Never skip a migration that the plan lists. Never apply a migration the plan does not list.
-- Never use the dev checkout for prod operations — separate worktrees per `DEFINE_CONCURRENCY_RULE`.
+- Never use the dev checkout for prod operations — separate worktrees per `docs/RELEASE_CHANNELS/DEFINE_CONCURRENCY_RULE.md`.
 - Never directly push or force-push to `stable`. The governed PR is the only permitted path for advancing the protected branch.
 
 ## Authority order for decisions
