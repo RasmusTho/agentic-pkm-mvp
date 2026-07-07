@@ -1,8 +1,8 @@
 State: Accepted (owner decision, 2026-07-07). Decides the full multi-writer vault-consistency model deferred by ADR-0053, resolving the seven cover-items scoped by `docs/audits/YGGDRASIL_ECOSYSTEM_2026-07-06.md` §2. Supersedes ADR-0053. Gates B2 (#3024) per Epic B #3020.
 Doc role: Decision record (ADR)
-Authority: Authoritative for how concurrent vault-note writes (Mac runtime, human via Obsidian, iCloud sync, Bifrost clients) are detected and resolved. It does NOT implement the mechanism — enactment is downstream work per T2/T3 (`docs/audits/YGGDRASIL_ECOSYSTEM_2026-07-06.md` §10). It does NOT design or schedule the future AI-mediated-merge evolution named in §6 below — that is explicitly out of scope for this decision.
+Authority: Authoritative for how concurrent vault-note writes (Mac runtime, human via Obsidian, iCloud sync, Bifrost clients) are detected and resolved. It does NOT implement the mechanism — enactment is downstream work per T2/T3 (`docs/audits/YGGDRASIL_ECOSYSTEM_2026-07-06.md` §10). It does NOT design or schedule the future AI-mediated-merge evolution named in the Future evolution section below — that is explicitly out of scope for this decision.
 Owner: Architecture (Rasmus)
-Temporal class: Durable decision (supersede via a new ADR only if the model below is reversed or replaced by the future evolution in §6).
+Temporal class: Durable decision (supersede via a new ADR only if the model below is reversed or replaced by the future evolution recorded below).
 Source of truth: This ADR plus `docs/audits/YGGDRASIL_ECOSYSTEM_2026-07-06.md` §2/§7/§9/§11, `docs/adr/ADR-0053-interim-vault-multiwriter-posture.md` (superseded), Epic B #3020 / B1 #3023 / B2 #3024 / decision #3114.
 
 # ADR-0055: Multi-writer vault-consistency model — stale-detection + conflict-copy for rewritten notes, per-note-class posture
@@ -30,7 +30,7 @@ For rewritten note classes: **detect-and-stage**, not detect-and-refuse. A losin
 Conflicted-copy artifacts (`* (conflicted copy).md` and similar) are detected by the watcher/ingest scan and quarantined — never ingested as ordinary notes. Surfaced to the human for resolution (folder listing / future companion-note affordance), not silently merged.
 
 ### 4. Writer provenance / echo
-Every writer (Mac runtime, Bifrost clients) tags its own writes with a writer identity and timestamp, carried as a small metadata field alongside the existing write receipt. This is the minimum needed to make conflict artifacts (item 2) legible ("your phone changed this at 14:02 while the Mac wrote it at 14:01") and to give the future evolution in §6 something to reason over. Content-hash idempotence (today's self-write-skip mechanism) is retained as a cheap no-op short-circuit, not replaced.
+Every writer (Mac runtime, Bifrost clients) tags its own writes with a writer identity and timestamp, carried as a small metadata field alongside the existing write receipt. This is the minimum needed to make conflict artifacts (item 2) legible ("your phone changed this at 14:02 while the Mac wrote it at 14:01") and to give the future evolution recorded below something to reason over. Content-hash idempotence (today's self-write-skip mechanism) is retained as a cheap no-op short-circuit, not replaced.
 
 ### 5. Bifrost client write mechanism
 Bifrost writes vault files using Apple's coordinated-access APIs (`NSFileCoordinator`/`UIDocument`), not plain `FileManager` I/O. This cooperates with iCloud's own coordination rather than racing it, and keeps the client capable of offline-first operation (no requirement to route writes through the hub API).
@@ -52,7 +52,7 @@ Enactment (T2, downstream of this ADR) must produce the concrete classification 
 - Human prose and `_heimdal/**` control notes gain real collision protection; append-only surfaces keep today's cheap behavior, proportionate to their lower risk.
 - ADR-0053's accepted interim risk window closes; it is formally superseded below.
 
-## §6 Explicitly out of scope: future AI-mediated merge evolution
+## Future evolution (explicitly out of scope): AI-mediated merge
 
 The owner has expressed a future direction: a git-merge-style flow where an AI agent resolves most conflicts automatically and escalates to the human only when needed, rather than always staging a conflict artifact for manual resolution. This is **not urgent and not judged a significant current problem** — it is recorded here so it is not lost, not designed or scheduled by this ADR.
 
