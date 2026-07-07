@@ -51,6 +51,8 @@ A new dimension answers *"in what bounded lived situation did this originate?"* 
 
 Episode boundaries proposed by capture (Heimdal) **stand by default** — silence is acceptance. The only human action is a **re-cut** (merge / split / re-time / re-label / re-bind goal); active choice changes what was suggested, it never approves it. This is a low-trust contextual proposal, **not** a canonical mutation, so it does not pass through WriteGuard — consistent with proportional governance. The WriteGuard confirm gate is unchanged for canonical *knowledge* writes.
 
+> **Amended by [ADR-0054](./ADR-0054-episode-resolution-engine-is-a-mimer-organ.md) (2026-07-07):** the *proposer* is refined. Heimdal contributes **single-stream** boundary proposals from its own attributed events; the **Mimer Episode Resolution Engine** fuses those with other streams (calendar, location, vault activity), resolves canonical episodes, and assigns `episode_ref`. The opt-out posture stated here is unchanged.
+
 ### 6. "Event" stays reserved for plumbing
 
 `Episode` is the term for the lived situation. "Event" remains reserved for the Heimdal sensor event (a discrete attributed sensing act) and outbox plumbing. The three carried resolutions hold: Heimdal owns attribution; WriteGuard is the confirm gate for canonical writes; vault-canonical + outbox, not an event bus.

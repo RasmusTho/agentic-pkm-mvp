@@ -50,3 +50,4 @@
 - [ADR-0051: Episode is a first-class Artifact — the contextual anchor of a knowledge artifact (Accepted)](./ADR-0051-episode-as-ontological-primitive.md)
 - [ADR-0052: Embedding fallback re-pin to 1024 dims for the BGE-M3 primary-model switch — supersedes ADR-0023's fallback dimension pin (Accepted)](./ADR-0052-embedding-fallback-repin-1024-bge-m3.md)
 - [ADR-0053: Interim multi-writer vault-write posture — accept last-write-wins for B1, decide the full model before B2 (Accepted; interim, superseded by #3114)](./ADR-0053-interim-vault-multiwriter-posture.md)
+- [ADR-0054: The Episode Resolution Engine is a Mimer organ — Heimdal contributes single-stream boundary proposals (Accepted)](./ADR-0054-episode-resolution-engine-is-a-mimer-organ.md)

@@ -63,7 +63,7 @@ trade-offs, and flag anything that turns out to need an owner decision.
 1. **Event contract / schema / ontology.** What is an "event"? The minimal envelope (identity,
    time, actor(s), observed content, confidence, provenance, sensitivity, consent-state). How events
    relate (episodes, threads, correlation). Prose-mirror-of-schema style, consistent with
-   `docs/architecture/*` contract docs.
+   `docs/architecture/*` contract docs. **Scope clarified by [ADR-0054](../adr/ADR-0054-episode-resolution-engine-is-a-mimer-organ.md):** Heimdal designs single-stream boundary *hints* only; multi-stream episode fusion and `episode_ref` assignment are a **Mimer** organ (the Episode Resolution Engine), out of Heimdal's window.
 2. **Confidence model.** What confidence means (transcription certainty, attribution certainty,
    interpretation certainty — likely orthogonal, not one scalar), how it is produced, and how
    downstream must treat low-confidence events.

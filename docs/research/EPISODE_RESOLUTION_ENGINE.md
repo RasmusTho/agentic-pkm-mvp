@@ -1,4 +1,4 @@
-State: Advisory research proposal for a runtime organ (the Episode Resolution Engine) that operationalises the `Episode` entity (ADR-0051) and the `episode_ref` dimension. Changes no runtime behaviour. Subordinate to the doctrine, the cognitive ontology, ADR-0051, ADR-0044 (Mimer/Heimdal constituent split), and the Heimdal Capability Charter. The one posture it proposes to reshape (segmentation ownership) is routed to CES/ADR below, not asserted as settled.
+State: Advisory research proposal for a runtime organ (the Episode Resolution Engine) that operationalises the `Episode` entity (ADR-0051) and the `episode_ref` dimension. Changes no runtime behaviour. Subordinate to the doctrine, the cognitive ontology, ADR-0051, ADR-0044 (Mimer/Heimdal constituent split), and the Heimdal Capability Charter. The one posture it proposed to reshape (segmentation ownership) is now enacted by ADR-0054 (engine in Mimer; Heimdal single-stream proposals).
 Doc role: Research / candidate subsystem proposal
 Temporal class: timeless (changes when semantics change, not when time passes)
 Review cadence: event-driven
@@ -69,9 +69,9 @@ Per the repo convention that architecture claims state conform / extend / reshap
 - **Multi-stream fusion → extend (new).** ADR-0051 is silent on streams beyond Heimdal; this adds a fusion contract. Silence, not conflict — but it is net-new surface, so it is a candidate, not a clarification.
 - **Segmentation *ownership* moves Heimdal → Mimer → RESHAPE.** ADR-0051's interaction model reads "Heimdal proposes." Relocating the fusion+assignment engine to Mimer, and demoting Heimdal to a single-stream contributor, changes an accepted posture. **This is the one reshape and it routes through CES/ADR** (below); it is not enacted here.
 
-## Reshape routing (CES/ADR) — not yet enacted
+## Reshape routing (CES/ADR) — ENACTED by ADR-0054
 
-The ownership relocation is an ontology/constituent reshape, not a clarification. It must route through a CES/ADR step before any implementation, and that ADR would edit: `docs/HEIMDAL/CAPABILITY_CHARTER.md` (Heimdal contributes single-stream proposals, does not own multi-stream segmentation), ADR-0051's interaction model (segmentation ownership), and `docs/architecture/semantic-dimensions.md` (the process that stamps `episode_ref`). This doc is the grounding; the ADR is the enactment. No canonical edit is made here.
+The ownership relocation is an ontology/constituent reshape, not a clarification, so it routed through a CES/ADR step before any implementation. The owner decided the placement on 2026-07-07 (engine in Mimer; Heimdal demoted to single-stream boundary proposals) and it is enacted by [ADR-0054](../adr/ADR-0054-episode-resolution-engine-is-a-mimer-organ.md), which amends ADR-0051 §5 (segmentation ownership) and clarifies the Heimdal Capability Charter OPEN #1. This doc remains the advisory grounding; ADR-0054 is the normative decision. No runtime/schema change is enacted — implementation still needs its own bounded issues (see build order).
 
 ## Privacy seam (load-bearing)
 
