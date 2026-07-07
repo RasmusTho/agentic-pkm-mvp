@@ -332,7 +332,7 @@ Decision(existing) / LearningSignal(existing) --is-evidence-for--> Capability
 
 **Maturity dimensions (the Assessment vector), each evidence-backed:**
 
-1. **Functional completeness** — requirements/specs realized by shipped code (weakened by stubs/TODOs).
+1. **Functional completeness** — requirements/specs realized by shipped code (weakened by stubs and unfinished-work markers).
 2. **Test completeness** — tests + coverage + invariant/eval fixtures bearing on the capability.
 3. **Documentation quality** — owner doc present, current, and consistent with code.
 4. **Integration completeness** — capability wired to its callers/surfaces vs. built-but-dormant.
