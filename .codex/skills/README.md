@@ -127,6 +127,20 @@ on CI checks — and the optional `--codex` verdict path — via REST without dr
 - `rollback-promotion`
   - release-channel low-level skill: restore `stable` to `stable-prev`, reverse reversible migrations, restart prod; real prod vault is never rewound by rollback; call after `execute-promotion` failure or `verify-promotion` FAIL; always follow with `verify-promotion`; governed by `docs/RELEASE_CHANNELS/DEFINE_ROLLBACK_CONTRACT.md`
 
+Product-lane app-agent skills (runtime client operating instructions, not Builder System
+workflow — see `## App-agent skill family (product-lane)` below for the full description):
+
+- `mimer-governed-boundary`
+  - shared contract skill for the app-agent family; loaded by reference, never invoked directly
+- `mimer-capture`
+  - governed intake write to the vault inbox
+- `mimer-retrieve`
+  - read-only vault search
+- `mimer-ask`
+  - grounded Q&A over the vault with citations
+- `mimer-vault-workspace`
+  - direct-filesystem drafting/synthesis/editing under human delegation
+
 ## Connected execution paths
 
 - Implementation path:
@@ -202,3 +216,35 @@ The policy attaches to the stages that actually choose capability; it does not c
 
 Mechanical, deterministic, or operator-gated skills (publication, promotion and rollback, issue/bug/
 learning intake, docs and backlog maintenance) do not choose capability and carry no TCD block.
+
+## App-agent skill family (product-lane)
+
+The five `mimer-*` skills are **runtime client operating instructions**, not Builder System
+workflow skills. They instruct external app agents (Claude app, Codex app, and peers) how to
+operate Mimer and the Obsidian vault as governed clients — no GitHub, no PRs, no issues. They are
+governed by `docs/contracts/MIMER_CLIENT_CONTRACT.md` (enacted by
+`docs/adr/ADR-0056-mimer-client-contract-and-transports.md`), not by this file's workflow map.
+
+The canonical workflow chain, BuilderOps Vault routing, and BuilderOps workflow checkpoints
+sections above do **not** apply to this family — it has no Issues, no PRs, no lifecycle states,
+and no BuilderOps routing obligation. Do not route app-agent skill work through
+`issue-to-code`/`publish-pr`/`verification-and-closure`; those are for changes to the skill files
+themselves (a Builder System docs-authoring or governance-lane change), not for the app-agent's
+own runtime operation.
+
+- `mimer-governed-boundary`
+  - the shared contract skill: the three hard invariants, the exclusion list, the provenance
+    frontmatter block, and error-surfacing duties every other skill in this family inherits by
+    reference; never invoked directly for a human request
+- `mimer-capture`
+  - friction-free intake into the vault inbox via the governed capture endpoint; the only skill in
+    this family that performs a durable vault write
+- `mimer-retrieve`
+  - read-only vault search; find existing material by title/uuid, with filesystem enrichment as
+    the sanctioned fallback for the uuid-to-path gap
+- `mimer-ask`
+  - grounded Q&A over the vault with per-source citations; never blends the agent's own knowledge
+    in unmarked
+- `mimer-vault-workspace`
+  - direct-filesystem participation (AGENT-FLOWS mode c): drafting/synthesis in declared workspace
+    roots, and human-directed edits to existing notes under full write discipline
