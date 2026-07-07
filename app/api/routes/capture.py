@@ -54,6 +54,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.api.routes.ingest_binding import ingest_binding_status
 from app.api.routes.vault_resolution import active_vault_root_or_selection_required
 from app.events.models import new_trace_id
 from app.events.schema import make_outbox_event
@@ -110,6 +111,15 @@ class CaptureResponse(BaseModel):
     writer's ``WriteReceipt``; ``note_path`` is the vault-relative inbox
     reference where the capture landed. The endpoint never fabricates an
     acknowledgement — this model is only built from an actual write receipt.
+
+    ``ingest_warning`` is populated when the write itself succeeded but the
+    watcher/worker are not confirmed bound to the vault the capture just
+    landed in (#3119) — a vault selected/initialized through the Companion UI
+    can silently diverge from the watcher/worker's independent boot-time
+    binding, so a bare "written" acknowledgement would misrepresent whether
+    the capture will ever be ingested/findable. ``None`` means the watcher is
+    confirmed bound to this vault (or binding status could not meaningfully
+    diverge, e.g. no watcher expected in this deployment).
     """
 
     outcome: Literal["written"] = "written"
@@ -120,6 +130,7 @@ class CaptureResponse(BaseModel):
     trace_id: str
     events_emitted: list[str] = Field(default_factory=list)
     governed_write: dict[str, Any] | None = None
+    ingest_warning: str | None = None
 
 
 def _capture_note_rel(vault_root: Path) -> str:
@@ -347,6 +358,19 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse |
             },
         ) from exc
 
+    # Ingest-binding visibility (#3119) — the write above already succeeded;
+    # this only decides whether to accompany "written" with a warning that the
+    # watcher/worker are not confirmed bound to this vault. Never gates or
+    # delays the write itself, and a check failure must not turn a successful
+    # capture into an error response.
+    ingest_warning: str | None = None
+    try:
+        binding = ingest_binding_status(selected_vault_path=str(vault_root))
+        if binding.state in ("unbound", "diverged"):
+            ingest_warning = binding.detail
+    except Exception:
+        logger.warning("ingest binding status check failed during capture", exc_info=True)
+
     return CaptureResponse(
         note_path=receipt.locator.path,
         operation=receipt.operation,
@@ -355,6 +379,7 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse |
         trace_id=trace_id,
         events_emitted=events_emitted,
         governed_write=governed_write,
+        ingest_warning=ingest_warning,
     )
 
 

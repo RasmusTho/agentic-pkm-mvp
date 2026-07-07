@@ -75,6 +75,11 @@ class CaptureAck:
     (``app/api/routes/capture.py::CaptureResponse``): the deterministic
     writer's receipt surfaced verbatim. The UI only ever builds this from an
     actual runtime response — never locally.
+
+    ``ingest_warning`` (#3119) is populated when the runtime reports the
+    watcher/worker are not confirmed bound to the vault this capture landed
+    in — the write itself still succeeded; this is advisory, not a failure
+    state, and never turns a ``written`` capture into ``not_yet_written``.
     """
 
     note_path: str
@@ -82,6 +87,7 @@ class CaptureAck:
     adapter: str
     captured_at: str
     trace_id: str
+    ingest_warning: str | None = None
 
 
 @dataclass(frozen=True)
@@ -376,6 +382,23 @@ def capture_modal_script() -> str:
         li.setAttribute('data-ack-trace-id', ack.trace_id || '');
         li.setAttribute('data-ack-captured-at', ack.captured_at || '');
         stateSpan.textContent = 'written \\u00b7 ' + (ack.note_path || '');
+        // #3119 — the write succeeded, but the watcher/worker may not be
+        // confirmed bound to this vault (a vault selected/initialized
+        // through the picker is an in-process API selection only; the
+        // watcher/worker bind independently at boot). Surface that instead
+        // of leaving success as the only visible signal.
+        if (ack.ingest_warning) {
+          li.setAttribute('data-ack-ingest-warning', ack.ingest_warning);
+          var warnSpan = document.createElement('span');
+          warnSpan.className = 'capture-session-ingest-warning';
+          warnSpan.setAttribute('data-testid', 'capture-ingest-warning');
+          warnSpan.textContent = 'ingest not yet bound \\u00b7 ' + ack.ingest_warning;
+          li.appendChild(textSpan);
+          li.appendChild(stateSpan);
+          li.appendChild(warnSpan);
+          list.insertBefore(li, list.firstChild);
+          return;
+        }
       } else if (state === 'written_unacknowledged') {
         stateSpan.textContent = 'written \\u00b7 acknowledgement pending';
       } else {
@@ -426,7 +449,11 @@ def capture_modal_script() -> str:
       // acknowledgement payload — never locally.
       addEntry(text, 'written', ack);
       clearComposerIfUnchanged(text);
-      setStatus('');
+      // #3119 — a bare "written" success must not paper over the runtime
+      // reporting that ingest is not confirmed bound to this vault; the
+      // status line is the surface most likely to still be visible once the
+      // session-list entry scrolls away.
+      setStatus(ack && ack.ingest_warning ? ('Written, but ' + ack.ingest_warning) : '');
     }
 
     function onNotWritten(text, reason) {
