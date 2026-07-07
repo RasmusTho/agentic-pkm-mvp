@@ -92,6 +92,7 @@ from app.tts.planning import TTSNormalizedTextEmptyError, build_tts_plan
 from app.tts.service import synthesize_tts
 from app.tts.status import tts_runtime_status
 from app.vault.active_context import ActiveContextResolver
+from app.vault.layout import LAYOUT_NOTE_NAME
 from app.vault.manager import (
     SETTINGS_DIR_NAME,
     MachineRole,
@@ -2740,6 +2741,13 @@ def _orientation_recents_anchor(vault_root: Path) -> WorkspaceOrientationRecents
     the orientation entry projection now only runs for an *initialized* vault
     (#2653), which always carries that scaffold, surfacing a settings file as
     "your most recent note" would otherwise be a real production mis-projection.
+    The vault layout note (``vault.layout.md``, #3120/#3133) is excluded by its
+    reserved name too: it is machine configuration authored under the system
+    folder on init, so it must never surface as a human note even when the
+    resolved system-dir boundary and the note's on-disk folder disagree (e.g. a
+    ``VAULT_SYSTEM_DIR_REL`` override that points elsewhere than the packaged
+    default system folder). Excluding by name keeps this a security-boundary
+    guard, not a folder-alignment assumption (#3134).
     Notes whose only available label is a bare UUID stem (no H1 heading) are also
     excluded — a UUID is an internal identity marker, not a human-meaningful
     label.
@@ -2768,6 +2776,12 @@ def _orientation_recents_anchor(vault_root: Path) -> WorkspaceOrientationRecents
         for path, _safe in _iter_vault_note_files(vault_root):
             try:
                 if not path.is_file():
+                    continue
+                # The vault layout note is machine config, never a human note.
+                # Exclude it by its reserved name so the resolved-system-dir
+                # boundary and the note's actual on-disk folder need not agree
+                # (#3134).
+                if path.name == LAYOUT_NOTE_NAME:
                     continue
                 if _is_relative_to(path, system_dir_abs):
                     continue
