@@ -1,4 +1,4 @@
-State: Specification directory for the Capability Knowledge Model (CKM / Kvasir) MVP, enacted by ADR-0057. System-level source of truth for what the MVP must do; GitHub issues are execution artifacts created from these task specs. Builder System work (BuilderOps plane); not Product/Runtime truth.
+State: Specification directory for the Capability Knowledge Model (CKM / Kvasir) MVP, enacted by ADR-0057. Backlog FILED: parent #3138, children #3139-#3148. System-level source of truth for what the MVP must do; GitHub issues are execution artifacts created from these task specs. Builder System work (BuilderOps plane); not Product/Runtime truth.
 Doc role: Specification directory (capability breakdown)
 Authority: Owns the MVP task decomposition, execution order, cross-task invariants, and acceptance path for the CKM. Subordinate to ADR-0057 (decisions), ADR-0010 (BuilderOps authority), `docs/research/DEVELOPMENT_KNOWLEDGE_MODEL.md` (grounding SRS), `docs/CAPABILITY_CONTRACT_MODEL.md` and `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` (seed taxonomy owners).
 Owner: BuilderOps governance
@@ -66,7 +66,7 @@ Partial-failure walk: seed applied but ingestion fails → registry exists with 
 
 ## Relationship to GitHub issues
 
-Parent feature issue: filed from [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md) — the live validation hub (blocked, not directly picked up). One child issue per task file (CKM-01..CKM-10), created in dependency order; children reference this directory as the source of truth. The spec is authoritative; issues track backlog state.
+Parent feature issue: [#3138](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3138) — the live validation hub (blocked, not directly picked up); draft archived in [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md). Children: CKM-01 #3139, CKM-02 #3140, CKM-03 #3141, CKM-04 #3142, CKM-05 #3143, CKM-06 #3144, CKM-07 #3145, CKM-08 #3146, CKM-09 #3147, CKM-10 #3148. The spec is authoritative; issues track backlog state.
 
 ## Verification path
 

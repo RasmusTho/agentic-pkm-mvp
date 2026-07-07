@@ -1,4 +1,4 @@
-State: Pre-filing draft of the parent feature issue for the CKM MVP. When the GitHub issue is filed, this header is updated with the live issue number and this file stops being the authoritative backlog surface.
+State: FILED as GitHub issue #3138 (2026-07-07) with children #3139-#3148; the GitHub issue is now the authoritative backlog/validation surface and this file is the archived draft.
 Doc role: Parent feature issue draft (BuilderOps lane)
 
 # feat: Capability Knowledge Model (CKM / Kvasir) MVP — evidence-backed capability model of the platform
