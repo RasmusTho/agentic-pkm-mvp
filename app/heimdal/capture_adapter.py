@@ -188,7 +188,7 @@ def compute_content_identity(raw_bytes: bytes) -> str:
     return hashlib.sha256(raw_bytes).hexdigest()
 
 
-def _is_file_stable(path: Path, *, delay: float = _STABILITY_CHECK_DELAY_SECONDS) -> bool:
+def _is_file_stable(path: Path, *, delay: Optional[float] = None) -> bool:
     """Whether ``path``'s size is unchanged across two reads ``delay`` seconds apart (#3112).
 
     A cheap, sync-client-agnostic guard against admitting a file that is
@@ -197,13 +197,27 @@ def _is_file_stable(path: Path, *, delay: float = _STABILITY_CHECK_DELAY_SECONDS
     False (not stable) if the file disappears between reads or cannot be
     stat'd -- treated the same as "not ready yet", not an error, so the
     caller retries on a later tick.
+
+    Residual: a file that finishes writing to a *different* size exactly
+    between the two reads would read as stable while still not the final
+    content. Inherent to any size-based heuristic without a real completion
+    signal from the sync client; acceptable here since a false "stable" is
+    retried like any other transient issue only in the sense that no data
+    is lost (the source is only deleted after a successful durable write of
+    whatever was read) -- but it IS a live gap, not a proof of completeness.
+
+    ``delay=None`` resolves the module's `_STABILITY_CHECK_DELAY_SECONDS` at
+    call time (not at def time), so a test's monkeypatch of that constant
+    applies even to a direct call of this function, not just through
+    :func:`admit_capture_file`.
     """
+    resolved_delay = delay if delay is not None else _STABILITY_CHECK_DELAY_SECONDS
     try:
         size_before = path.stat().st_size
     except OSError:
         return False
-    if delay > 0:
-        time.sleep(delay)
+    if resolved_delay > 0:
+        time.sleep(resolved_delay)
     try:
         size_after = path.stat().st_size
     except OSError:
@@ -284,11 +298,9 @@ def admit_capture_file(
     # rather than reading a truncated snapshot of it. Checked after consent
     # (consent stays the first possible refusal, per the docstring above)
     # but before any bytes are read -- a growing/shrinking file never
-    # reaches read_bytes/delete.
-    resolved_delay = (
-        stability_delay if stability_delay is not None else _STABILITY_CHECK_DELAY_SECONDS
-    )
-    if not _is_file_stable(path, delay=resolved_delay):
+    # reaches read_bytes/delete. `stability_delay=None` lets _is_file_stable
+    # resolve the module default itself, at call time.
+    if not _is_file_stable(path, delay=stability_delay):
         raise CaptureFileNotStableError(
             f"Capture refused: {path} is still changing size (mid-write/mid-download). "
             "Source file left in place; will be retried on a later watch-cycle tick."
