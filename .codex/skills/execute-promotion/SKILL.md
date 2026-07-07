@@ -72,12 +72,12 @@ This preflight is **fail-closed**: if stable is not an ancestor of the candidate
 2. Validates the plan: every required section from the promotion plan contract present, all operator acknowledgment checkboxes ticked. Abort if validation fails.
 3. **Ancestry preflight**: runs `git merge-base --is-ancestor origin/stable <candidate-sha>`. Aborts with reconciliation-PR instruction if it fails.
 4. Records the current `stable` ref as `stable-prev` (pointer file in `ops/promotions/`) before moving anything.
-5. Opens a governed PR targeting `stable` from the candidate branch. Waits for required status checks (`smoke`, `smoke-docker`, `pr-contract`) to pass per `_shared/CI_WAIT_CONTRACT.md`, then waits for the operator to merge. Records the merged PR URL in the promotion receipt.
-6. **Channel isolation preflight.** Before any stack mutation, invoke the shipped read-only guard:
+5. **Channel isolation preflight.** Before any stack mutation — including opening the governed PR below — invoke the shipped read-only guard:
    ```bash
    python -m app.release_channels.channel_isolation_preflight docker-compose.prod.yml prod
    ```
-   This fail-closes when the compose overlay's effective env bindings (`PKM_ENVIRONMENT`, `DATABASE_URL`, `DB_DSN`) do not resolve to the prod channel (`docs/RELEASE_CHANNELS/README.md §Compose/env binding invariant`). Abort if the guard fails.
+   This fail-closes when the compose overlay's effective env bindings (`PKM_ENVIRONMENT`, `DATABASE_URL`, `DB_DSN`) do not resolve to the prod channel (`docs/RELEASE_CHANNELS/README.md §Compose/env binding invariant`). Abort if the guard fails — do not open the PR in step 6 until it passes.
+6. Opens a governed PR targeting `stable` from the candidate branch. Waits for required status checks (`smoke`, `smoke-docker`, `pr-contract`) to pass per `_shared/CI_WAIT_CONTRACT.md`, then waits for the operator to merge. Records the merged PR URL in the promotion receipt.
 7. Updates the prod checkout's HEAD to the new `stable` (`git -C <prod-checkout> fetch && git -C <prod-checkout> checkout stable`).
 8. Applies reversible migrations to the prod DB (port 15432) in forward order. Applies forward-only migrations only after confirming the operator acknowledged them in the plan. Stops and calls for rollback if any migration fails.
 9. Restarts the prod process with `make prod-start-full` — the canonical prod startup that enforces all four prod runtime-binding elements (compose overlay, `pkm-prod` project namespace, `PKM_ENVIRONMENT=prod`, and the `.env.prod.local`-resolved vault root) per `docs/RELEASE_CHANNELS/README.md §Prod runtime binding`. Do not use separate down/up Make targets — a bare up target alone does not enforce the full binding.

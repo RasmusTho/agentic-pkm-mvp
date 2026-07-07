@@ -32,12 +32,12 @@ fitness-rule evidence without treating the verification receipt itself as runtim
 Product truth.
 
 This skill is **prod-scoped**: it verifies the running prod channel only. Do not run it against
-the test channel (`promote-to-test` runs its own test-scoped verification directly — see that
-skill's §Test-scoped verify — because this skill's checks assume `PKM_ENVIRONMENT=prod`).
+the test channel (`promote-to-test` runs its own test-scoped verification directly — see step 6
+(Test-scoped verify) in that skill — because this skill's checks assume `PKM_ENVIRONMENT=prod`).
 
 ## What this skill does
 
-1. Confirms the running prod process's code ref matches the current **promotion ref** per `docs/RELEASE_CHANNELS/README.md §Promotion model` — today that ref is `main` (interim baseline, [ADR-0040](../../../docs/adr/ADR-0040-prod-promotion-ref-main-interim.md)): `git rev-parse origin/main` == reported version in health endpoint or settings-explain output. Under the future gated model this becomes `origin/stable`. Do not compare against `origin/stable` while it remains dormant — it is not an ancestor of `origin/main` and a match against it is not a meaningful health signal today.
+1. Confirms the running prod process's code ref matches the current **promotion ref** by running `python -m app.release_channels.prod_ref_fitness <prod-checkout> --promotion-ref main` — the same guard `execute-promotion`/`rollback-promotion` rely on, and the single source of truth for "current," so this step never hardcodes or re-derives the ref by hand. Under the future gated model the flag becomes `--promotion-ref origin/stable`; do not pass that while `origin/stable` remains dormant — it is not an ancestor of `origin/main` and a match against it is not a meaningful health signal today.
 2. Confirms the prod Postgres container is healthy (port 15432 responsive, outbox consumer running, no error state in worker heartbeat).
 3. Runs `python -m app.cli status` against the prod channel and confirms all components report healthy.
 4. Runs `python -m app.cli settings-explain` against the prod channel and confirms the resolved environment is `prod`, the vault root is the real vault, and the DB resolves to the prod DB.
@@ -66,7 +66,7 @@ If `--plan` is provided, the verification receipt is appended to it. If not, it 
 ## What PASS means
 
 All of the following are true:
-- Code ref matches the current promotion ref (`main` under the ADR-0040 interim baseline; `origin/stable` under the future gated model — see step 1).
+- Code ref matches the current promotion ref (see step 1).
 - Status and settings-explain both report env=prod, correct vault, correct DB.
 - Postgres healthy, outbox consumer healthy, watcher heartbeat within cadence.
 - No stuck or errored events from the promotion window.
