@@ -225,6 +225,129 @@ def _chunk_for_embedding(text: str, max_chars: int) -> List[str]:
     return [text[i : i + max_chars] for i in range(0, len(text), max_chars)]
 
 
+# ---------------------------------------------------------------------------
+# Adaptive chunk bisect on provider 5xx (#3045)
+# ---------------------------------------------------------------------------
+#
+# A char budget is a poor proxy for a model's token/context window: table-heavy,
+# code-heavy, or unicode-dense markdown can exceed the context window well inside
+# a "safe" char count, while a same-length plain-prose chunk passes. When that
+# happens the provider returns a 5xx (e.g. Ollama's "HTTP 500: EOF" on
+# nomic-embed-text) for that one chunk, and the previous behavior let
+# ``embed_with_retry`` retry the *whole object* identically 3x and then
+# dead-letter it permanently (#2110 chunking alone does not fix this — it only
+# bounds size, not token density). Bisecting the *offending chunk* in place and
+# re-embedding both halves (recursively, down to a floor) turns a content-shaped
+# failure into a smaller, still in-window request instead of giving up on the
+# object.
+
+_TRANSIENT_NETWORK_MODULE_PREFIXES = ("httpx", "requests", "urllib3")
+_TRANSIENT_HTTP_STATUS_CODES = {408, 429}
+
+
+def _embed_min_chunk_chars() -> int:
+    """Floor below which a chunk is no longer bisected on provider 5xx.
+
+    Below this size a further split cannot plausibly be a context-window problem;
+    the error is treated as a genuine (non-size-related) failure and re-raised so
+    the caller's normal retry/dead-letter path still applies. Set
+    ``EMBED_MIN_CHUNK_CHARS`` to override; default 256 chars.
+    """
+    raw = os.getenv("EMBED_MIN_CHUNK_CHARS")
+    if raw is None:
+        return 256
+    try:
+        value = int(raw)
+    except ValueError:
+        return 256
+    return max(1, value)
+
+
+def _is_provider_5xx_error(exc: BaseException) -> bool:
+    """Return True for a provider response/transport error shaped like an
+    oversize-content failure worth bisecting.
+
+    Provider-agnostic by construction (no ollama-specific token counting): this
+    inspects the generic ``httpx`` exception shape (network module + status code)
+    plus the same ``is_transient = True`` marker protocol app-local provider
+    errors already use (e.g. ``GeminiTransientError`` in
+    ``app/llm/gemini_embeddings.py``, and the worker's
+    ``_is_transient_dispatch_error`` classifier in
+    ``app/workers/outbox_worker.py``). The status/marker logic is intentionally
+    duplicated in miniature here (not imported) because
+    ``app.workers.outbox_worker`` transitively imports back into
+    ``app.llm.embeddings`` (via ``app.indexer.consumer`` /
+    ``app.services.indexer``); importing it from this module would be circular.
+    """
+    for current in (exc, getattr(exc, "__cause__", None), getattr(exc, "__context__", None)):
+        if current is None:
+            continue
+        if getattr(current, "is_transient", None) is True:
+            return True
+        if isinstance(current, (httpx.ConnectError, httpx.TimeoutException)):
+            return True
+        response = getattr(current, "response", None)
+        status_code = getattr(response, "status_code", None)
+        if status_code is None:
+            continue
+        module_name = type(current).__module__
+        if not module_name.startswith(_TRANSIENT_NETWORK_MODULE_PREFIXES):
+            continue
+        try:
+            status_code = int(status_code)
+        except (TypeError, ValueError):
+            continue
+        if status_code >= 500 or status_code in _TRANSIENT_HTTP_STATUS_CODES:
+            return True
+    return False
+
+
+def _embed_chunk_with_bisect(
+    chunk: str,
+    adapter: ProviderAdapter,
+    *,
+    model: str,
+    dim: int,
+    timeout: float,
+    floor_chars: int,
+) -> List[tuple[float, ...]]:
+    """Embed one chunk, adaptively bisecting on a provider 5xx instead of
+    surfacing the whole-object failure.
+
+    Returns a list of vectors (one per surviving sub-chunk after any bisection)
+    so the caller mean-pools every leaf the same way regardless of how deep the
+    bisection went. Deterministic: the split point is always the chunk midpoint,
+    so the same input plus the same sequence of provider failures always
+    produces the same decomposition (no randomness, no provider-side token
+    counting).
+    """
+    try:
+        vec = adapter(chunk, model=model, dim=dim, timeout=timeout)
+        return [vec]
+    except Exception as exc:  # noqa: BLE001 - re-raised below when not bisectable
+        if not _is_provider_5xx_error(exc) or len(chunk) <= floor_chars:
+            # Floor reached (or a non-5xx / non-size-shaped failure): this is not
+            # a content-density problem this mechanism can fix. Surface the
+            # original error unchanged so the normal retry/dead-letter path
+            # (embed_with_retry) still applies (fail loud, no silent skip).
+            raise
+        midpoint = len(chunk) // 2
+        logger.warning(
+            "embedding chunk failed with provider 5xx at len=%d; bisecting to len~%d/%d: %s",
+            len(chunk),
+            midpoint,
+            len(chunk) - midpoint,
+            exc,
+        )
+        left = _embed_chunk_with_bisect(
+            chunk[:midpoint], adapter, model=model, dim=dim, timeout=timeout, floor_chars=floor_chars
+        )
+        right = _embed_chunk_with_bisect(
+            chunk[midpoint:], adapter, model=model, dim=dim, timeout=timeout, floor_chars=floor_chars
+        )
+        return left + right
+
+
 def _mean_pool(vectors: List[tuple[float, ...]], dim: int) -> tuple[float, ...]:
     if not vectors:
         return tuple(0.0 for _ in range(dim))
@@ -290,18 +413,30 @@ def _embed_single(text: str, provider: str, model: str, dim: Optional[int]) -> t
     # note cannot exceed the provider's input budget and abort the whole index
     # build (#2110). Provider-agnostic — the input budget must bound every
     # provider (e.g. Gemini), not only Ollama (#2327); mock/ollama behavior is
-    # unchanged because a single-chunk text still takes the direct adapter path.
+    # unchanged because a single-chunk text still takes the direct adapter path
+    # (no failure => no bisection => exactly one adapter call, same as before).
     chunks = _chunk_for_embedding(text, _embedding_max_input_chars())
-    if len(chunks) == 1:
+    floor_chars = _embed_min_chunk_chars()
+    if len(chunks) == 1 and len(chunks[0]) <= floor_chars:
+        # Already at (or under) the bisect floor: nothing left to split, so take
+        # the direct adapter path and let any error surface exactly as before.
         result = adapter(text, model=model, dim=dim, timeout=timeout)
     else:
         vectors = []
         for chunk in chunks:
-            vec = adapter(chunk, model=model, dim=dim, timeout=timeout)
-            # Guard each chunk before pooling so a wrong-dim chunk reports a clean
-            # provider contract violation instead of an opaque error in _mean_pool.
-            assert_embed_dim(vec, expected=dim, name=f"{provider} embedding chunk (expected_dim={dim})")
-            vectors.append(vec)
+            # A char-budget chunk can still crash the provider on a token-dense
+            # sub-slice (tables, code, unicode) that exceeds the model's context
+            # window despite fitting the char budget (#3045). Bisect that one
+            # chunk on a provider 5xx instead of letting embed_with_retry retry
+            # (and dead-letter) the whole object on an unchanged char-budget guess.
+            for vec in _embed_chunk_with_bisect(
+                chunk, adapter, model=model, dim=dim, timeout=timeout, floor_chars=floor_chars
+            ):
+                # Guard each leaf vector before pooling so a wrong-dim chunk reports
+                # a clean provider contract violation instead of an opaque error in
+                # _mean_pool.
+                assert_embed_dim(vec, expected=dim, name=f"{provider} embedding chunk (expected_dim={dim})")
+                vectors.append(vec)
         result = _mean_pool(vectors, dim)
 
     # CTI-1: dim guardrail — every registered adapter (including a wrapper/replacement

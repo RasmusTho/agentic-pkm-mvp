@@ -99,6 +99,9 @@ comes from the compiled task policy; env vars supply defaults only when the poli
     chunk-mean-pools, better long-note vectors). This is descriptive/advisory only — selecting the
     profile does not auto-apply it; an operator activating `bge-m3` must also set
     `EMBED_MAX_INPUT_CHARS=24000` explicitly (see `docs/runbooks/RUNBOOK_BGE_M3_CUTOVER.md`).
+- `EMBED_MIN_CHUNK_CHARS` (#3045)
+  - Floor below which a chunk is no longer bisected on a provider 5xx (see *Oversized input handling*, defense 2). Below this size a further split cannot plausibly be a context-window problem, so the original provider error is re-raised unchanged instead of continuing to bisect.
+  - Default: `256` (inline default in `_embed_min_chunk_chars`, `app/llm/embeddings.py`).
 - `EMBED_RETRY_MAX`
   - Maximum number of attempts per object when transient embed failures occur (HTTP 5xx, EOF, connection-reset, timeout, 408, 429).
   - Default: `3`. Identical across dev, test, and prod — no environment-conditional branching.
@@ -320,10 +323,11 @@ This event is the canonical signal to operators that the embedding chain is misc
 
 ### Oversized input handling
 
-A single note must never abort the whole index build (#2110). The embedding layer applies two bounded defenses, in order:
+A single note must never abort the whole index build (#2110). The embedding layer applies three bounded defenses, in order:
 
 1. **Chunking + mean-pooling to context budget.** Before each provider call, input longer than `EMBED_MAX_INPUT_CHARS` (default `6000`) is split into in-budget chunks; each chunk is embedded and the chunk vectors are mean-pooled into a single vector. This keeps every request within the model's context window so the provider does not return HTTP 500 ("input length exceeds the context length"), while preserving tail content rather than truncating it. Set `EMBED_MAX_INPUT_CHARS=0` to disable chunking.
-2. **Per-item degradation.** When a single item still fails at the provider (e.g. truncation disabled, or another transient provider/HTTP error), `embed_texts` skips that item — it logs a warning and substitutes a zero vector of the correct `expected_dim` — instead of raising and aborting the remaining batch. The zero vector preserves the dimension guardrail and contributes no similarity signal.
+2. **Adaptive chunk bisect on provider 5xx (#3045).** A char budget is a poor proxy for a token/context window: token-dense content (tables, code, unicode) can still crash the provider with a 5xx inside an otherwise "safe" `EMBED_MAX_INPUT_CHARS` chunk — content-dependent, not size-alone. When one chunk's embed attempt fails with a provider 5xx (or an equivalent transient/network error, or any app-local error carrying the `is_transient = True` marker), `_embed_single` halves that chunk and retries, recursing down to a floor (`EMBED_MIN_CHUNK_CHARS`, default `256`) before giving up — so a single pathological sub-slice bisects in place instead of failing the whole object on an unchanged char-budget guess. Below the floor (or for a non-5xx-shaped error) the original provider error is re-raised unchanged, preserving the normal `embed_with_retry` dead-letter path. The mechanism is provider-agnostic (no token counting, no ollama-specific detection) and deterministic (the split point is always the chunk midpoint, so the same input plus the same sequence of provider failures always produces the same decomposition).
+3. **Per-item degradation.** When a single item still fails at the provider after bisection (e.g. truncation disabled, or another transient provider/HTTP error), `embed_texts` skips that item — it logs a warning and substitutes a zero vector of the correct `expected_dim` — instead of raising and aborting the remaining batch. The zero vector preserves the dimension guardrail and contributes no similarity signal.
 
 Together these ensure an index build over a corpus containing one oversized or pathological note completes and the rest of the corpus embeds normally.
 
