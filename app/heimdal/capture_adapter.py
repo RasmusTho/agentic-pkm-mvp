@@ -59,6 +59,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -91,6 +92,13 @@ DEFAULT_CAPTURE_SCOPE = SELF_RECORD_SCOPE
 # stray non-audio files -- e.g. .DS_Store -- from being treated as memos).
 _ADMISSIBLE_EXTENSIONS = {".m4a", ".wav", ".caf", ".aac"}
 
+# How long to wait between the two size reads in the still-downloading guard
+# (#3112). iCloud sync of a voice memo (seconds, not minutes) makes a short
+# fixed delay sufficient without needing a real completion signal; tests pass
+# 0.0 to skip the wait. Not configurable via env -- this is an internal
+# implementation detail of admission, not an operator-facing knob.
+_STABILITY_CHECK_DELAY_SECONDS = 0.5
+
 
 class UnregisteredSensorError(RuntimeError):
     """Raised when the capture adapter's sensor identity is not registered (T5 mitigation)."""
@@ -102,6 +110,18 @@ class CaptureAdmissionError(RuntimeError):
     Wraps the underlying cause (consent refusal, store failure, I/O error)
     while making explicit that the source file was left in place -- never
     silently dropped or deleted on a failed admission.
+    """
+
+
+class CaptureFileNotStableError(CaptureAdmissionError):
+    """Raised when a candidate file's size changed between two reads (#3112).
+
+    A file still being written by a sync client (e.g. mid-download from
+    iCloud) can be read as truncated/corrupt audio; admitting it would
+    durably persist garbage and then delete the still-syncing source --
+    unrecoverable, since the raw layer is append-only. The candidate is
+    left in place and retried on a later watch-cycle tick once the sync
+    client finishes.
     """
 
 
@@ -168,6 +188,29 @@ def compute_content_identity(raw_bytes: bytes) -> str:
     return hashlib.sha256(raw_bytes).hexdigest()
 
 
+def _is_file_stable(path: Path, *, delay: float = _STABILITY_CHECK_DELAY_SECONDS) -> bool:
+    """Whether ``path``'s size is unchanged across two reads ``delay`` seconds apart (#3112).
+
+    A cheap, sync-client-agnostic guard against admitting a file that is
+    still being written (e.g. iCloud mid-download): a growing/shrinking
+    size means the bytes we would read are not the final content. Returns
+    False (not stable) if the file disappears between reads or cannot be
+    stat'd -- treated the same as "not ready yet", not an error, so the
+    caller retries on a later tick.
+    """
+    try:
+        size_before = path.stat().st_size
+    except OSError:
+        return False
+    if delay > 0:
+        time.sleep(delay)
+    try:
+        size_after = path.stat().st_size
+    except OSError:
+        return False
+    return size_before == size_after
+
+
 def is_admissible_capture_file(path: Path) -> bool:
     """Whether ``path`` looks like a voice-memo capture file (extension allowlist).
 
@@ -202,6 +245,7 @@ def admit_capture_file(
     scope: str = DEFAULT_CAPTURE_SCOPE,
     capture_chain: Optional[List[str]] = None,
     key: Optional[bytes] = None,
+    stability_delay: Optional[float] = None,
 ) -> CaptureResult:
     """Admit one candidate file: consent-gate, encrypt, durably persist, delete-after-ingest.
 
@@ -215,6 +259,12 @@ def admit_capture_file(
       `admit_raw_evidence`, the one sanctioned signal->raw admission call.
     - :class:`CaptureAdmissionError` wrapping any failure in the durable
       write itself.
+    - :class:`CaptureFileNotStableError` if the file is still being written
+      (e.g. mid-download) -- see :func:`_is_file_stable` (#3112).
+
+    ``stability_delay`` overrides the module's `_STABILITY_CHECK_DELAY_SECONDS`
+    for this call (``None`` uses the module default) -- primarily so tests
+    can drive the check deterministically without a real sleep.
 
     In every raised case, ``path`` is left on disk untouched: the source is
     deleted **only** after :func:`app.heimdal.raw_store.insert_raw_record`
@@ -229,6 +279,20 @@ def admit_capture_file(
     # must gate before we ever touch the file's bytes, so a refused capture
     # never reads (and never risks partially processing) the source file.
     admitted: AdmittedEvidence = admit_raw_evidence(scope=scope)
+
+    # Step 2.5 (#3112): refuse a file that is still being written/downloaded
+    # rather than reading a truncated snapshot of it. Checked after consent
+    # (consent stays the first possible refusal, per the docstring above)
+    # but before any bytes are read -- a growing/shrinking file never
+    # reaches read_bytes/delete.
+    resolved_delay = (
+        stability_delay if stability_delay is not None else _STABILITY_CHECK_DELAY_SECONDS
+    )
+    if not _is_file_stable(path, delay=resolved_delay):
+        raise CaptureFileNotStableError(
+            f"Capture refused: {path} is still changing size (mid-write/mid-download). "
+            "Source file left in place; will be retried on a later watch-cycle tick."
+        )
 
     try:
         raw_bytes = path.read_bytes()
@@ -314,21 +378,27 @@ def run_watch_cycle(
     sensor: Optional[SensorIdentity] = None,
     scope: str = DEFAULT_CAPTURE_SCOPE,
     key: Optional[bytes] = None,
+    stability_delay: Optional[float] = None,
 ) -> WatchCycleResult:
     """Scan ``watch_dir`` once and attempt to admit every candidate file.
 
     A single file's failure (consent refusal, unregistered sensor, durable
-    write error) does not abort the cycle -- it is recorded in
-    ``refused`` and the loop continues to the next candidate, so one bad
-    file cannot starve the rest of the queue. Every refusal is logged loudly
-    (operator-notified in the sense that it is never silent) via the
-    `logging` calls in :func:`admit_capture_file` and here.
+    write error, still-downloading per #3112) does not abort the cycle --
+    it is recorded in ``refused`` and the loop continues to the next
+    candidate, so one bad file cannot starve the rest of the queue. Every
+    refusal is logged loudly (operator-notified in the sense that it is
+    never silent) via the `logging` calls in :func:`admit_capture_file` and
+    here. A still-downloading file is simply retried on the next tick --
+    the poller (`app.heimdal.capture_runtime`) calls this repeatedly, so no
+    special-casing is needed here beyond leaving it in ``refused``.
     """
     admitted: List[CaptureResult] = []
     refused: List[tuple[Path, Exception]] = []
     for candidate in list_candidate_files(watch_dir):
         try:
-            result = admit_capture_file(candidate, sensor=sensor, scope=scope, key=key)
+            result = admit_capture_file(
+                candidate, sensor=sensor, scope=scope, key=key, stability_delay=stability_delay
+            )
             admitted.append(result)
         except Exception as exc:  # noqa: BLE001 -- deliberately broad: one bad file must not abort the cycle
             logger.error(
@@ -346,6 +416,7 @@ __all__ = [
     "CAPTURE_CHAIN_V1",
     "DEFAULT_CAPTURE_SCOPE",
     "CaptureAdmissionError",
+    "CaptureFileNotStableError",
     "CaptureResult",
     "SensorIdentity",
     "UnregisteredSensorError",

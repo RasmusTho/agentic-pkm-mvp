@@ -21,6 +21,7 @@ both real production code paths, not a stub of either.
 
 from __future__ import annotations
 
+import os
 import secrets
 from pathlib import Path
 
@@ -30,6 +31,7 @@ from app.heimdal import capture_adapter, raw_store
 from app.heimdal.capture_adapter import (
     CAPTURE_CHAIN_V1,
     CaptureAdmissionError,
+    CaptureFileNotStableError,
     SensorIdentity,
     UnregisteredSensorError,
     admit_capture_file,
@@ -60,6 +62,12 @@ _UNGRANTED_SCOPE = "device+adapter:no-such-scope"
 @pytest.fixture(autouse=True)
 def _reset_heimdal_state(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("STORE_BACKEND", "memory")
+    # #3112's still-downloading guard defaults to a real 0.5s sleep in
+    # production; zero it out here so the ~15 existing admit_capture_file/
+    # run_watch_cycle call sites in this file (which don't care about the
+    # guard) don't each pay that cost. Tests that DO exercise the guard
+    # pass an explicit stability_delay.
+    monkeypatch.setattr(capture_adapter, "_STABILITY_CHECK_DELAY_SECONDS", 0.0)
     reset_memory_consent_ledger()
     reset_memory_raw_store()
     yield
@@ -185,6 +193,98 @@ def test_retry_after_transient_failure_still_deletes_once_persisted(
     result = admit_capture_file(memo, key=_TEST_KEY)
     assert result.source_deleted is True
     assert not memo.exists()
+
+
+# --- #3112: still-downloading (truncated) file guard ----------------------
+
+
+class _FakeStat:
+    """Wraps a real ``os.stat_result``, overriding only ``st_size``.
+
+    ``Path.is_file()`` (used by `list_candidate_files`, which runs before
+    the stability check) also calls `.stat()` and needs a real ``st_mode``
+    -- delegating everything but the faked field keeps that working.
+    """
+
+    def __init__(self, real: os.stat_result, st_size: int) -> None:
+        self._real = real
+        self.st_size = st_size
+
+    def __getattr__(self, name: str):
+        return getattr(self._real, name)
+
+
+def test_refuses_still_growing_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A file whose size changes between the two stability reads is refused, not admitted (#3112).
+
+    Deterministically simulates a mid-download file: the second `stat()`
+    call for this path reports a different size than the first, exactly
+    what a real size check would observe mid-write -- without a real
+    sleep/thread (flaky-timing-free).
+    """
+    memo = _write_memo(tmp_path, content=b"partial-bytes")
+    real_stat = Path.stat
+    sizes = iter([7, 999])
+
+    def _fake_stat(self: Path, *args, **kwargs):
+        if self == memo:
+            return _FakeStat(real_stat(self, *args, **kwargs), next(sizes, 999))
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", _fake_stat)
+
+    with pytest.raises(CaptureFileNotStableError) as excinfo:
+        admit_capture_file(memo, key=_TEST_KEY, stability_delay=0.0)
+
+    assert "still changing size" in str(excinfo.value)
+    # Refused: source left in place (not read as truncated, not deleted), nothing durably written.
+    assert memo.exists()
+    assert all_raw_records() == []
+
+
+def test_admits_stable_file_with_nonzero_delay(tmp_path: Path) -> None:
+    """A file whose size is unchanged across the check is admitted normally, delay path exercised."""
+    memo = _write_memo(tmp_path)
+
+    result = admit_capture_file(memo, key=_TEST_KEY, stability_delay=0.01)
+
+    assert result.created is True
+    assert not memo.exists()
+
+
+def test_run_watch_cycle_refuses_growing_file_and_retains_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A still-downloading file is refused-and-retained by the cycle that catches it (#3112).
+
+    It is never admitted-then-deleted as truncated garbage: `refused` records
+    the specific `CaptureFileNotStableError`, and the source file remains on
+    disk for a later tick (the poller in `app.heimdal.capture_runtime`
+    retries automatically) once the sync client finishes.
+    """
+    memo = _write_memo(tmp_path, content=b"partial-bytes")
+    real_stat = Path.stat
+    # 3 sizes, not 2: run_watch_cycle -> list_candidate_files -> is_file() makes
+    # one stat() call before admit_capture_file's own two-read stability check
+    # runs, so the *last two* reads (the ones the check actually compares) must
+    # differ -- 7 (list scan) -> 50 -> 999 (stability check sees 50 != 999).
+    sizes = iter([7, 50, 999])
+
+    def _fake_stat(self: Path, *args, **kwargs):
+        if self == memo:
+            return _FakeStat(real_stat(self, *args, **kwargs), next(sizes, 999))
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", _fake_stat)
+
+    result = run_watch_cycle(tmp_path, key=_TEST_KEY, stability_delay=0.0)
+
+    assert result.admitted == []
+    assert len(result.refused) == 1
+    assert result.refused[0][0] == memo
+    assert isinstance(result.refused[0][1], CaptureFileNotStableError)
+    assert memo.exists()
+    assert all_raw_records() == []
 
 
 # --- T5 mitigation: unregistered sensor refusal ---------------------------
