@@ -1,6 +1,6 @@
 ---
 name: mimer-retrieve
-description: "Read-only vault search — use when the human asks what do I have on X / find my notes about Y. Search then note-read, with filesystem enrichment as the sanctioned uuid-to-path fallback. Never a write."
+description: "External app-agent client skill operating a running Mimer host (product lane; NOT for dev/build work in this repo): read-only vault search when the human, as a Mimer user, asks what do I have on X / find my notes about Y. Search then note-read, with filesystem enrichment as the sanctioned uuid-to-path fallback. Never a write."
 ---
 
 # Mimer Retrieve
@@ -22,7 +22,9 @@ capture request (`mimer-capture`), or drafting/editing a specific note (`mimer-v
 ## Operation
 
 1. `GET /search?q=<query>` — returns a fixed-size list (k=10) of `{uuid, title}` pairs. That is
-   the whole result shape; do not expect a body or a path back from this call.
+   the whole result shape; do not expect a body or a path back from this call. Send an
+   `X-Trace-Id` header on this and the note-read call below (contract §7), so the calls stay
+   joinable to the session trace.
 2. To read a hit's content: `GET /api/artifacts/note?note_path=<vault-relative path>`. The
    response carries `artifact_id`, `note_path`, `title`, `body`, `content_hash` — **the
    `note_path` field in the response is the absolute resolved filesystem path**, not the

@@ -68,7 +68,6 @@ KNOWN_NON_SKILL_TERMS = {
     "stable-prev",  # release-channel ref name
     "test-candidate",  # promotion vocabulary
     "generate-projections",  # builderops CLI subcommand
-    "x-trace-id",  # Mimer Client Contract trace-correlation header name
 }
 
 RETIRED_PHRASE = "Do not batch to end of task"

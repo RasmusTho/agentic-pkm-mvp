@@ -1,6 +1,6 @@
 ---
 name: mimer-ask
-description: "Grounded Q&A over the vault with per-source citations — use when the human asks a question the vault should answer. Never blends the agent's own knowledge in unmarked; no write follow-up without an explicit capture request."
+description: "External app-agent client skill operating a running Mimer host (product lane; NOT for dev/build work in this repo): grounded Q&A over the vault with per-source citations when the human, as a Mimer user, asks a question their vault should answer. Never blends the agent's own knowledge in unmarked; no write follow-up without an explicit capture request."
 ---
 
 # Mimer Ask
@@ -22,7 +22,7 @@ Not this skill: a bare lookup/find request (`mimer-retrieve`), a capture request
 ## Operation
 
 `POST /api/ask` with `{"question": "<question>"}` (the field alias `query` and an optional
-`zone_strategy` are also accepted). Send an `x-trace-id` header.
+`zone_strategy` are also accepted). Send an `X-Trace-Id` header.
 
 The response carries an answer plus per-source attribution — each source carries `uuid`, `title`,
 `origin`, `plane`, `zone`, and `path`.

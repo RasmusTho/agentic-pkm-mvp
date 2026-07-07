@@ -1,6 +1,6 @@
 ---
 name: mimer-governed-boundary
-description: "Shared contract skill for the Mimer app-agent skill family: the three hard invariants, exclusion list, provenance block, and error-surfacing duties every mimer-* skill inherits. Never invoked directly by a human request."
+description: "External app-agent client skill (product lane; NOT for dev/build work in this repo): shared contract for the mimer-* family — the three hard invariants, exclusion list, provenance block, and error-surfacing duties every mimer-* skill inherits. Loaded by reference from the other mimer-* skills; never invoked directly by a human request."
 ---
 
 # Mimer Governed Boundary
@@ -75,6 +75,16 @@ be paraphrased into a generic failure or silently retried:
 - Inbox-convention-unresolved (409), schema errors (422) — surface and let the human decide next.
 - Retrieval/ask failures propagate; never answer from the client's own knowledge while implying
   vault grounding it doesn't have.
+
+## Health duties before writing (contract §7)
+
+- Check `GET /healthz` (or `/api/status`) before entering any write flow — API or direct-FS.
+  If the runtime is unhealthy or unreachable, degrade per the contract's §6 table (blocked
+  governed write → surface the reason; API unreachable → read-only over declared filesystem
+  roots) and say so.
+- Send an `X-Trace-Id` header on every API call and log it client-side, so a capture, its
+  receipt, and its outbox event stay joinable across the seam.
+- Use `GET /version` to record which runtime build served a session when reporting anomalies.
 
 ## LAN/loopback-only posture (contract §4)
 

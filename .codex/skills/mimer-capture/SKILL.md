@@ -1,6 +1,6 @@
 ---
 name: mimer-capture
-description: "Friction-free intake into the Mimer vault inbox — use when the human says capture/remember/add to my inbox/jot this down. Governed write via the capture endpoint; never composes frontmatter or picks a target note."
+description: "External app-agent client skill operating a running Mimer host (product lane; NOT for dev/build work in this repo): friction-free intake into the vault inbox when the human, as a Mimer user, says capture/remember/add to my inbox/jot this down. Governed write via the capture endpoint; never composes frontmatter or picks a target note."
 ---
 
 # Mimer Capture
@@ -24,9 +24,12 @@ should answer (`mimer-ask`), or a request to draft/edit a specific note the huma
 
 ## Operation
 
+Check `GET /healthz` (or `/api/status`) before entering the write flow (contract §7); if the
+runtime is unhealthy, surface that instead of writing.
+
 Call `POST /api/companion/capture` with a body of exactly `{"text": "<non-empty string>"}` — the
 schema forbids extra fields, so do not add anything else (no provenance field, no due date, no
-tags — the endpoint rejects extras with 422). Send an `x-trace-id` header.
+tags — the endpoint rejects extras with 422). Send an `X-Trace-Id` header.
 
 The write is an append-only timestamped bullet to the vault inbox note. This skill:
 

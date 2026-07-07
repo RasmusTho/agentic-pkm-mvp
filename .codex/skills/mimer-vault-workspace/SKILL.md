@@ -1,6 +1,6 @@
 ---
 name: mimer-vault-workspace
-description: "Direct-filesystem participation in the vault (AGENT-FLOWS mode c) — use when the human points the agent at vault material to draft, synthesize, or edit. Workspace roots are the default write surface; human-directed note edits follow full write discipline."
+description: "External app-agent client skill for the live vault filesystem (product lane; NOT for dev/build work in this repo — the repo's vault/ is a fixture, not a real vault): direct-filesystem participation (AGENT-FLOWS mode c) when the human, as a Mimer user, points the agent at vault material to draft, synthesize, or edit. Full write discipline applies."
 ---
 
 # Mimer Vault Workspace
@@ -44,7 +44,10 @@ the rest are runtime- or Bifrost-owned.
 - **Read-fresh, verify-staleness.** Before any whole-file write: read the file and record its
   content hash; keep the read-to-write window short; re-check the hash immediately before
   writing. If the file changed since the read, re-read and re-apply the edit on the new content —
-  never write the stale version.
+  never write the stale version. This is advisory, not atomic: the check-to-write window is real
+  and a concurrent writer can still land inside it (the residual risk stays open until
+  ADR-0055's substrate mechanism is enacted) — the procedure shrinks collision risk, it does not
+  eliminate it, which is why it matters most on human-authored prose.
 - **Ownership courtesy.** Default to files the agent itself authored. Edit a human-authored note
   only on explicit human direction in the live session; prefer append/patch-shaped edits over
   whole-file rewrites of prose the human may have open in Obsidian.
@@ -58,6 +61,10 @@ the rest are runtime- or Bifrost-owned.
 - **One transport per note.** The capture inbox is excluded from filesystem writes precisely so
   the two transports never collide on it. If a same-note collision is nonetheless suspected,
   report it to the human with both versions' evidence rather than silently re-asserting one.
+  Know what is authoritative for what: the file's current content is the outcome
+  (last-write-wins), while any AuthorityReceipt/outbox event remains the truthful record of what
+  a governed write did *at its time* — receipts are authoritative for what happened, never for
+  what is currently true, so never "correct" a file to match a receipt.
 - **iCloud conflict artifacts.** Never merge, delete, or adopt a "conflicted copy" sibling
   silently — surface it to the human.
 
@@ -69,9 +76,12 @@ SHOULD append to it.
 
 ## Failure handling
 
-If the API is unreachable, this skill's filesystem participation continues independently and the
-agent says so — it does not invent a shadow write queue that replays into the vault later without
-the human. If a same-note collision is suspected, follow the one-transport-per-note rule above.
+Check `GET /healthz` (or `/api/status`) before entering a write flow (contract §7). If the API
+is unreachable, **degrade to read-only** over the declared filesystem roots and say so (contract
+§6 degradation table): an unreachable runtime means the watcher/ingest side may be down too, so
+no new direct-FS writes until health returns — and never a shadow write queue that replays into
+the vault later without the human. If a same-note collision is suspected, follow the
+one-transport-per-note rule above.
 
 ## Authority limits
 
