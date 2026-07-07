@@ -112,9 +112,11 @@ different field name (`active_edit_grace_s` vs the canonical `inactive_grace_s`,
 
 ### F7 — No single settings owner doc; docs contradict on authority direction
 
-`docs/DOCS_INDEX.md:301` (SETTINGS.md, "with known debt, forward-looking areas") and `:598`
-(VAULT_AND_SETTINGS_CONTEXT.md) own two disjoint halves; `vault-settings-roadmap.md` records the
-central service as simultaneously delivered-foundation and unmet-DoD (`:110-123` vs `:42-57`).
+`docs/DOCS_INDEX.md`'s `docs/SETTINGS.md` row ("with known debt, forward-looking areas") and its
+`docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md` row own two disjoint halves (row anchors by path —
+line numbers in that index shift with every added row, including this audit's own);
+`vault-settings-roadmap.md` records the central service as simultaneously delivered-foundation
+and unmet-DoD (`:110-123` vs `:42-57`).
 
 ### What is healthy (keep)
 
@@ -232,7 +234,7 @@ Minimal kernel = SET-1 + SET-2 + SET-3; the rest is defense in depth.
 | S3 | Unify receipts: compiler/auto-heal, watcher delta, agent writes all emit `SettingsWriteReceipt` (SET-3) | `tests/vault/test_settings_receipt_durable.py` extended to every writer | Extends #2475 UI-boundary receipt work |
 | S4 | Single default registry; collapse duplicated env defaults (SET-4) | one declaration site per key; divergence test | New; fixes LLM_TIMEOUT/WATCHER_ENABLE splits |
 | S5 | Vault-selection rebind for watcher + all vault-scoped consumers (SET-7) | test: select vault via API → watcher ingest binding follows | Supersedes #2476's "do not converge" verdict per owner ruling; #3119 already closed with a partial visible-signal fix (PR #3126), superseded here with a real rebind. Not a duplicate of #2143 (that epic is about serving multiple vaults concurrently; this is one watcher following one active selection). |
-| S6 | Prompts-as-settings: `settings/prompts/*.md` become runtime SoT; delete the unused prompt loader + mirrors once superseded (SET-6) | ask prompt edited in vault md changes `/api/ask` behavior; drift check for remaining mirrors | Enacts prompt-contract-mirror memory; supersedes `docs/settings/prompts/` |
+| S6 | Prompts-as-settings: `settings/prompts/*.md` become runtime SoT; migrate the validation loader's target to the canonical location, then retire loader + mirrors once genuinely unreferenced (the loader is live code — see F3) (SET-6) | ask prompt edited in vault md changes `/api/ask` behavior; drift check for remaining mirrors | Enacts prompt-contract-mirror memory; supersedes `docs/settings/prompts/` |
 | S7 | De-hardcode wave 1 (models/voices/rerank/thresholds/watcher tunables), tier-gated | each migrated key visible in `settings explain` with origin | Extends `vault-settings-roadmap.md :: extract configurable hardcoded values`; TTS voice decision (#1702) becomes a setting |
 | S8 | Owner-doc consolidation + schema cleanup (F6, F7) | DOCS_INDEX single owner row; orphan schema deleted | docs-authoring lane |
 
