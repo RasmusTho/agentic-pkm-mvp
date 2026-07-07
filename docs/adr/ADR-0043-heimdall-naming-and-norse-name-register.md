@@ -88,6 +88,7 @@ constituent naming avoids them.
 | Brokkr | Project-workshop boundary (planned) | Boundary concept | taken |
 | Tyr | Formal-records boundary (planned) | Boundary concept | taken |
 | OEF | Observability, Evaluation & Fitness | Control boundary (shipped code) | taken |
+| Kvasir | Capability Knowledge Model (builder-plane subsystem) | Builder subsystem | taken (ADR-0057) |
 | Mimer | → Munin | Deprecated alias | deprecated |
 | Niflheim | Dev vault | Environment (mutable) | in use |
 | Bifröst | Test vault | Environment (mutable) | in use |

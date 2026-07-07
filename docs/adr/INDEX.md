@@ -53,3 +53,4 @@
 - [ADR-0054: The Episode Resolution Engine is a Mimer organ — Heimdal contributes single-stream boundary proposals (Accepted)](./ADR-0054-episode-resolution-engine-is-a-mimer-organ.md)
 - [ADR-0055: Multi-writer vault-consistency model — stale-detection + conflict-copy for rewritten notes, per-note-class posture (Accepted)](./ADR-0055-vault-multiwriter-consistency-model.md)
 - [ADR-0056: One hub Mimer client contract; HTTP-API + direct-FS transports; external app agents join the writer set (Accepted)](./ADR-0056-mimer-client-contract-and-transports.md)
+- [ADR-0057: The Capability Knowledge Model (Kvasir) — a projection-only Builder System subsystem (Accepted)](./ADR-0057-capability-knowledge-model-kvasir.md)
