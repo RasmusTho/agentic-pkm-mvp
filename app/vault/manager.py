@@ -458,15 +458,42 @@ class VaultManager:
             gitignore_path.write_text(LOCAL_GITIGNORE, encoding="utf-8")
             created.append(str(gitignore_path.relative_to(expanded)))
 
-        # NOTE: initialize_vault deliberately does NOT pre-write a
-        # ``vault.layout.md`` here. Bootstrapping a default layout at init time
-        # changed the established capture-scoped layout for seed/UAT flows
-        # (regressing the watcher scope_glob and the channel-bootstrap settings
-        # layout). The CRE path is instead made crash-proof at the read side:
-        # ``resolve_vault_system_dir_rel_or_default`` (used by the relevance
-        # evaluator and materialization) degrades to the packaged default system
-        # folder on an init-only vault, so the default-on tick still materializes
-        # without forcing a layout note here.
+        # Ensure the vault is capture-ready immediately (#3120): a vault
+        # initialized purely through the Companion UI's "Initialize a vault
+        # here" action previously left ``vault.layout.md`` unwritten, so the
+        # first quick-capture failed with "vault inbox note convention could
+        # not be resolved" until an operator ran
+        # ``python -m app.cli vault-layout-ensure`` by hand -- a dead end for a
+        # browser-only new user.
+        #
+        # Deliberately ``load_or_create_layout`` (note-only), NOT the CLI
+        # command's ``ensure_vault_layout_report`` (note + eager folder mkdir
+        # + system note): the capture path only needs ``vault.layout.md`` to
+        # exist so ``load_layout`` resolves ``inbox_folder`` -- the actual
+        # inbox write creates its own parent directory on demand. Eagerly
+        # mkdir-ing every layout folder here reintroduced the #2183/#2210
+        # regression this NOTE used to warn about (this time caught by
+        # tests/watcher/test_scope_zero_match_signal.py::test_missing_scope_prefix_warns,
+        # which depends on a fresh init-only vault NOT pre-creating its scope
+        # prefix directory). ``load_or_create_layout`` is idempotent (a no-op
+        # if a layout note already exists) and derives folder names from this
+        # vault's own ``system-settings.yaml`` (none yet at fresh init, so it
+        # falls back to the packaged default layout) -- the exact same
+        # default the CRE read-side fallback
+        # (``resolve_vault_system_dir_rel_or_default``) already treats as
+        # authoritative. Best-effort -- a layout-note failure must never fail
+        # vault init itself, matching the bootstrap-escape contract in
+        # app/vault/layout.py (LAYOUT_ENSURE_ACTION).
+        try:
+            from app.vault.layout import load_or_create_layout
+
+            load_or_create_layout(expanded)
+        except Exception:
+            logger.warning(
+                "vault-layout-ensure best-effort provisioning failed during initialize_vault; "
+                "capture may require a manual `python -m app.cli vault-layout-ensure` run",
+                exc_info=True,
+            )
 
         context = self.select_vault(expanded, remember=remember)
         return VaultInitializationResult(
