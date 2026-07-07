@@ -1,17 +1,17 @@
-State: SoT v5.5 Reality-MVP baseline locked; v5.6 delivery line closed; v6 interaction, finding/reorienting, persistence-surface, and commitment specifications are active planning surfaces; read-only Chat cognition has a shipped scaffold, canvas co-authoring is materially implemented behind `CANVAS_ENABLED`, and hybrid Chat/Panel mutation remains future work.
+State: SoT v5.5 Reality-MVP baseline locked; v5.6 delivery line closed; v6 interaction, finding/reorienting, persistence-surface, and commitment specifications are active planning surfaces; read-only Chat cognition has a shipped scaffold, canvas co-authoring is materially implemented behind `CANVAS_ENABLED`, and hybrid Chat/Panel mutation remains future work. Re-scoped 2026-07-07 to the Yggdrasil ecosystem level: this document now owns the human-function axis for the whole personal agentic ecosystem (ADR-0044), with the newly ratified capability lines (Heimdal lived-world capture, the Episode primitive and closure-driven receding, durable decision records, external-source acquisition, native client surfaces, and language-native interaction) described as human functions; §14 declares which of these are shipped, emerging, or target state.
 Doc role: Core SoT
-Authority: Canonical user-facing function contract for the system; architecture and implementation changes should remain compatible with this document unless it is updated intentionally.
+Authority: Canonical user-facing function contract for the whole Yggdrasil ecosystem — every constituent and client surface serving the one human; architecture and implementation changes should remain compatible with this document unless it is updated intentionally. Constituent capability charters and client-surface contracts remain authoritative for their own mechanisms; this document owns what the human needs from them.
 Owner: Product / human-function SoT
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-06-29
-Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2133, and current repo state at 503c6c64 on 2026-06-29
+Last reviewed: 2026-07-07
+Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/GLOSSARY.md, docs/adr/ADR-0044-research08-d1-conforms-to-acknowledged-sos.md, docs/adr/ADR-0050-cross-repo-governance-and-bifrost-client-repo.md, docs/adr/ADR-0051-episode-as-ontological-primitive.md, docs/adr/ADR-0054-episode-resolution-engine-is-a-mimer-organ.md, docs/HEIMDAL/CAPABILITY_CHARTER.md, docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md, docs/DECISION_RECEIPT_LOG/README.md, docs/KNOWLEDGE_ACQUISITION/README.md, docs/EPISODE_RESOLUTION_ENGINE/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, and current repo state at a47fd20a on 2026-07-07
 
 
-# Human Flows — Mimer / agentic-pkm-mvp
+# Human Flows — Yggdrasil
 
-> Audience: humans using the system in Obsidian + CLI. Human language is canonical; automation is additive, not authoritative.
+> Audience: the human using the ecosystem — today mainly in Obsidian + CLI, with voice capture shipping and native app surfaces as settled directions. Human language is canonical; automation is additive, not authoritative.
 
 This document is about what the system is for.
 It describes the human problems the system is meant to help with, the kinds of work it must
@@ -25,6 +25,32 @@ axis** — the condition the human is in when they meet the system (first contac
 cold return, vault switch, degraded runtime, device role) — is owned by
 `docs/CONCEPTS/USER_SITUATION_MODEL.md`, so that situational intent has an upstream home without
 being narrated here.
+
+### Ecosystem scope
+
+This document is scoped to **Yggdrasil** — the whole personal agentic ecosystem — not to any single
+constituent. Under ADR-0044, Yggdrasil is the ecosystem apex: an acknowledged System of Systems
+under one human apex authority, governed by contracts rather than by any runtime component. Its
+current constituents are:
+
+- **Mimer** — the knowledge-and-cognition constituent: the vault, ingestion/indexing, retrieval,
+  governed agent action, and the Knowledge Acquisition Platform. Mimer is the second brain proper.
+- **Heimdal** — the sensor / event-capture constituent: it observes lived reality and converts it
+  into attributed, timestamped events with confidence and provenance, published as a stream that
+  Mimer consumes as candidate evidence, never as authority.
+- A thin **private-bindings** constituent for operator-bound configuration (not human-facing).
+
+Client surfaces — Obsidian, the CLI, the Companion UI, external app agents, and the **Bifrost**
+native apps (iPhone, iPad, Apple Watch) — are bridges between the human and the constituents, not
+constituents themselves (ADR-0050).
+
+The human is one person. Human needs do not split along constituent boundaries, so the function
+axis lives here, once, for the whole ecosystem. This re-scope does not merge or redefine
+constituent architecture: capability charters (for example `docs/HEIMDAL/CAPABILITY_CHARTER.md`)
+and client contracts (for example `docs/contracts/MIMER_CLIENT_CONTRACT.md` and
+`docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md`) remain authoritative for their own mechanisms,
+downstream of the human functions described here. Where this document says "the system" it means
+the ecosystem as the human experiences it, whichever constituent happens to carry the function.
 
 For the broader ontology of the system as a second-brain environment, see:
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
@@ -44,7 +70,8 @@ For the broader ontology of the system as a second-brain environment, see:
 
 ## 0. Product thesis: cognitive prosthesis, second brain, and agent memory
 
-Mimer is three things at once, held together by design:
+Yggdrasil — the personal agentic ecosystem, with Mimer as its knowledge-and-cognition heart — is
+three things at once, held together by design:
 
 - **A cognitive prosthesis for the human.** It supports cognitive functions a human cannot
   reliably do unaided — durable capture, reorientation, retrieval, commitment tracking,
@@ -56,6 +83,11 @@ Mimer is three things at once, held together by design:
   delegates over the vault and over supporting machine surfaces (databases, indexes, events,
   receipts), under explicit authority contracts. Their memory and writes are first-class
   inspectable objects, not hidden model state.
+
+Heimdal extends the same design outward into lived reality: what happens in the human's day —
+spoken thoughts, meetings, errands, situations — can become durable, attributed candidate evidence
+without the human sitting at a keyboard, under the same authorship and consent discipline as
+everything else.
 
 Runtime behavior — watchers, indexes, agents, APIs — remains subordinate to human-readable
 artifacts and to the authority contracts that govern machine action. When the two come into
@@ -128,11 +160,17 @@ The system is meant to function as a human-first cognitive work environment.
 
 Its job is to help a human:
 - capture what should not be lost,
+- capture from lived situations — speech, wearable, on-the-go moments — not only from a keyboard,
 - externalize thought so it can be worked on,
 - find and reuse what matters later,
+- let material about finished situations recede so the present stays legible,
 - develop knowledge over time,
+- turn encountered external material — video, audio, documents — into candidate knowledge for review,
 - support projects and commitments without keeping everything in working memory,
+- remember decisions and the reasons behind them,
+- remember the people involved — what was discussed and agreed — within contextual bounds,
 - aid learning and reflection,
+- meet the human in the human's own language,
 - support creative work, hobby work, and world-building,
 - preserve contextual integrity across different life spheres, contexts, and role identities,
 - remain evolvable as the user's needs change over time,
@@ -158,9 +196,16 @@ The system exists because unaided cognition is limited.
 In lived practice, the human faces recurring problems such as:
 - too much to keep in working memory at once,
 - ideas that disappear unless captured quickly,
+- moments that happen away from any keyboard — walks, meetings, errands — lost because capture
+  required a device, an app, and text production,
 - sources that become hard to relocate or trust later,
 - projects that fragment across notes, materials, and time,
 - open loops that continue to occupy attention without being clarified,
+- material about finished situations that keeps resurfacing as noise long after it stopped mattering,
+- decisions that get re-litigated because the reasons behind them were never durably kept,
+- conversations and agreements with people that fade — who said what, what was agreed, what is owed,
+- valuable long-form material (videos, talks, documents) that is consumed once and never becomes
+  usable knowledge,
 - difficulty turning vague intentions into actionable next steps,
 - difficulty maintaining learning momentum and reflective continuity,
 - difficulty moving between different life contexts without cognitive contamination,
@@ -193,10 +238,16 @@ They summarize the kinds of cycles the system should keep legible and support ac
 - Intent -> propose -> decide -> execute -> receipt
 - Review -> reclassify -> promote/archive
 - Remember -> recall -> explain -> correct
+- Live -> observe -> attribute -> episode -> close -> recede
+- Encounter -> acquire -> refine -> triage -> keep/discard
 
 Validation note:
 - these loops and the everyday scenarios below are the product-level acceptance source for system-level UAT
 - they are intentionally broader than the currently locked runtime baseline
+- the two newest loops lean furthest ahead of the runtime: `Live -> ... -> recede` is realized only
+  as far as discrete Heimdal capture plus the ratified Episode ontology (the Episode Resolution
+  Engine is specified, not built), and `Encounter -> ... -> keep/discard` is realized for the
+  YouTube acquisition path; both remain acceptance targets, not shipped end-to-end loops
 - when implementation lags the human contract, the scenario should still be kept as a non-blocking acceptance target rather than rewritten to fit today's internals
 - use `docs/TESTING.md` and `docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md` to classify whether a scenario is a baseline gate, a partial/non-blocking acceptance target, or a future release gate
 
@@ -252,6 +303,19 @@ Capture must work for:
 - creative fragments,
 - roleplaying/hobby material,
 - and open loops that are not yet clarified.
+
+Capture must also work from the lived world, not only from a writing surface. When something
+happens on a walk, in a meeting, or in a passing conversation, the human should be able to speak it
+— one press on a watch or phone, no app to open, no text to produce — and trust that it lands as a
+durable, attributed, timestamped record with provenance. This is Heimdal's function as the
+ecosystem's sensor constituent. Two boundaries protect it:
+
+- **Consent is a human surface, not a mechanism detail.** Capture of lived reality is opt-in per
+  place and session; always-on capture is off by default and remains an explicit owner decision.
+  Third parties are marked and protected rather than silently recorded, and the human controls what
+  raw material is retained and for how long.
+- **Captured events are candidate evidence, never authority.** What the sensor heard enters the
+  system as material to review, attribute, and promote — it does not silently become truth.
 
 ### Externalize and work on thought
 
@@ -315,6 +379,107 @@ This loop is the human-facing contract behind inspectable agent memory. The agen
 obligations — per-flow recall bindings, explanation duties, and paired correction paths — are
 owned by `docs/AGENT-FLOWS.md`; memory semantics remain owned by
 `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`.
+
+### Live in episodes: let situations open, close, and recede
+
+The human lives in situations — a trip, a meeting, a build session, a shopping errand — and much of
+what is captured is *about* one of them. The system should treat these lived situations as
+first-class context (the **Episode** primitive, ADR-0051): a bounded, human-legible record of a
+situation, indexed the way humans actually remember — by time, place, cause, goal, and who was
+involved — with artifacts attached to the episode they are about.
+
+Closure is the load-bearing human function:
+- while a situation is open, its material stays hot — open loops keep their pull,
+- when the situation closes, material that only mattered inside it recedes from view — the grocery
+  list stops surfacing after the shopping is done,
+- receding is a retrieval consequence, never erasure: nothing is deleted, trust and provenance are
+  untouched, and a receded episode can be reopened with full salience.
+
+Relevance is lost at the triggering event, not by the calendar. Age-based expiry is a poor proxy
+for "this stopped mattering"; episode closure is the honest signal.
+
+The human always owns the cut. The system may propose episode boundaries, and silence may accept
+them, but the human can re-cut — merge, split, re-time, re-label — by editing the episode note
+itself, and the system never overwrites a human's cut. The engine realizing this function is
+specified in `docs/EPISODE_RESOLUTION_ENGINE/`.
+
+### Remember decisions and their why
+
+Decisions are among the most expensive things a human produces and among the first things unaided
+memory loses. The system should keep a durable, human-readable record of decisions — what was
+decided, under what authority, on what basis, with what outcome — so that:
+- a past decision can be re-grounded instead of re-litigated,
+- the reasons survive even when the human no longer remembers making the call,
+- and the record outlives any database: decision records belong on the readable, backed-up human
+  surface, with machine stores as rebuildable projections (see `docs/DECISION_RECEIPT_LOG/`).
+
+This is the decision-specific case of the general receipt contract (§11): accountability material
+is only useful if the human can actually find it, read it, and trust it years later.
+
+### Acquire external sources into candidate knowledge
+
+Much of what the human learns arrives as long-form external material: videos, talks, podcasts,
+documents. The system should let the human point at such a source and have it acquired, transcribed
+or normalized, and distilled into a **candidate** — summary, claims, entities, possible actions —
+queued for the human's normal triage (the Knowledge Acquisition Platform,
+`docs/KNOWLEDGE_ACQUISITION/`).
+
+The boundary is authorship: acquisition ends at candidate. The system never auto-promotes acquired
+material into standing knowledge and never authors the human's takeaways; every acquired note
+arrives marked for review. The human decides what any of it means and whether it earns a place.
+
+### Remember people, conversations, and agreements
+
+Lived situations involve people. When capture and episodes carry attribution — who was there, who
+said it, who it concerns — the system can help with a need unaided memory serves badly:
+- recalling what was discussed or agreed with a particular person,
+- keeping per-person open loops visible — what I owe them, what they owe me,
+- and confirming or correcting attribution when the system guessed ("who was this about?");
+  attribution is proposed and human-confirmable, never silently authoritative.
+
+This is memory support inside the human's own life, not a CRM and not surveillance of others:
+third-party protection (see Capture) and contextual integrity (§9) bound it. People-related recall
+stays within the life sphere it was captured in unless the human makes overlap explicit.
+
+### Reconstruct the day and feed review from lived capture
+
+When capture, episodes, and decision records accumulate, the system can assemble the human's own
+record of "what actually happened" — today, this week — as a starting point for journaling, weekly
+review, and reflection, instead of asking the human to reconstruct the period from unaided memory.
+
+Day reconstruction is orientation material, not judgment: it should show the episodes, captures,
+and decisions of the period with provenance, let the human correct the record (re-cut,
+re-attribute, annotate), and hand off into the existing review rhythms (§5) rather than becoming a
+separate reporting chore.
+
+### Notice patterns over long horizons
+
+Across months and years of episodes and reflections, the system should help the human notice what a
+single day never shows: recurring situations, energy and habit patterns, themes that keep
+returning, commitments that always slip. This extends the reflection-and-calibration function to a
+longer horizon.
+
+The posture is assistance to self-observation, not a surveillance dashboard: patterns are surfaced
+as source-linked, reviewable observations the human can inspect, question, and dismiss — never as
+scores, streaks, or behavioral verdicts the human must answer to.
+
+### Keep archives usable as sources
+
+Retained source material — PDFs, media, emails, project files — must remain usable as a first-class
+source surface without being rewritten into notes first: findable, citable, previewable, with
+provenance and domain boundaries intact. Archive work is already named as a work type (§4) and an
+everyday scenario (§8); it is also a core function in its own right, because "keep it and still
+find it, without converting it" is one of the burdens unaided cognition carries worst.
+
+### Meet the human in their own language
+
+The human thinks, speaks, and writes in Swedish as well as English. Human-facing surfaces —
+capture (especially spoken capture), retrieval, proposals, explanations, and read-aloud — should
+meet the human in the language the human is using, without degrading into a second-class
+experience. Language is part of the dyslexia-friendly contract (§0): a surface that only works well
+in one language, or that forces silent translation of the human's own words, adds exactly the kind
+of friction this system exists to remove. Vault artifacts remain in whatever language the human
+wrote them in; language support must never rewrite the human's voice.
 
 ### Support commitments and action
 
@@ -554,6 +719,15 @@ Examples:
 - self-observation,
 - value clarification.
 
+### Lived-capture and episodic work
+
+Examples:
+- spoken capture from watch or phone during the day,
+- meeting and conversation records with attribution,
+- errand, trip, and session episodes that open, close, and recede,
+- day and week reconstruction for journaling and review,
+- long-horizon pattern observation over one's own episodes.
+
 These forms of work may overlap.
 The system should help coordinate them without assuming they are the same thing.
 
@@ -574,6 +748,7 @@ The system should support recurring human rhythms, not only isolated interaction
 
 When something appears, the human should be able to:
 - capture it quickly,
+- capture by voice when no keyboard is at hand,
 - mark or infer enough context that it can be found again,
 - and continue working without needing to fully classify everything immediately.
 
@@ -596,6 +771,8 @@ After interruption, the system should help the human return by making it easy to
 ### In review
 
 At daily/weekly or other recurring review moments, the system should help the human:
+- start from a reconstruction of what actually happened — episodes, captures, decisions — rather
+  than from unaided recall,
 - re-open the right commitments,
 - notice what has drifted,
 - detect waiting states and neglected loops,
@@ -607,7 +784,8 @@ Across weeks and months, the system should help the human:
 - develop durable knowledge,
 - preserve continuity in projects and learning,
 - carry creative/hobby worlds forward,
-- and maintain a usable memory of prior thought and prior action.
+- notice long-horizon patterns across episodes and reflections,
+- and maintain a usable memory of prior thought, prior decisions, and prior action.
 
 ### Made proactive
 
@@ -636,6 +814,8 @@ The system should make it increasingly clear whether something is primarily:
 - a waiting item,
 - a creative fragment,
 - a reflective artifact,
+- a lived episode that other artifacts are about,
+- an attributed capture event awaiting review,
 - a companion note or other system-surface continuity artifact,
 - or a system receipt/status surface.
 
@@ -656,6 +836,8 @@ From the human point of view, the following expectations matter:
 - the system should not silently rewrite meaning-bearing content,
 - suggestions should be distinguishable from accepted truth,
 - commitments should remain recoverable across time,
+- decisions and the reasons behind them should remain recoverable years later,
+- material about closed situations should recede from view without being lost,
 - creative and hobby material should remain usable without being downgraded to second-class status,
 - central artifacts should remain understandable without the current runtime,
 - narrower devices should still preserve minimum continuity functions,
@@ -796,6 +978,117 @@ The system should help the user:
 - distinguish commitment from note text,
 - and inspect what the system did, under what authority, and with what result.
 
+### Case: something happens while I am away from any keyboard
+
+User need:
+- "I'm on a walk, in a meeting, or in the middle of an errand. I need to say it once and trust that it lands."
+
+The system should help the user:
+- capture by voice with one press, without opening an app,
+- record when it happened, what it may be about, and who it concerns as reviewable attribution,
+- respect consent boundaries — capture is opt-in per place and session, and other people are
+  protected,
+- and deliver the capture into the normal review flow rather than into a separate silo.
+
+### Case: the shopping is done
+
+User need:
+- "Material that only mattered inside a finished situation should stop surfacing on its own."
+
+The system should help the user:
+- notice that the situation closed — by event, not by age,
+- let its material recede from proactive surfaces and ranked retrieval,
+- keep everything recoverable — receding is ranking, never deletion,
+- and keep genuinely durable material (a decision, a lesson) alive past the episode it was born in.
+
+### Case: the system cut my day wrong
+
+User need:
+- "The system thought this was one situation, but it was two. I need to correct its memory of my day."
+
+The system should help the user:
+- see what episodes it believes happened, as readable notes,
+- re-cut by direct edit — merge, split, re-time, re-label — with no forms or approval loops,
+- treat the human's cut as final: new evidence may produce a new proposal, but never silently
+  overwrite the correction,
+- and restore full salience when the human reopens something the system had closed.
+
+### Case: what did I decide, and why?
+
+User need:
+- "I know this was settled. I need the decision and its reasons back, not a re-run of the argument."
+
+The system should help the user:
+- retrieve the decision as a durable, readable record — what was decided, under what authority, on
+  what basis,
+- see the outcome and any later corrections alongside it,
+- and trust that the record survives system and database changes because it lives on the
+  human-readable, backed-up surface.
+
+### Case: I watched something worth keeping
+
+User need:
+- "That video/talk/document contained real substance. I want it in my system without doing the transcription work myself — but the takeaways stay mine."
+
+The system should help the user:
+- acquire the source from a simple pointer (a URL, a file),
+- produce a candidate: transcript-grounded summary, claims, entities, possible actions,
+- keep the candidate clearly marked as unreviewed, with provenance back to the source,
+- and leave promotion into standing knowledge as the human's decision.
+
+### Case: what did I agree with this person?
+
+User need:
+- "Before I meet them again, I want to remember what we discussed, what was agreed, and what is still open between us."
+
+The system should help the user:
+- recall conversations and agreements by person, with provenance,
+- show per-person open loops without turning people into database rows,
+- let the human confirm or correct who something was about,
+- and keep person-related recall inside its life sphere unless overlap is made explicit.
+
+### Case: what happened this week?
+
+User need:
+- "For my review, I want to start from what actually happened, not from what I happen to remember."
+
+The system should help the user:
+- assemble the period's episodes, captures, and decisions as orientation material,
+- make that record correctable rather than authoritative,
+- and flow directly into the existing review rhythm instead of adding a new reporting duty.
+
+### Case: I am switching devices
+
+User need:
+- "I was working at my desk; now I have only my phone. I need continuity, not identical features."
+
+The system should help the user:
+- keep capture, reading, and basic orientation available on the narrower device,
+- let richer assistance vary by device role without making the artifacts themselves device-bound,
+- and make any asymmetry understandable, so that partial capability never reads as data loss.
+
+### Case: this material has earned standing
+
+User need:
+- "This started as a rough capture and has become something I actually rely on. The system should reflect that."
+
+The system should help the user:
+- let material mature gradually — capture, working note, stabilized knowledge — without forcing
+  early classification,
+- make promotion an explicit, human-owned step with provenance intact,
+- and keep maturity visible, so reliable and exploratory material are not confused.
+
+### Case: I want the system in Swedish
+
+User need:
+- "Jag tänker och pratar ofta på svenska. Systemet ska möta mig där — särskilt när jag pratar in något."
+
+The system should help the user:
+- accept spoken and written capture in Swedish as first-class,
+- retrieve, propose, and explain in the language of the interaction,
+- read material aloud with a natural voice in the right language,
+- and never silently translate or rewrite the human's own words.
+
 ### Case: I want to think on a note with a writing partner
 
 User need:
@@ -833,6 +1126,8 @@ Therefore the system should:
 - support different role identities across contexts,
 - allow intentional and even recurring cross-domain use when wanted,
 - avoid accidental leakage,
+- apply the same contextual integrity to lived capture: what the sensor layer hears in one life
+  sphere must not leak into another by default, and capture consent is granted per context,
 - make stable overlap possible through explicit shared participation and bounded cross-context
   permissions when needed,
 - and make it possible for different kinds of work to coexist without forcing the same standards of
@@ -953,6 +1248,17 @@ The current baseline exposes these main surfaces:
 - Canvas co-authoring: a bounded note-body editing surface with session logs and governance-routing
   for mutation-bearing requests; this is implemented but still explicitly gated behind
   `CANVAS_ENABLED`.
+- Heimdal capture: a first discrete-capture slice — voice capture converted into attributed,
+  timestamped events with provenance — is delivered; always-on capture remains an explicit,
+  undecided owner posture.
+- External-source acquisition: CLI acquisition of YouTube sources into candidate companion notes
+  (Knowledge Acquisition Platform), ending at `candidate` and never auto-promoting.
+
+Settled directions not yet shipped as surfaces: the Bifrost native apps (iPhone on-the-go review
+and capture, iPad as a thinking canvas, Apple Watch capture; ADR-0050 and
+`docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md`) and the Episode Resolution Engine
+(`docs/EPISODE_RESOLUTION_ENGINE/`), which will realize episode segmentation, closure-driven
+receding, and human re-cut.
 
 These surfaces are important only insofar as they serve the human functions described above.
 
@@ -999,6 +1305,9 @@ The current baseline realizes only part of the broader function set.
 - bounded frontmatter updates and side-channel system metadata
 - AI-panel-driven suggestions and visible receipts
 - bounded canvas co-authoring with session logs and governance-routed mutation-bearing requests
+- discrete voice capture into attributed events (Heimdal v1)
+- external-source acquisition into candidate notes (Knowledge Acquisition Platform, YouTube first)
+- first slices of the durable decision receipt record on the readable surface
 - early support for promotion / standing changes
 - early support for open-loop/project semantics in docs and ontology
 
@@ -1009,6 +1318,12 @@ The current baseline realizes only part of the broader function set.
 - stronger learning-oriented flows
 - clearer creative/hobby-specific support patterns
 - fuller receipt artifacts beyond current overlays and operational traces
+- the Episode primitive as a runtime reality: the ontology is ratified (ADR-0051), but the Episode
+  Resolution Engine — segmentation, closure-driven receding, human re-cut — is specified, not built
+- native app surfaces (Bifrost: iPhone/iPad/Watch) — settled topology, early delivery
+- people/relationship memory, day reconstruction, and long-horizon pattern observation — named
+  human functions with no dedicated runtime yet
+- Swedish-first interaction across human surfaces (spoken capture, retrieval, read-aloud)
 - hybrid Panel/Chat integration that preserves Panel as primary command surface without making it
   the exclusive authoritative intent source (see
   `docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md`)
@@ -1032,6 +1347,8 @@ It uses them as orientation for what kinds of human function a system like this 
 
 The current runtime remains relevant, but secondary.
 
+- Heimdal captures lived events into an attributed, append-only stream that Mimer consumes as
+  candidate evidence, never as authority.
 - Ingest projects artifacts into runtime stores and rebuildable indexes.
 - Companion notes preserve system-side continuity and healing context for tracked vault notes.
 - PanelAgent provides bounded suggestion/action surfaces inside notes.
@@ -1046,6 +1363,16 @@ document should continue to hold.
 
 - `docs/PROJECT_KERNEL.md`
 - `docs/AGENT-FLOWS.md`
+- `docs/adr/ADR-0044-research08-d1-conforms-to-acknowledged-sos.md`
+- `docs/adr/ADR-0050-cross-repo-governance-and-bifrost-client-repo.md`
+- `docs/adr/ADR-0051-episode-as-ontological-primitive.md`
+- `docs/adr/ADR-0054-episode-resolution-engine-is-a-mimer-organ.md`
+- `docs/HEIMDAL/CAPABILITY_CHARTER.md`
+- `docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md`
+- `docs/DECISION_RECEIPT_LOG/README.md`
+- `docs/KNOWLEDGE_ACQUISITION/README.md`
+- `docs/EPISODE_RESOLUTION_ENGINE/README.md`
+- `docs/contracts/MIMER_CLIENT_CONTRACT.md`
 - `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`
 - `docs/CONCEPTS/USER_NEEDS_MODEL.md`
 - `docs/CONCEPTS/COMMITMENT_LAYER_CONTRACT.md`
