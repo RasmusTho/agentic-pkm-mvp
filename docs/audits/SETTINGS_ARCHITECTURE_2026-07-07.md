@@ -203,8 +203,9 @@ Minimal kernel = SET-1 + SET-2 + SET-3; the rest is defense in depth.
    (single default registry → instance md → vault-shared md → vault-local md → runtime override),
    one write path (WriteGuard-gated where authority-bearing), one receipt stream, one
    `settings explain` that names the origin of every effective key. The compile-to-YAML
-   intermediate and the dead prompt loader are deleted; pydantic models remain as the validation
-   layer, not a parallel truth.
+   intermediate is deleted, and the prompt loader is retired once its validation target migrates
+   to the canonical location (it is live code today — see F3); pydantic models remain as the
+   validation layer, not a parallel truth.
 3. **Ingestion.** The watcher already polls and already routes `local.md` deltas
    (`app/watcher/settings_delta.py:26-102`); extend that to the whole settings folder →
    validate → apply → durable receipt → hot-reload event. Edit in Obsidian, takes effect, leaves
