@@ -4,8 +4,8 @@ description: One owner doc for settings; orphaned schema deleted; roadmap items 
 task_id: SETTINGS-08
 source_anchor: docs/audits/SETTINGS_ARCHITECTURE_2026-07-07.md :: F6, F7
 parent_capability: Settings Spine
-prerequisites: [SETTINGS-03]
-depends_on: [CANONICALIZE_SETTINGS_LOCATION.md]
+prerequisites: [SETTINGS-01, SETTINGS-02, SETTINGS-03, SETTINGS-04, SETTINGS-05, SETTINGS-06, SETTINGS-07]
+depends_on: [WIRE_SETTINGS_INGESTION.md, SINGLE_DEFAULT_REGISTRY.md, CANONICALIZE_SETTINGS_LOCATION.md, RECEIPT_EVERY_SETTINGS_WRITE.md, REBIND_ON_VAULT_SELECTION.md, PROMPTS_AS_SETTINGS.md, DEHARDCODE_WAVE_ONE.md]
 can_parallelize_with: []
 ---
 

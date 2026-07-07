@@ -1,6 +1,6 @@
 ---
 name: Prompts As Settings
-description: Vault settings/prompts/*.md become the runtime prompt source of truth; the dead loader and stale descriptive mirrors are removed
+description: Vault settings/prompts/*.md become the runtime prompt source of truth; the validation loader migrates to the canonical location and stale descriptive mirrors are retired once superseded
 task_id: SETTINGS-06
 source_anchor: docs/audits/SETTINGS_ARCHITECTURE_2026-07-07.md :: F3
 parent_capability: Settings Spine

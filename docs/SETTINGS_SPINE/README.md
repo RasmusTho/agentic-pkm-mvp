@@ -26,9 +26,9 @@ writers. Findings F1-F7 and invariants SET-1..SET-7:
 | 3 | [CANONICALIZE_SETTINGS_LOCATION.md](CANONICALIZE_SETTINGS_LOCATION.md) | One vault settings root `<vault>/settings/`; legacy paths compat-read with loud deprecation | SET-2 | 1 |
 | 4 | [RECEIPT_EVERY_SETTINGS_WRITE.md](RECEIPT_EVERY_SETTINGS_WRITE.md) | Every settings writer (API, watcher delta, auto-heal, agent) emits a durable actor-tagged receipt | SET-3 | 1 |
 | 5 | [REBIND_ON_VAULT_SELECTION.md](REBIND_ON_VAULT_SELECTION.md) | Vault selection rebinds every vault-scoped settings consumer, watcher included | SET-7 | 1 |
-| 6 | [PROMPTS_AS_SETTINGS.md](PROMPTS_AS_SETTINGS.md) | `settings/prompts/*.md` become the runtime prompt SoT; dead loader and stale mirrors removed | SET-6 | 3 |
+| 6 | [PROMPTS_AS_SETTINGS.md](PROMPTS_AS_SETTINGS.md) | `settings/prompts/*.md` become the runtime prompt SoT; validation loader migrated, stale mirrors retired once superseded | SET-6 | 3 |
 | 7 | [DEHARDCODE_WAVE_ONE.md](DEHARDCODE_WAVE_ONE.md) | Highest-value hardcoded values (models/voices/rerank/thresholds/watcher tunables) migrate into the registry, tier-gated | SET-4/SET-1 | 2, 3 |
-| 8 | [CONSOLIDATE_SETTINGS_OWNER_DOCS.md](CONSOLIDATE_SETTINGS_OWNER_DOCS.md) | One settings owner doc; orphan schema deleted; location wording reconciled; parent-closure handoff | SET-6 | 3 |
+| 8 | [CONSOLIDATE_SETTINGS_OWNER_DOCS.md](CONSOLIDATE_SETTINGS_OWNER_DOCS.md) | One settings owner doc; orphan schema deleted; location wording reconciled; parent-closure handoff | SET-6 | 1-7 (all — its closure handoff verifies the full capability checklist) |
 
 Tasks 1 and 2 can run in parallel (disjoint surfaces: ingestion wiring vs default declarations).
 Everything else lands on the spine they define.
@@ -44,7 +44,8 @@ Everything else lands on the spine they define.
       Verify: `tests/vault/test_settings_receipt_durable.py` extended per task 4.
 - [ ] Pre-vault boot consumes only instance-scope settings; `no_vault` behavior unchanged (#2005).
       Verify: `tests/settings/test_health_settings_no_vault.py`, `tests/settings/test_watcher_settings_no_vault.py` stay green through every task.
-- [ ] Vault selection through the UI rebinds the watcher ingest path (closes the #3119 gap).
+- [ ] Vault selection through the UI rebinds the watcher ingest path (the real rebind #3119's
+      closing fix deliberately deferred; supersedes #2476's "do not converge" per owner ruling).
       Verify: `tests/watcher/test_ingest_binding_follows_selection.py` (task 5).
 - [ ] `settings explain` names the origin (registry default / instance / vault-shared / vault-local
       / runtime override) of every effective key migrated in tasks 6-7.
@@ -100,11 +101,14 @@ single owner) is the final child and carries the parent-closure handoff.
 
 Parent feature issue #3156; children #3159 (01), #3160 (02), #3161 (03), #3162 (04), #3163 (05),
 #3164 (06), #3165 (07), #3166 (08) — live map and lifecycle rules in `PARENT_FEATURE_ISSUE.md`.
-Reconciliation (do not duplicate): task 5 extends and closes
-the named gap #3119; the R5 scaffolding question stays owned by #2312 (task 3 consumes its ruling
-if available, otherwise scaffolds only on explicit init); `docs/implementation/vault-settings-roadmap.md`
-items "external Obsidian edits", "extract configurable hardcoded values", and "central service"
-are superseded by tasks 1, 7, and the spine respectively — task 8 marks them so.
+Reconciliation (do not duplicate): task 5 builds the live rebind that #3119's closing fix
+(PR #3126, visible-warning only) deliberately deferred, superseding #2476's "do not converge"
+verdict per the owner's 2026-07-07 ruling — it closes no open issue, both are already closed;
+the R5 scaffolding question is already resolved and shipped (#2312 closed 2026-06-24, Option A at
+`docs/ENVIRONMENTS.md :: Scaffolding placement decision`) — task 3 conforms to it;
+`docs/implementation/vault-settings-roadmap.md` items "external Obsidian edits", "extract
+configurable hardcoded values", and "central service" are superseded by tasks 1, 7, and the spine
+respectively — task 8 marks them so.
 
 ## Follow-up capability flagged, not in this spec
 
