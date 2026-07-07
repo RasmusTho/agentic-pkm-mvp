@@ -23,9 +23,9 @@ For the operator, the consequence of not doing this is concrete: every "deploy" 
 
 | Task | File | Outcome | State |
 | --- | --- | --- | --- |
-| Reconcile promotion workflow with pinned images | [RECONCILE_PROMOTION_WORKFLOW_WITH_PINNED_IMAGES.md](RECONCILE_PROMOTION_WORKFLOW_WITH_PINNED_IMAGES.md) | The six promotion skills + `docs/RELEASE_CHANNELS/` contracts become deployment-model-aware: checkout model until a channel's cutover receipt exists, pinned-image model (`scripts/deploy_channel.sh`) after | Issue filed |
-| Cutover readiness preflight | [CUTOVER_READINESS_PREFLIGHT.md](CUTOVER_READINESS_PREFLIGHT.md) | A committed, read-only per-channel readiness check (image availability, env completeness incl. Heimdal/embedding vars, recreate-set completeness, migration state, pin sanity) + refresh of the stale current-reality matrix and the #2698 execution plan | Issue filed |
-| Fleet-model fitness guard | [FLEET_MODEL_FITNESS_GUARD.md](FLEET_MODEL_FITNESS_GUARD.md) | A read-only guard asserting a cut-over channel really runs its pin (no `/app` repo bind-mount, `/version` == pin, gateway unit live), wired into deploy receipts and `verify-promotion` | Issue filed |
+| Reconcile promotion workflow with pinned images | [RECONCILE_PROMOTION_WORKFLOW_WITH_PINNED_IMAGES.md](RECONCILE_PROMOTION_WORKFLOW_WITH_PINNED_IMAGES.md) | The six promotion skills + `docs/RELEASE_CHANNELS/` contracts become deployment-model-aware: checkout model until a channel's cutover receipt exists, pinned-image model (`scripts/deploy_channel.sh`) after | Issue #3155 (`agent:ready`, `lane:governance`) |
+| Cutover readiness preflight | [CUTOVER_READINESS_PREFLIGHT.md](CUTOVER_READINESS_PREFLIGHT.md) | A committed, read-only per-channel readiness check (image availability, env completeness incl. Heimdal/embedding vars, recreate-set completeness, migration state, pin sanity) + refresh of the stale current-reality matrix and the #2698 execution plan | Issue #3157 (`agent:ready`) |
+| Fleet-model fitness guard | [FLEET_MODEL_FITNESS_GUARD.md](FLEET_MODEL_FITNESS_GUARD.md) | A read-only guard asserting a cut-over channel really runs its pin (no `/app` repo bind-mount, `/version` == pin, gateway unit live), wired into deploy receipts and `verify-promotion` | Issue #3158 (`agent:ready`) |
 | **Cutover execution (terminal, operator-gated)** | — (pre-existing issue #2698) | All three channels recreated onto pinned images under operator supervision; full-environment downtime authorized; forward-only migrations acked | Existing, `agent:needs-human` |
 
 ## Execution order
@@ -59,5 +59,5 @@ The #3124 release (main → test+prod + BGE-M3 cutover) runs on the **checkout m
 
 - Parent hub: epic **#2655** (existing — no new parent feature issue; the epic already carries the validation-hub role with per-child delivery receipts).
 - Terminal slice: **#2698** (existing S7 cutover, `agent:needs-human`) — deliberately **not** re-filed; task 2 refreshes its body so the operator gate reads a current plan.
-- Child issues from this directory: one per task file, titled `[Pinned-Image Cutover] <task-name>: <description>`, each referencing this spec via "Implements PINNED_IMAGE_CUTOVER/<TASK_FILE>".
+- Child issues from this directory: **#3155** (CUTOVER-01, governance lane), **#3157** (CUTOVER-02), **#3158** (CUTOVER-03) — each references this spec via "Implements PINNED_IMAGE_CUTOVER/<TASK_FILE>".
 - Related: #2527 (AC2 residual), #3124 (checkout-model release that sequences around this capability), ADR-0040.
