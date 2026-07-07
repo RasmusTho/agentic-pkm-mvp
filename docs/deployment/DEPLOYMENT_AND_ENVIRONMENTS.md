@@ -166,6 +166,8 @@ The epic (#2655) is delivered as the slices below. S1 is this document. S2–S7 
 - **S6 — Verify/formalize auth↔topology.** Verify and lock the configured trusted-proxy (`X-Forwarded-For` only when peer is loopback or explicitly allowed) topology; add/confirm tests that exercise the proxied path and assert untrusted non-loopback callers and unconfigured bridge peers are still rejected (#2223, #2706). Target: `app/auth.py` (formalize/comment), `tests/**` covering `require_loopback_or_api_key` + `_effective_client_host` on the runtime path.
 - **S7 — Cutover (OPERATOR-GATED, `agent:needs-human`).** Cut all three channels over from the shared-checkout bind-mount to pinned images, recreate API + managed gateways, run the migration gate (forward-only ack) and the health + UI smoke gates. **Authorizes full-environment downtime and may apply forward-only migrations — requires operator acknowledgement before execution.** Target: the live host; run S5's deploy script per channel under operator supervision; record receipts in `ops/promotions/`.
 
+Delivery status (2026-07-07): S1–S6 are delivered (#2668, #2693–#2697); the running fleet has **not** adopted the delivered tooling, and the promotion skill chain that landed after these slices is still checkout-based. The remaining work — reconciling the promotion workflow with pinned images, per-channel cutover readiness, a live fleet-model fitness guard, and the operator-gated cutover itself (#2698) — is specified in [`docs/deployment/PINNED_IMAGE_CUTOVER/`](PINNED_IMAGE_CUTOVER/README.md).
+
 ## Suggested validation
 
 - Markdown/doc lint or link check if the repo provides one; otherwise manual review against epic #2655 and the verified current-reality matrix above.
