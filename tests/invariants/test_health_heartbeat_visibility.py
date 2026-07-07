@@ -36,7 +36,9 @@ verifies the two contracts that actually decide the AC:
 from __future__ import annotations
 
 import json
+import logging
 import os
+import stat
 import time
 from pathlib import Path
 
@@ -44,6 +46,8 @@ import pytest
 import yaml
 
 from app.cli.health import _watcher_runtime_status, _worker_runtime_status
+from app.runtime.worker_heartbeat import write_worker_heartbeat
+from app.watcher.heartbeat import write_runtime_heartbeat
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_PATH = REPO_ROOT / "docker-compose.yaml"
@@ -174,3 +178,124 @@ def test_stopped_watcher_reported_missing(
     watcher_heartbeat.write_text(json.dumps({"ts": stale_ts, "paused": False}), encoding="utf-8")
     stale_status = _watcher_runtime_status()
     assert stale_status["ok"] is False, stale_status
+
+
+# ---------------------------------------------------------------------------
+# #3118 — self-heal past a root-owned, permission-denied heartbeat file, and
+# make the write failure visible instead of silently swallowed.
+#
+# A real cross-uid root-owned file cannot be constructed in this sandbox
+# (no root / no docker), and POSIX sticky-bit "restricted deletion" rules
+# mean a genuinely root-owned file inside a sticky (mode 1777) directory is
+# NOT unprivileged-recoverable in the first place (verified against
+# `unlink(2)`/`rename(2)` semantics — see the `_write_payload` docstrings in
+# `app/watcher/heartbeat.py` / `app/runtime/worker_heartbeat.py`). What these
+# tests verify is the writer's *reaction* to the OS raising `PermissionError`
+# on the truncate-write and/or the unlink: the recoverable case (this process
+# owns the file, e.g. a stale non-sticky-dir or same-uid mode-drift artifact)
+# self-heals; the unrecoverable case is logged loudly rather than discarded.
+# ---------------------------------------------------------------------------
+
+
+def test_heartbeat_writable_after_ownership_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A stale, permission-denied heartbeat file is removed and rewritten.
+
+    Simulates ownership drift by making the existing file's own write bit
+    denied to this process (mode 0o444) — reproducing the `PermissionError`
+    a real root-owned `rw-r--r--` file raises against a non-owner uid on
+    `Path.write_text`'s O_TRUNC open. Since this test process still owns the
+    file (it created it), `unlink` on it succeeds under POSIX rules even
+    inside a sticky-bit-equivalent directory — this is exactly the
+    "recoverable" half of the self-heal (self-owned stale mode drift, or a
+    non-sticky parent dir); the genuinely-root-owned-in-a-sticky-dir case is
+    an unprivileged dead end by construction (see module docstring) and is
+    covered separately by `test_unrecoverable_permission_error_is_logged_not_silent`.
+    """
+    caplog.set_level(logging.INFO)
+
+    heartbeat_dir = tmp_path / "runtime-tmp"
+    heartbeat_dir.mkdir()
+    watcher_heartbeat = heartbeat_dir / "watcher_heartbeat.json"
+    worker_heartbeat = heartbeat_dir / "worker_heartbeat.json"
+
+    # Simulate a prior write context leaving a permission-denied file behind.
+    watcher_heartbeat.write_text(json.dumps({"ts": 1.0, "stale": True}), encoding="utf-8")
+    watcher_heartbeat.chmod(stat.S_IREAD)
+    worker_heartbeat.write_text(json.dumps({"ts": 1.0, "stale": True}), encoding="utf-8")
+    worker_heartbeat.chmod(stat.S_IREAD)
+
+    monkeypatch.setenv("WATCHER_HEARTBEAT_PATH", str(watcher_heartbeat))
+    monkeypatch.setenv("WORKER_HEARTBEAT_PATH", str(worker_heartbeat))
+
+    # Container recreation after the drift: the writer ticks again and must
+    # not require any manual chown to produce a fresh, readable heartbeat.
+    write_runtime_heartbeat(ticks=1, changed=0, errors=0)
+    write_worker_heartbeat(
+        path=worker_heartbeat,
+        ticks_total=1,
+        errors_total=0,
+        outbox_path=tmp_path / "outbox.jsonl",
+    )
+
+    watcher_payload = json.loads(watcher_heartbeat.read_text(encoding="utf-8"))
+    worker_payload = json.loads(worker_heartbeat.read_text(encoding="utf-8"))
+    assert watcher_payload.get("ticks") == 1
+    assert worker_payload.get("ticks_total") == 1
+
+    # The freshly (re)created file must be world-writable so a FUTURE uid
+    # change on the same shared volume cannot reproduce the trap.
+    assert stat.S_IMODE(watcher_heartbeat.stat().st_mode) == 0o666
+    assert stat.S_IMODE(worker_heartbeat.stat().st_mode) == 0o666
+
+    # No manual chown was performed anywhere in this test — self-heal was
+    # entirely internal to the writer.
+    assert any("self-heal succeeded" in record.message for record in caplog.records)
+
+    # Reader confirms cross-container visibility is restored (the original
+    # AC's own health-status contract), not just "the file exists."
+    now = time.time()
+    watcher_ts_payload = json.loads(watcher_heartbeat.read_text(encoding="utf-8"))
+    watcher_ts_payload["ts"] = now
+    watcher_heartbeat.write_text(json.dumps(watcher_ts_payload), encoding="utf-8")
+    status = _watcher_runtime_status(now=now)
+    assert status["ok"] is True, status
+
+
+def test_unrecoverable_permission_error_is_logged_not_silent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A write failure that cannot self-heal is logged loudly, never silent.
+
+    Models the genuinely unrecoverable case (root-owned file inside a
+    sticky-bit dir, non-root non-owner writer) by making BOTH the truncate
+    write and the unlink raise `PermissionError` — the writer must not
+    swallow this into a bare `return` (the pre-#3118 behavior that produced
+    the silent, permanently-stale health status).
+    """
+    caplog.set_level(logging.ERROR)
+
+    heartbeat_dir = tmp_path / "runtime-tmp"
+    heartbeat_dir.mkdir()
+    watcher_heartbeat = heartbeat_dir / "watcher_heartbeat.json"
+    watcher_heartbeat.write_text(json.dumps({"ts": 1.0, "stale": True}), encoding="utf-8")
+
+    def _deny_write(self: Path, *args: object, **kwargs: object) -> None:
+        raise PermissionError(13, "Permission denied", str(self))
+
+    def _deny_unlink(self: Path, *args: object, **kwargs: object) -> None:
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(Path, "write_text", _deny_write)
+    monkeypatch.setattr(Path, "unlink", _deny_unlink)
+    monkeypatch.setenv("WATCHER_HEARTBEAT_PATH", str(watcher_heartbeat))
+
+    # Must not raise — the caller (watcher tick loop) cannot crash-loop on a
+    # heartbeat write failure.
+    write_runtime_heartbeat(ticks=1, changed=0, errors=0)
+
+    assert any(
+        record.levelno >= logging.ERROR and "self-heal FAILED" in record.message
+        for record in caplog.records
+    ), [r.message for r in caplog.records]
