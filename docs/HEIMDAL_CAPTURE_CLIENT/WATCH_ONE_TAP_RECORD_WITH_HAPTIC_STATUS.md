@@ -6,7 +6,7 @@ source_anchor: docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md :: §2 Platform footpr
 parent_capability: Heimdal Capture Client
 prerequisites: [HCAP-03]
 depends_on: [DELIVER_RECORDINGS_TO_WATCHED_FOLDER]
-can_parallelize_with: [DEVICE_HEALTH_PANEL_WITH_GAP_LOG]
+can_parallelize_with: [DEVICE_REGISTRATION_AND_CONSENT_SURFACE, DEVICE_HEALTH_PANEL_WITH_GAP_LOG]
 ---
 
 # Watch One-Tap Record With Haptic Status

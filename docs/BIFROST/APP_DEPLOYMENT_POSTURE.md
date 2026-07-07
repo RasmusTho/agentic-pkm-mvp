@@ -50,13 +50,16 @@ distribution to anyone else).
 - **7-day expiry:** free-provisioned apps stop launching after 7 days; re-running from Xcode
   re-signs. Practical cadence: re-install roughly weekly, or when picking up a new build — whichever
   comes first.
-- **3-app limit** per free Apple ID on device. Topology C (one shell app) spends one slot; a future
+- **3-app limit** per free Apple ID on device (commonly cited; verify against current Apple policy
+  when it starts to matter). Topology C (one shell app) spends one slot; a future
   split (capture app as its own bundle, per `APP_TOPOLOGY_AND_PLATFORMS.md :: Split triggers`) would
   spend a second.
 - **No paid-tier entitlements:** no iCloud key-value/CloudKit containers, no push notifications, no
   App Groups guarantees. Spec authors: do not design Bifrost features against these. Background
-  audio, Speech (on-device ASR), WatchConnectivity, file access, and local notifications are all
-  available on the free tier and are what B3 designs against.
+  audio, WatchConnectivity, security-scoped file access, and local notifications are all available
+  on the free tier and are what B3 designs against. (On-device ASR is deliberately NOT in that
+  list — the B3 client captures and delivers audio only; ASR stays hub-side per
+  `docs/HEIMDAL_CAPTURE_CLIENT/README.md :: The ASR ruling`.)
 - **No App Store review:** nothing ships through review under this posture, so App-Store-review risk
   (the always-on-mic concern in the split triggers) is dormant until the posture changes.
 

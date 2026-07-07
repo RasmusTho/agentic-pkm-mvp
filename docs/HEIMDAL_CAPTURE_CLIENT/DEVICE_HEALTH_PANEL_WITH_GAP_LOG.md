@@ -12,7 +12,8 @@ can_parallelize_with: [WATCH_ONE_TAP_RECORD_WITH_HAPTIC_STATUS]
 # Device Health Panel With Gap Log
 
 Target repo: **`RasmusTho/bifrost`** (Swift; hub repo holds only this spec).
-**Vault-write gate applies** (gap-log/snapshot writes): bifrost#4 + bifrost#5 merged.
+**Vault-write gate applies** (gap-log/snapshot writes): hub #3129/#3131/#3132 and bifrost#4/#5 all
+merged (README :: Gates — same gate as B2's write-bearing slices).
 
 ## Purpose
 
@@ -90,6 +91,6 @@ time, not batched in memory).
 ## Related GitHub Issues
 
 One implementation issue in `RasmusTho/bifrost` (`type:task`, `agent:blocked` — gate list: HCAP-02
-+ HCAP-04 issues + bifrost#4/#5), linking hub #3026 and this spec file. TCD hint: Sonnet / medium
++ HCAP-04 issues + hub #3129/#3131/#3132 + bifrost#4/#5), linking hub #3026 and this spec file. TCD hint: Sonnet / medium
 effort — the discipline (what persists vs what doesn't) is fully specified; implementation is
 routine.

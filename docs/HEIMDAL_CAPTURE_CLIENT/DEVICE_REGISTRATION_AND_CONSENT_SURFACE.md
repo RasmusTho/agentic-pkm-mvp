@@ -12,7 +12,8 @@ can_parallelize_with: [DISCRETE_RECORD_WITH_BACKGROUND_AUDIO, DELIVER_RECORDINGS
 # Device Registration And Consent Surface
 
 Target repo: **`RasmusTho/bifrost`** (Swift; hub repo holds only this spec).
-**Vault-write gate applies:** blocked until bifrost#4 and bifrost#5 are merged (README :: Gates).
+**Vault-write gate applies:** blocked until hub #3129/#3131/#3132 and bifrost#4/#5 are all merged
+(README :: Gates — same gate as B2's write-bearing slices).
 
 ## Purpose
 
@@ -90,5 +91,5 @@ bindings would corrupt the consent chain at its root.
 ## Related GitHub Issues
 
 One implementation issue in `RasmusTho/bifrost` (`type:task`, `agent:blocked` — gate list: HCAP-01
-issue + bifrost#4 + bifrost#5), linking hub #3026 and this spec file. TCD hint: Sonnet / medium
+issue + hub #3129/#3131/#3132 + bifrost#4/#5), linking hub #3026 and this spec file. TCD hint: Sonnet / medium
 effort — note I/O with strict truthfulness rules; shapes already exist in `YggdrasilCore`.

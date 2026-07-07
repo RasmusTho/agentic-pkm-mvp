@@ -15,10 +15,11 @@ floor") but friction-heavy and metadata-poor.
 
 Substrate facts this spec builds on (verified on hub `main` = `1ce3b013`):
 
-- **Ingress is filesystem-only.** `app/heimdal/capture_adapter.py` watches
-  `HEIMDAL_CAPTURE_WATCH_DIR` for `.m4a/.wav/.caf/.aac`, refuses still-syncing files via a
-  two-read stability guard (#3112), encrypts into the raw store idempotently by content hash, and
-  deletes the source only after the confirmed write. **There is no HTTP route for audio** and this
+- **Ingress is filesystem-only.** The capture watcher (`app/heimdal/capture_runtime.py`, which
+  reads `HEIMDAL_CAPTURE_WATCH_DIR` and drives `app/heimdal/capture_adapter.py` on a tick) admits
+  `.m4a/.wav/.caf/.aac`, refuses still-syncing files via a two-read stability guard (#3112),
+  encrypts into the raw store idempotently by content hash, and deletes the source only after the
+  confirmed write. **There is no HTTP route for audio** and this
   spec does not create one.
 - **The hub transcribes.** ASR is the shared faster-whisper engine invoked inside Heimdal's trust
   boundary on the runtime host — local-only, fail-loud, no cloud fallback (ADR-0049 §3; the
@@ -35,9 +36,10 @@ Substrate facts this spec builds on (verified on hub `main` = `1ce3b013`):
 
 Issue #3026 as originally filed asked for "on-device ASR", and the design-of-record's §3 assigns
 "the on-device ASR pipeline" to the Heimdal client. That conflicts with the **ratified** ADR-0049
-§3 architecture: one shared ASR engine on the runtime host, raw-evidence lineage
-(`raw_store` → gated reads → transcript with per-segment confidence), diarization-based
-third-party withholding, fail-loud local-only. The design-of-record's own authority header says
+§3 ruling (local-only ASR, no silent cloud fallback) as concretized by its joint source-of-truth
+`docs/HEIMDAL/FABLE_COMPANION.md` §7.3/§9-j/§9-k: one shared ASR engine on the runtime host,
+raw-evidence lineage (`raw_store` → gated reads → transcript with per-segment confidence),
+diarization-based third-party withholding, fail-loud. The design-of-record's own authority header says
 ADRs win on conflict. **Ruling encoded by this spec: the client captures and delivers audio; it
 never transcribes.** Phone-side ASR would bypass the raw seam (no lineage, no diarization
 withholding, a second ASR identity) — the same reason the Siri/App-Intents dictation channel is
@@ -88,11 +90,13 @@ streaming) stays "do not build" (R-EXTERNAL).
 
 ## Gates (slice-granular, recorded on #3026)
 
-- **Vault-write slices (4, 5) require bifrost#4 + bifrost#5** (coordinated writes + provenance —
-  the client write seam). The hub enactment trio #3129/#3131/#3132 is defense-in-depth for these
-  low-contention per-device notes, noted as adjacent, not a hard gate — unlike B2's shared-note
-  surfaces. Rationale: B1 already writes `_heimdal/**` under the same conditions; B3 adds one
-  per-device file with a single writer in practice.
+- **Vault-write slices (4, 5) carry the same gate as B2's write-bearing slices:** hub
+  #3129/#3131/#3132 (ADR-0055 enactment) **and** bifrost#4 + bifrost#5 (the client write seam) all
+  merged. This honors the recorded owner gate on Epic B ("B2/B3 remain gated on ADR-0055
+  enactment") without loosening it. Observation for the owner, stated but NOT enacted here: these
+  are low-contention per-device notes with a single writer in practice, so the hub-trio half of
+  the gate could defensibly be relaxed for HCAP-04/05 specifically — if the owner wants that, a
+  ruling comment on #3026 relaxes it auditable-ly; absent that comment, the full gate stands.
 - **Capture delivery (2, 3, 6) is not vault work** — new uniquely-named files in a non-vault
   folder, append-only semantics, no multi-writer exposure. Not gated on ADR-0055 enactment.
 - The former `agent:needs-human` posture on #3026 is discharged by decided facts: Posture A is
