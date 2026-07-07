@@ -130,3 +130,22 @@ def test_deploy_script_recreates_the_new_service() -> None:
     for line in text.splitlines():
         if line.strip().startswith(("compose pull", "compose up -d --force-recreate")):
             assert _SERVICE in line, line
+
+
+def test_deploy_script_health_gates_the_new_service() -> None:
+    """A broken heimdal-capture-watch must fail the deploy, not sit unhealthy and silent (#3111).
+
+    Before this, `health_gate` only checked api + companion-ui, so a capture-watch
+    container that crash-loops on a bad ``HEIMDAL_RAW_STORE_KEY`` would deploy "green"
+    and only be noticed later via ``docker ps``. A dedicated gate must exist, reference
+    the service's container health, and actually run in the deploy flow.
+    """
+    text = (_REPO_ROOT / "scripts" / "deploy_channel.sh").read_text(encoding="utf-8")
+    assert "capture_watch_gate()" in text, "capture_watch_gate function is missing"
+    body = text.split("capture_watch_gate()", 1)[1].split("\n}", 1)[0]
+    assert _SERVICE in body, "capture_watch_gate must reference the heimdal-capture-watch service"
+    invoked = [
+        ln for ln in text.splitlines()
+        if ln.strip().startswith("capture_watch_gate") and "()" not in ln
+    ]
+    assert invoked, "capture_watch_gate is defined but never invoked in the deploy flow"
