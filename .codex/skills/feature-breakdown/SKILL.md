@@ -15,7 +15,7 @@ Do not use this skill for:
 
 ## Canonical workflow
 
-`Docs -> Specification -> Implementation tasks -> GitHub issues -> Agent -> PR -> PR integration -> CI -> Task verification -> Merge -> Capability validation -> Acceptance -> Owner Doc`
+See `.codex/skills/README.md :: Workflow map` for the canonical chain (`PR integration` is conditional readiness/repair, not an unconditional stage). Spec-lane-specific stages on top of that chain: `Specification -> Implementation tasks`, and after Merge: `Capability validation -> Acceptance -> Owner Doc`.
 
 ## Practical modes
 

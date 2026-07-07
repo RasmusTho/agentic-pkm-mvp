@@ -120,6 +120,8 @@ Use this lane only when:
   - `.github/ISSUE_TEMPLATE/*.yml`
   - `.github/pull_request_template.md`
   - `.github/workflows/issue-pr-governance.yml`
+  - `companion-ui/docs/`
+  - `companion-ui/design_handoff/`
 - the PR does not change code, runtime behavior, contracts, or shipped reality
 
 Docs-authoring rules:

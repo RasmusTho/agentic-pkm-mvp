@@ -100,8 +100,9 @@ fails before writing; fix the store selection (`BUILDEROPS_DB_PATH`, `BUILDEROPS
 
 ## BuilderOps adoption checks
 
-When maintaining repo automations, also inspect whether recurring prompts route BuilderOps material
-without depending on human memory.
+The routing table is canonical in `.codex/skills/README.md :: BuilderOps Vault routing`; below is the
+automation-specific application. When maintaining repo automations, also inspect whether recurring
+prompts route BuilderOps material without depending on human memory.
 
 - Automations that inspect delivery learning must read BuilderOps `LearningSignal` records first and
   use `docs/learning-log.md` only for historical or explicit compatibility fallback entries.

@@ -1,6 +1,6 @@
 ---
 name: bug-to-issue
-description: "Create a GitHub Issue whenever a bug is discovered during analysis, testing, review, or runtime observation. Use when Codex identifies a defect, regression, crash, or contract mismatch and needs to open a compliant issue in the target repo with correct labels, body sections, and ready/needs-human status."
+description: "Create a GitHub Issue whenever a bug is discovered during analysis, testing, review, or runtime observation. Use when a builder agent identifies a defect, regression, crash, or contract mismatch and needs to open a compliant issue in the target repo with correct labels, body sections, and ready/needs-human status."
 ---
 
 # Bug To Issue
@@ -37,6 +37,7 @@ This is the hot-path defect intake lane, not the cold-path maintenance lane.
    - Add `agent:ready` only if the scope is bounded, testable, and unblocked.
    - Otherwise add `agent:needs-human` or `agent:blocked`.
 5. Project:
+   - Run the add-item / Set Project Status operations from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md`.
    - Add the new Issue to Project `Agent Delivery Control Plane`.
    - Set Status to match the agent-state label: `agent:ready` → `Ready`; otherwise (`agent:blocked`, `agent:needs-human`) → `Backlog`.
 6. Output receipt: issue number, labels set, Project Status set, and whether it was created or updated.

@@ -14,7 +14,8 @@ turn validated local changes into a truthful branch, commit, pushed head, and PR
 
 ## Canonical workflow position
 
-`Docs -> Issue -> Project -> Issue maintenance -> Agent -> Publish PR -> PR integration -> CI -> Verification -> Project/doc closure -> Owner Doc`
+See `.codex/skills/README.md :: Workflow map` for the canonical chain. `PR integration` sits on the
+conditional path — only when readiness/repair work is still needed before verification.
 
 ## Entry conditions
 
@@ -119,7 +120,7 @@ Brief summary of bounded outcome
 
 Optional detailed explanation of why this change is needed.
 
-Co-Authored-By: <agent identity> <noreply@anthropic.com>
+Co-Authored-By: <agent identity> <agent noreply address>
 EOF
 )"
 ```
@@ -128,7 +129,7 @@ Commit message must:
 - Start with imperative verb (Fix, Add, Update, Rebuild, etc.)
 - Summarize the bounded outcome, not the mechanical changes
 - Be truthful about scope
-- Replace `<agent identity>` in the `Co-Authored-By` trailer with the actual agent identity producing the commit; do not copy a hardcoded model name from this template
+- Replace `<agent identity> <agent noreply address>` in the `Co-Authored-By` trailer with the actual agent identity and its own noreply address producing the commit (e.g. Claude's `noreply@anthropic.com`, Codex/ChatGPT's own noreply domain); do not copy a hardcoded model name or a different agent's domain from this template
 
 ### Branch-Truth Gate — Pre-Push (mandatory before Step 5) [branch-truth-gate]
 
@@ -246,11 +247,8 @@ Pre-push PR-body contract gate:
   - governance lane: `- [x] Governance lane`
   - direct repair: a complete `## Direct Repair` block with `Type:`, `Reason:`, `Validation:`, and `Issue required: no`
 - If none is present, stop and repair the PR body before publication.
-- Verify BuilderOps Routing per tier (`docs/development/GOVERNANCE_PROPORTIONALITY.md`):
-  - Tier 2+: the body must include `## BuilderOps Routing`. If no BuilderOps object was created,
-    the section must still explain why the work did not produce operational BuilderOps material.
-  - Tier 1 (docs/governance lane): the section may be omitted when nothing was routed — absence
-    means `none`. Never leave the section present but unfilled.
+- Verify BuilderOps Routing per tier — see the `## Core rules` PR-body machinery rule above
+  (`docs/development/GOVERNANCE_PROPORTIONALITY.md`); never leave the section present but unfilled.
 
 Direct Repair block placement: prefer placing the `## Direct Repair` block as the first section of the PR body (before `## Summary`). The governance check accepts the block in any position — first, middle, or last — but first placement is preferred for reviewer clarity.
 

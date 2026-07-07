@@ -137,6 +137,8 @@ Approved docs-authoring surfaces:
 - `.github/ISSUE_TEMPLATE/*.yml`
 - `.github/pull_request_template.md`
 - `.github/workflows/issue-pr-governance.yml`
+- `companion-ui/docs/`
+- `companion-ui/design_handoff/`
 
 Rules:
 

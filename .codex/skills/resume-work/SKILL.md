@@ -109,8 +109,8 @@ while work is unfinished. Progressive and opportunistic — not a report after e
   ```
 
 - Do this without asking the user. It is cheap insurance, not a checkpoint system.
-- Forward-compatible: when BuilderOps Vault is available, this is `AgentWorklog` material.
-  The file is the always-on default; never block on the Vault.
+- BuilderOps Vault is available and this is `AgentWorklog` material (`app/builderops/cli.py ::
+  create-worklog`). The file stays the always-on default; never block recovery on the Vault.
 
 ## Stay in bounds
 
