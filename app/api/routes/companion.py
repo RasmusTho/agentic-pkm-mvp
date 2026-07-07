@@ -1847,7 +1847,7 @@ def _ingest_binding_state(vault_root: Path) -> IngestBindingResponse:
     except Exception:
         logger.warning("ingest binding status check failed", exc_info=True)
         return IngestBindingResponse(
-            state="unknown",
+            state="unbound",
             bound=False,
             detail="ingest binding status could not be determined",
             watcher_vault_path=None,
