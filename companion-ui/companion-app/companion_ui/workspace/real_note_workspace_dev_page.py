@@ -114,6 +114,13 @@ class DevPageState:
     runtime_vault_name: str = "unresolved"
     runtime_vault_channel: str = "unknown"
     runtime_vault_provenance: str = "unresolved"
+    # Ingest-binding visibility (#3119): whether the watcher/worker are
+    # actually bound to the runtime-selected vault, distinct from whether the
+    # vault itself is reachable (`runtime_vault_provenance`). "unknown" means
+    # no vault is selected yet, so there is nothing to compare against.
+    runtime_ingest_state: str = "unknown"
+    runtime_ingest_bound: bool = True
+    runtime_ingest_detail: str = ""
     canvas_session_id: str | None = None
     canvas_session_state: str = "idle"
     canvas_user_present: bool = False
@@ -464,6 +471,9 @@ class RealNoteWorkspaceDevPage:
             runtime_vault_name=(runtime.get("vault_identity") or {}).get("vault_name") or "unresolved",
             runtime_vault_channel=(runtime.get("vault_identity") or {}).get("channel") or "unknown",
             runtime_vault_provenance=(runtime.get("vault_identity") or {}).get("provenance") or "unresolved",
+            runtime_ingest_state=(runtime.get("ingest") or {}).get("state") or "unknown",
+            runtime_ingest_bound=bool((runtime.get("ingest") or {}).get("bound", True)),
+            runtime_ingest_detail=(runtime.get("ingest") or {}).get("detail") or "",
             canvas_session_id=canvas.get("session_id"),
             canvas_session_state=session_state,
             canvas_user_present=bool(canvas.get("user_present", False)),
@@ -979,6 +989,9 @@ class RealNoteWorkspaceDevPage:
             "runtime_vault_name": self.state.runtime_vault_name,
             "runtime_vault_channel": self.state.runtime_vault_channel,
             "runtime_vault_provenance": self.state.runtime_vault_provenance,
+            "runtime_ingest_state": self.state.runtime_ingest_state,
+            "runtime_ingest_bound": self.state.runtime_ingest_bound,
+            "runtime_ingest_detail": self.state.runtime_ingest_detail,
             "canvas_session_id": self.state.canvas_session_id,
             "canvas_session_state": self.state.canvas_session_state,
             "canvas_user_present": self.state.canvas_user_present,

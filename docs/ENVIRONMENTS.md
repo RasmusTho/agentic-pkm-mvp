@@ -84,6 +84,29 @@ When the runtime runs in containers, the `VAULT_ROOT` runtime binding has **two 
 
 Writing the host path into the container's `VAULT_ROOT` is what made `resolve_vault_root()` raise `VaultRootMisconfiguredError` and the API 503 (#2141): the host path does not exist inside the container. The no-vault idle posture omits both `VAULT_HOST_ROOT` and the generated in-container `VAULT_ROOT`. `VAULT_HOST_ROOT` is a mount-machinery surface, not a vault-selection surface — it describes *where the one bound content vault is reached from* on the host, not *which* vault is active.
 
+### Companion UI vault selection vs. watcher/worker ingest binding (#3119)
+
+A **third** independent binding slot exists alongside the two above, and it is the one most likely to silently diverge from the human's expectation: the **watcher/worker's own boot-time binding**, governed by `WATCHER_VAULT_PATH` (`app/watcher/config.py`), not by `VAULT_ROOT` and not by the API process's in-process `VaultManager` selection.
+
+This split is **deliberate, documented architecture**, not a bug: the watcher is a background daemon with an independent lifecycle, and converging it onto the HTTP process's in-memory `VaultManager` singleton would couple a background daemon to an HTTP runtime boundary it must not own (`app/watcher/config.py` module docstring, #2476 — "document the split, do not converge"). Three binding slots, three sources:
+
+- **API vault selection** — `VaultManager` in-process state (`app/vault/manager.py`), set by `POST /api/companion/vault/select` / `/vault/initialize`. This is what "vault selected through the Companion UI" means.
+- **`VAULT_ROOT` runtime binding** — the API process's own env/boot pointer (§Vault terminology above), read by `resolve_vault_root()` / `resolve_optional_vault_root()`.
+- **Watcher/worker ingest binding** — `WATCHER_VAULT_PATH`, read once at watcher boot (`RegistryConfig.from_env` / `WatcherConfig.from_env`) and frozen for the process lifetime; there is no live rebind on a later API-side selection.
+
+**The gap this creates.** A vault chosen or initialized entirely through the Companion UI picker (the primary new-user path, #3102) — with no prior `VAULT_HOST_ROOT`/`WATCHER_VAULT_PATH` binding — sets only the first of these three. The watcher/worker continue watching whatever (if anything) `WATCHER_VAULT_PATH` pointed to at container boot. A capture can therefore write successfully to disk while remaining permanently invisible to ingest/embed/retrieval, with no error surfaced anywhere (#3119).
+
+**Resolution: make the divergence visible, not silently self-healing.** Rather than restructuring the watcher's boot-time-frozen config/tick loop to support live rebind (a materially larger change to an intentionally independent daemon), the API compares its selected vault path against the path the watcher last self-reported via its heartbeat file (`app/watcher/heartbeat.py :: write_registry_heartbeat`, which already carries a `vault_path` field every tick). This comparison lives in `app.api.routes.ingest_binding.ingest_binding_status()` and reports one of four states:
+
+- `"bound"` — the watcher's fresh heartbeat confirms the same vault path.
+- `"diverged"` — the watcher is alive but bound to a *different* vault.
+- `"unbound"` — no heartbeat yet, or the last heartbeat is stale (watcher not confirmed running at all).
+- `"unknown"` — no vault is selected yet, so there is nothing to compare against.
+
+This status is surfaced on two paths: `GET /api/companion/workspace`'s `runtime.ingest` block (consumed by the Companion UI shell as an `workspace-ingest-unbound-banner`, independent of the existing vault-unreachable banner), and `POST /api/companion/capture`'s `ingest_warning` field (an advisory string alongside the `written` acknowledgement — the write itself is never gated or delayed by this check). Both degrade to a visible warning rather than raising, so a heartbeat-read failure cannot itself become a new outage.
+
+Full live propagation (watcher automatically rebinding without restart) remains out of scope here — see #2143 (multi-vault registry) for where that would eventually live.
+
 ### Full-host access for in-process vault selection (#2310)
 
 After Option-2 (#2309/#2325) the human selects any vault on any disk in-process, so the container must see the host filesystem. `api` / `worker` / `watcher` additionally bind-mount the host `/Users` and `/Volumes` at **identical container paths**, so a selected host-absolute vault path (internal SSD / iCloud Obsidian under `/Users/...`, or a `/Volumes/T7` external vault) resolves transparently in-container with **no path translation**. The mounts target the parents `/Users` / `/Volumes` (never a specific volume) so the stack boots when the T7 is unplugged. Activation requires Colima to share those host directories — see [`docs/ops/COLIMA_FULL_HOST_MOUNT.md`](ops/COLIMA_FULL_HOST_MOUNT.md).

@@ -1270,6 +1270,28 @@ def _render_vault_unreachable_banner(last_sync: str = "") -> str:
     )
 
 
+def _render_ingest_unbound_banner(detail: str = "") -> str:
+    """Surface #3119: the watcher/worker are not confirmed bound to the
+    selected vault. A vault chosen or initialized through the Companion UI
+    picker sets an in-process API selection only — the watcher/worker bind
+    their own vault path independently at boot (#2476, a deliberate split,
+    not a bug). Without this banner that divergence is completely silent:
+    captures succeed on disk while never being ingested/findable.
+
+    Mirrors ``_render_vault_unreachable_banner``'s shape (div + testid +
+    message + link) so it reads as the same passive-availability class of
+    warning rather than new UI machinery.
+    """
+
+    message = _e(detail) if detail else "captures here may not be ingested, indexed, or made findable."
+    return (
+        f'<div class="workspace-ingest-unbound-banner" data-testid="workspace-ingest-unbound-banner">'
+        f"<span>Ingest not yet bound to this vault — {message}</span>"
+        f'<a href="#workspace-runtime-status" class="banner-retry-link" data-testid="workspace-ingest-retry">retry</a>'
+        f"</div>"
+    )
+
+
 def _render_note_not_found(note_path: str) -> str:
     safe_path = _e(note_path)
     return (
@@ -2592,6 +2614,19 @@ def _render_note_section(fields: dict) -> tuple[str, str]:
         if vault_unreachable
         else ""
     )
+    # #3119 — independent of vault reachability: the watcher/worker may be
+    # bound to a different vault (or no vault at all) than the one the API
+    # just selected/served this note from. Only render when the runtime
+    # actively reported a mismatch (`unbound`/`diverged`); `unknown` (nothing
+    # selected yet) and `bound` are both silent, matching the passive-signal
+    # convention `vault_unreachable` already uses.
+    ingest_binding_state = str(fields.get("runtime_ingest_state") or "unknown")
+    ingest_unbound = ingest_binding_state in ("unbound", "diverged")
+    ingest_unbound_banner_html = (
+        _render_ingest_unbound_banner(detail=str(fields.get("runtime_ingest_detail") or ""))
+        if ingest_unbound
+        else ""
+    )
     # Direct human editing is always available, so "Canvas off" no longer means
     # the note is read-only — the misleading read-only pill is suppressed (#1447).
     # A genuine write-blocked state surfaces with explicit copy at save time.
@@ -2913,6 +2948,7 @@ def _render_note_section(fields: dict) -> tuple[str, str]:
     <div class="workspace-main">
       {workspace_header_strip_html}
       {vault_unreachable_banner_html}
+      {ingest_unbound_banner_html}
       <header
         class="note-header active-note-header"
         data-testid="workspace-note-header"

@@ -62,6 +62,7 @@ from app.domain.commitments import (
     CommitmentRecord,
     query_next_and_waiting_commitments,
 )
+from app.api.routes.ingest_binding import ingest_binding_status
 from app.events.panel import (
     NoteRef,
     PanelActionMapping,
@@ -133,6 +134,24 @@ class VaultIdentityState(BaseModel):
     vault_name: str
     channel: str
     provenance: str
+
+
+class IngestBindingResponse(BaseModel):
+    """Whether the watcher/worker are actually bound to the selected vault (#3119).
+
+    Vault *selection* (this API process's in-process ``VaultManager`` state)
+    and vault *ingest binding* (the watcher/worker's own boot-time
+    ``WATCHER_VAULT_PATH``) are independent by design (#2476). This surfaces
+    that divergence instead of leaving it silent: ``state`` is one of
+    ``"bound"`` (watcher confirmed on the same vault), ``"diverged"`` (watcher
+    alive but bound elsewhere), ``"unbound"`` (no fresh watcher heartbeat), or
+    ``"unknown"`` (no vault selected yet to compare against).
+    """
+
+    state: str
+    bound: bool
+    detail: str
+    watcher_vault_path: str | None = None
 
 
 class CompanionTTSRequest(BaseModel):
@@ -1255,6 +1274,7 @@ class RuntimeState(BaseModel):
     api_base_url_label: str
     trace_id: str
     vault_identity: VaultIdentityState
+    ingest: IngestBindingResponse
     reorient: dict[str, list[dict[str, str | bool]]] = Field(default_factory=dict)
     resurface: dict[str, list[dict[str, str | list[str] | bool]] | int | bool] = Field(
         default_factory=dict
@@ -1811,6 +1831,32 @@ def _vault_identity_state(vault_root: Path) -> VaultIdentityState:
         vault_name=vault_name,
         channel=channel,
         provenance=provenance,
+    )
+
+
+def _ingest_binding_state(vault_root: Path) -> IngestBindingResponse:
+    """Report whether the watcher/worker are actually bound to ``vault_root``.
+
+    Never raises — a heartbeat read failure degrades to ``"unbound"`` rather
+    than breaking the workspace/capture response (#3119: making the gap
+    visible must not introduce a new outage of its own).
+    """
+
+    try:
+        status = ingest_binding_status(selected_vault_path=str(vault_root))
+    except Exception:
+        logger.warning("ingest binding status check failed", exc_info=True)
+        return IngestBindingResponse(
+            state="unbound",
+            bound=False,
+            detail="ingest binding status could not be determined",
+            watcher_vault_path=None,
+        )
+    return IngestBindingResponse(
+        state=status.state,
+        bound=status.is_bound,
+        detail=status.detail,
+        watcher_vault_path=status.watcher_vault_path,
     )
 
 
@@ -4123,6 +4169,7 @@ def read_companion_workspace(
             api_base_url_label=_safe_api_label(),
             trace_id=trace_id,
             vault_identity=_vault_identity_state(vault_root),
+            ingest=_ingest_binding_state(vault_root),
             reorient=_reorient_state(signals=orientation_signals),
             resurface=_resurface_state(safe_note_path, signals=orientation_signals),
             commitments=_commitment_surface_state(vault_root),
