@@ -86,8 +86,14 @@ the live `VaultManager` context. `WATCHER_VAULT_PATH` is read once at watcher bo
 rebinds on UI vault selection — a capture can succeed while invisible to ingest (named gap,
 `docs/ENVIRONMENTS.md:94-108`). #3119 (which named this gap) closed 2026-07-07 via PR #3126, but
 that fix only adds a visible `ingest_binding` warning surface (`diverged`/`unbound`/`unknown`) —
-it does not rebind. The live rebind is not yet built and is tracked under the open epic #2143
-(instance manages multiple vaults).
+it does not rebind. The live rebind was deliberately deferred: #2476 ("document the split, do not
+converge") ruled that the watcher's independence from the HTTP process's `VaultManager` singleton
+should be preserved, not converged, and #3119's resolution and `docs/ENVIRONMENTS.md:94-108`
+explicitly point full live propagation at the future #2143 epic rather than building it now.
+**Owner ruling (2026-07-07, this audit) reverses that posture**: the watcher must be flexible
+about what it watches, with no value in a watcher bound to the wrong vault, and the design should
+support redirecting a running watcher rather than only detecting divergence. SETTINGS-05
+implements this and explicitly supersedes #2476's verdict.
 
 ### F5 — Receipts are inconsistent across writers
 
@@ -171,7 +177,8 @@ Minimal kernel = SET-1 + SET-2 + SET-3; the rest is defense in depth.
   either is deleted, becomes the source, or is generated as a projection; a reconciliation check
   detects divergence. *Violated today* (F3, F6).
 - **SET-7 `vault_selection_rebinds_consumers` (MUST)** — vault selection/switch rebinds every
-  vault-scoped settings consumer (watcher included). *Violated today* (F4, #3119).
+  vault-scoped settings consumer (watcher included). *Violated today* (F4). This invariant
+  supersedes the deliberate "do not converge" posture of #2476 per the owner's 2026-07-07 ruling.
 
 ## 5. Target design (proposal — advisory until owner ruling)
 
@@ -202,9 +209,9 @@ Minimal kernel = SET-1 + SET-2 + SET-3; the rest is defense in depth.
    a receipt. Fail-loud on invalid: degrade to last-valid with a visible health signal, never
    silent defaults (SET-1).
 4. **Sequencing (boot → vault).** env bootstrap → instance md → `no_vault` idle (unchanged,
-   #2005) → vault selected → vault settings load + **rebind subscribers via `VaultChangedEvent`**
-   (the remaining scope of the open epic #2143 — #3119 already closed with a partial
-   visible-signal fix, not the rebind) → watcher ingests subsequent edits. Settings that exist
+   #2005) → vault selected → vault settings load + **rebind subscribers via `VaultChangedEvent`**,
+   watcher included (owner-ruled 2026-07-07, superseding #2476's "do not converge" and #3119's
+   visible-signal-only fix) → watcher ingests subsequent edits. Settings that exist
    pre-vault stay instance-scoped; nothing vault-scoped is needed to boot (SET-5 already
    guarantees this). Vault init scaffolds `settings/` per the already-shipped R5/#2312 decision
    (Option A, `docs/ENVIRONMENTS.md:56`) — explicit init only, never on open; no new ruling needed.
@@ -224,7 +231,7 @@ Minimal kernel = SET-1 + SET-2 + SET-3; the rest is defense in depth.
 | S2 | Canonicalize one settings location; migrate A/C/health sources; compat-read old paths one release with loud deprecation (SET-2) | CI gate test `tests/architecture/test_settings_single_location.py`; grep gate on new paths | Resolves F2 doc contradiction across SETTINGS/ENVIRONMENTS/VAULT_AND_SETTINGS_CONTEXT |
 | S3 | Unify receipts: compiler/auto-heal, watcher delta, agent writes all emit `SettingsWriteReceipt` (SET-3) | `tests/vault/test_settings_receipt_durable.py` extended to every writer | Extends #2475 UI-boundary receipt work |
 | S4 | Single default registry; collapse duplicated env defaults (SET-4) | one declaration site per key; divergence test | New; fixes LLM_TIMEOUT/WATCHER_ENABLE splits |
-| S5 | Vault-selection rebind for watcher + all vault-scoped consumers (SET-7) | test: select vault via API → watcher ingest binding follows | **Extends #2143** (open epic); #3119 already closed with a partial visible-signal fix (PR #3126), not the rebind |
+| S5 | Vault-selection rebind for watcher + all vault-scoped consumers (SET-7) | test: select vault via API → watcher ingest binding follows | Supersedes #2476's "do not converge" verdict per owner ruling; #3119 already closed with a partial visible-signal fix (PR #3126), superseded here with a real rebind. Not a duplicate of #2143 (that epic is about serving multiple vaults concurrently; this is one watcher following one active selection). |
 | S6 | Prompts-as-settings: `settings/prompts/*.md` become runtime SoT; delete the unused prompt loader + mirrors once superseded (SET-6) | ask prompt edited in vault md changes `/api/ask` behavior; drift check for remaining mirrors | Enacts prompt-contract-mirror memory; supersedes `docs/settings/prompts/` |
 | S7 | De-hardcode wave 1 (models/voices/rerank/thresholds/watcher tunables), tier-gated | each migrated key visible in `settings explain` with origin | Extends `vault-settings-roadmap.md :: extract configurable hardcoded values`; TTS voice decision (#1702) becomes a setting |
 | S8 | Owner-doc consolidation + schema cleanup (F6, F7) | DOCS_INDEX single owner row; orphan schema deleted | docs-authoring lane |
