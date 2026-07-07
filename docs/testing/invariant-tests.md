@@ -790,6 +790,57 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 - **Related docs / contracts / ADRs:** [semantic-dimensions](../architecture/semantic-dimensions.md) (`episode_ref`), [functional-ontology](../architecture/functional-ontology.md) (`Episode`); ADR-0051, ADR-0029.
 - **Related issues:** none yet (downstream capture epic; grounded in [EPISODE_AS_ONTOLOGICAL_PRIMITIVE](../research/EPISODE_AS_ONTOLOGICAL_PRIMITIVE.md)).
 
+## Vault multi-writer consistency invariants (ADR-0055)
+
+### stale_write_rejected_for_rewritten_notes
+
+- **Purpose:** A writer to a rewritten-class vault note (human prose, `_heimdal/**` control notes,
+  companion notes) must not silently overwrite a version that changed since it was read; the collision
+  is detected and staged as a conflict artifact, never dropped.
+- **Protected principle:** the vault is canonical human-authored store; a collision must be loud, not silent.
+- **Affected boundaries:** WSP, HKA.
+- **Required fixture / data:** generalized `OptimisticWriteGuard` (`app/components/concurrency.py:118-131`)
+  beyond the panel-watcher family; the note-class table from ADR-0055 item 6 (T2 enactment).
+- **Expected failure mode:** two writers (Mac runtime, Obsidian human, or a Bifrost client) edit the same
+  rewritten-class note within the same window and one edit disappears with no trace.
+- **Current enforcement:** `gate` (target, per ADR-0055 item 7); not yet implemented — enactment tracked
+  as T2/T3 in `docs/audits/YGGDRASIL_ECOSYSTEM_2026-07-06.md` §10.
+- **Eventual test path:** `tests/invariants/test_vault_multiwriter.py::test_stale_write_rejected_for_rewritten_notes` (future).
+- **Related docs / contracts / ADRs:** ADR-0055, ADR-0053 (superseded); `docs/audits/YGGDRASIL_ECOSYSTEM_2026-07-06.md` §2/§7 (INV-VW1).
+- **Related issues:** #3114, #3020, #3024.
+
+### write_guard_asserted_at_every_write_seam
+
+- **Purpose:** Every vault write seam — including `append_note_relative`, not just `write_note_relative` —
+  asserts `WriteGuard` before writing.
+- **Protected principle:** a single write-health gate governs all vault mutation; no seam is exempt.
+- **Affected boundaries:** WSP.
+- **Required fixture / data:** `app/knowledge/write_ops.py:71,110-127`.
+- **Expected failure mode:** `append_note_relative` writes to the vault while the runtime is in an
+  unhealthy/safe-mode state, because it is not asserted like its `write_note_relative` sibling.
+- **Current enforcement:** `gate`; violated today at `append_note_relative` (`write_ops.py:118-127`) —
+  enforceable now, independent of the stale-detection mechanism above. Fix tracked as T3.
+- **Eventual test path:** `tests/invariants/test_vault_multiwriter.py::test_write_guard_asserted_at_every_write_seam`.
+- **Related docs / contracts / ADRs:** ADR-0055; `docs/audits/YGGDRASIL_ECOSYSTEM_2026-07-06.md` §2/§7 (INV-VW2).
+- **Related issues:** #3114, #3020.
+
+### icloud_conflict_artifacts_never_silently_ingested
+
+- **Purpose:** iCloud conflicted-copy files (`* (conflicted copy).md` and similar) are detected and
+  quarantined by the watcher/ingest scan, never ingested as ordinary notes.
+- **Protected principle:** a detected storage-layer conflict must be surfaced, not silently absorbed into
+  the knowledge graph as duplicate content.
+- **Affected boundaries:** SIP, WSP.
+- **Required fixture / data:** the vault scan filter (`app/vault/manager.py:241`); a fixture directory
+  containing a synthetic conflicted-copy filename.
+- **Expected failure mode:** `Note (conflicted copy).md` is ingested as a distinct ordinary note, doubling
+  content and confusing search/graph results.
+- **Current enforcement:** `doctor` (target, per ADR-0055 item 3 and item 7's posture for this narrower
+  case); absent today — the only filter is `filename.endswith(".md")`.
+- **Eventual test path:** `tests/invariants/test_vault_multiwriter.py::test_icloud_conflict_artifacts_never_silently_ingested`.
+- **Related docs / contracts / ADRs:** ADR-0055; `docs/audits/YGGDRASIL_ECOSYSTEM_2026-07-06.md` §2/§7 (INV-VW3).
+- **Related issues:** #3114, #3020.
+
 ## Coverage map (invariant → principle → test)
 
 | Invariant | Matrix principle(s) | Primary boundary | Enforcement | Test path |
@@ -831,6 +882,9 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 | staged_drafts_invisible_to_retrieval | #1,#9 | RCA/GOV | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/expansion/test_create_draft_lifecycle.py` |
 | expansion_requires_activation_record | #9 | GOV | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/activation/test_expansion_gate_records.py` |
 | curation_citations_resolve | #3,#9 | GOV/RCA | static + runtime | `tests/invariants/test_curation_invariants.py`, `tests/curation/test_contradiction_citations_resolve.py` |
+| stale_write_rejected_for_rewritten_notes (INV-VW1) | vault canonical + fail-loud | WSP/HKA | gate (target) | `tests/invariants/test_vault_multiwriter.py` (future) |
+| write_guard_asserted_at_every_write_seam (INV-VW2) | vault canonical + fail-loud | WSP | gate — violated today | `tests/invariants/test_vault_multiwriter.py` (future) |
+| icloud_conflict_artifacts_never_silently_ingested (INV-VW3) | vault canonical + fail-loud | SIP/WSP | doctor (target) | `tests/invariants/test_vault_multiwriter.py` (future) |
 
 ## Heimdal invariants (HEIM-1..14) — sibling registry
 

@@ -1,14 +1,14 @@
-State: Accepted (owner decision 2026-07-06). **Interim posture only.** Records that concurrent writes to the same vault note currently resolve as silent last-write-wins, and that this risk is knowingly accepted — unconstrained — for Epic B's B1 wave, pending a full multi-writer vault-consistency ADR that MUST land before B2 (tracked #3114). Supersede via that full ADR. The native-app topology design-of-record is committed alongside at `docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md`.
-Doc role: Decision record (ADR)
-Authority: Authoritative for (a) the *interim* risk posture on concurrent vault-note writes during the B1 wave, and (b) the requirement that the full model be decided (ADR-class) before B2 starts. It does **not** design the consistency mechanism — that is the deferred full ADR (#3114), scoped by `docs/audits/YGGDRASIL_ECOSYSTEM_2026-07-06.md` §2. Subordinate to the markdown-canonical rule of `docs/COGNITIVE_PROSTHESIS_CHARTER.md`.
+State: **Superseded** by [ADR-0055](./ADR-0055-vault-multiwriter-consistency-model.md) (2026-07-07), which resolves #3114 in full. Retained for history — records the interim posture that carried Epic B's B1 wave. The native-app topology design-of-record referenced below is committed alongside at `docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md`.
+Doc role: Decision record (ADR, superseded)
+Authority: Historical only. The full multi-writer vault-consistency model is now [ADR-0055](./ADR-0055-vault-multiwriter-consistency-model.md); read this ADR for the B1-wave interim posture it recorded, not as current policy.
 Owner: Architecture (Rasmus)
-Temporal class: Interim decision (expires when the full multi-writer vault-consistency ADR lands; that must be before B2).
-Source of truth: This ADR + `docs/audits/YGGDRASIL_ECOSYSTEM_2026-07-06.md` §2/§7/§9 + Epic B #3020 / B1 #3023 / decision #3114.
+Temporal class: Superseded (was: interim decision, expired 2026-07-07 when ADR-0055 landed).
+Source of truth: [ADR-0055](./ADR-0055-vault-multiwriter-consistency-model.md); this document is retained for history only.
 
 # ADR-0053: Interim multi-writer vault-write posture — accept last-write-wins for B1; decide the full model before B2
 
 **Date:** 2026-07-06
-**Status:** Accepted (interim; superseded by the full multi-writer vault-consistency ADR, #3114, before B2)
+**Status:** Superseded by [ADR-0055](./ADR-0055-vault-multiwriter-consistency-model.md) (2026-07-07)
 
 ---
 
