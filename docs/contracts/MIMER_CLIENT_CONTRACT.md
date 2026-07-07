@@ -70,7 +70,7 @@ Implementation: `app/api/routes/capture.py`. Request body is exactly `{"text": "
 
 Governed chain, in order: WriteGuard gate (`companion.capture.append`) → GovernedWriteAdapter issues a DecisionToken (write class `vault_capture_append`) → deterministic append via `app.knowledge.write_ops.append_note_relative` returning a runtime `WriteReceipt` → AuthorityReceipt recorded → `capture.inbox.appended` outbox event (JSONL audit log + DB outbox mirror) persisted **before** success is acknowledged.
 
-Success response (`200`): `{outcome: "written", note_path, operation, adapter, captured_at, trace_id, events_emitted, governed_write}` — `governed_write` carries the PolicyDecision, DecisionToken, and AuthorityReceipt verbatim. The client MUST surface this receipt, not fabricate its own acknowledgement.
+Success response (`200`): `{outcome: "written", note_path, operation, adapter, captured_at, trace_id, events_emitted, governed_write, ingest_warning}` — `governed_write` carries the PolicyDecision, DecisionToken, and AuthorityReceipt verbatim; `ingest_warning` (nullable) is set when the write landed but downstream ingest signaling degraded — the capture is durable, the index may lag. The client MUST surface this receipt, not fabricate its own acknowledgement.
 
 Error contract (a client must handle each named state; never retry blindly):
 
@@ -79,14 +79,14 @@ Error contract (a client must handle each named state; never retry blindly):
 | 422 | (schema) / `empty_capture` | Extra fields, or whitespace-only text; nothing written | Fix the request; surface to human |
 | 409 | `writeguard_blocked` | WriteGuard denies writes; `reason` included; nothing written | Surface reason verbatim; do NOT fall back to a direct FS write |
 | 409 | `inbox_convention_unresolved` | Inbox note convention could not resolve; nothing written | Surface to human |
-| — | `selection_required` (structured JSON) | No active vault selected | Surface; the human selects a vault; never guess a vault |
+| — | vault-selection state (structured JSON: `{state: "vault_selection_required", reason, …}` — `reason` ∈ `vault_root_misconfigured` / `no_vault_bound` / `uninitialized`; there is no `error` field) | No active vault selected | Match on `state`, not `error`; surface; the human selects a vault; never guess a vault |
 | 500 | `authority_receipt_persistence_failed`, state `not_acknowledged` | **The append may have landed** but its AuthorityReceipt could not be persisted | Do NOT blind-retry (duplicate-append risk). Verify by reading the inbox note (§6 W5) or hand to the human |
 
 ### 4.2 Read surface and the uuid→path gap
 
 - `GET /search?q=` returns `{"results": [{uuid, title}, …]}`, fixed k=10. A retrieval failure propagates as an error — no silent filler (#2989).
 - `POST /api/ask` takes `{"question": …}` (alias `query`; optional `zone_strategy`) and returns an answer with per-source attribution: each source carries `uuid, title, origin, plane, zone, path`.
-- `GET /api/artifacts/note?note_path=` reads a note **by vault-relative path** (absolute paths and traversal rejected with 400 `invalid_path`; missing note → 404 `note_not_found`). Response: `{artifact_id, note_path, title, body, content_hash}`.
+- `GET /api/artifacts/note?note_path=` reads a note **by vault-relative path** (absolute paths and traversal rejected with 400 `invalid_path`; missing note → 404 `note_not_found`). Response: `{artifact_id, note_path, title, body, content_hash}` — note the response's `note_path` is the **absolute resolved filesystem path**, not the vault-relative path the request took; clients must not echo it to other hosts or store it as a stable identifier.
 
 **The gap, stated honestly:** search returns *uuid*; note-fetch keys by *path*; no endpoint resolves uuid→path. **v1 posture: thin read + filesystem enrichment.** A client that needs the body behind a search hit either (a) uses `/api/ask`, whose sources include `path`, or (b) resolves the uuid itself against its filesystem view of the vault (frontmatter `uuid` field). A uuid-resolving fetch or enriched search payload is follow-on work (§9 F3), not something a client may emulate by inventing a hidden uuid→path store it treats as authoritative (invariant 3: any such cache is rebuildable and disposable).
 
@@ -203,7 +203,7 @@ Named follow-on work; each routes through `feature-breakdown`/`docs-to-issue`, n
 - **F1 — Capture provenance field + per-agent actor.** The capture schema is `{text}` with `extra="forbid"`; the actor is hardcoded `companion.capture`, so a Claude-app capture and a Bifrost capture are indistinguishable in DecisionToken/AuthorityReceipt/event. Add an optional provenance object to the schema and thread it through the governed chain.
 - **F2 — Auth coverage + per-agent/per-device identity (first hardening slice).** Apply the existing `X-API-Key` machinery to the four client routes and introduce per-client identity/keys; serves both families (and Bifrost B1's remote posture). Owner-ruled as the first hardening slice, not a v1 blocker.
 - **F3 — uuid-resolving note fetch or enriched search payload.** Close the §4.2 uuid→path gap at the API instead of by client-side filesystem enrichment.
-- **F4 — API versioning + published OpenAPI for the client surface.** The hub API is unversioned and `api/openapi.yaml` documents 2 of ~21 route modules (audit §3); a client-publishable contract needs both.
+- **F4 — API versioning + published OpenAPI for the client surface.** The hub API is unversioned and `api/openapi.yaml` documents 2 of 23+ route modules (audit §3; the surface is still growing); a client-publishable contract needs both.
 - **F5 — Client-visible idempotency key on capture.** Lets a client retry safely after `not_acknowledged`/timeout instead of verify-by-read (§6 W5).
 - **F6 — Full multi-writer consistency model: enactment.** The decision itself is made — `docs/adr/ADR-0055-vault-multiwriter-consistency-model.md` (Accepted 2026-07-07) resolves #3114 and gates B2 (#3024). What remains is **T2/T3 enactment**: the note-class classification table, closing INV-VW2 (`append_note_relative` WriteGuard coverage), the INV-VW1 stale-check generalization, INV-VW3 conflict-copy handling, and writer provenance at the substrate. This contract's §6 discipline is the interim client-side complement to today's unenacted mechanism, not a substitute for it.
 - **F7 — `_heimdal/**` published note-shape schema (audit G3).** Publish the `settings_notes.py` registry as a versioned schema artifact so a hub-side shape change cannot silently break a shipped Bifrost client.
