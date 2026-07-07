@@ -5,8 +5,8 @@ Doc role: Core SoT (deployment)
 Authority: Canonical deployment + environment-separation contract. `docs/ENVIRONMENTS.md` owns environment *selection* and *path scoping* (what data/config each channel touches); `docs/RELEASE_CHANNELS/README.md` owns *channel identity, per-channel DB isolation, promotion-plan contract, migration reversibility classification, and rollback semantics*. This document owns *how a deploy physically happens*: image build/promote, managed gateways, deploy/rollback runbook, health gates, and the proxy-trust topology. Operations, runbooks, and component docs should reference this document instead of restating deployment procedure.
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
-Last reviewed: 2026-06-29
-Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `Makefile`, `scripts/lib/companion_ui_startup.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`
+Last reviewed: 2026-07-07
+Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`
 
 ## Why this document exists
 
@@ -78,6 +78,17 @@ The pipeline builds an image **once per commit** and promotes the *same* image a
 **Identity invariant.** The image bytes for a given SHA are identical in `dev`, `test`, and `prod`. A channel never builds its own variant. Divergence between channels is expressed only through `.env.<env>` / compose env, mounted data (vault, DB volume), and ports.
 
 **Supersedes the bind-mount.** Once a channel runs a pinned image, a `git checkout`/`git pull` in the host tree no longer changes that channel's running code — by design. Deploying new code to a channel means building a new image, pushing it, bumping the pin, and recreating. The "pull without restart serves stale code" failure mode disappears because there is no live code mount to go stale.
+
+## Root-owned image bake vs. host-uid-remapped runtime user (#2991, #3047)
+
+Every channel's `api`/`worker`/`watcher`/`heimdal-capture-watch` service runs as `user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"` (`docker-compose.yaml`), populated from the host user via `scripts/export_runtime_env.sh` — not as `root`, and not as a fixed container uid. The image itself is built as `root` (`Dockerfile` has no `USER` directive), so every path `COPY . .` creates, and every directory that exists in the repo tree at build time, is `root:root`-owned in the resulting image.
+
+This is a structural mismatch: any code path that lazily creates a directory under `/app` at first use (`Path(...).mkdir(parents=True, exist_ok=True)`) fails with `PermissionError` under the non-root runtime uid unless that directory was pre-created **and** made writable by all uids at build time. Two runtime-writable surfaces have needed this treatment so far:
+
+- **`/app/tmp`** — the shared scratch/heartbeat/outbox surface (#2991), also backed at runtime by the `runtime-tmp` named volume mounted into api/worker/watcher (mount does not imply ownership by itself; the Dockerfile still pre-creates and chmods the mount point so a fresh, unmounted `/app/tmp` — e.g. bare-metal or a container without the volume — is also writable).
+- **`/app/runtime`** — the parent of every `runtime/<subdir>/...` receipt/state path defaulted by `app/**` modules (ask synthesis, expansion-gate, agent-memory, relevance, builderops, dispatcher, orientation, panel, proposals — `git grep 'Path("runtime/'`). None of these subdirectories are tracked in git (`.gitignore` lines 51-65), so `/app/runtime` does not exist in the image at all until first write; without the fix it fails the **first** `POST /api/ask` (or any other receipt-emitting request) on every freshly recreated container with `PermissionError: runtime/activation/ask_synthesis_receipts.jsonl` (#3047).
+
+**Contract:** the `Dockerfile` bakes each such surface with `RUN mkdir -p /app/<path> && chmod 1777 /app/<path>` immediately after `COPY . .`. `chmod 1777` (world rwx + sticky bit) makes the directory writable and traversable by any uid while still preventing one uid from deleting another's files — the same property `/tmp` relies on system-wide. This is the general chokepoint for the defect class: a new root-owned runtime-writable path gets its own `mkdir -p && chmod 1777` line at that Dockerfile location rather than a bespoke per-module workaround. It applies identically to `dev`/`test`/`prod` because the image is byte-identical across channels (see the identity invariant above) — there is no per-channel variant of this fix.
 
 ## Gateways as managed units
 
