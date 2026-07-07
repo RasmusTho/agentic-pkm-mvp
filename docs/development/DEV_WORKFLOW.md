@@ -296,7 +296,7 @@ Recommended anchor format:
 - examples:
   - `docs/PANEL_AGENT.md :: PA2-FREEFORM`
   - `docs/ROADMAP.md :: ORCHV2-PILOT`
-  - `docs/STATUS.md :: SEP-11`
+  - `docs/STATUS.md :: SETTINGS-PROVENANCE`
 
 Do not rely on inline `Tracked by: #...` or `Backlog: #...` markers as the primary backlog receipt.
 Those markers are now secondary convenience notes because they are not visible to other collaborators until merged.

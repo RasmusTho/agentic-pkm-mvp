@@ -30,7 +30,7 @@ def parse_anchors(section: str) -> List[Tuple[str, str | None]]:
 
     Expected format:
     - `docs/ROADMAP.md :: ORCHV2-TDD`
-    - `docs/STATUS.md :: SEP-11`
+    - `docs/STATUS.md :: SETTINGS-PROVENANCE`
     - `docs/PANEL_AGENT.md` :: accepted decision
     - #1234 / PR #1235
 

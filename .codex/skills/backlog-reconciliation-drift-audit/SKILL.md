@@ -69,7 +69,7 @@ For each inspected doc item or issue, classify exactly one state:
 - `blocked / needs-human`
 - `not actionable`
 
-Execute safe corrections and report receipts; recommend (without executing) only where `escalate human decision` applies. For each drift case, identify one concrete corrective action only:
+For each drift case, recommend one concrete corrective action only:
 
 - `create issue`
 - `update issue`

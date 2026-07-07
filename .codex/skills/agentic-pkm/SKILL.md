@@ -11,10 +11,16 @@ This is a Builder System workflow; Product/Runtime SBS impact routes via
 ## First context to load
 
 - Always read `AGENTS.md` first. It is the canonical repo builder-agent policy.
-- Reading order and the SoT hierarchy live in `AGENTS.md :: Reading order`; do not restate them here.
+- Follow `AGENTS.md :: Reading order` for the order in which to load context; do not restate that sequence here.
 - Prefer SoT docs over README. The README may be stale.
 - Use `docs/DOCS_INDEX.md` and `docs/PROJECT_KERNEL.md` as the entry points for current documentation.
-- Historical or archived docs: `docs/archive/*`.
+
+## SoT precedence (which source wins on conflict)
+
+1. Current SoT docs (identified via `docs/DOCS_INDEX.md` after reading `AGENTS.md`)
+2. Dev policy and workflow: `AGENTS.md`, `docs/development/DEV_WORKFLOW.md`
+3. Domain chapters: `docs/DATA_MODEL.md`, `docs/FRONTMATTER.md`, etc.
+4. Historical or archived docs: `docs/archive/*`
 
 ## Default working loop
 

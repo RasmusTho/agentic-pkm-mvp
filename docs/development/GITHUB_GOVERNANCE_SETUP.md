@@ -196,7 +196,7 @@ Recommended syntax in the Issue body:
 
 - `docs/PANEL_AGENT.md :: PA2-FREEFORM`
 - `docs/ROADMAP.md :: ORCHV2-TDD`
-- `docs/STATUS.md :: SEP-11`
+- `docs/STATUS.md :: SETTINGS-PROVENANCE`
 
 Recommended source-anchor style in docs when a stable item ID is warranted:
 
