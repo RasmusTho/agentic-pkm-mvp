@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.api.app import app
 from app.api.routes import ask as ask_module
+from app.components.llm.fabric import LLMBackendTimeout
 from app.retrieval.capability import RetrievalHit, RetrievalResponse
 from app.retrieval.hybrid import get_store
 
@@ -81,3 +82,29 @@ def test_ask_route_uses_retrieval_capability_contract(monkeypatch) -> None:
     finally:
         ask_module._HYBRID_WARMED = False
         get_store().set_documents([])
+
+
+def test_issue_3151_ask_timeout_propagates_structured_error(monkeypatch) -> None:
+    monkeypatch.setattr("app.api.routes.ask._ensure_hybrid_store_loaded", lambda: None)
+    ask_module._HYBRID_WARMED = True
+
+    def _timeout(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise LLMBackendTimeout(provider="ollama", timeout_seconds=0.1)
+
+    monkeypatch.setattr("app.api.routes.ask.run_ask_graph", _timeout)
+
+    client = TestClient(app)
+    try:
+        response = client.post(
+            "/api/ask",
+            json={"question": "contract path"},
+            headers={"x-trace-id": "trace-3151"},
+        )
+        assert response.status_code == 504
+        body = response.json()
+        assert body["detail"]["error"] == "llm_backend_timeout"
+        assert body["detail"]["provider"] == "ollama"
+        assert body["detail"]["timeout_seconds"] == 0.1
+        assert body["detail"]["trace_id"] == "trace-3151"
+    finally:
+        ask_module._HYBRID_WARMED = False
