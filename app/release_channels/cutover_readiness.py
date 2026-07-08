@@ -67,7 +67,7 @@ class ReadinessCheck:
 @dataclass(frozen=True)
 class MigrationInfo:
     revision: str
-    down_revision: str | None
+    down_revisions: tuple[str, ...]
     filename: str
     path: Path
 
@@ -410,7 +410,7 @@ _REVISION_ASSIGN_RE = re.compile(
 )
 
 
-def _literal_assignment(text: str, name: str) -> str | None:
+def _literal_assignment(text: str, name: str) -> object | None:
     for match in _REVISION_ASSIGN_RE.finditer(text):
         if match.group("name") != name:
             continue
@@ -419,14 +419,18 @@ def _literal_assignment(text: str, name: str) -> str | None:
             value = ast.literal_eval(value_text)
         except (SyntaxError, ValueError):
             return None
-        if value is None:
-            return None
-        if isinstance(value, str):
-            return value
-        if isinstance(value, (tuple, list)) and value:
-            first = value[0]
-            return first if isinstance(first, str) else None
+        return value
     return None
+
+
+def _revision_tuple(value: object | None) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, (tuple, list)):
+        return tuple(item for item in value if isinstance(item, str))
+    return ()
 
 
 def _load_migrations(migrations_dir: Path) -> dict[str, MigrationInfo]:
@@ -438,7 +442,7 @@ def _load_migrations(migrations_dir: Path) -> dict[str, MigrationInfo]:
             continue
         migrations[revision] = MigrationInfo(
             revision=revision,
-            down_revision=_literal_assignment(text, "down_revision"),
+            down_revisions=_revision_tuple(_literal_assignment(text, "down_revision")),
             filename=path.name,
             path=path,
         )
@@ -446,9 +450,43 @@ def _load_migrations(migrations_dir: Path) -> dict[str, MigrationInfo]:
 
 
 def _head_revision(migrations: Mapping[str, MigrationInfo]) -> str | None:
-    down_revisions = {info.down_revision for info in migrations.values() if info.down_revision}
+    down_revisions = {
+        down_revision
+        for info in migrations.values()
+        for down_revision in info.down_revisions
+    }
     heads = sorted(set(migrations) - down_revisions)
     return heads[-1] if heads else None
+
+
+def _path_from_revision_to_head(
+    migrations: Mapping[str, MigrationInfo],
+    *,
+    current: str | None,
+    db_revision: str | None,
+    seen: frozenset[str] = frozenset(),
+) -> list[MigrationInfo] | None:
+    if current is None:
+        return [] if db_revision is None else None
+    if current == db_revision:
+        return []
+    if current in seen:
+        return None
+    info = migrations.get(current)
+    if info is None:
+        return None
+
+    next_seen = seen | {current}
+    for parent in info.down_revisions or (None,):
+        parent_path = _path_from_revision_to_head(
+            migrations,
+            current=parent,
+            db_revision=db_revision,
+            seen=next_seen,
+        )
+        if parent_path is not None:
+            return [*parent_path, info]
+    return None
 
 
 def _pending_migration_delta(migrations_dir: Path, db_revision: str | None) -> _MigrationDelta:
@@ -457,15 +495,13 @@ def _pending_migration_delta(migrations_dir: Path, db_revision: str | None) -> _
     if head is None:
         return _MigrationDelta(head_revision=None)
 
-    pending: list[MigrationInfo] = []
-    current = head
-    while current and current != db_revision:
-        info = migrations.get(current)
-        if info is None:
-            break
-        pending.append(info)
-        current = info.down_revision
-    pending.reverse()
+    pending = _path_from_revision_to_head(
+        migrations,
+        current=head,
+        db_revision=db_revision,
+    )
+    if pending is None:
+        pending = []
 
     forward_only = [
         info for info in pending if classify_migration(info.path).classification == FORWARD_ONLY
