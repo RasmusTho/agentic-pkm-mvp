@@ -201,6 +201,19 @@ def test_pytest_failure_takes_precedence_over_http_status_text() -> None:
     )
 
 
+def test_hard_infra_signal_takes_precedence_over_pytest_signature() -> None:
+    context = _context_for(
+        "Run pytest -q tests/api/test_provider_errors.py\n"
+        "FAILED tests/api/test_provider_errors.py::test_returns_provider_http_500\n"
+        "E   AssertionError: expected retryable provider response for HTTP 500\n"
+        "The operation was canceled.\n"
+    )
+
+    assert context.failure_class == "timeout_or_infra"
+    assert context.actionable_by_autonomous_repair is False
+    assert context.appears_caused_by_pr == "unclear"
+
+
 def test_unknown_failure_block_prefers_exception_traceback() -> None:
     setup_noise = "\n".join(f"setup line {index}" for index in range(45))
     context = _context_for(
