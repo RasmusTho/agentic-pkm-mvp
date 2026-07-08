@@ -1,0 +1,59 @@
+name: PR CI Failure Context
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+      - CI Smoke
+      - Issue and PR Governance
+      - import-linter
+      - architecture-ci
+      - settings-ci
+      - harness-selfverify
+      - Companion UI Browser Runtime
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+jobs:
+  context-pack:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion != 'success' &&
+      github.event.workflow_run.conclusion != 'skipped' &&
+      github.event.workflow_run.name != 'PR CI Failure Context'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download failed run logs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p ci-failure-context
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "repos/${REPOSITORY}/actions/runs/${RUN_ID}/logs" \
+            > ci-failure-context/run-logs.zip
+
+      - name: Build CI failure context pack
+        run: |
+          python3 scripts/collect_ci_failure_context.py \
+            --event-json "$GITHUB_EVENT_PATH" \
+            --log-zip ci-failure-context/run-logs.zip \
+            --output-json ci-failure-context/context.json \
+            --output-markdown ci-failure-context/context.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-failure-context-${{ github.event.workflow_run.id }}
+          path: ci-failure-context/
