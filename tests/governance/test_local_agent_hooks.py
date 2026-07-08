@@ -123,15 +123,16 @@ def test_changed_paths_are_limited_to_claude_docs_or_local_helpers() -> None:
         text=True,
         capture_output=True,
     )
-    changed_paths = changed.stdout.splitlines()
+    changed_paths = [path for path in changed.stdout.splitlines() if path]
     if changed.returncode != 0:
-        changed_paths = subprocess.run(
+        fallback = subprocess.run(
             ["git", "show", "--name-only", "--format=", "HEAD"],
             cwd=REPO_ROOT,
             check=True,
             text=True,
             capture_output=True,
-        ).stdout.splitlines()
+        )
+        changed_paths = [path for path in fallback.stdout.splitlines() if path]
     allowed_prefixes = (".claude/", "scripts/local_agent_command_guard.py", "tests/governance/test_local_agent_hooks.py")
 
     assert changed_paths
