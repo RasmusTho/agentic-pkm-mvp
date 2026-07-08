@@ -115,6 +115,15 @@ def test_update_helpers_are_idempotent_for_lists_and_mappings(
         "review_findings": [
             {"id": "finding-1", "status": "open", "summary": "needs test"}
         ],
+        "reusable_constraints": [
+            {
+                "id": "constraint-1",
+                "text": "run-state is coordination evidence only",
+            }
+        ],
+        "follow_ups": [
+            {"id": "follow-up-1", "summary": "integrate state into epic runner"}
+        ],
         "compact_receipts": [
             {"id": "receipt-4000", "summary": "state update captured"}
         ],
@@ -126,6 +135,8 @@ def test_update_helpers_are_idempotent_for_lists_and_mappings(
     assert first == second
     assert len(second["child_queue"]) == 1
     assert len(second["review_findings"]) == 1
+    assert len(second["reusable_constraints"]) == 1
+    assert len(second["follow_ups"]) == 1
     assert len(second["compact_receipts"]) == 1
 
     merged = update_epic_run_state(
