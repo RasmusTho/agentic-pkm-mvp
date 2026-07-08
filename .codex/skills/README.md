@@ -84,6 +84,8 @@ on CI checks — and the optional `--codex` verdict path — via REST without dr
   - repair stale or false Issue / PR / label / Project state before or during execution
 - `deliver-issue-set`
   - review, plan, make ready, and deliver an epic, parent feature issue, Kanban/Project lane, or larger ready-issue set; use `issue-to-code` and `verification-and-closure` as the main lenses; if the ready pool is too small, repair or create bounded ready issues through `issue-maintenance-change-control`, `docs-to-issue`, or `feature-breakdown`; may claim multiple issues only for rational parallel sub-agent delivery with isolated worktrees and explicit receipts
+- `docs-governance`
+  - decision and routing skill for docs-as-code ownership, anti-sprawl, DOCS_INDEX impact, and narrower docs workflow selection
 - `docs-authoring`
   - docs-only authoritative authoring lane
 - `docs-to-issue`
@@ -150,7 +152,7 @@ workflow — see `## App-agent skill family (product-lane)` below for the full d
 - Epic / Kanban issue-set delivery path:
   `deliver-issue-set -> (issue-maintenance-change-control | docs-to-issue | feature-breakdown) -> issue-to-code -> publish-pr -> pr-integration as needed -> verification-and-closure`
 - Docs backlog path:
-  `docs-authoring -> docs-to-issue`
+  `docs-governance -> (docs-authoring | docs-to-issue | feature-breakdown)`
 - Architecture research path:
   `architecture-research -> feature-breakdown -> issue-to-code` (audit doc publishes via `publish-pr`; findings reconcile against open epics instead of creating parallel hubs)
 - Maintenance-learning intake path:
