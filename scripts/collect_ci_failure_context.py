@@ -166,6 +166,8 @@ def _classify(text: str, source_name: str) -> str:
         )
     ):
         return "import_boundary_failure"
+    if re.search(r"\bFAILED\s+tests/|\bE\s+AssertionError\b|short test summary info", text):
+        return "pytest_failure"
     if any(
         token in haystack
         for token in (
@@ -183,8 +185,6 @@ def _classify(text: str, source_name: str) -> str:
         )
     ):
         return "timeout_or_infra"
-    if re.search(r"\bFAILED\s+tests/|\bE\s+AssertionError\b|short test summary info", text):
-        return "pytest_failure"
     return "unknown_failure"
 
 
@@ -209,6 +209,12 @@ def _line_score(line: str, failure_class: str) -> int:
         score += 8
     if failure_class == "timeout_or_infra" and (
         "timed out" in lower or "operation was canceled" in lower or "no space left" in lower
+    ):
+        score += 8
+    if failure_class == "unknown_failure" and (
+        "traceback (most recent call last)" in lower
+        or "exception:" in lower
+        or re.search(r"\b[A-Za-z_][A-Za-z0-9_]*(?:Error|Exception):", line)
     ):
         score += 8
     return score
