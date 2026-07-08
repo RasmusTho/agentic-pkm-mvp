@@ -1,0 +1,67 @@
+name: Post-Merge Docs Classifier
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  classify:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Collect merged PR evidence snapshots
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          mkdir -p post-merge-docs-classifier
+          gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
+            > post-merge-docs-classifier/pr.json
+          gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" \
+            --jq '.[]' \
+            | jq -s '.' \
+            > post-merge-docs-classifier/files.json
+          ISSUE_NUMBER="$(python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          body = json.loads(Path("post-merge-docs-classifier/pr.json").read_text()).get("body") or ""
+          match = re.search(r"\b(?:Fixes|Closes|Resolves)\s+#(\d+)\b", body, re.I)
+          print(match.group(1) if match else "")
+          PY
+          )"
+          if [ -n "${ISSUE_NUMBER}" ]; then
+            gh api "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}" \
+              > post-merge-docs-classifier/issue.json
+          else
+            printf '{}\n' > post-merge-docs-classifier/issue.json
+          fi
+
+      - name: Build post-merge docs classifier artifacts
+        run: |
+          python3 scripts/post_merge_docs_classifier.py \
+            --pr-json post-merge-docs-classifier/pr.json \
+            --files-json post-merge-docs-classifier/files.json \
+            --issue-json post-merge-docs-classifier/issue.json \
+            --output-json post-merge-docs-classifier/classification.json \
+            --output-markdown post-merge-docs-classifier/classification.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: post-merge-docs-classifier-${{ github.event.pull_request.number }}
+          path: |
+            post-merge-docs-classifier/classification.json
+            post-merge-docs-classifier/classification.md
