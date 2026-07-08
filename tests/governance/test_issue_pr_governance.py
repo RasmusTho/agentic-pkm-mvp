@@ -95,3 +95,29 @@ def test_workflow_checks_issue_link_before_allowing_tier1_builderops_omission() 
     assert text.index("const hasIssueLink = issueLinkPattern.test(body);") < text.index(
         "const builderOpsRoutingSatisfied ="
     )
+
+
+def test_issue_readiness_workflow_is_artifact_only() -> None:
+    text = _read_workflow()
+    readiness_job = text.split("  issue-readiness:", 1)[1].split("\n  pr-contract:", 1)[0]
+
+    assert "permissions:" in readiness_job
+    assert "contents: read" in readiness_job
+    assert "issues: read" in readiness_job
+    assert "issues: write" not in readiness_job
+    assert "actions/upload-artifact@v4" in readiness_job
+    assert "--observe-only" in readiness_job
+    assert "validate_issue_readiness.py" in readiness_job
+    assert "gh issue edit" not in readiness_job
+    assert "removeLabel" not in readiness_job
+    assert "addLabels" not in readiness_job
+    assert "graphql" not in readiness_job.lower()
+    assert "dispatcher" not in readiness_job.lower()
+
+
+def test_issue_readiness_checker_is_governance_lane_allowed() -> None:
+    text = _read_workflow()
+
+    assert '"scripts/validate_issue_readiness.py"' in text
+    assert '"tests/scripts/test_validate_issue_readiness.py"' in text
+    assert '"tests/fixtures/issue_readiness/"' in text
