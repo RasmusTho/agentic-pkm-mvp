@@ -57,6 +57,11 @@ def test_dangerous_command_guard_allows_validation_and_denies_prod_or_destructiv
         "git push origin main",
         "gh pr merge 1 --squash",
         "gh issue edit 1 --add-label agent:ready",
+        "gh label create blocked --color ff0000",
+        "gh label delete blocked --yes",
+        "gh project item-edit --id X --field-id Y --single-select-option-id Z",
+        "gh api repos/owner/repo/issues/1/labels -X POST -f labels[]=blocked",
+        "gh api repos/owner/repo/issues/1 --method PATCH -f title=blocked",
         "prod migrate restart",
         "alembic upgrade head",
         "vault secret write token",
@@ -90,7 +95,7 @@ def test_command_guard_cli_exit_codes() -> None:
 
 def test_changed_paths_are_limited_to_claude_docs_or_local_helpers() -> None:
     changed = subprocess.run(
-        ["git", "status", "--short"],
+        ["git", "diff", "--name-only", "origin/main...HEAD"],
         cwd=REPO_ROOT,
         check=True,
         text=True,
@@ -99,5 +104,4 @@ def test_changed_paths_are_limited_to_claude_docs_or_local_helpers() -> None:
     allowed_prefixes = (".claude/", "scripts/local_agent_command_guard.py", "tests/governance/test_local_agent_hooks.py")
 
     assert changed
-    paths = [line[3:] for line in changed]
-    assert all(path.startswith(allowed_prefixes) for path in paths)
+    assert all(path.startswith(allowed_prefixes) for path in changed)
