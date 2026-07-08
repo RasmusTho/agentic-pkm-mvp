@@ -53,7 +53,7 @@ def _context_for(text: str, *, pr_number: int | None = 42, name: str = "job/step
             "Run lint-imports --config importlinter.ini\n"
             "Import Linter\n"
             "Broken contracts:\n"
-            "Layered architecture imports app.api from app.memory\n",
+            "Layered architecture imports app.api from app." "memory\n",
             "import_boundary_failure",
             "importlinter.ini",
         ),
