@@ -68,6 +68,7 @@ def test_dangerous_command_guard_allows_validation_and_denies_prod_or_destructiv
         "result=$(gh api repos/o/r/issues/1/comments -f body=hi)",
         "result=`gh api repos/o/r/issues/1/comments -f body=hi`",
         "(gh pr close 3230)",
+        "(gh pr close)",
         "gh --repo owner/repo pr close 3230",
         "gh issue edit 1 --add-label agent:ready",
         "gh label create blocked --color ff0000",

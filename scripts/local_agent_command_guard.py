@@ -92,8 +92,8 @@ def _classify_gh_tokens(tokens: Sequence[str], gh_index: int) -> GuardResult | N
 
     if index >= len(tokens):
         return None
-    group = tokens[index]
-    action = tokens[index + 1] if index + 1 < len(tokens) else ""
+    group = _strip_shell_punctuation(tokens[index])
+    action = _strip_shell_punctuation(tokens[index + 1]) if index + 1 < len(tokens) else ""
     if group == "api":
         return GuardResult(allowed=False, reason="GitHub API calls are not allowed from local hooks")
     if group == "project":
@@ -105,6 +105,10 @@ def _classify_gh_tokens(tokens: Sequence[str], gh_index: int) -> GuardResult | N
     if group == "pr" and action in {"close", "comment", "edit", "merge", "review"}:
         return GuardResult(allowed=False, reason="PR mutation is not allowed from local hooks")
     return None
+
+
+def _strip_shell_punctuation(token: str) -> str:
+    return token.strip("(){}[]`$;")
 
 
 def _parser() -> argparse.ArgumentParser:
