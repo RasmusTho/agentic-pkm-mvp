@@ -49,9 +49,23 @@ Before verifying, resolve the prod channel's deployment model:
   confirming `/version` and `/api/health.version` report the authorized SHA. The checkout may still
   exist for operations, but it is not proof of running code after cutover.
 
+### fleet-model fitness
+
+Every post-promotion verification must run the live fleet-model guard:
+
+```
+python -m app.release_channels.fleet_model_fitness prod --json
+```
+
+`model=checkout` is an allowed informational result before prod has a pinned-image cutover receipt.
+In pinned-image mode, the guard is a required FAIL/PASS check: it must fail on any repo `/app`
+bind-mount, channel pin vs running tag vs `/version` or `/api/health.version` divergence, API/gateway
+SHA divergence, or gateway `/healthz` failure. The guard receipt embedded in
+`ops/deployments/prod-latest.json` is the cutover evidence consumed by the deployment-model switch.
+
 ## What this skill does
 
-1. Confirms the running prod code identity matches the current **promotion ref/SHA** for the active deployment model. In checkout model, run `python -m app.release_channels.prod_ref_fitness <prod-checkout> --promotion-ref main` — the same guard `execute-promotion`/`rollback-promotion` rely on, and the single source of truth for "current," so this step never hardcodes or re-derives the ref by hand. Under the future gated checkout model the flag becomes `--promotion-ref origin/stable`; do not pass that while `origin/stable` remains dormant. In pinned-image model, read `ops/deployments/prod-latest.json` and confirm the receipt, `/version`, and `/api/health.version` all match the authorized SHA deployed by `scripts/deploy_channel.sh`.
+1. Confirms the running prod code identity matches the current **promotion ref/SHA** for the active deployment model. In checkout model, run `python -m app.release_channels.prod_ref_fitness <prod-checkout> --promotion-ref main` — the same guard `execute-promotion`/`rollback-promotion` rely on, and the single source of truth for "current," so this step never hardcodes or re-derives the ref by hand. Under the future gated checkout model the flag becomes `--promotion-ref origin/stable`; do not pass that while `origin/stable` remains dormant. In pinned-image model, read `ops/deployments/prod-latest.json` and confirm the receipt, `/version`, and `/api/health.version` all match the authorized SHA deployed by `scripts/deploy_channel.sh`. In both models, run the fleet-model fitness guard described above and treat pinned-image guard failures as promotion verification failures.
 2. Confirms the prod Postgres container is healthy (port 15432 responsive, outbox consumer running, no error state in worker heartbeat).
 3. Runs `python -m app.cli status` against the prod channel and confirms all components report healthy.
 4. Runs `python -m app.cli settings-explain` against the prod channel and confirms the resolved environment is `prod`, the vault root is the real vault, and the DB resolves to the prod DB.

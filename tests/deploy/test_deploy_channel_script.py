@@ -178,3 +178,17 @@ def test_app_bind_mount_removed_and_version_authoritative() -> None:
     assert "APP_CODE_BIND_COMPOSE ?=" in makefile
     assert "APP_CODE_BIND_COMPOSE ?= docker-compose.app-bind.yml" not in makefile
     assert "deploy-dev" in makefile and "deploy-test" in makefile and "deploy-prod" in makefile
+
+
+def test_deploy_receipt_embeds_fleet_model_fitness() -> None:
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "fleet_model_fitness_gate" in text
+    assert "app.release_channels.fleet_model_fitness" in text
+    assert "--require-pinned" in text
+    assert "FLEET_MODEL_FITNESS_JSON" in text
+    assert '"fleet_model_fitness"' in text
+
+    run_block = text.split('echo "deploy plan:', 1)[1]
+    assert run_block.index("health_gate") < run_block.index("version_gate")
+    assert run_block.index("version_gate") < run_block.index("fleet_model_fitness_gate")
+    assert run_block.index("fleet_model_fitness_gate") < run_block.index("record_receipt")
