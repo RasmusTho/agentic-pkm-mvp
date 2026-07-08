@@ -1,0 +1,773 @@
+State: Builder System architecture and process map.
+Doc role: Development governance / system-of-systems map
+Authority: Descriptive inventory plus target automation roadmap for the Builder System. This document does not change workflows, skills, scripts, issue templates, CI, branch protection, or GitHub state.
+Owner: Builder System governance
+Temporal class: operational
+Review cadence: event-driven
+Source of truth: observed repo files and read-only GitHub command output cited inline
+Last reviewed: 2026-07-08
+
+# Builder System Process Map
+
+## 1. Executive Model
+
+Yggdrasil's Builder System is the continuous-development enabling system around the Product/Runtime System. It builds, verifies, releases, governs, and learns from Product/Runtime changes; it is not itself a Product SBS runtime subsystem [docs/architecture/SBS_OPERATING_MODEL.md:68-93].
+
+Rasmus provides intent, preferences, constraints, and strategic direction. Routine review, dispatch, CI triage, PR closing, post-merge documentation checking, and learning capture should be performed by the Builder System when the governing contracts are sufficient. Human attention is an exception path: the canonical builder instructions say the default posture is to act, and to escalate only for irreversible, external-facing, or genuinely ambiguous authority decisions [AGENTS.md:161-169]. The review-gate fallback policy removes work from the autonomous-ready queue only when a required review gate is unavailable or a human override is needed [docs/architecture/SBS_OPERATING_MODEL.md:368-383].
+
+The Builder System has these layers:
+
+1. Intent layer: human intent enters through docs, issues, tasks, explicit decisions, and strategic constraints. Observed authority: `PROJECT_KERNEL`, charter, docs, and GitHub issue contracts route intent; `AGENTS.md` names the owner as the authority for irreversible and strategic calls [AGENTS.md:161-169], [docs/DOCS_INDEX.md:48-90].
+2. Docs-as-code/spec authority layer: docs are primary Builder System authority, not background. `docs/DOCS_INDEX.md` is the stable role/routing map and says to read Core SoT docs before references, and plans/historical docs as context only [docs/DOCS_INDEX.md:1-17].
+3. Contract layer: GitHub issues, PR templates, shared skill contracts, labels, Project states, `Verify:` markers, and SBS impact blocks define executable work [`.codex/skills/_shared/ISSUE_CONTRACT.md`:12-72], [`.github/ISSUE_TEMPLATE/task.yml`:73-109].
+4. Dispatch/routing layer: dispatcher queue/leases, labels, Project status, skill routing, model/reasoning policy, and worktree isolation select work and prevent collisions [docs/AGENT_ISSUE_DISPATCHER.md:132-180], [AGENTS.md:171-182].
+5. Execution layer: skills, agents, scripts, local worktrees, implementation PRs, and publication boundaries perform work [`.codex/skills/README.md`:144-164], [`.codex/skills/publish-pr/SKILL.md`:53-159].
+6. Verification/evidence layer: local validation, CI, REST-only check waiting, local review gate, delivery receipts, Project reconciliation, and owner-doc receipts prove work [`.codex/skills/verification-and-closure/SKILL.md`:46-77], [`.codex/skills/_shared/CI_WAIT_CONTRACT.md`:22-82].
+7. Closure/spec-feedback layer: merge, issue closure, dispatcher completion, parent validation receipts, post-merge owner-doc decisions, and roadmap/spec state updates close work truthfully [`.codex/skills/verification-and-closure/SKILL.md`:194-208], [docs/development/PARENT_ISSUE_CLOSURE.md:13-49].
+8. Learning/governance layer: BuilderOps records, learning signals, retrospectives, skill/docs updates, and TCD adjustments improve the Builder System without contaminating Product/Runtime memory [docs/architecture/SBS_OPERATING_MODEL.md:194-261].
+9. Exception layer: `agent:needs-human`, blocker receipts, owner waivers, release operator acknowledgements, and Human Exception packets stop autonomous continuation when authority is missing [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27], [docs/architecture/SBS_OPERATING_MODEL.md:372-383].
+
+## Evidence Legend
+
+Statuses in this document use the requested terms:
+
+- observed: implemented in files, workflows, scripts, settings, or command output.
+- inferred: strongly implied by multiple observed artifacts but not directly implemented.
+- missing: required by the intended architecture but no implementation was found.
+- implicit: described in prose or skills but not machine-enforced.
+- unknown: evidence unavailable.
+- not_found: explicitly searched and absent.
+
+Read-only GitHub evidence used:
+
+- `gh auth status && gh workflow list` on 2026-07-08: authenticated as `RasmusTho`; workflows listed active: App Image Build, architecture-ci, Companion UI Browser Runtime, ci-lite, CI Smoke, CI, harness-selfverify, import-linter, integration-nightly, Issue and PR Governance, Post-Merge Owner Doc Watchdog, Project PR Opened, Project PR Stage Change, Project Status Reconcile, release-uat, settings-ci, smoke, Dependabot Updates, Dependency Graph, CodeQL.
+- `gh run list --limit 30` on 2026-07-08: recent runs included in-progress PR #3208 CI and a failed Issue and PR Governance run for PR #3208; recent successful merge/push runs for PR #3207.
+- `gh pr list --state open --limit 100` on 2026-07-08: open PRs #3208, #3201, #3198.
+- `gh issue list --state open --limit 50` on 2026-07-08: open issues included `agent:ready`, `agent:blocked`, `agent:needs-human` work such as #3199, #3190, #3178, #3177, #3176, #3172, #3171.
+- `gh label list --limit 200` on 2026-07-08: canonical labels exist (`type:task`, `type:bug`, `type:refactor`, `prio:*`, `agent:*`, `lane:governance`) but many non-canonical labels also exist, including `governance`, `ci`, `maintenance`, `docs`, and legacy/default labels.
+- `gh api repos/RasmusTho/agentic-pkm-mvp/branches/main/protection` on 2026-07-08: `Branch not protected` / HTTP 404.
+- `gh api repos/RasmusTho/agentic-pkm-mvp/branches/stable/protection` on 2026-07-08: `stable` protected; required status checks are `smoke`, `smoke-docker`, and `pr-contract`; strict is `true`; required approving review count is `0`; CODEOWNERS review is not required.
+- `gh api repos/RasmusTho/agentic-pkm-mvp --jq '{allow_auto_merge,...}'` on 2026-07-08: `allow_auto_merge=false`, default branch `main`, merge/squash/rebase allowed, delete branch on merge disabled.
+- `find .claude -path '.claude/worktrees' -prune -o -type f -print`: repo-level `.claude` files are `.claude/settings.json` and `.claude/settings.local.json`; no repo-level `.claude/hooks/**` files were found.
+
+## 2. Component Inventory
+
+| Component | Status | Current artifact(s) | Responsibility | Inputs | Outputs | Mutation authority | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| intent capture | partially_implemented | Docs, issues, `AGENTS.md`, `docs/DOCS_INDEX.md` | Capture strategy and constraints as repo-governed artifacts | Human intent, owner docs | Docs, issues, decisions | PR or GitHub issue | [AGENTS.md:161-169], [docs/DOCS_INDEX.md:11-17] |
+| docs/spec authority | implemented | `docs/DOCS_INDEX.md`, owner docs, SBS docs | Route doc authority and conflict resolution | Docs tree | Owner-doc truth and routing | Docs PR | [docs/DOCS_INDEX.md:1-17], [docs/DOCS_INDEX.md:80-90] |
+| docs index | implemented | `docs/DOCS_INDEX.md` | Stable role map and reading order | Repo docs | Role and owner routing | Docs PR | [docs/DOCS_INDEX.md:1-17], [docs/DOCS_INDEX.md:48-90] |
+| owner docs | implemented | `docs/ARCHITECTURE.md`, `docs/STATUS.md`, subsystem docs, contracts | Current shipped truth and contract ownership | Code, PRs, accepted delivery | Current-state claims | PR | [docs/architecture/SBS_OPERATING_MODEL.md:332-342] |
+| SRS/SBS/system engineering docs | partially_implemented | `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`, `docs/architecture/**`, `docs/REQUIREMENTS_INDEX.md` | Target classification, boundary, requirements coverage | Architecture and requirements | SBS impact, debt, fitness rules | PR | [docs/DOCS_INDEX.md:56-64], [docs/architecture/SBS_OPERATING_MODEL.md:42-66] |
+| governance docs | implemented | `AGENTS.md`, `docs/development/**`, `.codex/skills/**` | Builder workflow authority | Task and delivery evidence | Process rules | PR | [AGENTS.md:8-17], [docs/architecture/SBS_OPERATING_MODEL.md:173-186] |
+| issue contract | implemented | `.codex/skills/_shared/ISSUE_CONTRACT.md`, `.github/ISSUE_TEMPLATE/task.yml` | Executable backlog shape | Source docs | Issue body with `Verify:` markers | Issue creation/edit | [`.codex/skills/_shared/ISSUE_CONTRACT.md`:12-72], [`.github/ISSUE_TEMPLATE/task.yml`:73-109] |
+| issue template | implemented | `.github/ISSUE_TEMPLATE/task.yml` | Form enforcement for task contracts | Human/agent issue creation | Structured issue fields | GitHub issue form | [`.github/ISSUE_TEMPLATE/task.yml`:1-141] |
+| issue readiness validator | partially_implemented | `issue-pr-governance.yml`, `validate_source_anchors.py`, skills | Enforce sections and source anchors for ready/blocked issues | Issue body/labels | Failed checks or valid issue | GitHub Action read/write labels only for cleanup | [`.github/workflows/issue-pr-governance.yml`:40-78] |
+| issue queue | partially_implemented | GitHub labels/Project, dispatcher SQLite | Expose ready work | `agent:ready`, Status=Ready, dispatcher pull | Queue entries | GitHub labels/Project; dispatcher store | [`.github/github-governance.yml`:28-31], [docs/AGENT_ISSUE_DISPATCHER.md:132-180] |
+| dispatcher | implemented | `app/dispatcher/**`, `docs/AGENT_ISSUE_DISPATCHER.md`, Makefile targets | Queue, claim, lease, heartbeat, completion | GitHub `agent:ready` issues | Local tasks/leases/events | Local dispatcher DB only | [docs/AGENT_ISSUE_DISPATCHER.md:21-36], [Makefile:356-361], [app/dispatcher/cli.py:31-32] |
+| model router | implicit | `AGENTS.md` TCD policy, `.codex/agents/*.toml` | Choose model/reasoning by risk | Task risk/TCD | Model/effort choice | Agent/session config | [AGENTS.md:112-157], [`.codex/agents/slice-implementer.toml`:1-20] |
+| skill router | partially_implemented | `AGENTS.md`, `.codex/skills/README.md` | Route work to workflow skill | Task class | Skill path | Agent behavior | [AGENTS.md:18-68], [`.codex/skills/README.md`:64-128] |
+| context builder | implicit | `docs/DOCS_INDEX.md`, skill first-context sections | Select source docs and owner docs | Issue source anchors, docs index | Context packet | Agent behavior | [AGENTS.md:8-17], [`.codex/skills/issue-to-code/SKILL.md`:236-256] |
+| worktree/branch allocator | partially_implemented | `scripts/agent_workspace_preflight.sh`, branch-truth gate | Detect worktree/branch drift; refuse shared root by default | Branch/worktree | Preflight pass/fail | Local script | [`.codex/skills/_shared/BRANCH_TRUTH_GATE.md`:9-77], [scripts/agent_workspace_preflight.sh:55-61] |
+| claim coordinator | implemented | dispatcher claim + `scripts/issue_pickup_claim.sh` | Claim issue and remove ready label | Ready issue | Lease plus label mutation | Dispatcher + `gh issue edit` | [`.codex/skills/issue-to-code/SKILL.md`:129-175], [scripts/issue_pickup_claim.sh:39-59] |
+| implementation agent | implemented | `issue-to-code`, `slice_implementer` adapter | Execute bounded issue | Ready issue, owner docs | Diff, validation, PR | Local files/PR | [`.codex/skills/issue-to-code/SKILL.md`:236-260], [`.codex/agents/slice-implementer.toml`:1-20] |
+| validation runner | partially_implemented | Makefile, scripts, CI, `DEV_WORKFLOW` | Run local and CI checks | Changed files | Logs/status | Local/CI | [docs/development/DEV_WORKFLOW.md:60-83], [`.github/workflows/ci.yml`:9-65] |
+| CI workflows | implemented | `.github/workflows/**` | Automated checks and projections | PR/push/schedule/manual | Check runs/artifacts/comments | GitHub Actions | `gh workflow list`; [`.github/workflows/ci-smoke.yaml`:4-13], [`.github/workflows/import-linter.yaml`:14-33] |
+| CI failure context collector | partially_implemented | `PR_ESCALATION_PATHS`, `scripts/await_pr_checks.sh` | Classify failure and collect status | Failing check | Failure class | Agent/script | [docs/development/PR_ESCALATION_PATHS.md:12-20], [scripts/await_pr_checks.sh:100-151] |
+| CI repair orchestrator | implicit | `pr-integration`, escalation docs | Repair CI when triggered | CI failure | Fix or block | Agent PR commits | [`.codex/skills/pr-integration/SKILL.md`:50-67] |
+| PR publisher | implemented | `publish-pr` skill | Branch, commit, push, PR | Local validated diff | PR | Git/GitHub | [`.codex/skills/publish-pr/SKILL.md`:29-37], [`.codex/skills/publish-pr/SKILL.md`:53-159] |
+| PR contract validator | implemented | `issue-pr-governance.yml` | Check PR body lane/issue/paths/BuilderOps routing | PR body/files | Failed or passed check | GitHub Action | [`.github/workflows/issue-pr-governance.yml`:79-218] |
+| review gate | partially_implemented | Local `/code-review` skill in `verification-and-closure`, optional Codex verdict resolver | Independent review before merge | PR diff | Findings/pass | Agent comments; owner waiver | [`.codex/skills/verification-and-closure/SKILL.md`:116-163], [app/dispatcher/poll_backoff.py:21] |
+| merge gate | partially_implemented | `verification-and-closure`, `scripts/await_pr_checks.sh`, branch protection on `stable` only | Decide merge eligibility | CI/review/ACs | Merge or block | `gh pr merge`; platform on `stable` | [`.codex/skills/verification-and-closure/SKILL.md`:95-115], `gh api main protection -> 404`, `gh api stable protection -> required checks` |
+| issue closure worker | partially_implemented | `verification-and-closure` | Close issues and set Done | Merged PR | Closed issue, labels removed, receipts | GitHub | [`.codex/skills/verification-and-closure/SKILL.md`:194-208] |
+| post-merge docs/spec classifier | partially_implemented | `post-merge-owner-doc` skill, watchdog workflow | Decide owner-doc update/follow-up/no-change | Merged PR diff | Docs PR, follow-up issue, or receipt | Agent/GitHub Action nudge | [`.codex/skills/post-merge-owner-doc/SKILL.md`:44-68], [`.github/workflows/post-merge-owner-doc-watchdog.yml`:1-83] |
+| autonomous closure gate | implicit | `verification-and-closure` prerequisites | Ensure closure is safe | ACs, CI, review, owner-doc receipt | Delivery receipt | Agent | [`.codex/skills/verification-and-closure/SKILL.md`:103-115], [`.codex/skills/verification-and-closure/SKILL.md`:194-208] |
+| promotion/release gate | partially_implemented | release-channel docs/skills, stable branch protection | Gate test/prod promotion | Promotion plan and operator ack | Stable update/verify/rollback | Operator + skills | [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113], `gh api stable protection` |
+| Mimer/product-lane workflow | implemented | Product docs, `mimer-*` skills | Runtime client operations separate from Builder workflow | Vault/user requests | Governed Mimer actions | Product authority paths | [`.codex/skills/README.md`:220-250] |
+| BuilderOps/governance workflow | partially_implemented | BuilderOps docs/API/skills | Store worklogs, learning, promotion intents, receipts | Agent workflow evidence | BuilderOps records/projections | BuilderOps CLI/API; promotion explicit | [docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md:13-81], [docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md:13-45] |
+| learning/retrospective loop | partially_implemented | `capture-learning`, `learning-retrospective`, BuilderOps records | Promote learning into artifacts | Divergences | LearningSignal, proposals, PRs/issues | BuilderOps + PR | [`.codex/skills/capture-learning/SKILL.md`:19-90], [`.codex/skills/learning-retrospective/SKILL.md`:27-150] |
+| local hooks | missing | `.claude/settings*.json` only; no `.claude/hooks/**` found | Local session guardrails | Local tool events | Hook decisions | None | [`.claude/settings.json`:1-11], [`.claude/settings.local.json`:1-17], `find .claude ... -> no hooks` |
+| GitHub event automations | partially_implemented | `.github/workflows/**` | Validate issues/PRs, project status, docs watchdog, CI | GitHub events | Checks/comments/status projections | Actions token/PAT | [`.github/workflows/issue-pr-governance.yml`:3-12], [`.github/workflows/project-status-reconcile.yml`:3-23] |
+| Codex Action integration | partially_implemented | `architecture-ci` optional `codex run docs-guardian`; Codex verdict resolver retained | Docs guard/autofix and optional verdict read | Workflow dispatch, PR bot surfaces | Fixes/verdict | CI with secret, agent read | [`.github/workflows/architecture-ci.yaml`:31-38], [`.codex/skills/verification-and-closure/SKILL.md`:165-192] |
+| Claude Action integration | missing | Claude compatibility docs/settings only | GitHub-driven Claude agent tasks | N/A | N/A | None | [CLAUDE.md:1-8], [`.claude/settings.json`:1-11] |
+| human exception router | implicit | `agent:needs-human`, review-gate fallback, this doc packet | Route authority exceptions | Ambiguity/failure | Human Exception packet | Human decision | [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27], [docs/architecture/SBS_OPERATING_MODEL.md:372-383] |
+
+## 3. Docs-As-Code / Spec Authority Map
+
+Observed current-state truth:
+
+- `docs/DOCS_INDEX.md` is the canonical stable map for document roles, authority routing, and reading order [docs/DOCS_INDEX.md:1-17].
+- Current runtime truth is routed to `docs/ARCHITECTURE.md` and `docs/STATUS.md` [docs/DOCS_INDEX.md:65-67].
+- Current shipped reality wins over roadmap/design docs when they conflict [docs/DOCS_INDEX.md:80-90].
+- Owner docs must be updated when behavior, contracts, or shipped truth changes [AGENTS.md:103-108], [docs/architecture/SBS_OPERATING_MODEL.md:332-342].
+
+Observed target-state/proposal truth:
+
+- Target SBS is target-state and not a shipped runtime map [docs/architecture/SBS_OPERATING_MODEL.md:28-34].
+- SBS operating model owns process, not product sequencing [docs/architecture/SBS_OPERATING_MODEL.md:385-389].
+- Plans/spec directories can define intent and spawn issues, but cannot be treated as shipped without code/test/owner-doc evidence [docs/development/AGENT_OPERATING_PROTOCOL.md:60-83].
+
+Observed docs-to-issue path:
+
+- `docs-to-issue` converts active docs into bounded GitHub issues without inventing strategy [`.codex/skills/docs-to-issue/SKILL.md`:6-20].
+- Issues cite source anchors and source docs [`.codex/skills/docs-to-issue/SKILL.md`:83-104].
+- Every AC needs a resolvable `Verify:` target before `agent:ready` [`.codex/skills/docs-to-issue/SKILL.md`:92-95], [docs/development/DEV_WORKFLOW.md:226-255].
+
+Observed code-to-doc feedback:
+
+- PR template requires owner-doc writeback resolution [`.github/pull_request_template.md`:34-39].
+- Verification checks owner-doc writeback and roadmap cleanup before closure [`.codex/skills/verification-and-closure/SKILL.md`:46-77].
+- Post-merge owner-doc skill chooses exactly: docs PR, follow-up issue, or no-change receipt [`.codex/skills/post-merge-owner-doc/SKILL.md`:44-68].
+
+Observed contradiction handling:
+
+- Current-state SoT wins over roadmap/design for current runtime [docs/DOCS_INDEX.md:80-90].
+- Target-state docs must not be presented as shipped behavior [AGENTS.md:89-101], [docs/architecture/SBS_OPERATING_MODEL.md:28-34].
+
+```mermaid
+flowchart TD
+  Intent["Rasmus intent / strategy"] --> Docs["Docs-as-code authority"]
+  Docs --> Index["DOCS_INDEX role routing"]
+  Index --> Owner["Owner docs / specs"]
+  Owner --> Issue["GitHub Issue contract with Source Anchors + Verify"]
+  Issue --> Claim["Dispatcher / claim"]
+  Claim --> PR["Implementation or docs PR"]
+  PR --> CI["CI + local validation + review gate"]
+  CI --> Merge["Merge / delivery receipt"]
+  Merge --> OwnerCheck["Post-merge owner-doc classifier"]
+  OwnerCheck -->|current truth changed| OwnerPR["Owner-doc PR"]
+  OwnerCheck -->|needs judgment| Followup["Bounded follow-up issue"]
+  OwnerCheck -->|no change| Receipt["No-change receipt"]
+  OwnerPR --> Docs
+  Followup --> Issue
+  Merge --> Learning["BuilderOps LearningSignal when divergence"]
+  Learning --> Retro["Learning retrospective"]
+  Retro --> Docs
+```
+
+## 4. End-To-End Builder System Process Map
+
+| Lane | Trigger | Actor | Input | Authority file(s) | Skill(s) | Script/workflow | Output | Mutation authority | Verification gate | Decision points | Feedback loops | Failure path | Human exception condition | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| intent capture | Human strategy/request | Rasmus + agent | Intent | `PROJECT_KERNEL`, `DOCS_INDEX`, owner docs | docs-authoring | PR/docs | Updated docs or issue-ready spec | PR | Docs review | current vs target | docs-to-issue | clarify docs | intent ambiguity | [docs/DOCS_INDEX.md:24-47] |
+| docs/spec authoring | Docs-only change | Agent | Existing docs | `AGENTS.md`, `DOCS_INDEX`, `DEV_WORKFLOW` | docs-authoring | docs/governance checks | Docs PR | PR | factual claim verification | owner doc role | docs-to-issue later | switch to issue-first if implementation | authority ambiguity | [`.codex/skills/docs-authoring/SKILL.md`:18-48] |
+| docs-to-issue | Active docs become executable work | Agent | Docs/source anchors | `ISSUE_CONTRACT`, `docs-to-issue` | docs-to-issue | gh/Project ops | Issue | GitHub | `Verify:` markers | executable? duplicate? ready? | issue maintenance | Backlog/needs-human | named human decision | [`.codex/skills/docs-to-issue/SKILL.md`:69-119] |
+| feature breakdown | Capability too large | Agent | Owner/spec docs | feature-breakdown | feature-breakdown | gh/docs | Spec dir, parent/child issues | PR + GitHub | task specs with ACs | parent vs child | validation hub | blocked parent | target acceptance ambiguity | [`.codex/skills/feature-breakdown/SKILL.md`:25-47], [`.codex/skills/feature-breakdown/SKILL.md`:107-129] |
+| issue intake | Issue opened/edited/labeled | GitHub Action + agent | Issue body | issue template, governance | docs-to-issue/learning-to-issue | `issue-pr-governance.yml` | Checked issue | Issue labels/comments | section/source checks | label/status | maintenance | failed governance check | missing human input | [`.github/workflows/issue-pr-governance.yml`:3-78] |
+| issue validation | Before coding | Agent | Issue | `AGENT_OPERATING_PROTOCOL`, issue contract | issue-to-code | source-anchor validation | pass/block | labels/Project | all `Verify:` targets | source truth sufficient? | issue maintenance | `agent:blocked` or `needs-human` | authority unclear | [`.codex/skills/issue-to-code/SKILL.md`:19-72] |
+| readiness classification | Queue eligibility | Agent + GitHub state | labels/Project | label taxonomy, lifecycle matrix | issue-maintenance | Project ops | Ready/Backlog | labels/Project | `agent:ready` + Status=Ready | agent-ready? | drift repair | no pickup | named decision | [`.codex/skills/_shared/LABEL_TAXONOMY.md`:8-37], [`.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md`:13-40] |
+| dispatcher / queue selection | Work pickup | Agent + dispatcher | Ready tasks | dispatcher contract | issue-to-code | `python -m app.dispatcher next/claim` | Lease/task | dispatcher DB + GitHub label | lease acquired | priority and fit | release/reclaim | fallback to GitHub-label-only | dispatcher unavailable plus unsafe fallback | [docs/AGENT_ISSUE_DISPATCHER.md:165-180] |
+| model routing | Before work | Agent | risk/TCD | `AGENTS.md` TCD | relevant skill | none | model/effort choice | session only | review outcome | under/over-model? | learning | escalate capability | >10 min human steering or repeated failures | [AGENTS.md:112-157] |
+| skill routing | Task start | Agent | task class | `AGENTS.md`, skills README | matching skill | none | loaded skill | none | skill instructions | narrowest skill | learning | wrong skill -> repair | unclear route | [AGENTS.md:18-68], [`.codex/skills/README.md`:64-128] |
+| context building | Before edit | Agent | source anchors | `DOCS_INDEX`, owner docs | active skill | rg/cat | context | none | owner docs read | current vs target | docs repair | stop | owner doc unavailable | [docs/DOCS_INDEX.md:11-17], [docs/development/AGENT_OPERATING_PROTOCOL.md:23-37] |
+| repo orientation | Before edit | Agent | git/docs | `AGENTS.md` | agentic-pkm/skill | `git status`, rg | state | none | diff/status | dirty tree? | resume-work | stop if conflict | destructive ambiguity | [AGENTS.md:159-182] |
+| work pickup / claim | Active work begins | Agent | ready issue | issue-to-code | issue-to-code | `scripts/issue_pickup_claim.sh` | In Progress, label removed | GitHub/dispatcher | gh view verify | claim can proceed? | release/blocked | blocked label/comment | human decision | [`.codex/skills/issue-to-code/SKILL.md`:129-175], [scripts/issue_pickup_claim.sh:39-59] |
+| implementation | Claimed issue | Agent | issue + owner docs | issue-to-code | issue-to-code | local tests | diff | files | local validation | can proceed? | local repair | block issue | safety/authority risk | [`.codex/skills/issue-to-code/SKILL.md`:236-260] |
+| local validation | Before PR | Agent | changed files | `DEV_WORKFLOW` | issue-to-code | pytest/ruff/mypy | validation log | none | checks pass | required checks | local repair | fix or block | cannot verify | [docs/development/DEV_WORKFLOW.md:60-83] |
+| PR publication | Local diff ready | Agent | validated diff | publish-pr | publish-pr | git/gh | branch/commit/PR | GitHub | branch-truth gate | lane? file set? | PR repair | stop on drift | publication ambiguity | [`.codex/skills/publish-pr/SKILL.md`:53-159] |
+| PR contract validation | PR opened/edited | GitHub Action | PR body/files | PR template/governance | none | `issue-pr-governance.yml` | pass/fail check | none | pr-contract | issue link? lane? | body repair | check failure | none unless authority needed | [`.github/workflows/issue-pr-governance.yml`:79-218] |
+| CI | PR/push/schedule/manual | GitHub Actions | PR head | workflows | none | `.github/workflows/**` | checks/artifacts | none | check status | failure? stale? | CI repair | block | persistent outage waiver | `gh workflow list`; [`.github/workflows/ci.yml`:3-65] |
+| CI triage | CI fail/stale | Agent | check logs | PR escalation | pr-integration | `await_pr_checks.sh`, gh api | failure class | PR commits if caused | re-run/recheck | caused-by-PR? | CI repair loop | block | unresolved residual risk | [docs/development/PR_ESCALATION_PATHS.md:12-20] |
+| PR integration / repair | Triggered by CI/review/drift | Agent | PR | PR hot/escalation | pr-integration | git/gh/tests | ready-for-verification or blocked | PR commits/comments | current SHA + checks | blocking? | repair loops | blocked-* | repeated failure | [`.codex/skills/pr-integration/SKILL.md`:38-67] |
+| machine review | CI green before merge | Agent/subagent | PR diff | verification-and-closure | code-review via verification | local subagent | findings/pass | comments | review gate | blocking finding? | review repair | stop after repeated failure | owner waiver | [`.codex/skills/verification-and-closure/SKILL.md`:116-163] |
+| merge gate | Verification complete | Agent | PR + issue + CI | verification-and-closure | verification-and-closure | `await_pr_checks.sh`, gh | merge/block | GitHub | CI/review/ACs | eligible? | repair loops | no merge | unsafe waiver needed | [`.codex/skills/verification-and-closure/SKILL.md`:95-115] |
+| issue closure | After merge | Agent + automation | merged PR | lifecycle matrix | verification-and-closure | gh/Project ops | closed issue, Done | GitHub | readback | partial? | closure loop | follow-up issue | closure ambiguity | [`.codex/skills/verification-and-closure/SKILL.md`:194-208] |
+| post-merge docs/spec feedback | After merge | Agent + watchdog | merged diff | post-merge-owner-doc | post-merge-owner-doc | watchdog workflow | docs PR/follow-up/no-change | GitHub/PR | receipt exists | owner doc changed? | docs loop | nudge | wording judgment | [`.codex/skills/post-merge-owner-doc/SKILL.md`:44-68], [`.github/workflows/post-merge-owner-doc-watchdog.yml`:47-83] |
+| promotion/release | Test/prod promotion | Agent + operator | candidate ref/plan | release docs/skills | promote-* | release workflows/scripts | promotion receipt | operator + PR to stable | health/smoke | reversible? | rollback loop | rollback/block | prod/stable authority | [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113], `gh api stable protection` |
+| Mimer/product-lane work | Runtime client task | App agent/human | vault/runtime request | Mimer contracts | `mimer-*` | product APIs/files | governed runtime action | Product authority | Mimer receipts | user/runtime authority | Product loops | human gate | durable knowledge mutation | [`.codex/skills/README.md`:220-250] |
+| BuilderOps/governance work | Workflow/governance change | Agent | learning/worklog/docs | BuilderOps docs | capture-learning, learning-retrospective | BuilderOps CLI/API | records, proposals, PRs | BuilderOps + PR | receipt/projection | promote? | learning loop | fallback log | authority crossing | [docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md:40-81] |
+| learning/retrospective | Divergence or cadence | Agent | LearningSignals | delivery feedback | capture-learning, learning-retrospective | BuilderOps CLI | proposals/PRs/issues | BuilderOps + PR | receipt | upstream artifact? | retro loop | proposal-only | human review in default mode | [docs/development/DELIVERY_FEEDBACK_LOOP.md:67-188] |
+| human exception routing | Stop condition | Agent | failure packet | this doc + fallback policy | active skill | issue/PR comment | Human Exception packet | human | explicit decision | continue unsafe? | returns to queue | `agent:needs-human` | safety/authority/intent/failure-critical | [docs/architecture/SBS_OPERATING_MODEL.md:372-383] |
+
+## 5. Dispatcher And Routing Model
+
+Observed: the repo has an actual dispatcher implementation and a documented operational deployment. It is not merely a label convention. The dispatcher has SQLite task/lease/event storage, a CLI, GitHub pull-sync, queue/claim/heartbeat/complete commands, tests, and Makefile targets [docs/AGENT_ISSUE_DISPATCHER.md:21-36], [app/dispatcher/cli.py:31-32], [Makefile:356-361], [tests/dispatcher/test_agent_loop.py:1-30].
+
+Mechanism classification:
+
+| Mechanism | Classification | Current behavior | Evidence |
+| --- | --- | --- | --- |
+| how work becomes eligible | deterministic + agentic | Issue must be `agent:ready` and Status=Ready; issue must satisfy contract and `Verify:` targets | [`.codex/skills/issue-to-code/SKILL.md`:109-124], [docs/development/DEV_WORKFLOW.md:216-255] |
+| how work is queued | deterministic + partial | Dispatcher pull reads open `agent:ready` issues; GitHub Project Agent Queue also exists | [docs/AGENT_ISSUE_DISPATCHER.md:199-215], [`.github/github-governance.yml`:46-50] |
+| how an agent selects an issue | agentic | Priority order plus engineering judgment; dispatcher `next` returns ready tasks but no full lane scheduler | [`.codex/skills/issue-to-code/SKILL.md`:109-124], [docs/AGENT_ISSUE_DISPATCHER.md:168-170] |
+| labels affect readiness | deterministic | `agent:ready` only with Status=Ready; `agent:blocked` and `needs-human` with Backlog | [`.codex/skills/_shared/LABEL_TAXONOMY.md`:8-37] |
+| Project status affects routing | deterministic + best-effort | Status=Ready qualifies pickup; Project is projection and may drift | [docs/development/GITHUB_GOVERNANCE_SETUP.md:52-87] |
+| work is claimed | deterministic | Dispatcher lease then GitHub label removal; fallback GitHub-label-only | [`.codex/skills/issue-to-code/SKILL.md`:133-175] |
+| branch/worktree allocation | partially deterministic | Dedicated worktree required by policy; preflight detects shared root/drift; no central allocator | [AGENTS.md:171-182], [`.codex/skills/_shared/BRANCH_TRUTH_GATE.md`:9-77] |
+| model choice | agentic | TCD policy and adapter defaults; no deterministic router service | [AGENTS.md:112-157], [`.codex/agents/issue-set-coordinator.toml`:1-21] |
+| skill choice | agentic + documented | `AGENTS.md` and skill README route by task class | [AGENTS.md:18-68], [`.codex/skills/README.md`:64-128] |
+| docs/source context selection | agentic + documented | `DOCS_INDEX`, source anchors, owner docs; no context-builder script | [docs/DOCS_INDEX.md:11-17], [docs/development/AGENT_OPERATING_PROTOCOL.md:23-37] |
+| parallel collision prevention | deterministic + partial | Dispatcher leases, label removal, worktree preflight; no branch allocator | [docs/AGENT_ISSUE_DISPATCHER.md:152-180], [scripts/agent_workspace_preflight.sh:55-61] |
+| stale claims detection | deterministic + partial | Dispatcher TTL/heartbeat and reclaim semantics; GitHub-label-only fallback has weaker stale detection | [docs/AGENT_ISSUE_DISPATCHER.md:165-180], [tests/dispatcher/test_leases.py:194-222] |
+| failed work returns to queue | partially implemented | Dispatcher release/block; GitHub labels for blocked; no automated failed-work requeue from CI | [docs/AGENT_ISSUE_DISPATCHER.md:142-150], [`.codex/skills/issue-to-code/SKILL.md`:176-195] |
+| human exception removed from normal queue | deterministic in labels | `agent:needs-human` normally Backlog and not ready | [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27] |
+
+```mermaid
+flowchart TD
+  Issue["GitHub Issue"] --> Shape{"Contract + Verify valid?"}
+  Shape -->|no| Repair["issue maintenance / docs repair"]
+  Shape -->|yes| Ready{"agent:ready + Status=Ready?"}
+  Ready -->|no| Backlog["Backlog / blocked / needs-human"]
+  Ready -->|yes| Pull["dispatcher pull"]
+  Pull --> Queue["dispatcher ready queue"]
+  Queue --> Next["dispatcher next"]
+  Next --> Preflight["workspace preflight"]
+  Preflight -->|fail| Block["block/release"]
+  Preflight -->|pass| Lease["claim lease TTL"]
+  Lease --> Label["remove agent:ready + Status In Progress"]
+  Label --> Work["implementation"]
+  Work --> Heartbeat["heartbeat while active"]
+  Work --> PR["publish PR"]
+  PR --> Complete["complete/release after closure"]
+  Backlog --> Human["human exception when agent:needs-human"]
+```
+
+## 6. State Machines
+
+### Issue Lifecycle
+
+```mermaid
+stateDiagram-v2
+  [*] --> IntentCaptured
+  IntentCaptured --> SpecNeeded
+  SpecNeeded --> IssueDrafted
+  IssueDrafted --> NeedsRepair: malformed contract
+  NeedsRepair --> IssueDrafted
+  IssueDrafted --> NeedsHuman: authority/intent missing
+  NeedsHuman --> IssueDrafted: decision supplied
+  IssueDrafted --> AgentReady: agent:ready + Status Ready
+  AgentReady --> Claimed: dispatcher/GitHub claim
+  Claimed --> InImplementation
+  InImplementation --> PRPublished
+  PRPublished --> CIFailing
+  CIFailing --> PRRepair
+  PRRepair --> PRPublished
+  PRPublished --> FrontierRescue: repeated failure / unclear route
+  FrontierRescue --> NeedsHuman
+  PRPublished --> MergeEligible: CI + review + ACs
+  MergeEligible --> Merged
+  Merged --> Closure
+  Closure --> PostMergeDocs
+  PostMergeDocs --> Done
+```
+
+### PR Lifecycle
+
+```mermaid
+stateDiagram-v2
+  [*] --> LocalDiff
+  LocalDiff --> Published
+  Published --> ContractCheck
+  ContractCheck --> Repair: failed pr-contract
+  Repair --> Published
+  ContractCheck --> CI
+  CI --> CIRepair: failing or stale
+  CIRepair --> CI
+  CI --> ReviewGate: green
+  ReviewGate --> ReviewRepair: blocking findings
+  ReviewRepair --> CI
+  ReviewGate --> MergeEligible: clean/fixed/waived
+  MergeEligible --> Merged
+  Merged --> OwnerDocReceipt
+  OwnerDocReceipt --> Done
+  MergeEligible --> HumanException: gate unavailable/unsafe waiver
+```
+
+### Agent Work Lifecycle
+
+```mermaid
+stateDiagram-v2
+  [*] --> Orient
+  Orient --> RouteSkill
+  RouteSkill --> BuildContext
+  BuildContext --> Claim
+  Claim --> Implement
+  Implement --> Validate
+  Validate --> Repair
+  Repair --> Validate
+  Validate --> Publish
+  Publish --> Integrate
+  Integrate --> VerifyClose
+  VerifyClose --> CompleteLease
+  CompleteLease --> Receipt
+  Receipt --> [*]
+  Claim --> Release: blocked
+  Validate --> NeedsHuman: unsafe ambiguity
+```
+
+### CI Repair Lifecycle
+
+```mermaid
+stateDiagram-v2
+  [*] --> AwaitChecks
+  AwaitChecks --> Green
+  AwaitChecks --> Failed
+  Failed --> Classify
+  Classify --> CausedByPR
+  Classify --> PreExisting
+  Classify --> Unresolved
+  CausedByPR --> Patch
+  Patch --> AwaitChecks
+  PreExisting --> ReceiptOrFollowup
+  ReceiptOrFollowup --> Green
+  Unresolved --> Blocked
+  Blocked --> HumanException
+```
+
+### Docs/Spec Feedback Lifecycle
+
+```mermaid
+stateDiagram-v2
+  [*] --> MergeObserved
+  MergeObserved --> DiffClassified
+  DiffClassified --> DocsPR: owner-doc clearly wrong
+  DiffClassified --> FollowupIssue: wording needs judgment
+  DiffClassified --> NoChangeReceipt
+  DocsPR --> ReviewMerge
+  FollowupIssue --> Backlog
+  NoChangeReceipt --> Complete
+  ReviewMerge --> Complete
+  Backlog --> Complete
+```
+
+### Human Exception Lifecycle
+
+```mermaid
+stateDiagram-v2
+  [*] --> AutonomousWork
+  AutonomousWork --> ExceptionDetected
+  ExceptionDetected --> PacketBuilt
+  PacketBuilt --> AgentNeedsHuman
+  AgentNeedsHuman --> HumanDecision
+  HumanDecision --> ResumeAutonomy: decision/authority supplied
+  HumanDecision --> Stop: cancelled/rejected
+  ResumeAutonomy --> AutonomousWork
+```
+
+## 7. Decision Points
+
+| Decision point | Current mechanism | Deterministic? | Agentic? | Human? | Inputs | Outputs | Failure mode | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Is source truth sufficient? | `DOCS_INDEX` + operating protocol | partial | yes | if unclear | source anchors/docs | proceed/repair | target-state treated as shipped | [docs/DOCS_INDEX.md:80-90], [docs/development/AGENT_OPERATING_PROTOCOL.md:73-83] |
+| Is this current-state or target-state? | doc role headers/index | partial | yes | if ambiguous | doc role | classification | false current claim | [docs/DOCS_INDEX.md:11-17], [docs/architecture/SBS_OPERATING_MODEL.md:28-34] |
+| Is an issue executable? | issue contract + `Verify:` | partial | yes | no | ACs/body | ready/repair | untestable AC | [`.codex/skills/_shared/ISSUE_CONTRACT.md`:53-72] |
+| Is issue agent-ready? | labels + Project status | yes | yes | no | labels/status | queue eligible | drift | [`.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md`:13-40] |
+| Product/Runtime, Builder, or boundary? | SBS classification | partial | yes | if unclear | touched surface | SBS impact | wrong authority | [docs/architecture/SBS_OPERATING_MODEL.md:95-118] |
+| Risk level? | TCD + PR hot path | partial | yes | no | lane/touched surface | low/normal/high | under-modeling | [AGENTS.md:142-157], [docs/development/PR_HOT_PATH.md:12-25] |
+| Docs-only/code/runtime/governance/release/Mimer/BuilderOps? | lane and skill routing | partial | yes | no | files/scope | lane | wrong lane | [docs/development/DEV_WORKFLOW.md:107-169], [`.codex/skills/README.md`:130-164] |
+| Requires frontier planning? | feature-breakdown/deliver-issue-set | no | yes | maybe | scope size | breakdown | parent issue used as slice | [`.codex/skills/feature-breakdown/SKILL.md`:25-47] |
+| Requires human exception? | stop conditions + fallback | partial | yes | yes | ambiguity/failure | packet/blocker | unnecessary interrupt or unsafe continue | [AGENTS.md:161-169], [docs/architecture/SBS_OPERATING_MODEL.md:372-383] |
+| Can an agent claim? | dispatcher/preflight/labels | yes | yes | no | queue/preflight | lease/claim | double claim | [docs/AGENT_ISSUE_DISPATCHER.md:152-180] |
+| Can implementation proceed? | issue-to-code stop conditions | partial | yes | if unclear | issue/docs/env | proceed/block | scope drift | [`.codex/skills/issue-to-code/SKILL.md`:62-72] |
+| Which tests/checks required? | `DEV_WORKFLOW`, issue `Verify:` | partial | yes | no | touched files/ACs | validation plan | missing coverage | [docs/development/DEV_WORKFLOW.md:60-83] |
+| Can CI failure be auto-repaired? | PR escalation | no | yes | if unresolved | logs/checks | fix/follow-up/block | blind retry | [docs/development/PR_ESCALATION_PATHS.md:12-20] |
+| Is review finding blocking? | review gate rules | no | yes | waiver only | findings | fix/waive/block | unresolved finding merged | [`.codex/skills/verification-and-closure/SKILL.md`:131-163] |
+| PR eligible for auto-merge? | verification prerequisites | partial | yes | waiver only | CI/review/ACs | merge/block | main unprotected | [`.codex/skills/verification-and-closure/SKILL.md`:103-115], `gh api main protection -> 404` |
+| Can issue be closed? | verification/closure | partial | yes | if partial/ambiguous | merge/ACs | close/follow-up | false done | [`.codex/skills/verification-and-closure/SKILL.md`:209-217] |
+| Owner doc/spec update needed? | PR template + post-merge skill | partial | yes | if wording judgment | diff | docs PR/follow-up/no-change | drift | [`.github/pull_request_template.md`:34-39], [`.codex/skills/post-merge-owner-doc/SKILL.md`:76-85] |
+| Promotion needs operator authority? | release skills | yes | yes | yes | plan | execute/stop | prod mutation without ack | [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113] |
+| Learning signal promotion? | capture-learning/retro | partial | yes | default retro review | divergence | record/proposal/issue | learning lost or product memory contamination | [`.codex/skills/capture-learning/SKILL.md`:19-90], [docs/architecture/SBS_OPERATING_MODEL.md:235-261] |
+
+## 8. Feedback Loops
+
+```mermaid
+flowchart TD
+  MalformedIssue["Malformed issue"] --> Maintenance["issue-maintenance-change-control"]
+  Maintenance --> RepairContract["repair sections / Verify / labels"]
+  RepairContract --> Ready["agent:ready + Status Ready"]
+```
+
+Issue readiness repair loop: triggered by malformed issue, stale anchors, missing `Verify:`, or drift; actor is agent/maintenance skill; no max retry is defined; state is GitHub issue body/labels/Project; escalates to `agent:needs-human` when authority or input is missing [docs/development/AGENT_OPERATING_PROTOCOL.md:73-83], [`.codex/skills/README.md`:168-178].
+
+```mermaid
+flowchart TD
+  Docs["Owner/spec docs"] --> Candidate["candidate work"]
+  Candidate --> Issue["GitHub issue"]
+  Issue --> PR["PR"]
+  PR --> Merge["merge"]
+  Merge --> OwnerDoc["owner-doc writeback"]
+  OwnerDoc --> Docs
+```
+
+Docs/spec-to-issue loop: triggered when active docs become bounded executable work; no max retry; state is source docs plus issue source anchors; returns to normal flow when issue is `agent:ready`; escalates when work is vague or needs owner judgment [`.codex/skills/docs-to-issue/SKILL.md`:69-119].
+
+```mermaid
+flowchart TD
+  Implement["Implement"] --> Validate["Local validation"]
+  Validate -->|fail| Fix["Fix"]
+  Fix --> Validate
+  Validate -->|pass| Publish["Publish PR"]
+```
+
+Implementation/local validation repair loop: triggered by local failing check; no max retry in scripts; evidence is terminal output/PR body; escalates under TCD triggers such as two failed attempts or hard-to-assess risk [AGENTS.md:142-149].
+
+```mermaid
+flowchart TD
+  CI["CI"] -->|fail/stale| Classify["Classify failure"]
+  Classify -->|caused by PR| Patch["Patch branch"]
+  Patch --> CI
+  Classify -->|pre-existing| Receipt["Receipt/follow-up"]
+  Classify -->|unresolved| Block["Block"]
+```
+
+CI repair loop: triggered by failing/missing/stale check; actor is pr-integration/verification; stop condition is caused-by-PR fixed, pre-existing receipted, or unresolved block; evidence is CI checks/logs; returns by re-running checks [docs/development/PR_ESCALATION_PATHS.md:12-20].
+
+```mermaid
+flowchart TD
+  Review["Local review gate"] --> Findings{"Findings?"}
+  Findings -->|none| Pass["Pass"]
+  Findings -->|blocking| Fix["Fix"]
+  Fix --> ReReview["Re-review"]
+  ReReview --> Findings
+  Findings -->|repeats after 2 attempts| Human["Human exception"]
+```
+
+Review repair loop: re-run after substantive fixes; stop after a clean round, two clean rounds for high-risk surfaces, or repeated same mechanism after two attempts [`.codex/skills/verification-and-closure/SKILL.md`:145-163].
+
+Frontier rescue loop: triggered by repeated failure, feature-level issue, hidden invariants, or route ambiguity; actor is agent; state moves to issue maintenance, feature-breakdown, or `agent:needs-human`; evidence is blocker receipt or follow-up issue [`.codex/skills/issue-to-code/SKILL.md`:121-124], [AGENTS.md:142-149].
+
+Closure loop: triggered after merge/verification; actor is verification-and-closure; state is issue/PR/Project/dispatcher; returns to done only after receipt, labels removed, Project Done, owner-doc receipt, and dispatcher complete/release when applicable [`.codex/skills/verification-and-closure/SKILL.md`:194-208].
+
+Post-merge docs/spec loop: triggered after merged PR; actor is post-merge skill plus watchdog nudge; outputs docs PR, follow-up issue, or no-change receipt [`.codex/skills/post-merge-owner-doc/SKILL.md`:44-68], [`.github/workflows/post-merge-owner-doc-watchdog.yml`:47-83].
+
+Learning/retrospective loop: triggered by divergence or approximately 10 delivery-learning records; actor is capture-learning/learning-retrospective; default mode proposes edits for human review; autonomous mode only when explicitly requested [`.codex/skills/learning-retrospective/SKILL.md`:25-32], [`.codex/skills/learning-retrospective/SKILL.md`:108-145].
+
+Promotion/rollback loop: triggered by test/prod promotion; actor is release skills plus operator; stop condition is PASS receipt or rollback verification; human/operator ack is required for prod promotion [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113].
+
+Human exception loop: triggered by safety-critical, authority-critical, intent-critical, or autonomous-failure-critical condition; state is `agent:needs-human` plus packet; returns when decision supplies authority [docs/architecture/SBS_OPERATING_MODEL.md:372-383].
+
+## 9. Automation Surface Matrix
+
+| Step | Current form | Better target form | Why | Attention reduction | Token reduction | Risk | Evidence |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| issue section validation | GitHub Action | deterministic script + GitHub Action | Keep malformed issues out of ready queue | medium | low | low | [`.github/workflows/issue-pr-governance.yml`:40-78] |
+| `Verify:` validation | skill-enforced prose | deterministic script + GitHub Action | Detect non-executable ACs before pickup | high | medium | medium | [docs/development/DEV_WORKFLOW.md:226-255] |
+| source anchor validation | script in Action | deterministic script | Already appropriate | medium | medium | low | [`.github/workflows/issue-pr-governance.yml`:68-78] |
+| dispatcher pull/claim | script/CLI + skill | hybrid: script + agent | Keep queue deterministic while selection remains judgment-based | high | medium | medium | [docs/AGENT_ISSUE_DISPATCHER.md:165-180] |
+| model routing | agent policy | shared contract, later deterministic hints | Avoid under-modeling; no deterministic model service yet | medium | low | medium | [AGENTS.md:112-157] |
+| skill routing | docs/skill index | shared contract + optional checker | Prevent wrong workflow entry | medium | medium | low | [`.codex/skills/README.md`:64-128] |
+| context builder | agent reading | hybrid: script + agent | Build compact source pack from issue anchors | high | high | medium | [docs/development/AGENT_OPERATING_PROTOCOL.md:23-37] |
+| worktree/branch preflight | deterministic script | Claude hook + script for local sessions | Local safety before mutation | high | medium | medium if hook blocks valid work | [scripts/agent_workspace_preflight.sh:55-61] |
+| CI wait | script | deterministic script | Already avoids GraphQL drain | high | high | low | [scripts/await_pr_checks.sh:1-25] |
+| CI failure classification | skill prose | hybrid: GitHub Action + agent artifact | Artifact logs first, agent patches second | high | high | medium | [docs/development/PR_ESCALATION_PATHS.md:12-20] |
+| review gate | local subagent | hybrid: agent + PR comments | Requires semantic review | high | low | medium | [`.codex/skills/verification-and-closure/SKILL.md`:116-163] |
+| owner-doc classifier | skill + watchdog nudge | hybrid: GitHub Action artifact + agent | Event can collect diff/context; agent judges wording | high | high | medium | [`.github/workflows/post-merge-owner-doc-watchdog.yml`:47-83] |
+| learning capture | skill + BuilderOps | skill + deterministic receipt helpers | Preserve learning without product-memory contamination | medium | medium | low | [docs/development/DELIVERY_FEEDBACK_LOOP.md:173-188] |
+| human exception | implicit labels | manual exception gate + packet template | Make escalation bounded and useful | high | medium | low | [docs/architecture/SBS_OPERATING_MODEL.md:372-383] |
+
+## 10. Hooks And Local Automation Assessment
+
+Claude Code hooks currently present: not_found. Repo-level `.claude` contains `settings.json` and `settings.local.json`; no repo-level `.claude/hooks/**` files were found by `find .claude -path '.claude/worktrees' -prune -o -type f -print` [`.claude/settings.json`:1-11], [`.claude/settings.local.json`:1-17].
+
+Local automation configs currently present: observed. `.claude/settings.json` and `.claude/settings.local.json` allow specific Bash commands; `.codex/config.toml` and `.codex/agents/**` provide Codex configuration/adapters [`.claude/settings.json`:1-11], [`.claude/settings.local.json`:1-17], [`.codex/agents/verification-closer.toml`:1-21].
+
+Candidate hooks:
+
+| Hook class | Event type | Target form | Should become hook? | Reason | Risk | Evidence |
+| --- | --- | --- | --- | --- | --- | --- |
+| block dangerous Bash commands | PreToolUse | Claude hook | yes, human-gated allowlist | Prevent destructive operations before shell execution | false positives | current settings allow specific Bash patterns [`.claude/settings.json`:1-11] |
+| block prod/vault/secret/migration commands | PreToolUse | Claude hook + manual exception | yes | Prod/stable/vault are stop-condition surfaces | blocking legitimate ops | [docs/development/AGENT_OPERATING_PROTOCOL.md:31-35] |
+| verify repo root and branch | SessionStart / PreToolUse | hook invoking script | yes | Redirect and branch drift are local-session risks | low | [`.codex/skills/_shared/BRANCH_TRUTH_GATE.md`:9-77] |
+| run formatter/lint subset after edits | PostToolUse / Stop | script, not hook for all edits | maybe | Deterministic validation belongs in scripts; hook should only suggest or receipt | latency | [docs/development/DEV_WORKFLOW.md:60-83] |
+| reduce long test logs | PostToolUse | hook or wrapper script | maybe | Saves tokens after command output | hiding evidence | [`.codex/skills/_shared/CI_WAIT_CONTRACT.md`:22-82] |
+| create local validation receipt | Stop | hook + script | yes for local sessions | Reduces forgotten receipts | stale receipts | [docs/development/PR_HOT_PATH.md:50-54] |
+| prevent protected branch mutation | PreToolUse | hook | yes | Local safety before Git operations | false positive for deliberate release work | [AGENTS.md:171-182] |
+| suppress routine notifications | Notification | hook | maybe | Reduce attention drain | missed important blockers | [AGENTS.md:130-169] |
+| emit Human Exception packet | Stop / SubagentStop | hook/template | yes, only on stop-condition state | Ensures escalation is actionable | over-escalation | [docs/architecture/SBS_OPERATING_MODEL.md:372-383] |
+| PreCompact context receipt | PreCompact | hook | yes | Preserve work state before compaction | stale context | [`.codex/skills/resume-work/SKILL.md` listed in AGENTS.md:24-25] |
+
+Tasks that should stay scripts: source-anchor validation, branch/worktree preflight, CI wait, skills consistency lint, project status reconcile, dispatcher operations. These are deterministic validation/mutation surfaces and already have scripts or CLI paths [scripts/agent_workspace_preflight.sh:1-61], [scripts/await_pr_checks.sh:1-25], [`.codex/skills/README.md`:189-195].
+
+Tasks that belong in GitHub Actions: issue/PR contract validation, PR checks, project projection, post-merge watchdog, and artifact-only CI failure context collection. These are GitHub event concerns, not local editor session concerns [`.github/workflows/issue-pr-governance.yml`:3-12], [`.github/workflows/project-status-reconcile.yml`:3-23].
+
+Forbidden or human-gated hooks: any hook that writes GitHub state, merges, pushes, executes production migrations, edits vault/HKA content, or applies promotion. Those cross authority boundaries and must use explicit commands, PRs, or operator acknowledgement [docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md:30-45], [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113].
+
+## 11. GitHub Event Automation Assessment
+
+| Event | Current workflow | Candidate automation | Required permissions | Safe first mode | Human exception condition |
+| --- | --- | --- | --- | --- | --- |
+| issues opened/edited/labeled | `issue-pr-governance`, `project-status-reconcile` | Readiness artifact with missing `Verify:` and source-anchor report | issues read/write, contents read | label-only or comment-only | issue requires named human input |
+| pull_request opened/synchronize/reopened/ready_for_review | CI, PR governance, project PR workflows | Evidence pack builder, PR contract artifact, CI context collector | contents read, pull-requests read/write for comments | artifact-only/comment-only | merge or patch authority needed |
+| pull_request_review | none observed as trigger | Review finding classifier | pull-requests read | observe-only/comment-only | ambiguous blocking review |
+| issue_comment | none observed as trigger | Command parser for `/dispatch`, `/repair`, `/evidence` in observe-only | issues read | observe-only | mutation requested |
+| workflow_run completed/failure | none observed as trigger | CI failure context collector | actions read, contents read | artifact-only | patch/merge decision |
+| push to agent branches | CI workflows on PR/push | Branch drift/evidence update | contents read | artifact-only | force-push/branch rewrite |
+| schedule | harness-selfverify, integration-nightly, project reconcile | queue health, stale claim report | read mostly | artifact-only | stale claim override |
+| workflow_dispatch | many workflows | manual diagnostics | per workflow | observe-only/artifact-only | operator action |
+| repository_dispatch | missing | external dispatcher trigger | contents/actions | observe-only | external actor trust unclear |
+
+Evidence: workflow triggers are observed in `.github/workflows/issue-pr-governance.yml` [`.github/workflows/issue-pr-governance.yml`:3-12], project reconcile [`.github/workflows/project-status-reconcile.yml`:3-23], CI [`.github/workflows/ci.yml`:3-6], CI smoke [`.github/workflows/ci-smoke.yaml`:4-13], harness selfverify [`.github/workflows/harness-selfverify.yml`:10-16], and release UAT [`.github/workflows/release-uat.yaml`:3-7].
+
+## 12. Agent/Action Integration Points
+
+| Integration point | Trigger | Agent role | Inputs | Allowed tools | Forbidden tools | Output | Risk | First safe rollout |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| issue dispatcher | schedule/comment/ready label | queue classifier | issue body/labels/Project | gh read, dispatcher pull/next | merge/push/prod writes | dispatch recommendation artifact | duplicate claims | observe-only then label-only |
+| CI repair agent | workflow_run failure | failure classifier/patch proposer | logs, PR diff | gh read, checkout, tests | merge, force-push, prod | failure context + candidate patch | bad patch | artifact-only then patch-branch with guardrails |
+| PR review agent | PR opened/synchronize after CI green | semantic reviewer | PR diff, issue, docs | code-review comments | merge/labels except comments | inline findings | noisy findings | auto-review/comment-only |
+| post-merge docs agent | PR merged | owner-doc classifier | merge diff, issue, DOCS_INDEX | gh read/comment, docs PR only after guardrails | product/runtime mutation | docs PR/follow-up/no-change receipt | wrong owner-doc wording | artifact-only then comment-only |
+| evidence pack builder | PR opened/sync/check complete | evidence collector | issue, PR, checks, files | gh read, artifact upload | state mutation | markdown/JSON evidence pack | stale evidence | artifact-only |
+| human exception packet generator | stop condition/blocker | packet compiler | failures, tried actions, evidence | gh comment/issue label with confirmation | autonomous merge/production action | Human Exception packet | over-escalation | comment-only |
+
+Codex Action integration is partially present as an optional docs-guardian autofix inside `architecture-ci` when `CODEX_API_KEY` exists [`.github/workflows/architecture-ci.yaml`:31-38]. The current default PR review gate is local, not the Codex verdict path [`.codex/skills/verification-and-closure/SKILL.md`:116-170]. Claude Action integration is missing; Claude-specific repo evidence is a compatibility entrypoint and local settings only [CLAUDE.md:1-8], [`.claude/settings.json`:1-11].
+
+No patch/merge authority should be enabled until branch protection and required guardrails are documented and enforced. Main is currently unprotected by read-only API output, and repo auto-merge is disabled.
+
+## 13. Branch Protection And Merge Guardrails
+
+Current observed state:
+
+- `main` is the default branch and is not protected: `gh api repos/RasmusTho/agentic-pkm-mvp/branches/main/protection` returned HTTP 404 `Branch not protected`.
+- `stable` is protected with strict required checks `smoke`, `smoke-docker`, and `pr-contract`; required approving review count is 0 and CODEOWNERS review is not required by branch protection.
+- Repository auto-merge is disabled: `allow_auto_merge=false`.
+- CODEOWNERS exists and names Rasmus for prod-critical files, promotion skills, and migrations [`.github/CODEOWNERS`:1-9].
+- Docs claim required checks were added to `stable` on 2026-05-10 [docs/development/GITHUB_GOVERNANCE_SETUP.md:303-319].
+
+Required target state before autonomous merge is safe:
+
+- Protect `main` or make the autonomous target a protected branch.
+- Require the actual checks used by the Builder System (`pr-contract`, CI/smoke/import-linter as appropriate).
+- Decide whether CODEOWNERS review is required for prod-critical paths; current `stable` branch protection does not require it.
+- Keep auto-merge disabled until evidence pack, review gate, and closure gate are deterministic enough to audit.
+- Limit autonomous-merge eligibility to docs-only/governance Tier 1 or low-risk code after guardrails are enforced; prod/stable, migrations, release, vault/HKA/MEM authority, and external-facing irreversible changes remain human/operator exception paths [docs/development/AGENT_OPERATING_PROTOCOL.md:31-35], [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113].
+
+Conclusion: autonomous merge to `main` is currently not platform-safe. Skills require CI and review gates even when a branch is unprotected [`.codex/skills/verification-and-closure/SKILL.md`:95-115], but platform protection does not enforce those gates on `main`.
+
+## 14. Human Exception Model
+
+Rasmus may be called only for:
+
+- safety-critical cases: prod/stable, secrets, migrations, vault/HKA/MEM authority, irreversible/external-facing actions.
+- authority-critical cases: owner-doc/product authority, release operator acknowledgement, governance boundary crossings.
+- intent-critical ambiguity: strategic direction or preference cannot be inferred from docs/source anchors.
+- autonomous-failure-critical cases: bounded repair/review/rescue loops failed and continuing would be unsafe.
+
+Canonical packet:
+
+```markdown
+# Human Exception Required
+## Failure class
+safety-critical / authority-critical / intent-critical / autonomous-failure-critical
+## Original intent
+## Current state
+## What agents/automation tried
+## Evidence
+## Why autonomous continuation is unsafe
+## Options
+## Recommended option
+## Consequence of doing nothing
+```
+
+Where to store/post:
+
+- Issue-backed work: post on the governing issue and apply `agent:needs-human`; Status should be Backlog according to the label taxonomy and lifecycle matrix [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27], [`.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md`:18-20].
+- PR-blocked work: post on the PR and link the governing issue; do not merge without explicit owner waiver when a required review gate is unavailable [docs/architecture/SBS_OPERATING_MODEL.md:372-383].
+- BuilderOps material: create `PromotionIntent` or `LearningSignal` only when crossing authority or learning conditions are met; BuilderOps records do not themselves authorize Product/Runtime mutation [docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md:40-81].
+
+## 15. Gaps And Missing Components
+
+| Missing/implicit component | Why needed | Evidence searched | Current workaround | Risk of absence | Proposed first implementation |
+| --- | --- | --- | --- | --- | --- |
+| queue/readiness classifier | Make `agent:ready` deterministic beyond section/source checks | issue workflow, skills, scripts | agent judgment + governance check | malformed ready work | deterministic `Verify:`/DoR checker Action |
+| model router | Reduce under/over-modeling | `AGENTS.md`, `.codex/agents` | TCD prose + adapter defaults | excess human steering or cost | shared routing receipt schema |
+| skill router | Prevent wrong workflow | `AGENTS.md`, skills README | agent reads index | wrong lane | low-risk linter for skill entrypoint mentions |
+| context builder | Reduce repeated source loading | DOCS_INDEX, skills | agent manual reading | token/time waste | script builds context pack from issue source anchors |
+| worktree/branch allocator | Avoid branch collision | branch gate, dispatcher docs | preflight detects, no central reservation | late collision | dispatcher branch/worktree reservation extension |
+| CI failure context collector | Needed before self-heal | workflows, PR escalation | agent reads checks/logs | blind repair | workflow_run artifact pack |
+| repair orchestrator | Bounded automated CI/review repair | pr-integration | agentic loop | endless or unsafe retries | patch-branch agent with retry ledger |
+| review gate runner | Make local review auditable in GitHub | verification skill | local subagent by agent | invisible review gaps | comment-only review Action or receipt artifact |
+| evidence pack builder | Single source for PR closure | PR hot path, verification | PR body/manual receipt | stale/incomplete evidence | artifact-only Action |
+| autonomous closure gate | Before issue close/merge | verification skill | agent checklist | false Done | deterministic closure checklist artifact |
+| post-merge docs classifier | Event-driven docs loop | skill + watchdog | watchdog nudges human/agent | docs drift | artifact-only diff classifier then comment-only |
+| exception router | Standard escalation | labels/fallback policy | ad hoc blocker comments | unusable escalations | Human Exception packet template + label/comment helper |
+| hook layer | Local safety/token reduction | `.claude` search | no hooks | branch/root/prod mistakes | SessionStart/PreToolUse hooks that call existing scripts |
+| main branch protection | Platform guardrails | `gh api main protection` | skill discipline only | unsafe autonomous merge | protect `main` with required checks |
+| auto-merge policy | Closure automation | repo settings | disabled | unclear authority | document eligibility after branch protection |
+
+## 16. Mermaid Diagrams Required
+
+### System Context Diagram
+
+```mermaid
+flowchart LR
+  Rasmus["Rasmus: intent / preference / authority"] --> Docs["Docs-as-code authority"]
+  Docs --> Issues["GitHub Issues / Project"]
+  Issues --> Dispatcher["Dispatcher queue / leases"]
+  Dispatcher --> Agents["Builder agents + skills"]
+  Agents --> Repo["Repo files / branches / PRs"]
+  Repo --> CI["CI + governance workflows"]
+  CI --> Review["Review / verification gate"]
+  Review --> Merge["Merge + closure"]
+  Merge --> Docs
+  Agents --> BuilderOps["BuilderOps records"]
+  BuilderOps --> Learning["Learning retrospective"]
+  Learning --> Docs
+  Review --> Exception["Human exception path"]
+  Exception --> Rasmus
+```
+
+### Docs-As-Code Feedback Loop
+
+```mermaid
+flowchart TD
+  Docs["Owner/spec docs"] --> SourceAnchors["Source Anchors"]
+  SourceAnchors --> Issue["Issue contract + Verify"]
+  Issue --> PR["PR + validation"]
+  PR --> Merge["Merge"]
+  Merge --> OwnerDocCheck["Owner-doc classifier"]
+  OwnerDocCheck --> DocsPR["Docs PR"]
+  OwnerDocCheck --> Followup["Follow-up issue"]
+  OwnerDocCheck --> Receipt["No-change receipt"]
+  DocsPR --> Docs
+  Followup --> Issue
+```
+
+### End-To-End Builder System Flowchart
+
+```mermaid
+flowchart TD
+  Intent --> DocsAuthoring --> DocsToIssue --> Readiness --> Dispatcher --> Claim --> Implement --> LocalValidation --> PublishPR --> PRContract --> CI --> ReviewGate --> MergeGate --> Closure --> PostMergeDocs --> Learning
+  Readiness -->|bad contract| IssueRepair
+  CI -->|fail| CIRepair --> CI
+  ReviewGate -->|findings| ReviewRepair --> CI
+  MergeGate -->|unsafe| HumanException
+  PostMergeDocs -->|docs changed| DocsAuthoring
+  Learning -->|retro edit| DocsAuthoring
+```
+
+### Dispatcher/Routing Flow
+
+```mermaid
+flowchart TD
+  ReadyIssue["agent:ready + Status Ready"] --> PullSync["dispatcher pull"]
+  PullSync --> Queue["ready queue"]
+  Queue --> Next["next eligible"]
+  Next --> Preflight["worktree preflight"]
+  Preflight --> Claim["claim lease"]
+  Claim --> GithubClaim["remove agent:ready + In Progress"]
+  GithubClaim --> Work["work + heartbeat"]
+  Work --> Complete["complete/release"]
+```
+
+### Issue Lifecycle State Machine
+
+```mermaid
+stateDiagram-v2
+  [*] --> intent_captured
+  intent_captured --> spec_needed
+  spec_needed --> issue_drafted
+  issue_drafted --> needs_repair
+  needs_repair --> issue_drafted
+  issue_drafted --> needs_human
+  needs_human --> issue_drafted
+  issue_drafted --> agent_ready
+  agent_ready --> claimed
+  claimed --> in_implementation
+  in_implementation --> PR_published
+  PR_published --> CI_failing
+  CI_failing --> PR_repair
+  PR_repair --> PR_published
+  PR_published --> frontier_rescue
+  frontier_rescue --> needs_human
+  PR_published --> merge_eligible
+  merge_eligible --> merged
+  merged --> closure
+  closure --> post_merge_docs
+  post_merge_docs --> done
+```
+
+### PR Lifecycle State Machine
+
+```mermaid
+stateDiagram-v2
+  [*] --> draft_or_branch
+  draft_or_branch --> open_PR
+  open_PR --> pr_contract
+  pr_contract --> contract_repair
+  contract_repair --> open_PR
+  pr_contract --> CI
+  CI --> ci_repair
+  ci_repair --> CI
+  CI --> review_gate
+  review_gate --> review_repair
+  review_repair --> CI
+  review_gate --> merge_eligible
+  merge_eligible --> merged
+  merged --> post_merge_receipt
+  post_merge_receipt --> done
+```
+
+### CI Repair Loop
+
+```mermaid
+flowchart TD
+  Check["Check failure"] --> Classify["Classify"]
+  Classify -->|caused by PR| Patch["Patch branch"]
+  Patch --> Recheck["Re-run/recheck"]
+  Recheck --> Check
+  Classify -->|pre-existing| Followup["Receipt/follow-up"]
+  Classify -->|unresolved| Human["Human exception/block"]
+```
+
+### Review/Repair Loop
+
+```mermaid
+flowchart TD
+  Review["Review gate"] --> Blocking{"Blocking?"}
+  Blocking -->|no| Pass["Pass"]
+  Blocking -->|yes| Fix["Fix"]
+  Fix --> Reverify["Re-review/reverify"]
+  Reverify --> Review
+  Blocking -->|repeated| Exception["Human exception"]
+```
+
+### Post-Merge Docs/Spec Feedback Loop
+
+```mermaid
+flowchart TD
+  Merge["Merged PR"] --> Diff["Read diff"]
+  Diff --> Decision{"Owner doc impact?"}
+  Decision -->|clear| DocsPR["Open docs PR"]
+  Decision -->|judgment| Issue["Open follow-up issue"]
+  Decision -->|none| Receipt["No-change receipt"]
+  DocsPR --> Receipt
+  Issue --> Receipt
+```
+
+### Human Exception Loop
+
+```mermaid
+flowchart TD
+  Stop["Stop condition"] --> Packet["Human Exception packet"]
+  Packet --> Label["agent:needs-human / blocker"]
+  Label --> Decision["Rasmus decision"]
+  Decision -->|authorize| Resume["Resume autonomous flow"]
+  Decision -->|reject| Close["Close/block/discard"]
+```
+
+## 17. Recommended Implementation Sequence
+
+| PR | Goal | Mode | Why now | Rollback | Human exception risk |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Land this process map | docs-only | Required before automating dispatch/routing | Revert doc PR | low |
+| 2 | Add deterministic readiness/`Verify:` checker that reports only | observe-only | No dispatcher automation before readiness is deterministic | Remove workflow/script | low |
+| 3 | Add CI failure context artifact builder on `workflow_run` | artifact-only | No CI self-heal before context collector | Disable workflow | low |
+| 4 | Add evidence pack builder for PRs | artifact-only | Closure needs one auditable packet | Disable workflow | low |
+| 5 | Protect `main` with documented required checks | manual exception gate | No autonomous merge before branch protection | Remove rule | medium, platform authority |
+| 6 | Add post-merge docs classifier artifact | artifact-only | Watchdog currently nudges but does not classify | Disable workflow | low |
+| 7 | Add local Claude/Codex session hooks for repo root, branch, and dangerous command blocking | hybrid: script + agent | Reduces local safety failures and token reloads | Remove hook config | medium, false positives |
+| 8 | Add comment-only CI repair agent using failure context | comment-only | Suggest fixes without patch authority | Disable Action/comment command | medium |
+| 9 | Add patch-branch CI repair for low-risk deterministic failures | patch-branch | Only after context and guardrails exist | Disable patch mode | high |
+| 10 | Add autonomous closure for docs-only/governance Tier 1 with protected branch and evidence pack | autonomous-closure | Only after branch protection, evidence, and review gates are enforceable | Disable closure workflow | high |
+
+Rules applied:
+
+- Process map first.
+- No autonomous merge before branch protection.
+- No CI self-heal before CI failure context collector.
+- No routine human review gate.
+- No broad skill rewrite.
+- No full SkillOpt system yet.
+- Docs-as-code/spec structure remains primary authority.
+- Dispatcher/routing is documented before automating dispatch.
+- Rasmus is exception authority, not routine reviewer/dispatcher/triager/closer.
