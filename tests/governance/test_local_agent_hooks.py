@@ -31,11 +31,12 @@ def test_hooks_do_not_post_push_merge_label_project_or_close() -> None:
 
     assert "git push" in combined
     assert "not allowed" in combined
-    assert "pr merge" in combined
-    assert "issue\\s+" in combined and "close|edit|comment" in combined
     assert "project state" in combined
     assert "github.rest" not in combined
     assert "createcomment" not in combined
+    assert not classify_command("gh pr merge 1 --squash").allowed
+    assert not classify_command("gh pr close 1").allowed
+    assert not classify_command("gh issue comment 1 --body blocked").allowed
 
 
 def test_hooks_reuse_existing_preflight_or_small_safe_helpers() -> None:
@@ -57,6 +58,7 @@ def test_dangerous_command_guard_allows_validation_and_denies_prod_or_destructiv
         "git push origin main",
         "gh pr merge 1 --squash",
         "gh pr close 3230",
+        "gh --repo owner/repo pr close 3230",
         "gh issue edit 1 --add-label agent:ready",
         "gh label create blocked --color ff0000",
         "gh label delete blocked --yes",
@@ -64,7 +66,11 @@ def test_dangerous_command_guard_allows_validation_and_denies_prod_or_destructiv
         "gh api repos/owner/repo/issues/1/labels -X POST -f labels[]=blocked",
         "gh api repos/owner/repo/issues/1 --method PATCH -f title=blocked",
         "gh api repos/o/r/issues/1/comments -f body=hi",
+        "gh api repos/o/r/issues/1/comments -f=body=hi",
         "gh api repos/o/r/issues/1/labels -F labels[]=blocked",
+        "gh api repos/o/r/issues/1/labels -F=body=@msg.txt",
+        "gh api repos/o/r/issues/1/comments --raw-field body=hi",
+        "gh api repos/o/r/issues/1/comments --field body=hi",
         "gh api repos/o/r/issues/1 --method=POST",
         "gh api repos/o/r/issues/1 -X=PATCH",
         "prod migrate restart",

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import shlex
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -15,16 +16,16 @@ class GuardResult:
     reason: str
 
 
+_GH_GLOBAL_FLAGS_WITH_VALUE = {
+    "--hostname",
+    "-R",
+    "--repo",
+}
+
+
 _DENY_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\brm\s+-(?:[^\n]*[rf]|[^\n]*[fr])\b"), "destructive rm command"),
     (re.compile(r"\bgit\s+push\b"), "git push is not allowed from local hooks"),
-    (re.compile(r"\bgh\s+pr\s+merge\b"), "PR merge is not allowed from local hooks"),
-    (re.compile(r"\bgh\s+issue\s+(?:close|edit|comment)\b"), "issue mutation is not allowed from local hooks"),
-    (re.compile(r"\bgh\s+pr\s+(?:close|comment|edit|review)\b"), "PR mutation is not allowed from local hooks"),
-    (re.compile(r"\bgh\s+label\s+(?:create|delete|edit|clone)\b"), "label mutation is not allowed from local hooks"),
-    (re.compile(r"\bgh\s+project\s+"), "Project mutation is not allowed from local hooks"),
-    (re.compile(r"\bgh\s+api\s+graphql\b"), "Project/GitHub GraphQL mutation risk is not allowed from local hooks"),
-    (re.compile(r"\bgh\s+api\b[^\n]*(?:\s-X=?\s*(?:POST|PATCH|PUT|DELETE)|\s--method=?\s*(?:POST|PATCH|PUT|DELETE)|\s-[fF]\s+)", re.I), "mutating GitHub REST API calls are not allowed from local hooks"),
     (re.compile(r"\bstable\b.*\b(?:promote|promotion|push|reset)\b"), "stable promotion commands require explicit workflow authority"),
     (re.compile(r"\bprod(?:uction)?\b.*\b(?:migrate|restart|deploy|dump|restore)\b"), "production commands require explicit workflow authority"),
     (re.compile(r"\b(?:vault|secret|token)\b.*\b(?:write|delete|rotate|export)\b"), "vault/secret mutation is not allowed from local hooks"),
@@ -41,12 +42,54 @@ def classify_command(command: str) -> GuardResult:
     normalized = " ".join(command.strip().split())
     if not normalized:
         return GuardResult(allowed=False, reason="empty command")
+    gh_result = _classify_gh_command(normalized)
+    if gh_result is not None:
+        return gh_result
     for pattern, reason in _DENY_PATTERNS:
         if pattern.search(normalized):
             return GuardResult(allowed=False, reason=reason)
     if any(pattern.search(normalized) for pattern in _ALLOW_PATTERNS):
         return GuardResult(allowed=True, reason="allowed local validation or inspection command")
     return GuardResult(allowed=True, reason="allowed by default; no denied authority pattern matched")
+
+
+def _classify_gh_command(command: str) -> GuardResult | None:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    if not tokens or tokens[0] != "gh":
+        return None
+
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token in _GH_GLOBAL_FLAGS_WITH_VALUE:
+            index += 2
+            continue
+        if any(token.startswith(flag + "=") for flag in _GH_GLOBAL_FLAGS_WITH_VALUE):
+            index += 1
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        break
+
+    if index >= len(tokens):
+        return None
+    group = tokens[index]
+    action = tokens[index + 1] if index + 1 < len(tokens) else ""
+    if group == "api":
+        return GuardResult(allowed=False, reason="GitHub API calls are not allowed from local hooks")
+    if group == "project":
+        return GuardResult(allowed=False, reason="Project mutation is not allowed from local hooks")
+    if group == "label" and action in {"create", "delete", "edit", "clone"}:
+        return GuardResult(allowed=False, reason="label mutation is not allowed from local hooks")
+    if group == "issue" and action in {"close", "edit", "comment"}:
+        return GuardResult(allowed=False, reason="issue mutation is not allowed from local hooks")
+    if group == "pr" and action in {"close", "comment", "edit", "merge", "review"}:
+        return GuardResult(allowed=False, reason="PR mutation is not allowed from local hooks")
+    return None
 
 
 def _parser() -> argparse.ArgumentParser:
