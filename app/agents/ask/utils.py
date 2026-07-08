@@ -3,9 +3,9 @@ from __future__ import annotations
 from typing import Any, Iterable, List
 
 from app.agent_memory.recall_explanation import RecallExplanation
+from app.components.llm.fabric import LLMBackendTimeout
 from app.reasoning.models import ReasoningMode
 from app.reasoning.provider import run_reasoning
-from app.services.llm import LLMBackendTimeout
 from app.settings.models import AskSettings, DEFAULT_ASK_SYSTEM_PROMPT, build_ask_system_prompt
 from app.settings.runtime import get_settings_bundle
 

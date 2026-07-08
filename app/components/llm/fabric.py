@@ -5,7 +5,7 @@ from typing import Any
 
 from app.components.embeddings import EmbeddingClientProtocol, get_embedding_client
 from app.components.llm.router import LLMRouter, LLMRoute, LLMTaskIntent
-from app.services.llm import call_llm
+from app.services.llm import LLMBackendTimeout, call_llm
 
 
 @dataclass(frozen=True)
@@ -72,6 +72,7 @@ def describe_default_route_policies() -> dict[str, dict[str, object]]:
 __all__ = [
     "LLMTaskIntent",
     "LLMRoute",
+    "LLMBackendTimeout",
     "ChatClient",
     "get_chat_client",
     "get_embeddings_client",

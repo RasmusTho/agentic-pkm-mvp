@@ -4,9 +4,9 @@ from fastapi.testclient import TestClient
 
 from app.api.app import app
 from app.api.routes import ask as ask_module
+from app.components.llm.fabric import LLMBackendTimeout
 from app.retrieval.capability import RetrievalHit, RetrievalResponse
 from app.retrieval.hybrid import get_store
-from app.services.llm import LLMBackendTimeout
 
 
 def test_ask_route_uses_retrieval_capability_contract(monkeypatch) -> None:

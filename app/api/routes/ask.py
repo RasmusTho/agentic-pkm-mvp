@@ -8,11 +8,11 @@ from pydantic import AliasChoices, BaseModel, Field
 
 from app.agents.ask.graph import run_ask_graph
 from app.agents.ask.utils import get_ask_settings
+from app.components.llm.fabric import LLMBackendTimeout
 from app.events.models import new_trace_id
 from app.observability.status_service import record_ask_error, record_ask_query
 from app.retrieval.hybrid import get_store as get_hybrid_store
 from app.retrieval.hybrid import rebuild_from_durable_index
-from app.services.llm import LLMBackendTimeout
 
 _HYBRID_WARMED = False
 
