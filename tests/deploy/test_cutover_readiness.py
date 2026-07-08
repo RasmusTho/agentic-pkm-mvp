@@ -9,6 +9,7 @@ from app.release_channels.cutover_readiness import (
 
 
 TARGET_SHA = "314632235404cae1c51dc92b5f37174aa02b5fb0"
+OTHER_SHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 
 def _write_base_fixture(root: Path, *, include_all_services: bool = True) -> None:
@@ -136,6 +137,28 @@ def test_incomplete_recreate_set_fails(tmp_path: Path) -> None:
 
     assert not result.ok
     assert "heimdal-capture-watch" in result.summary()
+
+
+def test_deploy_pin_mismatch_fails_with_pin_and_target(tmp_path: Path) -> None:
+    _write_base_fixture(tmp_path)
+    (tmp_path / "config" / "deploy" / "prod.env").write_text(
+        f"APP_IMAGE_TAG={OTHER_SHA}\n",
+        encoding="utf-8",
+    )
+
+    result = check_cutover_readiness(
+        "prod",
+        TARGET_SHA,
+        root=tmp_path,
+        db_revision="001",
+        runner=_runner,
+    )
+
+    summary = result.summary()
+    assert not result.ok
+    assert "deploy pin mismatch" in summary
+    assert f"APP_IMAGE_TAG={OTHER_SHA}" in summary
+    assert f"target-sha={TARGET_SHA}" in summary
 
 
 def test_pending_forward_only_migrations_listed_and_gated(tmp_path: Path) -> None:

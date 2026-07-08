@@ -297,6 +297,28 @@ def _parse_deploy_pin(path: Path) -> str | None:
     return None
 
 
+def _normalize_sha_tag(value: str) -> str:
+    """Return the SHA-like tag portion of a deploy pin or image reference."""
+    tag = value.strip().lower()
+    if ":" in tag:
+        tag = tag.rsplit(":", 1)[1]
+    return tag
+
+
+def _sha_tags_match(pinned_tag: str, target_sha: str) -> bool:
+    pinned = _normalize_sha_tag(pinned_tag)
+    target = _normalize_sha_tag(target_sha)
+    if not (
+        re.fullmatch(r"[0-9a-f]{7,40}", pinned)
+        and re.fullmatch(r"[0-9a-f]{7,40}", target)
+    ):
+        return False
+    if pinned == target:
+        return True
+    longer, shorter = (pinned, target) if len(pinned) > len(target) else (target, pinned)
+    return len(shorter) >= 7 and longer.startswith(shorter)
+
+
 def _check_pin_sanity(
     root: Path,
     channel: str,
@@ -311,8 +333,16 @@ def _check_pin_sanity(
         return ReadinessCheck("pin-sanity", False, f"{pin_path} cannot be read: {exc}")
     if not pinned_tag:
         return ReadinessCheck("pin-sanity", False, f"{pin_path} is missing APP_IMAGE_TAG")
-    if not re.fullmatch(r"[0-9a-f]{7,40}", pinned_tag):
+    normalized_pin = _normalize_sha_tag(pinned_tag)
+    normalized_target = _normalize_sha_tag(target_sha)
+    if not re.fullmatch(r"[0-9a-f]{7,40}", normalized_pin):
         return ReadinessCheck("pin-sanity", False, "APP_IMAGE_TAG is not a git SHA-shaped tag")
+    if not _sha_tags_match(normalized_pin, normalized_target):
+        return ReadinessCheck(
+            "pin-sanity",
+            False,
+            f"deploy pin mismatch: APP_IMAGE_TAG={normalized_pin} target-sha={normalized_target}",
+        )
 
     git_result = _git_target_reachable(root, target_sha, promotion_ref, runner)
     if not git_result.ok:
