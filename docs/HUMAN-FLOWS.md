@@ -5,8 +5,8 @@ Owner: Product / human-function SoT
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-07-07
-Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/GLOSSARY.md, docs/adr/ADR-0044-research08-d1-conforms-to-acknowledged-sos.md, docs/adr/ADR-0050-cross-repo-governance-and-bifrost-client-repo.md, docs/adr/ADR-0051-episode-as-ontological-primitive.md, docs/adr/ADR-0054-episode-resolution-engine-is-a-mimer-organ.md, docs/HEIMDAL/CAPABILITY_CHARTER.md, docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md, docs/DECISION_RECEIPT_LOG/README.md, docs/KNOWLEDGE_ACQUISITION/README.md, docs/EPISODE_RESOLUTION_ENGINE/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, and current repo state at a47fd20a on 2026-07-07
+Last reviewed: 2026-07-08
+Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/GLOSSARY.md, docs/adr/ADR-0044-research08-d1-conforms-to-acknowledged-sos.md, docs/adr/ADR-0050-cross-repo-governance-and-bifrost-client-repo.md, docs/adr/ADR-0051-episode-as-ontological-primitive.md, docs/adr/ADR-0054-episode-resolution-engine-is-a-mimer-organ.md, docs/HEIMDAL/CAPABILITY_CHARTER.md, docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md, docs/DECISION_RECEIPT_LOG/README.md, docs/KNOWLEDGE_ACQUISITION/README.md, docs/EPISODE_RESOLUTION_ENGINE/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2133, and current repo state at 8e19a275 on 2026-07-08
 
 
 # Human Flows — Yggdrasil
