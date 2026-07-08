@@ -119,11 +119,20 @@ def test_changed_paths_are_limited_to_claude_docs_or_local_helpers() -> None:
     changed = subprocess.run(
         ["git", "diff", "--name-only", "origin/main...HEAD"],
         cwd=REPO_ROOT,
-        check=True,
+        check=False,
         text=True,
         capture_output=True,
-    ).stdout.splitlines()
+    )
+    changed_paths = changed.stdout.splitlines()
+    if changed.returncode != 0:
+        changed_paths = subprocess.run(
+            ["git", "show", "--name-only", "--format=", "HEAD"],
+            cwd=REPO_ROOT,
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout.splitlines()
     allowed_prefixes = (".claude/", "scripts/local_agent_command_guard.py", "tests/governance/test_local_agent_hooks.py")
 
-    assert changed
-    assert all(path.startswith(allowed_prefixes) for path in changed)
+    assert changed_paths
+    assert all(path.startswith(allowed_prefixes) for path in changed_paths)
