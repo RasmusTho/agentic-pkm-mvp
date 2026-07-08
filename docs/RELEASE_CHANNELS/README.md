@@ -103,7 +103,7 @@ These extend the cross-environment invariants in [ENVIRONMENTS.md §Cross-Enviro
 1. **DB-per-channel.** Each channel runs against a separate logical Postgres database in a single local cluster. The outbox, event log, and any schema-carrying table lives in the channel's own DB. No cross-channel writes. No cross-channel consumers.
 2. **Vault-per-channel.** No channel ever writes to another channel's vault root. The prod vault is never targeted by dev or test processes, including during migration, reset, or experimentation.
 3. **Runtime-artifacts-per-channel.** Watcher state, heartbeats, incident logs, event logs, and all other runtime artifacts stay under the channel's runtime-artifact directory. Already partially true via [ENVIRONMENTS.md §Stores and Persistence](../ENVIRONMENTS.md); this capability extends the same rule to the DB.
-4. **Code-ref-per-channel.** The prod process runs from a checkout pinned to the agreed **promotion ref**, which the prod runtime must match exactly with a clean working tree — no machine-local uncommitted state acting as durable truth (Issue #2527). That ref is currently `main` (interim baseline); a gated `stable` ref is the deferred target (see [Promotion model](#promotion-model) and [ADR-0040](../adr/ADR-0040-prod-promotion-ref-main-interim.md)). Divergence from the promotion ref or a dirty prod tree is flagged by the read-only fitness guard `app/release_channels/prod_ref_fitness.py`. Dev work must not be able to swap code under a running prod process. On a single-user machine this is satisfied by running prod and dev from separate checkouts (git worktrees are the recommended shape).
+4. **Code-ref-per-channel.** The prod process runs code authorized by the agreed **promotion ref**. In the interim checkout model, that means a checkout pinned to the promotion ref, and the prod runtime must match it exactly with a clean working tree — no machine-local uncommitted state acting as durable truth (Issue #2527). After pinned-image cutover, that means the channel's deploy pin names an image tag built from the authorized promotion ref/SHA, and the running `/version` evidence plus deploy receipt must match that SHA. The promotion ref is currently `main` (interim baseline); a gated `stable` ref is the deferred target (see [Promotion model](#promotion-model) and [ADR-0040](../adr/ADR-0040-prod-promotion-ref-main-interim.md)). Divergence from the checkout promotion ref or a dirty prod tree is flagged by the read-only fitness guard `app/release_channels/prod_ref_fitness.py`; pinned-image drift is detected by the deployment receipt/version checks owned by `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`. Dev work must not be able to swap code under a running prod process. On a single-user machine this is satisfied before cutover by separate checkouts (git worktrees are the recommended shape), and after cutover by the absence of a live repo bind-mount plus per-channel image pins.
 5. **Promotion is explicit and recorded.** No implicit promotion. Every stable-ref movement is an intentional operator act with a resolvable receipt (git tag annotation, log entry, or equivalent).
 6. **Rollback is always available.** The previous stable ref is always resolvable and the migration reversal path is always specified at promotion time. If a migration is not reversibly specified, the promotion is rejected.
 7. **Same contracts everywhere.** Channel separation does not change the event envelope, artifact identity, provenance, receipt semantics, or write-safety rules. A channel is an operational boundary, not a different product.
@@ -154,6 +154,17 @@ Prod's promotion ref is **`main`**. The prod process runs from a checkout pinned
 ```
 python -m app.release_channels.prod_ref_fitness /Users/rasmus/workspace --promotion-ref main
 ```
+
+### Deployment model switch: checkout now, pinned image after cutover
+
+The promotion authority above decides **which SHA** prod may run; the deployment model decides **how**
+that SHA becomes live. Until a channel's cutover receipt exists (fleet-model fitness PASS recorded in
+`ops/deployments/<channel>-latest.json`), that channel stays in the checkout model and the checkout
+procedure remains the executable interim path. After the receipt exists, the channel is in the
+pinned-image model: the authorized SHA is applied by bumping the channel image pin and recreating via
+`scripts/deploy_channel.sh`, with the deploy receipt and live `/version` evidence proving the running
+code. This switch does not move ADR-0040 authority: prod's interim promotion ref remains `main` until
+a later ADR restores gated `stable`.
 
 ### Target: gated `stable` promotion (deferred hardening)
 

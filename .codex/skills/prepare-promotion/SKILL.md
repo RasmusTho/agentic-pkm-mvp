@@ -28,6 +28,23 @@ changes. Use `docs/architecture/SBS_OPERATING_MODEL.md` to route SBS impact, own
 transition debt, and fitness-rule evidence without treating the promotion plan itself as runtime
 memory or Product truth.
 
+## Deployment model
+
+Before planning, resolve the target channel's deployment model:
+
+- **Checkout model (interim / no-dead-window):** the channel remains on the checkout model until a
+  cutover receipt exists for that channel: a fleet-model fitness PASS recorded in
+  `ops/deployments/<channel>-latest.json`. In this mode, keep the existing promotion-plan diff:
+  current promotion ref / `stable` baseline, target commit, migration delta, config delta, rollback
+  path, and operator acknowledgments. The downstream checkout-mode execution in
+  `execute-promotion` remains the live path.
+- **Pinned-image model (post-cutover):** once that channel's cutover receipt exists, the plan still
+  uses `docs/RELEASE_CHANNELS/README.md` to decide which SHA is authorized, but physical deployment
+  will be executed by `scripts/deploy_channel.sh <channel> <authorized-sha>` per
+  `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`. The plan must record the deployment model,
+  channel, authorized SHA, image-tag availability check, migration-gate posture, previous-good pin
+  for rollback, and the expected deploy receipt path `ops/deployments/<channel>-latest.json`.
+
 ## What this skill does
 
 1. Resolves the current `stable` ref (the commit prod is running from).
@@ -53,6 +70,9 @@ Per `docs/RELEASE_CHANNELS/DEFINE_PROMOTION_PLAN_CONTRACT.md`:
 5. **Risk notes** — forward-only migrations, AC gaps, cross-channel concerns.
 6. **Rollback path** — previous `stable` ref and migration reversal sequence.
 7. **Operator acknowledgments** — checkboxes for forward-only migrations and any AC gaps.
+
+Pinned-image plans add a deployment-model note to the same plan, including the deploy-script command
+that `execute-promotion` will run and the previous-good image tag that `rollback-promotion` will use.
 
 ## Pre-conditions
 
@@ -86,6 +106,10 @@ A single markdown file at `ops/promotions/YYYY-MM-DD-<short-sha>.md` satisfying 
 - Never restart any process.
 - If the `stable` ref is ambiguous or missing, abort and report — do not guess.
 - If a migration lacks a reversibility marker, flag it as a blocking risk in the plan and do not classify it silently.
+- Never let the deployment-model switch move promotion authority: ADR-0040 and
+  `docs/RELEASE_CHANNELS/README.md §Promotion model` decide the authorized ref/SHA; the deployment
+  model only decides whether physical execution is checkout update/restart or
+  `scripts/deploy_channel.sh`.
 
 ## Invariant → producers rule (issue #1997 F4)
 

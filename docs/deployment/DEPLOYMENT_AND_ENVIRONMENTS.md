@@ -114,6 +114,16 @@ The deploy procedure is the same shape for every channel; only the pin target an
 4. **Health gate: liveness first, readiness second.** Block until the channel's API `/healthz` returns `{"ok": true}` (`app/api/routes/health_contract.py`) and then require both readiness probes on the channel's ports: `/readyz` must pass, and `/api/health` must report `required_ok: true`. `/healthz` is only a liveness probe; deploy completion requires readiness evidence that startup dependencies, DB connectivity, and the deployed code path are actually usable. The gateway's own `/healthz` must also respond. A deploy is not "done" until liveness and both readiness predicates pass; a failing gate triggers §Rollback.
 5. **Record the deployed SHA.** Confirm `/version` (`{git_sha, built_at}`) and the `version` field on `/api/health` report the SHA just deployed, and record it in the deploy receipt (and `ops/promotions/` for prod, per the promotion contract). This closes the loop opened by #2602: the marker is only trustworthy once the bind-mount is retired (S5) and the image artifact has been made immutable by digest pinning or explicit SHA-tag enforcement, so S5 must land before the SHA in `/version` can be treated as authoritative for what is running.
 
+## Promotion workflow binding
+
+The governed executor skills for this deploy procedure are `.codex/skills/prepare-promotion/SKILL.md`,
+`.codex/skills/execute-promotion/SKILL.md`, `.codex/skills/verify-promotion/SKILL.md`,
+`.codex/skills/rollback-promotion/SKILL.md`, `.codex/skills/promote-to-test/SKILL.md`, and
+`.codex/skills/promote-test-to-prod/SKILL.md`. Those skills decide when a channel is still in
+checkout mode versus pinned-image mode and, after a channel's cutover receipt exists, route physical
+execution through `scripts/deploy_channel.sh` so this document remains the owner of pin bump,
+migration gate, recreate, health gate, UI smoke, and deploy/rollback receipt semantics.
+
 ## Rollback procedure
 
 Rollback reuses the deploy mechanism in reverse, against the previous known-good pin.

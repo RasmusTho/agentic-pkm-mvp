@@ -36,6 +36,21 @@ candidate commit
 
 `promote-to-test` is the gate that produces the evidence `promote-test-to-prod` requires. No test receipt → no prod promotion (except the explicit emergency bypass; see §Emergency bypass).
 
+## Deployment model
+
+Before executing the test promotion, resolve the test channel's deployment model:
+
+- **Checkout model (interim / no-dead-window):** the channel remains on the checkout model until a
+  cutover receipt exists for test: a fleet-model fitness PASS recorded in
+  `ops/deployments/test-latest.json`. In this mode, keep the existing test checkout, test-scoped
+  migration, and `make test-down && make test-up` execution path.
+- **Pinned-image model (post-cutover):** once the test cutover receipt exists, keep the same
+  evidence and test-verification requirements, but route physical execution through
+  `scripts/deploy_channel.sh test <candidate-sha>` per
+  `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`. The script owns the pin bump, migration gate,
+  recreate, health gates, UI smoke, and deploy receipt. The candidate SHA still comes from the
+  governed promotion workflow; the deployment model only changes how the test channel is updated.
+
 ## Channel identity for the test promotion
 
 Before executing any step, confirm every binding in the table below is correct:
@@ -70,7 +85,7 @@ Before executing any step, confirm every binding in the table below is correct:
    - Classify each migration as reversible or forward-only (per `docs/RELEASE_CHANNELS/DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md`).
    - Produce a test promotion plan at `ops/test-promotions/YYYY-MM-DD-<short-sha>.md`.
 
-5. **Test-scoped execute.** Apply migrations to `app_test` (port 15434). Restart the test compose stack (`make test-down && make test-up`). Before restarting, confirm `docker-compose.test.yml` declares `PKM_ENVIRONMENT: test` for all services (api, worker, watcher) — this is enforced by `tests/ops/test_release_channel_isolation.py::test_test_compose_does_not_declare_prod_environment`. If the compose file declares `prod` instead, abort and fix the compose contract before proceeding. Record the test execution receipt in the plan file.
+5. **Test-scoped execute.** In checkout model, apply migrations to `app_test` (port 15434) and restart the test compose stack (`make test-down && make test-up`). Before restarting, confirm `docker-compose.test.yml` declares `PKM_ENVIRONMENT: test` for all services (api, worker, watcher) — this is enforced by `tests/ops/test_release_channel_isolation.py::test_test_compose_does_not_declare_prod_environment`. If the compose file declares `prod` instead, abort and fix the compose contract before proceeding. In pinned-image model, run `scripts/deploy_channel.sh test <candidate-sha>` instead of checkout restart and record the deploy receipt at `ops/deployments/test-latest.json`. Record the test execution receipt in the plan file.
 
 6. **Test-scoped verify.** Verify directly against the test channel — do NOT call the `verify-promotion` skill, which is prod-scoped and will fail or produce a wrong result when run against a `PKM_ENVIRONMENT=test` stack:
    - Confirm `PKM_ENVIRONMENT=test` is active in the running containers (`docker compose -p pkm-test exec api env | grep PKM_ENVIRONMENT`).
@@ -134,6 +149,8 @@ promote-to-test --candidate <sha-or-ref>
 - Never produce a PASS receipt if any verification step failed.
 - Never promote a ref to test and prod in a single step; these are always two separate operations.
 - The test channel rollback follows the same rules as prod rollback but targets `app_test` only. The real vault is never touched regardless of channel.
+- In pinned-image mode, never treat updating a test checkout as deployment; physical execution runs
+  through `scripts/deploy_channel.sh test <candidate-sha>`.
 
 ## Authority order for decisions
 

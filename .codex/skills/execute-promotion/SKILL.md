@@ -1,6 +1,6 @@
 ---
 name: execute-promotion
-description: "Execute a reviewed promotion plan: move the stable ref, apply migrations to the prod DB, and restart the prod process from the updated checkout. Requires a complete, operator-acknowledged promotion plan from prepare-promotion."
+description: "Execute a reviewed promotion plan: in checkout mode move the stable ref, apply migrations, and restart from the updated checkout; in pinned-image mode run scripts/deploy_channel.sh for the authorized SHA. Requires a complete, operator-acknowledged promotion plan from prepare-promotion."
 ---
 
 # Execute Promotion
@@ -66,23 +66,56 @@ git merge-base --is-ancestor origin/stable <candidate-sha>
 
 This preflight is **fail-closed**: if stable is not an ancestor of the candidate, no part of execute-promotion continues. The reconciliation PR must be merged and the ancestry check must pass before promotion resumes.
 
+## Deployment model
+
+Before any physical deploy step, resolve the target channel's deployment model:
+
+- **Checkout model (interim / no-dead-window):** the channel remains on the checkout model until a
+  cutover receipt exists for that channel: a fleet-model fitness PASS recorded in
+  `ops/deployments/<channel>-latest.json`. In this mode, execute the existing checkout procedure:
+  governed PR to `stable`, update the prod checkout, apply migrations from the checkout, and restart
+  with `make prod-start-full`.
+- **Pinned-image model (post-cutover):** once that channel's cutover receipt exists, do not treat a
+  checkout update as physical deployment. Keep `docs/RELEASE_CHANNELS/README.md` and ADR-0040 as the
+  authority for which SHA may be promoted, then execute the physical deploy through:
+
+  ```bash
+  scripts/deploy_channel.sh prod <authorized-sha> --ack-forward-only
+  ```
+
+  The script owns the pin bump, migration gate, API/worker/watcher/heimdal-capture-watch/gateway
+  recreate, liveness/readiness gate, live UI smoke, and deploy receipt per
+  `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md §Deploy procedure`. Use the forward-only ack flag
+  only when the acknowledged plan requires it.
+
 ## What this skill does
 
 1. Reads the promotion plan at the path provided by the operator (output of `prepare-promotion`).
 2. Validates the plan: every required section from the promotion plan contract present, all operator acknowledgment checkboxes ticked. Abort if validation fails.
-3. **Ancestry preflight**: runs `git merge-base --is-ancestor origin/stable <candidate-sha>`. Aborts with reconciliation-PR instruction if it fails.
-4. Records the current `stable` ref as `stable-prev` (pointer file in `ops/promotions/`) before moving anything.
-5. **Channel isolation preflight.** Before any stack mutation — including opening the governed PR below — invoke the shipped read-only guard against the prod checkout's own compose file (never a dev-tree copy — pass the full path, do not rely on cwd):
+3. Resolves the deployment model for `prod` using the rule above and records it in the execution receipt.
+
+**Checkout model (interim / no-dead-window):**
+
+4. **Ancestry preflight**: runs `git merge-base --is-ancestor origin/stable <candidate-sha>`. Aborts with reconciliation-PR instruction if it fails.
+5. Records the current `stable` ref as `stable-prev` (pointer file in `ops/promotions/`) before moving anything.
+6. **Channel isolation preflight.** Before any stack mutation — including opening the governed PR below — invoke the shipped read-only guard against the prod checkout's own compose file (never a dev-tree copy — pass the full path, do not rely on cwd):
    ```bash
    python -m app.release_channels.channel_isolation_preflight <prod-checkout>/docker-compose.prod.yml prod
    ```
-   This fail-closes when the compose overlay's effective env bindings (`PKM_ENVIRONMENT`, `DATABASE_URL`, `DB_DSN`) do not resolve to the prod channel (`docs/RELEASE_CHANNELS/README.md §Compose/env binding invariant`). Abort if the guard fails — do not open the PR in step 6 until it passes.
-6. Opens a governed PR targeting `stable` from the candidate branch. Waits for required status checks (`smoke`, `smoke-docker`, `pr-contract`) to pass per `_shared/CI_WAIT_CONTRACT.md`, then waits for the operator to merge. Records the merged PR URL in the promotion receipt.
-7. Updates the prod checkout's HEAD to the new `stable` (`git -C <prod-checkout> fetch && git -C <prod-checkout> checkout stable`).
-8. Applies reversible migrations to the prod DB (port 15432) in forward order. Applies forward-only migrations only after confirming the operator acknowledged them in the plan. Stops and calls for rollback if any migration fails.
-9. Restarts the prod process with `make prod-start-full` — the canonical prod startup that enforces all four prod runtime-binding elements (compose overlay, `pkm-prod` project namespace, `PKM_ENVIRONMENT=prod`, and the `.env.prod.local`-resolved vault root) per `docs/RELEASE_CHANNELS/README.md §Prod runtime binding`. Do not use separate down/up Make targets — a bare up target alone does not enforce the full binding.
-10. Appends the promotion execution receipt to the plan file: timestamp, operator, merged PR URL, which ref moved, which migrations applied, process restart confirmation.
-11. Reports to the operator: "Promotion executed. Run verify-promotion to confirm health."
+   This fail-closes when the compose overlay's effective env bindings (`PKM_ENVIRONMENT`, `DATABASE_URL`, `DB_DSN`) do not resolve to the prod channel (`docs/RELEASE_CHANNELS/README.md §Compose/env binding invariant`). Abort if the guard fails — do not open the PR in step 7 until it passes.
+7. Opens a governed PR targeting `stable` from the candidate branch. Waits for required status checks (`smoke`, `smoke-docker`, `pr-contract`) to pass per `_shared/CI_WAIT_CONTRACT.md`, then waits for the operator to merge. Records the merged PR URL in the promotion receipt.
+8. Updates the prod checkout's HEAD to the new `stable` (`git -C <prod-checkout> fetch && git -C <prod-checkout> checkout stable`).
+9. Applies reversible migrations to the prod DB (port 15432) in forward order. Applies forward-only migrations only after confirming the operator acknowledged them in the plan. Stops and calls for rollback if any migration fails.
+10. Restarts the prod process with `make prod-start-full` — the canonical prod startup that enforces all four prod runtime-binding elements (compose overlay, `pkm-prod` project namespace, `PKM_ENVIRONMENT=prod`, and the `.env.prod.local`-resolved vault root) per `docs/RELEASE_CHANNELS/README.md §Prod runtime binding`. Do not use separate down/up Make targets — a bare up target alone does not enforce the full binding.
+
+**Pinned-image model (post-cutover):**
+
+11. Confirms the plan names the authorized SHA and that the matching image tag is available.
+12. Runs `scripts/deploy_channel.sh prod <authorized-sha>` with the required forward-only migration acknowledgment flag when the plan contains acknowledged forward-only migrations. This script is the only physical deploy step in pinned-image mode.
+13. Reads and records the deploy receipt at `ops/deployments/prod-latest.json`, including the deployed SHA and health/smoke outcome.
+
+14. Appends the promotion execution receipt to the plan file: timestamp, operator, deployment model, merged PR URL or deploy receipt path, which ref/SHA was authorized, which migrations applied, and process recreate/restart confirmation.
+15. Reports to the operator: "Promotion executed. Run verify-promotion to confirm health."
 
 ## Pre-conditions
 
@@ -121,6 +154,8 @@ verify-promotion
 - Never skip a migration that the plan lists. Never apply a migration the plan does not list.
 - Never use the dev checkout for prod operations — separate worktrees per `docs/RELEASE_CHANNELS/DEFINE_CONCURRENCY_RULE.md`.
 - Never directly push or force-push to `stable`. The governed PR is the only permitted path for advancing the protected branch.
+- In pinned-image mode, never substitute `git checkout`, `git pull`, or `make prod-start-full` for
+  `scripts/deploy_channel.sh`; checkout updates no longer change the running channel after cutover.
 
 ## Authority order for decisions
 
