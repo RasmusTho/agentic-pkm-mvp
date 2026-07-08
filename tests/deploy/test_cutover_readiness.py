@@ -161,6 +161,53 @@ def test_deploy_pin_mismatch_fails_with_pin_and_target(tmp_path: Path) -> None:
     assert f"target-sha={TARGET_SHA}" in summary
 
 
+def test_list_style_base_environment_merges_with_mapping_overlay(tmp_path: Path) -> None:
+    _write_base_fixture(tmp_path)
+    compose_path = tmp_path / "docker-compose.yaml"
+    compose_text = compose_path.read_text(encoding="utf-8")
+    compose_text = compose_text.replace(
+        "\n  watcher:\n"
+        "    image: ghcr.io/rasmustho/pkm-app:${APP_IMAGE_TAG}\n"
+        "    env_file:\n"
+        "      - ./config/runtime.defaults.env\n"
+        "    environment:\n"
+        "      PKM_ENVIRONMENT: prod\n",
+        "\n  watcher:\n"
+        "    image: ghcr.io/rasmustho/pkm-app:${APP_IMAGE_TAG}\n"
+        "    env_file:\n"
+        "      - ./config/runtime.defaults.env\n"
+        "    environment:\n"
+        "      - VAULT_LAYOUT_NOTE_REL=${VAULT_LAYOUT_NOTE_REL:-}\n"
+        "      - WATCHER_AUTO_EXEC=${WATCHER_AUTO_EXEC-1}\n"
+        "      - LLM_PROVIDER=${LLM_PROVIDER}\n",
+    )
+    compose_path.write_text(compose_text, encoding="utf-8")
+    (tmp_path / "docker-compose.prod.yml").write_text(
+        "\n".join(
+            [
+                "services:",
+                "  watcher:",
+                "    environment:",
+                "      PKM_ENVIRONMENT: prod",
+                "      DATABASE_URL: postgresql+psycopg://app:app@db:5432/app",
+                "      DB_DSN: postgresql+psycopg://app:app@db:5432/app",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = check_cutover_readiness(
+        "prod",
+        TARGET_SHA,
+        root=tmp_path,
+        db_revision="001",
+        runner=_runner,
+    )
+
+    assert result.ok, result.summary()
+
+
 def test_pending_forward_only_migrations_listed_and_gated(tmp_path: Path) -> None:
     _write_base_fixture(tmp_path)
     _write_migration(
@@ -190,6 +237,26 @@ def test_pending_forward_only_migrations_listed_and_gated(tmp_path: Path) -> Non
     assert result.pending_migrations == ("002_forward_only.py", "003_reversible.py")
     assert result.pending_forward_only_migrations == ("002_forward_only.py",)
     assert "002_forward_only.py" in result.summary()
+
+
+def test_missing_migration_marker_fails_without_raising(tmp_path: Path) -> None:
+    _write_base_fixture(tmp_path)
+    bad_migration = tmp_path / "app" / "alembic" / "versions" / "002_no_marker.py"
+    bad_migration.write_text(
+        "revision = '002'\ndown_revision = '001'\n",
+        encoding="utf-8",
+    )
+
+    result = check_cutover_readiness(
+        "prod",
+        TARGET_SHA,
+        root=tmp_path,
+        db_revision="001",
+        runner=_runner,
+    )
+
+    assert not result.ok
+    assert "missing a 'reversibility' marker" in result.summary()
 
 
 def test_read_only_and_no_secret_values_in_output(tmp_path: Path) -> None:

@@ -22,6 +22,7 @@ from typing import Any
 import yaml
 
 from app.release_channels.reversibility import FORWARD_ONLY, classify_migration
+from app.release_channels.reversibility import MigrationMarkerError
 
 CHANNELS = frozenset({"dev", "test", "prod"})
 CHANNEL_COMPOSE_OVERLAYS = {
@@ -159,9 +160,9 @@ def _load_compose_model(root: Path, overlay_name: str) -> _ComposeModel:
 def _merge_service(base: dict[str, Any], overlay: Mapping[str, Any]) -> dict[str, Any]:
     merged = dict(base)
     for key, value in overlay.items():
-        if key == "environment" and isinstance(value, Mapping):
-            env = dict(merged.get("environment") or {})
-            env.update(value)
+        if key == "environment":
+            env = _normalize_environment(merged.get("environment"))
+            env.update(_normalize_environment(value))
             merged[key] = env
         elif key == "env_file":
             existing = _as_list(merged.get("env_file"))
@@ -177,6 +178,24 @@ def _as_list(value: Any) -> list[Any]:
     if isinstance(value, list):
         return list(value)
     return [value]
+
+
+def _normalize_environment(value: Any) -> dict[str, Any]:
+    """Normalize Compose mapping/list environment forms into a key mapping."""
+    if value is None:
+        return {}
+    if isinstance(value, Mapping):
+        return {str(key): item for key, item in value.items()}
+    if isinstance(value, list):
+        env: dict[str, Any] = {}
+        for item in value:
+            key, sep, item_value = str(item).partition("=")
+            key = key.strip()
+            if not key:
+                continue
+            env[key] = item_value if sep else None
+        return env
+    return {}
 
 
 def _parse_env_file_keys(path: Path) -> set[str]:
@@ -222,15 +241,7 @@ def _env_file_path(root: Path, entry: Any, environ: Mapping[str, str]) -> Path |
 
 
 def _environment_keys(value: Any) -> set[str]:
-    keys: set[str] = set()
-    if isinstance(value, Mapping):
-        keys.update(str(key) for key in value)
-    elif isinstance(value, list):
-        for item in value:
-            key = str(item).split("=", 1)[0].strip()
-            if key:
-                keys.add(key)
-    return keys
+    return set(_normalize_environment(value))
 
 
 def _declared_channel_env_keys(
@@ -494,7 +505,10 @@ def _check_migration_state(
             _MigrationDelta(),
         )
 
-    delta = _pending_migration_delta(root / "app" / "alembic" / "versions", db_revision)
+    try:
+        delta = _pending_migration_delta(root / "app" / "alembic" / "versions", db_revision)
+    except MigrationMarkerError as exc:
+        return ReadinessCheck("migration-state", False, str(exc)), _MigrationDelta()
     if not delta.pending:
         return (
             ReadinessCheck(
