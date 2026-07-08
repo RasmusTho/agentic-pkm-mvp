@@ -208,7 +208,7 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import sys; from app.cli.health import _worker_runtime_status; r=_worker_runtime_status(); sys.exit(0 if r.get('ok') else 1)\""]
       interval: 20s
-      timeout: 5s
+      timeout: 15s
       retries: 3
 
   watcher:
@@ -261,7 +261,7 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import sys; from app.cli.health import _watcher_runtime_status; r=_watcher_runtime_status(); sys.exit(0 if r.get('ok') else 1)\""]
       interval: 5s
-      timeout: 2s
+      timeout: 15s
       retries: 10
 
   # Heimdal capture-watch (#3098, follow-up to #3094/#3025): drives the

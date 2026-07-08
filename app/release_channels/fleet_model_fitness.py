@@ -215,6 +215,14 @@ def _get_nested(payload: dict[str, Any], *keys: str) -> str | None:
     return current if isinstance(current, str) else None
 
 
+def _api_health_git_sha(payload: dict[str, Any]) -> str | None:
+    nested = _get_nested(payload, "version", "git_sha")
+    if nested:
+        return nested
+    top_level = payload.get("version")
+    return top_level if isinstance(top_level, str) else None
+
+
 def check_fleet_model_fitness(
     channel: str,
     *,
@@ -299,9 +307,7 @@ def check_fleet_model_fitness(
         violations.append(str(exc))
 
     try:
-        api_health_git_sha = _get_nested(
-            http_get_json(f"{api_base}/api/health"), "version", "git_sha"
-        )
+        api_health_git_sha = _api_health_git_sha(http_get_json(f"{api_base}/api/health"))
         if api_health_git_sha != pin:
             violations.append(
                 f"API /api/health version git_sha '{api_health_git_sha or ''}' "

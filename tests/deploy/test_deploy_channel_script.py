@@ -117,6 +117,7 @@ def test_health_gate_blocks_and_triggers_rollback() -> None:
     assert "health_gate" in text
     assert "http://127.0.0.1:${api_port}/healthz" in text
     assert "http://127.0.0.1:${ui_port}/healthz" in text
+    assert 'wait_json_ok "http://127.0.0.1:${ui_port}/healthz"' in text
     assert "health gate failed; attempting rollback to previous pin" in text
     run_block = text.split('echo "deploy plan:', 1)[1]
     assert run_block.index("compose up -d --force-recreate") < run_block.index("health_gate")
