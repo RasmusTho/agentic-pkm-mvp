@@ -141,6 +141,21 @@ def _head_branch_base(run: dict[str, object]) -> str | None:
 
 def _classify(text: str, source_name: str) -> str:
     haystack = f"{source_name}\n{text}".lower()
+    has_hard_infra_signal = any(
+        token in haystack
+        for token in (
+            "timed out",
+            "timeout-minutes",
+            "the operation was canceled",
+            "runner stopped",
+            "no space left on device",
+            "connection reset",
+            "rate limit exceeded",
+        )
+    )
+    has_pytest_signature = bool(
+        re.search(r"\bFAILED\s+tests/|\bE\s+AssertionError\b|short test summary info", text)
+    )
     if re.search(r"^[^:\n]+\.py:\d+:\d+:\s+[a-z]\d{3}\b", text, re.M | re.I) or re.search(
         r"\bFound \d+ errors?\b", text
     ):
@@ -166,25 +181,20 @@ def _classify(text: str, source_name: str) -> str:
         )
     ):
         return "import_boundary_failure"
+    if has_hard_infra_signal:
+        return "timeout_or_infra"
+    if has_pytest_signature:
+        return "pytest_failure"
     if any(
         token in haystack
         for token in (
-            "timed out",
-            "timeout-minutes",
-            "the operation was canceled",
-            "runner stopped",
-            "no space left on device",
-            "connection reset",
             "http 500",
             "http 502",
             "http 503",
             "http 504",
-            "rate limit exceeded",
         )
     ):
         return "timeout_or_infra"
-    if re.search(r"\bFAILED\s+tests/|\bE\s+AssertionError\b|short test summary info", text):
-        return "pytest_failure"
     return "unknown_failure"
 
 
@@ -209,6 +219,12 @@ def _line_score(line: str, failure_class: str) -> int:
         score += 8
     if failure_class == "timeout_or_infra" and (
         "timed out" in lower or "operation was canceled" in lower or "no space left" in lower
+    ):
+        score += 8
+    if failure_class == "unknown_failure" and (
+        "traceback (most recent call last)" in lower
+        or "exception:" in lower
+        or re.search(r"\b[A-Za-z_][A-Za-z0-9_]*(?:Error|Exception):", line)
     ):
         score += 8
     return score

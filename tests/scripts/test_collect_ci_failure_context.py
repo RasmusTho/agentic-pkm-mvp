@@ -184,6 +184,51 @@ def test_command_only_successful_steps_do_not_drive_failure_classification() -> 
     assert "Something unexpected happened" in context.first_useful_failure_block
 
 
+def test_pytest_failure_takes_precedence_over_http_status_text() -> None:
+    context = _context_for(
+        "Run pytest -q tests/api/test_provider_errors.py\n"
+        "FAILED tests/api/test_provider_errors.py::test_returns_provider_http_500\n"
+        "E   AssertionError: expected retryable provider response for HTTP 500\n"
+        "short test summary info\n"
+    )
+
+    assert context.failure_class == "pytest_failure"
+    assert context.actionable_by_autonomous_repair is True
+    assert context.appears_caused_by_pr == "likely"
+    assert (
+        context.suspected_owner_script_or_test_file
+        == "tests/api/test_provider_errors.py::test_returns_provider_http_500"
+    )
+
+
+def test_hard_infra_signal_takes_precedence_over_pytest_signature() -> None:
+    context = _context_for(
+        "Run pytest -q tests/api/test_provider_errors.py\n"
+        "FAILED tests/api/test_provider_errors.py::test_returns_provider_http_500\n"
+        "E   AssertionError: expected retryable provider response for HTTP 500\n"
+        "The operation was canceled.\n"
+    )
+
+    assert context.failure_class == "timeout_or_infra"
+    assert context.actionable_by_autonomous_repair is False
+    assert context.appears_caused_by_pr == "unclear"
+
+
+def test_unknown_failure_block_prefers_exception_traceback() -> None:
+    setup_noise = "\n".join(f"setup line {index}" for index in range(45))
+    context = _context_for(
+        f"Run ./custom-check\n{setup_noise}\n"
+        "Traceback (most recent call last):\n"
+        "  File \"tools/custom_check.py\", line 42, in <module>\n"
+        "Exception: custom check exploded\n"
+    )
+
+    assert context.failure_class == "unknown_failure"
+    assert "Traceback (most recent call last):" in context.first_useful_failure_block
+    assert "Exception: custom check exploded" in context.first_useful_failure_block
+    assert "setup line 0" not in context.first_useful_failure_block
+
+
 def test_job_name_is_inferred_from_log_archive_path() -> None:
     context = build_context(
         repository="RasmusTho/agentic-pkm-mvp",
