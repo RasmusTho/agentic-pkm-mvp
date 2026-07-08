@@ -133,9 +133,15 @@ def test_collector_emits_json_and_markdown_for_failed_run_fixture(tmp_path: Path
     assert payload["pr_number"] == 3213
     assert payload["head_sha"] == "deadbeef"
     assert payload["base_branch"] == "main"
+    assert payload["job_name"] == "Unit tests (not pg)"
     assert payload["failure_class"] == "pytest_failure"
     assert payload["actionable_by_autonomous_repair"] is True
     assert payload["human_exception_required"] is False
+    assert (
+        payload["rerun_instruction"]
+        == "rerun run 98765 / job Unit tests (not pg) only after a bounded PR-branch repair changes the failing evidence"
+    )
+    assert "Rerun instruction:" in markdown
     assert "FAILED tests/scripts/test_collect_ci_failure_context.py::test_fixture" in markdown
 
 
@@ -176,6 +182,30 @@ def test_command_only_successful_steps_do_not_drive_failure_classification() -> 
 
     assert context.failure_class == "unknown_failure"
     assert "Something unexpected happened" in context.first_useful_failure_block
+
+
+def test_job_name_is_inferred_from_log_archive_path() -> None:
+    context = build_context(
+        repository="RasmusTho/agentic-pkm-mvp",
+        run_id="123456",
+        sources=[
+            LogSource(
+                name="logs.zip:Unit tests (not pg)/Run not-pg unit tests.txt",
+                text=(
+                    "Run pytest -q -m \"not pg\"\n"
+                    "FAILED tests/scripts/test_collect_ci_failure_context.py::test_case\n"
+                ),
+            )
+        ],
+        pr_number=42,
+        head_sha="abc123",
+        base_branch="main",
+        workflow_name="CI",
+    )
+
+    assert context.job_name == "Unit tests (not pg)"
+    assert context.rerun_instruction is not None
+    assert "Unit tests (not pg)" in context.rerun_instruction
 
 
 def test_comment_mode_uses_stable_marker_when_enabled() -> None:

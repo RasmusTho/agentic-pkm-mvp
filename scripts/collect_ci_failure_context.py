@@ -56,6 +56,7 @@ class FailureContext:
     actionable_by_autonomous_repair: bool
     human_exception_required: bool
     unknowns_missing_evidence: list[str]
+    rerun_instruction: str | None
     safe_next_action: str
 
 
@@ -266,6 +267,17 @@ def _extract_failing_step(source_name: str, text: str, failure_class: str) -> st
     return None
 
 
+def _extract_job_name(source_name: str) -> str | None:
+    path = source_name.split(":", 1)[-1]
+    parts = Path(path).parts
+    if len(parts) < 2:
+        return None
+    job = parts[0].strip()
+    if not job or job in {".", "/"}:
+        return None
+    return job
+
+
 def _infer_owner(text: str, source_name: str) -> str | None:
     haystack = f"{source_name}\n{text}"
     for pattern in _OWNER_PATH_PATTERNS:
@@ -319,6 +331,7 @@ def _unknowns(
     source: LogSource,
     command: str | None,
     owner: str | None,
+    job_name: str | None,
 ) -> list[str]:
     missing: list[str] = []
     if pr_number is None:
@@ -331,6 +344,8 @@ def _unknowns(
         missing.append("invoked command not visible in retained log block")
     if owner is None:
         missing.append("owner script or test file not inferable from logs")
+    if job_name is None:
+        missing.append("failing job not inferable from log archive path")
     return missing
 
 
@@ -342,6 +357,22 @@ def _safe_next_action(failure_class: str, actionable: bool, human_required: bool
     if actionable:
         return "hand context pack to CI repair agent for bounded diagnosis on the PR branch"
     return "attach context pack to PR evidence and block repair until more evidence is available"
+
+
+def _rerun_instruction(
+    failure_class: str,
+    run_id: str,
+    job_name: str | None,
+    actionable: bool,
+) -> str | None:
+    target = f"run {run_id}" if run_id else "the failed workflow run"
+    if job_name:
+        target = f"{target} / job {job_name}"
+    if failure_class == "timeout_or_infra":
+        return f"rerun {target} once after recording this context to separate infrastructure noise from deterministic failure"
+    if actionable:
+        return f"rerun {target} only after a bounded PR-branch repair changes the failing evidence"
+    return None
 
 
 def _appears_caused_by_pr(failure_class: str, pr_number: int | None) -> str:
@@ -376,9 +407,11 @@ def build_context(
     command = _extract_command(source.text)
     owner = _infer_owner(source.text, source.name)
     step = _extract_failing_step(source.name, source.text, failure_class)
+    inferred_job_name = _extract_job_name(source.name)
     human_required = failure_class == "unknown_failure" and not block
     actionable = failure_class not in {"timeout_or_infra", "unknown_failure"} and bool(block)
-    missing = _unknowns(pr_number, base_branch, source, command, owner)
+    resolved_job_name = job_name or inferred_job_name
+    missing = _unknowns(pr_number, base_branch, source, command, owner, resolved_job_name)
     return FailureContext(
         repository=repository,
         pr_number=pr_number,
@@ -386,7 +419,7 @@ def build_context(
         base_branch=base_branch,
         workflow_name=workflow_name,
         run_id=run_id,
-        job_name=job_name or check_name or "unknown",
+        job_name=resolved_job_name or check_name or "unknown",
         check_name=check_name or workflow_name or "unknown",
         failing_step=step,
         invoked_command=command,
@@ -397,6 +430,9 @@ def build_context(
         actionable_by_autonomous_repair=actionable,
         human_exception_required=human_required,
         unknowns_missing_evidence=missing,
+        rerun_instruction=_rerun_instruction(
+            failure_class, run_id, resolved_job_name, actionable
+        ),
         safe_next_action=_safe_next_action(failure_class, actionable, human_required),
     )
 
@@ -425,6 +461,7 @@ def render_markdown(context: FailureContext) -> str:
             f"- Appears caused by PR: `{context.appears_caused_by_pr}`",
             f"- Actionable by autonomous repair: `{context.actionable_by_autonomous_repair}`",
             f"- Human exception required: `{context.human_exception_required}`",
+            f"- Rerun instruction: {context.rerun_instruction or 'none'}",
             f"- Safe next action: {context.safe_next_action}",
             "",
             "## First Useful Failure Block",
