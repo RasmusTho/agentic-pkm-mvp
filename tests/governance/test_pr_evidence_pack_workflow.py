@@ -54,3 +54,19 @@ def test_workflow_collects_pr_issue_file_and_check_evidence() -> None:
     assert "repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs" in text
     assert "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}" in text
     assert "scripts/build_pr_evidence_pack.py" in text
+
+
+def test_workflow_paginates_files_and_check_runs() -> None:
+    text = _workflow_text()
+
+    files_fetch = text.split('gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files', 1)[1].split(
+        "> pr-evidence-pack/files.json", 1
+    )[0]
+    checks_fetch = text.split(
+        'gh api --paginate "repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs', 1
+    )[1].split(
+        "> pr-evidence-pack/checks.json", 1
+    )[0]
+
+    assert "jq -s '.'" in files_fetch
+    assert "jq -s '{check_runs: .}'" in checks_fetch

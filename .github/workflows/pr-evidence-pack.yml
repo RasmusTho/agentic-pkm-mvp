@@ -30,9 +30,13 @@ jobs:
           mkdir -p pr-evidence-pack
           gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
             > pr-evidence-pack/pr.json
-          gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" \
+          gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" \
+            --jq '.[]' \
+            | jq -s '.' \
             > pr-evidence-pack/files.json
-          gh api "repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100" \
+          gh api --paginate "repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100" \
+            --jq '.check_runs[]' \
+            | jq -s '{check_runs: .}' \
             > pr-evidence-pack/checks.json
           ISSUE_NUMBER="$(python3 - <<'PY'
           import json
