@@ -20,6 +20,15 @@ class LLMError(Exception):
     pass
 
 
+class LLMBackendTimeout(LLMError):
+    def __init__(self, *, provider: str, timeout_seconds: float) -> None:
+        self.provider = provider
+        self.timeout_seconds = timeout_seconds
+        super().__init__(
+            f"{provider} backend timed out after {timeout_seconds:g}s"
+        )
+
+
 def _minimal_validate(payload: dict, schema: dict) -> None:
     req = schema.get("required", [])
     for k in req:
@@ -98,16 +107,19 @@ def _ollama_chat(
     conn_class = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
     conn = conn_class(host, port, timeout=timeout)
     try:
-        conn.request("POST", path, body=json.dumps(body), headers={"Content-Type": "application/json"})
-        resp = conn.getresponse()
-        if resp.status != 200:
-            raise RuntimeError(f"ollama http {resp.status}")
-        buf = []
-        while True:
-            chunk = resp.read(65536)
-            if not chunk:
-                break
-            buf.append(chunk)
+        try:
+            conn.request("POST", path, body=json.dumps(body), headers={"Content-Type": "application/json"})
+            resp = conn.getresponse()
+            if resp.status != 200:
+                raise RuntimeError(f"ollama http {resp.status}")
+            buf = []
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                buf.append(chunk)
+        except (TimeoutError, socket.timeout) as exc:
+            raise LLMBackendTimeout(provider="ollama", timeout_seconds=timeout) from exc
         raw = b"".join(buf).decode("utf-8", errors="replace")
         text = ""
         for line in raw.splitlines():
@@ -196,6 +208,8 @@ def with_llm_retries(
     while True:
         try:
             return fn()
+        except LLMBackendTimeout:
+            raise
         except KeyboardInterrupt:
             raise
         except Exception as exc:
@@ -378,6 +392,8 @@ def call_llm(
                     response_format=response_format,
                 )
             )
+        except LLMBackendTimeout:
+            raise
         except (LLMError, socket.timeout, ConnectionRefusedError, RuntimeError, OSError) as exc:
             raise LLMError(
                 f"ollama provider call failed (model={model}); refusing to substitute a "

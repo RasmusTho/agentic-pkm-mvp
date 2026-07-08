@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import AliasChoices, BaseModel, Field
 
 from app.agents.ask.graph import run_ask_graph
@@ -12,6 +12,7 @@ from app.events.models import new_trace_id
 from app.observability.status_service import record_ask_error, record_ask_query
 from app.retrieval.hybrid import get_store as get_hybrid_store
 from app.retrieval.hybrid import rebuild_from_durable_index
+from app.services.llm import LLMBackendTimeout
 
 _HYBRID_WARMED = False
 
@@ -116,6 +117,18 @@ async def ask(req: AskRequest, request: Request) -> AskResponse:
     trace_id = getattr(request.state, "trace_id", None) or request.headers.get("x-trace-id") or new_trace_id()
     try:
         state = run_ask_graph(req.question, trace_id=trace_id, ask_settings=ask_settings)
+    except LLMBackendTimeout as exc:
+        record_ask_error()
+        raise HTTPException(
+            status_code=504,
+            detail={
+                "error": "llm_backend_timeout",
+                "provider": exc.provider,
+                "timeout_seconds": exc.timeout_seconds,
+                "trace_id": trace_id,
+                "message": str(exc),
+            },
+        ) from exc
     except Exception:
         record_ask_error()
         raise

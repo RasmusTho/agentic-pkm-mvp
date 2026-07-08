@@ -12,6 +12,7 @@ from app.components.llm.router import LLMRoute
 from app.reasoning.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.reasoning.schema import ReasoningInput, ReasoningOutput, ReasoningValidationError, validate_output
 from app.reasoning.models import ReasoningMode, ReasoningRun
+from app.services.llm import LLMBackendTimeout
 from app.stores import get_object_store
 
 _FIXTURE_PATH = Path("data") / "golden" / "reasoning_samples.jsonl"
@@ -410,6 +411,8 @@ def run_reasoning(
                 trace_id=trace_id,
             )
             answer_text = (raw or "").strip()
+        except LLMBackendTimeout:
+            raise
         except Exception as exc:
             return ReasoningRun(
                 mode=mode,
