@@ -60,13 +60,20 @@ def _classify_gh_command(command: str) -> GuardResult | None:
     except ValueError:
         tokens = command.split()
     for index, token in enumerate(tokens):
-        if os.path.basename(token) == "gh":
+        if _token_invokes_gh(token):
             return _classify_gh_tokens(tokens, index)
         if "gh " in token:
             nested_result = _classify_gh_command(token)
             if nested_result is not None:
                 return nested_result
     return None
+
+
+def _token_invokes_gh(token: str) -> bool:
+    if os.path.basename(token) == "gh":
+        return True
+    return re.search(r"(?:^|[^A-Za-z0-9_.-])(?:[\w./-]+/)?gh$", token) is not None
+
 
 def _classify_gh_tokens(tokens: Sequence[str], gh_index: int) -> GuardResult | None:
     index = gh_index + 1
