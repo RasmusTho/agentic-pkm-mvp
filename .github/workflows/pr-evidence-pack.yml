@@ -1,0 +1,70 @@
+name: PR Evidence Pack
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+  issues: read
+
+jobs:
+  evidence-pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Collect PR evidence snapshots
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p pr-evidence-pack
+          gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
+            > pr-evidence-pack/pr.json
+          gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" \
+            > pr-evidence-pack/files.json
+          gh api "repos/${REPOSITORY}/commits/${HEAD_SHA}/check-runs?per_page=100" \
+            > pr-evidence-pack/checks.json
+          ISSUE_NUMBER="$(python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          body = json.loads(Path("pr-evidence-pack/pr.json").read_text()).get("body") or ""
+          match = re.search(r"\b(?:Fixes|Closes|Resolves)\s+#(\d+)\b", body, re.I)
+          print(match.group(1) if match else "")
+          PY
+          )"
+          if [ -n "${ISSUE_NUMBER}" ]; then
+            gh api "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}" \
+              > pr-evidence-pack/issue.json
+          else
+            printf '{}\n' > pr-evidence-pack/issue.json
+          fi
+
+      - name: Build PR evidence pack
+        run: |
+          python3 scripts/build_pr_evidence_pack.py \
+            --pr-json pr-evidence-pack/pr.json \
+            --files-json pr-evidence-pack/files.json \
+            --checks-json pr-evidence-pack/checks.json \
+            --issue-json pr-evidence-pack/issue.json \
+            --codeowners .github/CODEOWNERS \
+            --output-json pr-evidence-pack/evidence.json \
+            --output-markdown pr-evidence-pack/evidence.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr-evidence-pack-${{ github.event.pull_request.number }}
+          path: |
+            pr-evidence-pack/evidence.json
+            pr-evidence-pack/evidence.md
