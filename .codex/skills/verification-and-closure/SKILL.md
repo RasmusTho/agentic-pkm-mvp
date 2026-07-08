@@ -119,6 +119,11 @@ The PR review gate runs locally via the built-in `/code-review` skill instead of
 external GitHub-native reviewer bot. Run it once the PR's required checks are green (per
 `_shared/CI_WAIT_CONTRACT.md`, without `--codex`) and before merge:
 
+- This section is an explicit repo-local authorization for any delivery or closure agent to spawn the
+  `/code-review` review agent when it is resolving the mandatory local review gate for a PR. The
+  agent does not need separate owner confirmation for this gate, because the reviewer is required by
+  the closure contract. This authorization is narrow: it covers the independent review gate only, not
+  arbitrary delegation, implementation workers, exploratory subagents, or recursive fan-out.
 - Invoke `/code-review` (the code-reviewer subagent) against the PR's diff, with `--comment` so
   findings post as inline PR comments — this keeps the review visible on the PR itself, matching the
   old externally-visible verdict.
