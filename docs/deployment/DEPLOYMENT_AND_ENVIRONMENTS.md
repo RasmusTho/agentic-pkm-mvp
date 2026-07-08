@@ -29,7 +29,7 @@ This document is the canonical spec that epic #2655 (deployment + environment-se
 
 Three channels run in parallel on one host: `dev`, `test`, `prod`. They are isolated by DB name, vault binding, ports, and runtime-artifact paths — see `docs/ENVIRONMENTS.md` for the environment-selection contract these values implement.
 
-### Current reality (verified 2026-06-29)
+### Current reality (verified 2026-07-06)
 
 | Surface | dev | test | prod |
 | --- | --- | --- | --- |
@@ -42,16 +42,16 @@ Three channels run in parallel on one host: `dev`, `test`, `prod`. They are isol
 | Gateway module | `serve_dev_page` | `serve_dev_page` | `serve_production_page` |
 | Shared renderer | `render_index_html` | `render_index_html` | `render_index_html` |
 | Vault mount → container `/app/vault` | none (no-vault posture) | Bifröst | Midgård |
-| Per-env config file | `.env.<env>` overlays + compose env | same | `.env.prod.local` (machine-local secrets) + compose env |
-| Container app code source | **shared checkout `./:/app`** (anti-pattern) | shared `./:/app` | shared `./:/app` |
+| Runtime env / deploy-pin source | `config/deploy/dev.env` + compose env | `config/deploy/test.env` + compose env | generated `tmp/runtime.env` + `config/deploy/prod.env` placeholder pin |
+| Container app code source | baked local image `pkm-app:dev-local` | `workspace-app` with shared host checkout bind-mounted at `/app` | `workspace-app` with shared host checkout bind-mounted at `/app` |
 | Startup wrappers | `make dev-up` / `make dev-ui` (`scripts/dev/start_niflheim_ui.sh`) | `make test-up` / `make test-ui` (`scripts/test/start_bifrost_ui.sh`) | `make prod-up` / `make prod-ui` (`scripts/prod/start_midgard_ui.sh`) |
 
-Anchors for the values above: ports/DBs in `docker-compose.{dev,test,prod}.yml`; the base `./:/app` mount in `docker-compose.yaml`; gateway ports `_DEFAULT_PORT = 8111` (`serve_dev_page.py`) and `_PRODUCTION_PORT = 8113` (`serve_production_page.py`), with test 8112 set via the `PORT` env by `scripts/lib/companion_ui_startup.sh`; vault names per `reference_three_vaults` (names are operator-owned and **never hardcoded**).
+Anchors for the values above: ports/DBs in `docker-compose.{dev,test,prod}.yml`; the 2026-07-06 host recon recorded in #3124 / `docs/deployment/PINNED_IMAGE_CUTOVER/README.md`; gateway ports `_DEFAULT_PORT = 8111` (`serve_dev_page.py`) and `_PRODUCTION_PORT = 8113` (`serve_production_page.py`, with test 8112 set via the `PORT` env); vault names per `reference_three_vaults` (names are operator-owned and **never hardcoded**).
 
 Notes on the current model:
-- The API stacks bind-mount the **whole repo** at `/app` (`docker-compose.yaml` `volumes: ["./:/app", …]`), plus `/Users` and `/Volumes` at identical container paths for in-process vault selection (#2310). The repo bind-mount is what removes code isolation: a `git checkout` in the one host tree changes the code under every channel's container at once.
-- Gateways are **host processes**, not containers. They are launched by `scripts/lib/companion_ui_startup.sh`, which runs `nohup "${py}" -m "${CUI_SERVE_MODULE}" … &` and records a PID file under `tmp/companion-ui-<channel>.pid`. There is no supervisor: if the process dies, nothing restarts it.
-- A partial build-identity foundation already exists: #2602 bakes `VCS_REF`/`BUILT_AT` into the image (Dockerfile ARG/LABEL/ENV), `get_runtime_version()` in `app/version.py` reads them (falling back to `git rev-parse` for local dev), `/version` returns `{git_sha, built_at}`, and `/api/health` carries a top-level `version` field. **But the `./:/app` bind-mount overrides the baked code**, so today the running code is the host checkout, not the image — the SHA marker can disagree with what is actually executing until the bind-mount is retired.
+- `test` and `prod` still bind-mount the **same host checkout** at `/app`. That repo bind-mount is what removes code isolation: a `git checkout` in the one host tree changes the code under both channels' containers at once. `dev` differs only by running the baked local `pkm-app:dev-local` image, not by running a promoted GHCR SHA pin.
+- Companion UI gateways are now declared as managed compose units in the repo, but the running fleet has not yet adopted the pinned-image model. The cutover guard therefore checks gateway-unit participation in the recreate set before #2698 can treat a channel as ready.
+- A partial build-identity foundation already exists: #2602 bakes `VCS_REF`/`BUILT_AT` into the image (Dockerfile ARG/LABEL/ENV), `get_runtime_version()` in `app/version.py` reads them (falling back to `git rev-parse` for local dev), `/version` returns `{git_sha, built_at}`, and `/api/health` carries a top-level `version` field. **But the `test`/`prod` `/app` bind-mount overrides the baked code**, so today those channels run the host checkout, not the image — the SHA marker can disagree with what is actually executing until the bind-mount is retired.
 
 ### Target
 
