@@ -226,7 +226,7 @@ wait_json_ok() {
   deadline=$((SECONDS + health_timeout))
   while [ "${SECONDS}" -lt "${deadline}" ]; do
     if body="$(curl -fsS --max-time 3 "${url}" 2>/dev/null)"; then
-      if "${PYTHON}" -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("ok") is True else 1)' <<<"${body}"; then
+      if "${PYTHON}" -c 'import json,sys; data=json.load(sys.stdin); sys.exit(0 if isinstance(data, dict) and data.get("ok") is True else 1)' <<<"${body}"; then
         return 0
       fi
     fi
