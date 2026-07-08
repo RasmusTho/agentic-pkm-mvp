@@ -107,7 +107,13 @@ read_pin() {
 
 write_pin() {
   local file="$1" sha="$2"
-  printf 'APP_IMAGE_REPOSITORY=%s\nAPP_IMAGE_TAG=%s\n' "${image_repository}" "${sha}" >"${file}"
+  local tmp_file
+  tmp_file="$(mktemp "${file}.tmp.XXXXXX")"
+  if [ -f "${file}" ]; then
+    awk -F= '$1 != "APP_IMAGE_REPOSITORY" && $1 != "APP_IMAGE_TAG" { print }' "${file}" >"${tmp_file}"
+  fi
+  printf 'APP_IMAGE_REPOSITORY=%s\nAPP_IMAGE_TAG=%s\n' "${image_repository}" "${sha}" >>"${tmp_file}"
+  mv "${tmp_file}" "${file}"
 }
 
 resolve_target_sha() {

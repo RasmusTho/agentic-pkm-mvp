@@ -102,6 +102,16 @@ def test_deploy_sequence_and_forward_only_ack_gate() -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_pin_write_preserves_channel_runtime_env() -> None:
+    text = SCRIPT.read_text(encoding="utf-8")
+    write_pin = text.split("write_pin() {", 1)[1].split("\n}\n", 1)[0]
+
+    assert 'APP_IMAGE_REPOSITORY=%s\\nAPP_IMAGE_TAG=%s\\n' in write_pin
+    assert '$1 != "APP_IMAGE_REPOSITORY" && $1 != "APP_IMAGE_TAG"' in write_pin
+    assert ">>\"${tmp_file}\"" in write_pin
+    assert "mv \"${tmp_file}\" \"${file}\"" in write_pin
+
+
 def test_health_gate_blocks_and_triggers_rollback() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
     assert "health_gate" in text

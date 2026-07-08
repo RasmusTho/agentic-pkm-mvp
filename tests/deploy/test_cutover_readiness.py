@@ -62,7 +62,7 @@ def _write_migration(
     *,
     filename: str,
     revision: str,
-    down_revision: str | None,
+    down_revision: str | tuple[str, ...] | None,
     reversibility: str,
 ) -> None:
     versions = root / "app" / "alembic" / "versions"
@@ -237,6 +237,54 @@ def test_pending_forward_only_migrations_listed_and_gated(tmp_path: Path) -> Non
     assert result.pending_migrations == ("002_forward_only.py", "003_reversible.py")
     assert result.pending_forward_only_migrations == ("002_forward_only.py",)
     assert "002_forward_only.py" in result.summary()
+
+
+def test_merge_revision_down_revision_tuple_does_not_leave_old_base_as_head(
+    tmp_path: Path,
+) -> None:
+    _write_base_fixture(tmp_path)
+    versions = tmp_path / "app" / "alembic" / "versions"
+    for child in versions.iterdir():
+        child.unlink()
+    _write_migration(
+        tmp_path,
+        filename="left_base.py",
+        revision="left",
+        down_revision=None,
+        reversibility="reversible",
+    )
+    _write_migration(
+        tmp_path,
+        filename="right_base.py",
+        revision="right",
+        down_revision=None,
+        reversibility="reversible",
+    )
+    _write_migration(
+        tmp_path,
+        filename="merge.py",
+        revision="merge",
+        down_revision=("left", "right"),
+        reversibility="reversible",
+    )
+    _write_migration(
+        tmp_path,
+        filename="head.py",
+        revision="head",
+        down_revision="merge",
+        reversibility="reversible",
+    )
+
+    result = check_cutover_readiness(
+        "prod",
+        TARGET_SHA,
+        root=tmp_path,
+        db_revision="head",
+        runner=_runner,
+    )
+
+    assert result.ok, result.summary()
+    assert result.pending_migrations == ()
 
 
 def test_missing_migration_marker_fails_without_raising(tmp_path: Path) -> None:
