@@ -85,7 +85,29 @@ def test_placeholder_verify_targets_are_not_concrete(target: str) -> None:
     ]
 
 
-@pytest.mark.parametrize("source_docs", ["- <path>", "- TBD"])
+@pytest.mark.parametrize(
+    "target",
+    [
+        "tests/<module>/test_<name>.py::test_<case>",
+        "doc writeback at docs/<PATH>.md :: <anchor>",
+    ],
+)
+def test_template_shaped_verify_targets_are_not_concrete(target: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "Verify: `tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`",
+        f"Verify: {target}",
+    )
+
+    report = classify_issue_body(body)
+
+    assert report.readiness_classification == "missing_verify_markers"
+    assert report.acceptance_criteria.missing_verify_items == [
+        "- [ ] The checker reports a ready candidate for canonical issue bodies."
+    ]
+
+
+@pytest.mark.parametrize("source_docs", ["- <path>", "- `<path>`", "- `docs/<path>.md`", "- TBD"])
 def test_placeholder_source_docs_are_missing(source_docs: str) -> None:
     body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
     body = body.replace(

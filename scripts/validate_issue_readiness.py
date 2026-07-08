@@ -146,8 +146,8 @@ def _non_placeholder_lines(section: str | None) -> list[str]:
         line = raw_line.strip()
         if not line or line in {"-", "- [ ]"}:
             continue
-        content = re.sub(r"^[-*]\s+(?:\[[ xX]\]\s+)?", "", line).strip()
-        if re.fullmatch(r"<.*>", content):
+        content = re.sub(r"^[-*]\s+(?:\[[ xX]\]\s+)?", "", line).strip().strip("`").strip()
+        if re.search(r"<[^>]+>", content):
             continue
         if re.fullmatch(r"<?(?:none|n/a|todo|tbd|blank|leave blank)>?", content, re.I):
             continue
@@ -177,7 +177,7 @@ def _has_concrete_verify_marker(item: str) -> bool:
         target = match.group(1).strip().strip("`").strip()
         if not target:
             continue
-        if re.fullmatch(r"<.*>", target):
+        if re.search(r"<[^>]+>", target):
             continue
         if re.fullmatch(
             r"(?:none|n/a|na|tbd|todo|test pointer|doc anchor|verification target|runtime receipt)",
