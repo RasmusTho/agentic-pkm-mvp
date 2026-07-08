@@ -56,4 +56,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ci-failure-context-${{ github.event.workflow_run.id }}
-          path: ci-failure-context/
+          path: |
+            ci-failure-context/context.json
+            ci-failure-context/context.md

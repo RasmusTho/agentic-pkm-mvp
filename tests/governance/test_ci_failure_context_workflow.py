@@ -57,5 +57,10 @@ def test_workflow_is_artifact_only() -> None:
     assert "actions/upload-artifact@v4" in text
     assert "ci-failure-context/context.json" in text
     assert "ci-failure-context/context.md" in text
+    upload_block = text.split("actions/upload-artifact@v4", 1)[1]
+    assert "ci-failure-context/" not in upload_block.replace(
+        "ci-failure-context/context.json", ""
+    ).replace("ci-failure-context/context.md", "")
+    assert "run-logs.zip" not in upload_block
     assert "github.rest.issues.createComment" not in text
     assert "gh pr comment" not in text
