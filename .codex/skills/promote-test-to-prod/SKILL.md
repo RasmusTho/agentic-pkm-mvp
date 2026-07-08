@@ -35,6 +35,23 @@ candidate commit
 
 This skill is a wrapper that gates the standard `prepare-promotion → execute-promotion → verify-promotion` sequence behind a required test evidence check.
 
+## Deployment model
+
+Before invoking the prod-facing stages, resolve the prod channel's deployment model:
+
+- **Checkout model (interim / no-dead-window):** the channel remains on the checkout model until a
+  cutover receipt exists for prod: a fleet-model fitness PASS recorded at
+  `ops/deployments/prod-latest.json`. In this mode, the wrapper keeps the existing
+  `prepare-promotion -> execute-promotion -> verify-promotion` chain, and
+  `execute-promotion` performs the governed `stable` PR, checkout update, migrations, and
+  `make prod-start-full` restart.
+- **Pinned-image model (post-cutover):** once the prod cutover receipt exists, the wrapper keeps the
+  same test receipt / bypass gate, operator acknowledgments, and release-channel authority checks,
+  but `execute-promotion` must route physical deployment through
+  `scripts/deploy_channel.sh prod <authorized-sha>` and `rollback-promotion` must route physical
+  rollback through `scripts/deploy_channel.sh prod <previous-good-sha>`. The deployment model does
+  not move ADR-0040 authority; it only changes how the authorized SHA is applied to prod.
+
 ## Required evidence before prod promotion
 
 One of two evidence forms must be present before this skill proceeds:
@@ -93,9 +110,8 @@ Before any prod mutation, confirm every prod binding in the table below is corre
 
 5. **Prod-scoped execute.** Invoke `execute-promotion` with the acknowledged plan:
    - Records `stable-prev` before moving anything.
-   - Advances `stable` via the governed PR targeting `stable` (the merge commit becomes the new `stable` HEAD — never a direct ref write; see `execute-promotion §Stable-branch protection and PR-based advancement`).
-   - Applies migrations to `app` (port 15432).
-   - Restarts the prod process with `make prod-start-full`. Vault root is resolved from the operator-configured `.env.prod.local` (configured once per machine per `docs/RELEASE_CHANNELS/README.md §Current direction`) — do not restate `VAULT_ROOT` inline on the command.
+   - In checkout model, advances `stable` via the governed PR targeting `stable` (the merge commit becomes the new `stable` HEAD — never a direct ref write; see `execute-promotion §Stable-branch protection and PR-based advancement`), applies migrations to `app` (port 15432), and restarts the prod process with `make prod-start-full`. Vault root is resolved from the operator-configured `.env.prod.local` (configured once per machine per `docs/RELEASE_CHANNELS/README.md §Current direction`) — do not restate `VAULT_ROOT` inline on the command.
+   - In pinned-image model, confirms the authorized SHA and invokes `scripts/deploy_channel.sh prod <authorized-sha>`; the deploy script performs the pin bump, migration gate, recreate, health gate, UI smoke, and receipt.
 
 6. **Prod-scoped verify.** Invoke `verify-promotion` against the prod channel:
    - Confirms `PKM_ENVIRONMENT=prod`, vault=real vault, DB=`app`.
@@ -104,8 +120,8 @@ Before any prod mutation, confirm every prod binding in the table below is corre
 
 7. **On FAIL.** Invoke `rollback-promotion`:
    - Reverses reversible migrations on `app`.
-   - Restores `stable` to `stable-prev`.
-   - Restarts prod.
+   - In checkout model, restores `stable` to `stable-prev` and restarts prod.
+   - In pinned-image model, runs `scripts/deploy_channel.sh prod <previous-good-sha>` to restore the previous-good pin and recreate prod.
    - Calls `verify-promotion` again. If still FAIL: escalate to operator, do not loop.
 
 ## Evidence handoff
@@ -147,6 +163,9 @@ promote-test-to-prod \
 - Always call `verify-promotion` after `execute-promotion` — whether bypass or normal path.
 - Never bypass the test stage without a written, stored risk note.
 - Never use the test checkout, test DB, or test vault for prod operations.
+- In pinned-image mode, never substitute checkout update/restart for
+  `scripts/deploy_channel.sh`; post-cutover physical prod deployment and rollback are pin bump plus
+  recreate.
 
 ## Authority order for decisions
 
