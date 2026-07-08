@@ -275,6 +275,19 @@ version_gate() {
   }
 }
 
+fleet_model_fitness_gate() {
+  local receipt_json
+  if ! receipt_json="$("${PYTHON}" -m app.release_channels.fleet_model_fitness "${channel}" --root "${ROOT}" --json)"; then
+    echo "fleet-model fitness gate failed" >&2
+    if [ -n "${receipt_json}" ]; then
+      echo "${receipt_json}" >&2
+    fi
+    return 1
+  fi
+  FLEET_MODEL_FITNESS_JSON="${receipt_json}"
+  export FLEET_MODEL_FITNESS_JSON
+}
+
 record_receipt() {
   local receipt_path timestamp
   timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -282,6 +295,7 @@ record_receipt() {
   receipt_path="${receipt_dir}/${channel}-latest.json"
   "${PYTHON}" - "$receipt_path" <<PY
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -293,6 +307,7 @@ payload = {
     "image": "${image_repository}:${target_sha}",
     "recorded_at": "${timestamp}",
     "migration_receipt": json.loads('''${MIGRATION_RECEIPT_JSON:-{"migrations_checked":0,"reversible":[],"forward_only":[],"classification_decisions":[]}}'''),
+    "fleet_model_fitness": json.loads(os.environ.get("FLEET_MODEL_FITNESS_JSON", "{}")),
 }
 Path(sys.argv[1]).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
 PY
@@ -332,6 +347,7 @@ health_gate || {
   exit 1
 }
 version_gate
+fleet_model_fitness_gate
 scripts/companion_ui_postdeploy_smoke.sh "${channel}"
 record_receipt
 capture_watch_gate || {
