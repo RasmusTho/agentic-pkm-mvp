@@ -437,3 +437,31 @@ class TestRegressionGateFailsLoud:
         thresholds = eval_run.load_thresholds()
         clean_scorecard = eval_run.build_scorecard(thresholds=thresholds)
         assert clean_scorecard["regression"] is False, clean_scorecard["failures"]
+
+    def test_clean_pass_is_hermetic_to_durable_rebuild_state(self, monkeypatch):
+        """#3186: the deterministic gate must ignore prior durable-index warmup.
+
+        The golden eval runner seeds an in-process fixture corpus. If a prior
+        full-suite test warmed ``app.retrieval.hybrid`` from the durable index,
+        the serving path's generation revalidation could rebuild over that
+        fixture before the first query, dropping aggregate / memory_recall
+        metrics to 0.0 and flipping a clean pass to a false regression.
+        """
+        from app.eval import run as eval_run
+        from app.retrieval import hybrid as retrieval_hybrid
+
+        class EmptyVectorIndex:
+            def generation(self):
+                return "new-generation"
+
+            def all_rows(self):
+                return []
+
+        monkeypatch.setattr("app.stores.get_vector_index", lambda: EmptyVectorIndex())
+        monkeypatch.setattr(retrieval_hybrid, "_REBUILT_FROM_DURABLE_INDEX", True)
+        monkeypatch.setattr(retrieval_hybrid, "_REBUILD_GENERATION", "old-generation")
+        monkeypatch.setattr(retrieval_hybrid, "_LAST_GENERATION_CHECK_MONOTONIC", None)
+
+        thresholds = eval_run.load_thresholds()
+        clean_scorecard = eval_run.build_scorecard(thresholds=thresholds)
+        assert clean_scorecard["regression"] is False, clean_scorecard["failures"]

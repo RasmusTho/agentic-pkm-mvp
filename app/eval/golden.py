@@ -10,6 +10,7 @@ from typing import Dict, List
 import math
 
 from app.retrieval.hybrid import get_store, hybrid_search
+from app.retrieval import hybrid as retrieval_hybrid
 
 DATA_ROOT = Path("data") / "golden"
 CORPUS_PATH = DATA_ROOT / "corpus.jsonl"
@@ -58,6 +59,37 @@ def _restore_store(store, docs: List[dict]) -> None:
     store.set_documents(docs)
 
 
+@contextmanager
+def _temporary_golden_store(corpus: List[dict]):
+    """Seed the in-process retrieval store without durable-index revalidation.
+
+    The deterministic eval corpus is a fixture, not the production durable index.
+    If another full-suite test warmed retrieval from the durable index first,
+    ``hybrid_search`` may otherwise revalidate generation state and overwrite
+    the seeded corpus before the first query.
+    """
+    store = get_store()
+    backup = _snapshot_store(store)
+    durable_state = (
+        retrieval_hybrid._REBUILT_FROM_DURABLE_INDEX,
+        retrieval_hybrid._REBUILD_GENERATION,
+        retrieval_hybrid._LAST_GENERATION_CHECK_MONOTONIC,
+    )
+    try:
+        store.set_documents(corpus)
+        retrieval_hybrid._REBUILT_FROM_DURABLE_INDEX = False
+        retrieval_hybrid._REBUILD_GENERATION = None
+        retrieval_hybrid._LAST_GENERATION_CHECK_MONOTONIC = None
+        yield
+    finally:
+        _restore_store(store, backup)
+        (
+            retrieval_hybrid._REBUILT_FROM_DURABLE_INDEX,
+            retrieval_hybrid._REBUILD_GENERATION,
+            retrieval_hybrid._LAST_GENERATION_CHECK_MONOTONIC,
+        ) = durable_state
+
+
 def precision_at_k(relevances: List[float], k: int) -> float:
     if k <= 0:
         return 0.0
@@ -97,8 +129,6 @@ def load_judgments() -> Dict[str, List[dict]]:
 
 
 def evaluate_golden_set(k: int = 5, *, rerank_provider: str | None = None) -> Dict[str, dict]:
-    store = get_store()
-    backup = _snapshot_store(store)
     corpus = load_corpus()
     judgments = load_judgments()
     # Hermetic gate: the golden judgments are authored against the FULL seed
@@ -111,9 +141,8 @@ def evaluate_golden_set(k: int = 5, *, rerank_provider: str | None = None) -> Di
     if rerank_provider:
         env_updates["RERANK_ENABLE"] = "1"
         env_updates["RERANK_PROVIDER"] = rerank_provider
-    try:
+    with _temporary_golden_store(corpus):
         with _temporary_env(env_updates):
-            store.set_documents(corpus)
             per_query = []
             for case in judgments.get("queries", []):
                 relevant_map = {entry["doc_id"]: entry.get("relevance", 0) for entry in case.get("relevance", [])}
@@ -129,8 +158,6 @@ def evaluate_golden_set(k: int = 5, *, rerank_provider: str | None = None) -> Di
                 "ndcg@k": fmean(entry["ndcg@k"] for entry in per_query),
             }
             return {"aggregate": aggregate, "queries": per_query}
-    finally:
-        _restore_store(store, backup)
 
 
 def evaluate_vs_baseline(provider: str, *, k: int = 10) -> Dict[str, Dict[str, float]]:
@@ -163,8 +190,6 @@ def evaluate_bilingual_golden_set(k: int = 5, *, rerank_provider: str | None = N
     `low_trust_citation` together form the memory-recall slice (recall-into-ASK
     / low-trust citation) required by W2.
     """
-    store = get_store()
-    backup = _snapshot_store(store)
     corpus = load_bilingual_corpus()
     judgments = load_bilingual_judgments()
     # Hermetic gate — see evaluate_golden_set: force the run unscoped so a
@@ -174,9 +199,8 @@ def evaluate_bilingual_golden_set(k: int = 5, *, rerank_provider: str | None = N
     if rerank_provider:
         env_updates["RERANK_ENABLE"] = "1"
         env_updates["RERANK_PROVIDER"] = rerank_provider
-    try:
+    with _temporary_golden_store(corpus):
         with _temporary_env(env_updates):
-            store.set_documents(corpus)
             per_query = []
             for case in judgments.get("queries", []):
                 relevant_map = {
@@ -229,8 +253,6 @@ def evaluate_bilingual_golden_set(k: int = 5, *, rerank_provider: str | None = N
                 "memory_recall": memory_recall,
                 "queries": per_query,
             }
-    finally:
-        _restore_store(store, backup)
 
 
 __all__ = [
