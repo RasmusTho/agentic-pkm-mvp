@@ -72,6 +72,22 @@ def _http_runner(api_sha: str = PIN, health_sha: str | None = None, gateway_ok: 
     return get_json
 
 
+def _http_runner_top_level_health_version(
+    api_sha: str = PIN,
+    gateway_ok: bool = True,
+):
+    def get_json(url: str) -> dict[str, Any]:
+        if url.endswith(":18000/version"):
+            return {"git_sha": api_sha, "built_at": "2026-07-08T00:00:00Z"}
+        if url.endswith(":18000/api/health"):
+            return {"version": api_sha}
+        if url.endswith(":8113/healthz"):
+            return {"ok": gateway_ok, "service": "companion-ui"}
+        raise AssertionError(f"unexpected URL: {url}")
+
+    return get_json
+
+
 def _all_services(**overrides: dict[str, Any]) -> dict[str, dict[str, Any]]:
     services = ("api", "worker", "watcher", "heimdal-capture-watch", "companion-ui")
     return {service: _inspect(service, **overrides.get(service, {})) for service in services}
@@ -116,6 +132,21 @@ def test_pin_version_and_gateway_sha_must_agree(tmp_path: Path) -> None:
     assert "/version" in joined and "version-drift" in joined
     assert "/api/health" in joined and "health-drift" in joined
     assert "gateway" in joined and "gateway-drift" in joined
+
+
+def test_api_health_top_level_version_string_is_accepted(tmp_path: Path) -> None:
+    root = _root_with_pin(tmp_path)
+    inspections = _all_services()
+
+    result = check_fleet_model_fitness(
+        "prod",
+        root=root,
+        docker_runner=_docker_runner(inspections),
+        http_get_json=_http_runner_top_level_health_version(),
+    )
+
+    assert result.ok
+    assert result.api_health_git_sha == PIN
 
 
 def test_checkout_model_reports_without_failing(tmp_path: Path) -> None:

@@ -237,7 +237,7 @@ wait_json_ok() {
 
 health_gate() {
   wait_json_ok "http://127.0.0.1:${api_port}/healthz" || return 1
-  curl -fsS --max-time 3 "http://127.0.0.1:${ui_port}/healthz" >/dev/null
+  wait_json_ok "http://127.0.0.1:${ui_port}/healthz" || return 1
 }
 
 capture_watch_gate() {
