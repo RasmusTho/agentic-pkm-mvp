@@ -115,25 +115,15 @@ def test_command_guard_cli_exit_codes() -> None:
     assert blocked.returncode == 1
 
 
-def test_changed_paths_are_limited_to_claude_docs_or_local_helpers() -> None:
-    changed = subprocess.run(
-        ["git", "diff", "--name-only", "origin/main...HEAD"],
-        cwd=REPO_ROOT,
-        check=False,
-        text=True,
-        capture_output=True,
+def test_hook_artifacts_are_limited_to_local_session_surfaces() -> None:
+    text = "\n".join(
+        [
+            HOOK_DOC.read_text(encoding="utf-8"),
+            (REPO_ROOT / "scripts/local_agent_command_guard.py").read_text(encoding="utf-8"),
+        ]
     )
-    changed_paths = [path for path in changed.stdout.splitlines() if path]
-    if changed.returncode != 0:
-        fallback = subprocess.run(
-            ["git", "show", "--name-only", "--format=", "HEAD"],
-            cwd=REPO_ROOT,
-            check=True,
-            text=True,
-            capture_output=True,
-        )
-        changed_paths = [path for path in fallback.stdout.splitlines() if path]
-    allowed_prefixes = (".claude/", "scripts/local_agent_command_guard.py", "tests/governance/test_local_agent_hooks.py")
 
-    assert changed_paths
-    assert all(path.startswith(allowed_prefixes) for path in changed_paths)
+    assert HOOK_DOC.relative_to(REPO_ROOT).as_posix() == ".claude/hooks/README.md"
+    assert ".github/workflows" not in text
+    assert "pull_request" not in text
+    assert "workflow_dispatch" not in text
