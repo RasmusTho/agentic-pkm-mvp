@@ -146,7 +146,10 @@ def _non_placeholder_lines(section: str | None) -> list[str]:
         line = raw_line.strip()
         if not line or line in {"-", "- [ ]"}:
             continue
-        if re.fullmatch(r"<?(?:none|n/a|todo|tbd|blank|leave blank)>?", line, re.I):
+        content = re.sub(r"^[-*]\s+(?:\[[ xX]\]\s+)?", "", line).strip()
+        if re.fullmatch(r"<.*>", content):
+            continue
+        if re.fullmatch(r"<?(?:none|n/a|todo|tbd|blank|leave blank)>?", content, re.I):
             continue
         lines.append(line)
     return lines
@@ -169,6 +172,23 @@ def _summarize_item(item: str) -> str:
     return re.sub(r"\s+", " ", first_line)
 
 
+def _has_concrete_verify_marker(item: str) -> bool:
+    for match in re.finditer(r"(?im)(?:^|\b)Verify:\s*(.+)$", item):
+        target = match.group(1).strip().strip("`").strip()
+        if not target:
+            continue
+        if re.fullmatch(r"<.*>", target):
+            continue
+        if re.fullmatch(
+            r"(?:none|n/a|na|tbd|todo|test pointer|doc anchor|verification target|runtime receipt)",
+            target,
+            re.IGNORECASE,
+        ):
+            continue
+        return True
+    return False
+
+
 def analyze_acceptance_criteria(section: str | None) -> AcceptanceCriteriaReport:
     lines = _non_placeholder_lines(section)
     items = _extract_acceptance_items(section)
@@ -176,7 +196,7 @@ def analyze_acceptance_criteria(section: str | None) -> AcceptanceCriteriaReport
     missing_verify = [
         _summarize_item(item)
         for item in items
-        if not re.search(r"(?im)(?:^|\b)Verify:\s*\S", item)
+        if not _has_concrete_verify_marker(item)
     ]
     return AcceptanceCriteriaReport(
         present=bool(items),
@@ -232,12 +252,6 @@ def classify_issue_body(
     elif _contains_any(NOT_AGENTABLE_PATTERNS, body):
         classification = "not_agentable"
         human_exception_required = True
-    elif _contains_any(AUTHORITY_RISK_PATTERNS, body):
-        classification = "authority_risk"
-        human_exception_required = True
-    elif _contains_any(AMBIGUOUS_PATTERNS, body):
-        classification = "ambiguous_intent"
-        human_exception_required = True
     elif "Source Docs" in missing or not source_docs_present:
         classification = "missing_source_docs"
     elif missing:
@@ -246,6 +260,12 @@ def classify_issue_body(
         classification = "malformed_acceptance_criteria"
     elif not ac_report.verify_markers_present:
         classification = "missing_verify_markers"
+    elif _contains_any(AUTHORITY_RISK_PATTERNS, body):
+        classification = "authority_risk"
+        human_exception_required = True
+    elif _contains_any(AMBIGUOUS_PATTERNS, body):
+        classification = "ambiguous_intent"
+        human_exception_required = True
 
     guidance = repair_guidance(
         classification=classification,

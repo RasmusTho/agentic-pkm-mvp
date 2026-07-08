@@ -69,6 +69,37 @@ def test_missing_verify_reports_exact_item_guidance() -> None:
     assert "acceptance criteria without verify markers" in report.repair_guidance[-1]
 
 
+@pytest.mark.parametrize("target", ["<test pointer>", "none", "n/a", "TBD"])
+def test_placeholder_verify_targets_are_not_concrete(target: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "Verify: `tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`",
+        f"Verify: {target}",
+    )
+
+    report = classify_issue_body(body)
+
+    assert report.readiness_classification == "missing_verify_markers"
+    assert report.acceptance_criteria.missing_verify_items == [
+        "- [ ] The checker reports a ready candidate for canonical issue bodies."
+    ]
+
+
+@pytest.mark.parametrize("source_docs", ["- <path>", "- TBD"])
+def test_placeholder_source_docs_are_missing(source_docs: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+    body = body.replace(
+        "## Source Docs\n- `.codex/skills/_shared/ISSUE_CONTRACT.md`\n- `.github/workflows/issue-pr-governance.yml`",
+        f"## Source Docs\n{source_docs}",
+    )
+
+    report = classify_issue_body(body)
+
+    assert report.readiness_classification == "missing_source_docs"
+    assert report.source_docs_present is False
+    assert report.source_docs_missing is True
+
+
 def test_blocked_or_needs_human_labels_are_not_agentable() -> None:
     body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
 
