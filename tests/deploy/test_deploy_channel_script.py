@@ -184,6 +184,7 @@ def test_deploy_receipt_embeds_fleet_model_fitness() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
     assert "fleet_model_fitness_gate" in text
     assert "app.release_channels.fleet_model_fitness" in text
+    assert "--require-pinned" in text
     assert "FLEET_MODEL_FITNESS_JSON" in text
     assert '"fleet_model_fitness"' in text
 

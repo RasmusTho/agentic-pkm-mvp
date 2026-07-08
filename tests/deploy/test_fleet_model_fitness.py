@@ -84,11 +84,13 @@ def test_bind_mount_in_pinned_mode_fails_naming_service(tmp_path: Path) -> None:
     result = check_fleet_model_fitness(
         "prod",
         root=root,
+        require_pinned=True,
         docker_runner=_docker_runner(inspections),
         http_get_json=_http_runner(),
     )
 
-    assert result.model == "pinned-image"
+    assert result.model == "checkout"
+    assert result.expected_model == "pinned-image"
     assert not result.ok
     assert any("api" in violation and "/app" in violation for violation in result.violations)
 
@@ -135,3 +137,65 @@ def test_checkout_model_reports_without_failing(tmp_path: Path) -> None:
     assert result.ok
     assert result.model == "checkout"
     assert result.to_receipt()["model"] == "checkout"
+
+
+def test_bind_mount_with_pin_reports_checkout_without_failing(tmp_path: Path) -> None:
+    root = _root_with_pin(tmp_path)
+    inspections = _all_services(api={"app_bind": True})
+
+    result = check_fleet_model_fitness(
+        "prod",
+        root=root,
+        docker_runner=_docker_runner(inspections),
+        http_get_json=_http_runner(),
+    )
+
+    assert result.ok
+    assert result.model == "checkout"
+    assert result.to_receipt()["ok"] is True
+
+
+def test_mixed_fleet_cannot_greenlight_pinned_deploy_receipt(tmp_path: Path) -> None:
+    root = _root_with_pin(tmp_path)
+    inspections = _all_services(
+        api={"image_tag": "dev-local", "app_bind": True},
+        worker={"image_tag": "worker-drift"},
+    )
+
+    result = check_fleet_model_fitness(
+        "prod",
+        root=root,
+        require_pinned=True,
+        docker_runner=_docker_runner(inspections),
+        http_get_json=_http_runner(),
+    )
+
+    receipt = result.to_receipt()
+    assert result.model == "checkout"
+    assert not result.ok
+    assert receipt["ok"] is False
+    assert receipt["model"] == "checkout"
+    assert receipt["expected_model"] == "pinned-image"
+    joined = "\n".join(result.violations)
+    assert "expected pinned-image model" in joined
+    assert "worker-drift" in joined
+
+
+def test_gateway_bind_mount_fails_when_pinned_required(tmp_path: Path) -> None:
+    root = _root_with_pin(tmp_path)
+    inspections = _all_services(**{"companion-ui": {"app_bind": True}})
+
+    result = check_fleet_model_fitness(
+        "prod",
+        root=root,
+        require_pinned=True,
+        docker_runner=_docker_runner(inspections),
+        http_get_json=_http_runner(),
+    )
+
+    receipt = result.to_receipt()
+    assert not result.ok
+    assert receipt["ok"] is False
+    joined = "\n".join(result.violations)
+    assert "companion-ui" in joined
+    assert "/app" in joined

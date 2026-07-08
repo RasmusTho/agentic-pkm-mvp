@@ -277,7 +277,7 @@ version_gate() {
 
 fleet_model_fitness_gate() {
   local receipt_json
-  if ! receipt_json="$("${PYTHON}" -m app.release_channels.fleet_model_fitness "${channel}" --root "${ROOT}" --json)"; then
+  if ! receipt_json="$("${PYTHON}" -m app.release_channels.fleet_model_fitness "${channel}" --root "${ROOT}" --json --require-pinned)"; then
     echo "fleet-model fitness gate failed" >&2
     if [ -n "${receipt_json}" ]; then
       echo "${receipt_json}" >&2

@@ -5,7 +5,8 @@ it is still in checkout mode or has cut over to pinned images. Checkout mode is
 informational and does not fail. Pinned-image mode fails loud when app services
 retain a repo ``/app`` bind-mount, when service image tags diverge from the
 channel pin, when live version endpoints diverge, or when the managed gateway is
-not live.
+not live. The deploy script runs the same guard with ``--require-pinned`` so a
+post-deploy receipt cannot green-light a checkout/hot-reload fleet.
 """
 
 from __future__ import annotations
@@ -72,6 +73,7 @@ class FleetModelFitnessResult:
     model: str
     pin: str
     services: tuple[ServiceFitness, ...]
+    expected_model: str | None = None
     api_version_git_sha: str | None = None
     api_health_git_sha: str | None = None
     gateway_sha: str | None = None
@@ -87,6 +89,7 @@ class FleetModelFitnessResult:
             "guard": "fleet_model_fitness.v1",
             "channel": self.channel,
             "model": self.model,
+            "expected_model": self.expected_model,
             "pin": self.pin,
             "ok": self.ok,
             "api_version_git_sha": self.api_version_git_sha,
@@ -216,6 +219,7 @@ def check_fleet_model_fitness(
     channel: str,
     *,
     root: Path | str = Path.cwd(),
+    require_pinned: bool = False,
     docker_runner: DockerRunner = _default_docker_runner,
     http_get_json: HttpJsonGetter = _default_http_get_json,
 ) -> FleetModelFitnessResult:
@@ -235,13 +239,14 @@ def check_fleet_model_fitness(
         for service in ALL_SERVICES
     )
     app_services = tuple(service for service in services if service.service in APP_CODE_SERVICES)
-    app_bind_services = tuple(service for service in app_services if service.has_app_bind_mount)
-    all_app_images_match_pin = all(_matches_pin(service.image, pin) for service in app_services)
+    bind_services = tuple(service for service in services if service.has_app_bind_mount)
+    model = "checkout" if bind_services else "pinned-image"
 
-    # Pre-cutover checkout fleets commonly run a local/checkout image plus a
-    # repo /app bind-mount. Report that model honestly and do not enforce the
-    # pinned-image identity checks until the live app images are on the pin.
-    if app_bind_services and not all_app_images_match_pin:
+    # The observed deployment model is physical: a live /app bind mount means
+    # checkout/hot-reload, even when the image tag happens to equal the pin.
+    # That keeps direct pre-cutover guard runs informative. Deploy receipts pass
+    # require_pinned=True below, so checkout cannot become a green deploy receipt.
+    if model == "checkout" and not require_pinned:
         return FleetModelFitnessResult(
             channel=channel,
             model="checkout",
@@ -250,7 +255,13 @@ def check_fleet_model_fitness(
         )
 
     violations: list[str] = []
-    for service in app_bind_services:
+    if model == "checkout" and require_pinned:
+        names = ", ".join(service.service for service in bind_services)
+        violations.append(
+            f"expected pinned-image model for channel '{channel}', but live /app "
+            f"bind-mount(s) show checkout model on: {names}"
+        )
+    for service in bind_services:
         sources = ", ".join(service.app_bind_mount_sources)
         violations.append(
             f"service '{service.service}' has a repo /app bind-mount in pinned-image mode: "
@@ -310,7 +321,8 @@ def check_fleet_model_fitness(
 
     return FleetModelFitnessResult(
         channel=channel,
-        model="pinned-image",
+        model=model,
+        expected_model="pinned-image" if require_pinned else None,
         pin=pin,
         services=services,
         api_version_git_sha=api_version_git_sha,
@@ -337,13 +349,22 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Write the machine-readable receipt JSON to stdout.",
     )
+    parser.add_argument(
+        "--require-pinned",
+        action="store_true",
+        help="Fail when the observed fleet model is checkout. Used by deploy receipts.",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
     try:
-        result = check_fleet_model_fitness(args.channel, root=args.root)
+        result = check_fleet_model_fitness(
+            args.channel,
+            root=args.root,
+            require_pinned=args.require_pinned,
+        )
     except FleetModelInspectionError as exc:
         print(f"fleet-model-fitness: ERROR - {exc}", file=sys.stderr)
         return 2
