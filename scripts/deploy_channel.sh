@@ -270,7 +270,7 @@ version_gate() {
   version_json="$(curl -fsS --max-time 5 "http://127.0.0.1:${api_port}/version")"
   health_json="$(curl -fsS --max-time 5 "http://127.0.0.1:${api_port}/api/health")"
   version_sha="$("${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin).get("git_sha", ""))' <<<"${version_json}")"
-  health_sha="$("${PYTHON}" -c 'import json,sys; print((json.load(sys.stdin).get("version") or {}).get("git_sha", ""))' <<<"${health_json}")"
+  health_sha="$("${PYTHON}" -c 'import json,sys; data=json.load(sys.stdin); value=data.get("version"); print(value.get("git_sha", "") if isinstance(value, dict) else (value if isinstance(value, str) else ""))' <<<"${health_json}")"
   [ "${version_sha}" = "${target_sha}" ] || {
     echo "/version reported ${version_sha}, expected ${target_sha}" >&2
     return 1
