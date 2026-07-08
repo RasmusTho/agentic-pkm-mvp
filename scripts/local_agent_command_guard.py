@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shlex
 from dataclasses import dataclass
@@ -58,10 +59,17 @@ def _classify_gh_command(command: str) -> GuardResult | None:
         tokens = shlex.split(command)
     except ValueError:
         tokens = command.split()
-    if not tokens or tokens[0] != "gh":
-        return None
+    for index, token in enumerate(tokens):
+        if os.path.basename(token) == "gh":
+            return _classify_gh_tokens(tokens, index)
+        if "gh " in token:
+            nested_result = _classify_gh_command(token)
+            if nested_result is not None:
+                return nested_result
+    return None
 
-    index = 1
+def _classify_gh_tokens(tokens: Sequence[str], gh_index: int) -> GuardResult | None:
+    index = gh_index + 1
     while index < len(tokens):
         token = tokens[index]
         if token in _GH_GLOBAL_FLAGS_WITH_VALUE:
