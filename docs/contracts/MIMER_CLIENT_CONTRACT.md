@@ -86,6 +86,11 @@ Error contract (a client must handle each named state; never retry blindly):
 
 - `GET /search?q=` returns `{"results": [{uuid, title}, …]}`, fixed k=10. A retrieval failure propagates as an error — no silent filler (#2989).
 - `POST /api/ask` takes `{"question": …}` (alias `query`; optional `zone_strategy`) and returns an answer with per-source attribution: each source carries `uuid, title, origin, plane, zone, path`.
+- When the ASK model backend accepts a connection but fails to respond before the configured LLM timeout,
+  `POST /api/ask` returns HTTP 504 with FastAPI detail
+  `{error: "llm_backend_timeout", provider, timeout_seconds, trace_id, message}`. Clients must surface
+  this as degraded model-provider availability, not as an empty grounded answer and not as an
+  invitation to answer from client memory.
 - `GET /api/artifacts/note?note_path=` reads a note **by vault-relative path** (absolute paths and traversal rejected with 400 `invalid_path`; missing note → 404 `note_not_found`). Response: `{artifact_id, note_path, title, body, content_hash}` — note the response's `note_path` is the **absolute resolved filesystem path**, not the vault-relative path the request took; clients must not echo it to other hosts or store it as a stable identifier.
 
 **The gap, stated honestly:** search returns *uuid*; note-fetch keys by *path*; no endpoint resolves uuid→path. **v1 posture: thin read + filesystem enrichment.** A client that needs the body behind a search hit either (a) uses `/api/ask`, whose sources include `path`, or (b) resolves the uuid itself against its filesystem view of the vault (frontmatter `uuid` field). A uuid-resolving fetch or enriched search payload is follow-on work (§9 F3), not something a client may emulate by inventing a hidden uuid→path store it treats as authoritative (invariant 3: any such cache is rebuildable and disposable).
