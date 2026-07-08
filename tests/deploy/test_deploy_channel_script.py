@@ -192,6 +192,16 @@ def test_app_bind_mount_removed_and_version_authoritative() -> None:
     assert "deploy-dev" in makefile and "deploy-test" in makefile and "deploy-prod" in makefile
 
 
+def test_version_gate_accepts_health_version_string_or_object() -> None:
+    text = SCRIPT.read_text(encoding="utf-8")
+    version_gate = text.split("version_gate() {", 1)[1].split("\n}\n", 1)[0]
+
+    assert "value=data.get(\"version\")" in version_gate
+    assert "isinstance(value, dict)" in version_gate
+    assert "isinstance(value, str)" in version_gate
+    assert "value.get(\"git_sha\", \"\")" in version_gate
+
+
 def test_deploy_receipt_embeds_fleet_model_fitness() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
     assert "fleet_model_fitness_gate" in text
