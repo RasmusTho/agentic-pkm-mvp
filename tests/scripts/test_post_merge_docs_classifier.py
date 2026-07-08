@@ -133,8 +133,20 @@ def test_human_exception_requires_authority_or_contradiction_evidence() -> None:
         files_payload=["app/runtime.py"],
         issue={"number": 3217},
     )
+    ordinary_owner_doc_update = classify(
+        pr=_pr(_body("- [x] Owner-doc updated in this PR.", "No human exception is needed.")),
+        files_payload=["docs/ARCHITECTURE.md"],
+        issue={"number": 3217},
+    )
+    no_exception_phrase = classify(
+        pr=_pr(_body("- [x] No owner-doc change implied.", "No human exception is needed.")),
+        files_payload=["tests/governance/test_policy.py"],
+        issue={"number": 3217},
+    )
 
     assert normal.impact_classification != "human_exception_likely"
     assert authority.impact_classification == "human_exception_likely"
     assert contradiction.impact_classification == "human_exception_likely"
+    assert ordinary_owner_doc_update.impact_classification == "docs_update_likely"
+    assert no_exception_phrase.impact_classification == "no_change_likely"
     assert "Human Exception" in render_markdown(authority)

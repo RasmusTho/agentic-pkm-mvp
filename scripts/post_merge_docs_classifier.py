@@ -145,12 +145,10 @@ def _authority_or_contradiction_evidence(body: str, files: list[str]) -> list[st
     evidence: list[str] = []
     if _owner_doc_declaration(body) == "conflicting_declarations":
         evidence.append("owner-doc writeback declaration has conflicting checked options")
-    if re.search(r"\b(owner authority|strategic ambiguity|human exception|owner decision)\b", body, re.I):
-        evidence.append("PR body names owner authority, strategic ambiguity, or human exception")
+    if re.search(r"\b(owner authority|strategic ambiguity|owner decision)\b", body, re.I):
+        evidence.append("PR body names owner authority, strategic ambiguity, or owner decision")
     if re.search(r"\b(shipped|actual|implemented)\b.*\b(target|planned|roadmap|spec)\b", body, re.I | re.S):
         evidence.append("PR body indicates shipped-vs-target/spec contradiction")
-    if any(filename in {"docs/ROADMAP.md", "docs/ARCHITECTURE.md"} for filename in files):
-        evidence.append("changed top-level owner authority document")
     return evidence
 
 
