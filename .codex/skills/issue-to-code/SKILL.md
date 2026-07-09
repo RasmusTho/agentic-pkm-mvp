@@ -141,6 +141,20 @@ python -m app.dispatcher status --json
 # => {"ok": false} or "db_exists": false → fall back to step 2 (GitHub-label-only)
 ```
 
+**Optional dispatcher preparation:**
+
+When the task explicitly authorizes dispatcher-backed coordination and local dispatcher state is
+missing, an agent may prepare the local dispatcher state root with:
+
+```bash
+python -m app.dispatcher start --agent <agent_id> --json
+```
+
+`start` is idempotent and singleton-guarded: an existing active dispatcher state root returns a
+no-op/status receipt; stale singleton metadata can be recovered; a competing start returns an explicit
+error. This command only prepares local dispatcher coordination state. It does not claim issues, move
+labels, mutate Project status, start sub-agents, or replace GitHub/PR lifecycle truth.
+
 **If dispatcher is available (db_exists: true):**
 
 1. **Get next task:** `python -m app.dispatcher next --json --agent <agent_id>` — returns a candidate task.

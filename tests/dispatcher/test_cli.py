@@ -14,6 +14,7 @@ import pytest
 from app.dispatcher.cli import REQUIRED_COMMANDS, _COMMAND_MAP, main
 from app.dispatcher.config import load_paths
 from app.dispatcher.events import JsonlEventWriter
+from app.dispatcher.singleton import fcntl, singleton_paths
 from app.dispatcher.store import SqliteStore
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -314,6 +315,113 @@ def test_status_command(tmp_env):
     assert code == 0
     assert data["ok"] is True
     assert "db_path" in data
+    assert "singleton" in data
+    assert data["singleton"]["state"] == "active"
+
+
+def test_status_reports_missing_singleton_without_initializing(tmp_env):
+    code, data = _run(["status", "--json"])
+    assert code == 0
+    assert data["ok"] is True
+    assert data["db_exists"] is False
+    assert data["singleton"]["exists"] is False
+    assert data["singleton"]["state"] == "missing"
+
+
+def test_start_initializes_absent_dispatcher_state(tmp_env):
+    code, data = _run(
+        ["start", "--agent", "codex", "--ttl-seconds", "600", "--json"],
+    )
+    assert code == 0
+    assert data["ok"] is True
+    assert data["started"] is True
+    assert data["recovered_stale"] is False
+    assert data["db_exists"] is True
+    assert data["singleton"]["state"] == "active"
+    assert data["singleton"]["holder"] == "codex"
+    assert data["singleton"]["ttl_seconds"] == 600
+
+    paths = load_paths(tmp_env)
+    assert paths.db_path.exists()
+    assert singleton_paths(paths).record_path.exists()
+
+
+def test_start_existing_dispatcher_is_noop_status_refresh(tmp_env):
+    first_code, first = _run(
+        ["start", "--agent", "codex", "--ttl-seconds", "600", "--json"],
+    )
+    second_code, second = _run(
+        ["start", "--agent", "other-agent", "--ttl-seconds", "600", "--json"],
+    )
+
+    assert first_code == 0
+    assert second_code == 0
+    assert first["started"] is True
+    assert second["started"] is False
+    assert second["recovered_stale"] is False
+    assert second["db_path"] == first["db_path"]
+    assert second["events_path"] == first["events_path"]
+    assert second["singleton"]["state"] == "active"
+    assert second["singleton"]["holder"] == "codex"
+
+
+def test_start_recovers_stale_singleton_record(tmp_env):
+    paths = load_paths(tmp_env)
+    paths.ensure()
+    record_path = singleton_paths(paths).record_path
+    record_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "holder": "stale-agent",
+                "pid": 12345,
+                "state_dir": str(paths.state_dir),
+                "db_path": str(paths.db_path),
+                "events_path": str(paths.events_path),
+                "acquired_at": "2026-01-01T00:00:00Z",
+                "heartbeat_at": "2026-01-01T00:00:00Z",
+                "expires_at": "2026-01-01T00:00:01Z",
+                "ttl_seconds": 1,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    status_code, status = _run(["status", "--json"])
+    assert status_code == 0
+    assert status["singleton"]["state"] == "stale"
+
+    code, data = _run(
+        ["start", "--agent", "codex", "--ttl-seconds", "600", "--json"],
+    )
+
+    assert code == 0
+    assert data["started"] is True
+    assert data["recovered_stale"] is True
+    assert data["singleton"]["state"] == "active"
+    assert data["singleton"]["holder"] == "codex"
+    assert data["db_exists"] is True
+
+
+def test_start_lock_contention_returns_error(tmp_env):
+    if fcntl is None:
+        pytest.skip("fcntl lock contention is POSIX-only")
+
+    paths = load_paths(tmp_env)
+    paths.ensure()
+    guard_path = singleton_paths(paths).guard_path
+    with guard_path.open("a+", encoding="utf-8") as guard_file:
+        fcntl.flock(guard_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            code, data = _run(["start", "--agent", "codex", "--json"])
+        finally:
+            fcntl.flock(guard_file.fileno(), fcntl.LOCK_UN)
+
+    assert code == 1
+    assert data["ok"] is False
+    assert "already in progress" in data["error"]
+    assert not paths.db_path.exists()
 
 
 # ---------------------------------------------------------------------------
