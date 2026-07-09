@@ -204,6 +204,15 @@ GitHub, repo docs, Product/Runtime behavior, or runtime/user memory.
 Epic-run-state candidate ledgers use this same vocabulary. Missing outcome means unresolved; unknown
 outcome strings are not terminal.
 
+The observe-only BuilderOps helper `python3 -m app.builderops builderops completeness-report check`
+reports unresolved learning/evaluation completeness across available BuilderOps records or explicit
+fixtures. It identifies unprocessed `LearningSignal` records, retrospective receipts whose claimed
+signals lack terminal outcomes, reevaluation candidates without terminal outcomes, and compatibility
+learning-log entries after the last retro marker. Missing or unreadable BuilderOps storage is an
+explicit unavailable report state, not a successful empty report. The helper is report-only and has
+no blocking CI, GitHub mutation, BuilderOps mutation, Product/Runtime mutation, or runtime/user-memory
+write authority by default.
+
 ### 5. Governance lane
 
 A distinct work-stream on the Project board for changes to delivery-system artifacts.

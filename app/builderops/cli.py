@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 import click
 
+from app.builderops.completeness_report import (
+    build_completeness_report,
+    load_records_from_db,
+)
 from app.builderops.config import load_paths
 from app.builderops.evidence_bridge import (
     EvidenceBridgeError,
@@ -581,6 +585,73 @@ def evidence_bridge_classify(
         payload = build_evidence_bridge_report(evidence)
     except EvidenceBridgeError as exc:
         raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@builderops.group(
+    "completeness-report",
+    help="Report learning and reevaluation signals without terminal outcomes.",
+)
+def completeness_report() -> None:
+    """Observe-only completeness reporting for learning and reevaluation."""
+
+
+@completeness_report.command(
+    "check",
+    help="Build an observe-only completeness report from BuilderOps records or fixtures.",
+)
+@click.option(
+    "--records-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="JSON list of BuilderOps records, or object with records and learning_evaluation_candidates.",
+)
+@click.option(
+    "--learning-log-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Optional docs/learning-log.md compatibility file to inspect.",
+)
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def completeness_report_check(
+    ctx: click.Context,
+    records_file: Path | None,
+    learning_log_file: Path | None,
+    as_json: bool,
+) -> None:
+    candidates: list[Mapping[str, Any]] = []
+    if records_file is not None:
+        payload = _load_json_value_file(records_file, field="records-file")
+        if isinstance(payload, list):
+            records = payload
+            storage = {"available": True, "source": str(records_file), "record_count": len(records)}
+        elif isinstance(payload, dict) and isinstance(payload.get("records"), list):
+            records = payload["records"]
+            raw_candidates = payload.get("learning_evaluation_candidates", [])
+            if not isinstance(raw_candidates, list):
+                raise click.BadParameter("learning_evaluation_candidates must be a list")
+            candidates = raw_candidates
+            storage = {"available": True, "source": str(records_file), "record_count": len(records)}
+        else:
+            raise click.BadParameter("records-file must contain a list or an object with records")
+    else:
+        db_path = ctx.obj.get("db_path") if ctx.obj else None
+        if db_path is None:
+            db_path = load_paths().db_path
+        records, storage = load_records_from_db(Path(db_path))
+
+    learning_log_text = (
+        learning_log_file.read_text(encoding="utf-8")
+        if learning_log_file is not None
+        else None
+    )
+    payload = build_completeness_report(
+        records=records,
+        storage=storage,
+        learning_log_text=learning_log_text,
+        reevaluation_candidates=candidates,
+    )
     _emit(payload, as_json)
 
 
