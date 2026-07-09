@@ -88,6 +88,30 @@ def _emit_error(msg: str, as_json: bool, code: int = 1) -> int:
     return code
 
 
+def _emit_payload(data: dict[str, Any], as_json: bool, code: int) -> int:
+    if as_json:
+        print(json.dumps(data, ensure_ascii=False))
+    else:
+        print(json.dumps(data, ensure_ascii=False, indent=2), file=sys.stderr)
+    return code
+
+
+def _coordination_payload(db_exists: bool) -> dict[str, Any]:
+    if db_exists:
+        return {
+            "coordination_mode": "dispatcher-backed",
+            "fallback_reason": None,
+            "setup_command": None,
+            "fallback_command": None,
+        }
+    return {
+        "coordination_mode": "github-label-only-fallback",
+        "fallback_reason": "dispatcher_db_missing",
+        "setup_command": "python -m app.dispatcher start --agent <agent_id> --json",
+        "fallback_command": "scripts/issue_pickup_claim.sh --issue <ISSUE_NUMBER>",
+    }
+
+
 def _make_store(env: dict[str, str] | None = None) -> SqliteStore:
     paths = load_paths(env)
     writer = JsonlEventWriter(paths.events_path)
@@ -283,9 +307,11 @@ def _cmd_link_pr(args: argparse.Namespace, store: SqliteStore) -> int:
 
 def _cmd_status(args: argparse.Namespace, store: SqliteStore) -> int:
     paths = load_paths()
+    status = singleton_status(paths)
     _emit({
         "ok": True,
-        **singleton_status(paths),
+        **status,
+        **_coordination_payload(bool(status["db_exists"])),
     }, args.json)
     return 0
 
@@ -474,7 +500,17 @@ def main(argv: list[str] | None = None) -> int:
         paths = load_paths()
         if not paths.db_path.exists():
             msg = "dispatcher not initialised — run: make dispatcher-init"
-            return _emit_error(msg, getattr(args, "json", False))
+            return _emit_payload(
+                {
+                    "ok": False,
+                    "error": msg,
+                    "state_dir": str(paths.state_dir),
+                    "db_path": str(paths.db_path),
+                    **_coordination_payload(False),
+                },
+                getattr(args, "json", False),
+                1,
+            )
 
     store = _make_store()
     return handler(args, store)

@@ -165,10 +165,12 @@ Design boundary:
 ## Agent Interaction Contract (MVP Loop)
 
 Canonical loop:
-0. `status --json`: preflight check — verify `db_exists: true`; if false or non-zero exit, either
-   prepare local dispatcher state with `start --agent <agent_id> --json` when dispatcher-backed
-   coordination is explicitly in scope, or skip dispatcher and fall back to GitHub-label-only claim
-   (`gh issue edit --remove-label agent:ready`); log fallback reason in PR body.
+0. `status --json`: preflight check — verify `db_exists: true` and
+   `coordination_mode: dispatcher-backed`; if false or non-zero exit, either prepare local dispatcher
+   state with `start --agent <agent_id> --json` when dispatcher-backed coordination is explicitly in
+   scope, or skip dispatcher and fall back to GitHub-label-only claim
+   (`gh issue edit --remove-label agent:ready`); log `coordination_mode` and `fallback_reason` in the
+   PR body or claim receipt.
 1. `next`: request next eligible task (`ready` only).
 2. `claim`: create lease and claim ownership. Default TTL: **90 minutes**.
 3. `work`: execute issue scope locally.
@@ -196,9 +198,10 @@ for agents that are explicitly operating in dispatcher-backed coordination mode.
 
 The singleton record is operational coordination evidence only. It does not run a daemon, claim work,
 heartbeat task leases, mutate GitHub labels or Project state, merge PRs, close issues, or replace
-GitHub/PR lifecycle truth. `status --json` reports the DB/events paths plus singleton state
-(`missing`, `active`, or `stale`) so `deliver-issue-set` and `issue-to-code` can decide whether to use
-dispatcher or fallback paths without guessing.
+GitHub/PR lifecycle truth. `status --json` reports the DB/events paths, singleton state
+(`missing`, `active`, or `stale`), `coordination_mode`, and `fallback_reason` so
+`deliver-issue-set` and `issue-to-code` can decide whether to use dispatcher or fallback paths
+without guessing.
 
 ## Observability and Persistence Expectations (MVP)
 
@@ -287,6 +290,34 @@ python -m app.dispatcher status --json   # verify db_exists: true
 ```bash
 make dispatcher-sync          # runs: python -m app.dispatcher pull --repo <repo> only
 ```
+
+### Setup on each agent machine
+
+Dispatcher commands are worktree-portable by default. When `DISPATCHER_STATE_DIR`,
+`DISPATCHER_DB_PATH`, and `DISPATCHER_EVENTS_PATH` are unset, the dispatcher resolves Git's primary
+worktree from `git worktree list --porcelain` and uses that root's `runtime/dispatcher` directory as
+the shared local state root. A command run from `/path/repo-3272` therefore reads and prepares
+`/path/repo/runtime/dispatcher` instead of creating an isolated queue in the issue worktree.
+
+Agents may still override paths explicitly with the `DISPATCHER_*` environment variables. Explicit
+paths always win and are the right mechanism for a remote Demerzel-mounted state directory or a
+test-only isolated state root.
+
+From any linked issue worktree:
+
+```bash
+python -m app.dispatcher status --json
+# db_exists true  -> coordination_mode=dispatcher-backed
+# db_exists false -> coordination_mode=github-label-only-fallback fallback_reason=dispatcher_db_missing
+python -m app.dispatcher start --agent <agent_id> --json   # prepare shared local state when authorised
+```
+
+`start` only prepares the local dispatcher schema and singleton coordination record. It does not
+claim issues, remove labels, move Project status, open PRs, merge PRs, or close issues. GitHub
+Issues, PRs, and CI remain lifecycle authority; dispatcher state remains operational queue/lease
+evidence. If dispatcher state is missing or unavailable and the task does not explicitly authorise
+preparation, use the GitHub-label-only fallback and preserve the pickup receipt fields
+`coordination_mode` and `fallback_reason`.
 
 ### Dev/prod startup bootstrap
 
@@ -386,7 +417,7 @@ dry-run/observe-only. Explicit `--apply` may execute only those validator-gated 
 verification reads for the changed issues; it does not claim work, start agents, merge PRs, or make
 GitHub Project status authoritative over the Issue contract.
 
-### Setup on each agent machine
+### SSH proxy setup for remote agents
 
 Install a wrapper script that proxies dispatcher commands over SSH:
 

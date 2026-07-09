@@ -143,8 +143,8 @@ The dispatcher is an optional but preferred coordination layer for multi-agent i
 **Dispatcher availability check:**
 ```bash
 python -m app.dispatcher status --json
-# => {"ok": true, "db_exists": true} → proceed with dispatcher
-# => {"ok": false} or "db_exists": false → fall back to step 2 (GitHub-label-only)
+# => {"ok": true, "db_exists": true, "coordination_mode": "dispatcher-backed"} → proceed with dispatcher
+# => {"ok": true, "db_exists": false, "coordination_mode": "github-label-only-fallback", "fallback_reason": "dispatcher_db_missing"} → prepare dispatcher or fall back to step 2
 ```
 
 **Optional dispatcher preparation:**
@@ -161,6 +161,10 @@ no-op/status receipt; stale singleton metadata can be recovered; a competing sta
 error. This command only prepares local dispatcher coordination state. It does not claim issues, move
 labels, mutate Project status, start sub-agents, or replace GitHub/PR lifecycle truth.
 
+The status payload is the claim receipt source for local coordination mode. Copy
+`coordination_mode` and `fallback_reason` into the PR body or claim receipt so reviewers can see
+whether pickup used dispatcher-backed coordination or GitHub-label-only fallback.
+
 **If dispatcher is available (db_exists: true):**
 
 1. **Get next task:** `python -m app.dispatcher next --json --agent <agent_id>` — returns a candidate task.
@@ -175,7 +179,7 @@ labels, mutate Project status, start sub-agents, or replace GitHub/PR lifecycle 
 **If dispatcher is unavailable (db_exists: false or dispatcher status fails):**
 
 - Skip dispatcher entirely and use GitHub-label-only claim (step 2 below, unchanged current behaviour).
-- **Log the fallback reason in the PR body** (e.g., "Dispatcher unavailable (db_exists: false) — used GitHub-label-only claim").
+- **Log the fallback reason in the PR body** (e.g., `coordination_mode=github-label-only-fallback fallback_reason=dispatcher_db_missing`).
 
 #### GitHub-Based Claim (Fallback or Non-Dispatcher Flow)
 
@@ -185,6 +189,9 @@ labels, mutate Project status, start sub-agents, or replace GitHub/PR lifecycle 
    ```bash
    scripts/issue_pickup_claim.sh --issue <N>
    ```
+   The wrapper prints `coordination_mode=<dispatcher-backed|github-label-only-fallback>` and
+   `fallback_reason=<reason|none>` in its pickup receipt. Preserve that receipt in the PR body or
+   claim comment when the issue uses dispatcher coordination or fallback.
 
 3. **Set Issue Project Status to In Progress:** run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` with the `In Progress` option ID.
 
