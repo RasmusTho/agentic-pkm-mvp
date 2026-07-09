@@ -243,6 +243,18 @@ def test_learning_evaluation_candidates_update_and_terminal_outcomes(
 def test_learning_evaluation_candidate_validation_rejects_missing_refs_and_bad_outcome() -> None:
     state = new_epic_run_state(3229, "run-learning-invalid")
 
+    with pytest.raises(EpicRunStateError, match="id or .*candidate_id"):
+        apply_epic_run_update(
+            state,
+            learning_evaluation_candidates=[
+                {
+                    "source_refs": [{"ref_type": "github_issue", "ref": "#3261"}],
+                    "upstream_artifact_hint": "AGENTS.md",
+                    "evidence_kind": "tcd_signal",
+                }
+            ],
+        )
+
     with pytest.raises(EpicRunStateError, match="source_refs"):
         apply_epic_run_update(
             state,

@@ -374,6 +374,9 @@ def _normalize_learning_evaluation_candidate(
         raise EpicRunStateError(f"{field} must be an object")
     candidate = _json_clone(value)
 
+    if "id" not in candidate and "candidate_id" not in candidate:
+        raise EpicRunStateError(f"{field}.id or {field}.candidate_id is required")
+
     for required in ("source_refs", "upstream_artifact_hint", "evidence_kind"):
         if required not in candidate:
             raise EpicRunStateError(f"{field}.{required} is required")
