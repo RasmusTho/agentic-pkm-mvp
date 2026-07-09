@@ -249,16 +249,22 @@ Observable signals:
 
 ## Optional Future Projections
 
-The following are described as **optional projections only** and are not part of the dispatcher hot path:
+The following are described as **optional projections only** and are not part of the dispatcher hot path.
+The dispatcher SQLite store is the Builder System control plane for active queue, lease, heartbeat,
+and lifecycle status. Projection surfaces render or repair that state; they do not replace it.
 
 | Target | Type | Status |
 | --- | --- | --- |
-| GitHub Projects board | Optional read projection | Not in dispatcher hot path (see Source-of-Truth Boundaries) |
+| Signboard Markdown board | Local generated projection | Implemented via `python -m app.dispatcher export-signboard <path>` |
+| GitHub Projects board | Deprecated optional projection | Not in dispatcher hot path (see Source-of-Truth Boundaries) |
 | Plane / Vikunja / Baserow | Optional external board | Not implemented — future scope only |
-| Local Markdown/JSON dashboard | Optional local projection | Not implemented — future scope only |
+| Local Markdown/JSON dashboard | Optional local projection | Signboard export is the current Markdown projection |
 | CLI sync-status command | Optional surface | Expressible via `get_sync_meta` in a future `disp sync-status` command |
 
 External boards and GitHub Projects are projections only and must not become required for core queue/lease/claim behavior.
+Agents must use dispatcher commands for work selection and mutation. Signboard files are generated
+for human kanban inspection and should not be treated as authoritative input unless a future
+two-way projection command explicitly validates and imports them.
 
 ## Operational Deployment
 
@@ -307,6 +313,47 @@ GitHub Project v2 / GraphQL reconciliation stays out of dispatcher `next`, `clai
 and `complete`. Low-frequency/batched projection repair is exposed separately through
 `scripts/reconcile_builderops_project_status.sh`, which delegates to the existing project
 reconciliation helper.
+
+### Signboard projection
+
+The dispatcher can export the active Builder Ops queue into a Signboard-compatible Markdown board:
+
+```bash
+python -m app.dispatcher export-signboard ~/BuilderOpsVault/agent-delivery --json
+```
+
+The exporter writes one Markdown file per dispatcher task under status columns:
+
+```text
+Backlog/
+Ready/
+In Progress/
+Review/
+Blocked/
+Done/
+```
+
+Canonical dispatcher statuses are mapped as follows:
+
+| Dispatcher status | Signboard column |
+| --- | --- |
+| `backlog` | `Backlog` |
+| `ready` | `Ready` |
+| `claimed`, `in_progress` | `In Progress` |
+| `review` | `Review` |
+| `blocked` | `Blocked` |
+| `completed`, `done` | `Done` |
+
+Manual lifecycle changes should use dispatcher commands, for example:
+
+```bash
+python -m app.dispatcher move github-issue-123 --status review --agent codex --json
+python -m app.dispatcher block github-issue-123 --reason "waiting for owner decision" --agent claude --json
+python -m app.dispatcher export-signboard ~/BuilderOpsVault/agent-delivery --json
+```
+
+The generated Markdown frontmatter is projection state only. Do not patch generated Signboard cards
+as the source of a claim, heartbeat, or lifecycle transition.
 
 ### Epic-runner lifecycle planning
 

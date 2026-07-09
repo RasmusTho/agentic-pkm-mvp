@@ -309,6 +309,60 @@ def test_update_clears_blocked_reason_on_non_blocked_status(tmp_env, store):
     assert next_data["task"]["task_id"] == ready.task_id
 
 
+def test_move_command_sets_lifecycle_status_and_emits_event(tmp_env, store):
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
+    ready = next(t for t in tasks if t.status == "ready")
+
+    code, data = _run(
+        ["move", ready.task_id, "--status", "Review", "--agent", "codex", "--json"],
+    )
+    assert code == 0
+    assert data["ok"] is True
+    assert data["task"]["status"] == "review"
+
+    events_code, events_data = _run(["events", "--tail", "20", "--json"])
+    assert events_code == 0
+    moved = [e for e in events_data["events"] if e["event_type"] == "task.moved"]
+    assert moved
+    assert moved[-1]["payload"]["from_status"] == "ready"
+    assert moved[-1]["payload"]["to_status"] == "review"
+
+
+def test_move_done_normalizes_to_completed(tmp_env, store):
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
+    ready = next(t for t in tasks if t.status == "ready")
+
+    code, data = _run(
+        ["move", ready.task_id, "--status", "Done", "--agent", "codex", "--json"],
+    )
+    assert code == 0
+    assert data["task"]["status"] == "completed"
+
+
+def test_export_signboard_writes_markdown_columns(tmp_env, store, tmp_path: Path):
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
+    ready = next(t for t in tasks if t.status == "ready")
+    _run(["move", ready.task_id, "--status", "Review", "--agent", "codex", "--json"])
+
+    board = tmp_path / "BuilderOpsVault" / "agent-delivery"
+    code, data = _run(["export-signboard", str(board), "--json"])
+    assert code == 0
+    assert data["ok"] is True
+    assert data["count"] == len(tasks)
+    assert (board / "Backlog").is_dir()
+    assert (board / "Review").is_dir()
+
+    review_cards = list((board / "Review").glob(f"{ready.task_id}--*.md"))
+    assert len(review_cards) == 1
+    content = review_cards[0].read_text(encoding="utf-8")
+    assert "generated_by: dispatcher.signboard" in content
+    assert 'status: "review"' in content
+    assert f"issue_number: {ready.issue_number}" in content
+
+
 def test_status_command(tmp_env):
     _run(["init", "--json"])
     code, data = _run(["status", "--json"])
