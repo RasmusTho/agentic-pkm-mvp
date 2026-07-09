@@ -37,6 +37,34 @@ Default rule:
 - required checks must be known, current, and attached to the current head SHA
 - failing checks must be classified before merge
 
+## CI Status Handling
+
+Use `scripts/await_pr_checks.sh` as the merge-gating wait path; it reads REST check-runs and classic
+commit status with bounded sleeps and current-head verification. When a PR appears stuck before the
+wait path reaches a terminal result, use the read-only classifier against the same REST check-runs
+payload:
+
+```bash
+gh api "repos/<owner>/<repo>/commits/<sha>/check-runs?per_page=100" > /tmp/check-runs.json
+python3 scripts/ci_stall_classifier.py \
+  --check-runs-json /tmp/check-runs.json \
+  --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+```
+
+Classifier output is advisory coordination evidence only:
+- `wait`: pending checks are still within the bounded threshold; keep waiting with the REST/backoff
+  path.
+- `stalled`: queued or in-progress checks exceeded the threshold; record a CI-pending handoff or
+  consider an explicit rerun workflow if one owns that action.
+- `flaky_or_external_failure`: latest failed conclusions point to infrastructure-style behavior
+  such as timeout/cancel/stale; rerun guidance is advisory and does not make the check acceptable.
+- `actionable_failure`: latest failed checks need repair or failure-context collection, not waiting.
+- `missing_checks`: expected checks have not attached yet; wait for attachment before trusting CI
+  readiness.
+
+The classifier must not bypass required checks, mark failures acceptable, auto-rerun workflows, or
+poll GitHub. GitHub check conclusions and the PR head SHA remain the authority.
+
 3. Review feedback triage
 - after CI is green and current, fetch existing review comments before any handoff or merge recommendation; do not park the PR as "awaiting human review" until posted comments are classified
 - branch protection is not the process gate: an unprotected branch or absent required-status-check rule does not waive the current-checks and review-feedback wait before merge
