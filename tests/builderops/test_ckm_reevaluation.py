@@ -115,6 +115,29 @@ def test_ckm_reevaluation_rejects_unknown_projection() -> None:
         build_ckm_reevaluation_report(payload)
 
 
+def test_ckm_reevaluation_rejects_cross_wired_projection_ref() -> None:
+    payload = _payload()
+    bad_action = _action("act-bad", "issue_candidate", "proj-gap")
+    bad_action["source_projection_ref"] = "ckm://projection/proj-maturity"
+    bad_action["source_refs"] = [
+        {"ref_type": "ckm_projection", "ref": "ckm://projection/proj-maturity"}
+    ]
+    payload["actions"] = [bad_action]
+
+    with pytest.raises(CkmReevaluationError, match="source projection"):
+        build_ckm_reevaluation_report(payload)
+
+
+def test_ckm_reevaluation_rejects_mismatched_watermark() -> None:
+    payload = _payload()
+    bad_action = _action("act-bad", "issue_candidate", "proj-gap")
+    bad_action["watermark"] = "ckm-watermark:stale"
+    payload["actions"] = [bad_action]
+
+    with pytest.raises(CkmReevaluationError, match="watermark"):
+        build_ckm_reevaluation_report(payload)
+
+
 def test_ckm_reevaluation_cli_is_observe_only(tmp_path: Path) -> None:
     projection_file = tmp_path / "ckm.json"
     projection_file.write_text(json.dumps(_payload()), encoding="utf-8")

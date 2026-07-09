@@ -36,10 +36,10 @@ def build_ckm_reevaluation_report(payload: Mapping[str, Any]) -> dict[str, Any]:
         raise CkmReevaluationError("CKM reevaluation payload must be an object")
 
     projections = _normalize_projections(payload.get("projections", []))
-    projection_ids = {item["id"] for item in projections}
+    projection_index = {item["id"]: item for item in projections}
     actions = _normalize_actions(
         payload.get("actions", payload.get("candidate", [])),
-        projection_ids,
+        projection_index,
     )
 
     return {
@@ -109,7 +109,7 @@ def _normalize_projections(value: Any) -> list[dict[str, Any]]:
 
 def _normalize_actions(
     value: Any,
-    projection_ids: set[str],
+    projection_index: Mapping[str, Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         raise CkmReevaluationError("actions must be a list")
@@ -132,7 +132,8 @@ def _normalize_actions(
             item.get("source_projection_id"),
             f"actions[{index}].source_projection_id",
         )
-        if source_projection_id not in projection_ids:
+        source_projection = projection_index.get(source_projection_id)
+        if source_projection is None:
             raise CkmReevaluationError(
                 f"actions[{index}].source_projection_id references unknown projection"
             )
@@ -148,13 +149,27 @@ def _normalize_actions(
             raise CkmReevaluationError(
                 f"actions[{index}].source_refs must include source_projection_ref"
             )
+        projection_refs = {
+            ref.get("ref")
+            for ref in source_projection.get("source_refs", [])
+            if isinstance(ref, Mapping)
+        }
+        if projection_ref not in projection_refs:
+            raise CkmReevaluationError(
+                f"actions[{index}].source_projection_ref must match the source projection"
+            )
+        watermark = _required_string(item.get("watermark"), f"actions[{index}].watermark")
+        if watermark != source_projection.get("watermark"):
+            raise CkmReevaluationError(
+                f"actions[{index}].watermark must match the source projection watermark"
+            )
         actions.append({
             "id": action_id,
             "route": route,
             "summary": _required_string(item.get("summary"), f"actions[{index}].summary"),
             "source_projection_id": source_projection_id,
             "source_projection_ref": projection_ref,
-            "watermark": _required_string(item.get("watermark"), f"actions[{index}].watermark"),
+            "watermark": watermark,
             "source_refs": source_refs,
             "recommendation": _required_string(
                 item.get("recommendation"),
