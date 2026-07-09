@@ -114,7 +114,10 @@ In autonomous maintenance mode:
 - verify whether any proposals were already applied by current repo reality before editing again;
 - create canonical GitHub Issues via `learning-to-issue` for unresolved work, storage decisions, or changes that need human authority;
 - do not change product/runtime behavior;
-- do not record a retrospective completion receipt until every LearningSignal in scope is either applied, already satisfied by repo reality, or represented by an Issue.
+- do not record a retrospective completion receipt until every LearningSignal in scope has one
+  terminal outcome: applied, already satisfied by repo reality, represented by an Issue, staged as a
+  PromotionIntent, recorded as transition debt or fitness-rule work, or discarded/superseded by a
+  receipt.
 
 ### Step 6: Record retrospective completion
 

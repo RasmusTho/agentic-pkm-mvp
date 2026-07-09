@@ -13,6 +13,8 @@ from app.builderops.retrospective_closure import (
     build_retrospective_closure_ledger,
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 def _target_ref(outcome: str) -> dict[str, str]:
     targets = {
@@ -156,3 +158,13 @@ def test_retrospective_closure_cli_outputs_signal_ids_and_outcomes(tmp_path: Pat
     ]
     assert payload["unresolved_signals"] == [{"signal_id": "lrn-2"}]
     assert "lrn-1=issue_created" in payload["receipt_body"]
+
+
+def test_learning_retrospective_skill_names_all_terminal_outcomes() -> None:
+    skill_text = (
+        REPO_ROOT / ".codex" / "skills" / "learning-retrospective" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    for outcome in TERMINAL_LEARNING_EVALUATION_OUTCOMES:
+        assert outcome in skill_text
+    assert "applied, already satisfied by repo reality, or represented by an Issue" not in skill_text
