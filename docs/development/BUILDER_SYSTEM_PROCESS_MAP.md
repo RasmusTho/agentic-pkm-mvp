@@ -5,7 +5,7 @@ Owner: Builder System governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: observed repo files and read-only GitHub command output cited inline
-Last reviewed: 2026-07-08
+Last reviewed: 2026-07-09
 
 # Builder System Process Map
 
@@ -13,7 +13,7 @@ Last reviewed: 2026-07-08
 
 Yggdrasil's Builder System is the continuous-development enabling system around the Product/Runtime System. It builds, verifies, releases, governs, and learns from Product/Runtime changes; it is not itself a Product SBS runtime subsystem [docs/architecture/SBS_OPERATING_MODEL.md:68-93].
 
-Rasmus provides intent, preferences, constraints, and strategic direction. Routine review, dispatch, CI triage, PR closing, post-merge documentation checking, and learning capture should be performed by the Builder System when the governing contracts are sufficient. Human attention is an exception path: the canonical builder instructions say the default posture is to act, and to escalate only for irreversible, external-facing, or genuinely ambiguous authority decisions [AGENTS.md:161-169]. The review-gate fallback policy removes work from the autonomous-ready queue only when a required review gate is unavailable or a human override is needed [docs/architecture/SBS_OPERATING_MODEL.md:368-383].
+Rasmus provides intent, preferences, constraints, and strategic direction. Routine review, dispatch, CI triage, PR closing, post-merge documentation checking, and learning capture should be performed by the Builder System when the governing contracts are sufficient. Human attention is an exception path: the canonical builder instructions say the default posture is to act, and to escalate only for irreversible, external-facing, or genuinely ambiguous authority decisions [AGENTS.md:161-169]. The review-gate fallback policy removes work from the autonomous-ready queue only when a required review gate is unavailable or a human override is needed [docs/architecture/SBS_OPERATING_MODEL.md §12].
 
 The Builder System has these layers:
 
@@ -24,8 +24,12 @@ The Builder System has these layers:
 5. Execution layer: skills, agents, scripts, local worktrees, implementation PRs, and publication boundaries perform work [`.codex/skills/README.md`:144-164], [`.codex/skills/publish-pr/SKILL.md`:53-159].
 6. Verification/evidence layer: local validation, CI, REST-only check waiting, local review gate, delivery receipts, Project reconciliation, and owner-doc receipts prove work [`.codex/skills/verification-and-closure/SKILL.md`:46-77], [`.codex/skills/_shared/CI_WAIT_CONTRACT.md`:22-82].
 7. Closure/spec-feedback layer: merge, issue closure, dispatcher completion, parent validation receipts, post-merge owner-doc decisions, and roadmap/spec state updates close work truthfully [`.codex/skills/verification-and-closure/SKILL.md`:194-208], [docs/development/PARENT_ISSUE_CLOSURE.md:13-49].
-8. Learning/governance layer: BuilderOps records, learning signals, retrospectives, skill/docs updates, and TCD adjustments improve the Builder System without contaminating Product/Runtime memory [docs/architecture/SBS_OPERATING_MODEL.md:194-261].
-9. Exception layer: `agent:needs-human`, blocker receipts, owner waivers, release operator acknowledgements, and Human Exception packets stop autonomous continuation when authority is missing [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27], [docs/architecture/SBS_OPERATING_MODEL.md:372-383].
+8. Continuous improvement and reevaluation layer: BuilderOps records, learning signals, evidence
+   packs, review findings, TCD signals, CKM projections, retrospectives, skill/docs updates, fitness
+   rules, transition debt, and bounded issues improve and reevaluate the Builder System without
+   contaminating Product/Runtime memory [docs/architecture/SBS_OPERATING_MODEL.md:194-261],
+   [docs/development/DELIVERY_FEEDBACK_LOOP.md:1-220].
+9. Exception layer: `agent:needs-human`, blocker receipts, owner waivers, release operator acknowledgements, and Human Exception packets stop autonomous continuation when authority is missing [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27], [docs/architecture/SBS_OPERATING_MODEL.md §12].
 
 ## Evidence Legend
 
@@ -49,6 +53,7 @@ Read-only GitHub evidence used:
 - `gh api repos/RasmusTho/agentic-pkm-mvp/branches/stable/protection` on 2026-07-08: `stable` protected; required status checks are `smoke`, `smoke-docker`, and `pr-contract`; strict is `true`; required approving review count is `0`; CODEOWNERS review is not required.
 - `gh api repos/RasmusTho/agentic-pkm-mvp --jq '{allow_auto_merge,...}'` on 2026-07-08: `allow_auto_merge=false`, default branch `main`, merge/squash/rebase allowed, delete branch on merge disabled.
 - `find .claude -path '.claude/worktrees' -prune -o -type f -print`: repo-level `.claude` files are `.claude/hooks/README.md`; no repo-level `.claude/settings*.json` files were found.
+- `gh issue list --state open --search "builder OR BuilderOps OR Kvasir OR CKM OR dispatcher OR review repair OR governance" --limit 80` on 2026-07-09: open Builder System work included #3229 (dispatcher-backed epic runner), #3224 (autonomous review and repair gates), #3138/#3139-#3148 (CKM/Kvasir), #3226 (process-map reconciliation), #3257 (epic-runner lifecycle transition plans), #3260-#3266 (continuous improvement / reevaluation operationalization), and #3171/#3174 (cross-repo Builder System governance).
 
 ## 2. Component Inventory
 
@@ -86,11 +91,12 @@ Read-only GitHub evidence used:
 | Mimer/product-lane workflow | implemented | Product docs, `mimer-*` skills | Runtime client operations separate from Builder workflow | Vault/user requests | Governed Mimer actions | Product authority paths | [`.codex/skills/README.md`:220-250] |
 | BuilderOps/governance workflow | partially_implemented | BuilderOps docs/API/skills | Store worklogs, learning, promotion intents, receipts | Agent workflow evidence | BuilderOps records/projections | BuilderOps CLI/API; promotion explicit | [docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md:13-81], [docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md:13-45] |
 | learning/retrospective loop | partially_implemented | `capture-learning`, `learning-retrospective`, BuilderOps records | Promote learning into artifacts | Divergences | LearningSignal, proposals, PRs/issues | BuilderOps + PR | [`.codex/skills/capture-learning/SKILL.md`:19-90], [`.codex/skills/learning-retrospective/SKILL.md`:27-150] |
+| continuous improvement / reevaluation loop | partially_implemented | `docs/development/DELIVERY_FEEDBACK_LOOP.md`, `capture-learning`, `learning-retrospective`, BuilderOps records/projections, PR evidence packs, CI failure context artifacts, CKM/Kvasir specs | Close the loop from evidence and delivery learning back into workflow changes, fitness rules, transition debt, issues, or discard/supersession receipts | LearningSignals, TCD signals, evidence packs, review findings, CKM maturity/gap projections, transition-debt and fitness outcomes | Applied governance edits, `already_satisfied` outcomes, bounded issues, PromotionIntents, fitness/debt updates, discard/supersession receipts | BuilderOps + GitHub/PR by explicit promotion or issue path only | [docs/development/DELIVERY_FEEDBACK_LOOP.md:1-220], [docs/architecture/SBS_OPERATING_MODEL.md:194-261], [docs/CAPABILITY_KNOWLEDGE_MODEL/README.md:1-80] |
 | local hooks | documented_only | `.claude/hooks/README.md`; no repo-level `.claude/settings*.json` found | Local session guardrails | Local tool events | Hook decisions | None | [`.claude/hooks/README.md`:1-50], `find .claude ... -> hooks README only` |
 | GitHub event automations | partially_implemented | `.github/workflows/**` | Validate issues/PRs, project status, docs watchdog, CI | GitHub events | Checks/comments/status projections | Actions token/PAT | [`.github/workflows/issue-pr-governance.yml`:3-12], [`.github/workflows/project-status-reconcile.yml`:3-23] |
 | Codex Action integration | partially_implemented | `architecture-ci` optional `codex run docs-guardian`; Codex verdict resolver retained | Docs guard/autofix and optional verdict read | Workflow dispatch, PR bot surfaces | Fixes/verdict | CI with secret, agent read | [`.github/workflows/architecture-ci.yaml`:31-38], [`.codex/skills/verification-and-closure/SKILL.md`:165-192] |
 | Claude Action integration | missing | Claude compatibility docs and local hook documentation only | GitHub-driven Claude agent tasks | N/A | N/A | None | [CLAUDE.md:1-8], [`.claude/hooks/README.md`:1-50] |
-| human exception router | implicit | `agent:needs-human`, review-gate fallback, this doc packet | Route authority exceptions | Ambiguity/failure | Human Exception packet | Human decision | [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27], [docs/architecture/SBS_OPERATING_MODEL.md:372-383] |
+| human exception router | implicit | `agent:needs-human`, review-gate fallback, this doc packet | Route authority exceptions | Ambiguity/failure | Human Exception packet | Human decision | [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27], [docs/architecture/SBS_OPERATING_MODEL.md §12] |
 
 ## 3. Docs-As-Code / Spec Authority Map
 
@@ -177,7 +183,8 @@ flowchart TD
 | Mimer/product-lane work | Runtime client task | App agent/human | vault/runtime request | Mimer contracts | `mimer-*` | product APIs/files | governed runtime action | Product authority | Mimer receipts | user/runtime authority | Product loops | human gate | durable knowledge mutation | [`.codex/skills/README.md`:220-250] |
 | BuilderOps/governance work | Workflow/governance change | Agent | learning/worklog/docs | BuilderOps docs | capture-learning, learning-retrospective | BuilderOps CLI/API | records, proposals, PRs | BuilderOps + PR | receipt/projection | promote? | learning loop | fallback log | authority crossing | [docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md:40-81] |
 | learning/retrospective | Divergence or cadence | Agent | LearningSignals | delivery feedback | capture-learning, learning-retrospective | BuilderOps CLI | proposals/PRs/issues | BuilderOps + PR | receipt | upstream artifact? | retro loop | proposal-only | human review in default mode | [docs/development/DELIVERY_FEEDBACK_LOOP.md:67-188] |
-| human exception routing | Stop condition | Agent | failure packet | this doc + fallback policy | active skill | issue/PR comment | Human Exception packet | human | explicit decision | continue unsafe? | returns to queue | `agent:needs-human` | safety/authority/intent/failure-critical | [docs/architecture/SBS_OPERATING_MODEL.md:372-383] |
+| continuous improvement / reevaluation | Divergence, epic close, review/CI/TCD pattern, CKM projection, or cadence | Agent + BuilderOps + optional human review | LearningSignals, evidence packs, review findings, TCD signals, CKM projections, fitness/debt state | delivery feedback, SBS operating model, CKM specs | learning-retrospective, capture-learning, future learning-to-issue | BuilderOps CLI/API, gh, docs/governance PRs | applied edit, already-satisfied receipt, bounded issue, PromotionIntent, debt/fitness update, discard/supersession receipt | BuilderOps + GitHub/PR through explicit gates | terminal outcome per signal | Product vs Builder? actionability? authority crossing? | reevaluation loop | unresolved signals remain open | strategic/Product authority or unsafe promotion | [docs/development/DELIVERY_FEEDBACK_LOOP.md:1-220], [docs/CAPABILITY_KNOWLEDGE_MODEL/README.md:51-77] |
+| human exception routing | Stop condition | Agent | failure packet | this doc + fallback policy | active skill | issue/PR comment | Human Exception packet | human | explicit decision | continue unsafe? | returns to queue | `agent:needs-human` | safety/authority/intent/failure-critical | [docs/architecture/SBS_OPERATING_MODEL.md §12] |
 
 ## 5. Dispatcher And Routing Model
 
@@ -356,7 +363,7 @@ stateDiagram-v2
 | Risk level? | TCD + PR hot path | partial | yes | no | lane/touched surface | low/normal/high | under-modeling | [AGENTS.md:142-157], [docs/development/PR_HOT_PATH.md:12-25] |
 | Docs-only/code/runtime/governance/release/Mimer/BuilderOps? | lane and skill routing | partial | yes | no | files/scope | lane | wrong lane | [docs/development/DEV_WORKFLOW.md:107-169], [`.codex/skills/README.md`:130-164] |
 | Requires frontier planning? | feature-breakdown/deliver-issue-set | no | yes | maybe | scope size | breakdown | parent issue used as slice | [`.codex/skills/feature-breakdown/SKILL.md`:25-47] |
-| Requires human exception? | stop conditions + fallback | partial | yes | yes | ambiguity/failure | packet/blocker | unnecessary interrupt or unsafe continue | [AGENTS.md:161-169], [docs/architecture/SBS_OPERATING_MODEL.md:372-383] |
+| Requires human exception? | stop conditions + fallback | partial | yes | yes | ambiguity/failure | packet/blocker | unnecessary interrupt or unsafe continue | [AGENTS.md:161-169], [docs/architecture/SBS_OPERATING_MODEL.md §12] |
 | Can an agent claim? | dispatcher/preflight/labels | yes | yes | no | queue/preflight | lease/claim | double claim | [docs/AGENT_ISSUE_DISPATCHER.md:152-180] |
 | Can implementation proceed? | issue-to-code stop conditions | partial | yes | if unclear | issue/docs/env | proceed/block | scope drift | [`.codex/skills/issue-to-code/SKILL.md`:62-72] |
 | Which tests/checks required? | `DEV_WORKFLOW`, issue `Verify:` | partial | yes | no | touched files/ACs | validation plan | missing coverage | [docs/development/DEV_WORKFLOW.md:60-83] |
@@ -432,9 +439,19 @@ Post-merge docs/spec loop: triggered after merged PR; actor is post-merge skill 
 
 Learning/retrospective loop: triggered by divergence or approximately 10 delivery-learning records; actor is capture-learning/learning-retrospective; default mode proposes edits for human review; autonomous mode only when explicitly requested [`.codex/skills/learning-retrospective/SKILL.md`:25-32], [`.codex/skills/learning-retrospective/SKILL.md`:108-145].
 
+Continuous improvement / reevaluation loop: triggered by a concrete divergence, repeated review or CI
+failure pattern, high-TCD delivery, epic close, CKM/Kvasir projection, or approximately 10 unprocessed
+delivery-learning records. Actor is `learning-retrospective` or a bounded governance/automation
+worker. State is BuilderOps `LearningSignal`/receipt records, PR evidence packs, CI failure context,
+review findings, TCD rationale, transition-debt/fitness-rule state, and CKM projections. Stop
+condition is one terminal outcome per in-scope signal: applied governance edit, already satisfied,
+bounded GitHub Issue, `PromotionIntent`, debt/fitness update, or discard/supersession receipt. CKM
+output remains projection-only and never mutates Product/Runtime authority by itself
+[docs/development/DELIVERY_FEEDBACK_LOOP.md:1-220], [docs/CAPABILITY_KNOWLEDGE_MODEL/README.md:51-77].
+
 Promotion/rollback loop: triggered by test/prod promotion; actor is release skills plus operator; stop condition is PASS receipt or rollback verification; human/operator ack is required for prod promotion [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113].
 
-Human exception loop: triggered by safety-critical, authority-critical, intent-critical, or autonomous-failure-critical condition; state is `agent:needs-human` plus packet; returns when decision supplies authority [docs/architecture/SBS_OPERATING_MODEL.md:372-383].
+Human exception loop: triggered by safety-critical, authority-critical, intent-critical, or autonomous-failure-critical condition; state is `agent:needs-human` plus packet; returns when decision supplies authority [docs/architecture/SBS_OPERATING_MODEL.md §12].
 
 ## 9. Automation Surface Matrix
 
@@ -453,7 +470,8 @@ Human exception loop: triggered by safety-critical, authority-critical, intent-c
 | review gate | local subagent | hybrid: agent + PR comments | Requires semantic review | high | low | medium | [`.codex/skills/verification-and-closure/SKILL.md`:116-163] |
 | owner-doc classifier | skill + watchdog nudge | hybrid: GitHub Action artifact + agent | Event can collect diff/context; agent judges wording | high | high | medium | [`.github/workflows/post-merge-owner-doc-watchdog.yml`:47-83] |
 | learning capture | skill + BuilderOps | skill + deterministic receipt helpers | Preserve learning without product-memory contamination | medium | medium | low | [docs/development/DELIVERY_FEEDBACK_LOOP.md:173-188] |
-| human exception | implicit labels | manual exception gate + packet template | Make escalation bounded and useful | high | medium | low | [docs/architecture/SBS_OPERATING_MODEL.md:372-383] |
+| continuous improvement / reevaluation | skill prose + BuilderOps + emerging evidence artifacts | hybrid: retrospective runner + evidence/CKM inputs + terminal-outcome ledger | Prevent LearningSignals, review findings, TCD patterns, and CKM gaps from accumulating without process change or explicit discard | high | medium | medium | [docs/development/DELIVERY_FEEDBACK_LOOP.md:1-220], [docs/CAPABILITY_KNOWLEDGE_MODEL/README.md:51-77] |
+| human exception | implicit labels | manual exception gate + packet template | Make escalation bounded and useful | high | medium | low | [docs/architecture/SBS_OPERATING_MODEL.md §12] |
 
 ## 10. Hooks And Local Automation Assessment
 
@@ -473,7 +491,7 @@ Candidate hooks:
 | create local validation receipt | Stop | hook + script | yes for local sessions | Reduces forgotten receipts | stale receipts | [docs/development/PR_HOT_PATH.md:50-54] |
 | prevent protected branch mutation | PreToolUse | hook | yes | Local safety before Git operations | false positive for deliberate release work | [AGENTS.md:171-182] |
 | suppress routine notifications | Notification | hook | maybe | Reduce attention drain | missed important blockers | [AGENTS.md:130-169] |
-| emit Human Exception packet | Stop / SubagentStop | hook/template | yes, only on stop-condition state | Ensures escalation is actionable | over-escalation | [docs/architecture/SBS_OPERATING_MODEL.md:372-383] |
+| emit Human Exception packet | Stop / SubagentStop | hook/template | yes, only on stop-condition state | Ensures escalation is actionable | over-escalation | [docs/architecture/SBS_OPERATING_MODEL.md §12] |
 | PreCompact context receipt | PreCompact | hook | yes | Preserve work state before compaction | stale context | [`.codex/skills/resume-work/SKILL.md` listed in AGENTS.md:24-25] |
 
 Tasks that should stay scripts: source-anchor validation, branch/worktree preflight, CI wait, skills consistency lint, project status reconcile, dispatcher operations. These are deterministic validation/mutation surfaces and already have scripts or CLI paths [scripts/agent_workspace_preflight.sh:1-61], [scripts/await_pr_checks.sh:1-25], [`.codex/skills/README.md`:189-195].
@@ -507,6 +525,7 @@ Evidence: workflow triggers are observed in `.github/workflows/issue-pr-governan
 | PR review agent | PR opened/synchronize after CI green | semantic reviewer | PR diff, issue, docs | code-review comments | merge/labels except comments | inline findings | noisy findings | auto-review/comment-only |
 | post-merge docs agent | PR merged | owner-doc classifier | merge diff, issue, DOCS_INDEX | gh read/comment, docs PR only after guardrails | product/runtime mutation | docs PR/follow-up/no-change receipt | wrong owner-doc wording | artifact-only then comment-only |
 | evidence pack builder | PR opened/sync/check complete | evidence collector | issue, PR, checks, files | gh read, artifact upload | state mutation | markdown/JSON evidence pack | stale evidence | artifact-only |
+| continuous improvement evaluator | cadence/epic close/projection refresh | signal classifier and closure-router | LearningSignals, evidence packs, review findings, TCD signals, CKM projections | gh read/comment, BuilderOps records, docs/governance PRs, issue creation through normal contract | product/runtime mutation, silent owner-doc writes, unreviewed promotion | terminal outcome ledger and bounded follow-up issues/PRs | over-promoting noisy signals | artifact-only report, then governance-lane PR/issue creation |
 | human exception packet generator | stop condition/blocker | packet compiler | failures, tried actions, evidence | gh comment/issue label with confirmation | autonomous merge/production action | Human Exception packet | over-escalation | comment-only |
 
 Codex Action integration is partially present as an optional docs-guardian autofix inside `architecture-ci` when `CODEX_API_KEY` exists [`.github/workflows/architecture-ci.yaml`:31-38]. The current default PR review gate is local, not the Codex verdict path [`.codex/skills/verification-and-closure/SKILL.md`:116-170]. Claude Action integration is missing; Claude-specific repo evidence is a compatibility entrypoint and local hook documentation only [CLAUDE.md:1-8], [`.claude/hooks/README.md`:1-50].
@@ -561,7 +580,7 @@ safety-critical / authority-critical / intent-critical / autonomous-failure-crit
 Where to store/post:
 
 - Issue-backed work: post on the governing issue and apply `agent:needs-human`; Status should be Backlog according to the label taxonomy and lifecycle matrix [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27], [`.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md`:18-20].
-- PR-blocked work: post on the PR and link the governing issue; do not merge without explicit owner waiver when a required review gate is unavailable [docs/architecture/SBS_OPERATING_MODEL.md:372-383].
+- PR-blocked work: post on the PR and link the governing issue; do not merge without explicit owner waiver when a required review gate is unavailable [docs/architecture/SBS_OPERATING_MODEL.md §12].
 - BuilderOps material: create `PromotionIntent` or `LearningSignal` only when crossing authority or learning conditions are met; BuilderOps records do not themselves authorize Product/Runtime mutation [docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md:40-81].
 
 ## 15. Gaps And Missing Components

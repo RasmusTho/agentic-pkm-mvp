@@ -5,8 +5,8 @@ Owner: Architecture spine / CES practice
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: this doc for SBS operating process; mixed for everything it points to
-Last reviewed: 2026-06-21
-Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/architecture/SBS_OPERATIONALIZATION_PLAN.md, docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md, docs/architecture/SBS_BOUNDARY_REGISTER.md, docs/architecture/SBS_TRANSITION_DEBT.md, docs/architecture/SBS_FITNESS_RULES.md, .github/ISSUE_TEMPLATE/task.yml, .github/pull_request_template.md, .github/github-governance.yml
+Last reviewed: 2026-07-09
+Last verified against: docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/architecture/SBS_OPERATIONALIZATION_PLAN.md, docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md, docs/architecture/SBS_BOUNDARY_REGISTER.md, docs/architecture/SBS_TRANSITION_DEBT.md, docs/architecture/SBS_FITNESS_RULES.md, docs/development/DELIVERY_FEEDBACK_LOOP.md, docs/development/BUILDER_SYSTEM_PROCESS_MAP.md, docs/CAPABILITY_KNOWLEDGE_MODEL/README.md, .github/ISSUE_TEMPLATE/task.yml, .github/pull_request_template.md, .github/github-governance.yml
 
 # SBS Operating Model
 
@@ -61,7 +61,7 @@ The SBS is described across several docs, each with a single owner. Do not dupli
 | PR lifecycle | this doc §8 + `.github/pull_request_template.md` | SBS impact block and owner-doc writeback checklist live in the template. |
 | Review-gate fallback policy | this doc §12 | What to do when a required automated review gate is unavailable. |
 | Builder System boundary, authority model, and artifact map | this doc §3 | Defines the continuous-development enabling system, its relationship to the Product/Runtime SBS and CES, how builder agents classify Product, Builder, and boundary work, and the owner/authority/writeback map for Builder System artifacts and workflows. |
-| Builder Learning and TCD governance loop | this doc §3 | Defines the allowed inputs, durable destinations, TCD signals, and promotion path for builder learning without contaminating Product/Runtime memory. |
+| Builder Learning, evaluation, and TCD governance loop | this doc §3 + `docs/development/DELIVERY_FEEDBACK_LOOP.md` | Defines the allowed inputs, durable destinations, TCD signals, reevaluation inputs, terminal outcomes, and promotion path for builder learning without contaminating Product/Runtime memory. |
 
 This matrix is the **source-of-truth verification matrix** required for SBS operationalization. If a new SBS concern appears, add a row here naming exactly one owner doc.
 
@@ -182,7 +182,8 @@ allowed route for changing it.
 | Prompt, workflow, and development docs | `docs/development/**`, `docs/READING_PATHS.md`, builder workflow sections in `docs/DOCS_INDEX.md`, prompt/workflow docs referenced by repo-local skills | Builder System governance; `docs/DOCS_INDEX.md` owns role routing | Normative or reference guidance depending on each doc's role header | Durable repo-governed docs | Docs-authoring or governance PR; issue-backed PR when changing an executable workflow contract | PR receipt and docs-index/read-path writeback when discovery changes | Guides builder work over Product/Runtime docs without becoming runtime/system-agent instruction | `pytest -q tests/architecture` when docs index coverage applies; manual role-boundary review |
 | Delivery receipts and closure comments | Issue comments, PR comments, parent validation receipts, closure receipts, post-merge owner-doc receipts | Governing workflow skill (`verification-and-closure`, `post-merge-owner-doc`, parent closure docs) | Delivery evidence and lifecycle truth; not semantic Product/Runtime authority unless promoted through owner docs | Durable GitHub records; high-churn operational summaries may also be represented as BuilderOps records | Explicit `gh issue comment` / `gh pr comment` by the responsible workflow; no repo-doc edits solely for transient operational state | Receipt names PR, merge SHA, validation, lifecycle mutations, owner-doc result, and remaining blockers | Evidence that Product/Runtime or Builder work passed its delivery contract; does not itself change runtime behavior | `gh issue view` / `gh pr view` comments plus Project/label verification |
 | Roadmap, project, and projection surfaces | GitHub Project, issue dependency comments, `docs/ROADMAP.md`, `docs/architecture/SBS_ROADMAP.md`, BuilderOps roadmap/docs-freshness projections | Roadmap owner docs for stable strategic truth; BuilderOps for high-churn operational movement; GitHub Project for lifecycle projection | Mixed: owner docs are strategic authority; Project/projections are operational projections | Owner docs durable; Project/projections durable but derived or high-churn | Stable roadmap changes via PR; Project updates through explicit GraphQL/`gh`; BuilderOps projections regenerated from BuilderOps records, not hand-edited as authority | Movement receipts on issues/PRs; owner-doc writeback only when stable truth changes | Routes Product SBS initiatives and Builder System delivery without replacing Product owner docs or shipped status docs | Project item status query; roadmap diff review; projection source-record check when BuilderOps is involved |
-| TCD and cost-control workflows | `AGENTS.md :: Total Cost of Development`, `deliver-issue-set`, planning/review TCD blocks, capability routing decisions | Builder System governance | Normative builder optimization policy | Durable repo-governed policy plus ephemeral per-delivery decisions recorded in plans/receipts | Governance PR for policy/skill changes; per-delivery use recorded in issue/PR comments or PR body | TCD plan/review blocks when required by the active skill; learning routed only on real divergence | Optimizes development work around Product/Runtime changes; not runtime MEM/CAO learning | Presence of required TCD block in planning/review output; PR/issue receipt for applied routing |
+| TCD and cost-control workflows | `AGENTS.md :: Total Cost of Development`, `deliver-issue-set`, planning/review/retrospective TCD blocks, capability routing decisions | Builder System governance | Normative builder optimization policy | Durable repo-governed policy plus ephemeral per-delivery decisions recorded in plans/receipts | Governance PR for policy/skill changes; per-delivery use recorded in issue/PR comments or PR body | TCD plan/review blocks when required by the active skill; repeated cost/rework signals route into continuous improvement and reevaluation | Optimizes development work around Product/Runtime changes; not runtime MEM/CAO learning | Presence of required TCD block in planning/review output; PR/issue receipt for applied routing; retrospective outcome for repeated high-cost patterns |
+| Continuous improvement and reevaluation workflows | `docs/development/DELIVERY_FEEDBACK_LOOP.md`, `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md`, `learning-retrospective`, BuilderOps `LearningSignal`/receipt/projection records, PR evidence packs, CI failure context, CKM/Kvasir projections | Builder System governance | Operational learning and reevaluation process; projection outputs are not authority | Durable BuilderOps records and repo-governed docs/issues; evidence artifacts and projections are rebuildable | BuilderOps record creation, governance-lane PR, bounded GitHub Issue, PromotionIntent, debt/fitness update, or discard/supersession receipt | Each in-scope signal gets a terminal outcome: applied, already satisfied, issue created, promotion pending, debt/fitness recorded, or discarded/superseded | Re-evaluates Builder System process and capability evidence without becoming Product/Runtime memory or shipped behavior | BuilderOps retrospective receipt, issue/PR receipt, debt/fitness diff, or CKM projection watermark |
 | Recovery and failure workflows | Quota/context/subagent failure handling, branch/worktree preflight, git hygiene, dispatcher fallback, review-gate fallback, blocked/needs-human transitions | Builder System governance | Normative safety and coordination policy for builder execution | Durable workflow docs/scripts plus durable GitHub blocker receipts; transient terminal state is not authority | Workflow/script changes via governance PR; live recovery state via explicit labels, Project status, and comments | Blocker or recovery receipt names the failed gate, fallback used, timestamp, and next action; BuilderOps learning only for upstream divergence | Prevents builder failures from corrupting Product/Runtime repo truth; recovery material must not become runtime/user memory | Preflight output, `gh issue view --json labels,projectItems`, recovery comment, and relevant workflow test when a script changes |
 
 Classification gaps found while applying this map must not be hidden in prose. If a category cannot
@@ -191,13 +192,20 @@ relationship, or verification target, record it as bounded transition debt in
 `docs/architecture/SBS_TRANSITION_DEBT.md` or split it into a follow-up issue before marking the work
 Done.
 
-### Builder Learning And TCD Governance Loop
+### Builder Learning, Evaluation, And TCD Governance Loop
 
 Builder learning is a Builder System concern. It is the governed feedback loop that improves builder
 instructions, skills, issue contracts, CI/fitness rails, release/UAT workflows, and TCD routing from
 delivery evidence. It is not Product/Runtime memory, not user memory, not a Human Knowledge Artifact,
 and not Product MEM/HKA authority unless a Product System owner path explicitly promotes it through a
 bounded issue/PR and owner-doc writeback.
+
+Builder evaluation and reevaluation are the cold-path companions to delivery. They periodically ask
+whether Builder System evidence still supports the current process, guardrails, issue contracts,
+fitness rules, transition debt, and capability model. They consume delivery evidence, review/CI/TCD
+patterns, and projection-only CKM/Kvasir capability evidence, then route any action through the same
+governed destinations as learning. Reevaluation is not a Product/Runtime authority path and does not
+make CKM output authoritative.
 
 Builder learning inputs include:
 
@@ -209,6 +217,17 @@ Builder learning inputs include:
   rollback receipts;
 - high human-time cost, high model/tool cost, high coordination cost, repeated context reloads, and
   other TCD signals.
+
+Builder reevaluation inputs include:
+
+- PR evidence packs, CI failure context artifacts, and review findings;
+- repeated repair classes, repeated Human Exception causes, and recurring blocker packets;
+- CKM/Kvasir projections once the CKM MVP exists: maturity vectors, missing-evidence findings,
+  stale-assessment flags, unlinked artifacts, and capability-gap/tension findings;
+- transition-debt and fitness-rule changes, including manual-review-now rules that repeatedly catch
+  the same failure mode;
+- delivery-run state from epic runners, including review findings, learned constraints, TCD launch
+  decisions, unresolved follow-ups, and closure outcomes.
 
 TCD inputs use `AGENTS.md :: Total Cost of Development` as the single policy source. Builder System
 records and delivery receipts may reference the observed TCD factors: human time, model/tool cost,
@@ -224,6 +243,7 @@ Allowed learning destinations:
 | BuilderOps `LearningSignal` | Builder operational learning signal | Durable BuilderOps record; projections are derived | `capture-learning` or the owning workflow, with source refs | A concrete divergence names an upstream artifact that may need repair. |
 | BuilderOps `PromotionIntent` | Reviewed staging request for crossing authority classes | Durable BuilderOps record | BuilderOps CLI or owning workflow before repo/Product promotion, or before GitHub Issue creation when the source is already a `PromotionIntent` | Learning material should become a PR/branch proposal, owner-doc or skill/AGENTS writeback, generated projection, Product/Runtime authority proposal, or a GitHub Issue proposed from PromotionIntent review. A bounded `LearningSignal` may still create a GitHub Issue through `learning-to-issue` without first creating a `PromotionIntent`. |
 | BuilderOps `BuilderOpsReceipt` or generated projection | Processing ledger or derived review view | Receipt is durable; projection is rebuildable | BuilderOps CLI, then regenerate projections from source records | Retrospective completion, supersession, discard, or projection for review. |
+| CKM/Kvasir projection or assessment input | Projection-only Builder capability evidence | Rebuildable from BuilderOps CKM tables and source artifacts | CKM ingestion/projection workflow; action only through issue/PR/PromotionIntent | Reevaluating capability maturity, missing evidence, stale assessments, or capability gaps without granting authority to the projection. |
 | Repo-local skill update | Normative Builder System workflow instruction | Durable repo-governed artifact | Bounded issue or direct-repair PR, with validation and owner-doc receipt | Learning changes how future agents should classify, execute, verify, or recover. |
 | Builder owner docs / development docs | Normative or reference Builder System governance | Durable repo-governed docs | Docs/governance PR with SBS Impact and validation | Learning changes boundary model, workflow policy, or durable process truth. |
 | Transition debt row | Known or likely gap in the target operating model | Durable register entry | PR updating `docs/architecture/SBS_TRANSITION_DEBT.md` or follow-up issue | A learning sink, metric, or workflow gap is real but not resolved in the current slice. |
@@ -232,26 +252,35 @@ Allowed learning destinations:
 | Prompt templates or agent-entry policy | Builder prompt/routing instruction | Durable repo-governed artifact | PR updating the prompt/policy owner surface | Learning changes how future builder context should be assembled or constrained. |
 | Product/Runtime owner docs, HKA, MEM, or runtime behavior | Product System authority only | Product-owned durable truth | Product/Runtime issue/PR path with owner-doc writeback and applicable contracts | Only when the change is explicitly Product work; never as silent builder-learning promotion. |
 
-Learning-to-change path:
+Learning-and-reevaluation-to-change path:
 
 1. **Observe.** A workflow records a divergence, cost signal, failed gate, drift, or repeated pattern
    in the smallest truthful surface: PR/issue receipt for ordinary evidence, BuilderOps
    `LearningSignal` for upstream repair signals, or a blocker receipt when work cannot proceed.
-2. **Classify.** The owner skill classifies the signal as Product/Runtime, Builder System, or
+2. **Evaluate.** Cold-path reevaluation reads BuilderOps learning records, PR/CI evidence, review
+   findings, TCD signals, transition-debt/fitness state, and CKM projections where available. It
+   determines whether the input is noise, already handled, a process defect, a capability gap, a
+   fitness/debt candidate, or Product/Runtime work requiring a stricter path.
+3. **Classify.** The owner skill classifies the signal as Product/Runtime, Builder System, or
    boundary work. Product effects require Product owner docs and SBS impact; Builder effects use this
    Builder System model; boundary effects name both.
-3. **Route.** Keep raw/high-churn material in BuilderOps or comments. A concrete, bounded
+4. **Route.** Keep raw/high-churn material in BuilderOps or comments. A concrete, bounded
    `LearningSignal` may become a GitHub Issue through `learning-to-issue` when it names an upstream
    artifact and has resolvable `Verify:` targets. Before crossing BuilderOps material into
    PR/branch proposals, owner-doc or skill/AGENTS writeback, generated projections, or
    Product/Runtime authority proposals, create or consume a BuilderOps `PromotionIntent` that names
    the target surface. Promote repo-governed artifacts only by PR.
-4. **Change.** Apply the smallest governed change: skill edit, owner-doc edit, issue/template repair,
+5. **Change.** Apply the smallest governed change: skill edit, owner-doc edit, issue/template repair,
    fitness rule, transition debt row, roadmap update, prompt/policy update, or Product issue/PR when
    Product authority is genuinely required.
-5. **Verify and close.** Validation must prove the destination changed and did not contaminate
+6. **Verify and close.** Validation must prove the destination changed and did not contaminate
    runtime/user memory. Delivery receipts name the PR, merge SHA, checks, Codex/review outcome,
    lifecycle state, BuilderOps routing, and any remaining debt.
+
+Terminal outcome rule: once a retrospective or reevaluation pass claims a set of signals, every
+signal in scope must end as applied, already satisfied, issue created, promotion pending,
+debt/fitness recorded, or discarded/superseded with a receipt. "Carry forward later" is not a
+terminal outcome unless represented by a bounded GitHub Issue or PromotionIntent.
 
 Runtime/user memory contamination is a blocking failure mode. Failed prompts, quota/context failures,
 delivery receipts, BuilderOps records, TCD rationales, review comments, and skill retrospectives must
