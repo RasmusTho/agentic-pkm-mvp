@@ -5,8 +5,15 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterator, Mapping
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX fallback for local tooling.
+    fcntl = None  # type: ignore[assignment]
 
 SCHEMA_VERSION = 1
 DEFAULT_EPIC_RUNS_DIR = Path("runtime/builderops/epic-runs")
@@ -41,6 +48,8 @@ _UPDATE_FIELDS = (
     *_REPLACE_MAPPING_FIELDS,
     "last_verified_head_sha",
 )
+_THREAD_LOCKS_GUARD = threading.Lock()
+_THREAD_LOCKS: dict[Path, threading.Lock] = {}
 
 
 class EpicRunStateError(ValueError):
@@ -112,22 +121,23 @@ def create_epic_run_state(
     """Create or idempotently load a local epic run-state file."""
 
     path = epic_run_state_path(run_id, root=root)
-    if path.exists() and not overwrite:
-        existing = load_epic_run_state(run_id, root=root)
-        expected_epic = _normalize_epic_issue_number(epic_issue_number)
-        if existing["epic_issue_number"] != expected_epic:
-            raise EpicRunStateError(
-                f"run_id {run_id!r} already belongs to epic "
-                f"{existing['epic_issue_number']}"
-            )
-        if updates:
-            existing = apply_epic_run_update(existing, **updates)
-            save_epic_run_state(existing, root=root)
-        return existing
+    with _locked_run_state(path):
+        if path.exists() and not overwrite:
+            existing = deserialize_epic_run_state(path.read_text(encoding="utf-8"))
+            expected_epic = _normalize_epic_issue_number(epic_issue_number)
+            if existing["epic_issue_number"] != expected_epic:
+                raise EpicRunStateError(
+                    f"run_id {run_id!r} already belongs to epic "
+                    f"{existing['epic_issue_number']}"
+                )
+            if updates:
+                existing = apply_epic_run_update(existing, **updates)
+                save_epic_run_state(existing, root=root)
+            return existing
 
-    state = new_epic_run_state(epic_issue_number, run_id, **updates)
-    save_epic_run_state(state, root=root)
-    return state
+        state = new_epic_run_state(epic_issue_number, run_id, **updates)
+        save_epic_run_state(state, root=root)
+        return state
 
 
 def load_epic_run_state(
@@ -166,13 +176,15 @@ def update_epic_run_state(
 ) -> dict[str, Any]:
     """Load, update, persist, and return a local epic run-state file."""
 
-    state = load_epic_run_state(run_id, root=root)
-    if updater is not None:
-        state = normalize_epic_run_state(updater(_json_clone(state)))
-    if updates:
-        state = apply_epic_run_update(state, **updates)
-    save_epic_run_state(state, root=root)
-    return state
+    path = epic_run_state_path(run_id, root=root)
+    with _locked_run_state(path):
+        state = deserialize_epic_run_state(path.read_text(encoding="utf-8"))
+        if updater is not None:
+            state = normalize_epic_run_state(updater(_json_clone(state)))
+        if updates:
+            state = apply_epic_run_update(state, **updates)
+        save_epic_run_state(state, root=root)
+        return state
 
 
 def apply_epic_run_update(state: Mapping[str, Any], **updates: Any) -> dict[str, Any]:
@@ -376,6 +388,32 @@ def _compact_dumps(value: Any) -> str:
 
 def _pretty_dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False, indent=2) + "\n"
+
+
+@contextmanager
+def _locked_run_state(path: Path) -> Iterator[None]:
+    lock_path = path.with_name(f".{path.name}.lock")
+    thread_lock = _thread_lock_for(lock_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with thread_lock:
+        with lock_path.open("a+", encoding="utf-8") as lock_file:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _thread_lock_for(lock_path: Path) -> threading.Lock:
+    lock_key = lock_path.resolve(strict=False)
+    with _THREAD_LOCKS_GUARD:
+        lock = _THREAD_LOCKS.get(lock_key)
+        if lock is None:
+            lock = threading.Lock()
+            _THREAD_LOCKS[lock_key] = lock
+        return lock
 
 
 def _is_relative_to(path: Path, base: Path) -> bool:
