@@ -93,14 +93,27 @@ jobs:
       LABELS: ${{ join(github.event.issue.labels.*.name, ',') }}
     steps:
       - uses: actions/checkout@v4
-      - name: Generate observe-only issue readiness report
+      - name: Generate issue readiness report
         run: |
           mkdir -p issue-readiness
-          python3 scripts/validate_issue_readiness.py \
-            --output-json issue-readiness/report.json \
-            --output-markdown issue-readiness/report.md \
-            --observe-only
+          readiness_args=(
+            --issue-number "$ISSUE_NUMBER"
+            --output-json issue-readiness/report.json
+            --output-markdown issue-readiness/report.md
+          )
+          IFS=',' read -ra labels <<< "$LABELS"
+          for label in "${labels[@]}"; do
+            if [ -n "$label" ]; then
+              readiness_args+=(--label "$label")
+            fi
+          done
+          if [[ ",$LABELS," == *",agent:ready,"* ]]; then
+            python3 scripts/validate_issue_readiness.py "${readiness_args[@]}"
+          else
+            python3 scripts/validate_issue_readiness.py "${readiness_args[@]}" --observe-only
+          fi
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: issue-readiness-${{ github.event.issue.number }}
           path: issue-readiness/

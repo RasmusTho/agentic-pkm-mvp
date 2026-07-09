@@ -11,6 +11,7 @@ from scripts import project_status
 from scripts import reconcile_project_status
 from scripts.reconcile_project_status import (
     ProjectItemListDeferred,
+    desired_issue_status,
     desired_pr_status,
     get_pr,
     list_project_items,
@@ -18,6 +19,10 @@ from scripts.reconcile_project_status import (
     reconcile_issue,
     reconcile_pr,
 )
+
+FIXTURE_DIR = Path("tests/fixtures/issue_readiness")
+VALID_READY_BODY = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+INVALID_READY_BODY = (FIXTURE_DIR / "missing_constraints.md").read_text(encoding="utf-8")
 
 
 def test_desired_pr_status_open_non_draft_pr_is_review() -> None:
@@ -64,6 +69,24 @@ def test_desired_status_closed_action_projects_done() -> None:
     assert project_status.desired_status("closed", None) == "Done"
     assert project_status.desired_status("closed", True) == "Done"
     assert project_status.desired_status("closed", False) == "Done"
+
+
+def test_desired_issue_status_requires_ready_candidate_body() -> None:
+    valid_issue = {
+        "number": 3212,
+        "state": "OPEN",
+        "labels": [{"name": "agent:ready"}],
+        "body": VALID_READY_BODY,
+    }
+    invalid_issue = {
+        "number": 3213,
+        "state": "OPEN",
+        "labels": [{"name": "agent:ready"}],
+        "body": INVALID_READY_BODY,
+    }
+
+    assert desired_issue_status(valid_issue) == "Ready"
+    assert desired_issue_status(invalid_issue) == "Backlog"
 
 
 def test_pr_stage_change_workflow_subscribes_to_closed_event() -> None:
@@ -195,6 +218,7 @@ def test_reconcile_issue_does_not_add_item_found_after_initial_limit(
             "state": "OPEN",
             "labels": [{"name": "agent:ready"}],
             "url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/495",
+            "body": VALID_READY_BODY,
         },
     )
     monkeypatch.setattr(
@@ -308,6 +332,7 @@ def test_reconcile_issue_stops_when_project_listing_fails_before_mutation(
             "state": "OPEN",
             "labels": [{"name": "agent:ready"}],
             "url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/495",
+            "body": VALID_READY_BODY,
         },
     )
     monkeypatch.setattr(
@@ -324,6 +349,65 @@ def test_reconcile_issue_stops_when_project_listing_fails_before_mutation(
     with pytest.raises(subprocess.CalledProcessError):
         reconcile_issue(args, "RasmusTho", {"number": 1}, "field", {"Ready": "opt"})
     assert add_calls == []
+
+
+def test_reconcile_issue_refuses_ready_for_invalid_agent_ready_body(
+    monkeypatch,
+    capsys,
+) -> None:
+    status_calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "get_issue",
+        lambda _repo, _number: {
+            "number": 495,
+            "state": "OPEN",
+            "labels": [{"name": "agent:ready"}],
+            "url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/495",
+            "body": INVALID_READY_BODY,
+        },
+    )
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "list_project_items",
+        lambda *_args: [
+            {
+                "id": "item-invalid",
+                "content": {"type": "Issue", "number": 495},
+                "status": "Ready",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "set_project_status",
+        lambda *args: status_calls.append(args),
+    )
+
+    args = reconcile_project_status.argparse.Namespace(
+        repo="RasmusTho/agentic-pkm-mvp",
+        issue=495,
+        dry_run=False,
+        status=None,
+    )
+
+    assert (
+        reconcile_issue(
+            args,
+            "RasmusTho",
+            {"id": "project-1", "number": 1, "title": "Agent Delivery Control Plane"},
+            "field",
+            {"Backlog": "backlog-id", "Ready": "ready-id"},
+        )
+        == 1
+    )
+    assert status_calls == [
+        ("RasmusTho", "project-1", "item-invalid", "field", "backlog-id", False)
+    ]
+    output = capsys.readouterr().out
+    assert "invalid issue #495" in output
+    assert "missing_required_sections" in output
 
 
 def test_reconcile_pr_soft_fails_on_transient_project_add_failure(
@@ -373,6 +457,7 @@ def test_reconcile_pr_soft_fails_on_transient_project_add_failure(
             "state": "OPEN",
             "labels": [{"name": "agent:ready"}],
             "url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/2144",
+            "body": VALID_READY_BODY,
         },
     )
 
@@ -660,6 +745,7 @@ def test_scan_is_incremental_by_updated_at(monkeypatch, tmp_path) -> None:
             "state": "OPEN",
             "labels": [{"name": "agent:ready"}],
             "url": f"https://github.com/RasmusTho/agentic-pkm-mvp/issues/{number}",
+            "body": VALID_READY_BODY,
         }
 
     def fake_get_pr(_repo: str, number: int) -> dict[str, object]:
@@ -742,6 +828,78 @@ def test_scan_is_incremental_by_updated_at(monkeypatch, tmp_path) -> None:
     assert json.loads(watermark_path.read_text(encoding="utf-8")) == {
         "last_scan_started_at": "2026-07-01T08:45:00Z"
     }
+
+
+@pytest.mark.parametrize("current_status", ["Backlog", "Ready"])
+def test_scan_refuses_project_ready_for_invalid_agent_ready_issue(
+    monkeypatch,
+    tmp_path,
+    capsys,
+    current_status: str,
+) -> None:
+    watermark_path = tmp_path / "project_status_reconcile_scan_watermark.json"
+    monkeypatch.setattr(reconcile_project_status, "SCAN_WATERMARK_PATH", watermark_path)
+    item = {
+        "id": "item-invalid",
+        "content": {
+            "type": "Issue",
+            "number": 3213,
+            "updatedAt": "2026-07-01T12:00:00Z",
+        },
+        "status": current_status,
+    }
+    status_calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "list_project_items_for_scan",
+        lambda _owner, _project_number: [item],
+    )
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "get_issue",
+        lambda _repo, _number: {
+            "number": 3213,
+            "state": "OPEN",
+            "labels": [{"name": "agent:ready"}],
+            "url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/3213",
+            "body": INVALID_READY_BODY,
+        },
+    )
+    monkeypatch.setattr(
+        reconcile_project_status,
+        "set_project_status",
+        lambda *args: status_calls.append(args),
+    )
+
+    args = reconcile_project_status.argparse.Namespace(
+        repo="RasmusTho/agentic-pkm-mvp",
+        dry_run=False,
+        status=None,
+    )
+    project = {"id": "project-1", "number": 1, "title": "Agent Delivery Control Plane"}
+
+    assert (
+        reconcile_project_status.reconcile_scan(
+            args,
+            "RasmusTho",
+            project,
+            "field-id",
+            {"Backlog": "backlog-id", "Ready": "ready-id"},
+        )
+        == 1
+    )
+    if current_status == "Ready":
+        assert status_calls == [
+            ("RasmusTho", "project-1", "item-invalid", "field-id", "backlog-id", False)
+        ]
+    else:
+        assert status_calls == []
+    assert not watermark_path.exists()
+    output = capsys.readouterr().out
+    assert "invalid issue #3213" in output
+    assert "missing_required_sections" in output
+    assert "scan failed: 1 invalid agent:ready issue(s)" in output
 
 
 def test_reconcile_skips_graphql_when_kill_switch_active(monkeypatch, capsys) -> None:

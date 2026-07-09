@@ -23,6 +23,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from app.dispatcher.github_call_logger import is_kill_switch_active
 from app.dispatcher.sync_github import classify_github_api_failure
+from scripts.validate_issue_readiness import classify_issue_body
 
 
 GOVERNANCE_PATH = Path(".github/github-governance.yml")
@@ -456,7 +457,15 @@ def find_item_by_number(items: list[dict[str, Any]], kind: str, number: int) -> 
 
 def get_issue(repo: str, number: int) -> dict[str, Any]:
     return json.loads(
-        run_gh("issue", "view", str(number), "--repo", repo, "--json", "number,state,labels,url,title")
+        run_gh(
+            "issue",
+            "view",
+            str(number),
+            "--repo",
+            repo,
+            "--json",
+            "number,state,labels,url,title,body",
+        )
     )
 
 
@@ -466,11 +475,35 @@ def get_pr(repo: str, number: int) -> dict[str, Any]:
     )
 
 
+def _issue_label_names(issue: dict[str, Any]) -> set[str]:
+    return {
+        str(label.get("name") or label) if isinstance(label, dict) else str(label)
+        for label in issue.get("labels", [])
+    }
+
+
+def issue_ready_validation_failure(issue: dict[str, Any]) -> str | None:
+    label_names = _issue_label_names(issue)
+    report = classify_issue_body(
+        issue.get("body") or "",
+        issue_number=issue.get("number"),
+        labels=sorted(label_names),
+    )
+    if report.readiness_classification == "ready_candidate":
+        return None
+    return (
+        f"strict readiness validation failed with "
+        f"{report.readiness_classification!r}; not setting Project Ready"
+    )
+
+
 def desired_issue_status(issue: dict[str, Any]) -> str | None:
     if issue.get("state") == "CLOSED":
         return "Done"
-    label_names = {label["name"] for label in issue.get("labels", [])}
+    label_names = _issue_label_names(issue)
     if "agent:ready" in label_names:
+        if issue_ready_validation_failure(issue) is not None:
+            return "Backlog"
         return "Ready"
     if {"agent:blocked", "agent:needs-human"} & label_names:
         return "Backlog"
@@ -542,6 +575,17 @@ def reconcile_issue(
     status_options: dict[str, str],
 ) -> int:
     issue = get_issue(args.repo, args.issue)
+    label_names = _issue_label_names(issue)
+    invalid_ready_failure = (
+        issue_ready_validation_failure(issue)
+        if "agent:ready" in label_names
+        else None
+    )
+    if args.status == "Ready" and invalid_ready_failure is not None:
+        print(f"invalid issue #{args.issue}: {invalid_ready_failure}")
+        return 1
+    if args.status is None and invalid_ready_failure is not None:
+        print(f"invalid issue #{args.issue}: {invalid_ready_failure}")
     desired = args.status or desired_issue_status(issue)
     if not desired:
         print(f"skip issue #{args.issue}: no derived status")
@@ -571,7 +615,7 @@ def reconcile_issue(
     current = item.get("status")
     if current == desired:
         print(f"issue #{args.issue}: already {desired}")
-        return 0
+        return 1 if invalid_ready_failure is not None else 0
     print(f"issue #{args.issue}: {current or '<none>'} -> {desired}")
     set_project_status(
         owner,
@@ -581,7 +625,7 @@ def reconcile_issue(
         status_options[desired],
         args.dry_run,
     )
-    return 0
+    return 1 if invalid_ready_failure is not None else 0
 
 
 def reconcile_pr(
@@ -650,6 +694,7 @@ def reconcile_scan(
         return 0
     repo = args.repo
     changes = 0
+    invalid_ready_count = 0
     for item in items:
         content = item.get("content") or {}
         kind = content.get("type")
@@ -664,7 +709,13 @@ def reconcile_scan(
         url = content.get("url")
         if kind == "Issue":
             issue = get_issue(repo, number)
+            label_names = _issue_label_names(issue)
             desired = desired_issue_status(issue)
+            if "agent:ready" in label_names:
+                failure = issue_ready_validation_failure(issue)
+                if failure is not None:
+                    print(f"invalid issue #{number}: {failure}")
+                    invalid_ready_count += 1
             url = issue["url"]
         elif kind == "PullRequest":
             pr = get_pr(repo, number)
@@ -686,6 +737,9 @@ def reconcile_scan(
         changes += 1
         if item.get("id") is None and not args.dry_run and url:
             add_item_to_project(owner, project["number"], url)
+    if invalid_ready_count:
+        print(f"scan failed: {invalid_ready_count} invalid agent:ready issue(s)")
+        return 1
     if not args.dry_run:
         persist_scan_watermark(scan_started_at)
     print(f"scan complete: {changes} change(s)")

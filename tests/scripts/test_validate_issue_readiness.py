@@ -168,13 +168,45 @@ def test_cli_observe_only_writes_json_and_markdown(tmp_path: Path) -> None:
     assert "Classification: `missing_verify_markers`" in markdown_path.read_text(encoding="utf-8")
 
 
-def test_cli_fails_non_ready_without_observe_only() -> None:
+def test_cli_succeeds_ready_candidate_without_observe_only() -> None:
     result = subprocess.run(
         [
             sys.executable,
             "scripts/validate_issue_readiness.py",
             "--body-file",
-            str(FIXTURE_DIR / "missing_constraints.md"),
+            str(FIXTURE_DIR / "valid_ready_candidate.md"),
+            "--label",
+            "agent:ready",
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    assert payload["readiness_classification"] == "ready_candidate"
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "expected_classification"),
+    [
+        ("missing_constraints.md", "missing_required_sections"),
+        ("ac_without_verify.md", "missing_verify_markers"),
+    ],
+)
+def test_cli_fails_non_ready_without_observe_only(
+    fixture_name: str,
+    expected_classification: str,
+) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/validate_issue_readiness.py",
+            "--body-file",
+            str(FIXTURE_DIR / fixture_name),
+            "--label",
+            "agent:ready",
         ],
         cwd=REPO_ROOT,
         text=True,
@@ -183,7 +215,7 @@ def test_cli_fails_non_ready_without_observe_only() -> None:
 
     assert result.returncode == 1
     payload = json.loads(result.stdout)
-    assert payload["readiness_classification"] == "missing_required_sections"
+    assert payload["readiness_classification"] == expected_classification
 
 
 def test_cli_reads_issue_number_from_environment(tmp_path: Path) -> None:

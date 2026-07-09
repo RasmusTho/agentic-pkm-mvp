@@ -77,6 +77,7 @@ Choose the label set based on readiness before running `gh issue create`:
 
 **Bounded, testable, and unblocked -> `agent:ready`, Status=Ready:**
 ```bash
+python3 scripts/validate_issue_readiness.py --body-file <body-file> --label agent:ready
 gh issue create \
   --repo <owner/repo> \
   --title "<type>: <bounded outcome>" \
@@ -106,7 +107,9 @@ gh issue create \
 # Then set Project Status=Backlog
 ```
 
-Do not apply `agent:ready` unless every AC has a resolvable `Verify:` target and no dependency blocks execution.
+Do not apply `agent:ready` or set Project Status `Ready` unless strict validation exits 0. Never use
+`--observe-only` for a Ready mutation. Every AC must have a resolvable `Verify:` target and no
+dependency may block execution.
 
 **Issue body (all cases):** use the body template from `.codex/skills/_shared/ISSUE_CONTRACT.md`, with the learning-specific requirements above (`## Context` links the source record; `## Applies learning` filled, e.g. `Applies learning from \`BuilderOps LearningSignal <id>\``).
 
@@ -135,6 +138,8 @@ Signs a raw-intake issue needs normalization:
    ```
 4. Fix labels - remove non-canonical, add correct ones:
    ```bash
+   gh issue view <N> --repo <owner/repo> --json body --jq .body > /tmp/issue-<N>-body.md
+   python3 scripts/validate_issue_readiness.py --body-file /tmp/issue-<N>-body.md --label agent:ready
    gh issue edit <N> --repo <owner/repo> \
      --remove-label "governance,ci,maintenance" \
      --add-label "type:task,prio:med,agent:ready"

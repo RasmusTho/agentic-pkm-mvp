@@ -24,6 +24,7 @@ from app.dispatcher.github_call_logger import (
     log_github_call,
     get_last_known_remaining,
 )
+from scripts.validate_issue_readiness import classify_issue_body
 
 PROVIDER_IDENTITY = "github"
 
@@ -32,6 +33,8 @@ PROVIDER_IDENTITY = "github"
 # preserves the previous 1000-issue ceiling.
 OPEN_ISSUES_PAGE_SIZE = 100
 OPEN_ISSUES_MAX_PAGES = 10
+READY_ISSUES_PAGE_SIZE = 100
+READY_ISSUES_MAX_PAGES = 25
 
 OPEN_ISSUES_QUERY = """
 query($owner: String!, $name: String!, $pageSize: Int!, $after: String) {
@@ -287,6 +290,30 @@ _LABEL_STATUS: dict[str, str] = {
 }
 
 
+def _label_names(payload: dict[str, Any]) -> list[str]:
+    return [
+        str(lbl.get("name") or lbl) if isinstance(lbl, dict) else str(lbl)
+        for lbl in payload.get("labels", [])
+    ]
+
+
+def _ready_validation_failure(payload: dict[str, Any]) -> str | None:
+    labels = _label_names(payload)
+    if "agent:ready" not in labels:
+        return None
+    report = classify_issue_body(
+        payload.get("body") or "",
+        issue_number=payload.get("number"),
+        labels=labels,
+    )
+    if report.readiness_classification == "ready_candidate":
+        return None
+    return (
+        "agent:ready skipped by strict readiness validation: "
+        f"{report.readiness_classification}"
+    )
+
+
 def normalize_github_issue(payload: dict[str, Any], now: str | None = None) -> TaskRecord:
     """Normalize a GitHub issue API payload into a local :class:`TaskRecord`.
 
@@ -302,10 +329,7 @@ def normalize_github_issue(payload: dict[str, Any], now: str | None = None) -> T
     number = payload["number"]
     task_id = f"github-issue-{number}"
 
-    labels: list[str] = [
-        str(lbl.get("name") or lbl) if isinstance(lbl, dict) else str(lbl)
-        for lbl in payload.get("labels", [])
-    ]
+    labels = _label_names(payload)
 
     priority = "med"
     for lbl in labels:
@@ -460,31 +484,63 @@ class GhCliIssueSource:
         import json
         import subprocess
 
-        try:
-            # Query open issues with agent:ready label
-            result = subprocess.run(
-                [
-                    "gh",
-                    "issue",
-                    "list",
-                    "--repo",
-                    repo,
-                    "--search",
-                    "is:open label:agent:ready",
-                    "--json",
-                    "number,title,state,labels,createdAt,updatedAt",
-                    "--limit",
-                    "100",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+        owner, _, name = repo.partition("/")
+        if not name:
+            raise RuntimeError(f"repo must be 'owner/name', got: {repo!r}")
+
+        issues: list[dict[str, Any]] = []
+        for page in range(1, READY_ISSUES_MAX_PAGES + 1):
+            try:
+                result = subprocess.run(
+                    [
+                        "gh",
+                        "api",
+                        f"repos/{owner}/{name}/issues",
+                        "--method",
+                        "GET",
+                        "-f",
+                        "state=open",
+                        "-f",
+                        "labels=agent:ready",
+                        "-F",
+                        f"per_page={READY_ISSUES_PAGE_SIZE}",
+                        "-F",
+                        f"page={page}",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            except FileNotFoundError:
+                raise RuntimeError("gh CLI not found; ensure gh is installed and in PATH")
             if result.returncode != 0:
-                raise RuntimeError(f"gh issue list failed: {result.stderr}")
-            return json.loads(result.stdout)
-        except FileNotFoundError:
-            raise RuntimeError("gh CLI not found; ensure gh is installed and in PATH")
+                raise RuntimeError(f"gh api ready issues failed: {result.stderr}")
+            payload = json.loads(result.stdout)
+            if not isinstance(payload, list):
+                raise RuntimeError("gh api ready issues returned a non-list payload")
+            for node in payload:
+                if node.get("pull_request"):
+                    continue
+                labels = node.get("labels") or []
+                issues.append(
+                    {
+                        "number": node.get("number"),
+                        "title": node.get("title"),
+                        "state": node.get("state"),
+                        "labels": [{"name": label.get("name")} for label in labels],
+                        "createdAt": node.get("created_at"),
+                        "updatedAt": node.get("updated_at"),
+                        "body": node.get("body"),
+                    }
+                )
+            if len(payload) < READY_ISSUES_PAGE_SIZE:
+                break
+        else:
+            raise RuntimeError(
+                f"gh api ready issues exceeded {READY_ISSUES_MAX_PAGES} pages "
+                "with more results remaining; refusing a truncated ready snapshot"
+            )
+        return issues
 
     def list_open_issues(self, repo: str, **kwargs: Any) -> list[dict[str, Any]]:
         """List all open issues with labels from the repo.
@@ -713,8 +769,17 @@ class PullSyncAdapter:
 
         upserted: list[TaskRecord] = []
         skipped: list[str] = []
+        invalid_ready_issue_numbers: set[int] = set()
+        ready_issue_numbers: set[int] = set()
         for issue in ready_issues:
             try:
+                validation_failure = _ready_validation_failure(issue)
+                number = issue.get("number")
+                if validation_failure is not None:
+                    if isinstance(number, int):
+                        invalid_ready_issue_numbers.add(number)
+                    skipped.append(f"issue={number or '?'}: {validation_failure}")
+                    continue
                 task = normalize_github_issue(issue, now=pull_at)
                 existing = self._store.get_task(task.task_id)
                 if existing is not None and existing.status in {"claimed", "in_progress"}:
@@ -726,18 +791,15 @@ class PullSyncAdapter:
                     task.last_heartbeat_at = existing.last_heartbeat_at
                 self._store.upsert_task(task)
                 upserted.append(task)
+                if isinstance(number, int):
+                    ready_issue_numbers.add(number)
             except Exception as exc:
                 skipped.append(f"issue={issue.get('number', '?')}: {exc}")
-
-        ready_issue_numbers: set[int] = set()
-        for issue in ready_issues:
-            number = issue.get("number")
-            if isinstance(number, int):
-                ready_issue_numbers.add(number)
 
         reconciled = self._reconcile_stale_ready(
             pull_at=pull_at,
             ready_issue_numbers=ready_issue_numbers,
+            invalid_ready_issue_numbers=invalid_ready_issue_numbers,
             open_issues=open_issues,
             open_issues_available=open_issues_available,
         )
@@ -764,6 +826,7 @@ class PullSyncAdapter:
         self,
         pull_at: str,
         ready_issue_numbers: set[int],
+        invalid_ready_issue_numbers: set[int],
         open_issues: list[dict[str, Any]],
         open_issues_available: bool = True,
     ) -> int:
@@ -779,8 +842,34 @@ class PullSyncAdapter:
             open_issue_labels[number] = labels
 
         reconciled = 0
+        reconciled_task_ids: set[str] = set()
         for status in ("ready", "blocked"):
             for task in self._store.list_tasks(status=status):
+                if task.task_id in reconciled_task_ids:
+                    continue
+                if task.issue_number in invalid_ready_issue_numbers:
+                    reconciled_task_ids.add(task.task_id)
+                    from_status = task.status
+                    task.status = "blocked"
+                    task.blocked_reason = "agent:ready strict readiness validation failed"
+                    task.updated_at = pull_at
+                    self._store.upsert_task(task)
+                    self._store.append_event(
+                        EventRecord(
+                            event_id=str(uuid.uuid4()),
+                            timestamp=pull_at,
+                            task_id=task.task_id,
+                            event_type="sync.reconciled",
+                            actor=f"sync:{self._provider}",
+                            payload={
+                                "from": from_status,
+                                "to": "blocked",
+                                "reason": "agent-ready-readiness-invalid",
+                            },
+                        )
+                    )
+                    reconciled += 1
+                    continue
                 if task.issue_number in ready_issue_numbers:
                     if task.status == "blocked":
                         task.status = "ready"
@@ -816,15 +905,20 @@ class PullSyncAdapter:
                     next_status = "completed"
                     reason = "closed-or-missing-from-open-issues"
                 elif "agent:ready" in task_labels:
-                    next_status = "ready"
-                    reason = "agent-ready-label-present"
+                    next_status = "blocked"
+                    reason = "agent-ready-readiness-unvalidated"
                 else:
                     next_status = "blocked"
                     reason = "agent-ready-label-removed"
 
                 from_status = task.status
                 task.status = next_status
-                if next_status != "blocked":
+                reconciled_task_ids.add(task.task_id)
+                if reason == "agent-ready-readiness-unvalidated":
+                    task.blocked_reason = (
+                        "agent:ready label present but strict readiness validation was not run"
+                    )
+                elif next_status != "blocked":
                     task.blocked_reason = None
                 task.updated_at = pull_at
                 self._store.upsert_task(task)
