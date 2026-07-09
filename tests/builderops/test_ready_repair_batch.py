@@ -97,6 +97,24 @@ def test_batch_blocks_non_ready_candidate_without_writes() -> None:
     assert report["mutations_performed"] is False
 
 
+def test_batch_keeps_empty_body_child_as_blocked_report_item() -> None:
+    report = build_ready_repair_batch(
+        issues=[
+            _issue(3271),
+            _issue(3272, body="", labels=["type:task"]),
+        ],
+        repo="RasmusTho/agentic-pkm-mvp",
+    )
+
+    assert report["summary"]["issue_count"] == 2
+    assert report["summary"]["ready_candidate_count"] == 1
+    assert report["summary"]["blocked_count"] == 1
+    blocked = report["issues"][1]
+    assert blocked["status"] == "blocked"
+    assert "readiness-unknown" in blocked["blocked_reasons"]
+    assert blocked["proposed_commands"] == []
+
+
 def test_apply_mode_only_executes_validator_gated_repairs() -> None:
     executed: list[list[str]] = []
 
@@ -125,3 +143,39 @@ def test_apply_mode_only_executes_validator_gated_repairs() -> None:
         ["python3", "scripts/reconcile_project_status.py", "--repo"],
     ]
     assert {item["issue_number"] for item in report["command_results"]} == {3271}
+
+
+def test_apply_mode_stops_issue_repairs_after_failed_command() -> None:
+    executed: list[list[str]] = []
+
+    def runner(argv: list[str]) -> dict[str, object]:
+        executed.append(list(argv))
+        return {
+            "returncode": 1,
+            "ok": False,
+            "stdout": "",
+            "stderr": "rate limited",
+        }
+
+    report = build_ready_repair_batch(
+        issues=[_issue(3271)],
+        repo="RasmusTho/agentic-pkm-mvp",
+        apply=True,
+        command_runner=runner,
+    )
+
+    assert report["summary"]["executed_command_count"] == 1
+    assert report["summary"]["failed_command_count"] == 1
+    assert [item["name"] for item in report["command_results"]] == ["add_agent_ready_label"]
+    assert executed == [
+        [
+            "gh",
+            "issue",
+            "edit",
+            "3271",
+            "--repo",
+            "RasmusTho/agentic-pkm-mvp",
+            "--add-label",
+            "agent:ready",
+        ]
+    ]

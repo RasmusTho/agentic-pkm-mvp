@@ -47,7 +47,7 @@ def build_ready_repair_batch(
                 continue
             for command in issue_report["proposed_commands"]:
                 result = dict(runner(command["argv"]))
-                command_results.append({
+                command_result = {
                     "issue_number": issue_report["issue_number"],
                     "name": command["name"],
                     "argv": command["argv"],
@@ -55,7 +55,10 @@ def build_ready_repair_batch(
                     "ok": bool(result.get("ok", result.get("returncode", 0) == 0)),
                     "stdout": result.get("stdout", ""),
                     "stderr": result.get("stderr", ""),
-                })
+                }
+                command_results.append(command_result)
+                if not command_result["ok"]:
+                    break
 
     failed_commands = [item for item in command_results if not item["ok"]]
     return {
@@ -198,8 +201,8 @@ def _normalize_issue(issue: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
         raise ReadyRepairBatchError("issue number must be a positive integer")
     body = issue.get("body")
-    if not isinstance(body, str) or not body.strip():
-        raise ReadyRepairBatchError(f"issue {number} body must be a non-empty string")
+    if not isinstance(body, str):
+        raise ReadyRepairBatchError(f"issue {number} body must be a string")
     return {
         "number": number,
         "title": _optional_string(issue.get("title")),
