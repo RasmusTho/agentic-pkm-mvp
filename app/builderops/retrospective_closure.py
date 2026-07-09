@@ -95,12 +95,14 @@ def _normalize_outcome(value: Mapping[str, Any]) -> dict[str, Any]:
             "outcome.outcome must be one of "
             f"{list(TERMINAL_LEARNING_EVALUATION_OUTCOMES)}"
         )
-    target_refs = value.get("target_refs")
+    raw_target_refs = value.get("target_refs")
     try:
-        validate_source_refs(target_refs, "outcome.target_refs")
+        validate_source_refs(raw_target_refs, "outcome.target_refs")
     except BuilderOpsValidationError as exc:
         raise RetrospectiveClosureError(str(exc)) from exc
-    target_refs = list(target_refs)
+    if not isinstance(raw_target_refs, list):  # validate_source_refs guards this.
+        raise RetrospectiveClosureError("outcome.target_refs must be a non-empty list")
+    target_refs = list(raw_target_refs)
     _validate_target_ref_types(outcome, target_refs)
     return {
         "signal_id": signal_id,
