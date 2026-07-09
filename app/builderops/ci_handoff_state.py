@@ -97,7 +97,8 @@ def plan_ci_handoff_resume(
     normalized_handoff = normalize_ci_handoff(handoff)
     live_head = _extract_pr_head_sha(live_pr)
     normalized_checks = [_normalize_check(item) for item in checks]
-    verdict = _checks_verdict(normalized_checks)
+    latest_checks = _latest_checks_by_name(normalized_checks)
+    verdict = _checks_verdict(latest_checks)
     blocked_reasons: list[str] = []
 
     if live_head != normalized_handoff["head_sha"]:
@@ -115,7 +116,7 @@ def plan_ci_handoff_resume(
             "next_closure_action": normalized_handoff["next_closure_action"],
             "review_state": normalized_handoff["review_state"],
             "local_validation": normalized_handoff["local_validation"],
-            "checks": normalized_checks,
+            "checks": latest_checks,
             "proposed_commands": [],
             "note": "CI is terminal green; caller must still perform explicit closure workflow.",
         }
@@ -155,9 +156,27 @@ def find_ci_handoff(
 
 def pending_check_summary(checks: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return [
-        item for item in (_normalize_check(check) for check in checks)
+        item for item in _latest_checks_by_name(
+            [_normalize_check(check) for check in checks]
+        )
         if item["status"] != "completed"
     ]
+
+
+def _latest_checks_by_name(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for check in checks:
+        existing = latest.get(check["name"])
+        if existing is None or _check_rank(check) >= _check_rank(existing):
+            latest[check["name"]] = check
+    return list(latest.values())
+
+
+def _check_rank(check: Mapping[str, Any]) -> tuple[str, str]:
+    return (
+        str(check.get("started_at") or ""),
+        str(check.get("id") or ""),
+    )
 
 
 def _checks_verdict(checks: list[dict[str, Any]]) -> str:
@@ -181,11 +200,18 @@ def _normalize_check(check: Mapping[str, Any]) -> dict[str, Any]:
         conclusion = None
     else:
         conclusion = _required_string(conclusion, "check.conclusion").lower()
-    return {
+    normalized = {
         "name": name,
         "status": status,
         "conclusion": conclusion,
     }
+    check_id = check.get("id")
+    if isinstance(check_id, (int, str)) and not isinstance(check_id, bool):
+        normalized["id"] = check_id
+    started_at = check.get("started_at", check.get("startedAt"))
+    if isinstance(started_at, str) and started_at.strip():
+        normalized["started_at"] = started_at.strip()
+    return normalized
 
 
 def _extract_pr_head_sha(live_pr: Mapping[str, Any]) -> str:

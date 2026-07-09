@@ -131,6 +131,51 @@ def test_resume_plans_closure_after_green_ci_without_merging() -> None:
     )
 
 
+def test_resume_deduplicates_stale_failed_rerun_checks() -> None:
+    handoff = build_ci_pending_handoff(
+        issue_number=3273,
+        pr_number=3286,
+        head_sha="abc123",
+        local_validation=["python3 scripts/docs_guard.py"],
+        review_state="review-comments-clear",
+        next_closure_action="read final PR state and perform explicit merge workflow",
+    )
+
+    plan = plan_ci_handoff_resume(
+        handoff=handoff,
+        live_pr={"number": 3286, "headRefOid": "abc123"},
+        checks=[
+            {
+                "id": 1,
+                "name": "pr-contract",
+                "status": "completed",
+                "conclusion": "failure",
+                "started_at": "2026-07-09T19:00:00Z",
+            },
+            {
+                "id": 2,
+                "name": "pr-contract",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-07-09T19:05:00Z",
+            },
+            {
+                "id": 3,
+                "name": "Unit tests (not pg)",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-07-09T19:03:00Z",
+            },
+        ],
+    )
+
+    assert plan["ok"] is True
+    assert plan["blocked_reasons"] == []
+    check_names = [item["name"] for item in plan["closure_plan_candidate"]["checks"]]
+    assert check_names == ["pr-contract", "Unit tests (not pg)"]
+    assert plan["closure_plan_candidate"]["checks"][0]["conclusion"] == "success"
+
+
 def test_ci_handoff_cli_record_and_resume_plan(tmp_path: Path) -> None:
     runner = CliRunner()
     pr_file = tmp_path / "pr.json"
