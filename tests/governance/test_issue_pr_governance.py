@@ -130,3 +130,11 @@ def test_issue_readiness_checker_is_governance_lane_allowed() -> None:
     assert '"scripts/validate_issue_readiness.py"' in text
     assert '"tests/scripts/test_validate_issue_readiness.py"' in text
     assert '"tests/fixtures/issue_readiness/"' in text
+
+
+def test_pr_body_generator_fixtures_are_governance_lane_allowed() -> None:
+    text = _read_workflow()
+
+    assert '"scripts/pr_body_generator.py"' in text
+    assert '"tests/scripts/test_pr_body_generator.py"' in text
+    assert '"tests/fixtures/pr_body_generator/"' in text

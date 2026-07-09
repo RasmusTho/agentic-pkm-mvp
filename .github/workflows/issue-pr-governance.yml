@@ -244,6 +244,7 @@ jobs:
               ".codex/skills/",
               ".codex/agents/",
               "tests/fixtures/issue_readiness/",
+              "tests/fixtures/pr_body_generator/",
             ];
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner: context.repo.owner,

@@ -18,7 +18,7 @@
     "sync_deployment_impact": "GitHub PR authoring only",
     "external_boundary_impact": "none unless helper output is used before PR creation",
     "new_or_changed_contract": "PR bodies can be generated from lane inputs",
-    "owner_doc_impact": "docs/development/PR_HOT_PATH.md updated",
+    "owner_doc_impact": "docs/development/PR_HOT_PATH.md and docs/STATUS.md updated",
     "transition_debt_impact": "reduces PR-contract churn",
     "fitness_rule_impact": "fixture tests for lane bodies",
     "boundary_risk": "low"
