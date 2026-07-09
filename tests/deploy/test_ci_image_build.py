@@ -26,7 +26,11 @@ def test_ci_builds_sha_tagged_image() -> None:
     assert "uses: docker/build-push-action@v6" in workflow
     assert "context: ." in workflow
     assert "file: Dockerfile" in workflow
+    assert "uses: docker/setup-qemu-action@v3" in workflow
+    assert "uses: docker/setup-buildx-action@v3" in workflow
     assert "tags: ${{ steps.build-identity.outputs.image }}" in workflow
+    assert "platforms: linux/amd64" in workflow
+    assert "platforms: linux/amd64,linux/arm64" in workflow
     assert "push: false" in workflow
 
 
@@ -53,11 +57,14 @@ def test_built_image_version_reports_build_sha(monkeypatch) -> None:
     }
 
 
-def test_single_image_artifact_per_commit() -> None:
+def test_single_sha_tagged_multi_arch_artifact_per_commit() -> None:
     workflow = _workflow_text()
 
     assert "strategy:" not in workflow
-    assert workflow.count("uses: docker/build-push-action@") == 1
+    assert workflow.count("uses: docker/build-push-action@") == 3
     assert "matrix:" not in workflow
     assert "CHANNEL" not in workflow
     assert "ENVIRONMENT" not in workflow
+    assert "Push multi-platform app image to GHCR" in workflow
+    assert "push: true" in workflow
+    assert "outputs: type=cacheonly" in workflow
