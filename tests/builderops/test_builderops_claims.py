@@ -56,3 +56,43 @@ def test_stale_advisory_claim_is_reported_without_exclusive_takeover(tmp_path: P
     assert claimed.exit_code == 0
     assert json.loads(claimed.output)["claim"]["agent"] == "claude"
     assert any(item["stale"] for item in json.loads(validated.output)["advisory_claims"]["claims"])
+
+
+def test_claim_rejects_ready_yaml_outside_ready_folder(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    vault = Path(env["BUILDEROPS_VAULT_ROOT"])
+    path = vault / "agent-delivery" / "Backlog" / "BMI-01.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        '---\nid: "BMI-01"\nstatus: "Ready"\n---\n\n# BMI-01\n',
+        encoding="utf-8",
+    )
+
+    result = _run(
+        ["vault", "claim", str(vault), "BMI-01", "--agent", "codex", "--json"],
+        env,
+    )
+
+    assert result.exit_code != 0
+    assert "is not Ready" in result.output
+    assert not list((vault / ".builderops" / "claims").glob("*.json"))
+
+
+def test_claim_rejects_unsafe_ticket_id_without_writing_outside_claims(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    vault = Path(env["BUILDEROPS_VAULT_ROOT"])
+    path = vault / "agent-delivery" / "Ready" / "unsafe.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        '---\nid: "../escape"\nstatus: "Ready"\n---\n\n# unsafe\n',
+        encoding="utf-8",
+    )
+
+    result = _run(
+        ["vault", "claim", str(vault), "unsafe", "--agent", "codex", "--json"],
+        env,
+    )
+
+    assert result.exit_code != 0
+    assert "unsafe ticket id" in result.output
+    assert not (vault / ".builderops" / "escape").exists()

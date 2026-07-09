@@ -15,9 +15,10 @@ until the result is executable work.
 
 The shared artifact vault is configured per machine through `BUILDEROPS_VAULT_ROOT`. The current
 deployment uses a dedicated iCloud Obsidian vault owned by Yggdrasil, separate from all human
-knowledge vaults. It holds Markdown artifacts. SQLite state, temporary provider credentials, and
-live leases stay local to the machine that runs the worker. iCloud is not a lock service and must
-not host the SQLite database or cross-device claims.
+knowledge vaults. It holds Markdown artifacts, queue files, receipts, transient worker state, and
+TTL-based advisory claim signals. SQLite state, authoritative dispatcher leases, and temporary
+provider credentials stay local to the machine that runs the worker. iCloud is not a lock service;
+its advisory claim files never guarantee exclusive ownership.
 
 ## Scope
 
@@ -32,7 +33,7 @@ not host the SQLite database or cross-device claims.
 
 | Task | ID | Deliverable |
 | --- | --- | --- |
-| [External BuilderOps Vault Configuration](EXTERNAL_BUILDEROPS_VAULT_CONFIGURATION.md) | BMI-01 | Explicit shared artifact-root configuration with local-only SQLite and claims roots. |
+| [External BuilderOps Vault Configuration](EXTERNAL_BUILDEROPS_VAULT_CONFIGURATION.md) | BMI-01 | Explicit shared artifact-root configuration with local SQLite and shared advisory claims. |
 | [Pre-Ticket Inquiry Records](PRE_TICKET_INQUIRY_RECORDS.md) | BMI-02 | Durable inquiry/run/turn records, CLI/API entrypoint, and trace query. |
 | [Model Turn Adapters](MODEL_TURN_ADAPTERS.md) | BMI-03 | Structured command/API adapter contract, retries, and bounded adversarial loop. |
 | [Desktop Skill Launchers](DESKTOP_SKILL_LAUNCHERS.md) | BMI-04 | Codex and Claude Desktop skill packages that invoke the shared inquiry command. |
@@ -48,7 +49,8 @@ is delivered. No task is ready to make a Product/Runtime write.
 ## Cross-Task Invariants / Interaction Safety
 
 1. **Vault separation.** Shared iCloud files are Builder System artifacts, never a Mimer human vault
-   or Product/Runtime source of truth. SQLite and lease files are local-only.
+   or Product/Runtime source of truth. SQLite, provider credentials, and authoritative dispatcher
+   leases are local-only; vault claim files are shared TTL advisory signals only.
 2. **Artifact-first turns.** A model receives immutable input artifact IDs and content hashes; it
    never relies on a chat transcript as sole state.
 3. **No silent promotion.** An inquiry may produce a synthesis but cannot create an Issue, PR, or
@@ -75,8 +77,9 @@ Partial failure examples:
   copying model output between tools. Verify: `tests/builderops/test_model_inquiry_cli.py::test_start_and_resume_inquiry`.
 - [ ] Each turn, synthesis, and readiness result can be traced to the source question and its input
   artifacts. Verify: `tests/builderops/test_model_inquiry_trace.py::test_trace_links_question_turns_and_synthesis`.
-- [ ] Shared iCloud artifacts never place SQLite databases or live claim files in the synchronized
-  vault. Verify: `tests/builderops/test_builderops_paths.py::test_shared_vault_keeps_sqlite_and_claims_local`.
+- [ ] Shared iCloud artifacts never place SQLite databases or provider credentials in the
+  synchronized vault, and claim files remain explicitly advisory. Verify:
+  `tests/builderops/test_builderops_paths.py::test_shared_vault_bootstrap_creates_advisory_claims_but_never_sqlite`.
 - [ ] A GitHub Issue is created only after readiness and promotion evidence are recorded. Verify:
   `tests/builderops/test_model_inquiry_promotion.py::test_issue_promotion_requires_ready_receipt`.
 - [ ] Desktop launcher instructions invoke the common BuilderOps command rather than a desktop-app

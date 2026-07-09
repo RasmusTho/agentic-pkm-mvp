@@ -250,7 +250,7 @@ def builderops(ctx: click.Context, db_path: Path | None) -> None:
 
 @builderops.group("vault", help="Operate the file-first Builder Ops Vault queue.")
 def vault() -> None:
-    """Shared Markdown vault helpers; mutable claims remain machine-local."""
+    """Shared Markdown queue and advisory TTL-claim helpers."""
 
 
 @vault.command("paths", help="Show shared vault and local operational paths.")
@@ -276,29 +276,28 @@ def vault_validate(root: Path, as_json: bool) -> None:
         raise click.ClickException("Builder Ops Vault validation failed")
 
 
-@vault.command("claim", help="Atomically claim a Ready ticket in machine-local state.")
+@vault.command("claim", help="Write a shared advisory TTL claim for a Ready ticket.")
 @click.argument("root", type=click.Path(file_okay=False, path_type=Path))
 @click.argument("ticket_ref")
 @click.option("--agent", required=True)
 @click.option("--ttl-minutes", default=120, show_default=True, type=int)
-@click.option("--takeover-stale", is_flag=True)
 @click.option("--json", "as_json", is_flag=True)
-def vault_claim(root: Path, ticket_ref: str, agent: str, ttl_minutes: int, takeover_stale: bool, as_json: bool) -> None:
+def vault_claim(root: Path, ticket_ref: str, agent: str, ttl_minutes: int, as_json: bool) -> None:
     try:
-        payload = claim_ticket(root, ticket_ref, agent=agent, paths=load_paths(), ttl_minutes=ttl_minutes, takeover_stale=takeover_stale)
+        payload = claim_ticket(root, ticket_ref, agent=agent, ttl_minutes=ttl_minutes)
     except VaultQueueError as exc:
         raise click.ClickException(str(exc)) from exc
     _emit(payload, as_json)
 
 
-@vault.command("release", help="Release this agent's machine-local ticket claim.")
+@vault.command("release", help="Release this agent's shared advisory ticket claims.")
 @click.argument("root", type=click.Path(file_okay=False, path_type=Path))
 @click.argument("ticket_ref")
 @click.option("--agent", required=True)
 @click.option("--json", "as_json", is_flag=True)
 def vault_release(root: Path, ticket_ref: str, agent: str, as_json: bool) -> None:
     try:
-        payload = release_ticket(root, ticket_ref, agent=agent, paths=load_paths())
+        payload = release_ticket(root, ticket_ref, agent=agent)
     except VaultQueueError as exc:
         raise click.ClickException(str(exc)) from exc
     _emit(payload, as_json)

@@ -88,12 +88,12 @@ Override mechanisms:
 The default path is repo-local runtime state and is ignored by Git via `runtime/builderops/`. It is
 not `$CODEX_HOME`, not local hidden memory, not repo authority, and not a reviewed docs surface.
 
-### Shared artifact vault and local claim state
+### Shared artifact vault and advisory claim signals
 
 `BUILDEROPS_VAULT_ROOT` may point to the dedicated Yggdrasil BuilderOps vault. It is a shared
-Markdown artifact root, not a database or lock service. `builderops vault init` creates only
-`agent-delivery/<status>/` directories in that vault; it never creates SQLite files, provider
-credentials, `.builderops/claims`, or any other live operational state there.
+Markdown artifact root, not a database or lock service. `builderops vault init` creates
+`agent-delivery/<status>/` directories plus `.builderops/claims/` for TTL-based advisory signals.
+It never creates SQLite files or provider credentials there.
 
 `builderops vault init` creates `.builderops/claims/` in the shared vault for TTL-based advisory
 claim signals. Multiple agents may write claims for the same ticket. These files improve queue
@@ -111,7 +111,7 @@ scripts/builderops_cli.sh builderops vault validate "$BUILDEROPS_VAULT_ROOT" --j
 ```
 
 Signboard may render the resulting `agent-delivery/` Markdown tree for a human. It is a projection
-only and is never an automation API or a source of live claim state.
+only and is never an automation API or a source of authoritative lease state.
 
 Projection regeneration reads from the selected store path using the same mechanisms. Automation
 worktrees that regenerate checked-in projection views should set the intended store explicitly with

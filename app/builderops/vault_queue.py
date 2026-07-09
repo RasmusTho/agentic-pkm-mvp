@@ -64,12 +64,18 @@ def vault_paths(paths: BuilderOpsPaths) -> dict[str, Any]:
 
 
 def validate_vault(root: Path, paths: BuilderOpsPaths) -> dict[str, Any]:
-    root = root.expanduser()
+    root = root.expanduser().resolve(strict=False)
     errors: list[str] = []
-    forbidden = [root / "builderops.sqlite3"]
-    for path in forbidden:
-        if path.exists():
-            errors.append(f"forbidden local operational state in shared vault: {path}")
+    configured_root = paths.vault_root.resolve(strict=False) if paths.vault_root else None
+    if configured_root is not None and configured_root != root:
+        errors.append(
+            f"validated root {root} does not match BUILDEROPS_VAULT_ROOT {configured_root}"
+        )
+    configured_db = paths.db_path.resolve(strict=False)
+    if configured_db == root or root in configured_db.parents:
+        errors.append(f"configured SQLite path is inside shared vault: {configured_db}")
+    for path in _sqlite_candidates(root):
+        errors.append(f"forbidden SQLite state in shared vault: {path}")
     tickets: list[Ticket] = []
     for status in STATUSES:
         for path in sorted((root / "agent-delivery" / status).glob("*.md")):
@@ -84,9 +90,15 @@ def validate_vault(root: Path, paths: BuilderOpsPaths) -> dict[str, Any]:
     return {"ok": not errors, "ticket_count": len(tickets), "errors": errors, "advisory_claims": claims, "claims_advisory": True}
 
 
-def claim_ticket(root: Path, ticket_ref: str, *, agent: str, paths: BuilderOpsPaths, ttl_minutes: int, takeover_stale: bool = False) -> dict[str, Any]:
+def claim_ticket(
+    root: Path,
+    ticket_ref: str,
+    *,
+    agent: str,
+    ttl_minutes: int,
+) -> dict[str, Any]:
     ticket = resolve_ticket(root, ticket_ref)
-    if ticket.meta.get("status") != "Ready":
+    if ticket.path.parent.name != "Ready" or ticket.meta.get("status") != "Ready":
         raise VaultQueueError(f"ticket {ticket.ticket_id} is not Ready")
     if ttl_minutes <= 0:
         raise VaultQueueError("ttl-minutes must be positive")
@@ -99,7 +111,7 @@ def claim_ticket(root: Path, ticket_ref: str, *, agent: str, paths: BuilderOpsPa
     return {"ticket": {"id": ticket.ticket_id, "path": str(ticket.path)}, "claim": claim, "claim_path": str(claim_path), "claim_scope": "shared-advisory"}
 
 
-def release_ticket(root: Path, ticket_ref: str, *, agent: str, paths: BuilderOpsPaths) -> dict[str, Any]:
+def release_ticket(root: Path, ticket_ref: str, *, agent: str) -> dict[str, Any]:
     ticket = resolve_ticket(root, ticket_ref)
     claims_root = root.expanduser() / ".builderops" / "claims"
     own_claims = [path for path in claims_root.glob(f"{ticket.ticket_id}-{_safe_agent(agent)}-*.json") if _read_claim(path).get("agent") == agent]
@@ -134,6 +146,9 @@ def read_ticket(path: Path) -> Ticket:
         if line.strip() and ":" in line:
             key, value = line.split(":", 1)
             meta[key.strip()] = value.strip().strip('"')
+    ticket_id = meta.get("id", path.stem)
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", ticket_id):
+        raise VaultQueueError(f"{path}: unsafe ticket id {ticket_id!r}")
     return Ticket(path=path, meta=meta, body=parts[2])
 
 
@@ -141,9 +156,9 @@ def _read_claim(path: Path) -> dict[str, str]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise VaultQueueError(f"invalid local claim state: {path}") from exc
+        raise VaultQueueError(f"invalid advisory claim state: {path}") from exc
     if not isinstance(data, dict) or not isinstance(data.get("expires_at"), str):
-        raise VaultQueueError(f"invalid local claim state: {path}")
+        raise VaultQueueError(f"invalid advisory claim state: {path}")
     return data
 
 
@@ -158,3 +173,23 @@ def _claim_summary(root: Path) -> dict[str, Any]:
 
 def _safe_agent(agent: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", agent).strip("-") or "agent"
+
+
+def _sqlite_candidates(root: Path) -> list[Path]:
+    if not root.exists():
+        return []
+    candidates: list[Path] = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() in {".db", ".db3", ".sqlite", ".sqlite3"}:
+            candidates.append(path)
+            continue
+        try:
+            with path.open("rb") as handle:
+                header = handle.read(16)
+            if header == b"SQLite format 3\x00":
+                candidates.append(path)
+        except OSError as exc:
+            raise VaultQueueError(f"unable to inspect vault file: {path}") from exc
+    return candidates
