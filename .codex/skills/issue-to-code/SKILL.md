@@ -138,16 +138,41 @@ When you start active work on an Issue:
 
 #### Dispatcher Integration
 
-The dispatcher is an optional but preferred coordination layer for multi-agent issue pickup. Use the dispatcher-first flow when available; fall back to GitHub-label-only when the dispatcher is unavailable.
+The dispatcher is the preferred coordination layer, but availability is not claim evidence. Use one
+pickup wrapper for both dispatcher-backed and degraded label-only pickup:
 
-**Dispatcher availability check:**
 ```bash
-python -m app.dispatcher status --json
-# => {"ok": true, "db_exists": true, "coordination_mode": "dispatcher-backed"} → proceed with dispatcher
-# => {"ok": true, "db_exists": false, "coordination_mode": "github-label-only-fallback", "fallback_reason": "dispatcher_db_missing"} → prepare dispatcher or fall back to step 2
+scripts/issue_pickup_claim.sh --issue <N> --agent <agent_id> --session <session_id>
 ```
 
-**Optional dispatcher preparation:**
+The wrapper runs workspace preflight and `dispatcher status`, derives the exact task id
+`github-issue-<N>`, and does not substitute a candidate returned by `dispatcher next`. When the
+dispatcher is available, it executes `dispatcher claim` for that exact task and verifies the returned
+task id, issue number, status, owner, lease id, lease resource, holder, expiry, and unreleased state
+before removing `agent:ready`. Database or singleton existence alone never produces a
+dispatcher-backed pickup receipt.
+
+If dispatcher claim verification fails, the wrapper exits without changing the Issue label. If the
+lease was verified but label removal fails, it releases the lease before failing. The success receipt
+contains `task_id`, `lease_id`, `holder`, and `evidence=verified-dispatcher-lease`.
+
+When dispatcher status selects degraded mode, the same wrapper posts a durable claimant-intent
+comment containing agent, session, branch, worktree, `coordination_mode`, and `fallback_reason`
+before removing `agent:ready`. Explicit fallback can be selected with:
+
+```bash
+scripts/issue_pickup_claim.sh \
+  --issue <N> \
+  --agent <agent_id> \
+  --session <session_id> \
+  --coordination-mode github-label-only-fallback \
+  --fallback-reason <reason>
+```
+
+Preserve the wrapper's receipt in the PR body. Do not reconstruct a dispatcher-backed receipt from
+`status --json`, database existence, or a separate label command.
+
+**Optional dispatcher preparation before pickup:**
 
 When the task explicitly authorizes dispatcher-backed coordination and local dispatcher state is
 missing, an agent may prepare the local dispatcher state root with:
@@ -161,46 +186,11 @@ no-op/status receipt; stale singleton metadata can be recovered; a competing sta
 error. This command only prepares local dispatcher coordination state. It does not claim issues, move
 labels, mutate Project status, start sub-agents, or replace GitHub/PR lifecycle truth.
 
-The status payload is the claim receipt source for local coordination mode. Copy
-`coordination_mode` and `fallback_reason` into the PR body or claim receipt so reviewers can see
-whether pickup used dispatcher-backed coordination or GitHub-label-only fallback.
-
-**If dispatcher is available (db_exists: true):**
-
-1. **Get next task:** `python -m app.dispatcher next --json --agent <agent_id>` — returns a candidate task.
-2. **Run pickup preflight before lease acquisition:** `scripts/issue_pickup_claim.sh --issue <ISSUE_NUMBER> --preflight-only`
-3. **Claim with dispatcher:** `python -m app.dispatcher claim <task_id> --agent <agent_id> --ttl-minutes 90 --json` — acquire 90-minute lease.
-4. **Confirm in GitHub (label mutation after successful preflight):** `scripts/issue_pickup_claim.sh --issue <ISSUE_NUMBER> --skip-preflight`
-5. **If step 4 fails, immediately release lease:** `python -m app.dispatcher release <task_id> --agent <agent_id> --json`
-6. **Mid-work heartbeat** (~every 30 min of active execution): `python -m app.dispatcher heartbeat <task_id> --agent <agent_id> --json` — renew lease before 90-min expiry.
-7. **On closure:** `python -m app.dispatcher complete <task_id> --agent <agent_id> --json` (successful) or `python -m app.dispatcher release <task_id> --agent <agent_id> --json` (abandoned).
-8. **Fallback on dispatcher failure:** If any dispatcher command fails (non-zero exit) during work, log the failure and continue with local work (do not retry dispatcher commands in a loop). At closure, attempt `dispatcher complete`; if it fails, continue with PR closure via GitHub.
-
-**If dispatcher is unavailable (db_exists: false or dispatcher status fails):**
-
-- Skip dispatcher entirely and use GitHub-label-only claim (step 2 below, unchanged current behaviour).
-- **Log the fallback reason in the PR body** (e.g., `coordination_mode=github-label-only-fallback fallback_reason=dispatcher_db_missing`).
-
-#### GitHub-Based Claim (Fallback or Non-Dispatcher Flow)
-
-1. **Fast-claim the Issue via mandatory preflight wrapper:**
-   ```bash
-   scripts/issue_pickup_claim.sh --issue <N>
-   ```
-   The wrapper prints `coordination_mode=<dispatcher-backed|github-label-only-fallback>` and
-   `fallback_reason=<reason|none>` in its pickup receipt. Preserve that receipt in the PR body or
-   claim comment when the issue uses dispatcher coordination or fallback.
-
-2. **For label-only fallback, post the durable claimant receipt immediately:**
-   ```bash
-   gh issue comment <N> --body "Claim receipt: agent=<agent-id> session=<session-id> branch=<branch> worktree=<worktree> coordination_mode=github-label-only-fallback fallback_reason=<reason>"
-   ```
-
-3. **Verify the authoritative claim signal and claimant receipt:**
-   ```bash
-   gh issue view #<N> --json labels,state
-   gh api repos/:owner/:repo/issues/<N>/comments --jq '.[-1].body'
-   ```
+Preparing the database does not sync or claim the expected task. If the wrapper reports a missing
+task, sync the dispatcher queue through its existing operator path, then rerun the complete wrapper;
+never remove the label separately. After successful dispatcher-backed pickup, run
+`dispatcher heartbeat` about every 30 minutes and use `dispatcher complete`, `block`, or `release`
+at the normal lifecycle boundary.
 
 Project reconciliation, when desired, is a separate cold-path projection repair. Do not query or mutate ProjectV2 in this claim path.
 
@@ -316,7 +306,7 @@ When continuing through anchor drift:
 
 1. Select the Issue according to priority and readiness rules.
 2. Run mandatory pickup claim wrapper before any lifecycle mutation:
-   - `scripts/issue_pickup_claim.sh --issue <N>`
+   - `scripts/issue_pickup_claim.sh --issue <N> --agent <agent_id> --session <session_id>`
    - This wrapper enforces workspace isolation preflight before removing `agent:ready`.
    - If preflight fails, stop and resolve branch/worktree collisions before claiming.
 3. Run delivered-state preflight before claim when target implementation paths are explicit:
