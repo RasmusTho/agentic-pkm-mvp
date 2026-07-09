@@ -28,6 +28,10 @@ from app.builderops.evidence_bridge import (
     build_evidence_bridge_report,
 )
 from app.builderops.epic_dispatch import EpicDispatchError, build_dispatch_plan
+from app.builderops.epic_delivery_ledger import (
+    EpicDeliveryLedgerError,
+    build_parent_epic_delivery_ledger,
+)
 from app.builderops.epic_lifecycle_plan import (
     EpicLifecyclePlanError,
     build_lifecycle_transition_plan,
@@ -1058,6 +1062,62 @@ def lifecycle_plan(
     except EpicLifecyclePlanError as exc:
         raise click.ClickException(str(exc)) from exc
     _emit(plan, as_json)
+
+
+@epic_run_state.group(
+    "ledger",
+    help="Render parent epic delivery ledger coordination evidence.",
+)
+def epic_delivery_ledger() -> None:
+    """Parent epic ledger coordination evidence."""
+
+
+@epic_delivery_ledger.command(
+    "render",
+    help="Render a parent epic delivery ledger without GitHub writes.",
+)
+@click.option("--epic-issue-number", required=True, type=int)
+@click.option(
+    "--children-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="JSON list of child entries, or an object with children.",
+)
+@click.option(
+    "--live-truth-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Optional read-only live truth snapshot keyed by issue number.",
+)
+@click.option("--json", "as_json", is_flag=True)
+def render_epic_delivery_ledger(
+    epic_issue_number: int,
+    children_file: Path,
+    live_truth_file: Path | None,
+    as_json: bool,
+) -> None:
+    children_payload = _load_json_value_file(children_file, field="children-file")
+    live_truth_payload = _load_json_value_file(live_truth_file, field="live-truth-file")
+    children = (
+        children_payload.get("children", children_payload)
+        if isinstance(children_payload, dict)
+        else children_payload
+    )
+    if not isinstance(children, list):
+        raise click.BadParameter("children-file must contain a list or object with children")
+    live_truth = live_truth_payload if isinstance(live_truth_payload, dict) else None
+    try:
+        ledger = build_parent_epic_delivery_ledger(
+            epic_issue_number=epic_issue_number,
+            children=children,
+            live_truth=live_truth,
+        )
+    except EpicDeliveryLedgerError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if as_json:
+        _emit(ledger, True)
+    else:
+        click.echo(ledger["markdown"], nl=False)
 
 
 @epic_run_state.group(

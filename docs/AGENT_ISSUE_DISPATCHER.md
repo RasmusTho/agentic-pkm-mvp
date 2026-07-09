@@ -429,6 +429,23 @@ after terminal green CI. It performs no merge, Project write, issue closure, dis
 GitHub check mutation; closure still belongs to the explicit verification workflow after re-reading
 live PR head/check/review truth.
 
+Parent epic issues may also carry a compact delivery ledger rendered from verified child receipts,
+local run-state projections, or read-only GitHub snapshots:
+
+```bash
+python3 -m app.builderops builderops epic-run-state ledger render \
+  --epic-issue-number <epic> \
+  --children-file <children.json> \
+  --live-truth-file <optional-live-truth.json> --json
+```
+
+The ledger is coordination evidence for startup legibility only. It records child issue, PR,
+head/merge SHA, CI state, blocker, and next action in a compact parent-safe block. When optional
+live-truth input disagrees with a ledger entry, the helper emits `live_truth_conflict` warnings
+instead of overwriting silently. Agents must resolve those warnings by re-reading live GitHub
+Issues/PRs/CI; the ledger must never auto-close children, mark CI acceptable, or outrank receipt
+comments and live GitHub state.
+
 Before starting an epic delivery batch, coordinators may run the child readiness repair batch helper
 against an explicit issue-state fixture:
 
