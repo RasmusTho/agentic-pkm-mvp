@@ -74,6 +74,11 @@ def move_task(
         raise ValueError(f"Task {task_id} not found")
 
     next_status = canonical_status(status)
+    if next_status == "completed" and task.lease_id is not None:
+        raise ValueError(
+            f"Cannot move task {task_id} to completed while lease {task.lease_id} is active; "
+            "use complete instead"
+        )
     previous_status = task.status
     task.status = next_status
     if next_status != "blocked":
@@ -125,4 +130,3 @@ def link_pr(
     ))
 
     return task
-

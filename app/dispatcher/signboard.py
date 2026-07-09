@@ -25,11 +25,16 @@ STATUS_COLUMNS: dict[str, str] = {
     "done": "Done",
 }
 
+VALID_STATUSES = frozenset(STATUS_COLUMNS.keys()) - {"done"}
+
 
 def canonical_status(status: str) -> str:
     normalized = status.strip().lower().replace(" ", "_").replace("-", "_")
     if normalized == "done":
         return "completed"
+    if normalized not in VALID_STATUSES:
+        allowed = ", ".join(sorted(VALID_STATUSES | {"done"}))
+        raise ValueError(f"Unknown dispatcher status {status!r}; expected one of: {allowed}")
     return normalized
 
 
@@ -54,12 +59,20 @@ def export_signboard(store: SqliteStore, board_root: Path) -> dict[str, Any]:
     written: list[str] = []
     for task in tasks:
         filename = _task_filename(task)
+        target_column = column_for_status(task.status)
+        target = root / target_column / filename
+        for column in sorted(set(STATUS_COLUMNS.values())):
+            for candidate in (root / column).glob(f"{task.task_id}--*.md"):
+                if candidate == target:
+                    continue
+                if _is_generated_card(candidate):
+                    candidate.unlink()
+
         for column in sorted(set(STATUS_COLUMNS.values())):
             candidate = root / column / filename
-            if candidate.exists() and column != column_for_status(task.status):
+            if candidate.exists() and column != target_column:
                 candidate.unlink()
 
-        target = root / column_for_status(task.status) / filename
         target.write_text(_render_task(task), encoding="utf-8")
         written.append(str(target))
 
@@ -75,6 +88,16 @@ def _task_filename(task: TaskRecord) -> str:
     title = re.sub(r"[^A-Za-z0-9._-]+", "-", task.title.strip()).strip("-")
     title = title[:72].strip("-") or "task"
     return f"{task.task_id}--{title}.md"
+
+
+def _is_generated_card(path: Path) -> bool:
+    try:
+        return "generated_by: dispatcher.signboard" in path.read_text(
+            encoding="utf-8",
+            errors="ignore",
+        )
+    except OSError:
+        return False
 
 
 def _yaml_scalar(value: Any) -> str:

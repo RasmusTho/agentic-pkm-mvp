@@ -341,6 +341,39 @@ def test_move_done_normalizes_to_completed(tmp_env, store):
     assert data["task"]["status"] == "completed"
 
 
+def test_move_rejects_unknown_status(tmp_env, store):
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
+    ready = next(t for t in tasks if t.status == "ready")
+
+    code, data = _run(
+        ["move", ready.task_id, "--status", "revieew", "--agent", "codex", "--json"],
+    )
+    assert code == 1
+    assert data["ok"] is False
+    assert "Unknown dispatcher status" in data["error"]
+
+
+def test_move_completed_rejects_active_lease(tmp_env, store):
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
+    ready = next(t for t in tasks if t.status == "ready")
+    _run(["claim", ready.task_id, "--agent", "codex", "--json"])
+
+    code, data = _run(
+        ["move", ready.task_id, "--status", "completed", "--agent", "codex", "--json"],
+    )
+    assert code == 1
+    assert data["ok"] is False
+    assert "use complete instead" in data["error"]
+
+    stored = store.get_task(ready.task_id)
+    assert stored is not None
+    assert stored.status == "claimed"
+    assert stored.lease_id is not None
+    assert stored.claimed_by == "codex"
+
+
 def test_export_signboard_writes_markdown_columns(tmp_env, store, tmp_path: Path):
     from tests.dispatcher.helpers import seed_tasks
     tasks = seed_tasks(store)
@@ -361,6 +394,31 @@ def test_export_signboard_writes_markdown_columns(tmp_env, store, tmp_path: Path
     assert "generated_by: dispatcher.signboard" in content
     assert 'status: "review"' in content
     assert f"issue_number: {ready.issue_number}" in content
+
+
+def test_export_signboard_removes_stale_generated_card_after_title_change(
+    tmp_env,
+    store,
+    tmp_path: Path,
+):
+    from tests.dispatcher.helpers import seed_tasks
+    tasks = seed_tasks(store)
+    ready = next(t for t in tasks if t.status == "ready")
+    board = tmp_path / "BuilderOpsVault" / "agent-delivery"
+
+    code, data = _run(["export-signboard", str(board), "--json"])
+    assert code == 0
+    first_cards = list(board.glob(f"**/{ready.task_id}--*.md"))
+    assert len(first_cards) == 1
+
+    ready.title = "Test: renamed feature A"
+    store.upsert_task(ready)
+    code, data = _run(["export-signboard", str(board), "--json"])
+    assert code == 0
+
+    cards = list(board.glob(f"**/{ready.task_id}--*.md"))
+    assert len(cards) == 1
+    assert "renamed-feature-A" in cards[0].name
 
 
 def test_status_command(tmp_env):
