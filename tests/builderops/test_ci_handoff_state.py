@@ -15,6 +15,7 @@ from app.builderops.epic_run_state import (
     create_epic_run_state,
     load_epic_run_state,
     new_epic_run_state,
+    update_epic_run_state,
 )
 
 
@@ -174,6 +175,38 @@ def test_resume_deduplicates_stale_failed_rerun_checks() -> None:
     check_names = [item["name"] for item in plan["closure_plan_candidate"]["checks"]]
     assert check_names == ["pr-contract", "Unit tests (not pg)"]
     assert plan["closure_plan_candidate"]["checks"][0]["conclusion"] == "success"
+
+
+def test_record_update_replaces_prior_pr_handoff_summary(tmp_path: Path) -> None:
+    first = build_ci_pending_handoff(
+        issue_number=3273,
+        pr_number=3286,
+        head_sha="oldsha",
+        local_validation=["pytest -q old"],
+        review_state="review-pending",
+        pending_checks=[{"name": "Unit tests (not pg)", "status": "queued"}],
+        next_closure_action="wait",
+        recorded_at="2026-07-09T19:00:00Z",
+    )
+    second = build_ci_pending_handoff(
+        issue_number=3273,
+        pr_number=3286,
+        head_sha="newsha",
+        local_validation=["pytest -q new"],
+        review_state="review-clear",
+        pending_checks=[],
+        next_closure_action="close",
+        recorded_at="2026-07-09T20:00:00Z",
+    )
+    create_epic_run_state(3279, "run-replace-handoff", root=tmp_path, ci_handoffs=[first])
+
+    updated = update_epic_run_state(
+        "run-replace-handoff",
+        root=tmp_path,
+        ci_handoffs=[second],
+    )
+
+    assert updated["ci_handoffs"] == [second]
 
 
 def test_ci_handoff_cli_record_and_resume_plan(tmp_path: Path) -> None:

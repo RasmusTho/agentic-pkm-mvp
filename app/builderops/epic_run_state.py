@@ -217,6 +217,11 @@ def apply_epic_run_update(state: Mapping[str, Any], **updates: Any) -> dict[str,
                     normalized[field],
                     incoming,
                 )
+            elif field == "ci_handoffs":
+                normalized[field] = _replace_matching_json_list_records(
+                    normalized[field],
+                    incoming,
+                )
             else:
                 normalized[field] = _merge_json_list(
                     normalized[field],
@@ -446,6 +451,24 @@ def _merge_json_list(existing: list[Any], incoming: list[Any]) -> list[Any]:
         key = _record_key(item_copy)
         if key in index:
             merged[index[key]] = _merge_json_value(merged[index[key]], item_copy)
+        else:
+            index[key] = len(merged)
+            merged.append(item_copy)
+    return merged
+
+
+def _replace_matching_json_list_records(
+    existing: list[Any],
+    incoming: list[Any],
+) -> list[Any]:
+    merged = _json_clone(existing)
+    index = {_record_key(item): pos for pos, item in enumerate(merged)}
+
+    for item in incoming:
+        item_copy = _json_clone(item)
+        key = _record_key(item_copy)
+        if key in index:
+            merged[index[key]] = item_copy
         else:
             index[key] = len(merged)
             merged.append(item_copy)
