@@ -7,6 +7,15 @@ from typing import Any, Mapping
 from app.builderops.epic_run_state import TERMINAL_LEARNING_EVALUATION_OUTCOMES
 from app.builderops.models import BuilderOpsValidationError, validate_source_refs
 
+OUTCOME_TARGET_REF_TYPES = {
+    "applied": frozenset({"pull_request", "repo_doc", "builderops_object"}),
+    "already_satisfied": frozenset({"repo_doc", "pull_request", "github_issue"}),
+    "issue_created": frozenset({"github_issue"}),
+    "promotion_pending": frozenset({"builderops_object"}),
+    "debt_or_fitness_recorded": frozenset({"repo_doc", "github_issue"}),
+    "discarded_or_superseded": frozenset({"builderops_object"}),
+}
+
 
 class RetrospectiveClosureError(BuilderOpsValidationError):
     """Raised when retrospective closure input is malformed."""
@@ -91,11 +100,30 @@ def _normalize_outcome(value: Mapping[str, Any]) -> dict[str, Any]:
         validate_source_refs(target_refs, "outcome.target_refs")
     except BuilderOpsValidationError as exc:
         raise RetrospectiveClosureError(str(exc)) from exc
+    target_refs = list(target_refs)
+    _validate_target_ref_types(outcome, target_refs)
     return {
         "signal_id": signal_id,
         "outcome": outcome,
-        "target_refs": list(target_refs),
+        "target_refs": target_refs,
     }
+
+
+def _validate_target_ref_types(
+    outcome: str,
+    target_refs: list[dict[str, Any]],
+) -> None:
+    allowed = OUTCOME_TARGET_REF_TYPES[outcome]
+    invalid = [
+        str(ref.get("ref_type"))
+        for ref in target_refs
+        if ref.get("ref_type") not in allowed
+    ]
+    if invalid:
+        raise RetrospectiveClosureError(
+            f"outcome {outcome!r} target_refs must use ref_type "
+            f"{sorted(allowed)}; got {invalid}"
+        )
 
 
 def _required_string(value: Any, field: str) -> str:
@@ -137,6 +165,7 @@ def _receipt_body(
 
 
 __all__ = [
+    "OUTCOME_TARGET_REF_TYPES",
     "RetrospectiveClosureError",
     "build_retrospective_closure_ledger",
 ]

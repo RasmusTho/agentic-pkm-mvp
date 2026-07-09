@@ -9,6 +9,7 @@ from click.testing import CliRunner
 from app.builderops.__main__ import _root as builderops_standalone_root
 from app.builderops.epic_run_state import TERMINAL_LEARNING_EVALUATION_OUTCOMES
 from app.builderops.retrospective_closure import (
+    OUTCOME_TARGET_REF_TYPES,
     RetrospectiveClosureError,
     build_retrospective_closure_ledger,
 )
@@ -108,6 +109,38 @@ def test_retrospective_closure_rejects_invalid_outcome_and_missing_target_refs()
                 }
             ],
         )
+
+
+@pytest.mark.parametrize(
+    ("outcome", "bad_ref"),
+    [
+        ("issue_created", {"ref_type": "pull_request", "ref": "#3280"}),
+        ("promotion_pending", {"ref_type": "github_issue", "ref": "#3262"}),
+        ("discarded_or_superseded", {"ref_type": "repo_doc", "ref": "docs/foo.md"}),
+    ],
+)
+def test_retrospective_closure_rejects_outcome_specific_bad_target_ref_types(
+    outcome: str,
+    bad_ref: dict[str, str],
+) -> None:
+    with pytest.raises(RetrospectiveClosureError, match="target_refs must use ref_type"):
+        build_retrospective_closure_ledger(
+            signals=[{"id": "lrn-1"}],
+            outcomes=[
+                {
+                    "signal_id": "lrn-1",
+                    "outcome": outcome,
+                    "target_refs": [bad_ref],
+                }
+            ],
+        )
+
+
+def test_outcome_target_ref_type_contract_covers_all_terminal_outcomes() -> None:
+    assert set(OUTCOME_TARGET_REF_TYPES) == set(TERMINAL_LEARNING_EVALUATION_OUTCOMES)
+    assert OUTCOME_TARGET_REF_TYPES["issue_created"] == frozenset({"github_issue"})
+    assert OUTCOME_TARGET_REF_TYPES["promotion_pending"] == frozenset({"builderops_object"})
+    assert OUTCOME_TARGET_REF_TYPES["discarded_or_superseded"] == frozenset({"builderops_object"})
 
 
 def test_retrospective_closure_cli_outputs_signal_ids_and_outcomes(tmp_path: Path) -> None:
