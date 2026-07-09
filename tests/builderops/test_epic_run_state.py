@@ -240,6 +240,41 @@ def test_learning_evaluation_candidates_update_and_terminal_outcomes(
     assert_learning_evaluation_candidates_terminal(resolved)
 
 
+def test_learning_evaluation_candidates_merge_by_candidate_id(tmp_path: Path) -> None:
+    run_id = "run-learning-candidate-id"
+    create_epic_run_state(3229, run_id, root=tmp_path)
+
+    update_epic_run_state(
+        run_id,
+        root=tmp_path,
+        learning_evaluation_candidates=[
+            {
+                "candidate_id": "learn-candidate-id",
+                "source_refs": [{"ref_type": "github_issue", "ref": "#3261"}],
+                "upstream_artifact_hint": "docs/development/DELIVERY_FEEDBACK_LOOP.md",
+                "evidence_kind": "reevaluation_candidate",
+            }
+        ],
+    )
+    resolved = update_epic_run_state(
+        run_id,
+        root=tmp_path,
+        learning_evaluation_candidates=[
+            {
+                "candidate_id": "learn-candidate-id",
+                "source_refs": [{"ref_type": "github_issue", "ref": "#3261"}],
+                "upstream_artifact_hint": "docs/development/DELIVERY_FEEDBACK_LOOP.md",
+                "evidence_kind": "reevaluation_candidate",
+                "outcome": "applied",
+            }
+        ],
+    )
+
+    assert len(resolved["learning_evaluation_candidates"]) == 1
+    assert resolved["learning_evaluation_candidates"][0]["outcome"] == "applied"
+    assert unresolved_learning_evaluation_candidates(resolved) == []
+
+
 def test_learning_evaluation_candidate_validation_rejects_missing_refs_and_bad_outcome() -> None:
     state = new_epic_run_state(3229, "run-learning-invalid")
 
