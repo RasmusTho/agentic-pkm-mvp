@@ -170,6 +170,14 @@ actionable item through the same governed destinations as learning: issue, PR, f
 row, `PromotionIntent`, or receipt. CKM output remains projection-only and never becomes product or
 runtime truth by itself.
 
+The observe-only BuilderOps helper `python -m app.builderops builderops evidence-bridge classify`
+bridges PR evidence packs, CI failure context, review findings, missing evidence, and Human
+Exception causes into reevaluation candidates. Its report keeps `observed`, `unknown`, and
+`candidate` fields separate; candidates require `source_refs` plus a named upstream artifact, unless
+they are explicitly held in an `unknown_for_retro` bucket. First rollout is artifact/comment-only:
+the helper does not push, merge, label, update Project state, write Product docs, or change
+Product/Runtime behavior.
+
 ### 4b. Retrospective closure rule
 
 A retrospective or reevaluation pass is not complete until every in-scope signal has one of these

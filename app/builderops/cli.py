@@ -7,6 +7,10 @@ from typing import Any, Callable
 import click
 
 from app.builderops.config import load_paths
+from app.builderops.evidence_bridge import (
+    EvidenceBridgeError,
+    build_evidence_bridge_report,
+)
 from app.builderops.epic_dispatch import EpicDispatchError, build_dispatch_plan
 from app.builderops.epic_lifecycle_plan import (
     EpicLifecyclePlanError,
@@ -543,6 +547,39 @@ def retrospective_closure_check(
             outcomes=outcomes,
         )
     except RetrospectiveClosureError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@builderops.group(
+    "evidence-bridge",
+    help="Classify PR/CI/review evidence into observe-only reevaluation candidates.",
+)
+def evidence_bridge() -> None:
+    """Evidence bridge helpers for continuous reevaluation."""
+
+
+@evidence_bridge.command(
+    "classify",
+    help="Classify delivery evidence without mutating GitHub, Product, or runtime state.",
+)
+@click.option(
+    "--evidence-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="JSON object with observed, unknown, and candidate evidence fields.",
+)
+@click.option("--json", "as_json", is_flag=True)
+def evidence_bridge_classify(
+    evidence_file: Path,
+    as_json: bool,
+) -> None:
+    evidence = _load_json_value_file(evidence_file, field="evidence-file")
+    if not isinstance(evidence, dict):
+        raise click.BadParameter("evidence-file must contain a JSON object")
+    try:
+        payload = build_evidence_bridge_report(evidence)
+    except EvidenceBridgeError as exc:
         raise click.ClickException(str(exc)) from exc
     _emit(payload, as_json)
 
