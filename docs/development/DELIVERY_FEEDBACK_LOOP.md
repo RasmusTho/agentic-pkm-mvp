@@ -178,6 +178,13 @@ they are explicitly held in an `unknown_for_retro` bucket. First rollout is arti
 the helper does not push, merge, label, update Project state, write Product docs, or change
 Product/Runtime behavior.
 
+The observe-only BuilderOps helper `python3 -m app.builderops builderops ckm-reevaluation classify`
+accepts CKM/Kvasir projection findings only as projection evidence. It preserves the projection
+watermark and source projection ref on every candidate action, supports issue, debt/fitness,
+promotion, and discard/supersession classifications, and never writes GitHub state, owner docs,
+runtime memory, Product/Runtime code, or Product/Runtime truth by default. Actions from CKM output
+must still pass through normal issue, PR, `PromotionIntent`, debt/fitness, or receipt gates.
+
 ### 4b. Retrospective closure rule
 
 A retrospective or reevaluation pass is not complete until every in-scope signal has one of these

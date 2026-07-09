@@ -18,6 +18,10 @@ from app.builderops.ci_handoff_state import (
     plan_ci_handoff_resume,
     record_ci_pending_handoff,
 )
+from app.builderops.ckm_reevaluation import (
+    CkmReevaluationError,
+    build_ckm_reevaluation_report,
+)
 from app.builderops.config import load_paths
 from app.builderops.evidence_bridge import (
     EvidenceBridgeError,
@@ -694,6 +698,39 @@ def _completeness_report_candidates(payload: Mapping[str, Any]) -> list[Mapping[
             raise click.BadParameter(f"{key} must be a list")
         candidates.extend(raw_candidates)
     return candidates
+
+
+@builderops.group(
+    "ckm-reevaluation",
+    help="Classify CKM/Kvasir projections as non-authoritative reevaluation input.",
+)
+def ckm_reevaluation() -> None:
+    """Observe-only CKM reevaluation helpers."""
+
+
+@ckm_reevaluation.command(
+    "classify",
+    help="Classify CKM projection findings without mutating Product, Runtime, or GitHub state.",
+)
+@click.option(
+    "--projection-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="JSON object with projections and actions/candidate fields.",
+)
+@click.option("--json", "as_json", is_flag=True)
+def ckm_reevaluation_classify(
+    projection_file: Path,
+    as_json: bool,
+) -> None:
+    payload = _load_json_value_file(projection_file, field="projection-file")
+    if not isinstance(payload, dict):
+        raise click.BadParameter("projection-file must contain a JSON object")
+    try:
+        report = build_ckm_reevaluation_report(payload)
+    except CkmReevaluationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(report, as_json)
 
 
 @builderops.group(
