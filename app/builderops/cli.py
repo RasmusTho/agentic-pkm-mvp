@@ -8,6 +8,10 @@ import click
 
 from app.builderops.config import load_paths
 from app.builderops.epic_dispatch import EpicDispatchError, build_dispatch_plan
+from app.builderops.epic_lifecycle_plan import (
+    EpicLifecyclePlanError,
+    build_lifecycle_transition_plan,
+)
 from app.builderops.epic_run_state import (
     EpicRunStateError,
     apply_epic_run_update,
@@ -48,6 +52,15 @@ def _load_json_object_file(path: Path | None, *, field: str) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise click.BadParameter(f"{field} must contain a JSON object")
     return parsed
+
+
+def _load_json_value_file(path: Path | None, *, field: str) -> Any:
+    if path is None:
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise click.BadParameter(f"{field} must contain valid JSON") from exc
 
 
 def _merge_json_objects(*objects: dict[str, Any]) -> dict[str, Any]:
@@ -624,6 +637,84 @@ def dispatch_plan(
             run_state=state,
         )
     except (EpicDispatchError, EpicRunStateError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(plan, as_json)
+
+
+@epic_run_state.command(
+    "lifecycle-plan",
+    help="Dry-run claim/review/done lifecycle transition plan for an issue or PR.",
+)
+@click.option(
+    "--transition",
+    required=True,
+    type=click.Choice(["claim", "review", "review-handoff", "done", "terminal"]),
+)
+@click.option(
+    "--issue-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="JSON issue object, or an object with an issue field.",
+)
+@click.option(
+    "--pr-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Optional JSON PR object, or an object with a pull_request/pr field.",
+)
+@click.option(
+    "--checks-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Optional JSON list of checks, or an object with a checks field.",
+)
+@click.option("--actor", default=None, help="Optional GitHub login for claim assignment planning.")
+@click.option(
+    "--repo",
+    default="OWNER/REPO",
+    show_default=True,
+    help="owner/repo for command text.",
+)
+@click.option("--json", "as_json", is_flag=True)
+def lifecycle_plan(
+    transition: str,
+    issue_file: Path,
+    pr_file: Path | None,
+    checks_file: Path | None,
+    actor: str | None,
+    repo: str,
+    as_json: bool,
+) -> None:
+    issue_payload = _load_json_value_file(issue_file, field="issue-file")
+    pr_payload = _load_json_value_file(pr_file, field="pr-file")
+    checks_payload = _load_json_value_file(checks_file, field="checks-file")
+
+    issue = (
+        issue_payload.get("issue", issue_payload)
+        if isinstance(issue_payload, dict)
+        else issue_payload
+    )
+    if isinstance(pr_payload, dict):
+        pull_request = pr_payload.get("pull_request", pr_payload.get("pr", pr_payload))
+    else:
+        pull_request = pr_payload
+    if isinstance(checks_payload, dict):
+        checks = checks_payload.get("checks", [])
+    elif checks_payload is None:
+        checks = []
+    else:
+        checks = checks_payload
+
+    try:
+        plan = build_lifecycle_transition_plan(
+            transition=transition,
+            issue=issue,
+            pull_request=pull_request,
+            checks=checks,
+            actor=actor,
+            repo=repo,
+        )
+    except EpicLifecyclePlanError as exc:
         raise click.ClickException(str(exc)) from exc
     _emit(plan, as_json)
 

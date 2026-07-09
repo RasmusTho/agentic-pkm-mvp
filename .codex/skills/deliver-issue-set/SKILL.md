@@ -98,6 +98,13 @@ Delivery rules:
   Project, PR, branch/worktree, dispatcher lease, or agent-spawn mutation. Persist its
   `dispatch_decisions` only through the existing `epic-run-state record` path when the coordinator
   needs local coordination evidence.
+- When coordinating claim, review-handoff, or terminal projection decisions, use the dry-run
+  lifecycle planner before issuing live mutations:
+  `python3 -m app.builderops builderops epic-run-state lifecycle-plan --transition <claim|review|done> --issue-file <file> [--pr-file <file>] --json`.
+  The planner separates required reads, proposed label/Project/PR writes, and verification reads. It
+  performs no GitHub, Project, dispatcher, run-state, or agent-spawn mutation; execute any proposed
+  lifecycle command only through the owning skill (`issue-to-code` for claim, `verification-and-closure`
+  for terminal closure, or issue maintenance for drift repair).
 - Default to delivering one issue at a time.
 - You may claim multiple issues only when you are immediately assigning them to active sub-agents with isolated worktrees and the parallelization is rational from both token-budget and quality perspectives.
 - Before selecting or dispatching work, classify each candidate as Product/Runtime System,

@@ -67,6 +67,12 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
   represented by a BuilderOps record, a bounded GitHub Issue, or an explicit `none` reason
 - Verify project lifecycle state still makes sense
 - Verify closed terminal PR cards do not remain blank in the Project
+- For terminal projection planning, a caller may generate the local dry-run plan
+  `python3 -m app.builderops builderops epic-run-state lifecycle-plan --transition done --issue-file <file> --pr-file <file> --json`.
+  The plan is advisory data only: it names required reads, proposed label/Project/PR writes, and
+  verification reads, while performing no GitHub, Project, dispatcher, run-state, or agent-spawn
+  mutation. Live merge, issue closure, label removal, and Project `Done` correction remain owned by
+  this skill's explicit commands and verification steps.
 - Verify review-feedback repairs are present on the target base branch before treating them as closed; a side branch or intermediate PR is not enough unless the fixing commit is reachable from the final merge target. [base-branch-truth]
 - Run GitHub GraphQL `reviewThreads` closure checks only when a review-thread closure trigger is present: a review-fix or direct-repair PR, a PR body or source anchor that names prior review feedback, a terminal issue/PR closure audit, or known unresolved review feedback. Preserve the lightweight hot path for ordinary PRs with no trigger. [review-thread-closure]
 - When a review-thread closure trigger applies and the work addresses earlier review feedback, reply to and resolve the original review thread with the fixing PR or merge commit before final closure. [review-thread-closure]
