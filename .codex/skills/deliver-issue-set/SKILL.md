@@ -44,7 +44,7 @@ Allowed:
 - classify issue readiness
 - repair issue contracts when the owner docs make the intended contract unambiguous
 - create bounded issues through `docs-to-issue` or `feature-breakdown` when source docs already support the work
-- correct labels and Project Status for readiness truth
+- correct authoritative labels for readiness truth; Project repair is optional cold-path projection maintenance
 - produce implementation order, parallelization plan, and verification ledger
 
 Forbidden in planning / readiness mode:
@@ -58,7 +58,7 @@ Forbidden in planning / readiness mode:
 - merge PRs
 - close delivered issues except as an explicit maintenance correction after following `issue-maintenance-change-control`
 
-All GitHub label, Issue body, Project Status, and issue-creation mutations must be executed with explicit `gh` or GraphQL commands, verified, and reported with receipts.
+All GitHub label, Issue body, and issue-creation mutations must be executed with explicit `gh` commands, verified, and reported with receipts. Optional Project projection repair stays outside the pickup/dispatch hot path.
 
 ### Delivery Mode
 
@@ -124,7 +124,7 @@ Delivery rules:
 - Do not claim more issues than there are ready sub-agent execution slots.
 - Never make speculative claims. Every claimed issue must have an owner agent, worktree/branch plan, validation plan, and expected return receipt.
 - Before dispatching any issue or batch, reconcile the candidate set against current `origin/main` and live GitHub state. Re-read the issue body/state, linked PRs, and existing claim receipts on the current branch tip so already-delivered, superseded, closed, merged, or otherwise stale work is dropped before a slice is assigned. A dispatch plan built from stale local context or pre-merge assumptions is non-authoritative; if `origin/main`, the issue, or a linked PR disagrees with the earlier plan, current repo/GitHub truth wins and the coordinator must recompute the pickup target before dispatch.
-- Confirm each selected issue is claimable before dispatching: `Status=Ready`, labeled `agent:ready`, and carrying no conflicting prior claim. Do not pre-transition status or remove `agent:ready` from the coordinator before dispatch — `issue-to-code` selects only `Ready` + `agent:ready` issues, so pre-claiming would force a compliant sub-agent to reject the assignment. If the dispatcher is unavailable, use GitHub-label-only claim fallback and coordinate from the live issue/project state; there is no dispatcher lease to reconcile. The fast-claim handshake (`Ready -> In Progress` + remove `agent:ready` via `scripts/issue_pickup_claim.sh`) is performed by the sub-agent as the first step of its own `issue-to-code` pickup. An issue counts as dispatched only once that pickup has acquired the lease and recorded a claim receipt comment naming the coordinator session, assignee/sub-agent, worktree/branch plan, and expected return receipt.
+- Confirm each selected issue is claimable before dispatching: labeled `agent:ready` after strict contract validation and carrying no conflicting prior claim. Project Status is not a dispatch precondition. Do not remove `agent:ready` from the coordinator before dispatch; the sub-agent performs the fast claim through `scripts/issue_pickup_claim.sh`. If the dispatcher is unavailable, use GitHub-label-only fallback and coordinate from live Issue/PR state. An issue counts as dispatched only once pickup has acquired the available claim signal and recorded a claim receipt naming the coordinator session, assignee/sub-agent, worktree/branch plan, and expected return receipt.
 - For each issue, follow `issue-to-code` from claim through implementation and local validation.
 - Use `publish-pr` for branch, commit, push, and PR creation/update.
 - Use `pr-integration` only when the PR needs readiness or repair before verification.
@@ -136,7 +136,7 @@ Delivery rules:
 
 Parallel claim is allowed only when all are true:
 
-- each issue is independently `Status=Ready` and labeled `agent:ready`
+- each issue is independently contract-valid and labeled `agent:ready`
 - each issue has concrete `Verify:` targets and source authority
 - dependency order allows parallel work
 - likely touched files, migrations, schemas, release channels, and owner-doc writebacks do not create uncontrolled conflicts
@@ -154,7 +154,7 @@ issue state, linked PR state, and claim/release/superseded receipts. A non-match
 real collision only when it is the latest live lease and has not been released or superseded — i.e.
 the Issue is currently `In Progress` / not `agent:ready`, and no later release/superseded receipt or
 re-Ready transition has reclaimed it. Stale receipts from a prior, already-released or superseded lease
-on a re-Readied Issue (the Issue is back to `Ready` + `agent:ready` with no live foreign lease) do not
+on a re-opened pickup (the Issue is labeled `agent:ready` again with no live foreign lease) do not
 block valid pickup; treat them as historical and proceed. When the latest lease is a genuine foreign
 claim, stop and report the collision instead of implementing. If the dispatcher is unavailable, resolve
 collision checks against the live issue/project state and explicit lease signal; when live evidence
@@ -186,7 +186,7 @@ For a Kanban / Project request:
 
 - Resolve the Project, view, lane, or status filter before execution.
 - If the user says "all issues on Kanban" without a narrower lane, inspect the shared Project state and define the in-scope set explicitly before mutating anything.
-- Treat `Ready` plus `agent:ready` issues as executable pickup candidates.
+- Treat strictly validated `agent:ready` issues as executable pickup candidates; Project Status may be inspected as a projection but does not gate pickup.
 - Treat `Backlog`, `agent:blocked`, and `agent:needs-human` as non-active until readiness repair proves otherwise.
 - Do not mark blocked or unclear items as delivered just to clear the board.
 

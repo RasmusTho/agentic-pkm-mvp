@@ -2,9 +2,11 @@ State: Shared skill contract. Canonical lifecycle truth matrix for Issues and PR
 
 # Lifecycle Truth Matrix
 
-Single source for the required Project Status of every Issue and PR content state. Every other
-cell is drift and must be corrected. Skills reference this file instead of carrying their own
-copies; `issue-maintenance-change-control` owns the reconciliation procedure that applies it.
+Single source for the optional legacy Project projection of Issue and PR content state. Project
+presence or Status never gates issue readiness, pickup, or claim. Review, merge, closure, and
+optional projection-repair behavior remain owned by their downstream skills. Skills reference this
+file instead of carrying their own copies; `issue-maintenance-change-control` owns optional
+reconciliation.
 
 ## Allowed Project statuses
 
@@ -12,7 +14,7 @@ copies; `issue-maintenance-change-control` owns the reconciliation procedure tha
 
 ## Matrix
 
-| Content | Content state | Required Project Status |
+| Content | Content state | Projected Status |
 |---------|---------------|-------------------------|
 | Issue | CLOSED | `Done` |
 | Issue | OPEN + `agent:ready` | `Ready` |
@@ -34,7 +36,7 @@ PR card in `Review` as drift.
 
 ## Binding rules
 
-- `agent:ready ↔ Status=Ready` is a post-condition, not just a declarative rule: an open
-  `agent:ready` Issue in any other status means the queue is lying about what is pickable.
+- `agent:ready` is the pickup qualifier after strict validation. `Status=Ready` is its preferred
+  legacy board projection, not a precondition or collision guard.
 - GitHub Issue state, agent labels, linked PR state, and merge/delivery reality outrank Project
   state when they disagree; correct the projection to match the harder truth.

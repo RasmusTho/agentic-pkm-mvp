@@ -19,8 +19,8 @@ The Builder System has these layers:
 
 1. Intent layer: human intent enters through docs, issues, tasks, explicit decisions, and strategic constraints. Observed authority: `PROJECT_KERNEL`, charter, docs, and GitHub issue contracts route intent; `AGENTS.md` names the owner as the authority for irreversible and strategic calls [AGENTS.md:161-169], [docs/DOCS_INDEX.md:48-90].
 2. Docs-as-code/spec authority layer: docs are primary Builder System authority, not background. `docs/DOCS_INDEX.md` is the stable role/routing map and says to read Core SoT docs before references, and plans/historical docs as context only [docs/DOCS_INDEX.md:1-17].
-3. Contract layer: GitHub issues, PR templates, shared skill contracts, labels, Project states, `Verify:` markers, and SBS impact blocks define executable work [`.codex/skills/_shared/ISSUE_CONTRACT.md`:12-72], [`.github/ISSUE_TEMPLATE/task.yml`:73-109].
-4. Dispatch/routing layer: dispatcher queue/leases, labels, Project status, skill routing, model/reasoning policy, and worktree isolation select work and prevent collisions [docs/AGENT_ISSUE_DISPATCHER.md:132-180], [AGENTS.md:171-182].
+3. Contract layer: GitHub issues, PR templates, shared skill contracts, labels, `Verify:` markers, and SBS impact blocks define executable work [`.codex/skills/_shared/ISSUE_CONTRACT.md`:12-72], [`.github/ISSUE_TEMPLATE/task.yml`:73-109].
+4. Dispatch/routing layer: dispatcher queue/leases, labels, skill routing, model/reasoning policy, and worktree isolation select work and prevent collisions; Project status is projection evidence only [docs/AGENT_ISSUE_DISPATCHER.md:132-180], [AGENTS.md:171-182].
 5. Execution layer: skills, agents, scripts, local worktrees, implementation PRs, and publication boundaries perform work [`.codex/skills/README.md`:144-164], [`.codex/skills/publish-pr/SKILL.md`:53-159].
 6. Verification/evidence layer: local validation, CI, REST-only check waiting, local review gate, delivery receipts, Project reconciliation, and owner-doc receipts prove work [`.codex/skills/verification-and-closure/SKILL.md`:46-77], [`.codex/skills/_shared/CI_WAIT_CONTRACT.md`:22-82].
 7. Closure/spec-feedback layer: merge, issue closure, dispatcher completion, parent validation receipts, post-merge owner-doc decisions, and roadmap/spec state updates close work truthfully [`.codex/skills/verification-and-closure/SKILL.md`:194-208], [docs/development/PARENT_ISSUE_CLOSURE.md:13-49].
@@ -68,7 +68,7 @@ Read-only GitHub evidence used:
 | issue contract | implemented | `.codex/skills/_shared/ISSUE_CONTRACT.md`, `.github/ISSUE_TEMPLATE/task.yml` | Executable backlog shape | Source docs | Issue body with `Verify:` markers | Issue creation/edit | [`.codex/skills/_shared/ISSUE_CONTRACT.md`:12-72], [`.github/ISSUE_TEMPLATE/task.yml`:73-109] |
 | issue template | implemented | `.github/ISSUE_TEMPLATE/task.yml` | Form enforcement for task contracts | Human/agent issue creation | Structured issue fields | GitHub issue form | [`.github/ISSUE_TEMPLATE/task.yml`:1-141] |
 | issue readiness validator | partially_implemented | `issue-pr-governance.yml`, `validate_source_anchors.py`, skills | Enforce sections and source anchors for ready/blocked issues | Issue body/labels | Failed checks or valid issue | GitHub Action read/write labels only for cleanup | [`.github/workflows/issue-pr-governance.yml`:40-78] |
-| issue queue | partially_implemented | GitHub labels/Project, dispatcher SQLite | Expose ready work | `agent:ready`, Status=Ready, dispatcher pull | Queue entries | GitHub labels/Project; dispatcher store | [`.github/github-governance.yml`:28-31], [docs/AGENT_ISSUE_DISPATCHER.md:132-180] |
+| issue queue | partially_implemented | GitHub labels, dispatcher SQLite | Expose ready work | strictly validated `agent:ready`, dispatcher pull | Queue entries | GitHub labels; dispatcher store | [docs/AGENT_ISSUE_DISPATCHER.md:132-180] |
 | dispatcher | implemented | `app/dispatcher/**`, `docs/AGENT_ISSUE_DISPATCHER.md`, Makefile targets | Queue, claim, lease, heartbeat, completion | GitHub `agent:ready` issues | Local tasks/leases/events | Local dispatcher DB only | [docs/AGENT_ISSUE_DISPATCHER.md:21-36], [Makefile:356-361], [app/dispatcher/cli.py:31-32] |
 | model router | implicit | `AGENTS.md` TCD policy, `.codex/agents/*.toml` | Choose model/reasoning by risk | Task risk/TCD | Model/effort choice | Agent/session config | [AGENTS.md:112-157], [`.codex/agents/slice-implementer.toml`:1-20] |
 | skill router | partially_implemented | `AGENTS.md`, `.codex/skills/README.md` | Route work to workflow skill | Task class | Skill path | Agent behavior | [AGENTS.md:18-68], [`.codex/skills/README.md`:64-128] |
@@ -161,7 +161,7 @@ flowchart TD
 | feature breakdown | Capability too large | Agent | Owner/spec docs | feature-breakdown | feature-breakdown | gh/docs | Spec dir, parent/child issues | PR + GitHub | task specs with ACs | parent vs child | validation hub | blocked parent | target acceptance ambiguity | [`.codex/skills/feature-breakdown/SKILL.md`:25-47], [`.codex/skills/feature-breakdown/SKILL.md`:107-129] |
 | issue intake | Issue opened/edited/labeled | GitHub Action + agent | Issue body | issue template, governance | docs-to-issue/learning-to-issue | `issue-pr-governance.yml` | Checked issue | Issue labels/comments | section/source checks | label/status | maintenance | failed governance check | missing human input | [`.github/workflows/issue-pr-governance.yml`:3-78] |
 | issue validation | Before coding | Agent | Issue | `AGENT_OPERATING_PROTOCOL`, issue contract | issue-to-code | source-anchor validation | pass/block | labels/Project | all `Verify:` targets | source truth sufficient? | issue maintenance | `agent:blocked` or `needs-human` | authority unclear | [`.codex/skills/issue-to-code/SKILL.md`:19-72] |
-| readiness classification | Queue eligibility | Agent + GitHub state | labels/Project | label taxonomy, lifecycle matrix | issue-maintenance | Project ops | Ready/Backlog | labels/Project | `agent:ready` + Status=Ready | agent-ready? | drift repair | no pickup | named decision | [`.codex/skills/_shared/LABEL_TAXONOMY.md`:8-37], [`.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md`:13-40] |
+| readiness classification | Queue eligibility | Agent + GitHub state | labels | label taxonomy, issue contract | issue-maintenance | readiness validator | ready/non-active | labels | strictly valid `agent:ready` | agent-ready? | drift repair | no pickup | named decision | [`.codex/skills/_shared/LABEL_TAXONOMY.md`], [`.codex/skills/_shared/ISSUE_CONTRACT.md`] |
 | dispatcher / queue selection | Work pickup | Agent + dispatcher | Ready tasks | dispatcher contract | issue-to-code | `python -m app.dispatcher next/claim` | Lease/task | dispatcher DB + GitHub label | lease acquired | priority and fit | release/reclaim | fallback to GitHub-label-only | dispatcher unavailable plus unsafe fallback | [docs/AGENT_ISSUE_DISPATCHER.md:165-180] |
 | model routing | Before work | Agent | risk/TCD | `AGENTS.md` TCD | relevant skill | none | model/effort choice | session only | review outcome | under/over-model? | learning | escalate capability | >10 min human steering or repeated failures | [AGENTS.md:112-157] |
 | skill routing | Task start | Agent | task class | `AGENTS.md`, skills README | matching skill | none | loaded skill | none | skill instructions | narrowest skill | learning | wrong skill -> repair | unclear route | [AGENTS.md:18-68], [`.codex/skills/README.md`:64-128] |
@@ -190,15 +190,20 @@ flowchart TD
 
 Observed: the repo has an actual dispatcher implementation and a documented operational deployment. It is not merely a label convention. The dispatcher has SQLite task/lease/event storage, a CLI, GitHub pull-sync, queue/claim/heartbeat/complete commands, tests, and Makefile targets [docs/AGENT_ISSUE_DISPATCHER.md:21-36], [app/dispatcher/cli.py:31-32], [Makefile:356-361], [tests/dispatcher/test_agent_loop.py:1-30].
 
+Authority roles are intentionally split: GitHub Issues / PRs / CI are durable delivery truth;
+Dispatcher SQLite owns volatile queue, claim, lease, and heartbeat coordination; the external
+BuilderOps Vault owns durable BuilderOps Markdown artifacts but no SQLite or live claims; and
+GitHub Project plus Signboard remain rebuildable projection surfaces.
+
 Mechanism classification:
 
 | Mechanism | Classification | Current behavior | Evidence |
 | --- | --- | --- | --- |
-| how work becomes eligible | deterministic + agentic | Issue must be `agent:ready` and Status=Ready; issue must satisfy contract and `Verify:` targets | [`.codex/skills/issue-to-code/SKILL.md`:109-124], [docs/development/DEV_WORKFLOW.md:216-255] |
-| how work is queued | deterministic + partial | Dispatcher pull reads open `agent:ready` issues; GitHub Project Agent Queue also exists | [docs/AGENT_ISSUE_DISPATCHER.md:199-215], [`.github/github-governance.yml`:46-50] |
+| how work becomes eligible | deterministic + agentic | Issue must carry a strictly validated `agent:ready` label and satisfy its contract and `Verify:` targets; Project Status does not gate pickup | [`.codex/skills/issue-to-code/SKILL.md`], [docs/development/DEV_WORKFLOW.md] |
+| how work is queued | deterministic + partial | Dispatcher SQLite pulls open `agent:ready` issues and owns volatile queue/lease state; the external BuilderOps Vault stores durable artifacts | [docs/AGENT_ISSUE_DISPATCHER.md] |
 | how an agent selects an issue | agentic | Priority order plus engineering judgment; dispatcher `next` returns ready tasks but no full lane scheduler | [`.codex/skills/issue-to-code/SKILL.md`:109-124], [docs/AGENT_ISSUE_DISPATCHER.md:168-170] |
-| labels affect readiness | deterministic | `agent:ready` only with Status=Ready; `agent:blocked` and `needs-human` with Backlog | [`.codex/skills/_shared/LABEL_TAXONOMY.md`:8-37] |
-| Project status affects routing | deterministic + best-effort | Status=Ready qualifies pickup; Project is projection and may drift | [docs/development/GITHUB_GOVERNANCE_SETUP.md:52-87] |
+| labels affect readiness | deterministic | `agent:ready` is the external pickup qualifier after strict validation; `agent:blocked` and `needs-human` are non-active | [`.codex/skills/_shared/LABEL_TAXONOMY.md`] |
+| Project status affects routing | none | Project is an optional legacy projection and is not consulted by dispatcher sync or pickup | [docs/AGENT_ISSUE_DISPATCHER.md :: Source-of-Truth Boundaries] |
 | work is claimed | deterministic | Dispatcher lease then GitHub label removal; fallback GitHub-label-only | [`.codex/skills/issue-to-code/SKILL.md`:133-175] |
 | branch/worktree allocation | partially deterministic | Dedicated worktree required by policy; preflight detects shared root/drift; no central allocator | [AGENTS.md:171-182], [`.codex/skills/_shared/BRANCH_TRUTH_GATE.md`:9-77] |
 | model choice | agentic | TCD policy and adapter defaults; no deterministic router service | [AGENTS.md:112-157], [`.codex/agents/issue-set-coordinator.toml`:1-21] |
@@ -213,7 +218,7 @@ Mechanism classification:
 flowchart TD
   Issue["GitHub Issue"] --> Shape{"Contract + Verify valid?"}
   Shape -->|no| Repair["issue maintenance / docs repair"]
-  Shape -->|yes| Ready{"agent:ready + Status=Ready?"}
+  Shape -->|yes| Ready{"strictly valid agent:ready?"}
   Ready -->|no| Backlog["Backlog / blocked / needs-human"]
   Ready -->|yes| Pull["dispatcher pull"]
   Pull --> Queue["dispatcher ready queue"]
@@ -221,7 +226,7 @@ flowchart TD
   Next --> Preflight["workspace preflight"]
   Preflight -->|fail| Block["block/release"]
   Preflight -->|pass| Lease["claim lease TTL"]
-  Lease --> Label["remove agent:ready + Status In Progress"]
+  Lease --> Label["remove agent:ready"]
   Label --> Work["implementation"]
   Work --> Heartbeat["heartbeat while active"]
   Work --> PR["publish PR"]
@@ -242,7 +247,7 @@ stateDiagram-v2
   NeedsRepair --> IssueDrafted
   IssueDrafted --> NeedsHuman: authority/intent missing
   NeedsHuman --> IssueDrafted: decision supplied
-  IssueDrafted --> AgentReady: agent:ready + Status Ready
+  IssueDrafted --> AgentReady: strict validation + agent:ready
   AgentReady --> Claimed: dispatcher/GitHub claim
   Claimed --> InImplementation
   InImplementation --> PRPublished
@@ -358,7 +363,7 @@ stateDiagram-v2
 | Is source truth sufficient? | `DOCS_INDEX` + operating protocol | partial | yes | if unclear | source anchors/docs | proceed/repair | target-state treated as shipped | [docs/DOCS_INDEX.md:80-90], [docs/development/AGENT_OPERATING_PROTOCOL.md:73-83] |
 | Is this current-state or target-state? | doc role headers/index | partial | yes | if ambiguous | doc role | classification | false current claim | [docs/DOCS_INDEX.md:11-17], [docs/architecture/SBS_OPERATING_MODEL.md:28-34] |
 | Is an issue executable? | issue contract + `Verify:` | partial | yes | no | ACs/body | ready/repair | untestable AC | [`.codex/skills/_shared/ISSUE_CONTRACT.md`:53-72] |
-| Is issue agent-ready? | labels + Project status | yes | yes | no | labels/status | queue eligible | drift | [`.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md`:13-40] |
+| Is issue agent-ready? | strict issue validation + label | yes | yes | no | body/labels | queue eligible | malformed issue labeled ready | [`.codex/skills/_shared/ISSUE_CONTRACT.md`], [`.codex/skills/_shared/LABEL_TAXONOMY.md`] |
 | Product/Runtime, Builder, or boundary? | SBS classification | partial | yes | if unclear | touched surface | SBS impact | wrong authority | [docs/architecture/SBS_OPERATING_MODEL.md:95-118] |
 | Risk level? | TCD + PR hot path | partial | yes | no | lane/touched surface | low/normal/high | under-modeling | [AGENTS.md:142-157], [docs/development/PR_HOT_PATH.md:12-25] |
 | Docs-only/code/runtime/governance/release/Mimer/BuilderOps? | lane and skill routing | partial | yes | no | files/scope | lane | wrong lane | [docs/development/DEV_WORKFLOW.md:107-169], [`.codex/skills/README.md`:130-164] |
@@ -381,7 +386,7 @@ stateDiagram-v2
 flowchart TD
   MalformedIssue["Malformed issue"] --> Maintenance["issue-maintenance-change-control"]
   Maintenance --> RepairContract["repair sections / Verify / labels"]
-  RepairContract --> Ready["agent:ready + Status Ready"]
+  RepairContract --> Ready["strict validation + agent:ready"]
 ```
 
 Issue readiness repair loop: triggered by malformed issue, stale anchors, missing `Verify:`, or drift; actor is agent/maintenance skill; no max retry is defined; state is GitHub issue body/labels/Project; escalates to `agent:needs-human` when authority or input is missing [docs/development/AGENT_OPERATING_PROTOCOL.md:73-83], [`.codex/skills/README.md`:168-178].
@@ -658,7 +663,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-  ReadyIssue["agent:ready + Status Ready"] --> PullSync["dispatcher pull"]
+  ReadyIssue["strictly valid agent:ready"] --> PullSync["dispatcher pull"]
   PullSync --> Queue["ready queue"]
   Queue --> Next["next eligible"]
   Next --> Preflight["worktree preflight"]

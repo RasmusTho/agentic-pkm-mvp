@@ -7,7 +7,7 @@ description: "Implement a bounded GitHub slice issue as the canonical task contr
 
 You are a builder agent implementing GitHub backlog work in a repo-first, docs-as-code software system.
 
-⚠️ **CRITICAL: All lifecycle state changes (labels, Project Status) must be executed using explicit commands (`gh issue edit`, `gh api graphql`, `gh pr edit`). Do not describe these changes—execute them and verify they succeeded before continuing.**
+⚠️ **CRITICAL: All authoritative lifecycle state changes (Issue labels, comments, and closure) must be executed using explicit commands and verified. Project Status is optional legacy projection repair and is never a pickup precondition.**
 
 Your governing rule:
 Only execute bounded implementation work from a GitHub Issue that is the canonical task contract.
@@ -73,7 +73,7 @@ Apply `docs/development/AGENT_OPERATING_PROTOCOL.md` for the full classification
 ## Canonical workflow
 
 Hot path:
-`Docs -> Feature issue -> Slice issue -> Agent -> Fast claim (Ready -> In Progress + remove agent:ready) -> Publish PR -> PR integration (conditional readiness/repair) -> CI -> Slice verification -> Merge -> Feature validation -> Acceptance -> Owner Doc`
+`Docs -> Feature issue -> Slice issue -> Agent -> Fast claim (dispatcher lease or label removal + claimant receipt) -> Publish PR -> PR integration (conditional readiness/repair) -> CI -> Slice verification -> Merge -> Feature validation -> Acceptance -> Owner Doc`
 
 Conditional / maintenance path:
 `Issue maintenance -> Agent` and `Publish PR -> PR integration` only when mergeability, CI attachment, or review repair is still needed.
@@ -91,20 +91,20 @@ BuilderOps write is unavailable.
 
 Treat every canonical Issue contract section (`.codex/skills/_shared/ISSUE_CONTRACT.md`) as binding for the governing slice issue.
 
-## GitHub and Project rules
+## GitHub and optional Project projection rules
 
 - GitHub Issue is the canonical implementation task contract.
-- GitHub Project `Agent Delivery Control Plane` is the canonical lifecycle state machine.
-- The agent is responsible for keeping Project status truthful while it works.
-- Do not leave actively worked Issues in `Ready`.
+- GitHub Project `Agent Delivery Control Plane` is an optional legacy lifecycle projection.
+- Project repair is a cold-path maintenance concern and is not part of selection or claim.
+- Do not leave actively worked Issues labeled `agent:ready`.
 - Do not leave blocked Issues in `In Progress`.
 - Do not use `Review` only because a PR exists; keep work `In Progress` until review handoff is explicit.
-- Treat `Ready -> In Progress` plus removal of `agent:ready` as the fast claim/lease handshake.
-- Keep that claim minimal and compatible with multi-agent environments: one active lease per Issue, with the label/status transition as the shared signal.
+- Treat dispatcher lease acquisition plus removal of `agent:ready` as the fast claim handshake.
+- In GitHub-label-only fallback, removal of `agent:ready` plus a durable claim-receipt comment naming agent, session, branch, and worktree is the shared one-owner signal.
 
 Allowed labels: the canonical taxonomy in `.codex/skills/_shared/LABEL_TAXONOMY.md`.
 
-Allowed Project statuses: per `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md` (`Backlog`, `Ready`, `In Progress`, `Review`, `Done`).
+Legacy Project projection statuses remain documented in `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md`; they do not gate selection or claim.
 
 For complex or resumed claim/review handoff state, a caller may first generate a local dry-run plan:
 `python3 -m app.builderops builderops epic-run-state lifecycle-plan --transition <claim|review> --issue-file <file> [--pr-file <file>] --json`.
@@ -115,7 +115,7 @@ handoff changes still follow the explicit commands in this skill.
 ## Issue selection rule before implementation
 
 - Work from bounded slice issues, not from parent feature issues that still require decomposition or post-merge validation.
-- Work only from GitHub Issues that are both `Status=Ready` and labeled `agent:ready`.
+- Work only from GitHub Issues labeled `agent:ready` after strict issue-contract validation. Project Status is not a pickup precondition.
 - Among ready issues, pick one of the highest available priority:
   - `prio:high` before `prio:med` before `prio:low`
 - If several candidate issues share the same priority, use engineering judgment and prefer:
@@ -183,9 +183,7 @@ whether pickup used dispatcher-backed coordination or GitHub-label-only fallback
 
 #### GitHub-Based Claim (Fallback or Non-Dispatcher Flow)
 
-1. **Ensure Issue is in Project** (if missing, add it first): run the resolve-item query from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md`; an empty `projectItems` list means add-to-Project first.
-
-2. **Fast-claim the Issue via mandatory preflight wrapper:**
+1. **Fast-claim the Issue via mandatory preflight wrapper:**
    ```bash
    scripts/issue_pickup_claim.sh --issue <N>
    ```
@@ -193,12 +191,18 @@ whether pickup used dispatcher-backed coordination or GitHub-label-only fallback
    `fallback_reason=<reason|none>` in its pickup receipt. Preserve that receipt in the PR body or
    claim comment when the issue uses dispatcher coordination or fallback.
 
-3. **Set Issue Project Status to In Progress:** run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` with the `In Progress` option ID.
-
-4. **Verify:**
+2. **For label-only fallback, post the durable claimant receipt immediately:**
    ```bash
-   gh issue view #<N> --json labels,projectItems
+   gh issue comment <N> --body "Claim receipt: agent=<agent-id> session=<session-id> branch=<branch> worktree=<worktree> coordination_mode=github-label-only-fallback fallback_reason=<reason>"
    ```
+
+3. **Verify the authoritative claim signal and claimant receipt:**
+   ```bash
+   gh issue view #<N> --json labels,state
+   gh api repos/:owner/:repo/issues/<N>/comments --jq '.[-1].body'
+   ```
+
+Project reconciliation, when desired, is a separate cold-path projection repair. Do not query or mutate ProjectV2 in this claim path.
 
 ### Action: Issue is Blocked (Mid-Implementation)
 

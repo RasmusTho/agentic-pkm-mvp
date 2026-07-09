@@ -716,9 +716,11 @@ Development control model:
 
 - Docs define intent, contracts, and owner boundaries.
 - GitHub Issues are the canonical task contract for implementation work.
-- GitHub Project v2 is the delivery state machine.
-- Local Agent Issue Dispatcher is the active operational coordination primitive for claim ordering,
-  leases, heartbeats, and completion; GitHub Issue/PR truth still outranks dispatcher state.
+- GitHub Project v2 is an optional legacy projection, not a pickup gate.
+- Dispatcher SQLite is the active volatile coordination primitive for claim ordering, leases,
+  heartbeats, and completion; GitHub Issues / PRs / CI remain durable delivery truth.
+- The external BuilderOps Vault stores durable BuilderOps Markdown artifacts. It does not contain
+  dispatcher SQLite or active claims.
 - Coding agents are the execution layer that implement bounded Issues.
 - Pull requests are the implementation artifact.
 - CI/test workflows are the validation loop.
@@ -726,7 +728,7 @@ Development control model:
 
 Canonical delivery sequence:
 
-`Docs -> Issue -> Project -> Agent -> PR -> CI -> Feedback`
+`Docs -> Issue -> Dispatcher claim -> Agent -> PR -> CI -> Feedback`
 
 Required Issue contract:
 
@@ -748,7 +750,7 @@ Required label ontology:
 - priority: `prio:high`, `prio:med`, `prio:low`
 - agent qualifiers: `agent:ready`, `agent:blocked`, `agent:needs-human`
 
-Required Project state machine:
+Optional legacy Project projection states:
 
 - `Backlog -> Ready -> In Progress -> Review -> Done`
 
@@ -758,12 +760,12 @@ Optional Project field:
 
 Guardrails for builder agents:
 
-- Project `Status` is the primary lifecycle signal.
-- `agent:ready` qualifies an Issue for pickup only when `Status=Ready`.
+- A strictly validated `agent:ready` label is the external pickup qualifier.
+- Project Status is a rebuildable projection and does not gate pickup.
 - `In Progress` covers active implementation and open PR work before explicit review handoff.
 - `Review` begins only when review handoff is explicit, normally after review is requested.
 - Closed or delivered work must not retain `agent:*` labels.
-- Agents only pick Issues with `Status=Ready` and label `agent:ready`.
+- Agents only pick Issues with a strictly validated `agent:ready` label and no conflicting dispatcher claim.
 - Agents must stay within the linked Issue scope.
 - Agents must respect the linked Issue constraints.
 - Agents must satisfy the linked Issue acceptance criteria before claiming completion.

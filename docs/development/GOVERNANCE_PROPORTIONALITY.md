@@ -8,7 +8,7 @@ Temporal class: durable
 
 This repository is intentionally single-operator. Every gate, receipt, and report section is paid for twice: once by an agent burning context to produce it, once by one human reading it. The governing goal is cost-effectiveness — keep the safety properties (fail-closed promotion, truthful lifecycle state, delivery traceability) while cutting per-change overhead for low-risk work.
 
-Proportionality applies to *reporting and PR-body machinery*. It never applies to lifecycle truth: labels and Project Status must stay truthful at every tier — the board must never lie.
+Proportionality applies to *reporting and PR-body machinery*. It never applies to authoritative lifecycle truth: Issue labels, Issue/PR state, CI, and merge evidence must stay truthful at every tier. Project Status is optional projection repair.
 
 ## Risk tiers
 
@@ -23,7 +23,7 @@ Three tiers. When in doubt, classify up. A PR that mixes tiers takes the highest
 **Required machinery:**
 
 - lane classifier in the PR body (the checkbox above)
-- truthful lifecycle state (labels, Project Status) — mandatory at every tier
+- truthful authoritative lifecycle state (labels, Issue/PR state, CI) — mandatory at every tier
 - `## BuilderOps Routing` may be omitted entirely when nothing was routed: **absence means "none"**. A present-but-unfilled section (template placeholders) still fails CI — claiming the section means filling it.
 - output format: a short human summary (2–4 sentences) plus a receipt line; no multi-section report
 - validation: lightweight docs/governance checks appropriate to the touched surfaces; no full code/test smoke by default
@@ -48,7 +48,7 @@ Three tiers. When in doubt, classify up. A PR that mixes tiers takes the highest
 
 ## What proportionality never relaxes
 
-- Lifecycle truth: labels and Project Status stay accurate at every tier.
+- Lifecycle truth: labels and Issue/PR state stay accurate at every tier; Project projection repair is optional and cold-path.
 - The fail-closed release-channel promotion chain.
 - `Verify:` targets on issue-backed acceptance criteria.
 - Branch-truth gates at the publication boundary.

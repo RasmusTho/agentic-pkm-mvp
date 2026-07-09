@@ -90,11 +90,10 @@ For each drift case, recommend one concrete corrective action only:
 - Roadmap should remain forward-looking.
 - Status may note delivery, but lasting truth belongs in the owner doc.
 - GitHub remains the canonical backlog-state surface.
-- Treat Project `Status` as the primary lifecycle signal; run Project reads/mutations per
-  `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md`.
+- Treat Project `Status` as an optional legacy projection; run its reads/mutations only when the
+  audit explicitly includes Project repair.
 - Treat `agent:ready` and other agent-state labels per `.codex/skills/_shared/LABEL_TAXONOMY.md` as
-  the canonical label semantics; `agent:ready` is the pickup qualifier for `Status=Ready`, not a
-  substitute for `In Progress`, `Review`, or `Done`.
+  the canonical label semantics; `agent:ready` is the pickup qualifier after strict validation.
 - For Issue and PR cards, follow `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md` as the single
   source for required Project Status. Skills reference this file instead of carrying their own copy;
   do not restate its rows here — an open non-draft PR legitimately projects to `Review` via the
@@ -123,7 +122,7 @@ On a plan divergence (you did something unexpected, or discovered an earlier art
 Receipt format:
 
 - backlog receipt:
-  `BACKLOG RECEIPT: Issue #123 created or updated, labeled ..., Project Status=Ready|Backlog|...`
+  `BACKLOG RECEIPT: Issue #123 created or updated, labeled ...; optional Project repair: <status|none>`
 - delivery receipt:
   `DELIVERY RECEIPT: Issue #123 delivered by PR #456. Merge commit: <sha>. CI: passed. Docs updated: yes/no. Owner doc updated: <path>. Project Status: Done.`
 - closure receipt:
