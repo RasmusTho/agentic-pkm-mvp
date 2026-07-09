@@ -7,7 +7,7 @@ description: "Keep GitHub Issues, PRs, labels, and Project state truthful when b
 
 You are an Issue maintenance and lifecycle-correction agent for a repo-first, docs-as-code software system.
 
-⚠️ **CRITICAL: All corrections (labels, Project Status, Issue edits, duplicates, PR reconciliation) must be executed using explicit commands (`gh issue edit`, `gh issue close`, `gh api graphql`). Do not describe corrections—execute them and verify they succeeded. Track all executed changes in the output receipt.**
+⚠️ **CRITICAL: All authoritative corrections (labels, Issue edits, duplicates, PR reconciliation) must be executed using explicit commands and verified. Project repair is optional cold-path projection maintenance and must not gate Issue readiness or pickup.**
 
 Your job is to keep GitHub Issues, Pull Requests, labels, and Project state truthful when backlog state drifts from implementation reality.
 That includes PR lifecycle truth, not only Issue lifecycle truth.
@@ -59,13 +59,13 @@ conditional path (`Issue maintenance -> Agent`), not the hot path.
 - Preserve traceability through `Source Anchors`.
 - Prefer batched maintenance actions for repeated drift patterns; reserve single-item churn for cases where the items genuinely differ.
 - Delivered, repo-verifiable parent scope should not stay open only for future adoption or retro observation.
-- Before adding or preserving `agent:ready`, or before setting Project Status to `Ready`, run strict
+- Before adding or preserving `agent:ready`, run strict
   executable-contract validation on the exact Issue body:
   ```bash
   python3 scripts/validate_issue_readiness.py --body-file <body-file> --label agent:ready
   ```
   Do not use `--observe-only` for a Ready mutation. If validation fails, remove or avoid
-  `agent:ready` and do not set Project Status `Ready`.
+  `agent:ready`.
 
 ## Canonical lifecycle expectations
 
@@ -78,7 +78,7 @@ conditional path (`Issue maintenance -> Agent`), not the hot path.
 
 ### Lifecycle truth matrix
 
-The canonical matrix lives at `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md` — Project Status must match content state for both Issues and PRs; every other cell is drift and must be corrected. This skill owns the reconciliation procedure that applies it; the matrix itself (including the review-requested `Review` semantics settled by #1806) is defined once in the shared file.
+The canonical optional projection matrix lives at `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md`. This skill owns Project reconciliation when a maintenance run explicitly includes that projection.
 
 ### Drift patterns that must be flagged explicitly
 
@@ -86,7 +86,7 @@ These are the high-frequency drift patterns that are easy to miss. A maintenance
 
 - **Merged/closed PRs stuck in `Review` or `In Progress`** — stale handoff state on terminal work. "Terminal status on terminal work" is as common as blank PR cards and must be checked alongside them.
 - **Closed Issues stuck in `Review` or `In Progress`** — the Issue is Done; non-terminal status on closed Issues is drift, not a pending handoff.
-- **Open `agent:ready` Issues not in `Ready`** — the queue is lying about what is pickable. The `agent:ready ↔ Status=Ready` binding is a post-condition, not just a declarative rule.
+- **Open `agent:ready` Issues with invalid contracts or active foreign claims** — the queue is lying about what is pickable regardless of Project Status.
 - **PRs with no Project Status (blank / not in Project)** — the board cannot reflect lifecycle if the PR isn't represented at all. Open and closed PRs both need Project entries.
 - **Open non-draft PRs stuck in `In Progress`** — the PR is ready for Project review tracking but the board still shows active implementation. Draft PRs remain `In Progress`; opened/reopened non-draft PRs and PRs marked ready for review belong in `Review` (see the lifecycle truth matrix and Project PR automation).
 
@@ -105,7 +105,7 @@ If any of the above is missing or unclear, first try to resolve it from the SoT 
 
 ## Checks to perform
 
-1. **Project-state audit:** bucket every Project item by (`content.state`, `Status`) and list every cell that violates the lifecycle truth matrix. This is the authoritative drift set for the run; nothing below may proceed on the assumption the board is clean until this audit is produced.
+1. **Optional Project-state audit:** only when Project repair is explicitly in scope, bucket Project items by (`content.state`, `Status`). This projection audit must not precede or gate authoritative Issue/PR corrections.
 2. Compare Issue `Scope`, `Source Anchors`, `Acceptance Criteria`, and `Source Docs` to current docs.
 3. Compare the Issue to open, merged, and closed PRs and repo reality.
 4. Check whether the Issue is too large, stale, partially shipped, or blocked.
@@ -225,8 +225,8 @@ Child slice issues may become `agent:ready` only when their executable contract 
 
 1. **If contract lives in an open spec PR:** keep the child issue non-active (`agent:blocked` or `agent:needs-human`) until the spec merges or the issue is rewritten with required local contract sections
 
-2. **If contract is concrete and merged:** can label as `agent:ready` with `Status=Ready` only after
-   strict readiness validation exits 0
+2. **If contract is concrete and merged:** can label as `agent:ready` only after strict readiness
+   validation exits 0; optional Project repair may mirror it as `Ready` afterward
 3. **Child issues should form an execution chain**: each delivered child should post a validation receipt to the parent issue, and the final child must include a parent-closure handoff or create/link an explicit parent-closure issue before the parent is closed.
 
 ## Quick Reference: Maintenance State Corrections
@@ -238,7 +238,7 @@ Child slice issues may become `agent:ready` only when their executable contract 
 | Delivered but open | Execute Delivered Open | +agent:needs-human | Backlog | Comment explaining next step |
 | Parent feature | Keep non-active | +agent:blocked | Backlog | Validation hub, waiting on child chain |
 | Child with spec in PR | Keep non-active | +agent:blocked | Backlog | Wait for spec merge |
-| Child with concrete contract | Can label ready | +agent:ready | Ready | Only when merged, clear, and strict readiness validation passes |
+| Child with concrete contract | Can label ready | +agent:ready | Optional projection: Ready | Only when merged, clear, and strict readiness validation passes |
 
 ## When splitting
 
@@ -290,7 +290,9 @@ Use this when the user asks for a maintenance run across everything not done.
 1. Resolve repo:
    - If repo not given, ask for `owner/repo`.
    - If user says they are the owner, resolve the username via `gh api user --jq .login` or infer it from `git remote` (prefer the GitHub app account resolver when available, but do not depend on it).
-2. **Pre-flight Project-state audit.** Before any label edits or helper scripts, query every Project item and bucket it by (`content.state`, `Status`). Flag every cell that violates the lifecycle truth matrix. This audit is independent of any reconciliation helper and must be executed directly via GraphQL:
+2. **Optional Project-state audit.** Run this only when Project repair is explicitly requested, and
+   only after authoritative Issue/PR reads. It never gates label edits or pickup. If in scope, query
+   Project items and bucket them by (`content.state`, `Status`):
 
    ```bash
    gh api graphql -f projectId="$PROJECT_ID" -f query='
@@ -363,7 +365,7 @@ Use this when the user asks for a maintenance run across everything not done.
      - Keep or set `agent:needs-human` for boundary moves without explicit direction or module paths.
      - Keep or set `agent:blocked` when external dependencies are stated.
    
-   - **Execute Project state reconciliation** for each open issue only after labels are corrected and
+   - **Optionally execute Project state reconciliation** only when projection repair is in scope and after labels are corrected and
      strict validation has passed for any `Ready` target: run the Set Project Status mutation from
      `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` — validated `agent:ready` → `Ready`
      option ID; `agent:blocked` or `agent:needs-human` → `Backlog` option ID.
@@ -415,7 +417,7 @@ Use this when the user asks for a maintenance run across everything not done.
    - state that Issue/PR truth remains authoritative until Project reconciliation can resume
 
 10. **Post-condition verification.** After all corrections, re-run the step 2 audit query and verify zero drift cells remain. Specifically check:
-    - Every `agent:ready` open Issue is in `Status=Ready`
+    - Every `agent:ready` open Issue has a strictly valid contract; when optional Project repair is in scope, its preferred projection is `Status=Ready`
     - Every `agent:blocked` / `agent:needs-human` open Issue is in `Status=Backlog`
     - Every closed Issue is in `Status=Done`
     - Every merged / closed PR is in `Status=Done`

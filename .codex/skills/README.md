@@ -14,7 +14,7 @@ boundary and artifact map in `docs/architecture/SBS_OPERATING_MODEL.md`.
 ## Workflow map
 
 Hot path:
-`Docs -> Issue -> Project -> Agent -> issue-to-code fast claim -> Publish PR -> CI -> Verification -> Merge -> Project/doc closure -> Owner Doc`
+`Docs -> Issue -> Dispatcher/GitHub claim -> Agent -> issue-to-code -> Publish PR -> CI -> Verification -> Merge -> closure -> Owner Doc`
 
 Conditional / maintenance path:
 `Issue maintenance -> Agent` for stale or false backlog state, and `Publish PR -> pr-integration` only when readiness/repair work is still needed before verification.
@@ -66,7 +66,7 @@ Do not rely on a human remembering where BuilderOps material belongs.
 Shared contracts: `.codex/skills/_shared/` holds the canonical contract files that skills reference
 instead of carrying inline copies — `ISSUE_CONTRACT.md` (Issue section list + `Verify:` rule),
 `LABEL_TAXONOMY.md` (canonical labels + `lane:governance` exception), `LIFECYCLE_TRUTH_MATRIX.md`
-(required Project Status per Issue/PR state), `BRANCH_TRUTH_GATE.md` (publication workspace gate),
+(optional legacy Project projection per Issue/PR state), `BRANCH_TRUTH_GATE.md` (publication workspace gate),
 `PROJECT_STATUS_OPERATIONS.md` (Project GraphQL operations), and `CI_WAIT_CONTRACT.md` (how to wait
 on CI checks — and the optional `--codex` verdict path — via REST without draining the shared API budget). A reference like
 `_shared/<FILE>.md :: <section>` resolves there. `_shared/` is not a skill directory.

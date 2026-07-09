@@ -8,7 +8,7 @@ from app.dispatcher import cli as dispatcher_cli
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_project_reconciliation_is_separate_from_dispatcher_claim_path() -> None:
+def test_project_reconciliation_is_not_pickup_gate() -> None:
     hook = REPO_ROOT / "scripts" / "reconcile_builderops_project_status.sh"
     hook_text = hook.read_text(encoding="utf-8")
     dispatcher_text = (REPO_ROOT / "app" / "dispatcher" / "cli.py").read_text(encoding="utf-8")

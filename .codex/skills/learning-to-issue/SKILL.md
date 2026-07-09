@@ -69,13 +69,13 @@ If an AC cannot carry a resolvable `Verify:` target, refine or split before mark
 
 ## Allowed labels (canonical only)
 
-Use the canonical taxonomy from `.codex/skills/_shared/LABEL_TAXONOMY.md`, including its governance-lane exception: governance-lane learning issues add `lane:governance` in addition to the canonical delivery label set so Project filtering and verification routing stay aligned with `AGENTS.md` and `docs/development/DELIVERY_FEEDBACK_LOOP.md`.
+Use the canonical taxonomy from `.codex/skills/_shared/LABEL_TAXONOMY.md`, including its governance-lane exception: governance-lane learning issues add `lane:governance` in addition to the canonical delivery label set so verification routing stays aligned with `AGENTS.md` and `docs/development/DELIVERY_FEEDBACK_LOOP.md`.
 
 ## Creating the issue
 
 Choose the label set based on readiness before running `gh issue create`:
 
-**Bounded, testable, and unblocked -> `agent:ready`, Status=Ready:**
+**Bounded, testable, and unblocked -> `agent:ready`:**
 ```bash
 python3 scripts/validate_issue_readiness.py --body-file <body-file> --label agent:ready
 gh issue create \
@@ -83,37 +83,35 @@ gh issue create \
   --title "<type>: <bounded outcome>" \
   --label "type:task,prio:med,agent:ready" \
   --body "..."
-# Then set Project Status=Ready
 ```
 For governance-lane learning issues, also add `--label "lane:governance"` so the issue is visible in the governance lane filter and keeps the relaxed governance verification path.
 
-**Dependency unresolved -> `agent:blocked`, Status=Backlog:**
+**Dependency unresolved -> `agent:blocked`:**
 ```bash
 gh issue create \
   --repo <owner/repo> \
   --title "<type>: <bounded outcome>" \
   --label "type:task,prio:med,agent:blocked" \
   --body "..."
-# Then set Project Status=Backlog
 ```
 
-**Requires human decision -> `agent:needs-human`, Status=Backlog:**
+**Requires human decision -> `agent:needs-human`:**
 ```bash
 gh issue create \
   --repo <owner/repo> \
   --title "<type>: <bounded outcome>" \
   --label "type:task,prio:med,agent:needs-human" \
   --body "..."
-# Then set Project Status=Backlog
 ```
 
-Do not apply `agent:ready` or set Project Status `Ready` unless strict validation exits 0. Never use
-`--observe-only` for a Ready mutation. Every AC must have a resolvable `Verify:` target and no
+Do not apply `agent:ready` unless strict validation exits 0. Never use
+`--observe-only` for a ready-label mutation. Every AC must have a resolvable `Verify:` target and no
 dependency may block execution.
 
 **Issue body (all cases):** use the body template from `.codex/skills/_shared/ISSUE_CONTRACT.md`, with the learning-specific requirements above (`## Context` links the source record; `## Applies learning` filled, e.g. `Applies learning from \`BuilderOps LearningSignal <id>\``).
 
-Run the add-item / Set Project Status operations from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md`. After creation, add to Project `Agent Delivery Control Plane` and verify Status matches the chosen readiness state.
+Project add/status operations are optional cold-path projection repair. Do not invoke GraphQL or
+ProjectV2 as part of Issue readiness or creation.
 
 ## Raw-intake normalization path
 
@@ -159,7 +157,7 @@ Signs a raw-intake issue needs normalization:
 
 **Backlog receipt (new issue):**
 ```
-BACKLOG RECEIPT: Issue #N created - "<title>", labeled type:task/prio:med/agent:ready, added to Project "Agent Delivery Control Plane", Status=Ready. Source: BuilderOps LearningSignal <id>, BuilderOps PromotionIntent <id>, or docs/learning-log.md :: YYYY-MM-DD compatibility entry.
+BACKLOG RECEIPT: Issue #N created - "<title>", labeled type:task/prio:med/agent:ready. Source: BuilderOps LearningSignal <id>, BuilderOps PromotionIntent <id>, or docs/learning-log.md :: YYYY-MM-DD compatibility entry.
 ```
 
 **Normalization receipt (existing issue updated):**

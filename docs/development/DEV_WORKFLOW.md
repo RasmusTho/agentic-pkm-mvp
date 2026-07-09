@@ -192,7 +192,7 @@ State model for lane-based delivery:
 - Issue state supports claim and bounded execution truth: `Ready`, `In Progress`, `Blocked`, `Done`.
 - PR/Project-item state supports review/integration projection: `Review`, `In Progress`, `Blocked`, `Done`.
 - Keep issue and PR state separate in multi-slice lanes where several implementation issues can feed the same lane PR.
-- `issue-to-code` owns fast issue claim (`Ready` -> `In Progress` and remove `agent:ready`) to prevent double-pick.
+- `issue-to-code` owns fast issue claim (dispatcher lease when available; otherwise remove `agent:ready` and post a claimant receipt) to prevent double-pick.
   - Claim must run through `scripts/issue_pickup_claim.sh --issue <N>` so workspace preflight is enforced before label mutation.
 - Open PR is the default publication mode. Draft PR is opt-in and requires an explicit reason.
 - `Review` is the agent-review gate before verification, not a generic waiting state.
@@ -203,7 +203,7 @@ State model for lane-based delivery:
 Execution rule:
 
 - do not start non-trivial implementation without a governing Issue
-- prefer Issues with `Status=Ready` and label `agent:ready`
+- select Issues with a strictly validated `agent:ready` label; Project Status is not a pickup gate
 - use the linked Issue as the bounded source of truth for scope and acceptance
 - implementation PRs should usually link the governing slice / child issue
 - do not implement directly from a feature / capability issue when the work is clearly multi-slice
@@ -216,8 +216,8 @@ Optional repo-local Codex skills may assist with either lane from `.codex/skills
 Lifecycle truth rule:
 
 - GitHub Issue state and linked PR/merge state are the harder lifecycle authority.
-- Project `Status` is the preferred projection of that lifecycle for pickup and board visibility.
-- `agent:ready` qualifies an Issue for pickup only when `Status=Ready`.
+- Project `Status` is an optional legacy projection for board visibility.
+- `agent:ready` qualifies an Issue for pickup after strict contract validation; dispatcher claim state prevents active collisions when available.
 - `In Progress` covers active implementation, including draft PRs and open PRs before explicit review handoff.
 - `Review` begins only when the PR becomes the explicit review handoff artifact, normally after review is requested.
 - closed or delivered work must not retain `agent:*` labels.

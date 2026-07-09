@@ -36,11 +36,9 @@ This is the hot-path defect intake lane, not the cold-path maintenance lane.
    - Add one priority: `prio:high`, `prio:med`, or `prio:low` based on impact.
    - Add `agent:ready` only if the scope is bounded, testable, and unblocked.
    - Otherwise add `agent:needs-human` or `agent:blocked`.
-5. Project:
-   - Run the add-item / Set Project Status operations from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md`.
-   - Add the new Issue to Project `Agent Delivery Control Plane`.
-   - Set Status to match the agent-state label: `agent:ready` → `Ready`; otherwise (`agent:blocked`, `agent:needs-human`) → `Backlog`.
-6. Output receipt: issue number, labels set, Project Status set, and whether it was created or updated.
+5. Optional Project projection:
+   - Project add/status operations are cold-path repair only; do not require ProjectV2 for Issue creation or `agent:ready`.
+6. Output receipt: issue number, labels set, and whether it was created or updated.
 
 ## Heuristics for `agent:ready`
 

@@ -44,13 +44,13 @@ Status meanings:
 - `Done`: merged or otherwise fully delivered work; the Issue is closed and no `agent:*` labels remain
 
 Agent-label meanings:
-- `agent:ready`: queue-eligible work; use only with `Status=Ready`
+- `agent:ready`: strictly validated queue-eligible work; Project Status is not a pickup precondition
 - `agent:blocked`: blocked by dependency waiting, including parent validation hubs waiting on child slices; normally pair with a non-active status such as `Backlog`
 - `agent:needs-human`: blocked on a named human decision, tradeoff, missing input, or authority question; normally pair with a non-active status such as `Backlog`
 - open implementation Issues should normally carry exactly one truthful agent-state label
 
 Interpretation rule:
-- GitHub Project `Status` is the preferred operational projection of lifecycle state, not the hardest source of truth.
+- GitHub Project `Status` is an optional legacy projection of lifecycle state, not a pickup gate or source of truth.
 - GitHub Issue state, agent labels, linked PR state, and merge/delivery reality outrank Project state when they disagree.
 - Agent labels qualify pickup or blocker state; they do not replace Issue/PR lifecycle truth.
 
@@ -117,7 +117,7 @@ cleanup is not automatic in v1.
 - Docs-authoring PRs may omit an Issue reference only when they are explicitly classified as docs authoring and remain limited to approved docs-authoring surfaces.
 - Governance-lane PRs may omit an Issue reference only when they are explicitly classified as governance lane and remain limited to approved governance surfaces.
 - Agents only pick Issues labeled `agent:ready`.
-- Agents only pick Issues when `Status=Ready` and the Issue is labeled `agent:ready`.
+- Agents only pick strictly validated Issues labeled `agent:ready` and acquire the dispatcher claim when available.
 - Issue claim (`Ready` -> `In Progress` plus `agent:ready` removal) remains a synchronous skill action, not PR automation.
 - Agents must stay within Issue scope, constraints, and acceptance criteria.
 - Blank/free-form Issues are disabled at repo level.

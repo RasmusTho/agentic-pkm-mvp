@@ -168,6 +168,34 @@ def test_normalize_github_issue_string_labels() -> None:
     assert task.status == "ready"
 
 
+def test_agent_ready_issue_pickable_without_project_status(tmp_store: SqliteStore) -> None:
+    """ProjectV2 fields are neither required nor consulted for queue eligibility."""
+    payload = {
+        "number": 201,
+        "title": "Label-only ready task",
+        "state": "open",
+        "labels": [{"name": "agent:ready"}, {"name": "prio:high"}],
+        "createdAt": "2026-07-09T00:00:00Z",
+        "updatedAt": "2026-07-09T01:00:00Z",
+        "body": VALID_READY_BODY,
+    }
+
+    source = _mock_source([payload], open_issues=[payload])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+
+    upserted = adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    assert [task.issue_number for task in upserted] == [201]
+    stored = tmp_store.get_task("github-issue-201")
+    assert stored is not None
+    assert stored.status == "ready"
+    assert {call[0] for call in source.method_calls} == {
+        "list_issues",
+        "list_open_issues",
+        "get_rate_limit",
+    }
+
+
 # ---------------------------------------------------------------------------
 # AC: Sync state records metadata
 # ---------------------------------------------------------------------------

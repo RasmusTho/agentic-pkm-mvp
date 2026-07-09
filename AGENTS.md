@@ -60,7 +60,7 @@ Repo-local workflow helpers live under `.codex/skills/`. They do not replace thi
 
 For GitHub implementation work, loading `.codex/skills/issue-to-code/SKILL.md` is mandatory before coding.
 That skill owns the pickup rule:
-when active work begins, move the governing Issue/Project state to `In Progress` and remove `agent:ready` before local edits so another agent does not pick up the same task.
+when active work begins, acquire the dispatcher claim when available and remove `agent:ready` before local edits so another agent does not pick up the same task. GitHub Project Status is an optional projection, not a pickup dependency.
 
 Execution discipline:
 
@@ -177,7 +177,7 @@ Many agents run against this repo at once. C_coordination, C_delay, and C_rework
 - **Dedicated worktree by default.** Any concurrent implementation or publication runs in its own `git worktree`, never the shared root worktree. Do not edit, commit, or push from the shared root checkout while other agents may be active. The publish/claim boundary (`scripts/agent_workspace_preflight.sh`) enforces this by default and refuses the shared root worktree — set `PKM_ALLOW_SHARED_ROOT=1` for deliberate solo work in the root.
 - **Never switch the shared root worktree's branch out from under a concurrent agent.** Branch switches happen in your own worktree. The shared-root HEAD thrash is a real, recurring loss — uncommitted work rides an unexpected checkout.
 - **Branch-truth before write.** Capture `EXPECTED_BRANCH` / `EXPECTED_WORKTREE` at branch creation and run the branch-truth gate before commit and before push (`_shared/BRANCH_TRUTH_GATE.md`). Proportionality never relaxes this.
-- **Smallest shared lease, then local.** Claim the issue/lane with the minimal shared handshake (`Ready -> In Progress`, remove `agent:ready`), then keep execution local and deterministic. One active lease per issue.
+- **Smallest shared lease, then local.** Claim the issue/lane with the minimal shared handshake (dispatcher lease when available; otherwise remove `agent:ready` and post a claimant receipt), then keep execution local and deterministic. One active lease per issue.
 - **Right-size fan-out.** Parallelize only independent issues with isolated worktrees, explicit return receipts, and an explicit token/quality rationale. Over-fanning raises C_coordination faster than it cuts C_delay — when in doubt, fewer agents.
 - **Reconcile races on evidence, do not redo.** On a claim or delivery collision, the latest unreleased lease governs; verify on `origin/main` and close your duplicate rather than re-implementing.
 - **Shared-budget awareness.** The GitHub API budget (5,000/hr) is shared across every concurrent agent, and GraphQL exhausts first. A tool call's real cost is its *marginal cost to all agents*, not to your task — so never busy-wait on a shared budget, prefer the transport that spares the scarce bucket (REST `gh api` over GraphQL `gh pr`/`gh issue`/`gh repo`; `git push --delete` over the API for branch ops), and read the free `gh api rate_limit` endpoint before assuming exhaustion. The same rule covers any pooled resource (CI runners, the embedding/Ollama queue). For waiting on CI checks (and the optional `--codex` verdict path, inactive as the default gate) specifically, follow `_shared/CI_WAIT_CONTRACT.md` — a tight `gh pr checks` loop drains the shared GraphQL bucket to zero and stalls every other agent.
@@ -310,7 +310,7 @@ For implementation work, GitHub Issues are the canonical task contract.
 
 Builder-agent rules:
 
-- Only pick work from a GitHub Issue that is both `Status=Ready` and labeled `agent:ready`.
+- Only pick work from a GitHub Issue carrying a strictly valid `agent:ready` label; strict contract validation must pass before the label is applied.
 - Read the full Issue before editing.
 - Treat `Context`, `Scope`, `Source Anchors`, `Constraints`, `Acceptance Criteria`, `Out of Scope`, `Suggested Validation`, and `Source Docs` as binding.
 - Every `Acceptance Criterion` must declare its verification inline with a `Verify:` marker: a concrete test pointer (`tests/...::test_name`) for behavioral criteria, or a concrete non-test target (doc writeback path plus anchor, runtime receipt, roadmap diff) for non-behavioral criteria. ACs without a resolvable `Verify:` target are not executable and the Issue must not be `agent:ready`.
@@ -320,9 +320,9 @@ Builder-agent rules:
 - Do not expand scope beyond the Issue without updating the task contract first.
 - Do not create new backlog work in GitHub without stable `Source Anchors` that point to the most local governing doc items.
 - Prefer stable anchor IDs over prose fragments when the source doc is likely to produce multiple Issues over time.
-- Treat GitHub Issues as the canonical backlog receipt. GitHub Project is the shared operating board when available; inline doc markers such as `Tracked by: #...` are secondary convenience notes only.
-- Prefer Issues plus truthful agent labels and linked PR state as harder authority than Project state if they drift.
-- Use Project `Status` as the pickup and coordination projection. `agent:ready` is only the pickup qualifier for `Status=Ready`; blocked labels belong on non-active work, and closed issues must not retain `agent:*` labels.
+- Treat GitHub Issues as the canonical backlog receipt. GitHub Project is an optional legacy projection when available; inline doc markers such as `Tracked by: #...` are secondary convenience notes only.
+- Prefer Issues plus truthful agent labels, linked PR state, and CI as harder authority than Project state if they drift.
+- Use `agent:ready` as the external pickup qualifier without requiring GitHub Project Status. The dispatcher claim is the collision guard when available; blocked labels belong on non-active work, and closed issues must not retain `agent:*` labels.
 - When a PR delivers a tracked backlog item, update the owner doc to describe shipped reality and rewrite roadmap/plan wording so it no longer reads as pending work.
 - Prefer GitHub REST endpoints for routine issue/label/PR operations; use GraphQL when REST does not express the required operation.
 - When GraphQL is required, resolve stable identifiers once per run and reuse cached values instead of repeating lookup queries.

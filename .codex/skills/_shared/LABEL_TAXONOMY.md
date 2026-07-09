@@ -15,15 +15,15 @@ own copies.
 | `prio:high` | blocks other work or has active regression |
 | `prio:med` | normal delivery priority |
 | `prio:low` | nice-to-have, no urgency |
-| `agent:ready` | bounded, testable, unblocked — safe for agent execution; use only with `Status=Ready` |
+| `agent:ready` | bounded, testable, unblocked, and strictly validated — safe for agent pickup without requiring Project Status |
 | `agent:blocked` | dependency unresolved, including parent validation hubs waiting on child slices |
 | `agent:needs-human` | requires a named human decision, tradeoff, missing input, or authority question |
 
 Rules:
 
 - Every new implementation Issue leaves creation with exactly one truthful agent-state label.
-- `agent:blocked` and `agent:needs-human` belong on non-active work, normally with
-  `Status=Backlog`.
+- `agent:blocked` and `agent:needs-human` belong on non-active work. A Project may mirror them as
+  `Backlog`, but that projection does not control pickup.
 - Closed or delivered Issues must not retain any `agent:*` label.
 
 ## Governance-lane exception

@@ -102,25 +102,24 @@ Skill-specific rule: if an AC cannot carry a resolvable `Verify:` target, the AC
   - `docs/STATUS.md :: SETTINGS-PROVENANCE`
 - Prefer stable anchor IDs over prose fragments.
 
-## Project rules
+## Pickup label and optional Project projection rules
 
-Run the add-item / Set Project Status operations from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md`.
+Project add/status operations from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` are optional
+cold-path projection repair. They do not gate Issue creation or `agent:ready`.
 
-- Add each new Issue to Project `Agent Delivery Control Plane`.
-- Set Status appropriately:
-  - `Ready` only if bounded, testable, unblocked, and safe for agent execution
-  - every Acceptance Criterion must carry a resolvable `Verify:` target before `Status=Ready`
-  - immediately before applying `agent:ready` or `Status=Ready`, run strict readiness validation
+- Set the agent label appropriately:
+  - `agent:ready` only if bounded, testable, unblocked, and safe for agent execution
+  - every Acceptance Criterion must carry a resolvable `Verify:` target before `agent:ready`
+  - immediately before applying `agent:ready`, run strict readiness validation
     on the exact body file:
     ```bash
     python3 scripts/validate_issue_readiness.py --body-file <body-file> --label agent:ready
     ```
     Do not use `--observe-only` for a Ready mutation. If validation fails, do not apply
-    `agent:ready` or `Status=Ready`.
-  - otherwise `Backlog`
+    `agent:ready`.
+  - otherwise use `agent:blocked` or `agent:needs-human` according to the actual blocker
 - Every new implementation Issue should leave creation with exactly one truthful agent-state label.
-- Use `agent:ready` only with `Status=Ready`.
-- Use `agent:blocked` or `agent:needs-human` only for non-active work, normally with `Status=Backlog`.
+- Use `agent:blocked` or `agent:needs-human` only for non-active work.
 - Use `agent:blocked` for dependency waiting, including parent issues waiting on child slices; use `agent:needs-human` only for a named human decision, tradeoff, missing input, or authority question.
 - Do not leave delivered or closed work with any `agent:*` label.
 
@@ -139,7 +138,7 @@ On a plan divergence (you did something unexpected, or discovered an earlier art
 For each created Issue, include:
 
 - backlog receipt:
-  `BACKLOG RECEIPT: Issue #123 created, labeled ..., added to Project "Agent Delivery Control Plane", Status=Ready|Backlog.`
+  `BACKLOG RECEIPT: Issue #123 created, labeled ...; optional Project repair: <status|none>.`
 - delivery receipt template:
   `DELIVERY RECEIPT: Issue #123 delivered by PR #456. Merge commit: <sha>. CI: passed. Docs updated: yes/no. Owner doc updated: <path>. Project Status: Done.`
 
