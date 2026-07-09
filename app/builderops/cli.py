@@ -43,6 +43,10 @@ from app.builderops.epic_run_state import (
     update_epic_run_state,
 )
 from app.builderops.models import BuilderOpsValidationError, normalize_actor
+from app.builderops.pattern_routing import (
+    PatternRoutingError,
+    build_pattern_routing_report,
+)
 from app.builderops.promotion_gateway import BuilderOpsPromotionGateway
 from app.builderops.projections import (
     PROJECTION_SPECS,
@@ -729,6 +733,41 @@ def ckm_reevaluation_classify(
     try:
         report = build_ckm_reevaluation_report(payload)
     except CkmReevaluationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(report, as_json)
+
+
+@builderops.group(
+    "pattern-routing",
+    help="Classify repeated learning patterns into debt, fitness, issue, or discard routes.",
+)
+def pattern_routing() -> None:
+    """Observe-only repeated-pattern routing helpers."""
+
+
+@pattern_routing.command(
+    "classify",
+    help="Classify repeated Builder System patterns without mutating repo or GitHub state.",
+)
+@click.option(
+    "--patterns-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="JSON object with a patterns list, or a JSON patterns list.",
+)
+@click.option("--json", "as_json", is_flag=True)
+def pattern_routing_classify(
+    patterns_file: Path,
+    as_json: bool,
+) -> None:
+    payload = _load_json_value_file(patterns_file, field="patterns-file")
+    if isinstance(payload, list):
+        payload = {"patterns": payload}
+    if not isinstance(payload, dict):
+        raise click.BadParameter("patterns-file must contain a JSON object or list")
+    try:
+        report = build_pattern_routing_report(payload)
+    except PatternRoutingError as exc:
         raise click.ClickException(str(exc)) from exc
     _emit(report, as_json)
 
