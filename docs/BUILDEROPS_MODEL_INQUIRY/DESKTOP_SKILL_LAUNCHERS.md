@@ -19,8 +19,9 @@ orchestrator inside either chat history.
 ## What This Task Does
 
 Create a repo-local `start-model-inquiry` skill and a portable Claude custom-skill package. Both
-validate the shared vault and call the same `builderops inquiry start` command. They display the
-returned `inquiry_id` and final state; they do not reimplement orchestration in prompt prose.
+validate the shared vault and call the repo-supported `scripts/builderops_cli.sh builderops inquiry
+start` command. They display the returned `inquiry_id` and final state; they do not reimplement
+orchestration in prompt prose.
 
 ## Concretely
 
@@ -56,3 +57,8 @@ other.
 
 - `docs/BUILDEROPS_MODEL_INQUIRY/README.md`
 - `.codex/skills/README.md`
+
+## Related GitHub Issues
+
+- Parent feature: [#3288](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3288)
+- Implementation: [#3292](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3292)

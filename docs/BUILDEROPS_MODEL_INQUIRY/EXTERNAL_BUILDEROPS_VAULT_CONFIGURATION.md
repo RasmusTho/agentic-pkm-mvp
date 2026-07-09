@@ -25,8 +25,8 @@ must initialize the external artifact vault without creating SQLite files or liv
 ## Concretely
 
 ```bash
-builderops vault init "$BUILDEROPS_VAULT_ROOT" --json
-builderops vault paths --json
+scripts/builderops_cli.sh builderops vault init "$BUILDEROPS_VAULT_ROOT" --json
+scripts/builderops_cli.sh builderops vault paths --json
 ```
 
 The paths command reports the shared artifact root, local SQLite path, and local claims root. It
@@ -45,14 +45,14 @@ Putting active coordination state there creates false safety across developer de
   Verify: `tests/builderops/test_builderops_paths.py::test_shared_vault_bootstrap_never_creates_sqlite_or_claims`.
 - [ ] Validation rejects a shared vault containing SQLite or active claim state.
   Verify: `tests/builderops/test_builderops_paths.py::test_rejects_operational_state_inside_shared_vault`.
-- [ ] The BuilderOps store and queue contracts document the iCloud/local-state separation.
-  Verify: doc writeback at `docs/builderops/BUILDEROPS_VAULT_STORE.md :: Store Location` and `docs/development/BUILDER_OPS_VAULT_QUEUE.md :: Authority Model`.
+- [ ] The BuilderOps store contract documents the shared-artifact/local-state separation.
+  Verify: doc writeback at `docs/builderops/BUILDEROPS_VAULT_STORE.md :: Store Location`.
 
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/builderops/test_builderops_paths.py`
-- `python3 -m app.builderops builderops vault paths --json`
-- Review the two documented location contracts.
+- `scripts/builderops_cli.sh builderops vault paths --json`
+- Review the documented location contract.
 
 ## Out of Scope
 
@@ -64,4 +64,8 @@ Putting active coordination state there creates false safety across developer de
 
 - `docs/BUILDEROPS_MODEL_INQUIRY/README.md`
 - `docs/builderops/BUILDEROPS_VAULT_STORE.md`
-- `docs/development/BUILDER_OPS_VAULT_QUEUE.md`
+
+## Related GitHub Issues
+
+- Parent feature: [#3288](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3288)
+- Implementation: [#3289](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3289)

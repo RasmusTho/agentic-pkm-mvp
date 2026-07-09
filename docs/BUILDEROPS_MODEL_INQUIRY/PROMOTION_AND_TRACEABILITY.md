@@ -23,8 +23,8 @@ trace graph from inquiry through Issue, PR, verification, and owner-document ref
 ## Concretely
 
 ```bash
-builderops inquiry promote inq_20260709_example --create-issue --json
-builderops inquiry trace inq_20260709_example --include-delivery --json
+scripts/builderops_cli.sh builderops inquiry promote inq_20260709_example --create-issue --json
+scripts/builderops_cli.sh builderops inquiry trace inq_20260709_example --include-delivery --json
 ```
 
 ## Why This Matters
@@ -38,6 +38,9 @@ criteria and source anchors before any implementation agent can claim it.
   absent readiness receipt. Verify: `tests/builderops/test_model_inquiry_promotion.py::test_issue_promotion_requires_ready_receipt`.
 - [ ] Successful promotion creates a canonical Issue contract through GitHub REST and records the
   Issue reference in a BuilderOps receipt. Verify: `tests/builderops/test_model_inquiry_promotion.py::test_promote_creates_issue_and_receipt`.
+- [ ] If GitHub creates an Issue before local receipt persistence fails, retry reconciles the same
+  Issue using a deterministic promotion marker and creates no duplicate. Verify:
+  `tests/builderops/test_model_inquiry_promotion.py::test_retry_reconciles_issue_after_receipt_failure`.
 - [ ] Trace output links an inquiry to its Issue, implementation PR, verification receipt, and owner
   documents when those refs exist. Verify: `tests/builderops/test_model_inquiry_trace.py::test_trace_includes_delivery_refs`.
 
@@ -56,3 +59,8 @@ criteria and source anchors before any implementation agent can claim it.
 - `docs/BUILDEROPS_MODEL_INQUIRY/README.md`
 - `docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md`
 - `.codex/skills/issue-to-code/SKILL.md`
+
+## Related GitHub Issues
+
+- Parent feature: [#3288](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3288)
+- Implementation: [#3293](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3293)

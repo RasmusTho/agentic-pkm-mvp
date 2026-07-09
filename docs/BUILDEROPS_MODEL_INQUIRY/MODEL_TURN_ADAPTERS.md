@@ -24,8 +24,8 @@ limit adversarial rounds, and persist provider request IDs and output hashes.
 ## Concretely
 
 ```bash
-builderops inquiry run inq_20260709_example --dry-run --json
-builderops inquiry run inq_20260709_example --max-rounds 5 --json
+scripts/builderops_cli.sh builderops inquiry run inq_20260709_example --dry-run --json
+scripts/builderops_cli.sh builderops inquiry run inq_20260709_example --max-rounds 5 --json
 ```
 
 ## Why This Matters
@@ -39,13 +39,15 @@ and audit evidence explicit.
   Verify: `tests/builderops/test_model_inquiry_runner.py::test_independent_drafts_share_context_hash`.
 - [ ] A review turn can only consume persisted input artifacts and emits schema-valid output.
   Verify: `tests/builderops/test_model_inquiry_runner.py::test_review_turn_uses_persisted_inputs_and_validates_output`.
+- [ ] Every persisted provider turn retains its provider request ID and output hash, and trace output
+  returns both values. Verify: `tests/builderops/test_model_inquiry_trace.py::test_trace_includes_provider_request_id_and_output_hash`.
 - [ ] The runner terminates at consensus, maximum rounds, provider refusal, or malformed output.
   Verify: `tests/builderops/test_model_inquiry_runner.py::test_runner_records_all_terminal_conditions`.
 
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/builderops/test_model_inquiry_runner.py`
-- `builderops inquiry run <fixture-run> --dry-run --json`
+- `scripts/builderops_cli.sh builderops inquiry run <fixture-run> --dry-run --json`
 
 ## Out of Scope
 
@@ -57,3 +59,8 @@ and audit evidence explicit.
 
 - `docs/BUILDEROPS_MODEL_INQUIRY/README.md`
 - `docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md`
+
+## Related GitHub Issues
+
+- Parent feature: [#3288](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3288)
+- Implementation: [#3291](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3291)

@@ -24,9 +24,9 @@ GitHub Issue during start or resume.
 ## Concretely
 
 ```bash
-builderops inquiry start --question-file question.md --workflow fable-gpt-architecture --json
-builderops inquiry trace inq_20260709_example --json
-builderops inquiry resume inq_20260709_example --json
+scripts/builderops_cli.sh builderops inquiry start --question-file question.md --workflow fable-gpt-architecture --json
+scripts/builderops_cli.sh builderops inquiry trace inq_20260709_example --json
+scripts/builderops_cli.sh builderops inquiry resume inq_20260709_example --json
 ```
 
 ## Why This Matters
@@ -57,3 +57,8 @@ accepted turns, or the distinction between evidence and candidate conclusions.
 
 - `docs/BUILDEROPS_MODEL_INQUIRY/README.md`
 - `docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md`
+
+## Related GitHub Issues
+
+- Parent feature: [#3288](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3288)
+- Implementation: [#3290](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3290)

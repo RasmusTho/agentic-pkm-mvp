@@ -13,16 +13,11 @@ between Fable and GPT/Codex. It stores the question, context packets, model turn
 readiness outcome, and promotion evidence in the BuilderOps plane. It does not make a GitHub Issue
 until the result is executable work.
 
-The shared artifact vault is the dedicated iCloud Obsidian vault:
-
-```text
-~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Yggdrasil BuilderOps/
-```
-
-This is a Yggdrasil-owned Builder System vault, separate from all human knowledge vaults. It holds
-Markdown artifacts and the file-first queue. SQLite state, temporary provider credentials, and live
-leases stay local to the machine that runs the worker. iCloud is not a lock service and must not host
-the SQLite database or cross-device claims.
+The shared artifact vault is configured per machine through `BUILDEROPS_VAULT_ROOT`. The current
+deployment uses a dedicated iCloud Obsidian vault owned by Yggdrasil, separate from all human
+knowledge vaults. It holds Markdown artifacts. SQLite state, temporary provider credentials, and
+live leases stay local to the machine that runs the worker. iCloud is not a lock service and must
+not host the SQLite database or cross-device claims.
 
 ## Scope
 
