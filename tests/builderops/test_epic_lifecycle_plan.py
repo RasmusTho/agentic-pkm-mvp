@@ -14,6 +14,7 @@ def _issue(
     state: str = "OPEN",
     labels: list[str] | None = None,
     project_status: str | None = "Ready",
+    readiness_classification: str | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "number": 3257,
@@ -23,6 +24,8 @@ def _issue(
     }
     if project_status is not None:
         payload["project_status"] = project_status
+    if readiness_classification is not None:
+        payload["readiness_classification"] = readiness_classification
     return payload
 
 
@@ -73,6 +76,46 @@ def test_claim_plan_separates_required_reads_and_projection_writes() -> None:
     assert plan["dispatcher_mutations"] == []
     assert plan["agent_spawns"] == []
     assert plan["summary"]["no_mutations_performed"] is True
+
+
+def test_ready_repair_plan_adds_ready_label_and_project_projection() -> None:
+    plan = build_lifecycle_transition_plan(
+        transition="readiness-repair",
+        issue=_issue(
+            labels=["lane:governance", "type:task"],
+            project_status="Backlog",
+            readiness_classification="ready_candidate",
+        ),
+        repo="RasmusTho/agentic-pkm-mvp",
+    )
+
+    assert plan["transition"] == "ready"
+    assert plan["blocked_reasons"] == []
+    assert plan["required_reads"][0]["name"] == "read_issue_readiness_state"
+    assert plan["proposed_writes"]["issue_labels"][0]["action"] == "add_label"
+    assert plan["proposed_writes"]["issue_labels"][0]["value"] == "agent:ready"
+    assert plan["proposed_writes"]["issue_project_status"][0]["value"] == "Ready"
+    assert plan["verification_reads"][0]["name"] == "verify_issue_ready_projection"
+    assert plan["github_mutations"] == []
+    assert plan["project_mutations"] == []
+
+
+def test_ready_repair_plan_blocks_without_strict_readiness_validation() -> None:
+    plan = build_lifecycle_transition_plan(
+        transition="ready",
+        issue=_issue(
+            labels=["lane:governance", "type:task"],
+            project_status="Backlog",
+            readiness_classification="missing_verify_markers",
+        ),
+        repo="RasmusTho/agentic-pkm-mvp",
+    )
+
+    assert plan["blocked_reasons"] == [
+        "readiness-not-ready-candidate:missing_verify_markers"
+    ]
+    assert plan["proposed_writes"]["issue_labels"] == []
+    assert plan["proposed_writes"]["issue_project_status"] == []
 
 
 def test_claim_plan_blocks_non_ready_issue_without_writes() -> None:
@@ -194,6 +237,41 @@ def test_cli_lifecycle_plan_is_dry_run_and_does_not_write_run_state(tmp_path: Pa
     assert payload["transition"] == "claim"
     assert payload["summary"]["no_mutations_performed"] is True
     assert not (tmp_path / "run-cli-lifecycle.json").exists()
+
+
+def test_cli_lifecycle_plan_accepts_ready_repair_transition(tmp_path: Path) -> None:
+    issue_file = tmp_path / "issue.json"
+    issue_file.write_text(
+        json.dumps(
+            {
+                "issue": _issue(
+                    labels=["lane:governance", "type:task"],
+                    project_status="Backlog",
+                    readiness_classification="ready_candidate",
+                )
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_builderops(
+        [
+            "epic-run-state",
+            "lifecycle-plan",
+            "--transition",
+            "ready-repair",
+            "--issue-file",
+            str(issue_file),
+            "--repo",
+            "RasmusTho/agentic-pkm-mvp",
+            "--json",
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["transition"] == "ready"
+    assert payload["proposed_writes"]["issue_labels"][0]["value"] == "agent:ready"
 
 
 def test_cli_lifecycle_plan_accepts_github_check_runs_payload(tmp_path: Path) -> None:

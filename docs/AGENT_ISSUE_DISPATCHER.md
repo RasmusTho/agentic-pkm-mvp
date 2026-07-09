@@ -311,11 +311,11 @@ reconciliation helper.
 ### Epic-runner lifecycle planning
 
 `deliver-issue-set` coordinators may use the local dry-run lifecycle planner to preview common
-claim, review-handoff, and terminal projection transitions:
+ready-repair, claim, review-handoff, and terminal projection transitions:
 
 ```bash
 python3 -m app.builderops builderops epic-run-state lifecycle-plan \
-  --transition <claim|review|done> --issue-file <file> [--pr-file <file>] --json
+  --transition <ready|claim|review|done> --issue-file <file> [--pr-file <file>] --json
 ```
 
 The planner emits required reads, proposed explicit label/Project/PR writes, and verification reads.
@@ -324,6 +324,11 @@ spawns. GitHub Issues/PRs/CI remain the hard lifecycle authority; Project status
 dispatcher and epic run-state remain operational coordination evidence only. Live mutations still
 belong to the owning workflow skill (`issue-to-code`, `verification-and-closure`, or issue
 maintenance) and must use explicit commands with verification.
+
+The `ready`/`ready-repair` transition is only a batch planning aid for the readiness repair loop. It
+requires a strict readiness validator result of `ready_candidate` on the issue payload before it will
+propose adding `agent:ready` or projecting Status=`Ready`; otherwise it returns blocked reasons and
+no proposed writes.
 
 ### Setup on each agent machine
 

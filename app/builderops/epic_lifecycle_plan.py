@@ -6,7 +6,7 @@ from typing import Any, Iterable, Mapping
 
 SCHEMA_VERSION = 1
 PROJECT_TITLE = "Agent Delivery Control Plane"
-VALID_TRANSITIONS = {"claim", "review", "done"}
+VALID_TRANSITIONS = {"ready", "claim", "review", "done"}
 AGENT_LABEL_PREFIX = "agent:"
 TERMINAL_CHECK_CONCLUSIONS = {"SUCCESS", "NEUTRAL", "SKIPPED"}
 
@@ -47,7 +47,9 @@ def build_lifecycle_transition_plan(
         repo=normalized_repo,
     )
 
-    if normalized_transition == "claim":
+    if normalized_transition == "ready":
+        _plan_ready(plan, normalized_issue, repo=normalized_repo)
+    elif normalized_transition == "claim":
         _plan_claim(plan, normalized_issue, actor=normalized_actor, repo=normalized_repo)
     elif normalized_transition == "review":
         _plan_review(plan, normalized_issue, normalized_pr, repo=normalized_repo)
@@ -201,6 +203,59 @@ def _plan_claim(
     _add_verify(
         plan,
         "verify_issue_claim_projection",
+        f"gh issue view {issue_number} --json labels,projectItems",
+    )
+
+
+def _plan_ready(plan: dict[str, Any], issue: Mapping[str, Any], *, repo: str) -> None:
+    issue_number = issue["number"]
+    _add_read(
+        plan,
+        "read_issue_readiness_state",
+        f"gh issue view {issue_number} --json state,labels,body,projectItems",
+    )
+
+    if issue["state"] != "OPEN":
+        plan["blocked_reasons"].append("issue-not-open")
+    labels = set(issue["labels"])
+    if "agent:blocked" in labels:
+        plan["blocked_reasons"].append("issue-agent-blocked")
+    if "agent:needs-human" in labels:
+        plan["blocked_reasons"].append("issue-needs-human")
+
+    readiness_classification = issue["readiness_classification"]
+    if readiness_classification != "ready_candidate":
+        plan["blocked_reasons"].append(f"readiness-not-ready-candidate:{readiness_classification}")
+
+    if plan["blocked_reasons"]:
+        plan["authority_notes"].append(
+            "Ready repair only proposes mutations after strict readiness validation reports ready_candidate."
+        )
+        return
+
+    if "agent:ready" not in labels:
+        _add_write(
+            plan,
+            "issue_labels",
+            action="add_label",
+            target=f"issue:{issue_number}",
+            value="agent:ready",
+            command=f"gh issue edit {issue_number} --repo {repo} --add-label agent:ready",
+            reason="validated issue can enter the agent pickup queue",
+        )
+
+    _plan_project_status(
+        plan,
+        bucket="issue_project_status",
+        target=f"issue:{issue_number}",
+        current=issue["project_status"],
+        desired="Ready",
+        command=_project_status_command("ISSUE_ITEM_ID", "READY_OPTION_ID"),
+        reason="validated issue should be projected as Ready before pickup",
+    )
+    _add_verify(
+        plan,
+        "verify_issue_ready_projection",
         f"gh issue view {issue_number} --json labels,projectItems",
     )
 
@@ -469,6 +524,9 @@ def _check_verdict(checks: list[Mapping[str, Any]]) -> str:
 def _normalize_transition(value: str) -> str:
     normalized = _normalize_string(value, "transition").lower().replace("_", "-")
     aliases = {
+        "readiness-repair": "ready",
+        "ready-repair": "ready",
+        "prepare-ready": "ready",
         "review-handoff": "review",
         "terminal": "done",
         "terminal-projection": "done",
@@ -490,6 +548,9 @@ def _normalize_issue(issue: Mapping[str, Any]) -> dict[str, Any]:
         "labels": _normalize_labels(issue.get("labels", [])),
         "assignees": _normalize_logins(issue.get("assignees", []), "assignees"),
         "project_status": _project_status(issue),
+        "readiness_classification": _normalize_optional_string(
+            issue.get("readiness_classification", issue.get("readinessClassification", "unknown"))
+        ),
     }
 
 

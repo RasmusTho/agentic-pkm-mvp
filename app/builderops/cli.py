@@ -648,7 +648,18 @@ def dispatch_plan(
 @click.option(
     "--transition",
     required=True,
-    type=click.Choice(["claim", "review", "review-handoff", "done", "terminal"]),
+    type=click.Choice(
+        [
+            "ready",
+            "ready-repair",
+            "readiness-repair",
+            "claim",
+            "review",
+            "review-handoff",
+            "done",
+            "terminal",
+        ]
+    ),
 )
 @click.option(
     "--issue-file",
