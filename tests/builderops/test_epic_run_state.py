@@ -7,7 +7,9 @@ import json
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 
+from app.builderops.__main__ import _root as builderops_standalone_root
 from app.builderops.epic_run_state import (
     DEFAULT_EPIC_RUNS_DIR,
     EpicRunStateError,
@@ -21,6 +23,14 @@ from app.builderops.epic_run_state import (
     serialize_epic_run_state,
     update_epic_run_state,
 )
+
+
+def _run_builderops(args: list[str]):
+    return CliRunner().invoke(
+        builderops_standalone_root,
+        ["builderops", *args],
+        catch_exceptions=False,
+    )
 
 
 def test_create_load_update_round_trip_uses_temp_runtime(tmp_path: Path) -> None:
@@ -259,3 +269,184 @@ def test_apply_update_rejects_unknown_fields() -> None:
 
     with pytest.raises(EpicRunStateError, match="unknown run-state update"):
         apply_epic_run_update(state, run_id="other-run")
+
+
+def test_cli_dry_run_previews_state_without_writing(tmp_path: Path) -> None:
+    result = _run_builderops(
+        [
+            "epic-run-state",
+            "record",
+            "--epic-issue-number",
+            "3229",
+            "--run-id",
+            "run-dry",
+            "--root",
+            str(tmp_path),
+            "--update-json",
+            json.dumps(
+                {
+                    "child_queue": [
+                        {"issue_number": 3247, "state": "queued"},
+                    ],
+                    "dispatcher_status": {"db_exists": False},
+                }
+            ),
+            "--dry-run",
+            "--json",
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["dry_run"] is True
+    assert payload["state_exists"] is False
+    assert payload["state"]["child_queue"] == [
+        {"issue_number": 3247, "state": "queued"}
+    ]
+    assert payload["state"]["dispatcher_status"] == {"db_exists": False}
+    assert not epic_run_state_path("run-dry", root=tmp_path).exists()
+
+
+def test_cli_record_resume_is_idempotent_for_epic_runner_fields(
+    tmp_path: Path,
+) -> None:
+    update = {
+        "child_queue": [{"issue_number": 3247, "state": "queued"}],
+        "issue_mappings": {
+            "3247": {
+                "branch": "codex/3247-deliver-issue-set-run-state",
+                "pr_number": 3250,
+                "worktree": "/tmp/wt-3247",
+            }
+        },
+        "validation_status": {"3247": {"pytest": "passed"}},
+        "review_findings": [{"id": "finding-3247", "status": "resolved"}],
+        "reusable_constraints": [
+            {"id": "state-not-authority", "text": "state is evidence only"}
+        ],
+        "follow_ups": [{"id": "follow-up-3247", "summary": "wire dispatcher later"}],
+        "stop_conditions": [
+            {"id": "no-github-dry-run-writes", "summary": "dry-run is local only"}
+        ],
+        "dispatcher_status": {"db_exists": False},
+        "compact_receipts": [{"id": "receipt-3247", "summary": "state recorded"}],
+        "last_verified_head_sha": "abc1234",
+    }
+    args = [
+        "epic-run-state",
+        "record",
+        "--epic-issue-number",
+        "3229",
+        "--run-id",
+        "run-resume",
+        "--root",
+        str(tmp_path),
+        "--update-json",
+        json.dumps(update),
+        "--json",
+    ]
+
+    first = _run_builderops(args)
+    second = _run_builderops(args)
+
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    first_payload = json.loads(first.output)
+    second_payload = json.loads(second.output)
+    assert first_payload["state"] == second_payload["state"]
+    state = second_payload["state"]
+    assert len(state["child_queue"]) == 1
+    assert len(state["review_findings"]) == 1
+    assert len(state["reusable_constraints"]) == 1
+    assert len(state["follow_ups"]) == 1
+    assert len(state["compact_receipts"]) == 1
+    assert state["issue_mappings"]["3247"]["pr_number"] == 3250
+    assert state["validation_status"]["3247"] == {"pytest": "passed"}
+    assert state["stop_conditions"] == update["stop_conditions"]
+    assert state["last_verified_head_sha"] == "abc1234"
+
+    shown = _run_builderops(
+        [
+            "epic-run-state",
+            "show",
+            "run-resume",
+            "--root",
+            str(tmp_path),
+            "--json",
+        ]
+    )
+    assert shown.exit_code == 0, shown.output
+    assert json.loads(shown.output) == state
+
+
+def test_cli_recreates_deleted_state_from_supplied_evidence(tmp_path: Path) -> None:
+    update = {
+        "child_queue": [{"issue_number": 3247, "state": "queued"}],
+        "reusable_constraints": [
+            {
+                "id": "rebuildable",
+                "text": "missing local state must be rebuilt from explicit evidence",
+            }
+        ],
+    }
+    args = [
+        "epic-run-state",
+        "record",
+        "--epic-issue-number",
+        "3229",
+        "--run-id",
+        "run-recreate",
+        "--root",
+        str(tmp_path),
+        "--update-json",
+        json.dumps(update),
+        "--json",
+    ]
+
+    created = _run_builderops(args)
+    assert created.exit_code == 0, created.output
+    epic_run_state_path("run-recreate", root=tmp_path).unlink()
+
+    recreated = _run_builderops(args)
+
+    assert recreated.exit_code == 0, recreated.output
+    state = json.loads(recreated.output)["state"]
+    assert state["epic_issue_number"] == 3229
+    assert state["child_queue"] == update["child_queue"]
+    assert state["reusable_constraints"] == update["reusable_constraints"]
+
+
+def test_cli_rejects_epic_mismatch_before_writing(tmp_path: Path) -> None:
+    create_epic_run_state(
+        3229,
+        "run-owned-by-3229",
+        root=tmp_path,
+        child_queue=[{"issue_number": 3247, "state": "queued"}],
+    )
+
+    result = _run_builderops(
+        [
+            "epic-run-state",
+            "record",
+            "--epic-issue-number",
+            "3230",
+            "--run-id",
+            "run-owned-by-3229",
+            "--root",
+            str(tmp_path),
+            "--update-json",
+            json.dumps(
+                {
+                    "child_queue": [
+                        {"issue_number": 9999, "state": "should-not-write"}
+                    ]
+                }
+            ),
+            "--json",
+        ]
+    )
+
+    assert result.exit_code != 0
+    assert "already belongs to epic 3229" in result.output
+    state = load_epic_run_state("run-owned-by-3229", root=tmp_path)
+    assert state["child_queue"] == [{"issue_number": 3247, "state": "queued"}]
