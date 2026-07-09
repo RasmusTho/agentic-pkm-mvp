@@ -1,0 +1,30 @@
+{
+  "lane": "implementation",
+  "summary": [
+    "ship an implementation change"
+  ],
+  "sbs_impact": {
+    "primary_subsystem": "Builder System",
+    "secondary_subsystems": "none",
+    "write_class": "implementation",
+    "authority_impact": "none",
+    "persistence_impact": "none",
+    "derived_rebuildable_impact": "none",
+    "human_knowledge_impact": "none",
+    "memory_impact": "unaffected",
+    "retrieval_context_impact": "unaffected",
+    "sync_deployment_impact": "none",
+    "external_boundary_impact": "none",
+    "new_or_changed_contract": "none",
+    "owner_doc_impact": "none",
+    "transition_debt_impact": "none",
+    "fitness_rule_impact": "none",
+    "boundary_risk": "low"
+  },
+  "owner_doc_resolution": "none",
+  "validation": [
+    "pytest -q"
+  ],
+  "builderops_records": "none",
+  "builderops_reason": "implementation fixture"
+}

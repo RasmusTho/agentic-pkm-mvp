@@ -1,0 +1,34 @@
+{
+  "lane": "direct-repair",
+  "summary": [
+    "repair a bounded governance typo"
+  ],
+  "sbs_impact": {
+    "primary_subsystem": "Builder System",
+    "secondary_subsystems": "none",
+    "write_class": "governance/direct repair",
+    "authority_impact": "no authority change",
+    "persistence_impact": "repo text only",
+    "derived_rebuildable_impact": "unaffected",
+    "human_knowledge_impact": "clarifies existing workflow text",
+    "memory_impact": "unaffected",
+    "retrieval_context_impact": "unaffected",
+    "sync_deployment_impact": "none",
+    "external_boundary_impact": "none",
+    "new_or_changed_contract": "none",
+    "owner_doc_impact": "no owner-doc change implied",
+    "transition_debt_impact": "none",
+    "fitness_rule_impact": "none",
+    "boundary_risk": "low"
+  },
+  "owner_doc_resolution": "none",
+  "validation": [
+    "python3 scripts/docs_guard.py"
+  ],
+  "builderops_records": "none",
+  "builderops_reason": "Bounded direct repair; no BuilderOps material routed.",
+  "direct_repair_type": "governance",
+  "direct_repair_reason": "Bounded correction to existing governance wording.",
+  "direct_repair_validation": "python3 scripts/docs_guard.py",
+  "notes": "No linked issue required for this bounded repair."
+}

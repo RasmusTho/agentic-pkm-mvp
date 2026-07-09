@@ -37,6 +37,28 @@ Default rule:
 - required checks must be known, current, and attached to the current head SHA
 - failing checks must be classified before merge
 
+## PR Body Preparation
+
+Before opening a PR, generate or preflight the body from lane inputs instead of reconstructing the
+template by hand:
+
+```bash
+python3 scripts/pr_body_generator.py --input-json /path/to/pr-body-inputs.json > /tmp/pr-body.md
+```
+
+Use the generator for implementation, docs-authoring, governance, and direct-repair lanes when a PR
+touches governance surfaces, closes an issue, or needs BuilderOps routing evidence. The generated
+body remains editable before PR creation, but required lane inputs fail locally before any PR is
+opened:
+
+- implementation lane requires a linked issue;
+- every body requires concrete SBS impact, validation, and owner-doc writeback resolution;
+- issue-backed and direct-repair bodies require concrete BuilderOps routing lines;
+- direct repair requires `Type`, `Reason`, `Validation`, and `Issue required: no`.
+
+The generator does not weaken `pr-contract`, infer issues silently, open PRs, or write to GitHub. CI
+remains the authority for whether the final PR body satisfies the repository contract.
+
 ## CI Status Handling
 
 Use `scripts/await_pr_checks.sh` as the merge-gating wait path; it reads REST check-runs and classic

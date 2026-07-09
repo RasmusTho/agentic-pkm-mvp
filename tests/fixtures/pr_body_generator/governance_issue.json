@@ -1,0 +1,37 @@
+{
+  "lane": "governance",
+  "issue_number": 3275,
+  "summary": [
+    "add a PR body generator for governance lane delivery",
+    "document local PR body preparation before opening a PR"
+  ],
+  "sbs_impact": {
+    "primary_subsystem": "Builder System",
+    "secondary_subsystems": "PR governance, CI contract",
+    "write_class": "governance/tooling",
+    "authority_impact": "no change; PR contract remains enforced by CI",
+    "persistence_impact": "none beyond generated PR body text",
+    "derived_rebuildable_impact": "generated PR bodies are reproducible from inputs",
+    "human_knowledge_impact": "clearer PR descriptions",
+    "memory_impact": "unaffected",
+    "retrieval_context_impact": "reduces repeated template reconstruction",
+    "sync_deployment_impact": "GitHub PR authoring only",
+    "external_boundary_impact": "none unless helper output is used before PR creation",
+    "new_or_changed_contract": "PR bodies can be generated from lane inputs",
+    "owner_doc_impact": "docs/development/PR_HOT_PATH.md updated",
+    "transition_debt_impact": "reduces PR-contract churn",
+    "fitness_rule_impact": "fixture tests for lane bodies",
+    "boundary_risk": "low"
+  },
+  "owner_doc_resolution": "updated",
+  "validation": [
+    "pytest -q tests/scripts/test_pr_body_generator.py tests/governance/test_issue_pr_governance.py",
+    "ruff check scripts tests/scripts/test_pr_body_generator.py",
+    "python3 scripts/docs_guard.py",
+    "python3 -m py_compile scripts/pr_body_generator.py",
+    "git diff --check"
+  ],
+  "builderops_records": "#3275 dispatcher claim lease-a3e06b41 and PR-body generator output",
+  "builderops_reason": "Issue-backed Builder System governance slice with PR contract helper output.",
+  "notes": "Generated body remains editable before PR creation."
+}

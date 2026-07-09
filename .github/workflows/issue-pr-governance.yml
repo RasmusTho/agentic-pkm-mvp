@@ -225,6 +225,7 @@ jobs:
               "scripts/git_hygiene_janitor.py",
               "scripts/issue_pickup_claim.sh",
               "scripts/reconcile_project_status.py",
+              "scripts/pr_body_generator.py",
               "scripts/validate_source_anchors.py",
               "scripts/validate_issue_readiness.py",
               "scripts/await_pr_checks.sh",
@@ -235,6 +236,7 @@ jobs:
               "tests/governance/test_issue_pr_governance.py",
               "tests/ops/test_project_status_reconcile.py",
               "tests/scripts/test_validate_issue_readiness.py",
+              "tests/scripts/test_pr_body_generator.py",
             ]);
             const governanceAllowedPrefixes = [
               "docs/",
