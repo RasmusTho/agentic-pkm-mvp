@@ -25,6 +25,7 @@ conditional path — only when readiness/repair work is still needed before veri
   - implementation
   - docs authoring
   - governance
+  - direct repair
 
 ## Responsibilities
 
@@ -134,6 +135,28 @@ Commit message must:
 ### Branch-Truth Gate — Pre-Push (mandatory before Step 5) [branch-truth-gate]
 
 Re-run the pre-push phase of `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure` (same preflight command as above, same fallback) — the commit you just made could be on the wrong branch if the workspace drifted between the gates. If the gate fails at pre-push: stop, do not push, relocate the commit to the correct branch (e.g. cherry-pick onto `$EXPECTED_BRANCH` and reset the drifted branch), and re-run both gates.
+
+### Review-Before-CI Gate — Pre-Push for Docs/Governance (mandatory before Step 5)
+
+For docs-authoring, governance, and direct-repair PRs, run the cheap local review/contract gate before
+the push creates or updates an expensive GitHub CI head. This is a local ordering gate only; it does
+not replace required GitHub checks, branch protection, or final review triage.
+
+Use `--review-gate-complete` only after the PR body preflight, docs guard, and targeted
+governance/contract checks for the touched surfaces have run. If an emergency direct repair must
+bypass this local gate, use `--bypass-reason` and name the bypass in the PR/issue receipt.
+
+```bash
+PR_LANE="<implementation|docs-authoring|governance|direct-repair>"
+if [ "$PR_LANE" = "docs-authoring" ] || [ "$PR_LANE" = "governance" ] || [ "$PR_LANE" = "direct-repair" ]; then
+  mapfile -t CHANGED_FILES < <(git diff --name-only origin/main...HEAD)
+  review_gate_args=(--lane "$PR_LANE" --review-gate-complete)
+  for file in "${CHANGED_FILES[@]}"; do
+    review_gate_args+=(--changed-file "$file")
+  done
+  python3 scripts/review_before_ci_gate.py "${review_gate_args[@]}" || exit 1
+fi
+```
 
 ### Step 5: Push Branch
 
