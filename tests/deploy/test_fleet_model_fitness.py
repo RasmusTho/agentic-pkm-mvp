@@ -105,7 +105,7 @@ def test_bind_mount_in_pinned_mode_fails_naming_service(tmp_path: Path) -> None:
         http_get_json=_http_runner(),
     )
 
-    assert result.model == "checkout"
+    assert result.model == "mixed"
     assert result.expected_model == "pinned-image"
     assert not result.ok
     assert any("api" in violation and "/app" in violation for violation in result.violations)
@@ -170,7 +170,7 @@ def test_checkout_model_reports_without_failing(tmp_path: Path) -> None:
     assert result.to_receipt()["model"] == "checkout"
 
 
-def test_bind_mount_with_pin_reports_checkout_without_failing(tmp_path: Path) -> None:
+def test_mixed_pinned_checkout_fleet_fails(tmp_path: Path) -> None:
     root = _root_with_pin(tmp_path)
     inspections = _all_services(api={"app_bind": True})
 
@@ -181,9 +181,12 @@ def test_bind_mount_with_pin_reports_checkout_without_failing(tmp_path: Path) ->
         http_get_json=_http_runner(),
     )
 
-    assert result.ok
-    assert result.model == "checkout"
-    assert result.to_receipt()["ok"] is True
+    assert not result.ok
+    assert result.model == "mixed"
+    assert result.to_receipt()["ok"] is False
+    joined = "\n".join(result.violations)
+    assert "mixed pinned/checkout fleet" in joined
+    assert "api" in joined
 
 
 def test_mixed_fleet_cannot_greenlight_pinned_deploy_receipt(tmp_path: Path) -> None:
@@ -202,31 +205,32 @@ def test_mixed_fleet_cannot_greenlight_pinned_deploy_receipt(tmp_path: Path) -> 
     )
 
     receipt = result.to_receipt()
-    assert result.model == "checkout"
+    assert result.model == "mixed"
     assert not result.ok
     assert receipt["ok"] is False
-    assert receipt["model"] == "checkout"
+    assert receipt["model"] == "mixed"
     assert receipt["expected_model"] == "pinned-image"
     joined = "\n".join(result.violations)
-    assert "expected pinned-image model" in joined
+    assert "mixed pinned/checkout fleet" in joined
     assert "worker-drift" in joined
 
 
-def test_gateway_bind_mount_fails_when_pinned_required(tmp_path: Path) -> None:
+def test_gateway_app_bind_mount_is_rejected(tmp_path: Path) -> None:
     root = _root_with_pin(tmp_path)
     inspections = _all_services(**{"companion-ui": {"app_bind": True}})
 
     result = check_fleet_model_fitness(
         "prod",
         root=root,
-        require_pinned=True,
         docker_runner=_docker_runner(inspections),
         http_get_json=_http_runner(),
     )
 
     receipt = result.to_receipt()
     assert not result.ok
+    assert result.model == "mixed"
     assert receipt["ok"] is False
     joined = "\n".join(result.violations)
+    assert "mixed pinned/checkout fleet" in joined
     assert "companion-ui" in joined
     assert "/app" in joined

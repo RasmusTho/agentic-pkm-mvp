@@ -1,6 +1,6 @@
 ---
 name: execute-promotion
-description: "Execute a reviewed promotion plan: in checkout mode move the stable ref, apply migrations, and restart from the updated checkout; in pinned-image mode run scripts/deploy_channel.sh for the authorized SHA. Requires a complete, operator-acknowledged promotion plan from prepare-promotion."
+description: "Execute a reviewed promotion plan: in checkout mode move the stable ref, apply migrations, and restart from the updated checkout; in pinned-image mode run scripts/deploy_channel.sh deploy for the authorized SHA. Requires a complete, operator-acknowledged promotion plan from prepare-promotion."
 ---
 
 # Execute Promotion
@@ -31,6 +31,10 @@ receipt itself as runtime memory or Product truth.
 
 ## Stable-branch protection and PR-based advancement
 
+This section applies to checkout / gated-`stable` execution only. Pinned-image mode does not advance
+`stable`; it uses the ADR-0040-authorized SHA and `scripts/deploy_channel.sh deploy` after the
+deployment-model switch below resolves to pinned-image.
+
 `origin/stable` is a **protected branch** (`enforce_admins: true`; required status checks: `smoke`, `smoke-docker`, `pr-contract`; PR required). Direct pushes and refs-API updates to `stable` are rejected by GitHub.
 
 Every stable-ref advancement therefore proceeds through a **governed PR targeting `stable`**, not a direct push or annotated-tag force-push:
@@ -43,6 +47,9 @@ Every stable-ref advancement therefore proceeds through a **governed PR targetin
 Never introduce a direct protected-branch ref mutation as the normal promotion path.
 
 ## Ancestry preflight (fail-closed)
+
+This preflight is checkout / gated-`stable` only. Pinned-image mode does not fail on dormant
+`origin/stable` ancestry while ADR-0040 authorizes prod from the current promotion ref.
 
 Before any stable-ref movement, verify that the current `stable` is an ancestor of the promotion candidate:
 
@@ -80,7 +87,7 @@ Before any physical deploy step, resolve the target channel's deployment model:
   authority for which SHA may be promoted, then execute the physical deploy through:
 
   ```bash
-  scripts/deploy_channel.sh prod <authorized-sha> --ack-forward-only
+  scripts/deploy_channel.sh deploy prod <authorized-sha> --ack-forward-only
   ```
 
   The script owns the pin bump, migration gate, API/worker/watcher/heimdal-capture-watch/gateway
@@ -111,7 +118,7 @@ Before any physical deploy step, resolve the target channel's deployment model:
 **Pinned-image model (post-cutover):**
 
 11. Confirms the plan names the authorized SHA and that the matching image tag is available.
-12. Runs `scripts/deploy_channel.sh prod <authorized-sha>` with the required forward-only migration acknowledgment flag when the plan contains acknowledged forward-only migrations. This script is the only physical deploy step in pinned-image mode.
+12. Runs `scripts/deploy_channel.sh deploy prod <authorized-sha>` with the required forward-only migration acknowledgment flag when the plan contains acknowledged forward-only migrations. This script is the only physical deploy step in pinned-image mode.
 13. Reads and records the deploy receipt at `ops/deployments/prod-latest.json`, including the deployed SHA and health/smoke outcome.
 
 14. Appends the promotion execution receipt to the plan file: timestamp, operator, deployment model, merged PR URL or deploy receipt path, which ref/SHA was authorized, which migrations applied, and process recreate/restart confirmation.
@@ -120,10 +127,19 @@ Before any physical deploy step, resolve the target channel's deployment model:
 ## Pre-conditions
 
 - A complete promotion plan produced by `prepare-promotion` exists and all operator acknowledgments are ticked.
-- `git merge-base --is-ancestor origin/stable <candidate-sha>` passes (ancestry preflight; see above).
 - The prod Postgres container is running (`make prod-up` healthy).
+- The active deployment model has been resolved before execution.
+
+**Checkout model only:**
+
+- `git merge-base --is-ancestor origin/stable <candidate-sha>` passes (ancestry preflight; see above).
 - The prod checkout (separate worktree, per `docs/RELEASE_CHANNELS/DEFINE_CONCURRENCY_RULE.md`) is available.
 - `origin/stable` resolves to the current prod commit.
+
+**Pinned-image model only:**
+
+- The plan names the ADR-0040-authorized SHA for the current promotion ref.
+- The matching pinned image tag is available to `scripts/deploy_channel.sh deploy`.
 
 ## Operator steps
 
