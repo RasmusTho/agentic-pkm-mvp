@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 
@@ -157,6 +160,51 @@ def test_update_helpers_are_idempotent_for_lists_and_mappings(
         "pr_number": 101,
         "worktree": "/tmp/wt",
     }
+
+
+def test_concurrent_updates_are_serialized(tmp_path: Path) -> None:
+    run_id = "run-concurrent"
+    create_epic_run_state(3229, run_id, root=tmp_path)
+    start = threading.Event()
+
+    def write_issue(issue_number: int) -> None:
+        start.wait(timeout=5)
+
+        def add_mapping(state: dict[str, object]) -> dict[str, object]:
+            updated = apply_epic_run_update(
+                state,
+                issue_mappings={
+                    str(issue_number): {
+                        "branch": f"codex/{issue_number}",
+                        "pr_number": issue_number + 100,
+                    }
+                },
+                validation_status={
+                    str(issue_number): {"pytest": "passed"},
+                },
+            )
+            time.sleep(0.01)
+            return updated
+
+        update_epic_run_state(run_id, root=tmp_path, updater=add_mapping)
+
+    issue_numbers = list(range(4100, 4112))
+    with ThreadPoolExecutor(max_workers=len(issue_numbers)) as executor:
+        futures = [executor.submit(write_issue, issue) for issue in issue_numbers]
+        start.set()
+        for future in futures:
+            future.result(timeout=5)
+
+    final_state = load_epic_run_state(run_id, root=tmp_path)
+
+    assert sorted(final_state["issue_mappings"]) == [
+        str(issue) for issue in issue_numbers
+    ]
+    assert sorted(final_state["validation_status"]) == [
+        str(issue) for issue in issue_numbers
+    ]
+    assert final_state["issue_mappings"]["4100"]["pr_number"] == 4200
+    assert final_state["validation_status"]["4111"] == {"pytest": "passed"}
 
 
 def test_dispatcher_status_is_recorded_as_local_snapshot() -> None:
