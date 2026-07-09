@@ -148,6 +148,31 @@ def test_latest_check_run_per_name_wins_before_classification() -> None:
     assert result.checks_considered[0]["conclusion"] == "success"
 
 
+def test_latest_check_run_uses_numeric_id_to_break_timestamp_ties() -> None:
+    result = classify_ci_state(
+        {
+            "check_runs": [
+                _check(
+                    "pr-contract",
+                    status="completed",
+                    conclusion="failure",
+                    check_id=9,
+                ),
+                _check(
+                    "pr-contract",
+                    status="completed",
+                    conclusion="success",
+                    check_id=10,
+                ),
+            ]
+        },
+        now="2026-07-09T20:10:00Z",
+    )
+
+    assert result.classification == "green"
+    assert result.checks_considered[0]["id"] == 10
+
+
 def test_missing_expected_check_reports_missing_attachment() -> None:
     result = classify_ci_state(
         {

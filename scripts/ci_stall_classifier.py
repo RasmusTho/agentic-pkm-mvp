@@ -273,8 +273,23 @@ def _latest_by_name(checks: list[CheckRun]) -> list[CheckRun]:
     return list(latest.values())
 
 
-def _check_rank(check: CheckRun) -> tuple[str, str]:
-    return (check.started_at or check.created_at or "", str(check.id or ""))
+def _check_rank(check: CheckRun) -> tuple[str, int]:
+    return (
+        check.started_at or check.created_at or "",
+        _numeric_check_id(check.id),
+    )
+
+
+def _numeric_check_id(value: int | str | None) -> int:
+    """Return the REST check-run id in its numeric ordering domain."""
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            pass
+    return -1
 
 
 def _missing_checks(checks: list[CheckRun], expected: Sequence[str]) -> list[str]:
