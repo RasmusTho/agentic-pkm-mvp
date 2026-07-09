@@ -282,11 +282,12 @@ python -m app.dispatcher status --json   # verify db_exists: true
 make dispatcher-sync          # runs: python -m app.dispatcher pull --repo <repo> only
 ```
 
-### Dev startup bootstrap
+### Dev/prod startup bootstrap
 
-`make dev-start-full` runs `scripts/start_full_system.sh` with `PKM_ENVIRONMENT=dev`. During that
-dev/runtime startup path, `scripts/start_full_system.sh` invokes
-`scripts/start_builderops_services.sh` before Compose services are started.
+`make dev-start-full` runs `scripts/start_full_system.sh` with `PKM_ENVIRONMENT=dev`.
+`make prod-start-full` runs the Midgård preflight wrapper and then `scripts/start_full_system.sh`
+with `PKM_ENVIRONMENT=prod`. During both full-stack startup paths, `scripts/start_full_system.sh`
+invokes `scripts/start_builderops_services.sh` before Compose services are started.
 
 The bootstrap is idempotent and operational-only:
 - it verifies dispatcher status and initializes the local dispatcher database when missing;

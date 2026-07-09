@@ -197,15 +197,16 @@ objects or as shorthand `ref_type:ref`.
 
 ### Startup readiness wrapper
 
-Automation worktrees and dev startup should use the supported wrapper instead of assuming a bare
-`python` binary exists on `PATH`:
+Automation worktrees and dev/prod full-stack startup should use the supported wrapper instead of
+assuming a bare `python` binary exists on `PATH`:
 
 ```bash
 scripts/builderops_cli.sh builderops list --json
 ```
 
-`scripts/start_builderops_services.sh` uses this wrapper during `make dev-start-full` to verify that
-the BuilderOps store can initialize/list records and that the database path resolves predictably.
+`scripts/start_builderops_services.sh` uses this wrapper during `make dev-start-full` and
+`make prod-start-full` to verify that the BuilderOps store can initialize/list records and that the
+database path resolves predictably.
 Failure to reach GitHub during the same bootstrap is recorded as degraded startup state, but the
 BuilderOps store readiness check itself goes through the wrapper/API boundary rather than importing
 store internals or relying on host Python.

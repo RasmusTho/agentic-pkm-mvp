@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Bootstrap dev-time BuilderOps coordination without making GitHub availability
-# a hard dependency for runtime startup.
+# Bootstrap BuilderOps coordination for dev/prod full-stack startup without
+# making GitHub availability a hard dependency for runtime startup.
 
 set -euo pipefail
 

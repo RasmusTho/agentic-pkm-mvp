@@ -1,4 +1,4 @@
-"""BuilderOps startup bootstrap for the dev runtime stack.
+"""BuilderOps startup bootstrap for dev/prod full-stack startup.
 
 This module is intentionally operational glue. GitHub Issues/PRs/CI remain the
 durable truth; dispatcher and BuilderOps state are local coordination surfaces.
@@ -309,7 +309,7 @@ def run_bootstrap(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Bootstrap BuilderOps coordination for dev startup.")
+    parser = argparse.ArgumentParser(description="Bootstrap BuilderOps coordination for full-stack startup.")
     parser.add_argument("--repo", default=DEFAULT_REPO)
     parser.add_argument("--root", default=str(Path.cwd()))
     parser.add_argument("--startup-status-path", default="tmp/startup_status.json")

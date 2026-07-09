@@ -19,7 +19,32 @@ def test_dev_start_full_invokes_builderops_bootstrap() -> None:
     assert "scripts/start_full_system.sh" in dev_target
     assert "scripts/start_builderops_services.sh" in start_script
     assert "builderops_bootstrap" in start_script
-    assert 'PKM_ENVIRONMENT:-}" = "dev"' in start_script
+
+
+def test_prod_start_full_invokes_builderops_bootstrap() -> None:
+    makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+    prod_wrapper = (REPO_ROOT / "scripts" / "prod" / "start_midgard_stack.sh").read_text(encoding="utf-8")
+    start_script = (REPO_ROOT / "scripts" / "start_full_system.sh").read_text(encoding="utf-8")
+
+    prod_target = makefile[makefile.index("prod-start-full:") : makefile.index("test-start-full:")]
+    assert 'PKM_ENVIRONMENT="prod"' in prod_target
+    assert "bash scripts/prod/start_midgard_stack.sh" in prod_target
+    assert "exec scripts/start_full_system.sh" in prod_wrapper
+    assert "scripts/start_builderops_services.sh" in start_script
+    assert "builderops_bootstrap" in start_script
+
+
+def test_builderops_bootstrap_environment_guard_covers_dev_and_prod_only() -> None:
+    start_script = (REPO_ROOT / "scripts" / "start_full_system.sh").read_text(encoding="utf-8")
+
+    guard = start_script[
+        start_script.index("builderops_bootstrap_environment=") : start_script.index(
+            "unset builderops_bootstrap_environment"
+        )
+    ]
+    assert "dev|prod)" in guard
+    assert "test)" not in guard
+    assert "scripts/start_builderops_services.sh" in guard
 
 
 def test_builderops_bootstrap_degrades_without_github_access(tmp_path: Path) -> None:
