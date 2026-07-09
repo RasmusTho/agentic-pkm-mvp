@@ -10,6 +10,14 @@ from app.builderops.completeness_report import (
     build_completeness_report,
     load_records_from_db,
 )
+from app.builderops.ci_handoff_state import (
+    CiHandoffStateError,
+    build_ci_pending_handoff,
+    find_ci_handoff,
+    pending_check_summary,
+    plan_ci_handoff_resume,
+    record_ci_pending_handoff,
+)
 from app.builderops.config import load_paths
 from app.builderops.evidence_bridge import (
     EvidenceBridgeError,
@@ -151,6 +159,28 @@ def _epic_run_state_payload(
         "learning_evaluation_candidates_terminal": not unresolved_candidates,
         "unresolved_learning_evaluation_candidates": unresolved_candidates,
     }
+
+
+def _extract_pr_number(pull_request: Mapping[str, Any]) -> int:
+    value = pull_request.get("number", pull_request.get("pr_number"))
+    if isinstance(value, str) and value.isdigit():
+        value = int(value)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise click.BadParameter("pull request number is required")
+    return value
+
+
+def _extract_pr_head_sha(pull_request: Mapping[str, Any]) -> str:
+    for key in ("head_sha", "headRefOid"):
+        value = pull_request.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    head = pull_request.get("head")
+    if isinstance(head, Mapping):
+        value = head.get("sha")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    raise click.BadParameter("pull request head SHA is required")
 
 
 def _store(ctx: click.Context) -> SqliteBuilderOpsStore:
@@ -950,6 +980,197 @@ def lifecycle_plan(
             repo=repo,
         )
     except EpicLifecyclePlanError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(plan, as_json)
+
+
+@epic_run_state.group(
+    "ci-handoff",
+    help="Record and resume-plan PR CI monitor handoffs.",
+)
+def ci_handoff() -> None:
+    """PR CI wait handoff coordination evidence."""
+
+
+@ci_handoff.command(
+    "record",
+    help="Record a PR as locally validated and waiting on CI.",
+)
+@click.option("--epic-issue-number", required=True, type=int)
+@click.option("--run-id", required=True)
+@click.option(
+    "--root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Override epic run-state root. Defaults to runtime/builderops/epic-runs.",
+)
+@click.option(
+    "--pr-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="JSON PR object, or an object with a pull_request/pr field.",
+)
+@click.option(
+    "--checks-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Optional JSON list of checks, or an object with a checks field.",
+)
+@click.option("--issue-number", default=None, type=int)
+@click.option("--repo", default=None)
+@click.option(
+    "--validation-command",
+    "validation_commands",
+    multiple=True,
+    required=True,
+    help="Local validation command already run. Repeat for each command.",
+)
+@click.option("--review-state", required=True)
+@click.option("--next-closure-action", required=True)
+@click.option("--dry-run", is_flag=True, help="Preview the state without writing a file.")
+@click.option("--json", "as_json", is_flag=True)
+def record_ci_handoff(
+    epic_issue_number: int,
+    run_id: str,
+    root: Path | None,
+    pr_file: Path,
+    checks_file: Path | None,
+    issue_number: int | None,
+    repo: str | None,
+    validation_commands: tuple[str, ...],
+    review_state: str,
+    next_closure_action: str,
+    dry_run: bool,
+    as_json: bool,
+) -> None:
+    pr_payload = _load_json_value_file(pr_file, field="pr-file")
+    pull_request = (
+        pr_payload.get("pull_request", pr_payload.get("pr", pr_payload))
+        if isinstance(pr_payload, dict)
+        else pr_payload
+    )
+    if not isinstance(pull_request, Mapping):
+        raise click.BadParameter("pr-file must contain a PR object")
+    checks_payload = _load_json_value_file(checks_file, field="checks-file")
+    if isinstance(checks_payload, dict):
+        checks = checks_payload.get("checks", checks_payload.get("check_runs", []))
+    elif checks_payload is None:
+        checks = []
+    else:
+        checks = checks_payload
+
+    try:
+        path = epic_run_state_path(run_id, root=root)
+        state_exists = path.exists()
+        if state_exists:
+            base_state = load_epic_run_state(run_id, root=root)
+            if base_state["epic_issue_number"] != epic_issue_number:
+                raise EpicRunStateError(
+                    f"run_id {run_id!r} already belongs to epic "
+                    f"{base_state['epic_issue_number']}"
+                )
+        else:
+            base_state = new_epic_run_state(epic_issue_number, run_id)
+        handoff = build_ci_pending_handoff(
+            pr_number=_extract_pr_number(pull_request),
+            head_sha=_extract_pr_head_sha(pull_request),
+            local_validation=validation_commands,
+            review_state=review_state,
+            pending_checks=pending_check_summary(checks),
+            next_closure_action=next_closure_action,
+            issue_number=issue_number,
+            repo=repo,
+        )
+        state = record_ci_pending_handoff(base_state, handoff)
+        if not dry_run:
+            if state_exists:
+                state = update_epic_run_state(
+                    run_id,
+                    root=root,
+                    ci_handoffs=[handoff],
+                )
+            else:
+                state = create_epic_run_state(
+                    epic_issue_number,
+                    run_id,
+                    root=root,
+                    ci_handoffs=[handoff],
+                )
+    except (CiHandoffStateError, EpicRunStateError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    _emit(
+        {
+            **_epic_run_state_payload(
+                dry_run=dry_run,
+                path=path,
+                state=state,
+                state_exists=state_exists,
+            ),
+            "handoff": handoff,
+        },
+        as_json,
+    )
+
+
+@ci_handoff.command(
+    "resume-plan",
+    help="Plan closure from a CI handoff and live PR/check evidence without writes.",
+)
+@click.option("--run-id", required=True)
+@click.option(
+    "--root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Override epic run-state root. Defaults to runtime/builderops/epic-runs.",
+)
+@click.option("--pr-number", required=True, type=int)
+@click.option(
+    "--pr-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="JSON PR object, or an object with a pull_request/pr field.",
+)
+@click.option(
+    "--checks-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="JSON list of checks, or an object with a checks field.",
+)
+@click.option("--json", "as_json", is_flag=True)
+def resume_ci_handoff_plan(
+    run_id: str,
+    root: Path | None,
+    pr_number: int,
+    pr_file: Path,
+    checks_file: Path,
+    as_json: bool,
+) -> None:
+    pr_payload = _load_json_value_file(pr_file, field="pr-file")
+    pull_request = (
+        pr_payload.get("pull_request", pr_payload.get("pr", pr_payload))
+        if isinstance(pr_payload, dict)
+        else pr_payload
+    )
+    if not isinstance(pull_request, Mapping):
+        raise click.BadParameter("pr-file must contain a PR object")
+    checks_payload = _load_json_value_file(checks_file, field="checks-file")
+    if isinstance(checks_payload, dict):
+        checks = checks_payload.get("checks", checks_payload.get("check_runs", []))
+    else:
+        checks = checks_payload
+
+    try:
+        state = load_epic_run_state(run_id, root=root)
+        handoff = find_ci_handoff(state, pr_number=pr_number)
+        if handoff is None:
+            raise CiHandoffStateError(f"no CI handoff found for PR #{pr_number}")
+        plan = plan_ci_handoff_resume(
+            handoff=handoff,
+            live_pr=pull_request,
+            checks=checks,
+        )
+    except (CiHandoffStateError, EpicRunStateError, FileNotFoundError) as exc:
         raise click.ClickException(str(exc)) from exc
     _emit(plan, as_json)
 

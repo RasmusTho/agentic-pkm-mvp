@@ -37,6 +37,7 @@ _LIST_FIELDS = (
     "stop_conditions",
     "dispatch_decisions",
     "compact_receipts",
+    "ci_handoffs",
 )
 _MERGE_MAPPING_FIELDS = (
     "issue_mappings",
@@ -115,6 +116,7 @@ def new_epic_run_state(
         "dispatch_decisions": [],
         "dispatcher_status": {},
         "compact_receipts": [],
+        "ci_handoffs": [],
         "last_verified_head_sha": None,
     }
     if updates:
