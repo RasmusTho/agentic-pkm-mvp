@@ -75,6 +75,22 @@ def test_claim_plan_separates_required_reads_and_projection_writes() -> None:
     assert plan["summary"]["no_mutations_performed"] is True
 
 
+def test_claim_plan_blocks_non_ready_issue_without_writes() -> None:
+    plan = build_lifecycle_transition_plan(
+        transition="claim",
+        issue=_issue(labels=["agent:blocked", "type:task"], project_status="Backlog"),
+        actor="RasmusTho",
+        repo="RasmusTho/agentic-pkm-mvp",
+    )
+
+    assert plan["blocked_reasons"] == [
+        "missing-agent-ready-label",
+        "project-status-not-ready",
+    ]
+    assert plan["proposed_writes"]["issue_labels"] == []
+    assert plan["proposed_writes"]["issue_project_status"] == []
+
+
 def test_review_handoff_plans_issue_and_pr_project_review_only() -> None:
     plan = build_lifecycle_transition_plan(
         transition="review-handoff",
@@ -178,3 +194,56 @@ def test_cli_lifecycle_plan_is_dry_run_and_does_not_write_run_state(tmp_path: Pa
     assert payload["transition"] == "claim"
     assert payload["summary"]["no_mutations_performed"] is True
     assert not (tmp_path / "run-cli-lifecycle.json").exists()
+
+
+def test_cli_lifecycle_plan_accepts_github_check_runs_payload(tmp_path: Path) -> None:
+    issue_file = tmp_path / "issue.json"
+    pr_file = tmp_path / "pr.json"
+    checks_file = tmp_path / "checks.json"
+    issue_file.write_text(
+        json.dumps({"issue": _issue(state="CLOSED", labels=["type:task"], project_status="Review")}),
+        encoding="utf-8",
+    )
+    pr_file.write_text(
+        json.dumps({"pull_request": _pr(state="CLOSED", merged=True, project_status="Review")}),
+        encoding="utf-8",
+    )
+    checks_file.write_text(
+        json.dumps(
+            {
+                "total_count": 1,
+                "check_runs": [
+                    {
+                        "name": "unit",
+                        "status": "completed",
+                        "conclusion": "failure",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_builderops(
+        [
+            "epic-run-state",
+            "lifecycle-plan",
+            "--transition",
+            "done",
+            "--issue-file",
+            str(issue_file),
+            "--pr-file",
+            str(pr_file),
+            "--checks-file",
+            str(checks_file),
+            "--repo",
+            "RasmusTho/agentic-pkm-mvp",
+            "--json",
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert "ci-checks-not-green" in payload["blocked_reasons"]
+    assert payload["proposed_writes"]["issue_project_status"] == []
+    assert payload["proposed_writes"]["pr_project_status"] == []

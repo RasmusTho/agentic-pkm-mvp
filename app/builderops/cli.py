@@ -699,7 +699,7 @@ def lifecycle_plan(
     else:
         pull_request = pr_payload
     if isinstance(checks_payload, dict):
-        checks = checks_payload.get("checks", [])
+        checks = checks_payload.get("checks", checks_payload.get("check_runs", []))
     elif checks_payload is None:
         checks = []
     else:

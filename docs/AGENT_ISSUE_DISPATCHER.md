@@ -307,6 +307,23 @@ and `complete`. Low-frequency/batched projection repair is exposed separately th
 `scripts/reconcile_builderops_project_status.sh`, which delegates to the existing project
 reconciliation helper.
 
+### Epic-runner lifecycle planning
+
+`deliver-issue-set` coordinators may use the local dry-run lifecycle planner to preview common
+claim, review-handoff, and terminal projection transitions:
+
+```bash
+python3 -m app.builderops builderops epic-run-state lifecycle-plan \
+  --transition <claim|review|done> --issue-file <file> [--pr-file <file>] --json
+```
+
+The planner emits required reads, proposed explicit label/Project/PR writes, and verification reads.
+It performs no GitHub writes, Project writes, dispatcher lease writes, run-state writes, or agent
+spawns. GitHub Issues/PRs/CI remain the hard lifecycle authority; Project status remains a projection;
+dispatcher and epic run-state remain operational coordination evidence only. Live mutations still
+belong to the owning workflow skill (`issue-to-code`, `verification-and-closure`, or issue
+maintenance) and must use explicit commands with verification.
+
 ### Setup on each agent machine
 
 Install a wrapper script that proxies dispatcher commands over SSH:
