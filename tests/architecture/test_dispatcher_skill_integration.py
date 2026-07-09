@@ -70,3 +70,17 @@ def test_skill_dispatcher_steps_in_order() -> None:
     assert (
         status_pos < next_pos < claim_pos < heartbeat_pos < complete_pos
     ), f"Dispatcher steps out of order: status({status_pos}) next({next_pos}) claim({claim_pos}) heartbeat({heartbeat_pos}) complete({complete_pos})"
+
+
+def test_issue_pickup_records_dispatcher_or_fallback_mode() -> None:
+    """Issue pickup guidance records the coordination path used."""
+    repo_root = Path(__file__).parent.parent.parent
+    skill = (repo_root / ".codex/skills/issue-to-code/SKILL.md").read_text()
+    script = (repo_root / "scripts/issue_pickup_claim.sh").read_text()
+
+    assert "coordination_mode" in skill
+    assert "fallback_reason" in skill
+    assert "dispatcher-backed" in skill
+    assert "github-label-only-fallback" in skill
+    assert "coordination_mode=$RECEIPT_COORDINATION_MODE" in script
+    assert "fallback_reason=$RECEIPT_FALLBACK_REASON" in script
