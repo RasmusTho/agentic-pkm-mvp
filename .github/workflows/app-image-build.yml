@@ -92,10 +92,15 @@ jobs:
         run: |
           set -euo pipefail
           image="${{ steps.build-identity.outputs.image }}"
-          inspect_output="$(docker buildx imagetools inspect "${image}")"
-          echo "${inspect_output}"
+          manifest_platforms="$(docker buildx imagetools inspect "${image}" | awk '
+            $1 == "Platform:" {
+              print $2
+            }
+          ' | sort -u)"
+          echo "Discovered manifest platforms:"
+          echo "${manifest_platforms}"
           for required_platform in linux/amd64 linux/arm64; do
-            if ! echo "${inspect_output}" | grep -q "Platform: ${required_platform}"; then
+            if ! echo "${manifest_platforms}" | grep -qx "${required_platform}"; then
               echo "missing required platform in image manifest: ${required_platform}"
               exit 1
             fi

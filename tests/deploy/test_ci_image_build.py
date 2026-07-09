@@ -52,6 +52,8 @@ def test_built_image_version_reports_build_sha(monkeypatch) -> None:
     assert "if: github.event_name == 'pull_request'" in workflow
     assert "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" in workflow
     assert "docker buildx imagetools inspect" in workflow
+    assert "manifest_platforms=\"" in workflow
+    assert "awk '" in workflow
     assert "--platform linux/amd64" in workflow
 
     monkeypatch.setenv("VCS_REF", "0123456789abcdef0123456789abcdef01234567")
