@@ -220,6 +220,13 @@ explicit unavailable report state, not a successful empty report. The helper is 
 no blocking CI, GitHub mutation, BuilderOps mutation, Product/Runtime mutation, or runtime/user-memory
 write authority by default.
 
+The observe-only BuilderOps helper `python3 -m app.builderops builderops pattern-routing classify`
+classifies repeated learning and reevaluation patterns into transition-debt, fitness-rule candidate,
+bounded issue, or discard/supersession routes. Non-discard routes require repeated evidence and
+source refs; one-off or already-covered signals can terminate as discard/supersession receipts. The
+helper reports criteria and terminal outcomes only; it does not create issues, edit debt/fitness
+docs, update GitHub state, or write Product/Runtime state.
+
 ### 5. Governance lane
 
 A distinct work-stream on the Project board for changes to delivery-system artifacts.
