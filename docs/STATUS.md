@@ -265,10 +265,10 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   planner, PR CI-monitor handoff records for locally validated PRs waiting on GitHub Actions, a
   read-only CI stall classifier for REST check-run payloads, a PR-body generator for local lane
   contract preflight before PR creation, a review-before-CI gate planner for docs/governance PR
-  preparation, and a parent epic delivery ledger renderer; these helpers emit local JSON/run-state
-  coordination evidence or editable local text only and do not mutate GitHub, Projects, dispatcher
-  leases, branches, worktrees, product/runtime behavior, or agent spawns unless a caller explicitly
-  invokes the validator-gated ready-repair apply mode.
+  preparation, a parent epic delivery ledger renderer, and a lintable epic PR batching policy helper;
+  these helpers emit local JSON/run-state coordination evidence or editable local text only and do
+  not mutate GitHub, Projects, dispatcher leases, branches, worktrees, product/runtime behavior, or
+  agent spawns unless a caller explicitly invokes the validator-gated ready-repair apply mode.
   Per `docs/adr/ADR-0010-builderops-vault-authority-boundary.md` it governs builder-operations
   material only; its records and generated projections are explicitly non-authoritative for
   product/runtime truth and never bypass repo authority gates. (ADR-0010's "not implemented" header

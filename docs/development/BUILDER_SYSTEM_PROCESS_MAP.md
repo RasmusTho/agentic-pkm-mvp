@@ -285,6 +285,31 @@ stateDiagram-v2
   MergeEligible --> HumanException: gate unavailable/unsafe waiver
 ```
 
+### Epic PR Batching Policy
+
+Default to one coherent child issue slice per PR. A parent epic orders work and receipts; it is not
+permission to create one mega-PR. Multiple child issues may share a PR only when they share the same
+owner/review surface, validation and CI risk profile, rollback behavior, owner-doc writeback surface,
+PR lane, and BuilderOps routing story.
+
+Allowed examples:
+
+- docs-only batches across the same development docs when review, validation, and owner-doc writeback
+  are identical;
+- shared helper plus direct tests when the helper is the single reason every child changes;
+- mechanical governance fixture updates when all children validate through the same targeted tests.
+
+Forbidden examples:
+
+- runtime behavior plus governance workflow or process changes in one PR;
+- Product owner-doc contract changes batched with Builder System process edits;
+- children with different rollback behavior, reviewers, required CI surfaces, or owner-doc writebacks;
+- batching merely because children share a parent epic.
+
+Use `app.builderops.epic_pr_batching_policy.evaluate_epic_pr_batching_policy` as a lintable local
+preflight for obvious over-batching risk. The policy is advisory governance evidence only: it does
+not weaken PR review, required CI, issue receipts, or branch protection.
+
 ### Agent Work Lifecycle
 
 ```mermaid

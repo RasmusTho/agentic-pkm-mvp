@@ -59,6 +59,19 @@ opened:
 The generator does not weaken `pr-contract`, infer issues silently, open PRs, or write to GitHub. CI
 remains the authority for whether the final PR body satisfies the repository contract.
 
+## Multi-Issue PR Scope
+
+Issue-backed PRs should normally close one child issue. A multi-issue PR is allowed only when every
+child shares the same owner/review surface, validation set, rollback behavior, owner-doc writeback,
+lane, and BuilderOps routing story. Use one closing keyword only for issues fully delivered by the
+PR; list related children without closing keywords when they remain open or are only partially
+addressed. The PR body must name the parent receipt expectation and explain why batching is safer
+than separate PRs.
+
+Never batch runtime behavior with governance/process changes, Product contract changes with Builder
+System process edits, or children that need different reviewers, CI surfaces, rollback paths, or
+owner-doc writebacks.
+
 ## Review-Before-CI
 
 For docs-authoring, governance, and direct-repair PRs, run the cheap local review gate before pushing
