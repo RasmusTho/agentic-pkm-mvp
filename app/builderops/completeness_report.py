@@ -200,8 +200,10 @@ def _candidate_summary(candidate: Mapping[str, Any]) -> dict[str, Any]:
         "id": candidate.get("id") or candidate.get("candidate_id"),
         "summary": candidate.get("summary"),
         "outcome": candidate.get("outcome"),
-        "evidence_kind": candidate.get("evidence_kind"),
-        "upstream_artifact_hint": candidate.get("upstream_artifact_hint"),
+        "evidence_kind": candidate.get("evidence_kind") or candidate.get("route"),
+        "upstream_artifact_hint": (
+            candidate.get("upstream_artifact_hint") or candidate.get("upstream_artifact")
+        ),
     }
 
 

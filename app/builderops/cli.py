@@ -628,10 +628,7 @@ def completeness_report_check(
             storage = {"available": True, "source": str(records_file), "record_count": len(records)}
         elif isinstance(payload, dict) and isinstance(payload.get("records"), list):
             records = payload["records"]
-            raw_candidates = payload.get("learning_evaluation_candidates", [])
-            if not isinstance(raw_candidates, list):
-                raise click.BadParameter("learning_evaluation_candidates must be a list")
-            candidates = raw_candidates
+            candidates = _completeness_report_candidates(payload)
             storage = {"available": True, "source": str(records_file), "record_count": len(records)}
         else:
             raise click.BadParameter("records-file must contain a list or an object with records")
@@ -653,6 +650,16 @@ def completeness_report_check(
         reevaluation_candidates=candidates,
     )
     _emit(payload, as_json)
+
+
+def _completeness_report_candidates(payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    candidates: list[Mapping[str, Any]] = []
+    for key in ("learning_evaluation_candidates", "candidate", "candidates"):
+        raw_candidates = payload.get(key, [])
+        if not isinstance(raw_candidates, list):
+            raise click.BadParameter(f"{key} must be a list")
+        candidates.extend(raw_candidates)
+    return candidates
 
 
 @builderops.group("epic-run-state", help="Record local deliver-issue-set epic run state.")

@@ -206,3 +206,52 @@ def test_completeness_report_cli_reads_fixture_file(tmp_path: Path) -> None:
     payload = json.loads(result.output)
     assert payload["complete"] is True
     assert payload["unprocessed_learning_signals"] == []
+
+
+def test_completeness_report_cli_reads_evidence_bridge_candidate_fixture(
+    tmp_path: Path,
+) -> None:
+    records_file = tmp_path / "evidence-bridge.json"
+    records_file.write_text(
+        json.dumps({
+            "records": [],
+            "candidate": [
+                {
+                    "id": "cand-review",
+                    "route": "learning_signal",
+                    "summary": "Review finding needs retrospective routing",
+                    "source_refs": [{"ref_type": "github_pr", "ref": "#3283"}],
+                    "upstream_artifact": ".codex/skills/verification-and-closure/SKILL.md",
+                    "evidence_ids": ["review-1"],
+                    "recommendation": "Route into a retrospective candidate.",
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        builderops_standalone_root,
+        [
+            "builderops",
+            "completeness-report",
+            "check",
+            "--records-file",
+            str(records_file),
+            "--json",
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["complete"] is False
+    assert payload["reevaluation_candidates_without_outcome"] == [
+        {
+            "id": "cand-review",
+            "summary": "Review finding needs retrospective routing",
+            "outcome": None,
+            "evidence_kind": "learning_signal",
+            "upstream_artifact_hint": ".codex/skills/verification-and-closure/SKILL.md",
+        }
+    ]
