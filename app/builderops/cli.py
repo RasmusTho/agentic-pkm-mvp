@@ -65,6 +65,14 @@ from app.builderops.retrospective_closure import (
     build_retrospective_closure_ledger,
 )
 from app.builderops.store import SqliteBuilderOpsStore
+from app.builderops.vault_queue import (
+    VaultQueueError,
+    claim_ticket,
+    init_vault,
+    release_ticket,
+    validate_vault,
+    vault_paths,
+)
 
 
 def _parse_json_object(value: str | None, *, field: str) -> dict[str, Any]:
@@ -238,6 +246,62 @@ def _handle_create(
 def builderops(ctx: click.Context, db_path: Path | None) -> None:
     ctx.ensure_object(dict)
     ctx.obj["db_path"] = db_path
+
+
+@builderops.group("vault", help="Operate the file-first Builder Ops Vault queue.")
+def vault() -> None:
+    """Shared Markdown vault helpers; mutable claims remain machine-local."""
+
+
+@vault.command("paths", help="Show shared vault and local operational paths.")
+@click.option("--json", "as_json", is_flag=True)
+def vault_paths_command(as_json: bool) -> None:
+    _emit(vault_paths(load_paths()), as_json)
+
+
+@vault.command("init", help="Create shared Markdown queue directories only.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.option("--json", "as_json", is_flag=True)
+def vault_init(root: Path, as_json: bool) -> None:
+    _emit(init_vault(root), as_json)
+
+
+@vault.command("validate", help="Validate shared-vault separation and ticket status integrity.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.option("--json", "as_json", is_flag=True)
+def vault_validate(root: Path, as_json: bool) -> None:
+    payload = validate_vault(root, load_paths())
+    _emit(payload, as_json)
+    if not payload["ok"]:
+        raise click.ClickException("Builder Ops Vault validation failed")
+
+
+@vault.command("claim", help="Atomically claim a Ready ticket in machine-local state.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.argument("ticket_ref")
+@click.option("--agent", required=True)
+@click.option("--ttl-minutes", default=120, show_default=True, type=int)
+@click.option("--takeover-stale", is_flag=True)
+@click.option("--json", "as_json", is_flag=True)
+def vault_claim(root: Path, ticket_ref: str, agent: str, ttl_minutes: int, takeover_stale: bool, as_json: bool) -> None:
+    try:
+        payload = claim_ticket(root, ticket_ref, agent=agent, paths=load_paths(), ttl_minutes=ttl_minutes, takeover_stale=takeover_stale)
+    except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@vault.command("release", help="Release this agent's machine-local ticket claim.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.argument("ticket_ref")
+@click.option("--agent", required=True)
+@click.option("--json", "as_json", is_flag=True)
+def vault_release(root: Path, ticket_ref: str, agent: str, as_json: bool) -> None:
+    try:
+        payload = release_ticket(root, ticket_ref, agent=agent, paths=load_paths())
+    except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
 
 
 @builderops.command("create-worklog", help="Create an AgentWorklog record.")

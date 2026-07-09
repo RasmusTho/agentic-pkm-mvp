@@ -14,6 +14,7 @@ DEFAULT_DB_NAME = "builderops.sqlite3"
 class BuilderOpsPaths:
     state_dir: Path
     db_path: Path
+    vault_root: Path | None
 
     def ensure(self) -> None:
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -26,4 +27,22 @@ def load_paths(env: dict[str, str] | None = None) -> BuilderOpsPaths:
     db_path = Path(
         src.get("BUILDEROPS_DB_PATH", str(state_dir / DEFAULT_DB_NAME))
     ).expanduser()
-    return BuilderOpsPaths(state_dir=state_dir, db_path=db_path)
+    vault_value = src.get("BUILDEROPS_VAULT_ROOT", "").strip()
+    vault_root = Path(vault_value).expanduser() if vault_value else None
+    paths = BuilderOpsPaths(
+        state_dir=state_dir,
+        db_path=db_path,
+        vault_root=vault_root,
+    )
+    _validate_separation(paths)
+    return paths
+
+
+def _validate_separation(paths: BuilderOpsPaths) -> None:
+    """Fail closed when mutable local state would enter the shared vault."""
+    if paths.vault_root is None:
+        return
+    vault = paths.vault_root.resolve(strict=False)
+    candidate = paths.db_path.resolve(strict=False)
+    if candidate == vault or vault in candidate.parents:
+        raise ValueError("BUILDEROPS_DB_PATH must be outside BUILDEROPS_VAULT_ROOT")
