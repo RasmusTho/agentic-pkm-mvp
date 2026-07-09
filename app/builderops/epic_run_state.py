@@ -37,6 +37,7 @@ _LIST_FIELDS = (
     "stop_conditions",
     "dispatch_decisions",
     "compact_receipts",
+    "ci_handoffs",
 )
 _MERGE_MAPPING_FIELDS = (
     "issue_mappings",
@@ -115,6 +116,7 @@ def new_epic_run_state(
         "dispatch_decisions": [],
         "dispatcher_status": {},
         "compact_receipts": [],
+        "ci_handoffs": [],
         "last_verified_head_sha": None,
     }
     if updates:
@@ -212,6 +214,11 @@ def apply_epic_run_update(state: Mapping[str, Any], **updates: Any) -> dict[str,
             incoming = _normalize_list(updates[field], field)
             if field == "learning_evaluation_candidates":
                 normalized[field] = _merge_learning_evaluation_candidates(
+                    normalized[field],
+                    incoming,
+                )
+            elif field == "ci_handoffs":
+                normalized[field] = _replace_matching_json_list_records(
                     normalized[field],
                     incoming,
                 )
@@ -444,6 +451,24 @@ def _merge_json_list(existing: list[Any], incoming: list[Any]) -> list[Any]:
         key = _record_key(item_copy)
         if key in index:
             merged[index[key]] = _merge_json_value(merged[index[key]], item_copy)
+        else:
+            index[key] = len(merged)
+            merged.append(item_copy)
+    return merged
+
+
+def _replace_matching_json_list_records(
+    existing: list[Any],
+    incoming: list[Any],
+) -> list[Any]:
+    merged = _json_clone(existing)
+    index = {_record_key(item): pos for pos, item in enumerate(merged)}
+
+    for item in incoming:
+        item_copy = _json_clone(item)
+        key = _record_key(item_copy)
+        if key in index:
+            merged[index[key]] = item_copy
         else:
             index[key] = len(merged)
             merged.append(item_copy)

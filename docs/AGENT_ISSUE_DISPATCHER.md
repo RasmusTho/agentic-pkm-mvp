@@ -403,6 +403,29 @@ dispatcher and epic run-state remain operational coordination evidence only. Liv
 belong to the owning workflow skill (`issue-to-code`, `verification-and-closure`, or issue
 maintenance) and must use explicit commands with verification.
 
+When a PR is locally validated but GitHub Actions are still pending, coordinators may separate the
+implementation handoff from terminal closure with a CI-monitor handoff record:
+
+```bash
+python3 -m app.builderops builderops epic-run-state ci-handoff record \
+  --epic-issue-number <epic> --run-id <run> \
+  --pr-file <pr.json> --checks-file <checks.json> \
+  --validation-command "<command already run>" \
+  --review-state <state> \
+  --next-closure-action "<explicit next action>" --json
+
+python3 -m app.builderops builderops epic-run-state ci-handoff resume-plan \
+  --run-id <run> --pr-number <pr> \
+  --pr-file <live-pr.json> --checks-file <live-checks.json> --json
+```
+
+The handoff captures PR number, head SHA, local validation commands, review state, pending check
+summary, and the next closure action. `resume-plan` fails closed if the live PR head SHA differs
+from the handoff SHA, blocks while CI is pending or red, and emits a closure-plan candidate only
+after terminal green CI. It performs no merge, Project write, issue closure, dispatcher write, or
+GitHub check mutation; closure still belongs to the explicit verification workflow after re-reading
+live PR head/check/review truth.
+
 Before starting an epic delivery batch, coordinators may run the child readiness repair batch helper
 against an explicit issue-state fixture:
 
