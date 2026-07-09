@@ -204,12 +204,9 @@ def _extract_pr_head_sha(pull_request: Mapping[str, Any]) -> str:
 
 
 def _store(ctx: click.Context) -> SqliteBuilderOpsStore:
-    db_path = ctx.obj.get("db_path") if ctx.obj else None
-    if db_path is None:
-        paths = load_paths()
-        paths.ensure()
-        db_path = paths.db_path
-    store = SqliteBuilderOpsStore(Path(db_path))
+    paths = _effective_paths(ctx)
+    paths.ensure()
+    store = SqliteBuilderOpsStore(paths.db_path)
     store.initialize()
     return store
 

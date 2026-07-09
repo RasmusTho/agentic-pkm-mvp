@@ -105,6 +105,22 @@ def test_global_db_path_override_is_used_by_paths_and_validation(tmp_path: Path)
     assert "BUILDEROPS_DB_PATH" in validated.output
 
 
+def test_global_db_path_override_cannot_create_store_inside_vault(tmp_path: Path) -> None:
+    vault = tmp_path / "shared-vault"
+    vault.mkdir()
+    override = vault / "override.sqlite3"
+    env = {"BUILDEROPS_VAULT_ROOT": str(vault)}
+
+    result = _run(
+        ["--db-path", str(override), "list", "--json"],
+        env,
+    )
+
+    assert result.exit_code != 0
+    assert "BUILDEROPS_DB_PATH" in result.output
+    assert not override.exists()
+
+
 @pytest.mark.parametrize(
     ("filename", "content"),
     [

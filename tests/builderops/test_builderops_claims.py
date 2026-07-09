@@ -50,7 +50,17 @@ def test_stale_advisory_claim_is_reported_without_exclusive_takeover(tmp_path: P
     _ticket(vault)
     claims = vault / ".builderops" / "claims"
     claims.mkdir(parents=True)
-    (claims / "BMI-01-codex-old.json").write_text(json.dumps({"ticket_id": "BMI-01", "agent": "codex", "expires_at": "2020-01-01T00:00:00Z"}), encoding="utf-8")
+    (claims / "BMI-01-codex-old.json").write_text(
+        json.dumps(
+            {
+                "ticket_id": "BMI-01",
+                "agent": "codex",
+                "claimed_at": "2019-01-01T00:00:00Z",
+                "expires_at": "2020-01-01T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
 
     claimed = _run(["vault", "claim", str(vault), "BMI-01", "--agent", "claude", "--json"], env)
     validated = _run(["vault", "validate", str(vault), "--json"], env)
@@ -119,8 +129,59 @@ def test_claim_rejects_symlinked_claims_root(tmp_path: Path) -> None:
     )
 
     assert result.exit_code != 0
-    assert "escapes shared vault" in result.output
+    assert "must not be a symlink" in result.output
     assert not list(outside.glob("*.json"))
+
+
+def test_claim_rejects_symlinked_builderops_parent_before_creating_claims(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    vault = Path(env["BUILDEROPS_VAULT_ROOT"])
+    _ticket(vault)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    builderops = vault / ".builderops"
+    try:
+        builderops.symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not supported on this platform")
+
+    result = _run(
+        ["vault", "claim", str(vault), "BMI-01", "--agent", "codex", "--json"],
+        env,
+    )
+
+    assert result.exit_code != 0
+    assert "must not be a symlink" in result.output
+    assert not (outside / "claims").exists()
+
+
+def test_claim_rejects_symlinked_ready_directory(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    vault = Path(env["BUILDEROPS_VAULT_ROOT"])
+    outside = tmp_path / "outside-ready"
+    outside.mkdir()
+    (outside / "BMI-01.md").write_text(
+        '---\nid: "BMI-01"\nstatus: "Ready"\n---\n\n# BMI-01\n',
+        encoding="utf-8",
+    )
+    delivery = vault / "agent-delivery"
+    delivery.mkdir(parents=True)
+    try:
+        (delivery / "Ready").symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not supported on this platform")
+
+    validated = _run(["vault", "validate", str(vault), "--json"], env)
+    claimed = _run(
+        ["vault", "claim", str(vault), "BMI-01", "--agent", "codex", "--json"],
+        env,
+    )
+
+    assert validated.exit_code != 0
+    assert "must not be a symlink" in validated.output
+    assert claimed.exit_code != 0
+    assert "must not be a symlink" in claimed.output
+    assert not list((vault / ".builderops" / "claims").glob("*.json"))
 
 
 def test_validate_reports_malformed_advisory_claim_without_crashing(tmp_path: Path) -> None:
@@ -138,3 +199,33 @@ def test_validate_reports_malformed_advisory_claim_without_crashing(tmp_path: Pa
     payload = json.loads(result.output.splitlines()[0])
     assert payload["ok"] is False
     assert any(str(malformed) in error for error in payload["errors"])
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '{"expires_at":"2030-01-01T00:00:00Z"}',
+        b"\xff\xfe\x00",
+    ],
+)
+def test_validate_rejects_incomplete_or_non_utf8_claims(
+    tmp_path: Path,
+    content: str | bytes,
+) -> None:
+    env = _env(tmp_path)
+    vault = Path(env["BUILDEROPS_VAULT_ROOT"])
+    _ticket(vault)
+    claims = vault / ".builderops" / "claims"
+    claims.mkdir(parents=True)
+    invalid = claims / "BMI-01-invalid.json"
+    if isinstance(content, bytes):
+        invalid.write_bytes(content)
+    else:
+        invalid.write_text(content, encoding="utf-8")
+
+    result = _run(["vault", "validate", str(vault), "--json"], env)
+
+    assert result.exit_code != 0
+    payload = json.loads(result.output.splitlines()[0])
+    assert payload["ok"] is False
+    assert any(str(invalid) in error for error in payload["errors"])

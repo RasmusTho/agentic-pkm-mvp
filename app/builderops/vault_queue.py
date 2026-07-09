@@ -78,7 +78,12 @@ def validate_vault(root: Path, paths: BuilderOpsPaths) -> dict[str, Any]:
         errors.append(f"forbidden SQLite state in shared vault: {path}")
     tickets: list[Ticket] = []
     for status in STATUSES:
-        for path in sorted((root / "agent-delivery" / status).glob("*.md")):
+        try:
+            ticket_paths = _ticket_paths(root, status)
+        except VaultQueueError as exc:
+            errors.append(str(exc))
+            continue
+        for path in ticket_paths:
             try:
                 ticket = read_ticket(path)
                 if ticket.meta.get("status") != status:
@@ -140,8 +145,17 @@ def resolve_ticket(root: Path, ticket_ref: str) -> Ticket:
 
 
 def _tickets(root: Path, status: str) -> list[Ticket]:
+    return [read_ticket(path) for path in _ticket_paths(root, status)]
+
+
+def _ticket_paths(root: Path, status: str) -> list[Path]:
+    vault_root = root.expanduser().resolve(strict=False)
     directory = root.expanduser() / "agent-delivery" / status
-    return [read_ticket(path) for path in sorted(directory.glob("*.md"))] if directory.exists() else []
+    if directory.is_symlink():
+        raise VaultQueueError(f"ticket status directory must not be a symlink: {directory}")
+    resolved = directory.resolve(strict=False)
+    _require_within_vault(resolved, vault_root, label="ticket status directory")
+    return sorted(resolved.glob("*.md")) if resolved.exists() else []
 
 
 def read_ticket(path: Path) -> Ticket:
@@ -165,10 +179,18 @@ def read_ticket(path: Path) -> Ticket:
 def _read_claim(path: Path) -> dict[str, str]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise VaultQueueError(f"invalid advisory claim state: {path}") from exc
-    if not isinstance(data, dict) or not isinstance(data.get("expires_at"), str):
+    required = ("ticket_id", "agent", "claimed_at", "expires_at")
+    if not isinstance(data, dict) or any(
+        not isinstance(data.get(field), str) or not data[field].strip()
+        for field in required
+    ):
         raise VaultQueueError(f"invalid advisory claim state: {path}")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", data["ticket_id"]):
+        raise VaultQueueError(f"invalid advisory claim state: {path}")
+    _parse_stamp(data["claimed_at"])
+    _parse_stamp(data["expires_at"])
     return data
 
 
@@ -191,13 +213,28 @@ def _safe_agent(agent: str) -> str:
 
 def _claims_root(root: Path, *, create: bool) -> Path:
     vault_root = root.expanduser().resolve(strict=False)
+    builderops_root = root.expanduser() / ".builderops"
+    if builderops_root.is_symlink():
+        raise VaultQueueError(f"BuilderOps state root must not be a symlink: {builderops_root}")
+    builderops_resolved = builderops_root.resolve(strict=False)
+    _require_within_vault(builderops_resolved, vault_root, label="BuilderOps state root")
     requested = root.expanduser() / ".builderops" / "claims"
+    if requested.is_symlink():
+        raise VaultQueueError(f"advisory claims root must not be a symlink: {requested}")
+    resolved = requested.resolve(strict=False)
+    _require_within_vault(resolved, vault_root, label="advisory claims root")
     if create:
         requested.mkdir(parents=True, exist_ok=True)
-    resolved = requested.resolve(strict=False)
-    if resolved == vault_root or vault_root not in resolved.parents:
-        raise VaultQueueError(f"advisory claims root escapes shared vault: {requested}")
+        if requested.is_symlink():
+            raise VaultQueueError(f"advisory claims root must not be a symlink: {requested}")
+        resolved = requested.resolve(strict=False)
+        _require_within_vault(resolved, vault_root, label="advisory claims root")
     return resolved
+
+
+def _require_within_vault(candidate: Path, vault_root: Path, *, label: str) -> None:
+    if candidate == vault_root or vault_root not in candidate.parents:
+        raise VaultQueueError(f"{label} escapes shared vault: {candidate}")
 
 
 def _sqlite_candidates(root: Path) -> list[Path]:
