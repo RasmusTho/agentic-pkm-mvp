@@ -36,6 +36,10 @@ from app.builderops.projections import (
     PROJECTION_SPECS,
     BuilderOpsProjectionGenerator,
 )
+from app.builderops.ready_repair_batch import (
+    ReadyRepairBatchError,
+    build_ready_repair_batch,
+)
 from app.builderops.retrospective_closure import (
     RetrospectiveClosureError,
     build_retrospective_closure_ledger,
@@ -660,6 +664,58 @@ def _completeness_report_candidates(payload: Mapping[str, Any]) -> list[Mapping[
             raise click.BadParameter(f"{key} must be a list")
         candidates.extend(raw_candidates)
     return candidates
+
+
+@builderops.group(
+    "ready-repair-batch",
+    help="Plan or explicitly apply Ready repairs for epic child issues.",
+)
+def ready_repair_batch() -> None:
+    """Batch readiness repair for epic runner child issues."""
+
+
+@ready_repair_batch.command(
+    "plan",
+    help="Build a dry-run Ready repair report from an explicit child issue list.",
+)
+@click.option(
+    "--children-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="JSON list of child issues, or object with an issues/children list.",
+)
+@click.option("--repo", default="RasmusTho/agentic-pkm-mvp", show_default=True)
+@click.option(
+    "--apply",
+    "apply_repairs",
+    is_flag=True,
+    help="Execute proposed label/Project repairs for validator-gated ready candidates.",
+)
+@click.option("--json", "as_json", is_flag=True)
+def ready_repair_batch_plan(
+    children_file: Path,
+    repo: str,
+    apply_repairs: bool,
+    as_json: bool,
+) -> None:
+    payload = _load_json_value_file(children_file, field="children-file")
+    if isinstance(payload, list):
+        issues = payload
+    elif isinstance(payload, dict):
+        issues = payload.get("issues", payload.get("children"))
+    else:
+        raise click.BadParameter("children-file must contain a list or object")
+    if not isinstance(issues, list):
+        raise click.BadParameter("children-file issues/children must be a list")
+    try:
+        report = build_ready_repair_batch(
+            issues=issues,
+            repo=repo,
+            apply=apply_repairs,
+        )
+    except ReadyRepairBatchError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(report, as_json)
 
 
 @builderops.group("epic-run-state", help="Record local deliver-issue-set epic run state.")
