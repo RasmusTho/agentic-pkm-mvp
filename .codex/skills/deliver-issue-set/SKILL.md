@@ -75,9 +75,9 @@ Delivery rules:
   `runtime/builderops/epic-runs/<run_id>.json`.
 - Record only evidence supplied by current GitHub/repo/PR/CI facts or by the current runner
   decision: child queue, issue/PR/branch/worktree mapping, validation status, review findings,
-  reusable constraints, follow-ups, stop conditions, dispatcher status snapshots, compact receipts,
-  and last verified head SHA. Do not infer lifecycle, Project, label, merge, closure, or product
-  truth from the state file.
+  reusable constraints, learning/evaluation candidates, follow-ups, stop conditions, dispatcher
+  status snapshots, compact receipts, and last verified head SHA. Do not infer lifecycle, Project,
+  label, merge, closure, or product truth from the state file.
 - Treat run-state as discardable local coordination state, never authority. If it is missing or
   deleted, rebuild it from live GitHub/repo evidence where practical and continue from that evidence;
   if the authoritative evidence is ambiguous, stop under the normal Human Exception / issue
@@ -85,8 +85,12 @@ Delivery rules:
 - Use `--dry-run --json` before any new run-state write path or when auditing a run. Dry-run output
   must not perform GitHub writes; it only previews the deterministic state that would be written.
 - Repeated `record` calls are the resume path. They must be idempotent for child queue, reusable
-  constraints, review findings, follow-ups, and compact receipts; duplicated local state is a runner
-  bug to repair before dispatching more work.
+  constraints, review findings, learning/evaluation candidates, follow-ups, and compact receipts;
+  duplicated local state is a runner bug to repair before dispatching more work.
+- Learning/evaluation candidates in run-state must carry source refs, an upstream artifact hint,
+  evidence kind, and an `outcome` once processed. Terminal outcomes use
+  `docs/development/DELIVERY_FEEDBACK_LOOP.md :: Terminal outcome vocabulary`; missing `outcome`
+  means unresolved and must be surfaced before parent or epic closure.
 - Dispatcher status in run-state is snapshot-only. Recording `{"db_exists": false}` or similar does
   not start, stop, claim, heartbeat, release, or complete dispatcher work. Keep dispatcher behavior
   governed by the existing dispatcher flow until a separate child issue changes it.
@@ -98,6 +102,8 @@ Delivery rules:
   Project, PR, branch/worktree, dispatcher lease, or agent-spawn mutation. Persist its
   `dispatch_decisions` only through the existing `epic-run-state record` path when the coordinator
   needs local coordination evidence.
+  When run-state contains reusable constraints, the helper includes those constraints in worker
+  context packs so later workers consume prior learning without rereading the full epic history.
 - When coordinating claim, review-handoff, or terminal projection decisions, use the dry-run
   lifecycle planner before issuing live mutations:
   `python3 -m app.builderops builderops epic-run-state lifecycle-plan --transition <claim|review|done> --issue-file <file> [--pr-file <file>] --json`.

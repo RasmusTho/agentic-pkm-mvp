@@ -163,6 +163,47 @@ def test_run_state_accepts_dispatch_decision_summaries(tmp_path: Path) -> None:
     ]
 
 
+def test_dispatch_context_pack_includes_reusable_constraints_from_run_state() -> None:
+    run_state = {
+        "schema_version": 1,
+        "epic_issue_number": 3229,
+        "run_id": "run-learned-constraints",
+        "child_queue": [],
+        "learning_evaluation_candidates": [],
+        "issue_mappings": {},
+        "validation_status": {},
+        "review_findings": [],
+        "reusable_constraints": [
+            {
+                "id": "artifact-only-pagination",
+                "text": "artifact-only workflow reads must paginate generated artifacts before repair.",
+            }
+        ],
+        "follow_ups": [],
+        "stop_conditions": [],
+        "dispatch_decisions": [],
+        "dispatcher_status": {},
+        "compact_receipts": [],
+        "last_verified_head_sha": None,
+    }
+
+    plan = build_dispatch_plan(
+        epic_issue_number=3229,
+        run_id="run-learned-constraints",
+        candidates=[_candidate(4051, risk="high")],
+        run_state=run_state,
+    )
+
+    constraints = plan["context_packs"][0]["known_constraints"]
+    assert constraints == [
+        "worker self-claims through issue-to-code",
+        {
+            "id": "artifact-only-pagination",
+            "text": "artifact-only workflow reads must paginate generated artifacts before repair.",
+        },
+    ]
+
+
 def test_existing_run_state_epic_mismatch_rejects_dispatch_plan(tmp_path: Path) -> None:
     candidates_file = tmp_path / "candidates.json"
     candidates_file.write_text(

@@ -188,6 +188,9 @@ The closure receipt names the outcome for each processed signal. Proposal-only m
 for human review, but once a pass is accepted for execution it must not leave claimed signals in an
 implicit "later" state.
 
+Epic-run-state candidate ledgers use this same vocabulary. Missing outcome means unresolved; unknown
+outcome strings are not terminal.
+
 ### 5. Governance lane
 
 A distinct work-stream on the Project board for changes to delivery-system artifacts.

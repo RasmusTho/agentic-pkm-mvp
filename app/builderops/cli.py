@@ -19,6 +19,7 @@ from app.builderops.epic_run_state import (
     epic_run_state_path,
     load_epic_run_state,
     new_epic_run_state,
+    unresolved_learning_evaluation_candidates,
     update_epic_run_state,
 )
 from app.builderops.models import BuilderOpsValidationError, normalize_actor
@@ -125,11 +126,14 @@ def _epic_run_state_payload(
     state: dict[str, Any],
     state_exists: bool,
 ) -> dict[str, Any]:
+    unresolved_candidates = unresolved_learning_evaluation_candidates(state)
     return {
         "dry_run": dry_run,
         "path": str(path),
         "state": state,
         "state_exists": state_exists,
+        "learning_evaluation_candidates_terminal": not unresolved_candidates,
+        "unresolved_learning_evaluation_candidates": unresolved_candidates,
     }
 
 
