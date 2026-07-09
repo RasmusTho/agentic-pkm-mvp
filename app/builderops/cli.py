@@ -28,6 +28,10 @@ from app.builderops.projections import (
     PROJECTION_SPECS,
     BuilderOpsProjectionGenerator,
 )
+from app.builderops.retrospective_closure import (
+    RetrospectiveClosureError,
+    build_retrospective_closure_ledger,
+)
 from app.builderops.store import SqliteBuilderOpsStore
 
 
@@ -485,6 +489,62 @@ def create_roadmap_execution_item(
     if idempotency_key:
         payload["idempotency_key"] = idempotency_key
     _handle_create(ctx, _store(ctx).create_roadmap_execution_item, payload, as_json)
+
+
+@builderops.group(
+    "retrospective-closure",
+    help="Build observe-only retrospective terminal-outcome ledgers.",
+)
+def retrospective_closure() -> None:
+    """Retrospective and reevaluation closure helpers."""
+
+
+@retrospective_closure.command(
+    "check",
+    help="Report whether processed signals have terminal outcomes.",
+)
+@click.option(
+    "--signals-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="JSON list of in-scope signals, or object with a signals field.",
+)
+@click.option(
+    "--outcomes-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="JSON list of terminal outcomes, or object with an outcomes field.",
+)
+@click.option("--json", "as_json", is_flag=True)
+def retrospective_closure_check(
+    signals_file: Path,
+    outcomes_file: Path,
+    as_json: bool,
+) -> None:
+    signals_payload = _load_json_value_file(signals_file, field="signals-file")
+    outcomes_payload = _load_json_value_file(outcomes_file, field="outcomes-file")
+    signals = (
+        signals_payload.get("signals", signals_payload)
+        if isinstance(signals_payload, dict)
+        else signals_payload
+    )
+    outcomes = (
+        outcomes_payload.get("outcomes", outcomes_payload)
+        if isinstance(outcomes_payload, dict)
+        else outcomes_payload
+    )
+    if not isinstance(signals, list):
+        raise click.BadParameter("signals-file must contain a list or a signals list")
+    if not isinstance(outcomes, list):
+        raise click.BadParameter("outcomes-file must contain a list or an outcomes list")
+    try:
+        payload = build_retrospective_closure_ledger(
+            signals=signals,
+            outcomes=outcomes,
+        )
+    except RetrospectiveClosureError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
 
 
 @builderops.group("epic-run-state", help="Record local deliver-issue-set epic run state.")
