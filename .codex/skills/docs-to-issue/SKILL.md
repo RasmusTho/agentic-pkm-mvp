@@ -110,6 +110,13 @@ Run the add-item / Set Project Status operations from `.codex/skills/_shared/PRO
 - Set Status appropriately:
   - `Ready` only if bounded, testable, unblocked, and safe for agent execution
   - every Acceptance Criterion must carry a resolvable `Verify:` target before `Status=Ready`
+  - immediately before applying `agent:ready` or `Status=Ready`, run strict readiness validation
+    on the exact body file:
+    ```bash
+    python3 scripts/validate_issue_readiness.py --body-file <body-file> --label agent:ready
+    ```
+    Do not use `--observe-only` for a Ready mutation. If validation fails, do not apply
+    `agent:ready` or `Status=Ready`.
   - otherwise `Backlog`
 - Every new implementation Issue should leave creation with exactly one truthful agent-state label.
 - Use `agent:ready` only with `Status=Ready`.

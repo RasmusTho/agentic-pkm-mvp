@@ -59,6 +59,13 @@ conditional path (`Issue maintenance -> Agent`), not the hot path.
 - Preserve traceability through `Source Anchors`.
 - Prefer batched maintenance actions for repeated drift patterns; reserve single-item churn for cases where the items genuinely differ.
 - Delivered, repo-verifiable parent scope should not stay open only for future adoption or retro observation.
+- Before adding or preserving `agent:ready`, or before setting Project Status to `Ready`, run strict
+  executable-contract validation on the exact Issue body:
+  ```bash
+  python3 scripts/validate_issue_readiness.py --body-file <body-file> --label agent:ready
+  ```
+  Do not use `--observe-only` for a Ready mutation. If validation fails, remove or avoid
+  `agent:ready` and do not set Project Status `Ready`.
 
 ## Canonical lifecycle expectations
 
@@ -218,7 +225,8 @@ Child slice issues may become `agent:ready` only when their executable contract 
 
 1. **If contract lives in an open spec PR:** keep the child issue non-active (`agent:blocked` or `agent:needs-human`) until the spec merges or the issue is rewritten with required local contract sections
 
-2. **If contract is concrete and merged:** can label as `agent:ready` with `Status=Ready`
+2. **If contract is concrete and merged:** can label as `agent:ready` with `Status=Ready` only after
+   strict readiness validation exits 0
 3. **Child issues should form an execution chain**: each delivered child should post a validation receipt to the parent issue, and the final child must include a parent-closure handoff or create/link an explicit parent-closure issue before the parent is closed.
 
 ## Quick Reference: Maintenance State Corrections
@@ -230,7 +238,7 @@ Child slice issues may become `agent:ready` only when their executable contract 
 | Delivered but open | Execute Delivered Open | +agent:needs-human | Backlog | Comment explaining next step |
 | Parent feature | Keep non-active | +agent:blocked | Backlog | Validation hub, waiting on child chain |
 | Child with spec in PR | Keep non-active | +agent:blocked | Backlog | Wait for spec merge |
-| Child with concrete contract | Can label ready | +agent:ready | Ready | Only when merged and clear |
+| Child with concrete contract | Can label ready | +agent:ready | Ready | Only when merged, clear, and strict readiness validation passes |
 
 ## When splitting
 
@@ -333,6 +341,12 @@ Use this when the user asks for a maintenance run across everything not done.
    - If body already matches the contract shape exactly, do not rewrite it.
    - If contract shape is missing or malformed, edit the issue to match the required sections.
    - If many related issues share the same contract-shape problem, do not bulk-rewrite them blindly; report the pattern, pick a correction policy, and apply it consistently.
+   - Before any command that adds `agent:ready` or preserves it on an edited issue, write the exact
+     candidate body to a body file and run:
+     ```bash
+     python3 scripts/validate_issue_readiness.py --body-file <body-file> --label agent:ready
+     ```
+     Continue with the Ready mutation only if the command exits 0.
    - **Execute label corrections** from established issue/PR truth before any Project reconciliation:
      ```bash
      # Example: set to ready if criteria are concrete
@@ -349,7 +363,10 @@ Use this when the user asks for a maintenance run across everything not done.
      - Keep or set `agent:needs-human` for boundary moves without explicit direction or module paths.
      - Keep or set `agent:blocked` when external dependencies are stated.
    
-   - **Execute Project state reconciliation** for each open issue only after labels are corrected: run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` — `agent:ready` → `Ready` option ID; `agent:blocked` or `agent:needs-human` → `Backlog` option ID.
+   - **Execute Project state reconciliation** for each open issue only after labels are corrected and
+     strict validation has passed for any `Ready` target: run the Set Project Status mutation from
+     `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` — validated `agent:ready` → `Ready`
+     option ID; `agent:blocked` or `agent:needs-human` → `Backlog` option ID.
      - If the issue is missing from the Project or missing `Status`, add/reconcile it during the same run
 5. **Execute Deduplication:**
    - If duplicate issues have the same scope/contract:

@@ -40,6 +40,18 @@ An empty `projectItems` list means the item is not in the Project yet — add it
 The single canonical mutation; pass the option ID for the target status (`Backlog`, `Ready`,
 `In Progress`, `Review`, `Done` — see `LIFECYCLE_TRUTH_MATRIX.md`):
 
+Before setting an Issue item to `Ready`, first run strict executable-contract validation on the
+exact Issue body that will be paired with `agent:ready`:
+
+```bash
+python3 scripts/validate_issue_readiness.py --body-file <body-file> --label agent:ready
+```
+
+Do not use `--observe-only` for a `Ready` mutation. If the command does not exit 0, do not set
+Project Status to `Ready`; keep or move the Issue to the appropriate non-executable state already
+allowed by the lifecycle truth matrix. This strict readiness check does not replace existing Source
+Anchors validation when that validation is part of the Issue path.
+
 ```bash
 gh api graphql -f projectId="$PROJECT_ID" -f itemId="$ITEM_ID" \
   -f fieldId="$STATUS_FIELD_ID" -f optionId="$TARGET_OPTION_ID" \

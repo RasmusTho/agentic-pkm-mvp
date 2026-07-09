@@ -24,6 +24,11 @@ from app.dispatcher.sync_github import (
 )
 from app.dispatcher.store import SqliteStore
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+FIXTURE_DIR = REPO_ROOT / "tests/fixtures/issue_readiness"
+VALID_READY_BODY = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
+INVALID_READY_BODY = (FIXTURE_DIR / "missing_constraints.md").read_text(encoding="utf-8")
+
 # ---------------------------------------------------------------------------
 # Sample GitHub issue payload
 # ---------------------------------------------------------------------------
@@ -35,6 +40,7 @@ SAMPLE_ISSUE_HIGH = {
     "labels": [{"name": "prio:high"}, {"name": "agent:ready"}],
     "createdAt": "2026-04-20T10:00:00Z",
     "updatedAt": "2026-04-21T12:00:00Z",
+    "body": VALID_READY_BODY,
 }
 
 SAMPLE_ISSUE_LOW = {
@@ -44,6 +50,7 @@ SAMPLE_ISSUE_LOW = {
     "labels": [{"name": "prio:low"}],
     "createdAt": "2026-04-19T08:00:00Z",
     "updatedAt": "2026-04-19T09:00:00Z",
+    "body": VALID_READY_BODY,
 }
 
 SAMPLE_ISSUE_NO_LABELS = {
@@ -154,6 +161,7 @@ def test_normalize_github_issue_string_labels() -> None:
         "labels": ["prio:high", "agent:ready"],
         "createdAt": "2026-04-01T00:00:00Z",
         "updatedAt": "2026-04-01T01:00:00Z",
+        "body": VALID_READY_BODY,
     }
     task = normalize_github_issue(payload)
     assert task.priority == "high"
@@ -353,6 +361,89 @@ def test_pull_skips_malformed_issue_without_aborting(tmp_store: SqliteStore) -> 
     assert meta is not None
     assert meta["sync_result"] == "ok"
     assert meta.get("skipped_count") == 1
+
+
+def test_pull_skips_invalid_agent_ready_issue_without_queueing(
+    tmp_store: SqliteStore,
+) -> None:
+    invalid_ready = {
+        **SAMPLE_ISSUE_HIGH,
+        "number": 105,
+        "title": "Invalid ready issue",
+        "body": INVALID_READY_BODY,
+    }
+    source = _mock_source([invalid_ready], open_issues=[invalid_ready])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+
+    upserted = adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    assert upserted == []
+    assert tmp_store.get_task("github-issue-105") is None
+    meta = get_sync_meta(tmp_store, PROVIDER_IDENTITY)
+    assert meta is not None
+    assert meta.get("skipped_count") == 1
+    assert "missing_required_sections" in " ".join(meta.get("skipped_notes", []))
+
+
+def test_pull_demotes_existing_invalid_agent_ready_when_snapshot_unavailable(
+    tmp_store: SqliteStore,
+) -> None:
+    invalid_ready = {
+        **SAMPLE_ISSUE_HIGH,
+        "number": 105,
+        "title": "Invalid ready issue",
+        "body": INVALID_READY_BODY,
+    }
+    existing = normalize_github_issue(
+        {**invalid_ready, "body": VALID_READY_BODY},
+        now="2026-04-24T00:00:00+00:00",
+    )
+    tmp_store.upsert_task(existing)
+    source = MagicMock(spec=GitHubIssueSource)
+    source.get_rate_limit.return_value = {"remaining": 10, "reset": 0}
+    source.list_issues.return_value = [invalid_ready]
+    source.list_open_issues.return_value = []
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+
+    upserted = adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    assert upserted == []
+    source.list_open_issues.assert_not_called()
+    stored = tmp_store.get_task("github-issue-105")
+    assert stored is not None
+    assert stored.status == "blocked"
+    assert stored.blocked_reason == "agent:ready strict readiness validation failed"
+    events = [
+        event
+        for event in tmp_store.list_events("github-issue-105")
+        if event.payload.get("reason") == "agent-ready-readiness-invalid"
+    ]
+    assert len(events) == 1
+
+
+def test_pull_blocks_unvalidated_agent_ready_from_open_snapshot(
+    tmp_store: SqliteStore,
+) -> None:
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
+    tmp_store.upsert_task(task)
+    source = _mock_source([], open_issues=[SAMPLE_ISSUE_HIGH])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+
+    adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    stored = tmp_store.get_task("github-issue-101")
+    assert stored is not None
+    assert stored.status == "blocked"
+    assert (
+        stored.blocked_reason
+        == "agent:ready label present but strict readiness validation was not run"
+    )
+    events = [
+        event
+        for event in tmp_store.list_events("github-issue-101")
+        if event.payload.get("reason") == "agent-ready-readiness-unvalidated"
+    ]
+    assert len(events) == 1
 
 
 def test_pull_upserts_tasks_into_store(tmp_store: SqliteStore) -> None:
@@ -622,6 +713,67 @@ def test_gh_cli_get_rate_limit_returns_none_on_gh_failure() -> None:
         result = source.get_rate_limit()
 
     assert result is None
+
+
+def test_list_ready_issues_paginates_with_bodies() -> None:
+    import json as _json
+
+    source = GhCliIssueSource()
+    pages = [
+        [
+            {
+                "number": 101,
+                "title": "First ready issue",
+                "state": "open",
+                "labels": [{"name": "agent:ready"}, {"name": "prio:high"}],
+                "created_at": "2026-04-20T10:00:00Z",
+                "updated_at": "2026-04-21T12:00:00Z",
+                "body": VALID_READY_BODY,
+            }
+        ]
+        * 100,
+        [
+            {
+                "number": 201,
+                "title": "Second ready issue page",
+                "state": "open",
+                "labels": [{"name": "agent:ready"}],
+                "created_at": "2026-04-22T10:00:00Z",
+                "updated_at": "2026-04-22T12:00:00Z",
+                "body": VALID_READY_BODY,
+            },
+            {
+                "number": 202,
+                "title": "PR returned by issues endpoint",
+                "state": "open",
+                "labels": [{"name": "agent:ready"}],
+                "created_at": "2026-04-22T10:00:00Z",
+                "updated_at": "2026-04-22T12:00:00Z",
+                "body": VALID_READY_BODY,
+                "pull_request": {"url": "https://api.github.com/repos/o/r/pulls/202"},
+            },
+        ],
+    ]
+    calls: list[list[str]] = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(list(args))
+        return MagicMock(
+            returncode=0,
+            stdout=_json.dumps(pages[len(calls) - 1]),
+            stderr="",
+        )
+
+    with patch("subprocess.run", side_effect=fake_run):
+        issues = source.list_issues("RasmusTho/agentic-pkm-mvp")
+
+    assert len(issues) == 101
+    assert issues[0]["body"] == VALID_READY_BODY
+    assert issues[-1]["number"] == 201
+    assert len(calls) == 2
+    assert any("page=1" in arg for arg in calls[0])
+    assert any("page=2" in arg for arg in calls[1])
+    assert all("repos/RasmusTho/agentic-pkm-mvp/issues" in call for call in calls)
 
 
 def test_list_open_issues_paginates() -> None:

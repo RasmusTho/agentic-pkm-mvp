@@ -2,7 +2,7 @@
 Issue governance needs deterministic observe-only readiness reporting for intake.
 
 ## Scope
-Add a local checker script, fixture tests, and artifact-only workflow reporting.
+Add a local checker script, fixture tests, and readiness workflow reporting.
 
 ## Source Anchors
 - `.codex/skills/_shared/ISSUE_CONTRACT.md :: Verify: marker rule`
@@ -11,7 +11,7 @@ Add a local checker script, fixture tests, and artifact-only workflow reporting.
 - Primary subsystem: Builder System / CES boundary
 - Secondary subsystem(s): none
 - Write class: governance/docs/process
-- Authority impact: observe-only issue readiness reporting
+- Authority impact: strict readiness failure for agent:ready issues
 - Persistence impact: none
 - Derived/rebuildable impact: CI artifact only
 - Human knowledge impact: reduces intake ambiguity
@@ -31,8 +31,8 @@ Add a local checker script, fixture tests, and artifact-only workflow reporting.
 ## Acceptance Criteria
 - [ ] The checker reports a ready candidate for canonical issue bodies.
   - Verify: `tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`
-- [ ] The workflow stores an observe-only report artifact.
-  - Verify: `tests/governance/test_issue_pr_governance.py::test_issue_readiness_workflow_is_artifact_only`
+- [ ] The workflow stores a report artifact and fails invalid `agent:ready` issues.
+  - Verify: `tests/governance/test_issue_pr_governance.py::test_issue_readiness_workflow_is_strict_for_agent_ready_only`
 
 ## Out of Scope
 - Auto-labeling issues as agent:ready.

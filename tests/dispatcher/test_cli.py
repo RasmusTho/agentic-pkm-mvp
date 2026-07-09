@@ -16,6 +16,11 @@ from app.dispatcher.config import load_paths
 from app.dispatcher.events import JsonlEventWriter
 from app.dispatcher.store import SqliteStore
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+VALID_READY_BODY = (
+    REPO_ROOT / "tests/fixtures/issue_readiness/valid_ready_candidate.md"
+).read_text(encoding="utf-8")
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -414,6 +419,7 @@ def test_pull_command_upserts_issues(tmp_env):
             "labels": [{"name": "prio:high"}, {"name": "agent:ready"}],
             "createdAt": "2026-04-20T10:00:00Z",
             "updatedAt": "2026-04-21T12:00:00Z",
+            "body": VALID_READY_BODY,
         },
         {
             "number": 102,

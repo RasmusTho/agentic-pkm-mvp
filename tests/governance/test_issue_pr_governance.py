@@ -97,7 +97,7 @@ def test_workflow_checks_issue_link_before_allowing_tier1_builderops_omission() 
     )
 
 
-def test_issue_readiness_workflow_is_artifact_only() -> None:
+def test_issue_readiness_workflow_is_strict_for_agent_ready_only() -> None:
     text = _read_workflow()
     readiness_job = text.split("  issue-readiness:", 1)[1].split("\n  pr-contract:", 1)[0]
 
@@ -106,8 +106,17 @@ def test_issue_readiness_workflow_is_artifact_only() -> None:
     assert "issues: read" in readiness_job
     assert "issues: write" not in readiness_job
     assert "actions/upload-artifact@v4" in readiness_job
-    assert "--observe-only" in readiness_job
+    assert "if: always()" in readiness_job
+    assert 'if [[ ",$LABELS," == *",agent:ready,"* ]]; then' in readiness_job
     assert "validate_issue_readiness.py" in readiness_job
+    ready_branch = readiness_job.split(
+        'if [[ ",$LABELS," == *",agent:ready,"* ]]; then',
+        1,
+    )[1].split("else", 1)[0]
+    observe_branch = readiness_job.split("else", 1)[1].split("fi", 1)[0]
+    assert "--observe-only" not in ready_branch
+    assert 'python3 scripts/validate_issue_readiness.py "${readiness_args[@]}"' in ready_branch
+    assert "--observe-only" in observe_branch
     assert "gh issue edit" not in readiness_job
     assert "removeLabel" not in readiness_job
     assert "addLabels" not in readiness_job
