@@ -99,8 +99,9 @@ It never creates SQLite files or provider credentials there.
 claim signals. Multiple agents may write claims for the same ticket. These files improve queue
 visibility and stale-recovery, but are explicitly not distributed locks: iCloud gives no global
 atomic/exclusive guarantee and a live claim must never be interpreted as exclusive ownership.
-SQLite (`BUILDEROPS_DB_PATH`) and provider credentials remain machine-local and fail closed if
-configured under the shared vault.
+SQLite (`BUILDEROPS_DB_PATH`) remains machine-local and fails closed if configured under the shared
+vault. Provider credentials must remain machine-local; these vault commands neither accept nor
+write provider credentials.
 
 Use the following operator checks before using a shared vault:
 

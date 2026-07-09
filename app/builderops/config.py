@@ -21,12 +21,20 @@ class BuilderOpsPaths:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def load_paths(env: dict[str, str] | None = None) -> BuilderOpsPaths:
+def load_paths(
+    env: dict[str, str] | None = None,
+    *,
+    db_path_override: Path | None = None,
+) -> BuilderOpsPaths:
     src = env if env is not None else os.environ
     state_dir = Path(src.get("BUILDEROPS_STATE_DIR", str(DEFAULT_STATE_DIR))).expanduser()
-    db_path = Path(
-        src.get("BUILDEROPS_DB_PATH", str(state_dir / DEFAULT_DB_NAME))
-    ).expanduser()
+    db_path = (
+        db_path_override.expanduser()
+        if db_path_override is not None
+        else Path(
+            src.get("BUILDEROPS_DB_PATH", str(state_dir / DEFAULT_DB_NAME))
+        ).expanduser()
+    )
     vault_value = src.get("BUILDEROPS_VAULT_ROOT", "").strip()
     vault_root = Path(vault_value).expanduser() if vault_value else None
     paths = BuilderOpsPaths(

@@ -22,7 +22,7 @@ from app.builderops.ckm_reevaluation import (
     CkmReevaluationError,
     build_ckm_reevaluation_report,
 )
-from app.builderops.config import load_paths
+from app.builderops.config import BuilderOpsPaths, load_paths
 from app.builderops.evidence_bridge import (
     EvidenceBridgeError,
     build_evidence_bridge_report,
@@ -248,6 +248,13 @@ def builderops(ctx: click.Context, db_path: Path | None) -> None:
     ctx.obj["db_path"] = db_path
 
 
+def _effective_paths(ctx: click.Context) -> BuilderOpsPaths:
+    try:
+        return load_paths(db_path_override=ctx.obj.get("db_path"))
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
 @builderops.group("vault", help="Operate the file-first Builder Ops Vault queue.")
 def vault() -> None:
     """Shared Markdown queue and advisory TTL-claim helpers."""
@@ -255,8 +262,10 @@ def vault() -> None:
 
 @vault.command("paths", help="Show shared vault and local operational paths.")
 @click.option("--json", "as_json", is_flag=True)
-def vault_paths_command(as_json: bool) -> None:
-    _emit(vault_paths(load_paths()), as_json)
+@click.pass_context
+def vault_paths_command(ctx: click.Context, as_json: bool) -> None:
+    paths = _effective_paths(ctx)
+    _emit(vault_paths(paths), as_json)
 
 
 @vault.command("init", help="Create shared Markdown queue directories only.")
@@ -269,8 +278,10 @@ def vault_init(root: Path, as_json: bool) -> None:
 @vault.command("validate", help="Validate shared-vault separation and ticket status integrity.")
 @click.argument("root", type=click.Path(file_okay=False, path_type=Path))
 @click.option("--json", "as_json", is_flag=True)
-def vault_validate(root: Path, as_json: bool) -> None:
-    payload = validate_vault(root, load_paths())
+@click.pass_context
+def vault_validate(ctx: click.Context, root: Path, as_json: bool) -> None:
+    paths = _effective_paths(ctx)
+    payload = validate_vault(root, paths)
     _emit(payload, as_json)
     if not payload["ok"]:
         raise click.ClickException("Builder Ops Vault validation failed")

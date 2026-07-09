@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import uuid
 from dataclasses import dataclass
@@ -49,8 +50,7 @@ def init_vault(root: Path) -> dict[str, Any]:
     root = root.expanduser()
     for status in STATUSES:
         (root / "agent-delivery" / status).mkdir(parents=True, exist_ok=True)
-    claims = root / ".builderops" / "claims"
-    claims.mkdir(parents=True, exist_ok=True)
+    claims = _claims_root(root, create=True)
     return {"root": str(root), "statuses": list(STATUSES), "advisory_claims_root": str(claims)}
 
 
@@ -86,7 +86,13 @@ def validate_vault(root: Path, paths: BuilderOpsPaths) -> dict[str, Any]:
                 tickets.append(ticket)
             except VaultQueueError as exc:
                 errors.append(str(exc))
-    claims = _claim_summary(root / ".builderops" / "claims")
+    try:
+        claims_root = _claims_root(root, create=False)
+        claims = _claim_summary(claims_root)
+        errors.extend(claims["errors"])
+    except VaultQueueError as exc:
+        errors.append(str(exc))
+        claims = {"root": str(root / ".builderops" / "claims"), "claims": [], "errors": [str(exc)]}
     return {"ok": not errors, "ticket_count": len(tickets), "errors": errors, "advisory_claims": claims, "claims_advisory": True}
 
 
@@ -102,18 +108,22 @@ def claim_ticket(
         raise VaultQueueError(f"ticket {ticket.ticket_id} is not Ready")
     if ttl_minutes <= 0:
         raise VaultQueueError("ttl-minutes must be positive")
-    claim_path = root.expanduser() / ".builderops" / "claims" / f"{ticket.ticket_id}-{_safe_agent(agent)}-{uuid.uuid4().hex}.json"
-    claim_path.parent.mkdir(parents=True, exist_ok=True)
+    claims_root = _claims_root(root, create=True)
+    claim_path = claims_root / f"{ticket.ticket_id}-{_safe_agent(agent)}-{uuid.uuid4().hex}.json"
     now = _now()
     claim = {"ticket_id": ticket.ticket_id, "agent": agent, "claimed_at": _stamp(now), "expires_at": _stamp(now + timedelta(minutes=ttl_minutes))}
-    claim_path.parent.mkdir(parents=True, exist_ok=True)
-    claim_path.write_text(json.dumps(claim, sort_keys=True) + "\n", encoding="utf-8")
+    temp_path = claims_root / f".{claim_path.name}.{uuid.uuid4().hex}.tmp"
+    try:
+        temp_path.write_text(json.dumps(claim, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temp_path, claim_path)
+    finally:
+        temp_path.unlink(missing_ok=True)
     return {"ticket": {"id": ticket.ticket_id, "path": str(ticket.path)}, "claim": claim, "claim_path": str(claim_path), "claim_scope": "shared-advisory"}
 
 
 def release_ticket(root: Path, ticket_ref: str, *, agent: str) -> dict[str, Any]:
     ticket = resolve_ticket(root, ticket_ref)
-    claims_root = root.expanduser() / ".builderops" / "claims"
+    claims_root = _claims_root(root, create=False)
     own_claims = [path for path in claims_root.glob(f"{ticket.ticket_id}-{_safe_agent(agent)}-*.json") if _read_claim(path).get("agent") == agent]
     if not own_claims:
         raise VaultQueueError(f"ticket {ticket.ticket_id} has no advisory claim by {agent}")
@@ -164,15 +174,30 @@ def _read_claim(path: Path) -> dict[str, str]:
 
 def _claim_summary(root: Path) -> dict[str, Any]:
     active = []
+    errors = []
     now = _now()
     for path in sorted(root.glob("*.json")) if root.exists() else []:
-        claim = _read_claim(path)
-        active.append({"ticket_id": claim.get("ticket_id"), "agent": claim.get("agent"), "stale": _parse_stamp(claim["expires_at"]) <= now})
-    return {"root": str(root), "claims": active}
+        try:
+            claim = _read_claim(path)
+            active.append({"ticket_id": claim.get("ticket_id"), "agent": claim.get("agent"), "stale": _parse_stamp(claim["expires_at"]) <= now})
+        except VaultQueueError as exc:
+            errors.append(str(exc))
+    return {"root": str(root), "claims": active, "errors": errors}
 
 
 def _safe_agent(agent: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", agent).strip("-") or "agent"
+
+
+def _claims_root(root: Path, *, create: bool) -> Path:
+    vault_root = root.expanduser().resolve(strict=False)
+    requested = root.expanduser() / ".builderops" / "claims"
+    if create:
+        requested.mkdir(parents=True, exist_ok=True)
+    resolved = requested.resolve(strict=False)
+    if resolved == vault_root or vault_root not in resolved.parents:
+        raise VaultQueueError(f"advisory claims root escapes shared vault: {requested}")
+    return resolved
 
 
 def _sqlite_candidates(root: Path) -> list[Path]:

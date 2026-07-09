@@ -82,6 +82,29 @@ def test_validate_rejects_mismatched_configured_root(tmp_path: Path) -> None:
     assert "does not match BUILDEROPS_VAULT_ROOT" in result.output
 
 
+def test_global_db_path_override_is_used_by_paths_and_validation(tmp_path: Path) -> None:
+    vault = tmp_path / "shared-vault"
+    env = {
+        "BUILDEROPS_VAULT_ROOT": str(vault),
+        "BUILDEROPS_DB_PATH": str(tmp_path / "safe" / "builderops.sqlite3"),
+    }
+    override = vault / "override.sqlite3"
+
+    paths = _run(
+        ["--db-path", str(override), "vault", "paths", "--json"],
+        env,
+    )
+    validated = _run(
+        ["--db-path", str(override), "vault", "validate", str(vault), "--json"],
+        env,
+    )
+
+    assert paths.exit_code != 0
+    assert "BUILDEROPS_DB_PATH" in paths.output
+    assert validated.exit_code != 0
+    assert "BUILDEROPS_DB_PATH" in validated.output
+
+
 @pytest.mark.parametrize(
     ("filename", "content"),
     [

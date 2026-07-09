@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from app.builderops.__main__ import _root as builderops_root
@@ -40,6 +41,7 @@ def test_shared_advisory_claims_allow_concurrent_agents_and_release_own_claims(t
     assert released.exit_code == 0
     assert not list((vault / ".builderops" / "claims").glob("BMI-01-codex-*.json"))
     assert list((vault / ".builderops" / "claims").glob("BMI-01-claude-*.json"))
+    assert not list((vault / ".builderops" / "claims").glob("*.tmp"))
 
 
 def test_stale_advisory_claim_is_reported_without_exclusive_takeover(tmp_path: Path) -> None:
@@ -96,3 +98,43 @@ def test_claim_rejects_unsafe_ticket_id_without_writing_outside_claims(tmp_path:
     assert result.exit_code != 0
     assert "unsafe ticket id" in result.output
     assert not (vault / ".builderops" / "escape").exists()
+
+
+def test_claim_rejects_symlinked_claims_root(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    vault = Path(env["BUILDEROPS_VAULT_ROOT"])
+    _ticket(vault)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    claims = vault / ".builderops" / "claims"
+    claims.parent.mkdir(parents=True)
+    try:
+        claims.symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not supported on this platform")
+
+    result = _run(
+        ["vault", "claim", str(vault), "BMI-01", "--agent", "codex", "--json"],
+        env,
+    )
+
+    assert result.exit_code != 0
+    assert "escapes shared vault" in result.output
+    assert not list(outside.glob("*.json"))
+
+
+def test_validate_reports_malformed_advisory_claim_without_crashing(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    vault = Path(env["BUILDEROPS_VAULT_ROOT"])
+    _ticket(vault)
+    claims = vault / ".builderops" / "claims"
+    claims.mkdir(parents=True)
+    malformed = claims / "BMI-01-partial.json"
+    malformed.write_text('{"ticket_id":', encoding="utf-8")
+
+    result = _run(["vault", "validate", str(vault), "--json"], env)
+
+    assert result.exit_code != 0
+    payload = json.loads(result.output.splitlines()[0])
+    assert payload["ok"] is False
+    assert any(str(malformed) in error for error in payload["errors"])
