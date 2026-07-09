@@ -23,9 +23,11 @@ def test_ci_pushes_sha_tag_to_ghcr() -> None:
     assert "uses: docker/login-action@v3" in workflow
     assert "registry: ghcr.io" in workflow
     assert 'image="ghcr.io/${owner}/pkm-app:${vcs_ref}"' in workflow
-    assert 'docker push "${{ steps.build-identity.outputs.image }}"' in workflow
+    assert 'push: true' in workflow
     assert "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" in workflow
-    assert "push: false" in workflow
+    assert "platforms: linux/amd64,linux/arm64" in workflow
+    assert "load: true" in workflow
+    assert "docker buildx imagetools inspect" in workflow
 
 
 def test_per_channel_pin_files_present() -> None:
