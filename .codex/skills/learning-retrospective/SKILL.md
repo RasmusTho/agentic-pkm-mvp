@@ -114,12 +114,35 @@ In autonomous maintenance mode:
 - verify whether any proposals were already applied by current repo reality before editing again;
 - create canonical GitHub Issues via `learning-to-issue` for unresolved work, storage decisions, or changes that need human authority;
 - do not change product/runtime behavior;
-- do not record a retrospective completion receipt until every LearningSignal in scope is either applied, already satisfied by repo reality, or represented by an Issue.
+- do not record a retrospective completion receipt until every LearningSignal in scope has one
+  terminal outcome: applied, already satisfied by repo reality, represented by an Issue, staged as a
+  PromotionIntent, recorded as transition debt or fitness-rule work, or discarded/superseded by a
+  receipt.
 
 ### Step 6: Record retrospective completion
 
-After human responds (regardless of how many proposals are accepted), append a BuilderOps receipt
-targeting the processed LearningSignals (`<agent-id>` is the invoking agent, e.g. `codex`, `claude`):
+Before appending a completion receipt, build an observe-only terminal-outcome ledger for the
+processed signals. The ledger uses the terminal outcome vocabulary from
+`docs/development/DELIVERY_FEEDBACK_LOOP.md :: Retrospective closure rule`:
+`applied`, `already_satisfied`, `issue_created`, `promotion_pending`,
+`debt_or_fitness_recorded`, and `discarded_or_superseded`.
+
+```bash
+python -m app.builderops builderops retrospective-closure check \
+  --signals-file <signals.json> \
+  --outcomes-file <outcomes.json> \
+  --json
+```
+
+If `complete` is false, do not record a retrospective completion receipt. Resolve the listed
+`unresolved_signals` first by applying the change, verifying it is already satisfied, creating an
+Issue, staging a PromotionIntent, recording debt/fitness, or discarding/superseding it with a
+receipt.
+
+After human responds and every in-scope signal has a terminal outcome, append a BuilderOps receipt
+targeting the processed LearningSignals (`<agent-id>` is the invoking agent, e.g. `codex`, `claude`).
+Use the ledger's `receipt_body` or equivalent text so the receipt names the processed signal IDs and
+their outcomes:
 
 ```bash
 python -m app.cli builderops append-receipt \
@@ -129,7 +152,7 @@ python -m app.cli builderops append-receipt \
   --occurred-at "<UTC timestamp>" \
   --target-ref "builderops_object:<learning-signal-id>" \
   --action retrospective_review \
-  --receipt-body "Applied N/M proposals; unresolved items: <summary>." \
+  --receipt-body "<terminal-outcome ledger receipt_body>" \
   --idempotency-key "learning-retro:<YYYY-MM-DD>:<scope>" \
   --source-ref "builderops_object:<learning-signal-id>" \
   --json
@@ -141,7 +164,9 @@ N = accepted proposals and M = total proposals made.
 Append the old `--- retro YYYY-MM-DD: applied N/M proposals ---` marker to `docs/learning-log.md`
 only when the retrospective processed historical compatibility entries from that file.
 
-In autonomous maintenance mode, N = entries resolved directly or already satisfied by repo reality; M = entries considered. Accepted proposals should be committed as governance-lane PRs — either by the human or a follow-up agent run using the `publish-pr` skill.
+In autonomous maintenance mode, N = entries with terminal outcomes and M = entries considered.
+Accepted proposals should be committed as governance-lane PRs — either by the human or a follow-up
+agent run using the `publish-pr` skill.
 
 ## Success signal
 

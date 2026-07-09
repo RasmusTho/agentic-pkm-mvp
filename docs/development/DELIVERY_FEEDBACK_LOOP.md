@@ -188,6 +188,11 @@ The closure receipt names the outcome for each processed signal. Proposal-only m
 for human review, but once a pass is accepted for execution it must not leave claimed signals in an
 implicit "later" state.
 
+The observe-only BuilderOps helper `python -m app.builderops builderops retrospective-closure check`
+builds the terminal-outcome ledger used before recording a retrospective completion receipt. It
+reports incomplete passes by listing `unresolved_signals`; it does not mutate BuilderOps records,
+GitHub, repo docs, Product/Runtime behavior, or runtime/user memory.
+
 Epic-run-state candidate ledgers use this same vocabulary. Missing outcome means unresolved; unknown
 outcome strings are not terminal.
 
