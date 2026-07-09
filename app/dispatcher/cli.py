@@ -19,6 +19,12 @@ from app.dispatcher import queue as queue_module
 from app.dispatcher.config import load_paths
 from app.dispatcher.events import JsonlEventWriter
 from app.dispatcher.models import LeaseRecord, TaskRecord
+from app.dispatcher.singleton import (
+    DEFAULT_SINGLETON_TTL_SECONDS,
+    DispatcherSingletonBusyError,
+    singleton_status,
+    start_singleton,
+)
 from app.dispatcher.store import SqliteStore
 from app.dispatcher.sync_github import (
     PROVIDER_IDENTITY,
@@ -93,14 +99,36 @@ def _make_store(env: dict[str, str] | None = None) -> SqliteStore:
 
 def _cmd_init(args: argparse.Namespace, store: SqliteStore) -> int:
     paths = load_paths()
-    paths.ensure()
+    try:
+        singleton = start_singleton(
+            paths,
+            holder=args.agent,
+            ttl_seconds=args.ttl_seconds,
+        )
+    except (DispatcherSingletonBusyError, ValueError) as exc:
+        return _emit_error(str(exc), args.json)
     store.initialize()
+    singleton.update(singleton_status(paths))
     _emit({
         "ok": True,
-        "state_dir": str(paths.state_dir),
-        "db_path": str(paths.db_path),
-        "events_path": str(paths.events_path),
+        **singleton,
     }, args.json)
+    return 0
+
+
+def _cmd_start(args: argparse.Namespace, store: SqliteStore) -> int:
+    paths = load_paths()
+    try:
+        singleton = start_singleton(
+            paths,
+            holder=args.agent,
+            ttl_seconds=args.ttl_seconds,
+        )
+    except (DispatcherSingletonBusyError, ValueError) as exc:
+        return _emit_error(str(exc), args.json)
+    store.initialize()
+    singleton.update(singleton_status(paths))
+    _emit({"ok": True, **singleton}, args.json)
     return 0
 
 
@@ -240,11 +268,7 @@ def _cmd_status(args: argparse.Namespace, store: SqliteStore) -> int:
     paths = load_paths()
     _emit({
         "ok": True,
-        "state_dir": str(paths.state_dir),
-        "db_path": str(paths.db_path),
-        "db_exists": paths.db_path.exists(),
-        "events_path": str(paths.events_path),
-        "events_exists": paths.events_path.exists(),
+        **singleton_status(paths),
     }, args.json)
     return 0
 
@@ -292,6 +316,7 @@ def _cmd_pull(args: argparse.Namespace, store: SqliteStore) -> int:
 
 _COMMAND_MAP = {
     "init": _cmd_init,
+    "start": _cmd_start,
     "queue": _cmd_queue,
     "next": _cmd_next,
     "show": _cmd_show,
@@ -316,6 +341,13 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     p = sub.add_parser("init", help="Initialize dispatcher state")
+    p.add_argument("--agent", default="cli")
+    p.add_argument("--ttl-seconds", type=int, default=DEFAULT_SINGLETON_TTL_SECONDS)
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("start", help="Initialize dispatcher state and singleton status")
+    p.add_argument("--agent", default="cli")
+    p.add_argument("--ttl-seconds", type=int, default=DEFAULT_SINGLETON_TTL_SECONDS)
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("queue", help="Show queue summary")

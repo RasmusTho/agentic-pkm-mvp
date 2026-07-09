@@ -165,7 +165,10 @@ Design boundary:
 ## Agent Interaction Contract (MVP Loop)
 
 Canonical loop:
-0. `status --json`: preflight check — verify `db_exists: true`; if false or non-zero exit, skip dispatcher and fall back to GitHub-label-only claim (`gh issue edit --remove-label agent:ready`); log fallback reason in PR body.
+0. `status --json`: preflight check — verify `db_exists: true`; if false or non-zero exit, either
+   prepare local dispatcher state with `start --agent <agent_id> --json` when dispatcher-backed
+   coordination is explicitly in scope, or skip dispatcher and fall back to GitHub-label-only claim
+   (`gh issue edit --remove-label agent:ready`); log fallback reason in PR body.
 1. `next`: request next eligible task (`ready` only).
 2. `claim`: create lease and claim ownership. Default TTL: **90 minutes**.
 3. `work`: execute issue scope locally.
@@ -178,6 +181,24 @@ Operational expectations:
 - Dispatcher outputs should be compact and actionable for CLI-driven agents.
 - Failure to heartbeat before expiry makes the claim recoverable by others after lease expiry processing.
 - Commands requiring a live DB (`next`, `claim`, `queue`, `pull`) exit 1 with `{"ok": false, "error": "dispatcher not initialised — run: make dispatcher-init"}` when the DB is missing.
+
+## Dispatcher Singleton Preparation
+
+`python -m app.dispatcher start --agent <agent_id> --json` is the local singleton preparation command
+for agents that are explicitly operating in dispatcher-backed coordination mode.
+
+`start` behavior:
+- creates the dispatcher state directory and SQLite schema when absent;
+- writes a bounded singleton coordination record under the dispatcher state directory;
+- returns a no-op/status receipt when an active singleton record already exists;
+- serializes concurrent starts with a local guard lock and returns an explicit error on contention;
+- recovers stale singleton metadata without deleting dispatcher DB or event state.
+
+The singleton record is operational coordination evidence only. It does not run a daemon, claim work,
+heartbeat task leases, mutate GitHub labels or Project state, merge PRs, close issues, or replace
+GitHub/PR lifecycle truth. `status --json` reports the DB/events paths plus singleton state
+(`missing`, `active`, or `stale`) so `deliver-issue-set` and `issue-to-code` can decide whether to use
+dispatcher or fallback paths without guessing.
 
 ## Observability and Persistence Expectations (MVP)
 
