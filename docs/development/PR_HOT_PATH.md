@@ -59,6 +59,31 @@ opened:
 The generator does not weaken `pr-contract`, infer issues silently, open PRs, or write to GitHub. CI
 remains the authority for whether the final PR body satisfies the repository contract.
 
+## Review-Before-CI
+
+For docs-authoring, governance, and direct-repair PRs, run the cheap local review gate before pushing
+or handing a new PR head to expensive GitHub CI:
+
+```bash
+python3 scripts/review_before_ci_gate.py \
+  --lane governance \
+  --changed-file docs/development/PR_HOT_PATH.md \
+  --review-gate-complete
+```
+
+The gate is a local ordering check: it exposes whether PR-body preflight, docs guard, and targeted
+governance/contract review should run before CI waiting becomes the main feedback loop. It does not
+replace required GitHub checks, branch protection, or final review triage.
+
+Direct-repair or emergency paths may bypass the local gate only with an explicit reason:
+
+```bash
+python3 scripts/review_before_ci_gate.py \
+  --lane direct-repair \
+  --changed-file docs/development/PR_HOT_PATH.md \
+  --bypass-reason "Emergency typo repair; receipt names skipped local gate."
+```
+
 ## CI Status Handling
 
 Use `scripts/await_pr_checks.sh` as the merge-gating wait path; it reads REST check-runs and classic

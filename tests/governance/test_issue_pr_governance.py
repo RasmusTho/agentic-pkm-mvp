@@ -138,3 +138,10 @@ def test_pr_body_generator_fixtures_are_governance_lane_allowed() -> None:
     assert '"scripts/pr_body_generator.py"' in text
     assert '"tests/scripts/test_pr_body_generator.py"' in text
     assert '"tests/fixtures/pr_body_generator/"' in text
+
+
+def test_review_before_ci_gate_is_governance_lane_allowed() -> None:
+    text = _read_workflow()
+
+    assert '"scripts/review_before_ci_gate.py"' in text
+    assert '"tests/ops/test_review_before_ci_gate.py"' in text
