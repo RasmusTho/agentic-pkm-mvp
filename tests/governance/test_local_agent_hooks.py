@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -44,6 +45,65 @@ def test_hooks_reuse_existing_preflight_or_small_safe_helpers() -> None:
 
     assert "scripts/agent_workspace_preflight.sh" in text
     assert "python3 scripts/local_agent_command_guard.py" in text
+
+
+def test_hook_safety_guard_allows_clean_checkout(tmp_path: Path) -> None:
+    clean_repo = tmp_path / "clean-repo"
+    head_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        text=True,
+    ).strip()
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "--no-hardlinks",
+            str(REPO_ROOT),
+            str(clean_repo),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "checkout", "--detach", head_sha],
+        cwd=clean_repo,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "switch", "-c", "clean-checkout-test"],
+        cwd=clean_repo,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    branch = subprocess.check_output(
+        ["git", "branch", "--show-current"],
+        cwd=clean_repo,
+        text=True,
+    ).strip()
+
+    result = subprocess.run(
+        [
+            "scripts/agent_workspace_preflight.sh",
+            "--expected-branch",
+            branch,
+            "--expected-worktree",
+            str(clean_repo),
+            "--base-branch",
+            "",
+        ],
+        cwd=clean_repo,
+        env={**os.environ, "PKM_ALLOW_SHARED_ROOT": "1"},
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
 
 
 def test_dangerous_command_guard_allows_validation_and_denies_prod_or_destructive_commands() -> None:

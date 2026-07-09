@@ -18,6 +18,14 @@ CLASSIFICATIONS: tuple[str, ...] = (
     "human_exception_likely",
     "unknown",
 )
+_GOVERNANCE_SCRIPT_FILES = {
+    "scripts/build_pr_evidence_pack.py",
+    "scripts/docs_guard.py",
+    "scripts/lint_skills_consistency.py",
+    "scripts/post_merge_docs_classifier.py",
+    "scripts/validate_issue_readiness.py",
+    "scripts/validate_source_anchors.py",
+}
 
 
 @dataclass(frozen=True)
@@ -131,13 +139,15 @@ def _governance_only_files(files: list[str]) -> bool:
         ".github/workflows/",
         ".github/ISSUE_TEMPLATE/",
         ".codex/skills/",
-        "scripts/",
         "tests/governance/",
         "tests/scripts/",
     )
     allowed_exact = {".github/pull_request_template.md", "AGENTS.md"}
     return bool(files) and all(
-        filename in allowed_exact or filename.startswith(allowed_prefixes) for filename in files
+        filename in allowed_exact
+        or filename in _GOVERNANCE_SCRIPT_FILES
+        or filename.startswith(allowed_prefixes)
+        for filename in files
     )
 
 
@@ -147,9 +157,28 @@ def _authority_or_contradiction_evidence(body: str, files: list[str]) -> list[st
         evidence.append("owner-doc writeback declaration has conflicting checked options")
     if re.search(r"\b(owner authority|strategic ambiguity|owner decision)\b", body, re.I):
         evidence.append("PR body names owner authority, strategic ambiguity, or owner decision")
-    if re.search(r"\b(shipped|actual|implemented)\b.*\b(target|planned|roadmap|spec)\b", body, re.I | re.S):
+    if _has_explicit_target_contradiction(body):
         evidence.append("PR body indicates shipped-vs-target/spec contradiction")
     return evidence
+
+
+def _has_explicit_target_contradiction(body: str) -> bool:
+    for phrase in re.split(r"[\n.;]+", body):
+        normalized = " ".join(phrase.lower().split())
+        if not normalized:
+            continue
+        if not re.search(r"\b(?:target|planned|roadmap|spec)\b", normalized):
+            continue
+        if not re.search(r"\b(?:contradict\w*|conflict\w*)\b", normalized):
+            continue
+        if re.search(
+            r"\b(?:does not|do not|did not|no|not|never|without)\s+"
+            r"(?:\w+\s+){0,3}(?:contradict\w*|conflict\w*)\b",
+            normalized,
+        ):
+            continue
+        return True
+    return False
 
 
 def _unknowns(
@@ -191,8 +220,15 @@ def classify(
     )
     evidence: list[str] = []
     authority_evidence = _authority_or_contradiction_evidence(body, files)
+    blocking_unknowns = list(unknowns)
+    if (
+        blocking_unknowns == ["linked issue unavailable"]
+        and declaration in {"no_change_declared", "updated_in_pr", "followup_created"}
+        and files
+    ):
+        blocking_unknowns = []
 
-    if unknowns and not evidence and not authority_evidence:
+    if blocking_unknowns and not evidence and not authority_evidence:
         classification = "unknown"
         evidence.append("insufficient evidence; classifier did not infer missing facts")
         action = "Collect PR body, linked issue, changed files, and owner-doc declaration before deciding."
