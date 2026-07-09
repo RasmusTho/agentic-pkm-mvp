@@ -154,6 +154,35 @@ remove_ready_label() {
     "repos/$REPO/issues/$ISSUE_NUMBER/labels/agent%3Aready" >/dev/null
 }
 
+release_dispatcher_claim() {
+  local release_json
+  if ! release_json="$(
+    "$PYTHON_BIN" -m app.dispatcher release "$TASK_ID" --agent "$AGENT_ID" --json 2>/dev/null
+  )"; then
+    return 1
+  fi
+
+  DISPATCHER_RELEASE_JSON="$release_json" \
+  EXPECTED_TASK_ID="$TASK_ID" \
+  "$JSON_PYTHON_BIN" - <<'PY'
+import json
+import os
+
+try:
+    payload = json.loads(os.environ["DISPATCHER_RELEASE_JSON"])
+except (KeyError, json.JSONDecodeError):
+    raise SystemExit(1)
+
+task = payload.get("task")
+if payload.get("ok") is not True or not isinstance(task, dict):
+    raise SystemExit(1)
+if task.get("task_id") != os.environ["EXPECTED_TASK_ID"]:
+    raise SystemExit(1)
+if task.get("claimed_by") is not None or task.get("lease_id") is not None:
+    raise SystemExit(1)
+PY
+}
+
 if [[ "$RECEIPT_COORDINATION_MODE" == "dispatcher-backed" ]]; then
   claim_json=""
   if ! claim_json="$("$PYTHON_BIN" -m app.dispatcher claim "$TASK_ID" --agent "$AGENT_ID" --ttl-minutes "$TTL_MINUTES" --json)"; then
@@ -213,15 +242,22 @@ if failed:
 print(f"{lease_id} {expected_agent}")
 PY
   )"; then
-    "$PYTHON_BIN" -m app.dispatcher release "$TASK_ID" --agent "$AGENT_ID" --json >/dev/null 2>&1 || true
+    if release_dispatcher_claim; then
+      echo "claim-verification-failed cleanup=released task_id=$TASK_ID lease_id=unverified holder=$AGENT_ID evidence=verified-dispatcher-release" >&2
+    else
+      echo "claim-verification-failed cleanup-failed task_id=$TASK_ID lease_id=unverified holder=$AGENT_ID evidence=cleanup-failed" >&2
+    fi
     echo "dispatcher availability is not an acquired claim; agent:ready was not removed" >&2
     exit 1
   fi
 
   read -r RECEIPT_LEASE_ID RECEIPT_HOLDER <<< "$validation"
   if ! remove_ready_label; then
-    "$PYTHON_BIN" -m app.dispatcher release "$TASK_ID" --agent "$AGENT_ID" --json >/dev/null 2>&1 || true
-    echo "GitHub label removal failed; released verified dispatcher lease $RECEIPT_LEASE_ID" >&2
+    if release_dispatcher_claim; then
+      echo "label-removal-failed cleanup=released task_id=$TASK_ID lease_id=$RECEIPT_LEASE_ID holder=$RECEIPT_HOLDER evidence=verified-dispatcher-release" >&2
+    else
+      echo "label-removal-failed cleanup-failed task_id=$TASK_ID lease_id=$RECEIPT_LEASE_ID holder=$RECEIPT_HOLDER evidence=cleanup-failed" >&2
+    fi
     exit 1
   fi
 

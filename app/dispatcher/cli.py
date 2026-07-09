@@ -108,7 +108,11 @@ def _coordination_payload(db_exists: bool) -> dict[str, Any]:
         "coordination_mode": "github-label-only-fallback",
         "fallback_reason": "dispatcher_db_missing",
         "setup_command": "python -m app.dispatcher start --agent <agent_id> --json",
-        "fallback_command": "scripts/issue_pickup_claim.sh --issue <ISSUE_NUMBER>",
+        "fallback_command": (
+            "scripts/issue_pickup_claim.sh --issue <ISSUE_NUMBER> --agent <agent_id> "
+            "--session <session_id> --coordination-mode github-label-only-fallback "
+            "--fallback-reason dispatcher_db_missing"
+        ),
     }
 
 

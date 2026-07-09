@@ -51,6 +51,9 @@ def _make_harness(
     status_json: str,
     claim_json: str = "",
     claim_rc: int = 0,
+    label_delete_rc: int = 0,
+    release_json: str = '{"ok":true,"task":{"task_id":"github-issue-3301","status":"ready","claimed_by":null,"lease_id":null}}',
+    release_rc: int = 0,
 ) -> tuple[Path, dict[str, str]]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(parents=True)
@@ -76,7 +79,7 @@ printf 'dispatcher %s\n' "$*" >> "$COMMAND_LOG"
 case "$*" in
   *"-m app.dispatcher status --json"*) printf '%s\n' "$FAKE_STATUS_JSON"; exit 0 ;;
   *"-m app.dispatcher claim "*) printf '%s\n' "$FAKE_CLAIM_JSON"; exit "$FAKE_CLAIM_RC" ;;
-  *"-m app.dispatcher release "*) echo '{"ok":true}'; exit 0 ;;
+  *"-m app.dispatcher release "*) printf '%s\n' "$FAKE_RELEASE_JSON"; exit "$FAKE_RELEASE_RC" ;;
   *) echo "unexpected dispatcher call: $*" >&2; exit 1 ;;
 esac
 """,
@@ -88,7 +91,7 @@ set -eu
 printf 'gh %s\n' "$*" >> "$COMMAND_LOG"
 case "$*" in
   *"/comments"*) echo '{"id":9876,"html_url":"https://example.test/comment/9876"}' ;;
-  *"/labels/agent%3Aready"*) echo '[]' ;;
+  *"/labels/agent%3Aready"*) echo '[]'; exit "$FAKE_LABEL_DELETE_RC" ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
 """,
@@ -115,6 +118,9 @@ printf 'preflight %s\n' "$*" >> "$COMMAND_LOG"
             "FAKE_STATUS_JSON": status_json,
             "FAKE_CLAIM_JSON": claim_json,
             "FAKE_CLAIM_RC": str(claim_rc),
+            "FAKE_LABEL_DELETE_RC": str(label_delete_rc),
+            "FAKE_RELEASE_JSON": release_json,
+            "FAKE_RELEASE_RC": str(release_rc),
         }
     )
     return worktree, env
@@ -243,3 +249,59 @@ def test_label_only_fallback_emits_durable_claimant_receipt(tmp_path: Path) -> N
     assert "session=session-3301" in commands
     assert "fallback_reason=dispatcher_db_missing" in commands
     assert "dispatcher-backed" not in result.stdout
+
+
+def test_label_delete_failure_reports_verified_dispatcher_release(tmp_path: Path) -> None:
+    worktree, env = _make_harness(
+        tmp_path,
+        status_json=json.dumps(
+            {
+                "ok": True,
+                "db_exists": True,
+                "coordination_mode": "dispatcher-backed",
+                "fallback_reason": None,
+            }
+        ),
+        claim_json=_dispatcher_claim(),
+        label_delete_rc=1,
+    )
+
+    result = _run(worktree, env)
+
+    assert result.returncode != 0
+    assert "cleanup=released" in result.stderr
+    assert "evidence=verified-dispatcher-release" in result.stderr
+    assert "task_id=github-issue-3301" in result.stderr
+    assert "lease_id=lease-3301" in result.stderr
+    assert "holder=codex-3301" in result.stderr
+    assert "pickup-claim-complete" not in result.stdout
+
+
+def test_label_delete_and_release_failure_reports_cleanup_failed_evidence(
+    tmp_path: Path,
+) -> None:
+    worktree, env = _make_harness(
+        tmp_path,
+        status_json=json.dumps(
+            {
+                "ok": True,
+                "db_exists": True,
+                "coordination_mode": "dispatcher-backed",
+                "fallback_reason": None,
+            }
+        ),
+        claim_json=_dispatcher_claim(),
+        label_delete_rc=1,
+        release_json='{ "ok": false }',
+        release_rc=1,
+    )
+
+    result = _run(worktree, env)
+
+    assert result.returncode != 0
+    assert "cleanup-failed" in result.stderr
+    assert "task_id=github-issue-3301" in result.stderr
+    assert "lease_id=lease-3301" in result.stderr
+    assert "holder=codex-3301" in result.stderr
+    assert "cleanup=released" not in result.stderr
+    assert "pickup-claim-complete" not in result.stdout

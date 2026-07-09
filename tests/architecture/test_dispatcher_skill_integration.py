@@ -96,4 +96,4 @@ def test_issue_pickup_receipt_requires_real_claim_evidence() -> None:
     assert "python -m app.dispatcher claim <task_id>" not in skill
     assert "lease_id=$RECEIPT_LEASE_ID" in script
     assert "holder=$RECEIPT_HOLDER" in script
-    assert "verified dispatcher lease" in script
+    assert "evidence=verified-dispatcher-lease" in script
