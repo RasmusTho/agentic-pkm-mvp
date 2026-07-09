@@ -36,7 +36,7 @@ First-read map for common work areas. Use `docs/DOCS_INDEX.md` (this file) to lo
 | Agent memory | `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`, `docs/AGENT_MEMORY/README.md` |
 | 2030 target SBS / subsystem boundaries | `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`, then `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md` and `docs/MODULAR_ARCHITECTURE.md` |
 | Architecture-foundation backlog (doctrine → ontology → semantics → contracts, #2533–#2552) | `docs/foundation/yggdrasil-architecture-context-packet.md` first, then `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` and the specific issue |
-| Using the SBS operationally (Product/Builder/boundary classification, Builder Learning/TCD governance, DoR/DoD, owner-doc writeback, review-gate fallback) | `docs/architecture/SBS_OPERATING_MODEL.md`, then `docs/architecture/SBS_ROADMAP.md` |
+| Using the SBS operationally (Product/Builder/boundary classification, Builder Learning/evaluation/TCD governance, DoR/DoD, owner-doc writeback, review-gate fallback) | `docs/architecture/SBS_OPERATING_MODEL.md`, then `docs/architecture/SBS_ROADMAP.md` |
 | Release channels | `docs/RELEASE_CHANNELS/README.md`, `docs/ENVIRONMENTS.md` |
 | Deployment (how a deploy physically happens: build-once/promote, managed gateways, deploy/rollback/health-gate, auth↔topology) | `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, then `docs/ENVIRONMENTS.md` and `docs/RELEASE_CHANNELS/README.md` |
 | Roadmap reset / strategic sequencing | `docs/ROADMAP.md`, `docs/plans/MAJOR_ROADMAP_RESET_2026_06_04.md` |
@@ -59,7 +59,7 @@ role map; the rows below are a quick pointer, not a replacement for the full tab
   `docs/architecture/SBS_CURRENT_TO_TARGET_MAPPING.md`, `docs/architecture/SBS_BOUNDARY_REGISTER.md`,
   `docs/architecture/SBS_TRANSITION_DEBT.md`, and `docs/architecture/SBS_FITNESS_RULES.md`
 - SBS operating model and roadmap (how Product/Runtime System work, Builder System work, and boundary
-  work are classified; Builder Learning/TCD governance; how SBS work is readied, done, reviewed, and
+  work are classified; Builder Learning/evaluation/TCD governance; how SBS work is readied, done, reviewed, and
   recorded; review-gate fallback policy; source-of-truth matrix): `docs/architecture/SBS_OPERATING_MODEL.md` and
   `docs/architecture/SBS_ROADMAP.md`
 - Semantic topology and authority map: `docs/SEMANTIC_SYSTEM_ARCHITECTURE.md`
@@ -642,7 +642,7 @@ These directories are docs-only specification authority for v6.0 capability boun
 | docs/development/BUILDER_CAPABILITY_PORTFOLIO.md | Builder capability portfolio (advisory proposal) | Proposal (owner triage pending) | 2026-07-02 | RESEARCH-05 proposal doc: candidate builder capabilities with build-vs-defer recommendations. Nothing is built by this doc; entries become issues only after owner triage. |
 | docs/development/BUILDER_SYSTEM_PROCESS_MAP.md | Builder System process map | Governance | 2026-07-08 | System-of-systems map for Builder System architecture, process lanes, dispatcher/routing, feedback loops, automation surfaces, branch/merge guardrails, and human exception policy. Descriptive inventory plus target automation roadmap; does not mutate workflows, skills, scripts, templates, or GitHub state. |
 | docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md | Autonomous review and repair gate contracts | Governance design / process contract | 2026-07-09 | Issue #3225 design artifact defining machine review, CI repair, review-repair loop, Human Exception, and closure eligibility contracts for future Builder System automation. Design-only; no mutation-bearing automation; subordinate to `BUILDER_SYSTEM_PROCESS_MAP.md`, `verification-and-closure`, `pr-integration`, and `CI_WAIT_CONTRACT`. |
-| docs/development/DELIVERY_FEEDBACK_LOOP.md | Delivery feedback loop governance | Reference | 2026-06-01 | Development reference for capture-learning, learning-retrospective, BuilderOps LearningSignal records, and the learning-log compatibility view. |
+| docs/development/DELIVERY_FEEDBACK_LOOP.md | Continuous improvement and reevaluation loop governance | Reference | 2026-07-09 | Development reference for capture-learning, learning-retrospective, BuilderOps LearningSignal records, evidence/CKM reevaluation inputs, terminal outcomes, and the learning-log compatibility view. |
 | docs/development/GITHUB_GOVERNANCE_PATCHES.md | Applied governance patch record | Aligned (forward line v5.x) | 2026-03-30 | Historical migration record for GitHub delivery governance wording after the owner-doc rollout; no longer the primary source of truth. |
 | docs/development/GOVERNANCE_PROPORTIONALITY.md | Governance proportionality contract | Governance | 2026-06-11 | Defines the three risk tiers and the PR-body/receipt/validation machinery each requires; lane checkboxes double as the deterministic Tier 1 classifier in `pr-contract` CI. |
 | docs/development/GITHUB_GOVERNANCE_SETUP.md | GitHub governance platform setup | Aligned (forward line v5.x) | 2026-05-10 | Development reference for the repo-external GitHub labels/Project contract and rollout receipts; platform-side setup complete including branch protection on stable (PR #853). |

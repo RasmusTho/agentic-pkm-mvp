@@ -1,14 +1,14 @@
-State: Development governance reference for delivery learning capture and retrospective feedback.
+State: Development governance reference for delivery learning capture, continuous improvement, and periodic reevaluation.
 Doc role: Reference
-Authority: Defines the delivery feedback loop for builder-agent governance; does not override `AGENTS.md`, GitHub issue contracts, or runtime/system-agent docs.
+Authority: Defines the Builder System continuous improvement and reevaluation loop for builder-agent governance; does not override `AGENTS.md`, GitHub issue contracts, or runtime/system-agent docs.
 Owner: Builder-agent governance
 Temporal class: operational
 Review cadence: per retrospective
 Source of truth: BuilderOps Vault LearningSignal records for operational learning; this document defines workflow
-Last reviewed: 2026-06-01
-Last verified against: issues #1506/#1509, docs/learning-log.md, docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md, docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md, .codex/skills/capture-learning/SKILL.md, .codex/skills/learning-retrospective/SKILL.md
+Last reviewed: 2026-07-09
+Last verified against: issues #1506/#1509/#3138/#3224/#3229/#3260-#3266, docs/learning-log.md, docs/development/BUILDER_SYSTEM_PROCESS_MAP.md, docs/architecture/SBS_OPERATING_MODEL.md, docs/CAPABILITY_KNOWLEDGE_MODEL/README.md, docs/builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md, docs/builderops/BUILDEROPS_VAULT_PROJECTIONS.md, .codex/skills/capture-learning/SKILL.md, .codex/skills/learning-retrospective/SKILL.md
 
-# Delivery Feedback Loop
+# Continuous Improvement And Reevaluation Loop
 
 ## Problem
 
@@ -16,24 +16,41 @@ The `verification-and-closure` skill closes issues and updates project state but
 
 The loop must be pipeline-wide, not owned by verification alone. Any skill that encounters a divergence from plan holds signal worth capturing.
 
+Delivery feedback is only half the loop. The Builder System must also periodically reevaluate whether
+its own process, guardrails, issue contracts, evidence surfaces, fitness rules, and capability model
+still match observed delivery reality. That reevaluation is not part of the hot delivery path, but it
+is part of the Builder System's supported operating model.
+
 ## Design
 
 ```text
-Docs -> Feature -> Slice -> Agent -> PR -> CI -> Verification -> Merge
-         ^                    | (any skill, on divergence)
-         |                    v
-         |              BuilderOps LearningSignal
-         |                    |
-         |                    v
-         |              learning-summary projection
-         |                    |
-         +---- learning-retrospective (cadence-triggered)
+Docs -> Feature -> Slice -> Agent -> PR -> CI -> Review -> Merge -> Closure
+         ^                    |        |       |          |
+         |                    |        |       |          v
+         |                    |        |       +---- PR evidence / review findings
+         |                    |        +------------ CI failure context
+         |                    +--------------------- LearningSignal on divergence
+         |                                          TCD signal on high cost/rework
+         |                                          CKM/evaluation input when capability evidence changes
+         |
+         +---- continuous improvement / reevaluation
                               |
                               v
-               Edits to upstream artifacts:
-               AGENTS.md · skill prompts · slice template
-               task-contract template · owner-doc conventions
+               learning-summary projection · CKM projections · evidence packs
+                              |
+                              v
+               learning-retrospective / reevaluation pass
+                              |
+                              v
+               One closed-loop outcome per signal:
+               applied governance edit · already satisfied · GitHub Issue
+               PromotionIntent · fitness rule/debt update · discard/supersession receipt
 ```
+
+Loop invariant:
+every captured improvement or reevaluation signal in scope must eventually be represented by one
+closed-loop outcome. A signal may not remain as chat context, unprocessed prose, or an implied future
+todo after the retrospective or reevaluation pass has claimed it.
 
 ## BuilderOps operating-plane boundary
 
@@ -118,7 +135,8 @@ LearningSignal records.
 
 ### 4. `learning-retrospective` skill
 
-Cadence-triggered (manual, or roughly every 10 deliveries). Reads BuilderOps `LearningSignal`
+Cadence-triggered (manual, after an epic closes, or roughly every 10 delivery-learning records).
+Reads BuilderOps `LearningSignal`
 records and may generate the `learning-summary` projection for a repo-readable view. It reads
 `docs/learning-log.md` only for historical compatibility entries that have not yet been represented
 as BuilderOps records.
@@ -130,9 +148,45 @@ as BuilderOps records.
 4. Accepted proposals are committed as ordinary governance-lane PRs.
 5. Records the retrospective outcome with a `BuilderOpsReceipt` over the processed LearningSignals.
 
-When the human explicitly asks the agent to handle the retro end to end, the retrospective may run in autonomous maintenance mode: verify which LearningSignals or compatibility entries are already satisfied by current repo reality, apply safe governance-lane edits for clearly named artifacts, create GitHub Issues for unresolved or decision-bearing work, and record a BuilderOps retrospective receipt only after every signal in scope is either applied, already satisfied, or represented by an Issue.
+When the human explicitly asks the agent to handle the retro end to end, the retrospective may run in autonomous maintenance mode: verify which LearningSignals or compatibility entries are already satisfied by current repo reality, apply safe governance-lane edits for clearly named artifacts, create GitHub Issues or PromotionIntents for unresolved or decision-bearing work, route repeated patterns to debt/fitness where appropriate, discard or supersede obsolete signals with a receipt, and record a BuilderOps retrospective receipt only after every signal in scope has a terminal outcome under §4b.
 
 **Success signal for the retrospective itself:** upstream artifacts carry dated edits traceable to LearningSignals, BuilderOps receipts, or historical compatibility entries. If AGENTS.md and skill prompts are static while LearningSignals accumulate, the retrospective step is broken.
+
+### 4a. Continuous reevaluation inputs
+
+Reevaluation uses a wider input set than `LearningSignal` records:
+
+- PR evidence packs and CI failure context artifacts from Builder System automation.
+- Review findings, repeated repair classes, and Human Exception packets.
+- TCD signals: high human steering, high context reload, over-fanning, repeated model under-use or
+  over-use, and avoidable coordination cost.
+- Transition-debt and fitness-rule outcomes from `docs/architecture/SBS_TRANSITION_DEBT.md` and
+  `docs/architecture/SBS_FITNESS_RULES.md`.
+- CKM/Kvasir projections once the CKM MVP exists: capability maturity, missing evidence, stale
+  assessment, unlinked artifact, and gap/tension findings.
+
+These inputs do not automatically create work. A reevaluation pass classifies them, then routes each
+actionable item through the same governed destinations as learning: issue, PR, fitness rule, debt
+row, `PromotionIntent`, or receipt. CKM output remains projection-only and never becomes product or
+runtime truth by itself.
+
+### 4b. Retrospective closure rule
+
+A retrospective or reevaluation pass is not complete until every in-scope signal has one of these
+terminal outcomes:
+
+- **applied** - a governance/docs/skill/template change was merged or is in the current PR.
+- **already_satisfied** - current repo reality already contains the intended improvement.
+- **issue_created** - a bounded GitHub Issue exists with `Source Anchors` and `Verify:` targets.
+- **promotion_pending** - a `PromotionIntent` exists for a boundary-crossing proposal.
+- **debt_or_fitness_recorded** - a transition-debt row, fitness-rule backlog item, or rule update
+  records the repeatable failure mode.
+- **discarded_or_superseded** - a `BuilderOpsReceipt` explains why the signal is obsolete, invalid,
+  or replaced by newer material.
+
+The closure receipt names the outcome for each processed signal. Proposal-only mode may still stop
+for human review, but once a pass is accepted for execution it must not leave claimed signals in an
+implicit "later" state.
 
 ### 5. Governance lane
 
@@ -184,13 +238,21 @@ BuilderOps adoption is enforced at workflow boundaries, not by human recall.
 - `automation-maintenance` audits recurring Codex app prompts for BuilderOps-first routing.
 - Learning-retro automations must read `LearningSignal` records and generated learning projections
   first, using `docs/learning-log.md` only for historical or explicit compatibility fallback entries.
+- Epic-runner automation must preserve improvement inputs in run-state when they are discovered
+  during issue-set delivery: review findings, repeated constraints, TCD signals, learning
+  candidates, CKM/reevaluation candidates, unresolved follow-ups, and terminal closure outcome.
+- Review/repair automation must expose reusable findings as learning or reevaluation candidates
+  rather than rediscovering the same rule in each PR.
+- CKM reevaluation output is projection-only. It may recommend issues, fitness rules, roadmap
+  correction, or owner-doc proposals, but action still crosses through GitHub/PR/BuilderOps
+  promotion gates.
 - Temporal-doc automations must route high-churn docs freshness and roadmap execution state to
   `DocsFreshnessRecord` and `RoadmapExecutionItem` records before considering repo-doc writeback.
 
 ## What this is not
 
 - Not a metrics dashboard
-- Not structured product telemetry or auto-classification
+- Not product telemetry, runtime memory, or auto-classification authority
 - Not a blocking gate in the delivery path — the loop is asynchronous, delivery velocity is unchanged
 - Not a second Project board or new agent
 - Not mandatory per-delivery — log only on divergence
@@ -201,8 +263,15 @@ BuilderOps adoption is enforced at workflow boundaries, not by human recall.
 After 3–4 retrospectives:
 - `AGENTS.md` and skill prompts carry dated edits traceable to specific log entries
 - At least one delivered slice has the "applies learning" slot filled
+- At least one repeated review/CI/TCD pattern has been routed to a durable outcome: issue, skill
+  edit, fitness-rule candidate, transition-debt row, or discard/supersession receipt
+- Once CKM projections exist, at least one reevaluation pass has compared CKM maturity/gap evidence
+  against active Builder System backlog or fitness-rule coverage without treating CKM output as
+  authority
 - Signal volume in the log reflects real divergences, not noise
 
 If those artifacts are static while LearningSignals accumulate: fix the retrospective step.
 If LearningSignals are empty while deliveries ship with real divergences: fix the skill addendums.
+If evidence packs, review findings, TCD signals, or CKM gaps accumulate without terminal outcomes:
+fix the reevaluation step.
 Historical compatibility entries in `docs/learning-log.md` should trend toward zero after #1506.
