@@ -35,7 +35,8 @@ from app.dispatcher.sync_github import (
 
 REQUIRED_COMMANDS = frozenset([
     "init", "queue", "next", "show", "claim",
-    "heartbeat", "release", "update", "block", "complete", "events", "pull",
+    "heartbeat", "release", "update", "move", "block", "complete", "events", "pull",
+    "export-signboard",
 ])
 
 
@@ -215,6 +216,22 @@ def _cmd_update(args: argparse.Namespace, store: SqliteStore) -> int:
         return _emit_error(str(exc), args.json)
 
 
+def _cmd_move(args: argparse.Namespace, store: SqliteStore) -> int:
+    from app.dispatcher.services import move_task
+    try:
+        task = move_task(
+            store,
+            task_id=args.task_id,
+            status=args.status,
+            note=args.note,
+            actor=args.agent,
+        )
+        _emit({"ok": True, "task": _compact_task(task)}, args.json)
+        return 0
+    except ValueError as exc:
+        return _emit_error(str(exc), args.json)
+
+
 def _cmd_block(args: argparse.Namespace, store: SqliteStore) -> int:
     try:
         task = queue_module.block(
@@ -310,6 +327,16 @@ def _cmd_pull(args: argparse.Namespace, store: SqliteStore) -> int:
         return _emit_error(f"pull failed: {exc}", args.json)
 
 
+def _cmd_export_signboard(args: argparse.Namespace, store: SqliteStore) -> int:
+    from pathlib import Path
+
+    from app.dispatcher.signboard import export_signboard
+
+    result = export_signboard(store, Path(args.path))
+    _emit({"ok": True, **result}, args.json)
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Parser
 # ---------------------------------------------------------------------------
@@ -324,12 +351,14 @@ _COMMAND_MAP = {
     "heartbeat": _cmd_heartbeat,
     "release": _cmd_release,
     "update": _cmd_update,
+    "move": _cmd_move,
     "block": _cmd_block,
     "complete": _cmd_complete,
     "events": _cmd_events,
     "link-pr": _cmd_link_pr,
     "status": _cmd_status,
     "pull": _cmd_pull,
+    "export-signboard": _cmd_export_signboard,
 }
 
 
@@ -385,6 +414,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--agent", default="cli")
     p.add_argument("--json", action="store_true")
 
+    p = sub.add_parser("move", help="Move a task to a lifecycle status")
+    p.add_argument("task_id")
+    p.add_argument("--status", required=True)
+    p.add_argument("--note", default=None)
+    p.add_argument("--agent", default="cli")
+    p.add_argument("--json", action="store_true")
+
     p = sub.add_parser("block", help="Mark task as blocked")
     p.add_argument("task_id")
     p.add_argument("--reason", required=True)
@@ -411,6 +447,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("pull", help="Pull open agent:ready issues from GitHub")
     p.add_argument("--repo", required=True, help="GitHub repo (owner/repo)")
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("export-signboard", help="Export dispatcher queue as a Signboard Markdown board")
+    p.add_argument("path", help="Directory to write kanban columns into")
     p.add_argument("--json", action="store_true")
 
     return parser

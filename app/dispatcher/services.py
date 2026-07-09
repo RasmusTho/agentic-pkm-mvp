@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime, timezone
 
 from app.dispatcher.models import EventRecord, TaskRecord
+from app.dispatcher.signboard import canonical_status
 from app.dispatcher.store import SqliteStore
 
 
@@ -60,6 +61,50 @@ def update_task(
     return task
 
 
+def move_task(
+    store: SqliteStore,
+    task_id: str,
+    status: str,
+    actor: str,
+    note: str | None = None,
+) -> TaskRecord:
+    """Move a task to a lifecycle status. Emits task.moved event."""
+    task = store.get_task(task_id)
+    if task is None:
+        raise ValueError(f"Task {task_id} not found")
+
+    next_status = canonical_status(status)
+    if next_status == "completed" and task.lease_id is not None:
+        raise ValueError(
+            f"Cannot move task {task_id} to completed while lease {task.lease_id} is active; "
+            "use complete instead"
+        )
+    previous_status = task.status
+    task.status = next_status
+    if next_status != "blocked":
+        task.blocked_reason = None
+    task.updated_at = _utc_now()
+    store.upsert_task(task)
+
+    payload: dict = {
+        "from_status": previous_status,
+        "to_status": next_status,
+    }
+    if note is not None:
+        payload["note"] = note
+
+    store.append_event(EventRecord(
+        event_id=_make_event_id(),
+        timestamp=_utc_now(),
+        task_id=task_id,
+        event_type="task.moved",
+        actor=actor,
+        payload=payload,
+    ))
+
+    return task
+
+
 def link_pr(
     store: SqliteStore,
     task_id: str,
@@ -85,5 +130,3 @@ def link_pr(
     ))
 
     return task
-
-
