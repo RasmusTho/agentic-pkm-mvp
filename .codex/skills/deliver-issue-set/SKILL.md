@@ -90,6 +90,14 @@ Delivery rules:
 - Dispatcher status in run-state is snapshot-only. Recording `{"db_exists": false}` or similar does
   not start, stop, claim, heartbeat, release, or complete dispatcher work. Keep dispatcher behavior
   governed by the existing dispatcher flow until a separate child issue changes it.
+- Before launching a parallel batch, use the runtime-neutral dry-run dispatch helper when candidate
+  data is available:
+  `python3 -m app.builderops builderops epic-run-state dispatch-plan --epic-issue-number <N> --run-id <safe-id> --candidates-file <file> --json`.
+  The helper emits TCD launch decisions, capped batch selection, minimal Codex/Claude worker context
+  packs, and an `epic_run_state_update.dispatch_decisions` payload. It performs no GitHub label,
+  Project, PR, branch/worktree, dispatcher lease, or agent-spawn mutation. Persist its
+  `dispatch_decisions` only through the existing `epic-run-state record` path when the coordinator
+  needs local coordination evidence.
 - Default to delivering one issue at a time.
 - You may claim multiple issues only when you are immediately assigning them to active sub-agents with isolated worktrees and the parallelization is rational from both token-budget and quality perspectives.
 - Before selecting or dispatching work, classify each candidate as Product/Runtime System,
@@ -297,6 +305,8 @@ If the work spans multiple sub-agents:
 - assign one bounded ready issue per sub-agent at a time, unless a tightly coupled pair has an explicit quality reason to stay with the same sub-agent
 - state the token/quality rationale for the parallel batch before claiming
 - claim only after the sub-agent handoff is ready
+- build sub-agent handoffs from the same runtime-neutral context-pack schema for Codex and Claude;
+  runtime differences are invocation hints only, not duplicate workflow contracts
 - include the relevant owner docs, `Verify:` ledger, validation commands, and required skills in each handoff
 - include a publication preflight in each handoff: verify the eventual PR can satisfy the `publish-pr` lane classifier and closing keyword, the exact `## BuilderOps Routing` shape (`Records/projections/receipts:` and `Reason:`) when that section is required, and the repo-standard validation that applies to the touched files
 - if the handoff touches `app/` or `tests/` files, require `ruff check app tests` in the validation plan up front
