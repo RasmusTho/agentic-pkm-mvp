@@ -48,7 +48,7 @@ Read-only GitHub evidence used:
 - `gh api repos/RasmusTho/agentic-pkm-mvp/branches/main/protection` on 2026-07-08: `Branch not protected` / HTTP 404.
 - `gh api repos/RasmusTho/agentic-pkm-mvp/branches/stable/protection` on 2026-07-08: `stable` protected; required status checks are `smoke`, `smoke-docker`, and `pr-contract`; strict is `true`; required approving review count is `0`; CODEOWNERS review is not required.
 - `gh api repos/RasmusTho/agentic-pkm-mvp --jq '{allow_auto_merge,...}'` on 2026-07-08: `allow_auto_merge=false`, default branch `main`, merge/squash/rebase allowed, delete branch on merge disabled.
-- `find .claude -path '.claude/worktrees' -prune -o -type f -print`: repo-level `.claude` files are `.claude/settings.json` and `.claude/settings.local.json`; no repo-level `.claude/hooks/**` files were found.
+- `find .claude -path '.claude/worktrees' -prune -o -type f -print`: repo-level `.claude` files are `.claude/hooks/README.md`; no repo-level `.claude/settings*.json` files were found.
 
 ## 2. Component Inventory
 
@@ -86,10 +86,10 @@ Read-only GitHub evidence used:
 | Mimer/product-lane workflow | implemented | Product docs, `mimer-*` skills | Runtime client operations separate from Builder workflow | Vault/user requests | Governed Mimer actions | Product authority paths | [`.codex/skills/README.md`:220-250] |
 | BuilderOps/governance workflow | partially_implemented | BuilderOps docs/API/skills | Store worklogs, learning, promotion intents, receipts | Agent workflow evidence | BuilderOps records/projections | BuilderOps CLI/API; promotion explicit | [docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md:13-81], [docs/builderops/BUILDEROPS_PROMOTION_GATEWAY.md:13-45] |
 | learning/retrospective loop | partially_implemented | `capture-learning`, `learning-retrospective`, BuilderOps records | Promote learning into artifacts | Divergences | LearningSignal, proposals, PRs/issues | BuilderOps + PR | [`.codex/skills/capture-learning/SKILL.md`:19-90], [`.codex/skills/learning-retrospective/SKILL.md`:27-150] |
-| local hooks | missing | `.claude/settings*.json` only; no `.claude/hooks/**` found | Local session guardrails | Local tool events | Hook decisions | None | [`.claude/settings.json`:1-11], [`.claude/settings.local.json`:1-17], `find .claude ... -> no hooks` |
+| local hooks | documented_only | `.claude/hooks/README.md`; no repo-level `.claude/settings*.json` found | Local session guardrails | Local tool events | Hook decisions | None | [`.claude/hooks/README.md`:1-50], `find .claude ... -> hooks README only` |
 | GitHub event automations | partially_implemented | `.github/workflows/**` | Validate issues/PRs, project status, docs watchdog, CI | GitHub events | Checks/comments/status projections | Actions token/PAT | [`.github/workflows/issue-pr-governance.yml`:3-12], [`.github/workflows/project-status-reconcile.yml`:3-23] |
 | Codex Action integration | partially_implemented | `architecture-ci` optional `codex run docs-guardian`; Codex verdict resolver retained | Docs guard/autofix and optional verdict read | Workflow dispatch, PR bot surfaces | Fixes/verdict | CI with secret, agent read | [`.github/workflows/architecture-ci.yaml`:31-38], [`.codex/skills/verification-and-closure/SKILL.md`:165-192] |
-| Claude Action integration | missing | Claude compatibility docs/settings only | GitHub-driven Claude agent tasks | N/A | N/A | None | [CLAUDE.md:1-8], [`.claude/settings.json`:1-11] |
+| Claude Action integration | missing | Claude compatibility docs and local hook documentation only | GitHub-driven Claude agent tasks | N/A | N/A | None | [CLAUDE.md:1-8], [`.claude/hooks/README.md`:1-50] |
 | human exception router | implicit | `agent:needs-human`, review-gate fallback, this doc packet | Route authority exceptions | Ambiguity/failure | Human Exception packet | Human decision | [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27], [docs/architecture/SBS_OPERATING_MODEL.md:372-383] |
 
 ## 3. Docs-As-Code / Spec Authority Map
@@ -457,15 +457,15 @@ Human exception loop: triggered by safety-critical, authority-critical, intent-c
 
 ## 10. Hooks And Local Automation Assessment
 
-Claude Code hooks currently present: not_found. Repo-level `.claude` contains `settings.json` and `settings.local.json`; no repo-level `.claude/hooks/**` files were found by `find .claude -path '.claude/worktrees' -prune -o -type f -print` [`.claude/settings.json`:1-11], [`.claude/settings.local.json`:1-17].
+Claude Code hooks currently present: documentation_only. Repo-level `.claude` contains `.claude/hooks/README.md`; no repo-level `.claude/settings*.json` files were found by `find .claude -path '.claude/worktrees' -prune -o -type f -print` [`.claude/hooks/README.md`:1-50].
 
-Local automation configs currently present: observed. `.claude/settings.json` and `.claude/settings.local.json` allow specific Bash commands; `.codex/config.toml` and `.codex/agents/**` provide Codex configuration/adapters [`.claude/settings.json`:1-11], [`.claude/settings.local.json`:1-17], [`.codex/agents/verification-closer.toml`:1-21].
+Local automation configs currently present: observed for Codex. `.codex/config.toml` and `.codex/agents/**` provide Codex configuration/adapters; `.claude/hooks/README.md` documents the intended Claude local hook posture but no repo-level `.claude/settings*.json` config is present [`.claude/hooks/README.md`:1-50], [`.codex/agents/verification-closer.toml`:1-21].
 
 Candidate hooks:
 
 | Hook class | Event type | Target form | Should become hook? | Reason | Risk | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| block dangerous Bash commands | PreToolUse | Claude hook | yes, human-gated allowlist | Prevent destructive operations before shell execution | false positives | current settings allow specific Bash patterns [`.claude/settings.json`:1-11] |
+| block dangerous Bash commands | PreToolUse | Claude hook | yes, human-gated allowlist | Prevent destructive operations before shell execution | false positives | hook posture is documented but no repo-level Claude settings file is present [`.claude/hooks/README.md`:1-50] |
 | block prod/vault/secret/migration commands | PreToolUse | Claude hook + manual exception | yes | Prod/stable/vault are stop-condition surfaces | blocking legitimate ops | [docs/development/AGENT_OPERATING_PROTOCOL.md:31-35] |
 | verify repo root and branch | SessionStart / PreToolUse | hook invoking script | yes | Redirect and branch drift are local-session risks | low | [`.codex/skills/_shared/BRANCH_TRUTH_GATE.md`:9-77] |
 | run formatter/lint subset after edits | PostToolUse / Stop | script, not hook for all edits | maybe | Deterministic validation belongs in scripts; hook should only suggest or receipt | latency | [docs/development/DEV_WORKFLOW.md:60-83] |
@@ -509,7 +509,7 @@ Evidence: workflow triggers are observed in `.github/workflows/issue-pr-governan
 | evidence pack builder | PR opened/sync/check complete | evidence collector | issue, PR, checks, files | gh read, artifact upload | state mutation | markdown/JSON evidence pack | stale evidence | artifact-only |
 | human exception packet generator | stop condition/blocker | packet compiler | failures, tried actions, evidence | gh comment/issue label with confirmation | autonomous merge/production action | Human Exception packet | over-escalation | comment-only |
 
-Codex Action integration is partially present as an optional docs-guardian autofix inside `architecture-ci` when `CODEX_API_KEY` exists [`.github/workflows/architecture-ci.yaml`:31-38]. The current default PR review gate is local, not the Codex verdict path [`.codex/skills/verification-and-closure/SKILL.md`:116-170]. Claude Action integration is missing; Claude-specific repo evidence is a compatibility entrypoint and local settings only [CLAUDE.md:1-8], [`.claude/settings.json`:1-11].
+Codex Action integration is partially present as an optional docs-guardian autofix inside `architecture-ci` when `CODEX_API_KEY` exists [`.github/workflows/architecture-ci.yaml`:31-38]. The current default PR review gate is local, not the Codex verdict path [`.codex/skills/verification-and-closure/SKILL.md`:116-170]. Claude Action integration is missing; Claude-specific repo evidence is a compatibility entrypoint and local hook documentation only [CLAUDE.md:1-8], [`.claude/hooks/README.md`:1-50].
 
 No patch/merge authority should be enabled until branch protection and required guardrails are documented and enforced. Main is currently unprotected by read-only API output, and repo auto-merge is disabled.
 

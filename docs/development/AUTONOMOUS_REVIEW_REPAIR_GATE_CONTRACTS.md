@@ -71,8 +71,7 @@ Required inputs:
 - PR number, base branch, head branch, current head SHA, and changed-file list.
 - Issue contract, including acceptance criteria, non-goals, constraints,
   required source docs, and `Verify:` markers.
-- PR evidence pack from the future #3214 evidence-pack contract, once
-  available.
+- PR evidence pack from the implemented #3214 evidence-pack contract.
 - Source docs named by the issue and by the touched owner-doc routing path.
 - CI/check state for the current head SHA, including required checks and any
   governance checks.
@@ -156,7 +155,7 @@ does not imply review pass, and review pass does not override failing CI.
 
 ### Inputs
 
-Required inputs come from the future #3213 CI context-pack shape:
+Required inputs come from the implemented #3213 CI context-pack shape:
 
 - PR number, check run, workflow/job identifiers, failing command, and failing
   log excerpts.
@@ -187,7 +186,8 @@ met:
 - Branch-protection and branch-guardrail evidence from #3215, including clear
   rules for protected branches, required checks, stale SHA handling, and safe
   branch targets.
-- PR evidence pack from #3214 tying the repair to the current head SHA.
+- PR evidence pack from the implemented #3214 evidence-pack contract tying the
+  repair to the current head SHA.
 - Explicit issue or owner authorization for mutation-bearing repair.
 - Current branch-truth preflight proving the worktree, branch, and expected PR
   branch match.

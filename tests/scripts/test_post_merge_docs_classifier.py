@@ -150,3 +150,67 @@ def test_human_exception_requires_authority_or_contradiction_evidence() -> None:
     assert ordinary_owner_doc_update.impact_classification == "docs_update_likely"
     assert no_exception_phrase.impact_classification == "no_change_likely"
     assert "Human Exception" in render_markdown(authority)
+
+
+def test_issue_less_governance_pr_uses_declaration_and_files() -> None:
+    result = classify(
+        pr=_pr(
+            _body("- [x] No owner-doc change implied.").replace("Closes #3217\n\n", ""),
+            title="governance: tune post-merge classifier",
+        ),
+        files_payload=["scripts/post_merge_docs_classifier.py"],
+        issue={},
+    )
+
+    assert result.linked_issues == []
+    assert result.impact_classification == "no_change_likely"
+    assert "linked issue unavailable" in result.unknowns_missing_evidence
+    assert "changed files are governance/tooling surfaces" in result.evidence
+
+
+def test_target_spec_exception_requires_explicit_contradiction() -> None:
+    ordinary_spec_reference = classify(
+        pr=_pr(
+            _body(
+                "- [x] No owner-doc change implied.",
+                "Implemented SBI-1. Source docs: docs/foo/SPEC.md.",
+            )
+        ),
+        files_payload=["app/runtime.py"],
+        issue={"number": 3217},
+    )
+    explicit_contradiction = classify(
+        pr=_pr(
+            _body(
+                "- [x] No owner-doc change implied.",
+                "Shipped behavior contradicts target spec.",
+            )
+        ),
+        files_payload=["app/runtime.py"],
+        issue={"number": 3217},
+    )
+    negated_contradiction = classify(
+        pr=_pr(
+            _body(
+                "- [x] No owner-doc change implied.",
+                "Implemented SBI-1. This does not conflict with target spec.",
+            )
+        ),
+        files_payload=["app/runtime.py"],
+        issue={"number": 3217},
+    )
+
+    assert ordinary_spec_reference.impact_classification == "docs_update_likely"
+    assert explicit_contradiction.impact_classification == "human_exception_likely"
+    assert negated_contradiction.impact_classification == "docs_update_likely"
+
+
+def test_runtime_scripts_are_not_whitelisted_as_governance_only() -> None:
+    result = classify(
+        pr=_pr(_body("- [x] No owner-doc change implied.")),
+        files_payload=["scripts/deploy_channel.sh"],
+        issue={"number": 3217},
+    )
+
+    assert result.impact_classification == "docs_update_likely"
+    assert "changed files are governance/tooling surfaces" not in result.evidence
