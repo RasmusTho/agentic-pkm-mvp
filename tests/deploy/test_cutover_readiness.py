@@ -239,9 +239,7 @@ def test_pending_forward_only_migrations_listed_and_gated(tmp_path: Path) -> Non
     assert "002_forward_only.py" in result.summary()
 
 
-def test_merge_revision_down_revision_tuple_does_not_leave_old_base_as_head(
-    tmp_path: Path,
-) -> None:
+def test_merge_revision_walks_all_parent_paths(tmp_path: Path) -> None:
     _write_base_fixture(tmp_path)
     versions = tmp_path / "app" / "alembic" / "versions"
     for child in versions.iterdir():
@@ -279,12 +277,90 @@ def test_merge_revision_down_revision_tuple_does_not_leave_old_base_as_head(
         "prod",
         TARGET_SHA,
         root=tmp_path,
-        db_revision="head",
+        db_revision="left",
         runner=_runner,
     )
 
     assert result.ok, result.summary()
+    assert result.pending_migrations == ("right_base.py", "merge.py", "head.py")
+
+
+def test_merge_revision_lists_shared_pending_parent_once(tmp_path: Path) -> None:
+    _write_base_fixture(tmp_path)
+    versions = tmp_path / "app" / "alembic" / "versions"
+    for child in versions.iterdir():
+        child.unlink()
+    _write_migration(
+        tmp_path,
+        filename="001_base.py",
+        revision="001",
+        down_revision=None,
+        reversibility="reversible",
+    )
+    _write_migration(
+        tmp_path,
+        filename="002_shared.py",
+        revision="002",
+        down_revision="001",
+        reversibility="reversible",
+    )
+    _write_migration(
+        tmp_path,
+        filename="left.py",
+        revision="left",
+        down_revision="002",
+        reversibility="reversible",
+    )
+    _write_migration(
+        tmp_path,
+        filename="right.py",
+        revision="right",
+        down_revision="002",
+        reversibility="reversible",
+    )
+    _write_migration(
+        tmp_path,
+        filename="merge.py",
+        revision="merge",
+        down_revision=("left", "right"),
+        reversibility="reversible",
+    )
+
+    result = check_cutover_readiness(
+        "prod",
+        TARGET_SHA,
+        root=tmp_path,
+        db_revision="001",
+        runner=_runner,
+    )
+
+    assert result.ok, result.summary()
+    assert result.pending_migrations == ("002_shared.py", "left.py", "right.py", "merge.py")
+
+
+def test_unreachable_db_revision_fails_migration_state(tmp_path: Path) -> None:
+    _write_base_fixture(tmp_path)
+    _write_migration(
+        tmp_path,
+        filename="002_reversible.py",
+        revision="002",
+        down_revision="001",
+        reversibility="reversible",
+    )
+
+    result = check_cutover_readiness(
+        "prod",
+        TARGET_SHA,
+        root=tmp_path,
+        db_revision="stale_branch",
+        runner=_runner,
+    )
+
+    assert not result.ok
     assert result.pending_migrations == ()
+    summary = result.summary()
+    assert "migration-state" in summary
+    assert "not reachable from selected Alembic head" in summary
 
 
 def test_missing_migration_marker_fails_without_raising(tmp_path: Path) -> None:

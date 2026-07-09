@@ -247,8 +247,14 @@ def check_fleet_model_fitness(
         for service in ALL_SERVICES
     )
     app_services = tuple(service for service in services if service.service in APP_CODE_SERVICES)
+    app_bind_services = tuple(service for service in app_services if service.has_app_bind_mount)
     bind_services = tuple(service for service in services if service.has_app_bind_mount)
-    model = "checkout" if bind_services else "pinned-image"
+    if not bind_services:
+        model = "pinned-image"
+    elif len(app_bind_services) == len(APP_CODE_SERVICES):
+        model = "checkout"
+    else:
+        model = "mixed"
 
     # The observed deployment model is physical: a live /app bind mount means
     # checkout/hot-reload, even when the image tag happens to equal the pin.
@@ -263,6 +269,12 @@ def check_fleet_model_fitness(
         )
 
     violations: list[str] = []
+    if model == "mixed":
+        names = ", ".join(service.service for service in bind_services)
+        violations.append(
+            f"mixed pinned/checkout fleet for channel '{channel}': live /app "
+            f"bind-mount(s) on {names}"
+        )
     if model == "checkout" and require_pinned:
         names = ", ".join(service.service for service in bind_services)
         violations.append(

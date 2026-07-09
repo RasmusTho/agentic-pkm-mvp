@@ -118,6 +118,7 @@ class _MigrationDelta:
     pending: tuple[MigrationInfo, ...] = ()
     forward_only: tuple[MigrationInfo, ...] = ()
     head_revision: str | None = None
+    unreachable_detail: str | None = None
 
 
 def _default_runner(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -459,34 +460,65 @@ def _head_revision(migrations: Mapping[str, MigrationInfo]) -> str | None:
     return heads[-1] if heads else None
 
 
-def _path_from_revision_to_head(
+def _ancestor_revisions(
     migrations: Mapping[str, MigrationInfo],
-    *,
     current: str | None,
-    db_revision: str | None,
-    seen: frozenset[str] = frozenset(),
-) -> list[MigrationInfo] | None:
+    *,
+    visiting: frozenset[str] = frozenset(),
+) -> frozenset[str] | None:
     if current is None:
-        return [] if db_revision is None else None
-    if current == db_revision:
-        return []
-    if current in seen:
+        return frozenset()
+    if current in visiting:
         return None
     info = migrations.get(current)
     if info is None:
         return None
 
-    next_seen = seen | {current}
+    ancestors = {current}
+    next_visiting = visiting | {current}
     for parent in info.down_revisions or (None,):
-        parent_path = _path_from_revision_to_head(
+        parent_ancestors = _ancestor_revisions(
             migrations,
-            current=parent,
-            db_revision=db_revision,
-            seen=next_seen,
+            parent,
+            visiting=next_visiting,
         )
-        if parent_path is not None:
-            return [*parent_path, info]
-    return None
+        if parent_ancestors is None:
+            return None
+        ancestors.update(parent_ancestors)
+    return frozenset(ancestors)
+
+
+def _postorder_to_revision(
+    migrations: Mapping[str, MigrationInfo],
+    current: str | None,
+) -> list[MigrationInfo] | None:
+    ordered: list[MigrationInfo] = []
+    emitted: set[str] = set()
+    visiting: set[str] = set()
+
+    def visit(revision: str | None) -> bool:
+        if revision is None:
+            return True
+        if revision in emitted:
+            return True
+        if revision in visiting:
+            return False
+        info = migrations.get(revision)
+        if info is None:
+            return False
+
+        visiting.add(revision)
+        for parent in info.down_revisions or (None,):
+            if not visit(parent):
+                return False
+        visiting.remove(revision)
+        emitted.add(revision)
+        ordered.append(info)
+        return True
+
+    if not visit(current):
+        return None
+    return ordered
 
 
 def _pending_migration_delta(migrations_dir: Path, db_revision: str | None) -> _MigrationDelta:
@@ -495,19 +527,38 @@ def _pending_migration_delta(migrations_dir: Path, db_revision: str | None) -> _
     if head is None:
         return _MigrationDelta(head_revision=None)
 
-    pending = _path_from_revision_to_head(
-        migrations,
-        current=head,
-        db_revision=db_revision,
+    head_ancestors = _ancestor_revisions(migrations, head)
+    ordered_to_head = _postorder_to_revision(migrations, head)
+    if head_ancestors is None or ordered_to_head is None:
+        return _MigrationDelta(
+            head_revision=head,
+            unreachable_detail="migration graph is incomplete or cyclic",
+        )
+    if db_revision not in head_ancestors:
+        return _MigrationDelta(
+            head_revision=head,
+            unreachable_detail=(
+                f"DB revision {db_revision} is not reachable from selected Alembic head {head}"
+            ),
+        )
+
+    db_ancestors = _ancestor_revisions(migrations, db_revision)
+    if db_ancestors is None:
+        return _MigrationDelta(
+            head_revision=head,
+            unreachable_detail="migration graph is incomplete or cyclic",
+        )
+
+    pending_revisions = head_ancestors - db_ancestors
+    pending = tuple(
+        info for info in ordered_to_head if info.revision in pending_revisions
     )
-    if pending is None:
-        pending = []
 
     forward_only = [
         info for info in pending if classify_migration(info.path).classification == FORWARD_ONLY
     ]
     return _MigrationDelta(
-        pending=tuple(pending),
+        pending=pending,
         forward_only=tuple(forward_only),
         head_revision=head,
     )
@@ -545,6 +596,11 @@ def _check_migration_state(
         delta = _pending_migration_delta(root / "app" / "alembic" / "versions", db_revision)
     except MigrationMarkerError as exc:
         return ReadinessCheck("migration-state", False, str(exc)), _MigrationDelta()
+    if delta.unreachable_detail is not None:
+        return (
+            ReadinessCheck("migration-state", False, delta.unreachable_detail),
+            delta,
+        )
     if not delta.pending:
         return (
             ReadinessCheck(
