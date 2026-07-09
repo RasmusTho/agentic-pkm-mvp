@@ -106,6 +106,12 @@ Allowed labels: the canonical taxonomy in `.codex/skills/_shared/LABEL_TAXONOMY.
 
 Allowed Project statuses: per `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md` (`Backlog`, `Ready`, `In Progress`, `Review`, `Done`).
 
+For complex or resumed claim/review handoff state, a caller may first generate a local dry-run plan:
+`python3 -m app.builderops builderops epic-run-state lifecycle-plan --transition <claim|review> --issue-file <file> [--pr-file <file>] --json`.
+The plan is advisory data only: it separates reads, proposed writes, and verification reads, and it
+does not perform GitHub, Project, dispatcher, run-state, or agent-spawn mutations. Live claim and
+handoff changes still follow the explicit commands in this skill.
+
 ## Issue selection rule before implementation
 
 - Work from bounded slice issues, not from parent feature issues that still require decomposition or post-merge validation.
