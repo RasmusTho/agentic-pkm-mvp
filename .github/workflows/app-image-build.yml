@@ -95,7 +95,7 @@ jobs:
           inspect_output="$(docker buildx imagetools inspect "${image}")"
           echo "${inspect_output}"
           for required_platform in linux/amd64 linux/arm64; do
-            if ! echo "${inspect_output}" | grep -q "Platform: ${required_platform}"; then
+            if ! echo "${inspect_output}" | grep -Eq "Platform:[[:space:]]+${required_platform}"; then
               echo "missing required platform in image manifest: ${required_platform}"
               exit 1
             fi
