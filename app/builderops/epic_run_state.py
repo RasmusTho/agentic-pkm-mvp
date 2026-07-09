@@ -391,6 +391,10 @@ def _normalize_learning_evaluation_candidate(
     source_refs = candidate["source_refs"]
     if not isinstance(source_refs, list) or not source_refs:
         raise EpicRunStateError(f"{field}.source_refs must be a non-empty list")
+    candidate["source_refs"] = [
+        _normalize_source_ref(item, f"{field}.source_refs[{index}]")
+        for index, item in enumerate(source_refs)
+    ]
 
     for required in ("upstream_artifact_hint", "evidence_kind"):
         candidate[required] = _normalize_required_string(
@@ -409,6 +413,20 @@ def _normalize_learning_evaluation_candidate(
         candidate["outcome"] = outcome
 
     return candidate
+
+
+def _normalize_source_ref(value: Any, field: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise EpicRunStateError(f"{field} must be an object")
+    source_ref = _json_clone(value)
+    for required in ("ref_type", "ref"):
+        if required not in source_ref:
+            raise EpicRunStateError(f"{field}.{required} is required")
+        source_ref[required] = _normalize_required_string(
+            source_ref[required],
+            f"{field}.{required}",
+        )
+    return source_ref
 
 
 def _normalize_mapping(value: Any, field: str) -> dict[str, Any]:

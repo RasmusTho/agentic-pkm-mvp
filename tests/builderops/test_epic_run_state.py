@@ -13,6 +13,7 @@ from app.builderops.__main__ import _root as builderops_standalone_root
 from app.builderops.epic_run_state import (
     DEFAULT_EPIC_RUNS_DIR,
     EpicRunStateError,
+    TERMINAL_LEARNING_EVALUATION_OUTCOMES,
     assert_learning_evaluation_candidates_terminal,
     apply_epic_run_update,
     create_epic_run_state,
@@ -240,6 +241,33 @@ def test_learning_evaluation_candidates_update_and_terminal_outcomes(
     assert_learning_evaluation_candidates_terminal(resolved)
 
 
+@pytest.mark.parametrize("outcome", TERMINAL_LEARNING_EVALUATION_OUTCOMES)
+def test_learning_evaluation_candidates_accept_each_terminal_outcome(
+    tmp_path: Path,
+    outcome: str,
+) -> None:
+    run_id = f"run-learning-outcome-{outcome}"
+    create_epic_run_state(3229, run_id, root=tmp_path)
+
+    resolved = update_epic_run_state(
+        run_id,
+        root=tmp_path,
+        learning_evaluation_candidates=[
+            {
+                "id": f"learn-{outcome}",
+                "source_refs": [{"ref_type": "github_issue", "ref": "#3261"}],
+                "upstream_artifact_hint": "docs/development/DELIVERY_FEEDBACK_LOOP.md",
+                "evidence_kind": "reevaluation_candidate",
+                "outcome": outcome,
+            }
+        ],
+    )
+
+    assert resolved["learning_evaluation_candidates"][0]["outcome"] == outcome
+    assert unresolved_learning_evaluation_candidates(resolved) == []
+    assert_learning_evaluation_candidates_terminal(resolved)
+
+
 def test_learning_evaluation_candidates_merge_by_candidate_id(tmp_path: Path) -> None:
     run_id = "run-learning-candidate-id"
     create_epic_run_state(3229, run_id, root=tmp_path)
@@ -342,6 +370,32 @@ def test_learning_evaluation_candidate_validation_rejects_missing_refs_and_bad_o
                 {
                     "id": "learn-bad",
                     "source_refs": [],
+                    "upstream_artifact_hint": "AGENTS.md",
+                    "evidence_kind": "tcd_signal",
+                }
+            ],
+        )
+
+    with pytest.raises(EpicRunStateError, match=r"source_refs\[0\]\.ref_type"):
+        apply_epic_run_update(
+            state,
+            learning_evaluation_candidates=[
+                {
+                    "id": "learn-bad",
+                    "source_refs": [{"ref": "#3261"}],
+                    "upstream_artifact_hint": "AGENTS.md",
+                    "evidence_kind": "tcd_signal",
+                }
+            ],
+        )
+
+    with pytest.raises(EpicRunStateError, match=r"source_refs\[0\]\.ref"):
+        apply_epic_run_update(
+            state,
+            learning_evaluation_candidates=[
+                {
+                    "id": "learn-bad",
+                    "source_refs": [{"ref_type": "github_issue", "ref": " "}],
                     "upstream_artifact_hint": "AGENTS.md",
                     "evidence_kind": "tcd_signal",
                 }
