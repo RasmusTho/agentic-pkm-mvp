@@ -26,6 +26,7 @@ _LIST_FIELDS = (
     "reusable_constraints",
     "follow_ups",
     "stop_conditions",
+    "dispatch_decisions",
     "compact_receipts",
 )
 _MERGE_MAPPING_FIELDS = (
@@ -101,6 +102,7 @@ def new_epic_run_state(
         "reusable_constraints": [],
         "follow_ups": [],
         "stop_conditions": [],
+        "dispatch_decisions": [],
         "dispatcher_status": {},
         "compact_receipts": [],
         "last_verified_head_sha": None,

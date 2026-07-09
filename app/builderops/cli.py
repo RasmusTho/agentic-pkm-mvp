@@ -7,6 +7,7 @@ from typing import Any, Callable
 import click
 
 from app.builderops.config import load_paths
+from app.builderops.epic_dispatch import EpicDispatchError, build_dispatch_plan
 from app.builderops.epic_run_state import (
     EpicRunStateError,
     apply_epic_run_update,
@@ -569,6 +570,62 @@ def show_epic_run_state(run_id: str, root: Path | None, as_json: bool) -> None:
         _emit(load_epic_run_state(run_id, root=root), as_json)
     except (EpicRunStateError, FileNotFoundError) as exc:
         raise click.ClickException(str(exc)) from exc
+
+
+@epic_run_state.command(
+    "dispatch-plan",
+    help="Dry-run runtime-neutral worker context packs for an epic run.",
+)
+@click.option("--epic-issue-number", required=True, type=int)
+@click.option("--run-id", required=True)
+@click.option(
+    "--root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Read existing epic run-state from this root when present; never writes.",
+)
+@click.option(
+    "--candidates-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="JSON object with candidates and optional active_leases.",
+)
+@click.option("--max-parallel", default=2, show_default=True, type=int)
+@click.option(
+    "--runtime",
+    "runtime_targets",
+    multiple=True,
+    help="Allowed worker runtime target. Repeat for Codex/Claude.",
+)
+@click.option("--json", "as_json", is_flag=True)
+def dispatch_plan(
+    epic_issue_number: int,
+    run_id: str,
+    root: Path | None,
+    candidates_file: Path,
+    max_parallel: int,
+    runtime_targets: tuple[str, ...],
+    as_json: bool,
+) -> None:
+    payload = _load_json_object_file(candidates_file, field="candidates-file")
+    candidates = payload.get("candidates", [])
+    active_leases = payload.get("active_leases", [])
+    try:
+        state = None
+        if epic_run_state_path(run_id, root=root).exists():
+            state = load_epic_run_state(run_id, root=root)
+        plan = build_dispatch_plan(
+            epic_issue_number=epic_issue_number,
+            run_id=run_id,
+            candidates=candidates,
+            max_parallel=max_parallel,
+            runtime_targets=runtime_targets or ("codex", "claude"),
+            active_leases=active_leases,
+            run_state=state,
+        )
+    except (EpicDispatchError, EpicRunStateError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(plan, as_json)
 
 
 @builderops.command("acquire-lease", help="Acquire or renew a BuilderOps record lease.")

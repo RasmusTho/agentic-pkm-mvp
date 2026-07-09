@@ -81,8 +81,17 @@ If a task does not match a role, do not invent one: run the matching skill direc
 
 ## Handoff receipt
 
-Every worker returns a `subagent_handoff_receipt` so the coordinator can act without hidden chat
-context.
+Every worker receives a minimal runtime-neutral context pack and returns a `subagent_handoff_receipt`
+so the coordinator can act without hidden chat context. Codex and Claude use the same pack and receipt
+schema; differences such as runtime/model hints belong in the invocation metadata, not in duplicate
+workflow contracts.
+
+The dry-run helper for generating these packets is:
+
+`python3 -m app.builderops builderops epic-run-state dispatch-plan --epic-issue-number <N> --run-id <safe-id> --candidates-file <file> --json`
+
+It does not claim issues, mutate GitHub/Project/PR state, reserve branches/worktrees, touch dispatcher
+leases, or spawn agents. Workers still self-claim through `issue-to-code` before editing.
 
 ```yaml
 subagent_handoff_receipt:
