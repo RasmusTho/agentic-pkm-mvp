@@ -167,20 +167,21 @@ Design boundary:
 ## Agent Interaction Contract (MVP Loop)
 
 Canonical loop:
-0. `status --json`: preflight check — verify `db_exists: true` and
-   `coordination_mode: dispatcher-backed`; if false or non-zero exit, either prepare local dispatcher
-   state with `start --agent <agent_id> --json` when dispatcher-backed coordination is explicitly in
-   scope, or skip dispatcher and fall back to GitHub-label-only claim
-   (`gh issue edit --remove-label agent:ready`); log `coordination_mode` and `fallback_reason` in the
-   PR body or claim receipt.
-1. `next`: request next eligible task (`ready` only).
-2. `claim`: create lease and claim ownership. Default TTL: **90 minutes**.
+0. Run `scripts/issue_pickup_claim.sh --issue <N> --agent <agent_id> --session <session_id>`.
+   The wrapper checks `status --json`, claims the exact `github-issue-<N>` task when dispatcher-backed,
+   verifies the active lease and holder, and only then removes `agent:ready`. Dispatcher database or
+   singleton existence is availability evidence, not claim evidence. In degraded mode the wrapper
+   posts a durable claimant-intent comment with identity and fallback reason before label removal.
+1. `next`: optional queue discovery only; it does not replace exact-task pickup verification.
+2. `claim`: performed by the pickup wrapper for the exact task. Default TTL: **90 minutes**.
 3. `work`: execute issue scope locally.
 4. `heartbeat/update` (every **~30 minutes** of active execution): renew lease before 90-min expiry.
 5. `link_pr`: attach PR reference when opened.
 6. `complete` or `block` or `release`: write terminal or transitional outcome.
 
 Operational expectations:
+- A `dispatcher-backed` pickup receipt must name the verified task id, lease id, holder, and evidence.
+- Missing task/lease, ownership mismatch, or malformed claim output fails before GitHub label mutation.
 - Agents must not mutate lifecycle truth in dispatcher in ways that conflict with GitHub issue/PR truth.
 - Dispatcher outputs should be compact and actionable for CLI-driven agents.
 - Failure to heartbeat before expiry makes the claim recoverable by others after lease expiry processing.

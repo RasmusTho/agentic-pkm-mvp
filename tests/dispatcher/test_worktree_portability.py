@@ -103,5 +103,7 @@ def test_missing_dispatcher_state_reports_fallback_reason(
         "python -m app.dispatcher start --agent <agent_id> --json"
     )
     assert status_data["fallback_command"] == (
-        "scripts/issue_pickup_claim.sh --issue <ISSUE_NUMBER>"
+        "scripts/issue_pickup_claim.sh --issue <ISSUE_NUMBER> --agent <agent_id> "
+        "--session <session_id> --coordination-mode github-label-only-fallback "
+        "--fallback-reason dispatcher_db_missing"
     )
