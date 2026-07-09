@@ -275,6 +275,51 @@ def test_learning_evaluation_candidates_merge_by_candidate_id(tmp_path: Path) ->
     assert unresolved_learning_evaluation_candidates(resolved) == []
 
 
+def test_learning_evaluation_candidates_merge_mixed_id_and_candidate_id(
+    tmp_path: Path,
+) -> None:
+    run_id = "run-learning-mixed-ids"
+    create_epic_run_state(3229, run_id, root=tmp_path)
+
+    update_epic_run_state(
+        run_id,
+        root=tmp_path,
+        learning_evaluation_candidates=[
+            {
+                "id": "learn-1",
+                "candidate_id": "stable-candidate-1",
+                "source_refs": [{"ref_type": "github_issue", "ref": "#3261"}],
+                "upstream_artifact_hint": "docs/development/DELIVERY_FEEDBACK_LOOP.md",
+                "evidence_kind": "reevaluation_candidate",
+            }
+        ],
+    )
+    resolved = update_epic_run_state(
+        run_id,
+        root=tmp_path,
+        learning_evaluation_candidates=[
+            {
+                "candidate_id": "stable-candidate-1",
+                "outcome": "debt_or_fitness_recorded",
+                "outcome_ref": "docs/architecture/SBS_TRANSITION_DEBT.md::D12",
+            }
+        ],
+    )
+
+    assert resolved["learning_evaluation_candidates"] == [
+        {
+            "id": "learn-1",
+            "candidate_id": "stable-candidate-1",
+            "source_refs": [{"ref_type": "github_issue", "ref": "#3261"}],
+            "upstream_artifact_hint": "docs/development/DELIVERY_FEEDBACK_LOOP.md",
+            "evidence_kind": "reevaluation_candidate",
+            "outcome": "debt_or_fitness_recorded",
+            "outcome_ref": "docs/architecture/SBS_TRANSITION_DEBT.md::D12",
+        }
+    ]
+    assert unresolved_learning_evaluation_candidates(resolved) == []
+
+
 def test_learning_evaluation_candidate_validation_rejects_missing_refs_and_bad_outcome() -> None:
     state = new_epic_run_state(3229, "run-learning-invalid")
 

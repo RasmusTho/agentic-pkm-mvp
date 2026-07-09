@@ -209,10 +209,17 @@ def apply_epic_run_update(state: Mapping[str, Any], **updates: Any) -> dict[str,
 
     for field in _LIST_FIELDS:
         if field in updates and updates[field] is not None:
-            normalized[field] = _merge_json_list(
-                normalized[field],
-                _normalize_list(updates[field], field),
-            )
+            incoming = _normalize_list(updates[field], field)
+            if field == "learning_evaluation_candidates":
+                normalized[field] = _merge_learning_evaluation_candidates(
+                    normalized[field],
+                    incoming,
+                )
+            else:
+                normalized[field] = _merge_json_list(
+                    normalized[field],
+                    incoming,
+                )
 
     for field in _MERGE_MAPPING_FIELDS:
         if field in updates and updates[field] is not None:
@@ -425,6 +432,37 @@ def _merge_json_list(existing: list[Any], incoming: list[Any]) -> list[Any]:
     return merged
 
 
+def _merge_learning_evaluation_candidates(
+    existing: list[Any],
+    incoming: list[Any],
+) -> list[Any]:
+    merged = _json_clone(existing)
+    index: dict[str, int] = {}
+    for pos, item in enumerate(merged):
+        for key in _learning_evaluation_candidate_keys(item):
+            index[key] = pos
+
+    for item in incoming:
+        item_copy = _json_clone(item)
+        keys = _learning_evaluation_candidate_keys(item_copy)
+        match_positions = {index[key] for key in keys if key in index}
+        if len(match_positions) > 1:
+            raise EpicRunStateError(
+                "learning/evaluation candidate update matches multiple existing rows"
+            )
+        if match_positions:
+            pos = match_positions.pop()
+            merged[pos] = _merge_json_value(merged[pos], item_copy)
+            for key in _learning_evaluation_candidate_keys(merged[pos]):
+                index[key] = pos
+        else:
+            index_position = len(merged)
+            for key in keys:
+                index[key] = index_position
+            merged.append(item_copy)
+    return merged
+
+
 def _merge_json_mapping(
     existing: Mapping[str, Any],
     incoming: Mapping[str, Any],
@@ -478,6 +516,17 @@ def _candidate_display_id(candidate: Mapping[str, Any]) -> str:
         if value is not None:
             return str(value)
     return _compact_dumps(candidate)
+
+
+def _learning_evaluation_candidate_keys(value: Any) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [_record_key(value)]
+    keys: list[str] = []
+    for field in ("id", "candidate_id"):
+        record_value = value.get(field)
+        if isinstance(record_value, (str, int)) and not isinstance(record_value, bool):
+            keys.append(f"{field}:{record_value}")
+    return keys or [_record_key(value)]
 
 
 def _json_clone(value: Any) -> Any:
