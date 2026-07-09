@@ -66,6 +66,10 @@ def build_dispatch_plan(
             epic_issue_number=normalized_epic,
             run_id=normalized_run_id,
         )
+    run_state_constraints = _normalize_json_list(
+        run_state.get("reusable_constraints", []) if run_state is not None else [],
+        "run_state.reusable_constraints",
+    )
 
     decisions: list[dict[str, Any]] = []
     context_packs: list[dict[str, Any]] = []
@@ -100,6 +104,7 @@ def build_dispatch_plan(
                     decision=decision,
                     context_pack_id=context_pack_id,
                     dispatch_slot=selected_count,
+                    run_state_constraints=run_state_constraints,
                 )
                 context_packs.append(context_pack)
                 selected_files.update(candidate["likely_touched_files"])
@@ -181,6 +186,7 @@ def _build_context_pack(
     decision: Mapping[str, Any],
     context_pack_id: str,
     dispatch_slot: int,
+    run_state_constraints: list[Any],
 ) -> dict[str, Any]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -196,7 +202,10 @@ def _build_context_pack(
         "skill_loaded": ".codex/skills/issue-to-code/SKILL.md",
         "source_anchors": candidate["source_anchors"],
         "owner_docs": sorted(candidate["owner_docs"]),
-        "known_constraints": candidate["known_constraints"],
+        "known_constraints": _merge_context_constraints(
+            candidate["known_constraints"],
+            run_state_constraints,
+        ),
         "branch_worktree_plan": {
             "branch": candidate["branch"],
             "worktree": candidate["worktree"],
@@ -288,6 +297,21 @@ def _dispatch_state_summary(decision: Mapping[str, Any]) -> dict[str, Any]:
         "skip_reason": decision["skip_reason"],
         "context_pack_id": decision["context_pack_id"],
     }
+
+
+def _merge_context_constraints(
+    issue_constraints: Iterable[Any],
+    run_state_constraints: Iterable[Any],
+) -> list[Any]:
+    merged: list[Any] = []
+    seen: set[str] = set()
+    for constraint in (*issue_constraints, *run_state_constraints):
+        key = json.dumps(constraint, sort_keys=True, ensure_ascii=False)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(constraint)
+    return merged
 
 
 def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:

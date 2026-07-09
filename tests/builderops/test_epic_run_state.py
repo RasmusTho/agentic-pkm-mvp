@@ -13,6 +13,8 @@ from app.builderops.__main__ import _root as builderops_standalone_root
 from app.builderops.epic_run_state import (
     DEFAULT_EPIC_RUNS_DIR,
     EpicRunStateError,
+    TERMINAL_LEARNING_EVALUATION_OUTCOMES,
+    assert_learning_evaluation_candidates_terminal,
     apply_epic_run_update,
     create_epic_run_state,
     deserialize_epic_run_state,
@@ -21,6 +23,7 @@ from app.builderops.epic_run_state import (
     new_epic_run_state,
     record_dispatcher_status,
     serialize_epic_run_state,
+    unresolved_learning_evaluation_candidates,
     update_epic_run_state,
 )
 
@@ -172,6 +175,248 @@ def test_update_helpers_are_idempotent_for_lists_and_mappings(
     }
 
 
+def test_learning_evaluation_candidates_update_and_terminal_outcomes(
+    tmp_path: Path,
+) -> None:
+    run_id = "run-learning-candidates"
+    create_epic_run_state(3229, run_id, root=tmp_path)
+
+    unresolved = update_epic_run_state(
+        run_id,
+        root=tmp_path,
+        learning_evaluation_candidates=[
+            {
+                "id": "learn-1",
+                "source_refs": [
+                    {"ref_type": "github_issue", "ref": "#3261"},
+                    {"ref_type": "ci_check", "ref": "Unit tests (not pg)"},
+                ],
+                "upstream_artifact_hint": ".codex/skills/deliver-issue-set/SKILL.md",
+                "evidence_kind": "review_finding",
+                "summary": "Repeated context reload should become a reusable constraint.",
+            }
+        ],
+    )
+
+    assert unresolved_learning_evaluation_candidates(unresolved) == [
+        unresolved["learning_evaluation_candidates"][0]
+    ]
+    with pytest.raises(EpicRunStateError, match="learn-1"):
+        assert_learning_evaluation_candidates_terminal(unresolved)
+
+    resolved = update_epic_run_state(
+        run_id,
+        root=tmp_path,
+        learning_evaluation_candidates=[
+            {
+                "id": "learn-1",
+                "source_refs": [
+                    {"ref_type": "github_issue", "ref": "#3261"},
+                    {"ref_type": "ci_check", "ref": "Unit tests (not pg)"},
+                ],
+                "upstream_artifact_hint": ".codex/skills/deliver-issue-set/SKILL.md",
+                "evidence_kind": "review_finding",
+                "summary": "Repeated context reload should become a reusable constraint.",
+                "outcome": "issue_created",
+                "outcome_ref": "github_issue:#3262",
+            }
+        ],
+    )
+
+    assert resolved["learning_evaluation_candidates"] == [
+        {
+            "id": "learn-1",
+            "source_refs": [
+                {"ref_type": "github_issue", "ref": "#3261"},
+                {"ref_type": "ci_check", "ref": "Unit tests (not pg)"},
+            ],
+            "upstream_artifact_hint": ".codex/skills/deliver-issue-set/SKILL.md",
+            "evidence_kind": "review_finding",
+            "summary": "Repeated context reload should become a reusable constraint.",
+            "outcome": "issue_created",
+            "outcome_ref": "github_issue:#3262",
+        }
+    ]
+    assert unresolved_learning_evaluation_candidates(resolved) == []
+    assert_learning_evaluation_candidates_terminal(resolved)
+
+
+@pytest.mark.parametrize("outcome", TERMINAL_LEARNING_EVALUATION_OUTCOMES)
+def test_learning_evaluation_candidates_accept_each_terminal_outcome(
+    tmp_path: Path,
+    outcome: str,
+) -> None:
+    run_id = f"run-learning-outcome-{outcome}"
+    create_epic_run_state(3229, run_id, root=tmp_path)
+
+    resolved = update_epic_run_state(
+        run_id,
+        root=tmp_path,
+        learning_evaluation_candidates=[
+            {
+                "id": f"learn-{outcome}",
+                "source_refs": [{"ref_type": "github_issue", "ref": "#3261"}],
+                "upstream_artifact_hint": "docs/development/DELIVERY_FEEDBACK_LOOP.md",
+                "evidence_kind": "reevaluation_candidate",
+                "outcome": outcome,
+            }
+        ],
+    )
+
+    assert resolved["learning_evaluation_candidates"][0]["outcome"] == outcome
+    assert unresolved_learning_evaluation_candidates(resolved) == []
+    assert_learning_evaluation_candidates_terminal(resolved)
+
+
+def test_learning_evaluation_candidates_merge_by_candidate_id(tmp_path: Path) -> None:
+    run_id = "run-learning-candidate-id"
+    create_epic_run_state(3229, run_id, root=tmp_path)
+
+    update_epic_run_state(
+        run_id,
+        root=tmp_path,
+        learning_evaluation_candidates=[
+            {
+                "candidate_id": "learn-candidate-id",
+                "source_refs": [{"ref_type": "github_issue", "ref": "#3261"}],
+                "upstream_artifact_hint": "docs/development/DELIVERY_FEEDBACK_LOOP.md",
+                "evidence_kind": "reevaluation_candidate",
+            }
+        ],
+    )
+    resolved = update_epic_run_state(
+        run_id,
+        root=tmp_path,
+        learning_evaluation_candidates=[
+            {
+                "candidate_id": "learn-candidate-id",
+                "source_refs": [{"ref_type": "github_issue", "ref": "#3261"}],
+                "upstream_artifact_hint": "docs/development/DELIVERY_FEEDBACK_LOOP.md",
+                "evidence_kind": "reevaluation_candidate",
+                "outcome": "applied",
+            }
+        ],
+    )
+
+    assert len(resolved["learning_evaluation_candidates"]) == 1
+    assert resolved["learning_evaluation_candidates"][0]["outcome"] == "applied"
+    assert unresolved_learning_evaluation_candidates(resolved) == []
+
+
+def test_learning_evaluation_candidates_merge_mixed_id_and_candidate_id(
+    tmp_path: Path,
+) -> None:
+    run_id = "run-learning-mixed-ids"
+    create_epic_run_state(3229, run_id, root=tmp_path)
+
+    update_epic_run_state(
+        run_id,
+        root=tmp_path,
+        learning_evaluation_candidates=[
+            {
+                "id": "learn-1",
+                "candidate_id": "stable-candidate-1",
+                "source_refs": [{"ref_type": "github_issue", "ref": "#3261"}],
+                "upstream_artifact_hint": "docs/development/DELIVERY_FEEDBACK_LOOP.md",
+                "evidence_kind": "reevaluation_candidate",
+            }
+        ],
+    )
+    resolved = update_epic_run_state(
+        run_id,
+        root=tmp_path,
+        learning_evaluation_candidates=[
+            {
+                "candidate_id": "stable-candidate-1",
+                "outcome": "debt_or_fitness_recorded",
+                "outcome_ref": "docs/architecture/SBS_TRANSITION_DEBT.md::D12",
+            }
+        ],
+    )
+
+    assert resolved["learning_evaluation_candidates"] == [
+        {
+            "id": "learn-1",
+            "candidate_id": "stable-candidate-1",
+            "source_refs": [{"ref_type": "github_issue", "ref": "#3261"}],
+            "upstream_artifact_hint": "docs/development/DELIVERY_FEEDBACK_LOOP.md",
+            "evidence_kind": "reevaluation_candidate",
+            "outcome": "debt_or_fitness_recorded",
+            "outcome_ref": "docs/architecture/SBS_TRANSITION_DEBT.md::D12",
+        }
+    ]
+    assert unresolved_learning_evaluation_candidates(resolved) == []
+
+
+def test_learning_evaluation_candidate_validation_rejects_missing_refs_and_bad_outcome() -> None:
+    state = new_epic_run_state(3229, "run-learning-invalid")
+
+    with pytest.raises(EpicRunStateError, match="id or .*candidate_id"):
+        apply_epic_run_update(
+            state,
+            learning_evaluation_candidates=[
+                {
+                    "source_refs": [{"ref_type": "github_issue", "ref": "#3261"}],
+                    "upstream_artifact_hint": "AGENTS.md",
+                    "evidence_kind": "tcd_signal",
+                }
+            ],
+        )
+
+    with pytest.raises(EpicRunStateError, match="source_refs"):
+        apply_epic_run_update(
+            state,
+            learning_evaluation_candidates=[
+                {
+                    "id": "learn-bad",
+                    "source_refs": [],
+                    "upstream_artifact_hint": "AGENTS.md",
+                    "evidence_kind": "tcd_signal",
+                }
+            ],
+        )
+
+    with pytest.raises(EpicRunStateError, match=r"source_refs\[0\]\.ref_type"):
+        apply_epic_run_update(
+            state,
+            learning_evaluation_candidates=[
+                {
+                    "id": "learn-bad",
+                    "source_refs": [{"ref": "#3261"}],
+                    "upstream_artifact_hint": "AGENTS.md",
+                    "evidence_kind": "tcd_signal",
+                }
+            ],
+        )
+
+    with pytest.raises(EpicRunStateError, match=r"source_refs\[0\]\.ref"):
+        apply_epic_run_update(
+            state,
+            learning_evaluation_candidates=[
+                {
+                    "id": "learn-bad",
+                    "source_refs": [{"ref_type": "github_issue", "ref": " "}],
+                    "upstream_artifact_hint": "AGENTS.md",
+                    "evidence_kind": "tcd_signal",
+                }
+            ],
+        )
+
+    with pytest.raises(EpicRunStateError, match="outcome must be one of"):
+        apply_epic_run_update(
+            state,
+            learning_evaluation_candidates=[
+                {
+                    "id": "learn-bad",
+                    "source_refs": [{"ref_type": "github_issue", "ref": "#3261"}],
+                    "upstream_artifact_hint": "AGENTS.md",
+                    "evidence_kind": "tcd_signal",
+                    "outcome": "maybe_later",
+                }
+            ],
+        )
+
+
 def test_concurrent_updates_are_serialized(tmp_path: Path) -> None:
     run_id = "run-concurrent"
     create_epic_run_state(3229, run_id, root=tmp_path)
@@ -304,7 +549,48 @@ def test_cli_dry_run_previews_state_without_writing(tmp_path: Path) -> None:
         {"issue_number": 3247, "state": "queued"}
     ]
     assert payload["state"]["dispatcher_status"] == {"db_exists": False}
+    assert payload["learning_evaluation_candidates_terminal"] is True
+    assert payload["unresolved_learning_evaluation_candidates"] == []
     assert not epic_run_state_path("run-dry", root=tmp_path).exists()
+
+
+def test_cli_surfaces_unresolved_learning_evaluation_candidates(tmp_path: Path) -> None:
+    result = _run_builderops(
+        [
+            "epic-run-state",
+            "record",
+            "--epic-issue-number",
+            "3229",
+            "--run-id",
+            "run-unresolved-candidate",
+            "--root",
+            str(tmp_path),
+            "--update-json",
+            json.dumps(
+                {
+                    "learning_evaluation_candidates": [
+                        {
+                            "id": "candidate-1",
+                            "source_refs": [
+                                {"ref_type": "github_issue", "ref": "#3261"}
+                            ],
+                            "upstream_artifact_hint": "docs/development/DELIVERY_FEEDBACK_LOOP.md",
+                            "evidence_kind": "reevaluation_candidate",
+                        }
+                    ]
+                }
+            ),
+            "--dry-run",
+            "--json",
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["learning_evaluation_candidates_terminal"] is False
+    assert payload["unresolved_learning_evaluation_candidates"] == [
+        payload["state"]["learning_evaluation_candidates"][0]
+    ]
 
 
 def test_cli_record_resume_is_idempotent_for_epic_runner_fields(

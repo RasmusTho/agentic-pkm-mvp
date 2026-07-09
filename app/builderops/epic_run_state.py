@@ -17,11 +17,20 @@ except ImportError:  # pragma: no cover - non-POSIX fallback for local tooling.
 
 SCHEMA_VERSION = 1
 DEFAULT_EPIC_RUNS_DIR = Path("runtime/builderops/epic-runs")
+TERMINAL_LEARNING_EVALUATION_OUTCOMES = (
+    "applied",
+    "already_satisfied",
+    "issue_created",
+    "promotion_pending",
+    "debt_or_fitness_recorded",
+    "discarded_or_superseded",
+)
 
 _RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 _LIST_FIELDS = (
     "child_queue",
+    "learning_evaluation_candidates",
     "review_findings",
     "reusable_constraints",
     "follow_ups",
@@ -96,6 +105,7 @@ def new_epic_run_state(
         "epic_issue_number": _normalize_epic_issue_number(epic_issue_number),
         "run_id": validate_run_id(run_id),
         "child_queue": [],
+        "learning_evaluation_candidates": [],
         "issue_mappings": {},
         "validation_status": {},
         "review_findings": [],
@@ -199,10 +209,17 @@ def apply_epic_run_update(state: Mapping[str, Any], **updates: Any) -> dict[str,
 
     for field in _LIST_FIELDS:
         if field in updates and updates[field] is not None:
-            normalized[field] = _merge_json_list(
-                normalized[field],
-                _normalize_list(updates[field], field),
-            )
+            incoming = _normalize_list(updates[field], field)
+            if field == "learning_evaluation_candidates":
+                normalized[field] = _merge_learning_evaluation_candidates(
+                    normalized[field],
+                    incoming,
+                )
+            else:
+                normalized[field] = _merge_json_list(
+                    normalized[field],
+                    incoming,
+                )
 
     for field in _MERGE_MAPPING_FIELDS:
         if field in updates and updates[field] is not None:
@@ -231,6 +248,33 @@ def record_dispatcher_status(
     """Record a dispatcher status snapshot without importing or changing dispatcher."""
 
     return apply_epic_run_update(state, dispatcher_status=dispatcher_status)
+
+
+def unresolved_learning_evaluation_candidates(
+    state: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Return run-state learning/evaluation candidates without terminal outcomes."""
+
+    normalized = normalize_epic_run_state(state)
+    return [
+        _json_clone(candidate)
+        for candidate in normalized["learning_evaluation_candidates"]
+        if not _candidate_has_terminal_outcome(candidate)
+    ]
+
+
+def assert_learning_evaluation_candidates_terminal(
+    state: Mapping[str, Any],
+) -> None:
+    """Fail when any learning/evaluation candidate lacks a terminal outcome."""
+
+    unresolved = unresolved_learning_evaluation_candidates(state)
+    if unresolved:
+        identifiers = ", ".join(_candidate_display_id(item) for item in unresolved)
+        raise EpicRunStateError(
+            "learning/evaluation candidate(s) lack terminal outcome: "
+            f"{identifiers}"
+        )
 
 
 def serialize_epic_run_state(state: Mapping[str, Any]) -> str:
@@ -279,7 +323,13 @@ def normalize_epic_run_state(state: Mapping[str, Any]) -> dict[str, Any]:
     }
 
     for field in _LIST_FIELDS:
-        normalized[field] = _normalize_list(raw.get(field, []), field)
+        if field == "learning_evaluation_candidates":
+            normalized[field] = _normalize_learning_evaluation_candidates(
+                raw.get(field, []),
+                field,
+            )
+        else:
+            normalized[field] = _normalize_list(raw.get(field, []), field)
     for field in (*_MERGE_MAPPING_FIELDS, *_REPLACE_MAPPING_FIELDS):
         normalized[field] = _normalize_mapping(raw.get(field, {}), field)
 
@@ -300,10 +350,83 @@ def _normalize_optional_string(value: Any, field: str) -> str | None:
     return value.strip()
 
 
+def _normalize_required_string(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise EpicRunStateError(f"{field} must be a non-empty string")
+    return value.strip()
+
+
 def _normalize_list(value: Any, field: str) -> list[Any]:
     if not isinstance(value, list):
         raise EpicRunStateError(f"{field} must be a list")
     return _json_clone(value)
+
+
+def _normalize_learning_evaluation_candidates(
+    value: Any,
+    field: str,
+) -> list[dict[str, Any]]:
+    items = _normalize_list(value, field)
+    return [
+        _normalize_learning_evaluation_candidate(item, f"{field}[{index}]")
+        for index, item in enumerate(items)
+    ]
+
+
+def _normalize_learning_evaluation_candidate(
+    value: Any,
+    field: str,
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise EpicRunStateError(f"{field} must be an object")
+    candidate = _json_clone(value)
+
+    if "id" not in candidate and "candidate_id" not in candidate:
+        raise EpicRunStateError(f"{field}.id or {field}.candidate_id is required")
+
+    for required in ("source_refs", "upstream_artifact_hint", "evidence_kind"):
+        if required not in candidate:
+            raise EpicRunStateError(f"{field}.{required} is required")
+
+    source_refs = candidate["source_refs"]
+    if not isinstance(source_refs, list) or not source_refs:
+        raise EpicRunStateError(f"{field}.source_refs must be a non-empty list")
+    candidate["source_refs"] = [
+        _normalize_source_ref(item, f"{field}.source_refs[{index}]")
+        for index, item in enumerate(source_refs)
+    ]
+
+    for required in ("upstream_artifact_hint", "evidence_kind"):
+        candidate[required] = _normalize_required_string(
+            candidate[required],
+            f"{field}.{required}",
+        )
+
+    outcome = candidate.get("outcome")
+    if outcome is not None:
+        outcome = _normalize_required_string(outcome, f"{field}.outcome")
+        if outcome not in TERMINAL_LEARNING_EVALUATION_OUTCOMES:
+            raise EpicRunStateError(
+                f"{field}.outcome must be one of "
+                f"{list(TERMINAL_LEARNING_EVALUATION_OUTCOMES)}"
+            )
+        candidate["outcome"] = outcome
+
+    return candidate
+
+
+def _normalize_source_ref(value: Any, field: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise EpicRunStateError(f"{field} must be an object")
+    source_ref = _json_clone(value)
+    for required in ("ref_type", "ref"):
+        if required not in source_ref:
+            raise EpicRunStateError(f"{field}.{required} is required")
+        source_ref[required] = _normalize_required_string(
+            source_ref[required],
+            f"{field}.{required}",
+        )
+    return source_ref
 
 
 def _normalize_mapping(value: Any, field: str) -> dict[str, Any]:
@@ -323,6 +446,37 @@ def _merge_json_list(existing: list[Any], incoming: list[Any]) -> list[Any]:
             merged[index[key]] = _merge_json_value(merged[index[key]], item_copy)
         else:
             index[key] = len(merged)
+            merged.append(item_copy)
+    return merged
+
+
+def _merge_learning_evaluation_candidates(
+    existing: list[Any],
+    incoming: list[Any],
+) -> list[Any]:
+    merged = _json_clone(existing)
+    index: dict[str, int] = {}
+    for pos, item in enumerate(merged):
+        for key in _learning_evaluation_candidate_keys(item):
+            index[key] = pos
+
+    for item in incoming:
+        item_copy = _json_clone(item)
+        keys = _learning_evaluation_candidate_keys(item_copy)
+        match_positions = {index[key] for key in keys if key in index}
+        if len(match_positions) > 1:
+            raise EpicRunStateError(
+                "learning/evaluation candidate update matches multiple existing rows"
+            )
+        if match_positions:
+            pos = match_positions.pop()
+            merged[pos] = _merge_json_value(merged[pos], item_copy)
+            for key in _learning_evaluation_candidate_keys(merged[pos]):
+                index[key] = pos
+        else:
+            index_position = len(merged)
+            for key in keys:
+                index[key] = index_position
             merged.append(item_copy)
     return merged
 
@@ -354,6 +508,7 @@ def _record_key(value: Any) -> str:
     if isinstance(value, Mapping):
         for field in (
             "id",
+            "candidate_id",
             "issue_number",
             "issue",
             "pr_number",
@@ -367,6 +522,29 @@ def _record_key(value: Any) -> str:
             ):
                 return f"{field}:{record_value}"
     return _compact_dumps(value)
+
+
+def _candidate_has_terminal_outcome(candidate: Mapping[str, Any]) -> bool:
+    return candidate.get("outcome") in TERMINAL_LEARNING_EVALUATION_OUTCOMES
+
+
+def _candidate_display_id(candidate: Mapping[str, Any]) -> str:
+    for field in ("id", "candidate_id"):
+        value = candidate.get(field)
+        if value is not None:
+            return str(value)
+    return _compact_dumps(candidate)
+
+
+def _learning_evaluation_candidate_keys(value: Any) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [_record_key(value)]
+    keys: list[str] = []
+    for field in ("id", "candidate_id"):
+        record_value = value.get(field)
+        if isinstance(record_value, (str, int)) and not isinstance(record_value, bool):
+            keys.append(f"{field}:{record_value}")
+    return keys or [_record_key(value)]
 
 
 def _json_clone(value: Any) -> Any:
@@ -429,8 +607,10 @@ def _is_relative_to(path: Path, base: Path) -> bool:
 __all__ = [
     "DEFAULT_EPIC_RUNS_DIR",
     "SCHEMA_VERSION",
+    "TERMINAL_LEARNING_EVALUATION_OUTCOMES",
     "EpicRunStateError",
     "apply_epic_run_update",
+    "assert_learning_evaluation_candidates_terminal",
     "create_epic_run_state",
     "deserialize_epic_run_state",
     "epic_run_state_path",
@@ -440,6 +620,7 @@ __all__ = [
     "record_dispatcher_status",
     "save_epic_run_state",
     "serialize_epic_run_state",
+    "unresolved_learning_evaluation_candidates",
     "update_epic_run_state",
     "validate_run_id",
 ]
