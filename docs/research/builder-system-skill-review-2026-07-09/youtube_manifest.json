@@ -1,0 +1,382 @@
+{
+  "created_at": "2026-07-09T09:05:01.432968+00:00",
+  "pipeline": "app.knowledge_acquisition.youtube_plugin.yt_dlp_extract_info/fetch_caption_body + normalize; uses documented caption-first path, with explicit en-US -> en-orig workaround where plugin selector would otherwise fall into ASR",
+  "store_backend": "memory",
+  "pipeline_test_findings": [
+    "youtube_plugin.fetch requires explicit STORE_BACKEND or DB_DSN/DATABASE_URL; without it, persist_raw_record fails loud after caption fetch.",
+    "For videos whose yt-dlp metadata language is en-US but automatic caption keys are en-orig/en, select_caption_track returns captionless and triggers slow ASR fallback. The saved transcripts for suY66oTDn0s and gsvZn4nbFus use an explicit original-English caption workaround instead of waiting on ASR.",
+    "yt-dlp emitted a warning that no supported JavaScript runtime was found; extraction still succeeded for metadata/captions in this run."
+  ],
+  "input_urls": [
+    "https://youtu.be/A8mokin_YOs?si=n2SAximDZwDd-IET",
+    "https://youtu.be/kwSVtQ7dziU?si=whmTl3zrC4pZieSH",
+    "https://youtu.be/ib74sLgjIBM?si=ZX21BURpRjH2fEyb",
+    "https://youtu.be/suY66oTDn0s?si=wd1Rw5bmt2bIYfxc",
+    "https://youtu.be/gsvZn4nbFus?si=1lsPv85aGjjS399g",
+    "https://youtu.be/A8mokin_YOs?si=09kie2lm7SgB06C9"
+  ],
+  "videos": [
+    {
+      "video_id": "A8mokin_YOs",
+      "input_urls": [
+        "https://youtu.be/A8mokin_YOs?si=n2SAximDZwDd-IET",
+        "https://youtu.be/A8mokin_YOs?si=09kie2lm7SgB06C9"
+      ],
+      "title": "New Skills! v1.1 brings /wayfinder, /research, /implement, /to-spec, /to-tickets",
+      "channel": "Matt Pocock",
+      "channel_id": "UCswG6FSbgZjbWtdf_hMLaow",
+      "publish_date": "20260708",
+      "duration": 911,
+      "metadata_language": "en",
+      "selection_path": "pipeline_selector",
+      "ok": true,
+      "acquisition_method": "captions_auto",
+      "caption_language": "en",
+      "content_identity": "sha256:a507447a824d1cbb8c8530f4155c10b3e8002b354ab4716ced99651edd28cee4",
+      "normalized_language": "en",
+      "quality_note": "machine-generated auto-captions; rolling-cue duplication removed by normalization, punctuation/segmentation may still be imprecise",
+      "normalized_segments": 429,
+      "chapters": [
+        {
+          "start_time": 0.0,
+          "title": "v1.1 Is Ready!",
+          "end_time": 37.0
+        },
+        {
+          "start_time": 37.0,
+          "title": "to-spec, /to-tickets",
+          "end_time": 154.0
+        },
+        {
+          "start_time": 154.0,
+          "title": "Grilling skill improvements",
+          "end_time": 246.0
+        },
+        {
+          "start_time": 246.0,
+          "title": "Complete development lifecycle flow",
+          "end_time": 405.0
+        },
+        {
+          "start_time": 405.0,
+          "title": "Code review with refactoring smells",
+          "end_time": 472.0
+        },
+        {
+          "start_time": 472.0,
+          "title": "Introducing Wayfinder for large plans",
+          "end_time": 681.0
+        },
+        {
+          "start_time": 681.0,
+          "title": "Supporting skills: research and prototype",
+          "end_time": 732.0
+        },
+        {
+          "start_time": 732.0,
+          "title": "TDD skill updates",
+          "end_time": 795.0
+        },
+        {
+          "start_time": 795.0,
+          "title": "Migration guide and closing thoughts",
+          "end_time": 839.0
+        },
+        {
+          "start_time": 839.0,
+          "title": "AI Coding Crash Course announcement",
+          "end_time": 911
+        }
+      ],
+      "normalized_transcript_path": "docs/research/builder-system-skill-review-2026-07-09/transcripts/A8mokin_YOs.normalized.md",
+      "raw_artifact_note": "Raw VTT/JSON generated during acquisition; omitted from repository artifact set. Use normalized_transcript_path plus content_identity for audit evidence."
+    },
+    {
+      "video_id": "kwSVtQ7dziU",
+      "input_urls": [
+        "https://youtu.be/kwSVtQ7dziU?si=whmTl3zrC4pZieSH"
+      ],
+      "title": "Skill Issue: Andrej Karpathy on Code Agents, AutoResearch, and the Loopy Era of AI",
+      "channel": "No Priors: AI, Machine Learning, Tech, & Startups",
+      "channel_id": "UCSI7h9hydQ40K5MJHnCrQvw",
+      "publish_date": "20260320",
+      "duration": 3991,
+      "metadata_language": "en",
+      "selection_path": "pipeline_selector",
+      "ok": true,
+      "acquisition_method": "captions_auto",
+      "caption_language": "en",
+      "content_identity": "sha256:e380a3f361fd582779cf8402ff218dda57c58fd895ae0b7e23a273ee769d78a3",
+      "normalized_language": "en",
+      "quality_note": "machine-generated auto-captions; rolling-cue duplication removed by normalization, punctuation/segmentation may still be imprecise",
+      "normalized_segments": 2299,
+      "chapters": [
+        {
+          "start_time": 0.0,
+          "title": "Andrej Karpathy Introduction",
+          "end_time": 175.0
+        },
+        {
+          "start_time": 175.0,
+          "title": "What Capability Limits Remain?",
+          "end_time": 375.0
+        },
+        {
+          "start_time": 375.0,
+          "title": "What Mastery of Coding Agents Looks Like",
+          "end_time": 676.0
+        },
+        {
+          "start_time": 676.0,
+          "title": "Second Order Effects of Natural Language Coding",
+          "end_time": 951.0
+        },
+        {
+          "start_time": 951.0,
+          "title": "Why AutoResearch",
+          "end_time": 1365.0
+        },
+        {
+          "start_time": 1365.0,
+          "title": "Relevant Skills in the AI Era",
+          "end_time": 1705.0
+        },
+        {
+          "start_time": 1705.0,
+          "title": "Model Speciation",
+          "end_time": 1950.0
+        },
+        {
+          "start_time": 1950.0,
+          "title": "Building More Collaboration Surfaces for Humans and AI",
+          "end_time": 2248.0
+        },
+        {
+          "start_time": 2248.0,
+          "title": "Analysis of Jobs Market Data",
+          "end_time": 2905.0
+        },
+        {
+          "start_time": 2905.0,
+          "title": "Open vs. Closed Source Models",
+          "end_time": 3231.0
+        },
+        {
+          "start_time": 3231.0,
+          "title": "Autonomous Robotics",
+          "end_time": 3659.0
+        },
+        {
+          "start_time": 3659.0,
+          "title": "MicroGPT and Agentic Education",
+          "end_time": 3940.0
+        },
+        {
+          "start_time": 3940.0,
+          "title": "Conclusion",
+          "end_time": 3991
+        }
+      ],
+      "normalized_transcript_path": "docs/research/builder-system-skill-review-2026-07-09/transcripts/kwSVtQ7dziU.normalized.md",
+      "raw_artifact_note": "Raw VTT/JSON generated during acquisition; omitted from repository artifact set. Use normalized_transcript_path plus content_identity for audit evidence."
+    },
+    {
+      "video_id": "ib74sLgjIBM",
+      "input_urls": [
+        "https://youtu.be/ib74sLgjIBM?si=ZX21BURpRjH2fEyb"
+      ],
+      "title": "Build A Claude Knowledge Base That Self-Improves!",
+      "channel": "Systems Made Better",
+      "channel_id": "UCNZd3Osk_AIOxz2aydFYhHg",
+      "publish_date": "20260523",
+      "duration": 2175,
+      "metadata_language": "en",
+      "selection_path": "pipeline_selector",
+      "ok": true,
+      "acquisition_method": "captions_auto",
+      "caption_language": "en",
+      "content_identity": "sha256:b14b7aeb6e3e5c32e9340c1dde08fbfb3dd94922df55e3626c63f35f41c084fc",
+      "normalized_language": "en",
+      "quality_note": "machine-generated auto-captions; rolling-cue duplication removed by normalization, punctuation/segmentation may still be imprecise",
+      "normalized_segments": 987,
+      "chapters": [
+        {
+          "start_time": 0.0,
+          "title": "Build Karpathy's AI Knowledge Base in Claude",
+          "end_time": 116.0
+        },
+        {
+          "start_time": 116.0,
+          "title": "My Claude CoWork Knowledge Base: System Overview",
+          "end_time": 236.0
+        },
+        {
+          "start_time": 236.0,
+          "title": "The Claude Build - System Setup",
+          "end_time": 680.0
+        },
+        {
+          "start_time": 680.0,
+          "title": "The Claude Build - Information Dump",
+          "end_time": 968.0
+        },
+        {
+          "start_time": 968.0,
+          "title": "The Claude Build - Create the Wiki",
+          "end_time": 1237.0
+        },
+        {
+          "start_time": 1237.0,
+          "title": "Creating A Compounding Loop: Self-Improvement in Claude",
+          "end_time": 1462.0
+        },
+        {
+          "start_time": 1462.0,
+          "title": "System Health Check: Claude CoWork Scheduled Task",
+          "end_time": 2019.0
+        },
+        {
+          "start_time": 2019.0,
+          "title": "Final Results",
+          "end_time": 2093.0
+        },
+        {
+          "start_time": 2093.0,
+          "title": "The 1 Day vs 100 Day Transformation To Aim For",
+          "end_time": 2175
+        }
+      ],
+      "normalized_transcript_path": "docs/research/builder-system-skill-review-2026-07-09/transcripts/ib74sLgjIBM.normalized.md",
+      "raw_artifact_note": "Raw VTT/JSON generated during acquisition; omitted from repository artifact set. Use normalized_transcript_path plus content_identity for audit evidence."
+    },
+    {
+      "video_id": "suY66oTDn0s",
+      "input_urls": [
+        "https://youtu.be/suY66oTDn0s?si=wd1Rw5bmt2bIYfxc"
+      ],
+      "title": "Claude Fable 5 Bossed 20 Cheap AI Agents. The Whole Site Cost $8.",
+      "channel": "AI News & Strategy Daily | Nate B Jones",
+      "channel_id": "UC0C-17n9iuUQPylguM1d-lQ",
+      "publish_date": "20260708",
+      "duration": 1157,
+      "metadata_language": "en-US",
+      "selection_path": "en_us_en_orig_workaround",
+      "ok": true,
+      "acquisition_method": "captions_auto",
+      "caption_language": "en-orig",
+      "content_identity": "sha256:f6ff6244b16d0b1477f87b7ab3fb9120ccfae1fc19609afe3df4ac79d4bfc05a",
+      "normalized_language": "en-orig",
+      "quality_note": "machine-generated auto-captions; rolling-cue duplication removed by normalization, punctuation/segmentation may still be imprecise",
+      "normalized_segments": 515,
+      "chapters": [
+        {
+          "start_time": 0.0,
+          "title": "The hallucination that didn't matter",
+          "end_time": 116.0
+        },
+        {
+          "start_time": 116.0,
+          "title": "Elsa's website and the 6-day baseline",
+          "end_time": 210.0
+        },
+        {
+          "start_time": 210.0,
+          "title": "The build: a boss, 4 model families, 34 checked tasks",
+          "end_time": 258.0
+        },
+        {
+          "start_time": 258.0,
+          "title": "The audition: hiring agents with a tryout",
+          "end_time": 318.0
+        },
+        {
+          "start_time": 318.0,
+          "title": "The org chart and the honest cost breakdown",
+          "end_time": 431.0
+        },
+        {
+          "start_time": 431.0,
+          "title": "Every task ships with an executed check",
+          "end_time": 469.0
+        },
+        {
+          "start_time": 469.0,
+          "title": "Catch 1: the hallucinated quotes",
+          "end_time": 539.0
+        },
+        {
+          "start_time": 539.0,
+          "title": "Catch 2: the worker that cheated",
+          "end_time": 599.0
+        },
+        {
+          "start_time": 599.0,
+          "title": "Catch 3: the boss's own bug",
+          "end_time": 637.0
+        },
+        {
+          "start_time": 637.0,
+          "title": "Catch 4: who checks the checkers",
+          "end_time": 765.0
+        },
+        {
+          "start_time": 765.0,
+          "title": "The constitution: how to prompt for big work",
+          "end_time": 895.0
+        },
+        {
+          "start_time": 895.0,
+          "title": "Elsa's verdict and where this leaves you",
+          "end_time": 1157
+        }
+      ],
+      "normalized_transcript_path": "docs/research/builder-system-skill-review-2026-07-09/transcripts/suY66oTDn0s.normalized.md",
+      "raw_artifact_note": "Raw VTT/JSON generated during acquisition; omitted from repository artifact set. Use normalized_transcript_path plus content_identity for audit evidence."
+    },
+    {
+      "video_id": "gsvZn4nbFus",
+      "input_urls": [
+        "https://youtu.be/gsvZn4nbFus?si=1lsPv85aGjjS399g"
+      ],
+      "title": "Combine Fable 5 & Sol 5.6 With This One Skill (Or Fall Behind)",
+      "channel": "Chase AI",
+      "channel_id": "UCoy6cTJ7Tg0dqS-DI-_REsA",
+      "publish_date": "20260708",
+      "duration": 578,
+      "metadata_language": "en-US",
+      "selection_path": "en_us_en_orig_workaround",
+      "ok": true,
+      "acquisition_method": "captions_auto",
+      "caption_language": "en-orig",
+      "content_identity": "sha256:353be23548413e19839ce23abdad726c29df56beccd5d029c1e6cefbc8646731",
+      "normalized_language": "en-orig",
+      "quality_note": "machine-generated auto-captions; rolling-cue duplication removed by normalization, punctuation/segmentation may still be imprecise",
+      "normalized_segments": 272,
+      "chapters": [
+        {
+          "start_time": 0.0,
+          "title": "Intro",
+          "end_time": 57.0
+        },
+        {
+          "start_time": 57.0,
+          "title": "Sol & The Skill",
+          "end_time": 321.0
+        },
+        {
+          "start_time": 321.0,
+          "title": "Demo",
+          "end_time": 567.0
+        },
+        {
+          "start_time": 567.0,
+          "title": "Outro",
+          "end_time": 578
+        }
+      ],
+      "normalized_transcript_path": "docs/research/builder-system-skill-review-2026-07-09/transcripts/gsvZn4nbFus.normalized.md",
+      "raw_artifact_note": "Raw VTT/JSON generated during acquisition; omitted from repository artifact set. Use normalized_transcript_path plus content_identity for audit evidence."
+    }
+  ],
+  "retained_artifact_policy": "Normalized transcripts and manifest are retained in repo; raw VTT/JSON generated during acquisition are omitted to avoid vendoring duplicate generated payloads."
+}
