@@ -83,6 +83,28 @@ Embeddings are currently dispatched from `app/llm/embeddings.py` (superseded as 
 - `LLM_TIMEOUT` applies to every HTTP call.
   - chat defaults to 120s
   - embeddings and other adapter calls default to 60s
+- `/api/ask` fails loud with the documented ASK timeout contract when the backend raises
+  `LLMBackendTimeout` (the current Ollama socket-timeout path). The HTTP response is
+  `504 Gateway Timeout` with the FastAPI error body also documented in
+  `docs/contracts/MIMER_CLIENT_CONTRACT.md`:
+
+  ```json
+  {
+    "detail": {
+      "error": "llm_backend_timeout",
+      "provider": "<provider>",
+      "timeout_seconds": 120.0,
+      "trace_id": "<trace id>",
+      "message": "<backend timeout detail>"
+    }
+  }
+  ```
+
+  `provider` names the backend that timed out, `timeout_seconds` is the bound that fired, and
+  `trace_id` is the request trace to use when correlating logs/status evidence. This is the expected
+  timeout surface for wedged Ollama calls on the named timeout path; it is not a successful ASK
+  response and it does not include `answer` / `sources` fields. Other provider failures can still
+  follow their existing generic error or fallback behavior until they raise `LLMBackendTimeout`.
 - No automatic retry is implemented today; the health CLI only checks reachability/basic readiness.
 - `app/quality/guardrails.DEFAULT_BREAKER` is available for future integration around provider calls.
 - For deterministic CLI/test workflows, prefer `LLM_PROVIDER=mock` until a local Ollama server or remote provider is confirmed healthy.
