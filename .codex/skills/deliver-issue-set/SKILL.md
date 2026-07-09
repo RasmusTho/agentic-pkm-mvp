@@ -68,6 +68,28 @@ Delivery mode may claim, implement, publish, verify, merge, and close issues onl
 
 Delivery rules:
 
+- Use epic run-state v0 as coordination evidence for any delivery-mode epic or parent-feature run
+  that spans planning plus at least one child issue. The helper surface is:
+  `python3 -m app.builderops builderops epic-run-state record --epic-issue-number <N> --run-id <safe-id>`.
+  Use `--root <tmpdir>` in tests; otherwise the default path is
+  `runtime/builderops/epic-runs/<run_id>.json`.
+- Record only evidence supplied by current GitHub/repo/PR/CI facts or by the current runner
+  decision: child queue, issue/PR/branch/worktree mapping, validation status, review findings,
+  reusable constraints, follow-ups, stop conditions, dispatcher status snapshots, compact receipts,
+  and last verified head SHA. Do not infer lifecycle, Project, label, merge, closure, or product
+  truth from the state file.
+- Treat run-state as discardable local coordination state, never authority. If it is missing or
+  deleted, rebuild it from live GitHub/repo evidence where practical and continue from that evidence;
+  if the authoritative evidence is ambiguous, stop under the normal Human Exception / issue
+  maintenance rules instead of trusting stale local state.
+- Use `--dry-run --json` before any new run-state write path or when auditing a run. Dry-run output
+  must not perform GitHub writes; it only previews the deterministic state that would be written.
+- Repeated `record` calls are the resume path. They must be idempotent for child queue, reusable
+  constraints, review findings, follow-ups, and compact receipts; duplicated local state is a runner
+  bug to repair before dispatching more work.
+- Dispatcher status in run-state is snapshot-only. Recording `{"db_exists": false}` or similar does
+  not start, stop, claim, heartbeat, release, or complete dispatcher work. Keep dispatcher behavior
+  governed by the existing dispatcher flow until a separate child issue changes it.
 - Default to delivering one issue at a time.
 - You may claim multiple issues only when you are immediately assigning them to active sub-agents with isolated worktrees and the parallelization is rational from both token-budget and quality perspectives.
 - Before selecting or dispatching work, classify each candidate as Product/Runtime System,

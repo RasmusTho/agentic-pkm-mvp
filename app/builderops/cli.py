@@ -7,6 +7,15 @@ from typing import Any, Callable
 import click
 
 from app.builderops.config import load_paths
+from app.builderops.epic_run_state import (
+    EpicRunStateError,
+    apply_epic_run_update,
+    create_epic_run_state,
+    epic_run_state_path,
+    load_epic_run_state,
+    new_epic_run_state,
+    update_epic_run_state,
+)
 from app.builderops.models import BuilderOpsValidationError, normalize_actor
 from app.builderops.promotion_gateway import BuilderOpsPromotionGateway
 from app.builderops.projections import (
@@ -26,6 +35,25 @@ def _parse_json_object(value: str | None, *, field: str) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise click.BadParameter(f"{field} must be a JSON object")
     return parsed
+
+
+def _load_json_object_file(path: Path | None, *, field: str) -> dict[str, Any]:
+    if path is None:
+        return {}
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise click.BadParameter(f"{field} must contain a JSON object") from exc
+    if not isinstance(parsed, dict):
+        raise click.BadParameter(f"{field} must contain a JSON object")
+    return parsed
+
+
+def _merge_json_objects(*objects: dict[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for item in objects:
+        merged.update(item)
+    return merged
 
 
 def _parse_ref(value: str) -> dict[str, Any]:
@@ -74,6 +102,21 @@ def _emit_projection_results(payload: list[dict[str, Any]], as_json: bool) -> No
         click.echo(
             f"{item['projection_type']}\t{item['record_count']}\t{item['path']}"
         )
+
+
+def _epic_run_state_payload(
+    *,
+    dry_run: bool,
+    path: Path,
+    state: dict[str, Any],
+    state_exists: bool,
+) -> dict[str, Any]:
+    return {
+        "dry_run": dry_run,
+        "path": str(path),
+        "state": state,
+        "state_exists": state_exists,
+    }
 
 
 def _store(ctx: click.Context) -> SqliteBuilderOpsStore:
@@ -424,6 +467,108 @@ def create_roadmap_execution_item(
     if idempotency_key:
         payload["idempotency_key"] = idempotency_key
     _handle_create(ctx, _store(ctx).create_roadmap_execution_item, payload, as_json)
+
+
+@builderops.group("epic-run-state", help="Record local deliver-issue-set epic run state.")
+def epic_run_state() -> None:
+    """Local coordination evidence for deliver-issue-set runs."""
+
+
+@epic_run_state.command(
+    "record",
+    help="Create or update an epic run-state file from explicit local evidence.",
+)
+@click.option("--epic-issue-number", required=True, type=int)
+@click.option("--run-id", required=True)
+@click.option(
+    "--root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Override epic run-state root. Defaults to runtime/builderops/epic-runs.",
+)
+@click.option("--update-json", default="{}", help="JSON object with run-state update fields.")
+@click.option(
+    "--update-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Path to a JSON object with run-state update fields.",
+)
+@click.option("--dry-run", is_flag=True, help="Preview the state without writing a file.")
+@click.option("--json", "as_json", is_flag=True)
+def record_epic_run_state(
+    epic_issue_number: int,
+    run_id: str,
+    root: Path | None,
+    update_json: str,
+    update_file: Path | None,
+    dry_run: bool,
+    as_json: bool,
+) -> None:
+    updates = _merge_json_objects(
+        _load_json_object_file(update_file, field="update-file"),
+        _parse_json_object(update_json, field="update-json"),
+    )
+    try:
+        path = epic_run_state_path(run_id, root=root)
+        state_exists = path.exists()
+        if dry_run:
+            if state_exists:
+                base_state = load_epic_run_state(run_id, root=root)
+                if base_state["epic_issue_number"] != epic_issue_number:
+                    raise EpicRunStateError(
+                        f"run_id {run_id!r} already belongs to epic "
+                        f"{base_state['epic_issue_number']}"
+                    )
+            else:
+                base_state = new_epic_run_state(epic_issue_number, run_id)
+            state = apply_epic_run_update(base_state, **updates)
+        elif state_exists:
+            existing_state = load_epic_run_state(run_id, root=root)
+            if existing_state["epic_issue_number"] != epic_issue_number:
+                raise EpicRunStateError(
+                    f"run_id {run_id!r} already belongs to epic "
+                    f"{existing_state['epic_issue_number']}"
+                )
+            state = (
+                update_epic_run_state(run_id, root=root, **updates)
+                if updates
+                else existing_state
+            )
+        else:
+            state = create_epic_run_state(
+                epic_issue_number,
+                run_id,
+                root=root,
+                **updates,
+            )
+    except EpicRunStateError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    _emit(
+        _epic_run_state_payload(
+            dry_run=dry_run,
+            path=path,
+            state=state,
+            state_exists=state_exists,
+        ),
+        as_json,
+    )
+
+
+@epic_run_state.command("show", help="Read an existing epic run-state file.")
+@click.argument("run_id")
+@click.option(
+    "--root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Override epic run-state root. Defaults to runtime/builderops/epic-runs.",
+)
+@click.option("--json", "as_json", is_flag=True)
+def show_epic_run_state(run_id: str, root: Path | None, as_json: bool) -> None:
+    try:
+        _emit(load_epic_run_state(run_id, root=root), as_json)
+    except (EpicRunStateError, FileNotFoundError) as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 @builderops.command("acquire-lease", help="Acquire or renew a BuilderOps record lease.")
