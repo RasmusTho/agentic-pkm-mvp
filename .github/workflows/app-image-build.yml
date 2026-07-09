@@ -36,6 +36,11 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
       - name: Login to GHCR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/login-action@v3
@@ -44,19 +49,35 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build app image
+      - name: Build app image (PR validation)
+        if: github.event_name == 'pull_request'
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
           load: true
           push: false
+          platforms: linux/amd64
           tags: ${{ steps.build-identity.outputs.image }}
           build-args: |
             VCS_REF=${{ env.VCS_REF }}
             BUILT_AT=${{ env.BUILT_AT }}
 
+      - name: Build and push app image (main multi-arch)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ steps.build-identity.outputs.image }}
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            VCS_REF=${{ env.VCS_REF }}
+            BUILT_AT=${{ env.BUILT_AT }}
+
       - name: Verify image runtime version
+        if: github.event_name == 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
@@ -65,9 +86,22 @@ jobs:
             "${{ steps.build-identity.outputs.image }}" \
             -c 'from app.version import get_runtime_version; import os; version = get_runtime_version(); assert version["git_sha"] == os.environ["VCS_REF"], version; assert version["built_at"] == os.environ["BUILT_AT"], version'
 
-      - name: Push app image to GHCR
+      - name: Verify pushed app image runtime version and platforms
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
         run: |
           set -euo pipefail
-          docker push "${{ steps.build-identity.outputs.image }}"
+          image="${{ steps.build-identity.outputs.image }}"
+          inspect_output="$(docker buildx imagetools inspect "${image}")"
+          echo "${inspect_output}"
+          for required_platform in linux/amd64 linux/arm64; do
+            if ! echo "${inspect_output}" | grep -q "Platform: ${required_platform}"; then
+              echo "missing required platform in image manifest: ${required_platform}"
+              exit 1
+            fi
+          done
+          docker run --rm \
+            --platform linux/amd64 \
+            --entrypoint python \
+            "${image}" \
+            -c 'from app.version import get_runtime_version; import os; version = get_runtime_version(); assert version["git_sha"] == os.environ["VCS_REF"], version; assert version["built_at"] == os.environ["BUILT_AT"], version'
