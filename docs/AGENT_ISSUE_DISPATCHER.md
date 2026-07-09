@@ -372,6 +372,20 @@ dispatcher and epic run-state remain operational coordination evidence only. Liv
 belong to the owning workflow skill (`issue-to-code`, `verification-and-closure`, or issue
 maintenance) and must use explicit commands with verification.
 
+Before starting an epic delivery batch, coordinators may run the child readiness repair batch helper
+against an explicit issue-state fixture:
+
+```bash
+python3 -m app.builderops builderops ready-repair-batch plan \
+  --children-file <children.json> --json
+```
+
+The helper runs the strict readiness validator for each child, reports blocked children, and proposes
+the exact `agent:ready` / Project `Ready` repairs for `ready_candidate` issues. Default mode is
+dry-run/observe-only. Explicit `--apply` may execute only those validator-gated repairs and emits
+verification reads for the changed issues; it does not claim work, start agents, merge PRs, or make
+GitHub Project status authoritative over the Issue contract.
+
 ### Setup on each agent machine
 
 Install a wrapper script that proxies dispatcher commands over SSH:
