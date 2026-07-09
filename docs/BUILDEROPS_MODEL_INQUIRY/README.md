@@ -1,4 +1,4 @@
-State: Specification directory for a Builder System capability. Not yet implemented.
+State: Specification directory for a Builder System capability. Backlog filed; not yet implemented.
 Doc role: Specification directory
 Authority: Defines the BuilderOps pre-ticket model-inquiry capability and its task decomposition. BuilderOps Vault authority remains owned by ADR-0010.
 Owner: BuilderOps governance
@@ -90,8 +90,10 @@ Partial failure examples:
 
 ## Relationship To GitHub Issues
 
-Parent feature Issue: pending creation. It is the validation hub for this capability. Each task
-below becomes one bounded child Issue after the specification PR is published.
+Parent feature Issue: [#3288](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3288). It is the
+validation hub for this capability. Child issues are #3289 (BMI-01), #3290 (BMI-02), #3291
+(BMI-03), #3292 (BMI-04), and #3293 (BMI-05). They remain blocked until this specification PR is
+merged, then become eligible in the listed dependency order.
 
 ## Validation / Acceptance Path
 
