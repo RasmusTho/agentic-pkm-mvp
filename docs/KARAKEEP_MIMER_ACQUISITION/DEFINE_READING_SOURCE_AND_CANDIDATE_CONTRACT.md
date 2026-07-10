@@ -18,15 +18,21 @@ Mimer/KAP consumes, without importing source-specific authority into HKA/GOV.
 
 ## What This Task Does
 
-Define Heimdal link/note/highlight evidence, stable source identity/revision, provenance, attribution
-and entity-mention fields, tombstone posture, producer cursor, and durable published-event shape.
-Define separately how Mimer consumes that event, resolves/refines meaning, advances its own consumer
-cursor, and maps it to a draft `reading_source_note` via governed first-write-wins behavior.
+Define how Karakeep link/note/highlight evidence conforms to the existing canonical
+`heimdal.observation.published.v1` schema: stable source identity/revision, the schema's complete
+identity/time/actor/entity/content/confidence/provenance/sensitivity/consent families, and tombstone
+posture. Define separately how the existing `mimer.candidate_projector` consumer and
+`app.heimdal.candidate_projection.project_pending_candidates` path are extended to map that event to
+a draft `reading_source_note` via governed first-write-wins behavior. Do not create a parallel event
+topic, log, read API, projector, or consumer cursor.
 
 ## Concretely
 
-Update this specification and the Heimdal/Mimer handoff contract so implementation has named fields,
-two explicit cursors, and no ownership decisions remain. No runtime behavior lands in this task.
+Update this specification and the canonical Heimdal/Mimer handoff docs so implementation has named
+Karakeep-to-v1 field mappings and an explicit extension design for the shipped Mimer projector. The
+source checkpoint remains Heimdal adapter state; the downstream cursor is the existing
+`mimer.candidate_projector` cursor accessed only through `app.heimdal.publish`. No runtime behavior
+lands in this task.
 
 ## Why This Matters
 
@@ -47,11 +53,20 @@ distributed transaction.
 ## Acceptance Criteria
 
 - [ ] Contract assigns Karakeep fetch, identity, revision, provenance, attribution/entity mentions,
-  and publication exclusively to Heimdal. Verify: `tests/heimdal/test_karakeep_handoff_contract.py::test_contract_assigns_external_front_to_heimdal`.
-- [ ] Handoff fixes the published link/note/highlight shape and separate producer/consumer cursor
-  rules; tombstones never delete a Mimer artifact automatically. Verify: `tests/heimdal/test_karakeep_handoff_contract.py::test_published_shape_and_two_cursor_semantics_are_fail_safe`.
-- [ ] Candidate mapping mandates `requires_review: true`, `review_state: draft`, deterministic path,
-  Karakeep provenance, and KAP WriteGuard materialization from published evidence. Verify: `tests/knowledge_acquisition/test_karakeep_handoff_consumer.py::test_candidate_contract_is_draft_governed_and_deterministic`.
+  and publication exclusively to Heimdal, and maps every saved-item field into the mandatory
+  identity/time/actor/entity/content/confidence/provenance/sensitivity/consent families of
+  `heimdal.observation.published.v1`. Verify: `tests/heimdal/test_karakeep_handoff_contract.py::test_karakeep_mapping_conforms_to_canonical_published_v1_schema`.
+- [ ] Handoff reuses the append-only Heimdal observation log and sanctioned
+  `app.heimdal.publish.publish_full_observation` / `read_observations_for_consumer` /
+  `advance_cursor_for_consumer` APIs; adapter checkpoint and existing `mimer.candidate_projector`
+  cursor remain independent, and no parallel topic/log/read path/cursor is introduced. Verify:
+  `tests/heimdal/test_karakeep_handoff_contract.py::test_contract_reuses_canonical_log_and_cursor_seam`.
+- [ ] The contract chooses extension of the shipped
+  `app.heimdal.candidate_projection.project_pending_candidates` path and its existing
+  `mimer.candidate_projector` cursor—not a second KAP consumer—and fixes the additive mapping to
+  `reading_source_note`, tombstone no-delete behavior, `requires_review: true`,
+  `review_state: draft`, deterministic path, Karakeep provenance, and WriteGuard materialization.
+  Verify: `tests/knowledge_acquisition/test_karakeep_handoff_consumer.py::test_contract_extends_existing_mimer_projector_without_parallel_consumer`.
 - [ ] Contract explicitly forbids `/api/capture`, companion capture, Karakeep MCP, and embedded
   endpoint/credential values. Verify: doc writeback at
   `docs/KARAKEEP_MIMER_ACQUISITION/README.md :: Capability boundary`.
@@ -69,6 +84,11 @@ endpoint selection.
 ## Related Docs
 
 - `docs/adr/ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md`
+- `docs/EVENTS.md :: Heimdal observation log (append-only, per-consumer cursor)`
+- `docs/EVENTS.md :: Heimdal event contract schemas`
+- `schemas/events/heimdal.observation.published.v1.schema.json`
+- `app/heimdal/publish.py :: publish_full_observation / read_observations_for_consumer / advance_cursor_for_consumer`
+- `app/heimdal/candidate_projection.py :: CANDIDATE_CONSUMER_ID / project_pending_candidates`
 - `docs/HEIMDAL/FABLE_COMPANION.md`
 - `docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md`
 - `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md`

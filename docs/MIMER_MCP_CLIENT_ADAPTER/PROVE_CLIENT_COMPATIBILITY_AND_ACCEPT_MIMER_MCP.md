@@ -93,4 +93,3 @@ Create the final child only after MIMER-MCP-02 and MIMER-MCP-03 merge. TCD hint:
 (Sonnet / high is also acceptable) because the work is integration- and evidence-heavy rather than
 architecture-generative; escalate to xhigh on protocol/client divergence or ambiguous capture
 behavior. Require the normal CI gate plus architecture/security review before parent closure.
-

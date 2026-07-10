@@ -125,7 +125,7 @@ Only then may the parent close and owner docs be promoted from planned to delive
 - KMA-02: #3373 and KMA-03: #3374 — blocked on #3372; parallel after the contract lands.
 - KMA-04: #3375 — blocked on #3374 only.
 - KMA-05: #3377 — blocked on #3373 and #3375.
-- KMA-06: #3376 — blocked on #3373 and #3377; final live acceptance/closure handoff.
+- KMA-06: #3376 — blocked directly on #3377 (which already transitively requires #3373); final live acceptance/closure handoff.
 
 [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md) points to the live validation hub; GitHub owns
 pickup/lifecycle truth and this directory owns the task contracts.
