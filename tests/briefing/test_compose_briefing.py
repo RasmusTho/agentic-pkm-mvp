@@ -547,6 +547,9 @@ def test_load_briefing_round_trip_absent_and_invalid_schema(
         "invalid_surfaced_ref_uuid",
         "invalid_receipt_vault_uuid",
         "noncanonical_receipt_timestamp",
+        "noncanonical_commitment_artifact_path",
+        "noncanonical_moment_artifact_path",
+        "noncanonical_receipt_path",
         "degraded_without_reason",
     ],
 )
@@ -554,6 +557,7 @@ def test_load_briefing_rejects_malformed_schema_v1_provenance(
     vault: tuple[Path, VaultContext], malformed_case: str
 ) -> None:
     root, context = vault
+    _seed_commitment(context, "commitment-1", kind="next_action", state="next")
     _seed_moment(root, "moment-1", refs=[SurfacedRef(ref="Notes/A.md", why="why")])
     _seed_receipts(root, [_receipt("object-1", "2026-07-09T12:00:00Z")])
     compose_briefing(
@@ -574,6 +578,18 @@ def test_load_briefing_rejects_malformed_schema_v1_provenance(
     elif malformed_case == "noncanonical_receipt_timestamp":
         payload["sections"]["decision_receipts"]["items"][0]["created_at"] = (
             "2026-07-09T12:00:00+00:00"
+        )
+    elif malformed_case == "noncanonical_commitment_artifact_path":
+        payload["sections"]["commitments"]["items"][0]["artifact_path"] = (
+            "Human/private.md"
+        )
+    elif malformed_case == "noncanonical_moment_artifact_path":
+        payload["sections"]["moments"]["items"][0]["artifact_path"] = (
+            "Human/private.md"
+        )
+    elif malformed_case == "noncanonical_receipt_path":
+        payload["sections"]["decision_receipts"]["items"][0]["receipt_path"] = (
+            "_system/receipts/decisions/wrong-shard.jsonl"
         )
     else:
         payload["degraded_sections"] = ["moments"]

@@ -174,7 +174,12 @@ def load_briefing(
     try:
         content = target.read_text(encoding="utf-8")
         frontmatter = _load_frontmatter(content)
-        return _note_from_frontmatter(frontmatter, expected_date=for_date)
+        return _note_from_frontmatter(
+            frontmatter,
+            expected_date=for_date,
+            vault_root=vault_root,
+            system_dir=system_dir,
+        )
     except BriefingReadError:
         raise
     except Exception as exc:
@@ -493,7 +498,11 @@ def _load_frontmatter(content: str) -> dict[str, Any]:
 
 
 def _note_from_frontmatter(
-    frontmatter: dict[str, Any], *, expected_date: date
+    frontmatter: dict[str, Any],
+    *,
+    expected_date: date,
+    vault_root: Path,
+    system_dir: str,
 ) -> BriefingNote:
     required_identity = {
         "artifact_class": BRIEFING_ARTIFACT_CLASS,
@@ -524,7 +533,15 @@ def _note_from_frontmatter(
             raise BriefingReadError("briefing section shape is invalid")
         if reason is not None and not isinstance(reason, str):
             raise BriefingReadError("briefing section reason is invalid")
-        items = tuple(_item_from_mapping(name, item) for item in raw_items)
+        items = tuple(
+            _item_from_mapping(
+                name,
+                item,
+                vault_root=vault_root,
+                system_dir=system_dir,
+            )
+            for item in raw_items
+        )
         if status == "degraded":
             if items:
                 raise BriefingReadError("degraded briefing section must have no items")
@@ -545,20 +562,37 @@ def _note_from_frontmatter(
     )
 
 
-def _item_from_mapping(name: SectionName, raw: Any) -> BriefingItem:
+def _item_from_mapping(
+    name: SectionName,
+    raw: Any,
+    *,
+    vault_root: Path,
+    system_dir: str,
+) -> BriefingItem:
     if not isinstance(raw, dict):
         raise BriefingReadError("briefing item must be a mapping")
     try:
         if name == "commitments" and raw.get("source") == "commitment":
+            commitment_id = _required_text(raw, "commitment_id")
+            artifact_path = _required_text(raw, "artifact_path")
+            if artifact_path != commitment_artifact_path(commitment_id, vault_root):
+                raise _InvalidSourceRecord
             return CommitmentBriefingItem(
-                commitment_id=_required_text(raw, "commitment_id"),
+                commitment_id=commitment_id,
                 commitment_kind=_required_text(raw, "commitment_kind"),
                 state=_required_text(raw, "state"),
                 summary=_required_text(raw, "summary"),
-                artifact_path=_required_text(raw, "artifact_path"),
+                artifact_path=artifact_path,
                 target_ref=_optional_text(raw, "target_ref"),
             )
         if name == "moments" and raw.get("source") == "moment":
+            moment_id = _required_text(raw, "moment_id")
+            artifact_path = _required_text(raw, "artifact_path")
+            expected_artifact_path = (
+                PurePosixPath(system_dir) / "moments" / f"{moment_id}.md"
+            ).as_posix()
+            if artifact_path != expected_artifact_path:
+                raise _InvalidSourceRecord
             refs = raw.get("surfaced_refs")
             if not isinstance(refs, list) or not all(isinstance(ref, dict) for ref in refs):
                 raise _InvalidSourceRecord
@@ -575,11 +609,11 @@ def _item_from_mapping(name: SectionName, raw: Any) -> BriefingItem:
                     normalized_ref["uuid"] = ref_uuid
                 normalized_refs.append(normalized_ref)
             return MomentBriefingItem(
-                moment_id=_required_text(raw, "moment_id"),
+                moment_id=moment_id,
                 title=_required_text(raw, "title"),
                 need_basis=_required_text(raw, "need_basis"),
                 urgency_band=_required_text(raw, "urgency_band"),
-                artifact_path=_required_text(raw, "artifact_path"),
+                artifact_path=artifact_path,
                 surfaced_refs=tuple(normalized_refs),
             )
         if name == "decision_receipts" and raw.get("source") == "decision_receipt":
@@ -592,12 +626,21 @@ def _item_from_mapping(name: SectionName, raw: Any) -> BriefingItem:
             parsed_created_at = _parse_datetime(created_at)
             if created_at != _format_utc(parsed_created_at):
                 raise _InvalidSourceRecord
+            receipt_path = _required_text(raw, "receipt_path")
+            expected_receipt_path = (
+                PurePosixPath(system_dir)
+                / "receipts"
+                / "decisions"
+                / f"decisions-{parsed_created_at.strftime('%Y%m')}.jsonl"
+            ).as_posix()
+            if receipt_path != expected_receipt_path:
+                raise _InvalidSourceRecord
             return DecisionReceiptBriefingItem(
                 object_id=_required_text(raw, "object_id"),
                 vault_uuid=vault_uuid,
                 key=_required_text(raw, "key"),
                 created_at=created_at,
-                receipt_path=_required_text(raw, "receipt_path"),
+                receipt_path=receipt_path,
             )
     except _InvalidSourceRecord as exc:
         raise BriefingReadError("briefing item shape is invalid") from exc
