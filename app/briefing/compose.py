@@ -305,6 +305,9 @@ def _read_moments(
                     raise _InvalidSourceRecord
                 normalized["uuid"] = uuid
             surfaced_refs.append(normalized)
+        surfaced_refs.sort(
+            key=lambda ref: (ref["ref"], ref["why"], ref.get("uuid") or "")
+        )
         items.append(
             MomentBriefingItem(
                 moment_id=moment_id,
@@ -333,7 +336,7 @@ def _read_decision_receipts(
         raise _InvalidSourceRecord
     window_end = datetime.combine(for_date, time.min, tzinfo=timezone.utc)
     window_start = window_end - timedelta(days=1)
-    items: list[DecisionReceiptBriefingItem] = []
+    timestamped_items: list[tuple[datetime, DecisionReceiptBriefingItem]] = []
     for record in records:
         if not isinstance(record, dict):
             raise _InvalidSourceRecord
@@ -345,29 +348,32 @@ def _read_decision_receipts(
             raise _InvalidSourceRecord
         if not window_start <= created < window_end:
             continue
-        items.append(
-            DecisionReceiptBriefingItem(
-                object_id=object_id,
-                vault_uuid=raw_uuid,
-                key=key,
-                created_at=_format_utc(created),
-                receipt_path=(
-                    PurePosixPath(system_dir)
-                    / "receipts"
-                    / "decisions"
-                    / f"decisions-{created.strftime('%Y%m')}.jsonl"
-                ).as_posix(),
+        timestamped_items.append(
+            (
+                created,
+                DecisionReceiptBriefingItem(
+                    object_id=object_id,
+                    vault_uuid=raw_uuid,
+                    key=key,
+                    created_at=_format_utc(created),
+                    receipt_path=(
+                        PurePosixPath(system_dir)
+                        / "receipts"
+                        / "decisions"
+                        / f"decisions-{created.strftime('%Y%m')}.jsonl"
+                    ).as_posix(),
+                ),
             )
         )
-    items.sort(
-        key=lambda item: (
-            item.created_at,
-            item.key,
-            item.object_id,
-            item.vault_uuid or "",
+    timestamped_items.sort(
+        key=lambda pair: (
+            pair[0],
+            pair[1].key,
+            pair[1].object_id,
+            pair[1].vault_uuid or "",
         )
     )
-    return tuple(items)
+    return tuple(item for _created, item in timestamped_items)
 
 
 def _render_note(note: BriefingNote) -> str:
@@ -519,13 +525,18 @@ def _note_from_frontmatter(
         if reason is not None and not isinstance(reason, str):
             raise BriefingReadError("briefing section reason is invalid")
         items = tuple(_item_from_mapping(name, item) for item in raw_items)
-        if status == "degraded" and items:
-            raise BriefingReadError("degraded briefing section must have no items")
+        if status == "degraded":
+            if items:
+                raise BriefingReadError("degraded briefing section must have no items")
+            if reason not in ("source_read_failed", "invalid_source_record"):
+                raise BriefingReadError("degraded briefing section reason is invalid")
+        elif reason is not None:
+            raise BriefingReadError("available briefing section must have no reason")
         sections[name] = BriefingSection(status=status, items=items, reason=reason)
     actual_degraded = tuple(
         name for name in SECTION_ORDER if sections[name].status == "degraded"
     )
-    if actual_degraded != degraded:
+    if actual_degraded != degraded or degraded_raw != list(actual_degraded):
         raise BriefingReadError("briefing degraded section markers disagree")
     return BriefingNote(
         briefing_date=expected_date,
@@ -551,23 +562,41 @@ def _item_from_mapping(name: SectionName, raw: Any) -> BriefingItem:
             refs = raw.get("surfaced_refs")
             if not isinstance(refs, list) or not all(isinstance(ref, dict) for ref in refs):
                 raise _InvalidSourceRecord
+            normalized_refs: list[dict[str, Any]] = []
+            for ref in refs:
+                normalized_ref: dict[str, Any] = {
+                    "ref": _required_text(ref, "ref"),
+                    "why": _required_text(ref, "why"),
+                }
+                ref_uuid = ref.get("uuid")
+                if ref_uuid is not None:
+                    if not isinstance(ref_uuid, str) or not ref_uuid.strip():
+                        raise _InvalidSourceRecord
+                    normalized_ref["uuid"] = ref_uuid
+                normalized_refs.append(normalized_ref)
             return MomentBriefingItem(
                 moment_id=_required_text(raw, "moment_id"),
                 title=_required_text(raw, "title"),
                 need_basis=_required_text(raw, "need_basis"),
                 urgency_band=_required_text(raw, "urgency_band"),
                 artifact_path=_required_text(raw, "artifact_path"),
-                surfaced_refs=tuple(dict(ref) for ref in refs),
+                surfaced_refs=tuple(normalized_refs),
             )
         if name == "decision_receipts" and raw.get("source") == "decision_receipt":
             vault_uuid = raw.get("vault_uuid")
-            if vault_uuid is not None and not isinstance(vault_uuid, str):
+            if vault_uuid is not None and (
+                not isinstance(vault_uuid, str) or not vault_uuid.strip()
+            ):
+                raise _InvalidSourceRecord
+            created_at = _required_text(raw, "created_at")
+            parsed_created_at = _parse_datetime(created_at)
+            if created_at != _format_utc(parsed_created_at):
                 raise _InvalidSourceRecord
             return DecisionReceiptBriefingItem(
                 object_id=_required_text(raw, "object_id"),
                 vault_uuid=vault_uuid,
                 key=_required_text(raw, "key"),
-                created_at=_required_text(raw, "created_at"),
+                created_at=created_at,
                 receipt_path=_required_text(raw, "receipt_path"),
             )
     except _InvalidSourceRecord as exc:
@@ -602,9 +631,7 @@ def _parse_datetime(value: str) -> datetime:
 
 
 def _format_utc(value: datetime) -> str:
-    return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace(
-        "+00:00", "Z"
-    )
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _one_line(value: str) -> str:

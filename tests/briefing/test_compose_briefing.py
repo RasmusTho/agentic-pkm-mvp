@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from datetime import date
 from pathlib import Path
 
@@ -260,7 +261,10 @@ def test_compose_is_deterministic_for_same_inputs_same_day(
             "title": "Z",
             "need_basis": "reorientation",
             "urgency_band": "timely",
-            "surfaced_refs": [],
+            "surfaced_refs": [
+                {"ref": "Notes/Z.md", "why": "second", "uuid": "uuid-z"},
+                {"ref": "Notes/A.md", "why": "first", "uuid": "uuid-a"},
+            ],
         },
         {
             "moment_id": "a",
@@ -274,9 +278,30 @@ def test_compose_is_deterministic_for_same_inputs_same_day(
         _receipt("b", "2026-07-09T23:00:00+00:00"),
         _receipt("a", "2026-07-09T01:00:00+00:00"),
     ]
-    monkeypatch.setattr(compose_module, "load_commitments", lambda **_: list(reversed(commitments)))
-    monkeypatch.setattr(compose_module, "collect_now_moments", lambda *_args, **_kwargs: list(reversed(moments)))
-    monkeypatch.setattr(compose_module, "iter_decision_receipts", lambda *_: list(reversed(receipts)))
+    calls = {"commitments": 0, "moments": 0, "receipts": 0}
+
+    def shuffled_commitments(**_: object) -> list[CommitmentRecord]:
+        calls["commitments"] += 1
+        return list(reversed(commitments)) if calls["commitments"] == 1 else list(commitments)
+
+    def shuffled_moments(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+        calls["moments"] += 1
+        snapshot = deepcopy(moments)
+        if calls["moments"] == 1:
+            snapshot.reverse()
+        else:
+            snapshot[0]["surfaced_refs"] = list(
+                reversed(snapshot[0]["surfaced_refs"])  # type: ignore[arg-type]
+            )
+        return snapshot
+
+    def shuffled_receipts(*_: object) -> list[dict[str, object]]:
+        calls["receipts"] += 1
+        return list(reversed(receipts)) if calls["receipts"] == 1 else list(receipts)
+
+    monkeypatch.setattr(compose_module, "load_commitments", shuffled_commitments)
+    monkeypatch.setattr(compose_module, "collect_now_moments", shuffled_moments)
+    monkeypatch.setattr(compose_module, "iter_decision_receipts", shuffled_receipts)
     guard = WriteGuard(lambda: {"state": "healthy"})
 
     compose_briefing(vault_context=context, for_date=BRIEFING_DATE, write_guard=guard)
@@ -290,6 +315,7 @@ def test_compose_is_deterministic_for_same_inputs_same_day(
     assert "secret_body" not in text
     assert "generated_at" not in text
     assert ".tmp" not in text
+    assert calls == {"commitments": 2, "moments": 2, "receipts": 2}
 
 
 def test_review_return_is_included_once(vault: tuple[Path, VaultContext]) -> None:
@@ -303,6 +329,33 @@ def test_review_return_is_included_once(vault: tuple[Path, VaultContext]) -> Non
     note = load_briefing(vault_context=context, for_date=BRIEFING_DATE)
     assert note is not None
     assert [item.commitment_id for item in note.sections["commitments"].items] == ["review-next"]
+
+
+def test_commitments_order_next_waiting_review_return_with_dedup_and_done_exclusion(
+    vault: tuple[Path, VaultContext],
+) -> None:
+    _root, context = vault
+    _seed_commitment(context, "next-2", kind="next_action", state="next")
+    _seed_commitment(context, "next-1", kind="next_action", state="next")
+    _seed_commitment(context, "next-review", kind="review_return", state="next")
+    _seed_commitment(context, "waiting-1", kind="waiting", state="waiting")
+    _seed_commitment(context, "review-1", kind="review_return", state="open")
+    _seed_commitment(context, "review-done", kind="review_return", state="done")
+
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    note = load_briefing(vault_context=context, for_date=BRIEFING_DATE)
+    assert note is not None
+    assert [item.commitment_id for item in note.sections["commitments"].items] == [
+        "next-1",
+        "next-2",
+        "next-review",
+        "waiting-1",
+        "review-1",
+    ]
 
 
 def test_empty_sources_are_available_not_degraded(vault: tuple[Path, VaultContext]) -> None:
@@ -338,6 +391,63 @@ def test_receipt_window_is_half_open_previous_utc_day(vault: tuple[Path, VaultCo
     assert note is not None
     assert [item.object_id for item in note.sections["decision_receipts"].items] == ["start"]
     assert note.sections["decision_receipts"].items[0].created_at == "2026-07-09T00:00:00Z"
+
+
+def test_receipts_preserve_subsecond_precision_for_chronological_order(
+    vault: tuple[Path, VaultContext],
+) -> None:
+    root, context = vault
+    _seed_receipts(
+        root,
+        [
+            _receipt("earlier", "2026-07-09T12:00:00.100000Z", key="z"),
+            _receipt("later", "2026-07-09T12:00:00.900000Z", key="a"),
+        ],
+    )
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    note = load_briefing(vault_context=context, for_date=BRIEFING_DATE)
+    assert note is not None
+    items = note.sections["decision_receipts"].items
+    assert [item.object_id for item in items] == ["earlier", "later"]
+    assert [item.created_at for item in items] == [
+        "2026-07-09T12:00:00.100000Z",
+        "2026-07-09T12:00:00.900000Z",
+    ]
+
+
+def test_each_public_source_reader_is_called_exactly_once(
+    vault: tuple[Path, VaultContext], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.briefing import compose as compose_module
+
+    _root, context = vault
+    calls = {"commitments": 0, "moments": 0, "receipts": 0}
+
+    def commitments(**_: object) -> list[CommitmentRecord]:
+        calls["commitments"] += 1
+        return []
+
+    def moments(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+        calls["moments"] += 1
+        return []
+
+    def receipts(*_: object) -> list[dict[str, object]]:
+        calls["receipts"] += 1
+        return []
+
+    monkeypatch.setattr(compose_module, "load_commitments", commitments)
+    monkeypatch.setattr(compose_module, "collect_now_moments", moments)
+    monkeypatch.setattr(compose_module, "iter_decision_receipts", receipts)
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    assert calls == {"commitments": 1, "moments": 1, "receipts": 1}
 
 
 def test_invalid_returned_item_degrades_whole_section(
@@ -426,5 +536,52 @@ def test_load_briefing_round_trip_absent_and_invalid_schema(
     payload = yaml.safe_load(target.read_text(encoding="utf-8").split("---", 2)[1])
     payload["schema_version"] = 999
     target.write_text(f"---\n{yaml.safe_dump(payload)}---\ninvalid\n", encoding="utf-8")
+    with pytest.raises(BriefingReadError):
+        load_briefing(vault_context=context, for_date=BRIEFING_DATE)
+
+
+@pytest.mark.parametrize(
+    "malformed_case",
+    [
+        "empty_surfaced_ref",
+        "invalid_surfaced_ref_uuid",
+        "invalid_receipt_vault_uuid",
+        "noncanonical_receipt_timestamp",
+        "degraded_without_reason",
+    ],
+)
+def test_load_briefing_rejects_malformed_schema_v1_provenance(
+    vault: tuple[Path, VaultContext], malformed_case: str
+) -> None:
+    root, context = vault
+    _seed_moment(root, "moment-1", refs=[SurfacedRef(ref="Notes/A.md", why="why")])
+    _seed_receipts(root, [_receipt("object-1", "2026-07-09T12:00:00Z")])
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    target = _target(root)
+    text = target.read_text(encoding="utf-8")
+    payload = yaml.safe_load(text.split("---", 2)[1])
+
+    if malformed_case == "empty_surfaced_ref":
+        payload["sections"]["moments"]["items"][0]["surfaced_refs"] = [{}]
+    elif malformed_case == "invalid_surfaced_ref_uuid":
+        payload["sections"]["moments"]["items"][0]["surfaced_refs"][0]["uuid"] = ""
+    elif malformed_case == "invalid_receipt_vault_uuid":
+        payload["sections"]["decision_receipts"]["items"][0]["vault_uuid"] = ""
+    elif malformed_case == "noncanonical_receipt_timestamp":
+        payload["sections"]["decision_receipts"]["items"][0]["created_at"] = (
+            "2026-07-09T12:00:00+00:00"
+        )
+    else:
+        payload["degraded_sections"] = ["moments"]
+        payload["sections"]["moments"] = {"status": "degraded", "items": []}
+
+    target.write_text(
+        f"---\n{yaml.safe_dump(payload, sort_keys=False)}---\nmalformed\n",
+        encoding="utf-8",
+    )
     with pytest.raises(BriefingReadError):
         load_briefing(vault_context=context, for_date=BRIEFING_DATE)
