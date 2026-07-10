@@ -76,9 +76,9 @@ From that, classify into one of the four situations and act.
 - **Continue on your own** when the state is clear (situation 1), or thin but safe to
   rebuild (situation 2): state the reconstruction in one line, then proceed. A
   reasonable, reversible reconstruction beats stalling on a question the repo can answer.
-- **Escalate** only for situations 3 and 4, or a genuine wrong-direction risk. Keep it to
-  one decision, framed Problem → Options → Consequences, and keep making safe progress in
-  parallel where you can.
+- **Escalate** only for situations 3 and 4, or a genuine wrong-direction risk. Deliver the
+  ask per `.codex/skills/owner-decision-brief` (one standalone plain-language decision
+  brief), and keep making safe progress in parallel where you can.
 
 Do not stop before every write, and do not narrate the recovery. Lead with the chosen
 action.
@@ -124,5 +124,5 @@ while work is unfinished. Progressive and opportunistic — not a report after e
 ## Output
 
 - One line naming the situation (1–4) and the chosen action.
-- Then either continue, or the single Problem → Options → Consequences decision when
-  escalating.
+- Then either continue, or the single decision brief per
+  `.codex/skills/owner-decision-brief` when escalating.
