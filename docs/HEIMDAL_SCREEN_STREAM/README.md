@@ -219,13 +219,13 @@ declared once and settings-governed (SETTINGS_SPINE posture, SCREEN-06), tuned a
 
 - Parent feature issue: **#3340**, filed `Backlog` + `agent:blocked` as the live validation hub.
   Draft body: [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md).
-- Children, in dependency order, all filed `agent:blocked`: SCREEN-01 → **#3343** and SCREEN-03 →
-  **#3341** are the dependency-free heads (SCREEN-03 with a Bifrost-transfer note) — both flip to
-  `agent:ready` once this spec PR merges to `main`; SCREEN-02 → **#3344** stays blocked until
-  SCREEN-01/#3343 merges; SCREEN-05 → **#3345** stays blocked until SCREEN-02/#3344 merges; SCREEN-06 →
-  **#3342** stays blocked until SCREEN-01/#3343 and SCREEN-03/#3341 merge; **SCREEN-04 → #3346 stays
-  blocked until SCREEN-02/#3344 merges and is additionally, externally blocked on the ERE stream
-  registry (#3176)**.
+- Children, in dependency order, all filed `agent:blocked`: SCREEN-01 → **#3343** is the sole
+  dependency-free head (per its `prerequisites: []` frontmatter) and flips to `agent:ready` once this
+  spec PR merges to `main`; SCREEN-02 → **#3344** and SCREEN-03 → **#3341** (Bifrost-transfer note)
+  stay blocked until SCREEN-01/#3343 merges; SCREEN-05 → **#3345** stays blocked until SCREEN-02/#3344
+  merges; SCREEN-06 → **#3342** stays blocked until SCREEN-01/#3343 and SCREEN-03/#3341 merge;
+  **SCREEN-04 → #3346 stays blocked until SCREEN-02/#3344 merges and is additionally, externally
+  blocked on the ERE stream registry (#3176)**.
 
 The spec is the source of truth; issues track pickup state.
 
