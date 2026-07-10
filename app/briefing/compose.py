@@ -202,6 +202,27 @@ def _atomic_write(
 
     target = (vault_root / note_rel_path).resolve()
     target.relative_to(vault_root)
+
+    # Preserve the port's independent guard-at-seam check without allowing a
+    # second live health decision after filesystem mutation. The caller check in
+    # ``compose_briefing`` is defense-in-depth; this cached adapter decision is
+    # the final decision and is made immediately before the first mkdir. The
+    # canonical adapter reasserts the same action against the same snapshot.
+    snapshot_evaluated = False
+    cached_snapshot: dict[str, Any] = {}
+
+    def adapter_snapshot() -> dict[str, Any]:
+        nonlocal snapshot_evaluated, cached_snapshot
+        if not snapshot_evaluated:
+            cached_snapshot = dict(write_guard.snapshot_fn())
+            snapshot_evaluated = True
+        return cached_snapshot
+
+    adapter_guard = WriteGuard(
+        adapter_snapshot,
+        bootstrap_actions=write_guard.bootstrap_actions,
+    )
+    adapter_guard.assert_writes_allowed(BRIEFING_WRITE_ACTION)
     target.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
         dir=target.parent,
@@ -214,7 +235,7 @@ def _atomic_write(
             content,
             vault_root=staging_root,
             action=BRIEFING_WRITE_ACTION,
-            write_guard=write_guard,
+            write_guard=adapter_guard,
         )
         staged_file = staging_root / note_rel_path
         os.replace(staged_file, target)

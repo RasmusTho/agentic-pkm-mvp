@@ -648,7 +648,7 @@ def find_write_frontmatter_call_sites(root: Path = APP_ROOT) -> list[tuple[str, 
 #                           asserts its own action string caller-side
 #                           (defense-in-depth, pre-dates #2953).
 WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
-    ("app/briefing/compose.py", 212): (
+    ("app/briefing/compose.py", 233): (
         "guarded_by_caller: compose_briefing asserts write_guard."
         "assert_writes_allowed(BRIEFING_WRITE_ACTION) before the private atomic "
         "staging directory is created, and passes the same guard/action through "

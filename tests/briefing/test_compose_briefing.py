@@ -170,6 +170,27 @@ def test_briefing_write_asserts_guard_at_seam(vault: tuple[Path, VaultContext]) 
     assert not (root / "_system" / "briefings").exists()
 
 
+def test_briefing_write_rechecks_guard_before_any_mutation(
+    vault: tuple[Path, VaultContext],
+) -> None:
+    root, context = vault
+    snapshots = iter(
+        [
+            {"state": "healthy"},
+            {"state": "safe_mode", "reason": "health changed"},
+        ]
+    )
+    guard = WriteGuard(lambda: next(snapshots))
+
+    with pytest.raises(WritesBlockedError) as exc_info:
+        compose_briefing(vault_context=context, for_date=BRIEFING_DATE, write_guard=guard)
+
+    assert exc_info.value.action == "briefing.write_note"
+    assert not _target(root).exists()
+    assert not (root / "_system" / "briefings").exists()
+    assert list(root.rglob("*.tmp")) == []
+
+
 @pytest.mark.parametrize(
     ("reader_name", "section_name"),
     [
