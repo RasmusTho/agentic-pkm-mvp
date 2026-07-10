@@ -54,7 +54,9 @@ def test_no_autoplay_on_render() -> None:
     assert "autoplay" not in html.lower()
 
 
-def _run_affordance_script(fetch_responses: list[dict[str, object]]) -> dict[str, object]:
+def _run_affordance_script(
+    fetch_responses: list[dict[str, object]], *, retry: bool = False
+) -> dict[str, object]:
     html = render_briefing_listen_affordance(
         briefing_text=_BRIEFING,
         tts_available=True,
@@ -93,6 +95,7 @@ global.Audio = function (url) {{
 }};
 {script}
 window.briefingListen.play(button);
+{("setTimeout(() => window.briefingListen.play(button), 10);" if retry else "")}
 setTimeout(() => console.log(JSON.stringify({{
   events,
   status: status.textContent,
@@ -184,3 +187,32 @@ def test_structured_tts_rejection_surfaces_honest_reason() -> None:
     assert "aria-disabled=true" in result["events"]
     assert "fetch-synthesize" not in result["events"]
     assert "play" not in result["events"]
+
+
+def test_transient_tts_failure_restores_retryability() -> None:
+    available_plan = {
+        "enabled": True,
+        "normalized_text": "Hej Anna.",
+        "mixed_language": False,
+        "cached": False,
+        "provider_available": True,
+        "warnings": [],
+        "segments": [],
+    }
+    result = _run_affordance_script(
+        [
+            {"ok": True, "body": available_plan},
+            {
+                "ok": False,
+                "body": {"detail": {"reason": "tts_concurrency_limit_reached"}},
+            },
+            {"ok": True, "body": available_plan},
+            {"ok": True, "body": {"ok": True, "audio_url": "/briefing.wav"}},
+        ],
+        retry=True,
+    )
+
+    assert result["events"].count("fetch-plan") == 2
+    assert result["events"].count("fetch-synthesize") == 2
+    assert "aria-disabled=false" in result["events"]
+    assert "play" in result["events"]

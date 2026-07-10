@@ -41,6 +41,23 @@ def render_briefing_listen_affordance(
     return detail || (data && (data.reason || data.message)) || 'Local TTS unavailable.';
   }}
 
+  function isPermanentUnavailable(message) {{
+    var normalized = String(message || '').toLowerCase();
+    return normalized.indexOf('tts_disabled') >= 0 ||
+      normalized.indexOf('tts is disabled') >= 0 ||
+      normalized.indexOf('local_only_required') >= 0 ||
+      normalized.indexOf('cloud_fallback_forbidden') >= 0 ||
+      normalized.indexOf('provider/model unavailable') >= 0 ||
+      normalized.indexOf('model unavailable') >= 0 ||
+      normalized.indexOf('command unavailable') >= 0;
+  }}
+
+  function ttsError(message, permanent) {{
+    var error = new Error(message);
+    error.permanentUnavailable = permanent === true;
+    return error;
+  }}
+
   function postJson(path, payload) {{
     return fetch(path, {{
       method: 'POST',
@@ -49,7 +66,8 @@ def render_briefing_listen_affordance(
     }}).then(function (response) {{
       return response.json().then(function (data) {{
         if (!response.ok) {{
-          throw new Error(errorMessage(data));
+          var message = errorMessage(data);
+          throw ttsError(message, isPermanentUnavailable(message));
         }}
         return data;
       }});
@@ -67,6 +85,11 @@ def render_briefing_listen_affordance(
   function setStatus(surface, message) {{
     var status = surface.querySelector('[data-testid="briefing-listen-status"]');
     if (status) {{ status.textContent = message; }}
+  }}
+
+  function setButtonEnabled(button, enabled) {{
+    button.disabled = !enabled;
+    button.setAttribute('aria-disabled', enabled ? 'false' : 'true');
   }}
 
   function escapeHtml(value) {{
@@ -111,16 +134,19 @@ def render_briefing_listen_affordance(
       var surface = surfaceFor(button);
       if (!surface || button.disabled) {{ return; }}
       var text = briefingText(surface);
-      button.disabled = true;
+      setButtonEnabled(button, false);
       setStatus(surface, 'Planning local audio.');
       postJson('/api/companion/tts/plan', {{text: text, rate: 1.0}})
         .then(function (plan) {{
           renderSpeechPlan(surface, plan);
           if (plan.enabled === false) {{
-            throw new Error('Local TTS is disabled.');
+            throw ttsError('Local TTS is disabled.', true);
           }}
           if (!plan.cached && plan.provider_available === false) {{
-            throw new Error(plan.provider_reason || 'Local TTS provider/model unavailable.');
+            throw ttsError(
+              plan.provider_reason || 'Local TTS provider/model unavailable.',
+              true
+            );
           }}
           setStatus(surface, 'Synthesizing local audio.');
           return postJson('/api/companion/tts/synthesize', {{
@@ -134,19 +160,18 @@ def render_briefing_listen_affordance(
           }}
           var audio = new Audio(result.audio_url);
           audio.onended = function () {{
-            button.disabled = false;
+            setButtonEnabled(button, true);
             setStatus(surface, 'Briefing audio finished.');
           }};
           audio.onerror = function () {{
-            button.disabled = false;
+            setButtonEnabled(button, true);
             setStatus(surface, 'Briefing audio failed.');
           }};
           setStatus(surface, 'Playing briefing.');
           return audio.play();
         }})
         .catch(function (error) {{
-          button.disabled = true;
-          button.setAttribute('aria-disabled', 'true');
+          setButtonEnabled(button, !(error && error.permanentUnavailable));
           setStatus(
             surface,
             error && error.message ? error.message : 'Local TTS unavailable.'
