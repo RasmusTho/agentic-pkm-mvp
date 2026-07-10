@@ -44,6 +44,16 @@ surface.
 No BuilderOps object changes product/runtime truth unless an explicit promotion crosses into the
 target authority surface through its normal gate.
 
+### Specialized model-inquiry crossing
+
+`app/builderops/model_inquiry_promotion.py` is a narrower explicit crossing layered beside this
+generic proposal-only gateway. It may create one GitHub Issue only when the operator supplies
+`builderops inquiry promote <id> --create-issue` and the shared inquiry graph contains consensus, a
+canonical structured Issue proposal, `issue_ready` evidence, and a hash-bound readiness receipt.
+It persists a file-first PromotionIntent before REST, reconciles retries with a deterministic Issue
+body marker, and appends the resulting Issue receipt to the shared inquiry trace. It does not add
+PR, merge, owner-doc, GraphQL, or Project mutation authority.
+
 ## State Transitions
 
 Gateway transitions are narrower than raw store transitions:
@@ -88,3 +98,6 @@ This slice intentionally does not implement:
 - generated projection file writes
 - public remote deployment or rich UI
 - product/runtime authority changes
+
+The first item remains out of scope for this **generic** gateway. The specialized model-inquiry
+crossing above has its own stronger evidence and explicit-command contract.

@@ -91,6 +91,86 @@ def test_start_persists_question_before_provider_call(tmp_path: Path) -> None:
     assert observed[0]["turns"] == []
 
 
+def test_start_and_resume_inquiry(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    question_file = tmp_path / "question.md"
+    question_file.write_text("# Question\n\nHow should the boundary work?\n", encoding="utf-8")
+
+    start = CliRunner().invoke(
+        builderops_root,
+        [
+            "builderops",
+            "inquiry",
+            "start",
+            "--question-file",
+            str(question_file),
+            "--workflow",
+            "fable-gpt-architecture",
+            "--inquiry-id",
+            "inq_test_start_resume",
+            "--json",
+        ],
+        env=env,
+        catch_exceptions=False,
+    )
+    assert start.exit_code == 0, start.output
+    assert json.loads(start.output)["inquiry"]["inquiry_id"] == "inq_test_start_resume"
+
+    resume = CliRunner().invoke(
+        builderops_root,
+        [
+            "builderops",
+            "inquiry",
+            "resume",
+            "inq_test_start_resume",
+            "--json",
+        ],
+        env=env,
+        catch_exceptions=False,
+    )
+    assert resume.exit_code == 0, resume.output
+    assert json.loads(resume.output) == {
+        "inquiry_id": "inq_test_start_resume",
+        "next_sequence": 0,
+        "pending_turn_ids": [],
+        "skipped_turn_ids": [],
+        "terminal_receipt_ids": [],
+    }
+
+
+def test_inquiry_evaluate_is_local_and_repository_independent(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    ModelInquiryService.from_env(env).start(
+        question="Evaluate locally before any GitHub authority crossing",
+        workflow="fable-gpt-architecture",
+        inquiry_id="inq_test_local_evaluate",
+        source_refs=[{"ref_type": "github_issue", "ref": "#3293"}],
+    )
+
+    result = CliRunner().invoke(
+        builderops_root,
+        [
+            "builderops",
+            "inquiry",
+            "evaluate",
+            "inq_test_local_evaluate",
+            "--json",
+        ],
+        env=env,
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 1
+    assert "terminal inquiry run" in result.output
+    assert "repository" not in result.output.lower()
+    assert not (
+        Path(env["BUILDEROPS_VAULT_ROOT"])
+        / "model-inquiries"
+        / "inq_test_local_evaluate"
+        / "readiness.json"
+    ).exists()
+
+
 def test_inquiry_artifacts_are_immutable_and_idempotent(tmp_path: Path) -> None:
     env = _env(tmp_path)
     service = ModelInquiryService.from_env(env)

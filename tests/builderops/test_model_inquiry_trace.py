@@ -83,6 +83,99 @@ def test_trace_links_question_turns_and_synthesis(tmp_path: Path) -> None:
         ModelInquiryService(vault).trace("inq_test_trace")
 
 
+def test_trace_includes_delivery_refs(tmp_path: Path) -> None:
+    vault = tmp_path / "shared-vault-delivery"
+    vault.mkdir()
+    service = ModelInquiryService(vault)
+    refs = [{"ref_type": "github_issue", "ref": "#3293"}]
+    service.start(
+        question="Trace delivery references",
+        workflow="fable-gpt-architecture",
+        inquiry_id="inq_test_delivery",
+        source_refs=refs,
+    )
+    synthesis = service.commit_synthesis(
+        "inq_test_delivery",
+        content="Issue proposal",
+        input_artifact_refs=["question"],
+        source_refs=refs,
+    )
+    readiness = service.commit_readiness(
+        "inq_test_delivery",
+        outcome="issue_ready",
+        rationale="Canonical issue evidence is complete.",
+        input_artifact_refs=["synthesis"],
+        source_refs=refs,
+    )
+    service.commit_readiness_receipt("inq_test_delivery", source_refs=refs)
+    marker = f"<!-- builderops-inquiry-promotion:inq_test_delivery:{'a' * 64} -->"
+    intent = service.commit_promotion_intent(
+        "inq_test_delivery",
+        repository="example/repo",
+        marker=marker,
+        title="Trace delivery",
+        issue_body=f"Canonical body\n{marker}",
+        source_refs=refs,
+    )
+    service.commit_promotion_receipt(
+        "inq_test_delivery",
+        intent=intent,
+        issue_number=700,
+        issue_url="https://github.com/example/repo/issues/700",
+        issue_created_at="2026-07-10T12:00:00Z",
+        source_refs=refs,
+    )
+    for delivery_ref in (
+        {
+            "ref_type": "github_pull_request",
+            "ref": "example/repo#701",
+            "authority_surface": "github",
+        },
+        {"ref_type": "verification_receipt", "ref": "receipt-701"},
+        {"ref_type": "owner_doc", "ref": "docs/STATUS.md"},
+    ):
+        service.commit_delivery_reference(
+            "inq_test_delivery",
+            delivery_ref=delivery_ref,
+            source_refs=refs,
+        )
+
+    trace = service.trace("inq_test_delivery", include_delivery=True)
+
+    assert trace["readiness"] == readiness
+    assert trace["synthesis"] == synthesis
+    assert trace["promotion_intent"] == intent
+    assert trace["delivery_refs"] == [
+        {
+            "ref_type": "github_issue",
+            "ref": "example/repo#700",
+            "authority_surface": "github",
+        },
+        {
+            "ref_type": "github_pull_request",
+            "ref": "example/repo#701",
+            "authority_surface": "github",
+        },
+        {"ref_type": "owner_doc", "ref": "docs/STATUS.md"},
+        {"ref_type": "verification_receipt", "ref": "receipt-701"},
+    ]
+
+    promotion_path = (
+        vault
+        / "model-inquiries"
+        / "inq_test_delivery"
+        / "receipts"
+        / "promotion-github-issue.json"
+    )
+    forged = json.loads(promotion_path.read_text(encoding="utf-8"))
+    forged["github_issue_url"] = "https://attacker.example/issues/700"
+    forged.pop("artifact_hash")
+    forged["artifact_hash"] = canonical_hash(forged)
+    promotion_path.write_text(json.dumps(forged), encoding="utf-8")
+    with pytest.raises(BuilderOpsValidationError, match="promotion terminal receipt"):
+        service.trace("inq_test_delivery", include_delivery=True)
+
+
 def test_trace_rejects_tampered_derived_artifact(tmp_path: Path) -> None:
     vault = tmp_path / "shared-vault"
     vault.mkdir()
