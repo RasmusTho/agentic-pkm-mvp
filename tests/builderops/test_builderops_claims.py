@@ -462,7 +462,11 @@ def test_queue_operations_reject_symlinked_vault_ancestor_without_external_acces
         "BUILDEROPS_VAULT_ROOT": str(aliased_vault),
         "BUILDEROPS_DB_PATH": str(tmp_path / "local" / "builderops.sqlite3"),
     }
+    entries_before = {
+        path.relative_to(outside_vault) for path in outside_vault.rglob("*")
+    }
 
+    initialized = _run(["vault", "init", str(aliased_vault), "--json"], env)
     validated = _run(["vault", "validate", str(aliased_vault), "--json"], env)
     claimed = _run(
         ["vault", "claim", str(aliased_vault), "BMI-01", "--agent", "codex", "--json"],
@@ -473,11 +477,16 @@ def test_queue_operations_reject_symlinked_vault_ancestor_without_external_acces
         env,
     )
 
+    assert initialized.exit_code != 0
+    assert "ancestor must not be a symlink" in initialized.output
     assert validated.exit_code != 0
     assert "ancestor must not be a symlink" in validated.output
     assert claimed.exit_code != 0
     assert released.exit_code != 0
     assert marker.read_text(encoding="utf-8") == "untouched"
+    assert {
+        path.relative_to(outside_vault) for path in outside_vault.rglob("*")
+    } == entries_before
     assert not (outside_vault / ".builderops").exists()
 
 

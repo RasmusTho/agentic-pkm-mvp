@@ -67,10 +67,9 @@ def _parse_stamp(value: str) -> datetime:
 
 def init_vault(root: Path) -> dict[str, Any]:
     root = root.expanduser()
-    if root.is_symlink():
-        raise VaultQueueError(f"shared vault root must not be a symlink: {root}")
+    _trusted_vault_root(root)
     root.mkdir(parents=True, exist_ok=True)
-    vault_root = root.resolve(strict=True)
+    vault_root = _trusted_vault_root(root).resolve(strict=True)
     delivery = root / "agent-delivery"
     _prepare_directory(delivery, vault_root, label="agent-delivery root")
     for status in STATUSES:
