@@ -274,6 +274,13 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   product/runtime truth and never bypass repo authority gates. (ADR-0010's "not implemented" header
   predates this store/CLI/API delivery under the #1500-series follow-ups and is the stale surface to
   reconcile next.)
+- The dispatcher's Signboard Markdown projection (`app/dispatcher/signboard.py`,
+  `python -m app.dispatcher export-signboard`) preserves any human-authored `## Notes` content
+  across re-export instead of overwriting it, and its export path defaults to
+  `BuilderOpsVault/agent-delivery` under the currently active vault (resolved through the shipped
+  `VaultManager` active-vault-selection mechanism) so no CLI/automation caller has to type a manual
+  path (#3312). The projection remains read-only for coordination fields and has no write path for
+  claim, lease, or lock state; dispatcher SQLite remains sole claim/lease authority per ADR-0010.
 - Canvas co-authoring is materially implemented behind `CANVAS_ENABLED`: `canvas open` / `edit` /
   `close`, `/api/canvas/sessions*`, session-log persistence, and governance-bearing mutation routing
   are shipped; broader Chat cognition and hybrid Panel/Chat mutation remain separate follow-up work.

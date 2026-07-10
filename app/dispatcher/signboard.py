@@ -12,6 +12,44 @@ from typing import Any
 
 from app.dispatcher.models import TaskRecord
 from app.dispatcher.store import SqliteStore
+from app.vault.manager import get_vault_manager
+
+
+# The Signboard export nests under the human's actively-selected vault so no
+# CLI/automation caller ever has to type a manual path (dyslexia-friendly,
+# no-manual-path-typing posture). This reuses the shipped Option 2
+# active-vault-selection mechanism (``VaultManager`` / ``AppLocalSettingsStore``)
+# rather than inventing a parallel "BuilderOps vault root" concept.
+DEFAULT_SIGNBOARD_SUBPATH = Path("BuilderOpsVault") / "agent-delivery"
+
+_NOTES_HEADING = "## Notes"
+_RECEIPTS_HEADING = "## Receipts"
+
+
+class NoActiveVaultError(RuntimeError):
+    """Raised when a default Signboard export path is requested but no vault
+    is currently selected via the active-vault-selection mechanism."""
+
+
+def default_signboard_root() -> Path:
+    """Resolve the default Signboard export root from the active vault.
+
+    Reuses the existing shipped active-vault-selection mechanism
+    (``app.vault.manager.get_vault_manager``) so callers never need to type a
+    manual vault path. Raises :class:`NoActiveVaultError` when no vault is
+    currently selected; callers should fall back to an explicit path or
+    instruct the human to select a vault first.
+    """
+
+    manager = get_vault_manager()
+    context = manager.context
+    if context.status == "none":
+        context = manager.load_last_active()
+    if context.active_vault_path and context.status in {"selected", "uninitialized"}:
+        return Path(context.active_vault_path).expanduser().resolve() / DEFAULT_SIGNBOARD_SUBPATH
+    raise NoActiveVaultError(
+        "no active vault is selected; pass an explicit path or select a vault first"
+    )
 
 
 STATUS_COLUMNS: dict[str, str] = {
@@ -61,11 +99,26 @@ def export_signboard(store: SqliteStore, board_root: Path) -> dict[str, Any]:
         filename = _task_filename(task)
         target_column = column_for_status(task.status)
         target = root / target_column / filename
+
+        # Preserve any human-authored content in the "## Notes" section of a
+        # previously generated card for this task, wherever it currently
+        # lives (the card may have moved columns/filenames since the last
+        # export because status or title changed). The target's own existing
+        # card, if any, is the freshest source; stale cards elsewhere are a
+        # fallback so a rename/status-move doesn't drop notes.
+        preserved_notes: str | None = None
+        target_text = _read_card_text(target)
+        if target_text is not None and _is_generated_card_text(target_text):
+            preserved_notes = _extract_notes_section(target_text)
+
         for column in sorted(set(STATUS_COLUMNS.values())):
             for candidate in (root / column).glob(f"{task.task_id}--*.md"):
                 if candidate == target:
                     continue
-                if _is_generated_card(candidate):
+                candidate_text = _read_card_text(candidate)
+                if candidate_text is not None and _is_generated_card_text(candidate_text):
+                    if preserved_notes is None:
+                        preserved_notes = _extract_notes_section(candidate_text)
                     candidate.unlink()
 
         for column in sorted(set(STATUS_COLUMNS.values())):
@@ -73,7 +126,7 @@ def export_signboard(store: SqliteStore, board_root: Path) -> dict[str, Any]:
             if candidate.exists() and column != target_column:
                 candidate.unlink()
 
-        target.write_text(_render_task(task), encoding="utf-8")
+        target.write_text(_render_task(task, notes=preserved_notes), encoding="utf-8")
         written.append(str(target))
 
     return {
@@ -90,14 +143,57 @@ def _task_filename(task: TaskRecord) -> str:
     return f"{task.task_id}--{title}.md"
 
 
-def _is_generated_card(path: Path) -> bool:
+def _read_card_text(path: Path) -> str | None:
+    """Read a card's text, tolerating a missing/unreadable file (returns None)."""
     try:
-        return "generated_by: dispatcher.signboard" in path.read_text(
-            encoding="utf-8",
-            errors="ignore",
-        )
+        return path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
-        return False
+        return None
+
+
+def _is_generated_card_text(text: str) -> bool:
+    return "generated_by: dispatcher.signboard" in text
+
+
+def _is_generated_card(path: Path) -> bool:
+    text = _read_card_text(path)
+    return text is not None and _is_generated_card_text(text)
+
+
+def _extract_notes_section(text: str) -> str | None:
+    """Return the human-authored body of a card's "## Notes" section, if any.
+
+    The section runs from just below the "## Notes" heading up to (but not
+    including) the *last* "## Receipts" heading in the file — the only other
+    heading ``_render_task`` ever generates, and always the final line of
+    generated structure (nothing follows it but a trailing blank line). Using
+    the last occurrence rather than the first means a human quoting the
+    literal text "## Receipts" earlier in their own notes does not get
+    mistaken for the real boundary; only the generator's actual trailing
+    heading does. Returns ``None`` when there is no "## Notes" heading or the
+    section is blank, so callers can fall back to the default stub.
+    """
+
+    lines = text.splitlines()
+    try:
+        start = next(i for i, line in enumerate(lines) if line.strip() == _NOTES_HEADING)
+    except StopIteration:
+        return None
+
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        if lines[i].strip() == _RECEIPTS_HEADING:
+            end = i
+
+    section_lines = lines[start + 1 : end]
+    while section_lines and section_lines[0] == "":
+        section_lines.pop(0)
+    while section_lines and section_lines[-1] == "":
+        section_lines.pop()
+
+    if not section_lines:
+        return None
+    return "\n".join(section_lines)
 
 
 def _yaml_scalar(value: Any) -> str:
@@ -113,7 +209,7 @@ def _yaml_list(values: list[str]) -> str:
     return "[" + ", ".join(_yaml_scalar(v) for v in values) + "]"
 
 
-def _render_task(task: TaskRecord) -> str:
+def _render_task(task: TaskRecord, *, notes: str | None = None) -> str:
     source_refs = list(task.source_anchor_refs or [])
     github_url = ""
     labels: list[str] = []
@@ -161,5 +257,8 @@ def _render_task(task: TaskRecord) -> str:
         body.append(f"- GitHub: {github_url}")
     if source_refs:
         body.append(f"- Source anchors: {', '.join(source_refs)}")
-    body.extend(["", "## Notes", "", "## Receipts", ""])
+    body.extend(["", _NOTES_HEADING, ""])
+    if notes:
+        body.extend([notes, ""])
+    body.extend(["## Receipts", ""])
     return "\n".join(frontmatter + body)

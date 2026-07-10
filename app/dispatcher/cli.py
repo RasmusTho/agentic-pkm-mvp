@@ -360,9 +360,17 @@ def _cmd_pull(args: argparse.Namespace, store: SqliteStore) -> int:
 def _cmd_export_signboard(args: argparse.Namespace, store: SqliteStore) -> int:
     from pathlib import Path
 
-    from app.dispatcher.signboard import export_signboard
+    from app.dispatcher.signboard import NoActiveVaultError, default_signboard_root, export_signboard
 
-    result = export_signboard(store, Path(args.path))
+    if args.path:
+        target_path = Path(args.path)
+    else:
+        try:
+            target_path = default_signboard_root()
+        except NoActiveVaultError as exc:
+            return _emit_error(str(exc), args.json)
+
+    result = export_signboard(store, target_path)
     _emit({"ok": True, **result}, args.json)
     return 0
 
@@ -480,7 +488,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("export-signboard", help="Export dispatcher queue as a Signboard Markdown board")
-    p.add_argument("path", help="Directory to write kanban columns into")
+    p.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help=(
+            "Directory to write kanban columns into. Optional: defaults to "
+            "BuilderOpsVault/agent-delivery inside the active vault "
+            "(active-vault-selection mechanism); no path needs to be typed."
+        ),
+    )
     p.add_argument("--json", action="store_true")
 
     return parser
