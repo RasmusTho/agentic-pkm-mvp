@@ -128,6 +128,9 @@ boundaries are defined in the [System Breakdown Structure](../SYSTEM_BREAKDOWN_S
 - **Must NOT be inferred:** authority, evidence admissibility, scope membership, or permission to
   cross a scope. Belonging to an Episode is context, not standing; `episode_ref` is **orthogonal to
   `evidence_role`** and never upgrades it, and a `pending` (unconfirmed) binding is not authority.
+- **Closure consequence:** when every referenced Episode is closed, retrieval applies a derived,
+  reversible rank dampening (never exclusion, never an `evidence_role`/authority effect) — the
+  Event Horizon decay model, [ADR-0058](../adr/ADR-0058-event-horizon-closure-decay.md).
 - **Invariant:** TBD — `episode_ref` and the Episode's closure state preserved through
   segment/projection/retrieval; registered as `observation_episode_binding_survives` in the
   [invariant registry](../testing/invariant-tests.md).

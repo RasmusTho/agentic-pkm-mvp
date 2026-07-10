@@ -69,6 +69,7 @@ Closure state is vault-durable on the Episode note; the outbox event is at-least
 - `docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md` (derived-not-persisted; ranking-not-authority)
 - `app/retrieval/capability.py::RetrievalSignalPayload`; `app/relevance/evaluator.py` + `docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md`
 - [ADR-0051](../adr/ADR-0051-episode-as-ontological-primitive.md) §Relevance decay = episode closure; `docs/HEIMDAL/CAPABILITY_CHARTER.md` HEIM-7
+- [ADR-0058](../adr/ADR-0058-event-horizon-closure-decay.md) (Accepted 2026-07-10) — the normative decay model this slice implements: single closure trigger, post-fusion rank multiplier with floor > 0, MAX over `episode_ref` bindings, direct-reference bypass, fail-open on dangling refs, derived-never-persisted. Where this spec is looser, ADR-0058 wins.
 
 ## Related GitHub Issues
 
