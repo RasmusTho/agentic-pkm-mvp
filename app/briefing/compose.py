@@ -179,12 +179,15 @@ def load_briefing(
     try:
         content = target.read_text(encoding="utf-8")
         frontmatter = _load_frontmatter(content)
-        return _note_from_frontmatter(
+        note = _note_from_frontmatter(
             frontmatter,
             expected_date=for_date,
             vault_root=vault_root,
             system_dir=system_dir,
         )
+        if content != _render_note(note):
+            raise BriefingReadError("briefing body disagrees with structured content")
+        return note
     except BriefingReadError:
         raise
     except Exception as exc:

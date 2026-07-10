@@ -22,7 +22,7 @@ from app.relevance.schema import (
     MomentUrgency,
     SurfacedRef,
 )
-from app.services.commitment_persistence import persist_commitment
+from app.services.commitment_persistence import commitment_artifact_path, persist_commitment
 from app.vault.manager import VaultContext
 from app.vault.markdown_settings import render_markdown_settings
 from app.write_guard import WriteGuard, WritesBlockedError
@@ -609,6 +609,45 @@ def test_load_briefing_round_trip_absent_and_invalid_schema(
     payload = yaml.safe_load(target.read_text(encoding="utf-8").split("---", 2)[1])
     payload["schema_version"] = 999
     target.write_text(f"---\n{yaml.safe_dump(payload)}---\ninvalid\n", encoding="utf-8")
+    with pytest.raises(BriefingReadError):
+        load_briefing(vault_context=context, for_date=BRIEFING_DATE)
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "arbitrary_body",
+        "truncated_section",
+        "contradicting_provenance",
+    ],
+)
+def test_load_briefing_rejects_body_that_disagrees_with_frontmatter(
+    vault: tuple[Path, VaultContext], corruption: str
+) -> None:
+    root, context = vault
+    _seed_commitment(context, "commitment-1", kind="next_action", state="next")
+    _seed_moment(root, "moment-1")
+    _seed_receipts(root, [_receipt("object-1", "2026-07-09T12:00:00Z")])
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    target = _target(root)
+    text = target.read_text(encoding="utf-8")
+    _opening, yaml_text, body = text.split("---\n", 2)
+
+    if corruption == "arbitrary_body":
+        corrupted_body = "CORRUPTED BODY\n"
+    elif corruption == "truncated_section":
+        corrupted_body = body.split("## Decision receipts", 1)[0]
+    else:
+        canonical_path = commitment_artifact_path("commitment-1", root)
+        assert canonical_path in body
+        corrupted_body = body.replace(canonical_path, "Human/contradiction.md", 1)
+
+    target.write_text(f"---\n{yaml_text}---\n{corrupted_body}", encoding="utf-8")
+
     with pytest.raises(BriefingReadError):
         load_briefing(vault_context=context, for_date=BRIEFING_DATE)
 
