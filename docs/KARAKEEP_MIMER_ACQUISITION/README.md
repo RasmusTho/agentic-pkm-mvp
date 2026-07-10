@@ -1,6 +1,7 @@
-State: FILED specification directory (parent #3367; children #3372–#3377). D1 is settled. All
-children remain `agent:blocked` until this specification merges; no Karakeep service or ingestion
-support is claimed as shipped.
+State: ACTIVE specification directory (parent #3367; children #3372–#3377). D1 is settled. The
+specification is merged; child pickup follows live GitHub dependency/label truth. No Karakeep
+service or ingestion support is claimed as shipped until the implementation and acceptance slices
+land.
 Doc role: Capability specification (feature-breakdown lane)
 Authority: Product/Runtime target-state specification subordinate first to accepted `docs/adr/ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md`, then `docs/HEIMDAL/FABLE_COMPANION.md`, `docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md`, and `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md`.
 Owner: Architecture / Product
@@ -24,6 +25,13 @@ This is **not companion capture** and does not call Mimer's `/api/capture` endpo
 bundled MCP server is also outside this capability: connecting an interactive assistant to that
 server is Direction A operator configuration. Private endpoint selection, credential values, DNS,
 and firewall policy remain operator-owned deployment inputs and are deliberately not specified here.
+
+The source contract is fixed in
+[`DEFINE_READING_SOURCE_AND_CANDIDATE_CONTRACT.md`](DEFINE_READING_SOURCE_AND_CANDIDATE_CONTRACT.md):
+one immutable `heimdal.observation.published.v1` revision per canonical Karakeep snapshot, the
+existing append-only log and sanctioned publish/read/advance APIs, and the existing
+`mimer.candidate_projector` consumer. Mimer's planned additive `reading_source_note` mapping remains
+review-required and first-write-wins; a tombstone is evidence for review, never a delete command.
 
 ## Product/Runtime SBS classification
 

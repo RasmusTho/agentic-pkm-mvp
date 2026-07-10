@@ -59,6 +59,16 @@ policy §3 mandates for AI-generated content, with full provenance, written back
 existing companion-note / vault mechanics named in the source spec. From this point the
 ingestion/triage policy governs; the pipeline is done.
 
+**Karakeep handoff extension (contract selected, runtime pending).** KMA-01 / issue #3372 fixes the
+Mimer-side extension point as the shipped
+`app.heimdal.candidate_projection.project_pending_candidates` path with its existing
+`mimer.candidate_projector` cursor. A later implementation slice adds a source-discriminated
+`reading_source_note` mapping with draft/review-required posture, deterministic first-write-wins
+pathing, provenance survival, and WriteGuard materialization. It consumes only durable
+`heimdal.observation.published.v1` evidence; it does not contact Karakeep, use companion capture, or
+create another projector/cursor. See
+`docs/KARAKEEP_MIMER_ACQUISITION/DEFINE_READING_SOURCE_AND_CANDIDATE_CONTRACT.md :: Additive Mimer candidate mapping`.
+
 ## Stage execution model
 
 - Stages form a small DAG, not a strict line: `normalize` depends on `raw`; each extractor depends

@@ -236,6 +236,18 @@ document and §1.3 are now consistent prose/schema mirrors of each other).
 - **Out of scope for this slice:** the consent ledger runtime (A5); the corrected/revision fold logic
   (§11#12/§11#14); the entity register runtime (A1, already landed, #3038); the observation log /
   cursor mechanics (A2, already landed, #3039); capture, ASR, projector.
+
+### Karakeep published-evidence profile (contract only)
+
+Issue #3372 defines the target adapter profile at
+`docs/KARAKEEP_MIMER_ACQUISITION/DEFINE_READING_SOURCE_AND_CANDIDATE_CONTRACT.md :: Published-v1 field map`.
+Each Karakeep link, note, or highlight revision conforms to the existing
+`heimdal.observation.published.v1` schema and the append-only log above; no Karakeep-specific topic,
+log, read API, or cursor is introduced. Heimdal alone owns REST fetch, source identity/revision,
+attribution, provenance, and publication. Mimer begins at the durable event and keeps the existing
+`mimer.candidate_projector` cursor. This paragraph records the contract selected by KMA-01; the
+Karakeep adapter and additive candidate behavior are not shipped by this docs/test slice.
+
 ## Heimdal consent ledger v0 + capture-time check (HEIM-3)
 
 `app/heimdal/consent_ledger.py` (#3042, Epic #3019 slice A5; ratified by
