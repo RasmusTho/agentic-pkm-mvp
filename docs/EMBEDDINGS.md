@@ -42,6 +42,20 @@ Embeddings are **derived artifacts** (rebuildable). The canonical source of trut
 5. Vectors are **upserted** into `VectorIndex`.
 6. Indexer emits index events to outbox (success/failure) with provenance.
 
+**The read path never embeds documents (ADR-0059 D1, #3405):** document embedding happens only on
+this write path above (steps 1–6, at ingest/index time). The retrieval serving path
+(`app/retrieval/hybrid.py::rebuild_from_durable_index`) loads each row's already-stored `embedding`
+from `VectorIndex.all_rows()` straight into the in-process cache and never calls the document-embedding
+client — closing a prior gap where every cache rebuild after a generation mismatch re-embedded the
+whole corpus on a **read**, which could route the sanctioned Gemini fallback (`EMBED_FALLBACK_PROVIDER`,
+above) through a query instead of a write. The only exception is a scoped, explicit lazy-embed
+fallback for documents that reach the cache with no stored vector at all — test-seeded corpora
+(`set_documents()`/`add_document()` without an `embedding`), and, fail-safe, an individual durable row
+whose stored vector is unexpectedly empty. **Query embedding is unaffected:** the query vector is
+still embedded live, per request, with the primary identity, exactly as *Query vs Document embeddings*
+below describes. See `docs/adr/ADR-0059-unified-retrieval-path-pgvector-read-authority.md :: D1` and
+`docs/RETRIEVAL.md :: Hybrid Search :: Scoring`.
+
 ## Configuration
 
 Embedding provider/model choice is a user setting first, not a hidden runtime default. The preferred embedding route
