@@ -24,6 +24,30 @@ from __future__ import annotations
 
 WORKSPACE_VAULT_POSTURES: tuple[str, ...] = ("healthy", "degraded")
 
+# The one reachability classification: which vault_state values count as
+# reachable. Shared with `overlay_host.coarse_vault_posture` so the two
+# posture consumers can never diverge on a future vault_state value.
+REACHABLE_VAULT_STATES: frozenset[str] = frozenset({"ok"})
+
+# Transport-level failure markers that classify an *unstructured* error
+# string as "the runtime itself is unreachable" (#3361, DESIGN_AUDIT.md §3.1
+# bug B2). Single shared constant consumed by BOTH
+# `serve_dev_page._render_error_section` / `_is_runtime_unreachable` AND
+# `entry_state._is_runtime_unavailable_error` — the entry-state mirror must
+# stay in lockstep, otherwise a DNS failure renders unreachable *copy* while
+# the entry state still resolves `shell_active` and drops the Retry /
+# System-map affordances.
+TRANSPORT_UNAVAILABLE_MARKERS: tuple[str, ...] = (
+    "connection refused",
+    "timed out",
+    "timeout",
+    "network",
+    "errno",
+    "name or service not known",
+    "nodename nor servname",
+    "name resolution",
+)
+
 # The single calm sentence every degraded vault-reachability surface shows.
 # Never a second, independently-worded banner (DESIGN_AUDIT.md §3.1 fix).
 CALM_RECONNECT_BANNER_TEXT = (
@@ -45,6 +69,23 @@ RECONNECTING_PICKER_SUB = (
 )
 
 
+def vault_state_from_provenance(vault_provenance: str) -> str:
+    """The three-way ``vault_state`` from the server-declared provenance.
+
+    ``"unreachable"`` / ``"unresolved"`` pass through; every other declared
+    provenance (``"resolved"``, ``"runtime"``, ...) is ``"ok"``. This is the
+    ONE place that classification happens (#3361 review finding 1): the
+    topbar chip and the calm banner must both consume a posture derived from
+    this same value, never re-derive it from different inputs.
+    """
+    lowered = str(vault_provenance).lower()
+    if lowered == "unreachable":
+        return "unreachable"
+    if lowered == "unresolved":
+        return "unresolved"
+    return "ok"
+
+
 def derive_vault_posture(vault_state: str) -> str:
     """Derive the single vault-reachability posture from the server-declared
     ``vault_state`` (``"ok"`` / ``"unreachable"`` / ``"unresolved"``).
@@ -53,7 +94,7 @@ def derive_vault_posture(vault_state: str) -> str:
     value the runtime did not declare — fails closed to ``"degraded"``
     rather than inventing a third posture or defaulting to healthy.
     """
-    if vault_state == "ok":
+    if vault_state in REACHABLE_VAULT_STATES:
         return "healthy"
     return "degraded"
 

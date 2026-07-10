@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from companion_ui.workspace.entry_state import resolve_entry_state
 from companion_ui.workspace.serve_dev_page import render_index_html
 from companion_ui.workspace.workspace_posture import (
     CALM_RECONNECT_BANNER_TEXT,
@@ -226,3 +227,82 @@ def test_picker_initialize_cta_only_when_uninitialized() -> None:
     assert RECONNECTING_PICKER_TITLE.lower() in visible
     assert RECONNECTING_PICKER_SUB.lower() in visible
     assert "is not initialized yet" not in visible
+# ---------------------------------------------------------------------------
+# Review finding 1 — chip and banner must agree by construction on EVERY
+# three-way vault_state, including the "unresolved" default fallback
+# ---------------------------------------------------------------------------
+def test_unresolved_provenance_chip_and_banner_agree() -> None:
+    """provenance "unresolved" (the default fallback) is degraded on BOTH the
+    chip and the banner — never a degraded chip with a silent banner (the B5
+    contradiction), because both consume the one derived posture value."""
+    html = _render_shell(runtime_vault_provenance="unresolved")
+    assert 'data-state="unresolved"' in html
+    assert 'data-vault-posture="degraded"' in html
+    visible = _visible_text(html)
+    assert "niflheim · reconnecting" in visible
+    assert "vault ok" not in visible
+    # The banner agrees: degraded chip => the one calm banner renders.
+    assert html.count('data-testid="workspace-vault-unreachable-banner"') == 1
+    assert CALM_RECONNECT_BANNER_TEXT.lower() in visible
+
+
+# ---------------------------------------------------------------------------
+# Review finding 2 — entry_state mirror shares the transport markers
+# ---------------------------------------------------------------------------
+def test_entry_state_resolves_no_vault_on_dns_errno_error() -> None:
+    """A DNS/errno transport error resolves the entry state to no_vault (so
+    the Retry / System-map affordances render) even with a note_path — the
+    entry_state classifier consumes the same shared transport markers as the
+    error-copy classifier and can never lag it."""
+    for error in (
+        "[Errno -2] Name or service not known",
+        "[Errno 8] nodename nor servname provided, or not known",
+        "[Errno 61] Connection refused",
+        "Temporary failure in name resolution",
+    ):
+        resolution = resolve_entry_state(note_path="Notes/test.md", error=error)
+        assert resolution.state == "no_vault", (
+            f"{error!r} must resolve no_vault, got {resolution.state!r}"
+        )
+        # And the rendered page carries the Retry affordance for that state.
+        html = render_index_html(
+            api_base_url="http://127.0.0.1:18001",
+            note_path="Notes/test.md",
+            fields=None,
+            error=error,
+        )
+        assert 'data-testid="workspace-entry-retry"' in html
+
+
+# ---------------------------------------------------------------------------
+# Review finding 3 — a genuinely-missing configured folder wins over the
+# reconnecting flag: the create/initialize path must stay available
+# ---------------------------------------------------------------------------
+def test_misconfigured_vault_keeps_create_cta_despite_reconnecting_flag() -> None:
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="",
+        vault_selection_required={
+            "state": "vault_selection_required",
+            "reason": "vault_root_misconfigured",
+            "message": "The configured vault path is missing.",
+            "configured_vault_root": "/Users/me/Vaults/Niflheim",
+            "requested_note_path": "",
+            "context": {"status": "missing", "active_vault_path": "/Users/me/Vaults/Niflheim"},
+            "recent_vaults": [],
+            "actions": [],
+            "runtime_reconnecting": True,
+        },
+    )
+    # The missing-folder create/initialize affordance survives the flag —
+    # a missing folder can never be papered over as "reconnecting" with no
+    # working action left (misconfigured wins).
+    assert 'data-reconnecting="false"' in html
+    assert 'data-testid="vault-picker-initialize"' in html
+    assert 'data-testid="vault-picker-create-submit"' in html
+    assert 'data-intent="vault.initialize"' in html
+    visible = _visible_text(html)
+    assert "missing" in visible
+    assert RECONNECTING_PICKER_SUB.lower() not in visible
+    # And the strictly-uninitialized CTA testid still does not appear here.
+    assert 'data-testid="vault-picker-initialize-submit"' not in html

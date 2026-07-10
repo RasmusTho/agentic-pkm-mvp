@@ -159,9 +159,11 @@ from companion_ui.workspace.workspace_posture import (
     CANT_REACH_VAULT_COPY,
     RECONNECTING_PICKER_SUB,
     RECONNECTING_PICKER_TITLE,
+    TRANSPORT_UNAVAILABLE_MARKERS,
     derive_vault_posture,
     render_posture_banner,
     vault_posture_chip_suffix,
+    vault_state_from_provenance,
 )
 
 _DEFAULT_HOST = "0.0.0.0"
@@ -770,6 +772,7 @@ def _render_workspace_header_strip(
     vault_name: str,
     vault_channel: str,
     vault_provenance: str,
+    vault_posture: str,
     writeguard_status: str,
     canvas_enabled: bool,
     update_flow_available: bool,
@@ -801,13 +804,12 @@ def _render_workspace_header_strip(
         if is_prod
         else '<span class="workspace-dev-ribbon" data-testid="workspace-dev-ribbon">DEV</span>'
     )
-    vp_lower = str(vault_provenance).lower()
-    if vp_lower == "unreachable":
-        vault_state = "unreachable"
-    elif vp_lower == "unresolved":
-        vault_state = "unresolved"
-    else:
-        vault_state = "ok"
+    # #3361 review finding 1 — the three-way vault_state comes from the ONE
+    # shared classifier; the reachability posture arrives as the
+    # `vault_posture` parameter, derived exactly once by the caller from
+    # this same provenance, so the chip and the calm banner can never
+    # disagree by construction.
+    vault_state = vault_state_from_provenance(vault_provenance)
     # §5.2 — Browse Vault routes to the canonical left-pane browse surface, not
     # the modal overlay (which is a narrow responsive fallback only).
     browse_target = "#vault-browser-left-pane"
@@ -822,11 +824,6 @@ def _render_workspace_header_strip(
     coarse_posture = coarse_vault_posture(
         vault_state=vault_state, primary_posture=posture
     )
-    # #3361 (DESIGN_AUDIT.md §3.1) — the single derived vault-reachability
-    # posture. The chip label (and the one calm banner elsewhere in this
-    # render) both subscribe to this value; neither computes its own
-    # reachability copy.
-    vault_posture = derive_vault_posture(vault_state)
     vault_chip_suffix = vault_posture_chip_suffix(vault_posture)
     # CUIDR-04 (#2447): the runtime/diagnostic telemetry that left the front
     # edge is built by `_render_operator_telemetry_block(fields, ...)` and
@@ -2618,6 +2615,15 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
         guard_degraded=guard_degraded,
     )
     effective_vault_provenance = "unreachable" if vault_unreachable else str(vault_provenance)
+    # #3361 (DESIGN_AUDIT.md §3.1) — the single derived vault-reachability
+    # posture, computed EXACTLY ONCE per render from the same three-way
+    # vault_state. Both the topbar chip (via the parameter below) and the one
+    # calm banner consume this value; neither re-derives it from a different
+    # input (review finding 1: a provenance-"unresolved" render previously
+    # showed a degraded chip with no banner — the B5 contradiction itself).
+    vault_posture = derive_vault_posture(
+        vault_state_from_provenance(effective_vault_provenance)
+    )
     workspace_header_strip_html = _render_workspace_header_strip(
         fields=fields,
         posture=posture_token,
@@ -2628,6 +2634,7 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
         vault_name=vault_name,
         vault_channel=vault_channel,
         vault_provenance=effective_vault_provenance,
+        vault_posture=vault_posture,
         writeguard_status=writeguard_status,
         canvas_enabled=canvas_enabled,
         update_flow_available=update_flow_available,
@@ -2700,12 +2707,10 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
         identity_chips_html=identity_chips_html,
         rendered_props=rendered_props,
     )
-    # #3361 (DESIGN_AUDIT.md §3.1) — the ONE calm banner for degraded vault
-    # posture; it derives from the same `derive_vault_posture` value the
-    # topbar chip subscribes to, not an independently-worded message.
-    vault_unreachable_banner_html = render_posture_banner(
-        derive_vault_posture("unreachable" if vault_unreachable else "ok")
-    )
+    # #3361 (DESIGN_AUDIT.md §3.1) — the ONE calm banner consumes the SAME
+    # `vault_posture` value the topbar chip received (derived exactly once
+    # above), so the two surfaces agree by construction.
+    vault_unreachable_banner_html = render_posture_banner(vault_posture)
     # #3119 — independent of vault reachability: the watcher/worker may be
     # bound to a different vault (or no vault at all) than the one the API
     # just selected/served this note from. Only render when the runtime
@@ -6328,10 +6333,18 @@ def _render_vault_selection_required_section(payload: object) -> str:
     # ``runtime_reconnecting`` flag (never inferred from reason alone, per
     # the "never invent a posture the runtime did not declare" constraint);
     # absent/false is the default for every existing payload shape. Only a
-    # configured, non-uninitialized vault earns the "reconnecting" copy —
-    # the Initialize CTA stays reserved for reason="uninitialized" either way.
+    # configured, non-uninitialized, non-misconfigured vault earns the
+    # "reconnecting" copy — the Initialize CTA stays reserved for
+    # reason="uninitialized" either way, and a genuinely-missing configured
+    # folder (``vault_root_misconfigured``) wins over the reconnecting flag
+    # (review finding 3): telling a human their missing folder is
+    # "reconnecting" while suppressing the only working create/initialize
+    # action would leave the picker with no working affordance at all.
     is_reconnecting = (
-        bool(data.get("runtime_reconnecting")) and bool(configured) and not is_uninitialized
+        bool(data.get("runtime_reconnecting"))
+        and bool(configured)
+        and not is_uninitialized
+        and not is_missing_configured
     )
     if is_reconnecting:
         message = _e(RECONNECTING_PICKER_SUB)
@@ -6452,7 +6465,9 @@ def _render_vault_selection_required_section(payload: object) -> str:
     # field, no Role select — just an honest confirm button for the path the
     # human already chose. The general ``no_vault_bound`` picker never renders it.
     initialize_html = ""
-    if (is_uninitialized or is_missing_configured) and configured and not is_reconnecting:
+    # (is_reconnecting is mutually exclusive with both reasons by
+    # construction above, so it needs no re-check here.)
+    if (is_uninitialized or is_missing_configured) and configured:
         initialize_copy = (
             "This vault folder is missing. Create and initialize it here to "
             "continue."
@@ -7081,25 +7096,6 @@ def _render_vault_switch_overlay(fields: object) -> str:
   </script>"""
 
 
-# #3361 (DESIGN_AUDIT.md §3.1 bug B2) — DNS-resolution failures
-# ("[Errno -2] Name or service not known", the macOS/BSD "nodename nor
-# servname provided" variant) are transport-level runtime unreachability
-# just like "connection refused" / "timed out", but were previously absent
-# from this marker set and fell through to a raw-errno display. Single
-# shared marker set for both `_render_error_section` and
-# `_is_runtime_unreachable` so classification stays in lockstep.
-_TRANSPORT_UNAVAILABLE_MARKERS: tuple[str, ...] = (
-    "connection refused",
-    "timed out",
-    "timeout",
-    "network",
-    "errno",
-    "name or service not known",
-    "nodename nor servname",
-    "name resolution",
-)
-
-
 def _render_error_section(
     error: str,
     *,
@@ -7163,7 +7159,7 @@ def _render_error_section(
     # Q23 — provenance behind a Details disclosure; Q24 — suppress the form).
     lowered = error.lower()
     contract_unavailable = error_kind == "runtime_unavailable" or lowered.startswith("http 503")
-    runtime_unavailable = any(marker in lowered for marker in _TRANSPORT_UNAVAILABLE_MARKERS)
+    runtime_unavailable = any(marker in lowered for marker in TRANSPORT_UNAVAILABLE_MARKERS)
     # #2124 — same 503/transport shape, two causes. From a remote page origin
     # the likely cause is "wrong device" (the browser hit the API's localhost
     # bind, unreachable from that device), so render the distinct remote-access
@@ -7229,7 +7225,7 @@ def _is_runtime_unreachable(error: str) -> bool:
     # which resolves the declared error kind before any transport classification.
     if error_kind:
         return False
-    return any(marker in lowered for marker in _TRANSPORT_UNAVAILABLE_MARKERS)
+    return any(marker in lowered for marker in TRANSPORT_UNAVAILABLE_MARKERS)
 
 
 def _render_vault_unreachable_state(error: str, *, retry_html: str) -> str:

@@ -36,6 +36,8 @@ import html as _html
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from companion_ui.workspace.workspace_posture import TRANSPORT_UNAVAILABLE_MARKERS
+
 ENTRY_STATES: tuple[str, ...] = (
     "boot",
     "no_vault",
@@ -146,17 +148,20 @@ def _is_runtime_unavailable_error(error: str) -> bool:
     """True when an error string signals the runtime aggregate is unreachable.
 
     Covers the contract's HTTP 503 ``runtime_unavailable`` payload and
-    request-level network failures (connection refused, timeout, DNS).
+    request-level network failures (connection refused, timeout, DNS/errno).
+    The transport markers are the SHARED
+    ``workspace_posture.TRANSPORT_UNAVAILABLE_MARKERS`` constant — the same
+    set ``serve_dev_page`` uses to classify error copy (#3361): if this
+    mirror lagged, a DNS failure would render unreachable copy while the
+    entry state still resolved ``shell_active``, dropping the Retry /
+    System-map affordances.
     """
     lowered = error.lower()
     if "runtime_unavailable" in lowered:
         return True
     if lowered.startswith("http 503"):
         return True
-    return any(
-        marker in lowered
-        for marker in ("connection refused", "timed out", "timeout", "network")
-    )
+    return any(marker in lowered for marker in TRANSPORT_UNAVAILABLE_MARKERS)
 
 
 def _as_dict(value: object) -> dict:

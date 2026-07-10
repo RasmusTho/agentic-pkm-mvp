@@ -30,6 +30,8 @@ from __future__ import annotations
 import html as _html
 from dataclasses import dataclass, field, replace
 
+from companion_ui.workspace.workspace_posture import REACHABLE_VAULT_STATES
+
 # The spec's declared overlay set, verbatim from the `shell_active ⇄
 # overlay(cmd|vault|memory|peek|posture|map|settings|capture|receipts|tts|help)`
 # transition (SYSTEM_ENTRY_POINT_SPEC.md §Allowed transitions). Adding or
@@ -315,11 +317,14 @@ def coarse_vault_posture(*, vault_state: str, primary_posture: str) -> str:
     The dot renders **only** a value from :data:`COARSE_VAULT_POSTURES`;
     detailed health slices stay with ``/api/status``. Out-of-contract inputs
     degrade coarsely instead of inventing detail.
+
+    The is-the-vault-reachable classification is the shared
+    ``workspace_posture.REACHABLE_VAULT_STATES`` (#3361) so this dot and the
+    single derived vault posture cannot diverge on a future vault_state
+    value — only the severity grading below is local.
     """
-    if vault_state == "unreachable":
-        return "unavailable"
-    if vault_state == "unresolved":
-        return "degraded"
+    if vault_state not in REACHABLE_VAULT_STATES:
+        return "unavailable" if vault_state == "unreachable" else "degraded"
     if primary_posture in COARSE_VAULT_POSTURES:
         return primary_posture
     return "degraded"
