@@ -4,6 +4,7 @@ import ast
 import threading
 from datetime import date, datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -16,6 +17,7 @@ from app.briefing.trigger import (
 )
 from app.vault.manager import VaultContext
 from app.write_guard import WriteGuard, WritesBlockedError
+from app.watcher.registry import BriefingTickCadence, _run_briefing_tick
 
 BRIEFING_DATE = date(2026, 7, 10)
 MORNING = datetime(2026, 7, 10, 5, 15, tzinfo=timezone.utc)  # 07:15 Stockholm
@@ -167,6 +169,52 @@ def test_manual_regenerate_bypasses_auto_trigger_guard(tmp_path: Path) -> None:
     assert result.triggered is True
     assert result.reason == "manual_regenerate"
     mocked.assert_called_once()
+
+
+def test_manual_regenerate_preserves_vault_local_write_ceiling(tmp_path: Path) -> None:
+    base_context = _context(tmp_path)
+    context = VaultContext(
+        **{
+            **base_context.__dict__,
+            "settings_path": str(Path(base_context.active_vault_path or "") / "settings"),
+        }
+    )
+    permissions = SimpleNamespace(allow_writes_to_vault=False)
+    manager = SimpleNamespace(permissions_for_context=lambda _context: permissions)
+    with (
+        patch("app.briefing.trigger.get_vault_manager", return_value=manager),
+        patch("app.briefing.trigger.compose_briefing") as mocked,
+    ):
+        result = regenerate_briefing(vault_context=context, for_date=BRIEFING_DATE)
+    assert result.triggered is False
+    assert result.reason == "vault_local_writes_disabled"
+    mocked.assert_not_called()
+
+
+def test_registry_briefing_tick_has_bounded_retry_cadence(tmp_path: Path) -> None:
+    context = _context(tmp_path)
+    cfg = SimpleNamespace(enable=True, vault_path=Path(context.active_vault_path or ""))
+    cadence = BriefingTickCadence(interval_seconds=900)
+    trigger_result = SimpleNamespace(
+        triggered=False,
+        reason="generation_failed",
+        briefing_date=BRIEFING_DATE,
+    )
+    manager = SimpleNamespace(validate_vault=lambda _root: context)
+    with (
+        patch("app.watcher.registry.VaultManager", return_value=manager),
+        patch(
+            "app.watcher.registry.scheduled_briefing_tick",
+            return_value=trigger_result,
+        ) as scheduled,
+    ):
+        first = _run_briefing_tick(cfg, now=1000, cadence=cadence)
+        second = _run_briefing_tick(cfg, now=1001, cadence=cadence)
+        third = _run_briefing_tick(cfg, now=1900, cadence=cadence)
+    assert first["reason"] == "generation_failed"
+    assert second == {"triggered": False, "reason": "cadence_not_due"}
+    assert third["reason"] == "generation_failed"
+    assert scheduled.call_count == 2
 
 
 def test_automatic_trigger_preserves_write_guard(tmp_path: Path) -> None:

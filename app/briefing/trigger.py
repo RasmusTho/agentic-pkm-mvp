@@ -80,6 +80,12 @@ def regenerate_briefing(
     """Explicitly replace a dated briefing, bypassing the automatic guard."""
 
     root = _selected_vault_root(vault_context)
+    if not _vault_local_writes_allowed(vault_context):
+        return BriefingTriggerResult(
+            False,
+            "vault_local_writes_disabled",
+            for_date,
+        )
     with _vault_generation_lock(root):
         receipt = compose_briefing(
             vault_context=vault_context,
