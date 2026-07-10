@@ -150,8 +150,8 @@ All writers consume this table; individual runtime code must not create a compet
 
 | Path / note pattern | Class | Contract posture |
 | --- | --- | --- |
-| `_heimdal/**` full-note writes (except the explicit append-only rows below) | rewritten | Control notes use the published schema; stale detection and conflict staging apply when enacted. |
-| `_heimdal/steering.log.md` | append-only | Immutable steering entries append through the governed append seam. |
+| `_heimdal/**` frontmatter and full-note writes (except the explicit body-append operations below) | rewritten | Control notes use the published schema; stale detection and conflict staging apply when enacted. |
+| body steering entries in `_heimdal/steering.log.md` | append-only | Immutable steering entries append through the governed append seam; bookkeeping frontmatter remains rewritten. |
 | body steering entries in `_heimdal/watchlist.md` and `_heimdal/never.md` | append-only | `append_inflow_steering` appends durable in-flow watch/never entries; their frontmatter remains a rewritten control surface. |
 | human-authored Markdown outside managed append-only zones | rewritten | Preserve human prose; never silently overwrite a stale version. |
 | `⚙️ System/companions/**`, legacy `_system/companions/**` | rewritten | Runtime-owned companion notes; direct client writes remain forbidden. |

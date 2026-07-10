@@ -52,8 +52,8 @@ def test_note_classification_contract_covers_decided_rows() -> None:
     contract = CLIENT_CONTRACT_PATH.read_text(encoding="utf-8")
 
     for pattern, note_class in (
-        ("`_heimdal/**` full-note writes (except the explicit append-only rows below)", "rewritten"),
-        ("`_heimdal/steering.log.md`", "append-only"),
+        ("`_heimdal/**` frontmatter and full-note writes (except the explicit body-append operations below)", "rewritten"),
+        ("body steering entries in `_heimdal/steering.log.md`", "append-only"),
         ("body steering entries in `_heimdal/watchlist.md` and `_heimdal/never.md`", "append-only"),
         ("human-authored Markdown outside managed append-only zones", "rewritten"),
         ("`⚙️ System/companions/**`, legacy `_system/companions/**`", "rewritten"),
