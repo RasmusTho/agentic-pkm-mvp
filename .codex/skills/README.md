@@ -14,7 +14,7 @@ boundary and artifact map in `docs/architecture/SBS_OPERATING_MODEL.md`.
 ## Workflow map
 
 Hot path:
-`Docs -> Issue -> Project -> Agent -> issue-to-code fast claim -> Publish PR -> CI -> Verification -> Merge -> Project/doc closure -> Owner Doc`
+`Docs -> Issue -> Builder Ops Vault ticket/claim -> Agent -> issue-to-code -> Publish PR -> CI -> Verification -> Merge -> Vault/GitHub/doc closure -> Owner Doc`
 
 Conditional / maintenance path:
 `Issue maintenance -> Agent` for stale or false backlog state, and `Publish PR -> pr-integration` only when readiness/repair work is still needed before verification.
@@ -66,8 +66,8 @@ Do not rely on a human remembering where BuilderOps material belongs.
 Shared contracts: `.codex/skills/_shared/` holds the canonical contract files that skills reference
 instead of carrying inline copies — `ISSUE_CONTRACT.md` (Issue section list + `Verify:` rule),
 `LABEL_TAXONOMY.md` (canonical labels + `lane:governance` exception), `LIFECYCLE_TRUTH_MATRIX.md`
-(required Project Status per Issue/PR state), `BRANCH_TRUTH_GATE.md` (publication workspace gate),
-`PROJECT_STATUS_OPERATIONS.md` (Project GraphQL operations), and `CI_WAIT_CONTRACT.md` (how to wait
+(Vault/GitHub lifecycle truth), `BRANCH_TRUTH_GATE.md` (publication workspace gate),
+`PROJECT_STATUS_OPERATIONS.md` (deprecated Project-v2 reference; no hot-path mutations), and `CI_WAIT_CONTRACT.md` (how to wait
 on CI checks — and the optional `--codex` verdict path — via REST without draining the shared API budget). A reference like
 `_shared/<FILE>.md :: <section>` resolves there. `_shared/` is not a skill directory.
 
@@ -81,9 +81,9 @@ on CI checks — and the optional `--codex` verdict path — via REST without dr
   - before coding, update lifecycle state truthfully: move active work to `In Progress` and remove `agent:ready`
   - use that transition as the minimal shared claim/lease compatibility signal in multi-agent environments
 - `issue-maintenance-change-control`
-  - repair stale or false Issue / PR / label / Project state before or during execution
+  - repair stale or false Issue / PR / label / Vault-ticket state before or during execution
 - `deliver-issue-set`
-  - review, plan, make ready, and deliver an epic, parent feature issue, Kanban/Project lane, or larger ready-issue set; use `issue-to-code` and `verification-and-closure` as the main lenses; if the ready pool is too small, repair or create bounded ready issues through `issue-maintenance-change-control`, `docs-to-issue`, or `feature-breakdown`; may claim multiple issues only for rational parallel sub-agent delivery with isolated worktrees and explicit receipts
+  - review, plan, make ready, and deliver an epic, parent feature issue, Vault lane, or larger ready-issue set; use `issue-to-code` and `verification-and-closure` as the main lenses; if the ready pool is too small, repair or create bounded ready issues through `issue-maintenance-change-control`, `docs-to-issue`, or `feature-breakdown`; may claim multiple issues only for rational parallel sub-agent delivery with isolated worktrees and explicit receipts
 - `docs-governance`
   - decision and routing skill for docs-as-code ownership, anti-sprawl, DOCS_INDEX impact, and narrower docs workflow selection
 - `docs-authoring`

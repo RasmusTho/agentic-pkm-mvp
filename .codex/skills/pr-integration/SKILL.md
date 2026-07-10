@@ -75,7 +75,7 @@ Use `PR_ESCALATION_PATHS.md` for:
 - dependency issue scan
 - owner-doc check
 - heavy review/comment loops
-- GitHub Project / board cleanup
+- GitHub Project / board cleanup (optional cold-path projection only)
 - full governance receipt repair
 
 ## Handoff Decision
@@ -90,9 +90,9 @@ Declare exactly one outcome:
 
 ## Lifecycle Truth Rules During Integration
 
-Project Status for the Issue and PR follows `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md` as the
-single source (an open non-draft PR legitimately projects to `Review` via the shipped Project
-automation — do not treat that as drift). Stage-specific rules on top of the matrix:
+Vault/GitHub lifecycle truth follows `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md`. This stage
+does not mutate a Vault ticket unless it owns the explicit review handoff, and never mutates Project
+v2. Stage-specific rules:
 
 - do not mark the Issue's lifecycle `Done` in this stage
 - do not close the governing Issue in this stage

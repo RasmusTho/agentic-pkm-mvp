@@ -1,40 +1,28 @@
-State: Shared skill contract. Canonical lifecycle truth matrix for Issues and PRs.
+State: Shared skill contract. Canonical Builder System lifecycle truth matrix.
 
 # Lifecycle Truth Matrix
 
-Single source for the required Project Status of every Issue and PR content state. Every other
-cell is drift and must be corrected. Skills reference this file instead of carrying their own
-copies; `issue-maintenance-change-control` owns the reconciliation procedure that applies it.
+The Builder Ops Vault is the active operational lifecycle surface. GitHub Issues and PRs are the
+external task and delivery trail. The repository is the authority for code and durable docs.
+GitHub Project v2 is an optional, deprecated read-only projection; it is never required for a
+delivery and must not be read or mutated in the Builder System hot path.
 
-## Allowed Project statuses
-
-`Backlog`, `Ready`, `In Progress`, `Review`, `Done`
-
-## Matrix
-
-| Content | Content state | Required Project Status |
-|---------|---------------|-------------------------|
-| Issue | CLOSED | `Done` |
-| Issue | OPEN + `agent:ready` | `Ready` |
-| Issue | OPEN + `agent:blocked` | `Backlog` |
-| Issue | OPEN + `agent:needs-human` | `Backlog` |
-| PR | MERGED | `Done` |
-| PR | CLOSED (unmerged) | `Done` |
-| PR | OPEN + Draft | `In Progress` |
-| PR | OPEN + non-draft + review requested | `Review` |
-| PR | OPEN + non-draft, no review requested | `Review` |
-| Any | Present but no Project entry | Add to Project, apply row above |
-
-## Review semantics
-
-`Review` is the Project handoff state for open non-draft PRs. The shipped Project automation maps
-`opened`, `reopened`, and `ready_for_review` non-draft PR events to `Review`; draft PRs remain
-`In Progress` until they are marked ready. Maintenance runs must not treat a normal open non-draft
-PR card in `Review` as drift.
+| Delivery condition | Vault ticket / claim | GitHub Issue | PR |
+| --- | --- | --- | --- |
+| Not executable or dependency waiting | `Backlog` or `Blocked`; no active claim | `agent:blocked` or `agent:needs-human` when applicable | none or linked context |
+| Executable and unclaimed | `Ready`; no active claim | open and `agent:ready` during transition | none |
+| Active implementation | `In Progress`; active claim owned by worker | remove `agent:ready` after claim | draft or active PR if published |
+| Review handoff | `Review`; claim remains until explicit release | open; no active-work label required | open, ready for review |
+| Delivered terminal work | `Done`; no claim | closed with no `agent:*` labels | merged or closed |
 
 ## Binding rules
 
-- `agent:ready ↔ Status=Ready` is a post-condition, not just a declarative rule: an open
-  `agent:ready` Issue in any other status means the queue is lying about what is pickable.
-- GitHub Issue state, agent labels, linked PR state, and merge/delivery reality outrank Project
-  state when they disagree; correct the projection to match the harder truth.
+- When a matching Vault ticket exists, its folder, YAML `status`, and active claim are the pickup
+  truth. Validate it with `builderops vault validate` before mutation.
+- Claim atomically changes `Ready` to `In Progress`; then remove `agent:ready` through the REST
+  label endpoint. If REST confirmation fails, release the Vault claim.
+- Without a Vault ticket, use the documented dispatcher/GitHub-label fallback in `AGENTS.md`.
+- `agent:ready` is an external transition qualifier, not a Project-status surrogate. Do not require
+  a Project card or Project status to create, pick up, review, merge, or close work.
+- Closed Issues must not retain active `agent:*` labels. A Vault record or projection never closes
+  an Issue by itself.

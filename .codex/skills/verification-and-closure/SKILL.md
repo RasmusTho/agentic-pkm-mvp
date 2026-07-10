@@ -11,7 +11,7 @@ Use [`docs/development/PR_HOT_PATH.md`](../../../docs/development/PR_HOT_PATH.md
 Use [`docs/development/PR_ESCALATION_PATHS.md`](../../../docs/development/PR_ESCALATION_PATHS.md) only when the PR hot path says an escalation trigger applies.
 Use [`docs/development/PARENT_ISSUE_CLOSURE.md`](../../../docs/development/PARENT_ISSUE_CLOSURE.md) only when parent closure is relevant, especially for the final child slice or an explicit closure task.
 
-⚠️ **CRITICAL: All lifecycle state changes (labels, Project Status, Issue closure, PR merge) must be executed using explicit commands and verified. Do not describe these changes.**
+⚠️ **CRITICAL: All lifecycle state changes (vault status/claim, labels, Issue closure, PR merge) must be executed using explicit `builderops vault` and REST-first commands and verified. Do not describe these changes. Project v2 is not a closure dependency.**
 Test/check failures must be classified, not dismissed as merely "out of scope" when they are actually blocking.
 
 ## Your Job
@@ -23,8 +23,8 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 - detect false backlog or project states
 - honor automation-driven `Done` projection first, and only fallback-set `Done` when needed
 - merge the PR when the delivery contract is satisfied
-- close the governing Issue and set Project Status to `Done`
-- release the dispatcher lease if one was claimed
+- close the governing Issue and move the vault ticket to `Done`
+- complete/release the dispatcher lease only for fallback work with no vault ticket
 - unblock dependent issues when the delivered work truly satisfies them
 
 ## Inputs to Inspect
@@ -65,8 +65,8 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
   `## BuilderOps Routing` section means `none` and does not block merge. At every tier, unresolved
   learning, docs freshness, roadmap execution, promotion, projection, or receipt material must be
   represented by a BuilderOps record, a bounded GitHub Issue, or an explicit `none` reason
-- Verify project lifecycle state still makes sense
-- Verify closed terminal PR cards do not remain blank in the Project
+- Verify vault lifecycle and claim state match the terminal GitHub state
+- Treat Project/card drift as optional cold-path maintenance, never as a hot-path merge blocker
 - For terminal projection planning, a caller may generate the local dry-run plan
   `python3 -m app.builderops builderops epic-run-state lifecycle-plan --transition done --issue-file <file> --pr-file <file> --json`.
   The plan is advisory data only: it names required reads, proposed label/Project/PR writes, and
@@ -208,14 +208,14 @@ When all prerequisites are met:
 2. merge the PR
 3. verify merge succeeded
 4. if issue-backed, close the Issue
-5. if issue-backed, complete or release the dispatcher task if applicable
-6. if issue-backed, remove all agent labels from the Issue
-7. if issue-backed, set Issue and PR Project Status to `Done` if automation has not already projected it
-8. if issue-backed, for each spec file named in the Issue's `Source Anchors`, restore any stale `State: Not yet implemented` line to `State: Implemented. Delivered by PR #<PR> (issue #<N>, <YYYY-MM-DD>).`
-9. verify final state
-10. invoke `post-merge-owner-doc` on the merged PR. For issue-backed PRs, the receipt belongs on the closed issue; for direct-repair, docs-lane, or governance-lane PRs with no closing issue, the receipt belongs on the PR comment thread.
-11. assert the `post-merge owner-doc check:` receipt exists before emitting a delivery receipt; watchdog reminders or pending reminders are not closure receipts. For direct-repair, docs-lane, or governance-lane PRs with no closing issue, verify the receipt on the PR comment thread. [owner-doc-receipt-gate]
-12. if direct repair, write a direct repair delivery receipt instead of issue-closure state changes
+5. if issue-backed, remove all agent labels from the Issue through REST
+6. if issue-backed and vault-backed, move the ticket to `Done` (which releases its claim); otherwise
+   complete/release the dispatcher fallback task if applicable
+7. if issue-backed, for each spec file named in the Issue's `Source Anchors`, restore any stale `State: Not yet implemented` line to `State: Implemented. Delivered by PR #<PR> (issue #<N>, <YYYY-MM-DD>).`
+8. verify final state
+9. invoke `post-merge-owner-doc` on the merged PR. For issue-backed PRs, the receipt belongs on the closed issue; for direct-repair, docs-lane, or governance-lane PRs with no closing issue, the receipt belongs on the PR comment thread.
+10. assert the `post-merge owner-doc check:` receipt exists before emitting a delivery receipt; watchdog reminders or pending reminders are not closure receipts. For direct-repair, docs-lane, or governance-lane PRs with no closing issue, verify the receipt on the PR comment thread. [owner-doc-receipt-gate]
+11. if direct repair, write a direct repair delivery receipt instead of issue-closure state changes
 
 ## When Not to Merge
 
@@ -228,13 +228,13 @@ When all prerequisites are met:
 
 ## Lifecycle Rules During Verification
 
-Project Status for the Issue and PR follows `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md` as the
-single source (an open non-draft PR legitimately projects to `Review` via the shipped Project
-automation — do not treat that as drift). Merge-stage-specific rules on top of the matrix:
+Builder Ops Vault status and GitHub Issue/PR state are the active lifecycle surfaces. Project v2 is
+an optional deprecated projection governed by `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md`
+only during an explicit cold-path maintenance run. Merge-stage rules:
 
-- do not mark lifecycle `Done` before merge
-- if project/PR automation already projected `Done`, verify that state rather than writing it again
-- only apply the fallback `Done` mutation when the item still needs terminal projection
+- do not move the vault ticket to `Done` before merge
+- verify folder/YAML status and absence of an active claim after the `Done` transition
+- do not issue Project GraphQL reads/writes from the closure hot path
 
 ## BuilderOps Closure Checkpoint
 
@@ -263,16 +263,17 @@ Use [`docs/development/PARENT_ISSUE_CLOSURE.md`](../../../docs/development/PAREN
 After merging and delivering work, scan for issues blocked by the delivered Issue.
 Only unblock issues whose actual dependency is truly satisfied.
 
-## Project State Operations
+## Optional Project Projection Maintenance
 
-Use `gh` CLI and the GitHub GraphQL API to keep Project state truthful.
-Do not leave state updates as recommendations when you can execute them directly.
+Project v2 repair is outside the closure hot path. If an explicit later maintenance run reconciles
+the deprecated projection, route through `issue-maintenance-change-control`; do not spend GraphQL
+quota or delay merge/closure here.
 
 ## Status and Closure Enforcement
 
 - do not validate code only; validate delivery state
 - detect and correct false status where possible
-- if issue-backed work is truly delivered, confirm or recommend Issue closure and Project Status = `Done`
+- if issue-backed work is truly delivered, close the Issue and move its vault ticket to `Done`
 - if direct repair work is truly delivered, write the direct repair delivery receipt and do not create or mutate a governing Issue
 - direct repair delivery receipt shape:
   - `Direct repair merged: PR #<n>, type=<type>, validation=<checks>.`

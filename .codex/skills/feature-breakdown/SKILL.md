@@ -201,11 +201,13 @@ By contrast, additive work on a single surface that mirrors an existing pattern 
    - If the GitHub parent issue later closes, update the local `PARENT_FEATURE_ISSUE.md` again so it no longer reads as an unfiled or active draft.
    - When closing, also update the capability `README.md` so it no longer reads as an active pre-delivery lane and so any now-satisfied acceptance checklist truthfully reflects the delivered docs/spec state.
 9. Create or update GitHub issues from the task specifications, in dependency order.
-10. Keep labels and Project status truthful:
-    - parent feature issue normally starts as `Backlog` plus `agent:blocked`
-    - ready tasks use `Status=Ready` plus `agent:ready`
+10. Keep labels and Vault routing truthful:
+    - parent feature issue normally starts non-active with `agent:blocked`
+    - ready tasks use `agent:ready`; when a matching Vault ticket exists it must be `Ready` and unclaimed
     - blocked tasks use `agent:blocked`
     - decision-dependent tasks use `agent:needs-human` only when a named human decision, tradeoff, missing input, or authority question is still open
+    - do not add the Issue to GitHub Project or mutate Project Status; create or import a Vault ticket
+      only through the documented Vault workflow
 11. Emit one clear breakdown receipt showing the parent feature issue, implementation tasks, evidence surface, and execution order.
 
 ## Parent feature issue requirements
@@ -292,6 +294,6 @@ On a plan divergence (you did something unexpected, or discovered an earlier art
 When creating issues, include:
 
 - `FEATURE RECEIPT: Issue #123 created or updated as the parent feature issue.`
-- `TASK RECEIPT: Issue #124 created from LOCAL_TEST_BOOTSTRAP/RESET_RUNTIME_STATE, Status=Ready, label=agent:ready.`
+- `TASK RECEIPT: Issue #124 created from LOCAL_TEST_BOOTSTRAP/RESET_RUNTIME_STATE, label=agent:ready, Vault ticket: <id|not-created>.`
 
 If no parent feature issue is needed, say so explicitly and explain why the work should remain a single bounded issue instead.

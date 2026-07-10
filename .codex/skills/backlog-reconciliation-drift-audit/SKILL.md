@@ -1,137 +1,48 @@
 ---
 name: backlog-reconciliation-drift-audit
-description: "Periodically reconcile docs, Issues, Project state, PRs, and owner docs so backlog truth stays stable over time."
+description: "Periodically reconcile docs, Issues, PRs, Builder Ops Vault tickets, and owner docs so backlog truth stays stable over time."
 ---
 
 # Backlog Reconciliation Drift Audit
 
-You are a backlog reconciliation and drift-audit agent for a repo-first, docs-as-code software system.
-This is a Builder System workflow; Product/Runtime SBS impact routes via
-`docs/architecture/SBS_OPERATING_MODEL.md` (see `.codex/skills/README.md`).
+Audit the durable and operational sources of truth: docs, GitHub Issues/PRs, Builder Ops Vault
+tickets and claims, and owner docs. GitHub Project v2 is a deprecated optional projection and is
+not audited or mutated in the Builder System hot path.
 
-Your job is to periodically reconcile docs, GitHub Issues, Project state, merged PRs, and owner docs so backlog truth stays stable over time.
-Treat closed PR cards as part of lifecycle truth, not as an afterthought.
+## Audit chain
 
-This is not feature planning.
-This is anti-drift maintenance.
-It is a cold-path audit, not a hot-path intake workflow.
+`Docs <-> Issues <-> Vault tickets/claims <-> PRs <-> Owner Docs`
 
-## Audit model
-
-`Docs <-> Issues <-> Project <-> PRs <-> Owner Docs`
-
-You must detect:
-
-- doc items that should be backlogged but are not
-- open Issues that are already delivered
-- Issues whose `Source Anchors` no longer match current docs
-- roadmap/plan items that still read as pending after merge
-- delivered code with missing owner-doc writeback
-- backlog items that should have been repaired in a batch but were instead handled one-by-one
-- duplicate Issues covering the same anchored source item
-- Issues in false Project status
-- closed PR cards that still have blank or non-terminal Project status
-- issues missing required contract sections
-- open implementation Issues missing a truthful agent-state label
-- stale `agent:ready` labels on work that is blocked or already done
-- open non-draft PR work with review requested that is not projected to `Review`
-- merged PR cards that remain non-terminal (`In Progress`/`Review`) after merge
-- fixes that were validated on a branch but are not yet present on `origin/main`
-- active work that still presents as `Ready`
-
-## Authority order
-
-1. Current-state owner docs and active SoT docs
-2. Architecture docs
-3. Human-flow docs
-4. Roadmap / forward-line docs
-5. Status / rollout docs
-6. Active plan docs
-
-## Audit procedure
-
-1. Inspect active backlog-source docs.
-2. Inspect open Issues.
-3. Inspect recent merged PRs.
-4. Inspect recent closed PRs that are not merged.
-5. Inspect current Project states.
-6. Match all of them by `Source Anchors`, doc items, and delivered reality.
-7. Confirm recently merged fix PRs are actually present on `origin/main` when they claim to resolve projection drift.
-
-For each inspected doc item or issue, classify exactly one state:
-
-- `not backlogged`
-- `backlogged`
-- `in progress`
-- `delivered`
-- `closed`
-- `superseded`
-- `blocked / needs-human`
-- `not actionable`
-
-For each drift case, recommend one concrete corrective action only:
-
-- `create issue`
-- `update issue`
-- `split issue`
-- `close issue`
-- `relabel issue`
-- `move project status`
-- `update owner doc`
-- `rewrite roadmap/plan wording`
-- `create follow-up issue`
-- `escalate human decision`
+Look for stale or duplicate Issues, missing source anchors or `Verify:` markers, falsely ready
+work, expired or conflicting Vault claims, delivered-but-open Issues, missing owner-doc writeback,
+and roadmap text that still calls delivered work pending.
 
 ## Rules
 
-- Do not create duplicate issues.
-- Do not leave ambiguous `probably done` states.
-- If delivered reality exists, move the truth into the owner doc.
-- Roadmap should remain forward-looking.
-- Status may note delivery, but lasting truth belongs in the owner doc.
-- GitHub remains the canonical backlog-state surface.
-- Treat Project `Status` as the primary lifecycle signal; run Project reads/mutations per
-  `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md`.
-- Treat `agent:ready` and other agent-state labels per `.codex/skills/_shared/LABEL_TAXONOMY.md` as
-  the canonical label semantics; `agent:ready` is the pickup qualifier for `Status=Ready`, not a
-  substitute for `In Progress`, `Review`, or `Done`.
-- For Issue and PR cards, follow `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md` as the single
-  source for required Project Status. Skills reference this file instead of carrying their own copy;
-  do not restate its rows here — an open non-draft PR legitimately projects to `Review` via the
-  shipped Project automation regardless of whether review was explicitly requested, and that is not
-  drift.
-- Prefer one repair action per drift class when the same correction repeats across multiple items; do not churn the board with separate micro-fixes when a batched audit can close the gap.
-- If full-project scan is slow or blocked by API latency, route bulk reads via `gh api` REST rather
-  than GraphQL (shared API budget guidance: `.codex/skills/_shared/CI_WAIT_CONTRACT.md`,
-  `AGENTS.md :: Parallel-agent execution`); run a targeted audit for open issues, open PRs, recently
-  merged PRs, and recently closed-unmerged PRs, then report that fallback explicitly.
+- GitHub Issues are the external task contract; Vault is active delivery truth when its ticket
+  exists; the repository is code and owner-doc truth.
+- Use REST `gh api` for GitHub reads and mutations. Never use GraphQL, `gh project`, or Project-v2
+  field mutations for this workflow.
+- Validate Vaults with `builderops vault validate` before acting on status or claim drift.
+- `agent:ready` requires strict readiness validation and a matching unclaimed `Ready` ticket when
+  Vault-backed. Do not use an absent Project card as evidence of drift.
+- Close delivered Issues only after a PR/commit and acceptance evidence are repo-verifiable; remove
+  all `agent:*` labels on closure.
 
+## Procedure
 
-## Capturing learning
+1. Read owner docs and scoped roadmap/plan sections.
+2. List open Issues and relevant PRs through REST; inspect bodies, labels, comments, links, and
+   delivery evidence.
+3. Validate the Vault and inspect every scoped ticket's folder, YAML status, and claim TTL.
+4. Compare all four surfaces and choose one corrective action per drift class.
+5. Make only explicit, verified corrections: issue body/labels/comments, Vault operations, owner-doc
+   writeback, bounded follow-up issues, or documented escalation.
+6. Emit a receipt with before/after counts and every action.
 
-On a plan divergence (you did something unexpected, or discovered an earlier artifact was wrong), route it through `capture-learning` — it owns the invocation timing and the "name an upstream artifact or don't log" gate.
+## Output
 
-## Output format
-
-1. Drift Findings
-2. Backlog Reconciliation Table
-3. Issues to Create or Update
-4. Project State Corrections
-5. Doc Writeback Corrections
-6. Receipts
-
-Receipt format:
-
-- backlog receipt:
-  `BACKLOG RECEIPT: Issue #123 created or updated, labeled ..., Project Status=Ready|Backlog|...`
-- delivery receipt:
-  `DELIVERY RECEIPT: Issue #123 delivered by PR #456. Merge commit: <sha>. CI: passed. Docs updated: yes/no. Owner doc updated: <path>. Project Status: Done.`
-- closure receipt:
-  `CLOSURE RECEIPT: PR #456 closed as terminal work. Project Status: Done.`
-
-If no drift is found, say that explicitly and still report residual risks:
-
-- missing anchor validation
-- oversized umbrella issues
-- docs that are still too broad to anchor safely
-- project states that depend on manual GitHub updates
+- Backlog truth summary
+- Drift findings by source surface
+- Corrective actions and verification evidence
+- Remaining bounded work or human decisions

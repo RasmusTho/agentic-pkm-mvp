@@ -30,7 +30,8 @@ Use maintenance skills instead of this lane when the work is a repair, audit, or
 ## Core rules
 
 - GitHub Issues are the canonical backlog task contract.
-- GitHub Project is the canonical backlog state machine.
+- Builder Ops Vault is the active operational queue when a ticket exists; GitHub Issues are the
+  canonical external task contract.
 - Before drafting an Issue, classify the work as Product/Runtime System, Builder System, or boundary
   work using `docs/architecture/SBS_OPERATING_MODEL.md :: Builder System Boundary And Work
   Classification`.
@@ -52,7 +53,7 @@ Use maintenance skills instead of this lane when the work is a repair, audit, or
 - Inline doc markers such as `Tracked by: #123` and `Backlog: #123` are secondary convenience notes only.
 - New backlog work must use stable `Source Anchors`.
 - Do not create duplicate Issues.
-- Do not create micro-issues or churn Project state for routine maintenance notes that can be batched into one bounded repair item.
+- Do not create micro-issues or churn queue state for routine maintenance notes that can be batched into one bounded repair item.
 - If a docs item is larger than one bounded implementation issue or clearly needs post-merge validation before owner docs should change, route it through `feature-breakdown` instead of flattening it into one issue.
 - Do not create Issues for vague aspirations, broad cleanup, philosophy, or already delivered work.
 - If an item is too large, split it into multiple bounded Issues with explicit dependency order.
@@ -102,27 +103,24 @@ Skill-specific rule: if an AC cannot carry a resolvable `Verify:` target, the AC
   - `docs/STATUS.md :: SETTINGS-PROVENANCE`
 - Prefer stable anchor IDs over prose fragments.
 
-## Project rules
+## Queue and readiness rules
 
-Run the add-item / Set Project Status operations from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md`.
-
-- Add each new Issue to Project `Agent Delivery Control Plane`.
-- Set Status appropriately:
-  - `Ready` only if bounded, testable, unblocked, and safe for agent execution
-  - every Acceptance Criterion must carry a resolvable `Verify:` target before `Status=Ready`
-  - immediately before applying `agent:ready` or `Status=Ready`, run strict readiness validation
+- `agent:ready` is allowed only when the Issue is bounded, testable, unblocked, and safe for agent execution.
+- Every Acceptance Criterion must carry a resolvable `Verify:` target before applying `agent:ready`.
+- Immediately before applying `agent:ready`, run strict readiness validation
     on the exact body file:
     ```bash
     python3 scripts/validate_issue_readiness.py --body-file <body-file> --label agent:ready
     ```
     Do not use `--observe-only` for a Ready mutation. If validation fails, do not apply
-    `agent:ready` or `Status=Ready`.
-  - otherwise `Backlog`
+    `agent:ready`.
 - Every new implementation Issue should leave creation with exactly one truthful agent-state label.
-- Use `agent:ready` only with `Status=Ready`.
-- Use `agent:blocked` or `agent:needs-human` only for non-active work, normally with `Status=Backlog`.
+- Use `agent:blocked` or `agent:needs-human` only for non-active work.
 - Use `agent:blocked` for dependency waiting, including parent issues waiting on child slices; use `agent:needs-human` only for a named human decision, tradeoff, missing input, or authority question.
 - Do not leave delivered or closed work with any `agent:*` label.
+- Do not add the Issue to GitHub Project or mutate Project Status. If an external Builder Ops Vault
+  exists, create or import a matching ticket through the Vault workflow; otherwise pickup uses the
+  dispatcher/GitHub-label transition fallback.
 
 
 ## Capturing learning
@@ -139,9 +137,9 @@ On a plan divergence (you did something unexpected, or discovered an earlier art
 For each created Issue, include:
 
 - backlog receipt:
-  `BACKLOG RECEIPT: Issue #123 created, labeled ..., added to Project "Agent Delivery Control Plane", Status=Ready|Backlog.`
+  `BACKLOG RECEIPT: Issue #123 created, labeled ..., Vault ticket: <id|not-created>.`
 - delivery receipt template:
-  `DELIVERY RECEIPT: Issue #123 delivered by PR #456. Merge commit: <sha>. CI: passed. Docs updated: yes/no. Owner doc updated: <path>. Project Status: Done.`
+  `DELIVERY RECEIPT: Issue #123 delivered by PR #456. Merge commit: <sha>. CI: passed. Docs updated: yes/no. Owner doc updated: <path>. Vault status: Done|not-applicable.`
 
 If no Issue should be created, say so explicitly and explain why.
 

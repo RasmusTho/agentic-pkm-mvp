@@ -36,11 +36,11 @@ This is the hot-path defect intake lane, not the cold-path maintenance lane.
    - Add one priority: `prio:high`, `prio:med`, or `prio:low` based on impact.
    - Add `agent:ready` only if the scope is bounded, testable, and unblocked.
    - Otherwise add `agent:needs-human` or `agent:blocked`.
-5. Project:
-   - Run the add-item / Set Project Status operations from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md`.
-   - Add the new Issue to Project `Agent Delivery Control Plane`.
-   - Set Status to match the agent-state label: `agent:ready` → `Ready`; otherwise (`agent:blocked`, `agent:needs-human`) → `Backlog`.
-6. Output receipt: issue number, labels set, Project Status set, and whether it was created or updated.
+5. Queue routing:
+   - Do not add the Issue to GitHub Project or mutate Project Status.
+   - If an external Builder Ops Vault exists, create or import the matching ticket using the Vault
+     workflow; otherwise leave the Issue for the dispatcher/GitHub-label transition fallback.
+6. Output receipt: issue number, labels set, Vault ticket outcome, and whether it was created or updated.
 
 ## Heuristics for `agent:ready`
 

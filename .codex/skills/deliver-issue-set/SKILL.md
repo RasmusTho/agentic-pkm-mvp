@@ -40,11 +40,11 @@ Use this mode when the user asks to review, plan, prepare, triage, or make issue
 
 Allowed:
 
-- inspect epic, parent issue, child issues, linked PRs, Project state, owner docs, and source anchors
+- inspect epic, parent issue, child issues, linked PRs, Builder Ops Vault state, owner docs, and source anchors
 - classify issue readiness
 - repair issue contracts when the owner docs make the intended contract unambiguous
 - create bounded issues through `docs-to-issue` or `feature-breakdown` when source docs already support the work
-- correct labels and Project Status for readiness truth
+- correct vault status/claims and GitHub labels for readiness truth
 - produce implementation order, parallelization plan, and verification ledger
 
 Forbidden in planning / readiness mode:
@@ -58,7 +58,9 @@ Forbidden in planning / readiness mode:
 - merge PRs
 - close delivered issues except as an explicit maintenance correction after following `issue-maintenance-change-control`
 
-All GitHub label, Issue body, Project Status, and issue-creation mutations must be executed with explicit `gh` or GraphQL commands, verified, and reported with receipts.
+All vault and GitHub label/Issue mutations must be executed with explicit `builderops vault` and REST
+`gh api` commands, verified, and reported with receipts. Project v2 is an optional cold-path
+projection, not a delivery-mode dependency.
 
 ### Delivery Mode
 
@@ -91,9 +93,9 @@ Delivery rules:
   evidence kind, and an `outcome` once processed. Terminal outcomes use
   `docs/development/DELIVERY_FEEDBACK_LOOP.md :: Terminal outcome vocabulary`; missing `outcome`
   means unresolved and must be surfaced before parent or epic closure.
-- Dispatcher status in run-state is snapshot-only. Recording `{"db_exists": false}` or similar does
-  not start, stop, claim, heartbeat, release, or complete dispatcher work. Keep dispatcher behavior
-  governed by the existing dispatcher flow until a separate child issue changes it.
+- Vault/dispatcher status in run-state is snapshot-only. Recording a vault path, ticket id,
+  `{"db_exists": false}`, or similar does not claim, renew, move, release, or complete work. Use
+  `issue-to-code` for live vault-first claim and dispatcher fallback behavior.
 - Before launching a parallel batch, use the runtime-neutral dry-run dispatch helper when candidate
   data is available:
   `python3 -m app.builderops builderops epic-run-state dispatch-plan --epic-issue-number <N> --run-id <safe-id> --candidates-file <file> --json`.
@@ -108,9 +110,10 @@ Delivery rules:
   lifecycle planner before issuing live mutations:
   `python3 -m app.builderops builderops epic-run-state lifecycle-plan --transition <claim|review|done> --issue-file <file> [--pr-file <file>] --json`.
   The planner separates required reads, proposed label/Project/PR writes, and verification reads. It
-  performs no GitHub, Project, dispatcher, run-state, or agent-spawn mutation; execute any proposed
+  performs no GitHub, Project, vault, dispatcher, run-state, or agent-spawn mutation; execute any proposed
   lifecycle command only through the owning skill (`issue-to-code` for claim, `verification-and-closure`
-  for terminal closure, or issue maintenance for drift repair).
+  for terminal closure, or issue maintenance for drift repair). Ignore Project v2 writes proposed by
+  legacy plan payloads in the hot path.
 - Default to delivering one issue at a time.
 - You may claim multiple issues only when you are immediately assigning them to active sub-agents with isolated worktrees and the parallelization is rational from both token-budget and quality perspectives.
 - Before selecting or dispatching work, classify each candidate as Product/Runtime System,
@@ -124,19 +127,25 @@ Delivery rules:
 - Do not claim more issues than there are ready sub-agent execution slots.
 - Never make speculative claims. Every claimed issue must have an owner agent, worktree/branch plan, validation plan, and expected return receipt.
 - Before dispatching any issue or batch, reconcile the candidate set against current `origin/main` and live GitHub state. Re-read the issue body/state, linked PRs, and existing claim receipts on the current branch tip so already-delivered, superseded, closed, merged, or otherwise stale work is dropped before a slice is assigned. A dispatch plan built from stale local context or pre-merge assumptions is non-authoritative; if `origin/main`, the issue, or a linked PR disagrees with the earlier plan, current repo/GitHub truth wins and the coordinator must recompute the pickup target before dispatch.
-- Confirm each selected issue is claimable before dispatching: `Status=Ready`, labeled `agent:ready`, and carrying no conflicting prior claim. Do not pre-transition status or remove `agent:ready` from the coordinator before dispatch — `issue-to-code` selects only `Ready` + `agent:ready` issues, so pre-claiming would force a compliant sub-agent to reject the assignment. If the dispatcher is unavailable, use GitHub-label-only claim fallback and coordinate from the live issue/project state; there is no dispatcher lease to reconcile. The fast-claim handshake (`Ready -> In Progress` + remove `agent:ready` via `scripts/issue_pickup_claim.sh`) is performed by the sub-agent as the first step of its own `issue-to-code` pickup. An issue counts as dispatched only once that pickup has acquired the lease and recorded a claim receipt comment naming the coordinator session, assignee/sub-agent, worktree/branch plan, and expected return receipt.
+- Confirm each selected issue is claimable before dispatching: matching vault ticket in `Ready` with
+  no active claim plus a bounded GitHub Issue labeled `agent:ready`. Do not pre-claim from the
+  coordinator. `issue-to-code` performs the vault claim and REST label confirmation in the worker's
+  own pickup. If no vault ticket exists, use its dispatcher/GitHub-label transition fallback. An
+  issue counts as dispatched only after the worker holds the one active lease and records a claim
+  receipt naming coordinator session, assignee/sub-agent, worktree/branch plan, and expected return.
 - For each issue, follow `issue-to-code` from claim through implementation and local validation.
 - Use `publish-pr` for branch, commit, push, and PR creation/update.
 - Use `pr-integration` only when the PR needs readiness or repair before verification.
-- Use `verification-and-closure` for merge, Issue closure, Project `Done`, dispatcher release, dependent unblocking, and post-merge owner-doc routing.
+- Use `verification-and-closure` for merge, Issue closure, vault `Done`/lease release (or dispatcher
+  fallback completion), dependent unblocking, and post-merge owner-doc routing.
 - When coordinating autonomous delivery, do not treat an unprotected branch or absent required-status-check rule as permission to skip the process gate. `verification-and-closure` still owns the current CI/checks plus local-review-gate prerequisites before merge.
 - A coordinator waits on many PRs at once — the worst case for the shared API budget. Poll per `_shared/CI_WAIT_CONTRACT.md` (REST check-runs only, ≥60–120s backoff, `scripts/await_pr_checks.sh`); never run concurrent `gh pr checks` loops, which drain the shared GraphQL bucket to zero and stall every sub-agent.
-- After every delivered issue, re-read the parent feature issue / Project state and recompute the next pickup target.
+- After every delivered issue, re-read the parent feature issue, vault queue, and GitHub state and recompute the next pickup target.
 - Stop instead of forcing delivery when an issue is blocked, malformed, stale, already delivered, missing `Verify:` targets, missing authority, or needs human input.
 
 Parallel claim is allowed only when all are true:
 
-- each issue is independently `Status=Ready` and labeled `agent:ready`
+- each issue has an independently Ready, unclaimed vault ticket and is labeled `agent:ready`
 - each issue has concrete `Verify:` targets and source authority
 - dependency order allows parallel work
 - likely touched files, migrations, schemas, release channels, and owner-doc writebacks do not create uncontrolled conflicts
@@ -146,18 +155,18 @@ Parallel claim is allowed only when all are true:
 
 If any parallel worker stalls, fails claim, loses branch/worktree truth, or discovers contract drift, release or reclassify that issue before claiming replacements.
 
-If a sub-agent starts pickup and finds an existing claim receipt or lifecycle claim that does not match
+If a sub-agent starts pickup and finds an existing vault/dispatcher claim receipt that does not match
 the dispatching coordinator, scope the collision check to the active/latest unreleased lease before
 deciding. Because an Issue can be claimed, released, superseded, closed, and re-Readied over its
 lifetime, only the most recent lease that is still open governs pickup. Use the latest evidence across
 issue state, linked PR state, and claim/release/superseded receipts. A non-matching receipt counts as a
 real collision only when it is the latest live lease and has not been released or superseded — i.e.
-the Issue is currently `In Progress` / not `agent:ready`, and no later release/superseded receipt or
+the vault ticket is currently `In Progress` / not `agent:ready`, and no later release/superseded receipt or
 re-Ready transition has reclaimed it. Stale receipts from a prior, already-released or superseded lease
-on a re-Readied Issue (the Issue is back to `Ready` + `agent:ready` with no live foreign lease) do not
+on a re-Readied Issue (the vault ticket is back to `Ready` + `agent:ready` with no live foreign lease) do not
 block valid pickup; treat them as historical and proceed. When the latest lease is a genuine foreign
 claim, stop and report the collision instead of implementing. If the dispatcher is unavailable, resolve
-collision checks against the live issue/project state and explicit lease signal; when live evidence
+collision checks against the live vault/issue state and explicit lease signal; when live evidence
 conflicts, the coordinator must reconcile, release, or choose a different issue before work continues.
 
 Delivery mode is complete only when every in-scope issue is either:
@@ -182,11 +191,12 @@ For an epic or parent feature issue:
 - Close the parent only when repo-verifiable acceptance is satisfied and parent-closure rules allow it.
 - These hub-closure checks are scoped to epic / parent / Project-lane coordination; ordinary single-issue delivery carries only its own issue-contract, `## SBS Impact`, and verification requirements (`docs/development/GOVERNANCE_PROPORTIONALITY.md`).
 
-For a Kanban / Project request:
+For a Kanban / queue request:
 
-- Resolve the Project, view, lane, or status filter before execution.
-- If the user says "all issues on Kanban" without a narrower lane, inspect the shared Project state and define the in-scope set explicitly before mutating anything.
-- Treat `Ready` plus `agent:ready` issues as executable pickup candidates.
+- Resolve the Builder Ops Vault, view, lane, or status filter before execution. Treat Project v2 as
+  a read-only compatibility view if the user explicitly names it.
+- If the user says "all issues on Kanban" without a narrower lane, inspect the shared vault state and define the in-scope set explicitly before mutating anything.
+- Treat unclaimed vault `Ready` tickets plus `agent:ready` issues as executable pickup candidates.
 - Treat `Backlog`, `agent:blocked`, and `agent:needs-human` as non-active until readiness repair proves otherwise.
 - Do not mark blocked or unclear items as delivered just to clear the board.
 
@@ -196,8 +206,8 @@ Treat "several ready issues" as at least 3 executable pickup issues unless the u
 
 If fewer than the target number are ready:
 
-1. Inspect the epic, parent feature issue, related child issues, active docs, Project backlog, and linked PRs.
-2. Run the relevant Project/lifecycle truth audit from `issue-maintenance-change-control` before readiness mutations.
+1. Inspect the epic, parent feature issue, related child issues, active docs, vault backlog, and linked PRs.
+2. Run `builderops vault validate` and reconcile ticket/Issue links before readiness mutations.
 3. Identify candidates that are close to ready.
 4. Repair existing issue contracts only when the source authority is clear.
 5. Use `docs-to-issue` or `feature-breakdown` for new issues, not ad hoc issue creation.
@@ -225,7 +235,7 @@ For each candidate issue, inspect:
 - issue number and title
 - parent / child relationship
 - labels
-- Project Status
+- Vault status and active claim
 - priority
 - linked PRs
 - Product/Runtime System vs Builder System vs boundary classification, with the owner docs required
@@ -354,7 +364,8 @@ Lead with the human summary, then include a section only when it has content —
 6. Blockers And Non-Executable Items (reason and next action per item, stop conditions)
 7. Maintenance And Follow-Ups (issues needing maintenance or breakdown, owner-doc and source-anchor notes)
 
-Receipts for mutations must name the issue number, labels, Project Status, command family used, and verification result.
+Receipts for mutations must name the issue number, labels, vault ticket/status/claim outcome,
+command family used, and verification result.
 
 ## Capturing Learning
 

@@ -7,7 +7,7 @@ description: "Implement a bounded GitHub slice issue as the canonical task contr
 
 You are a builder agent implementing GitHub backlog work in a repo-first, docs-as-code software system.
 
-⚠️ **CRITICAL: All lifecycle state changes (labels, Project Status) must be executed using explicit commands (`gh issue edit`, `gh api graphql`, `gh pr edit`). Do not describe these changes—execute them and verify they succeeded before continuing.**
+⚠️ **CRITICAL: All lifecycle state changes (vault status/claims and GitHub labels/comments) must be executed using explicit `builderops vault` and REST `gh api` commands. Do not describe these changes—execute and verify them before continuing. GitHub Project v2 is not a hot-path dependency.**
 
 Your governing rule:
 Only execute bounded implementation work from a GitHub Issue that is the canonical task contract.
@@ -73,7 +73,7 @@ Apply `docs/development/AGENT_OPERATING_PROTOCOL.md` for the full classification
 ## Canonical workflow
 
 Hot path:
-`Docs -> Feature issue -> Slice issue -> Agent -> Fast claim (Ready -> In Progress + remove agent:ready) -> Publish PR -> PR integration (conditional readiness/repair) -> CI -> Slice verification -> Merge -> Feature validation -> Acceptance -> Owner Doc`
+`Docs -> Feature issue -> Slice issue -> Builder Ops Vault claim -> Agent -> Publish PR -> PR integration (conditional readiness/repair) -> CI -> Slice verification -> Merge -> Feature validation -> Acceptance -> Owner Doc`
 
 Conditional / maintenance path:
 `Issue maintenance -> Agent` and `Publish PR -> PR integration` only when mergeability, CI attachment, or review repair is still needed.
@@ -91,20 +91,22 @@ BuilderOps write is unavailable.
 
 Treat every canonical Issue contract section (`.codex/skills/_shared/ISSUE_CONTRACT.md`) as binding for the governing slice issue.
 
-## GitHub and Project rules
+## Builder Ops Vault and GitHub rules
 
 - GitHub Issue is the canonical implementation task contract.
-- GitHub Project `Agent Delivery Control Plane` is the canonical lifecycle state machine.
-- The agent is responsible for keeping Project status truthful while it works.
-- Do not leave actively worked Issues in `Ready`.
-- Do not leave blocked Issues in `In Progress`.
-- Do not use `Review` only because a PR exists; keep work `In Progress` until review handoff is explicit.
-- Treat `Ready -> In Progress` plus removal of `agent:ready` as the fast claim/lease handshake.
-- Keep that claim minimal and compatible with multi-agent environments: one active lease per Issue, with the label/status transition as the shared signal.
+- Builder Ops Vault is the active lifecycle and lease surface when a ticket exists.
+- A vault claim atomically moves `Ready -> In Progress`; one active claim is allowed per ticket.
+- GitHub Issues/PRs remain the external traceability and publication trail. Remove `agent:ready`
+  through REST after a vault claim succeeds; if that REST confirmation fails, release the vault claim.
+- GitHub Project v2 is a deprecated optional projection. Never query or mutate it in pickup,
+  heartbeat, review handoff, CI wait, merge, or closure loops.
+- Dispatcher is a transition fallback only when no matching vault ticket exists.
+- Do not move to `Review` only because a PR exists; use it only for explicit review handoff.
 
 Allowed labels: the canonical taxonomy in `.codex/skills/_shared/LABEL_TAXONOMY.md`.
 
-Allowed Project statuses: per `.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md` (`Backlog`, `Ready`, `In Progress`, `Review`, `Done`).
+Legacy Project projections, when inspected in a cold-path maintenance run, follow
+`.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md`; they do not qualify or block vault-backed pickup.
 
 For complex or resumed claim/review handoff state, a caller may first generate a local dry-run plan:
 `python3 -m app.builderops builderops epic-run-state lifecycle-plan --transition <claim|review> --issue-file <file> [--pr-file <file>] --json`.
@@ -115,7 +117,9 @@ handoff changes still follow the explicit commands in this skill.
 ## Issue selection rule before implementation
 
 - Work from bounded slice issues, not from parent feature issues that still require decomposition or post-merge validation.
-- Work only from GitHub Issues that are both `Status=Ready` and labeled `agent:ready`.
+- Prefer vault tickets whose folder and YAML status are both `Ready`, have no active claim, and link
+  to a bounded GitHub Issue labeled `agent:ready`. When no vault ticket exists, use the documented
+  dispatcher/GitHub-label transition fallback.
 - Among ready issues, pick one of the highest available priority:
   - `prio:high` before `prio:med` before `prio:low`
 - If several candidate issues share the same priority, use engineering judgment and prefer:
@@ -136,9 +140,31 @@ handoff changes still follow the explicit commands in this skill.
 
 When you start active work on an Issue:
 
-#### Dispatcher Integration
+#### Vault-First Integration
 
-The dispatcher is an optional but preferred coordination layer for multi-agent issue pickup. Use the dispatcher-first flow when available; fall back to GitHub-label-only when the dispatcher is unavailable.
+Use the separate Builder Ops Vault whenever a matching ticket exists. Resolve the root from
+`BUILDEROPS_VAULT_ROOT`; if it is unset, use the path documented in
+`docs/development/BUILDER_OPS_VAULT_QUEUE.md` only when that vault exists.
+
+1. Run workspace pickup preflight: `scripts/issue_pickup_claim.sh --issue <N> --preflight-only`.
+2. Validate the vault: `python3 -m app.builderops builderops vault validate "$BUILDEROPS_VAULT_ROOT" --json`.
+3. Resolve the Ready ticket by ticket id or GitHub issue number, then claim it:
+   `python3 -m app.builderops builderops vault claim "$BUILDEROPS_VAULT_ROOT" <ticket-or-issue> --agent <agent_id> --session <session_id> --json`.
+4. Remove `agent:ready` using the REST-only label endpoint (the existing pickup wrapper may be used
+   after its preflight): `scripts/issue_pickup_claim.sh --issue <N> --skip-preflight`.
+5. If step 4 fails, immediately run `builderops vault release` for the same ticket and agent.
+6. Renew long-running work before TTL expiry (normally every 30 minutes):
+   `python3 -m app.builderops builderops vault renew "$BUILDEROPS_VAULT_ROOT" <ticket> --agent <agent_id> --json`.
+7. On explicit review handoff, move the ticket to `Review`, append a meaningful handoff note, then
+   release the claim. On blocked/abandoned work, move to `Blocked` or `Ready`; those transitions
+   release the claim automatically. Terminal `Done` is owned by `verification-and-closure`.
+
+If a matching vault ticket exists, do not also acquire a dispatcher lease.
+
+#### Dispatcher Transition Fallback
+
+Use the dispatcher only when no matching vault ticket exists. Do not initialize dispatcher state
+merely because a configured vault is temporarily invalid; fail loud and repair the vault invariant.
 
 **Dispatcher availability check:**
 ```bash
@@ -175,23 +201,18 @@ labels, mutate Project status, start sub-agents, or replace GitHub/PR lifecycle 
 **If dispatcher is unavailable (db_exists: false or dispatcher status fails):**
 
 - Skip dispatcher entirely and use GitHub-label-only claim (step 2 below, unchanged current behaviour).
-- **Log the fallback reason in the PR body** (e.g., "Dispatcher unavailable (db_exists: false) — used GitHub-label-only claim").
+- **Log the fallback reason in the PR body** (e.g., "No vault ticket; dispatcher unavailable
+  (db_exists: false) — used REST GitHub-label-only claim").
 
-#### GitHub-Based Claim (Fallback or Non-Dispatcher Flow)
+#### GitHub-Based Claim (Final Fallback)
 
-1. **Ensure Issue is in Project** (if missing, add it first): run the resolve-item query from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md`; an empty `projectItems` list means add-to-Project first.
-
-2. **Fast-claim the Issue via mandatory preflight wrapper:**
+1. **Fast-claim the Issue via mandatory preflight wrapper:**
    ```bash
    scripts/issue_pickup_claim.sh --issue <N>
    ```
 
-3. **Set Issue Project Status to In Progress:** run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` with the `In Progress` option ID.
-
-4. **Verify:**
-   ```bash
-   gh issue view #<N> --json labels,projectItems
-   ```
+2. **Verify with REST** that `agent:ready` is absent and append a claim receipt comment naming the
+   agent/session/worktree. Do not add or mutate a Project item.
 
 ### Action: Issue is Blocked (Mid-Implementation)
 
@@ -202,14 +223,12 @@ If work becomes blocked before or during implementation:
    gh issue edit #<N> --add-label agent:blocked --remove-label agent:ready
    ```
 
-2. **Set Issue Project Status to Backlog:** run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` with the `Backlog` option ID.
+2. **If vault-backed, move the ticket to `Blocked`** (this releases the claim). Otherwise release the
+   dispatcher lease if one exists.
 
 3. **Add a blocking comment to the Issue with explicit reason**
 
-4. **Verify:**
-   ```bash
-   gh issue view #<N> --json labels,projectItems
-   ```
+4. **Verify through vault validation plus REST issue labels/comments.**
 
 **Use `agent:blocked`** when blocked by dependency or setup.  
 **Use `agent:needs-human`** when work requires a human decision or missing authority.
@@ -218,40 +237,33 @@ If work becomes blocked before or during implementation:
 
 When you open a draft PR or continue implementing after opening a PR:
 
-1. **Keep Issue Project Status at In Progress** (no change needed if already set)
+1. **Keep the vault ticket `In Progress` and renew its claim as needed.**
 
 2. **If creating PR, no status change yet** — PR remains draft
 
-3. **Verify Issue still shows In Progress:**
-   ```bash
-   gh issue view #<N> --json projectItems
-   ```
+3. **Verify the vault folder/YAML/claim invariant.**
 
 ### Action: Request Review (Explicit Handoff)
 
 Only move to Review when the PR is the **explicit review handoff artifact** (normally after review is requested):
 
-1. **Move Issue Project Status to Review:** run the Set Project Status mutation from `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md` with the `Review` option ID.
+1. **Move the vault ticket to `Review`, append the review-handoff note, and release the claim.**
 
-2. **Move PR Project Status to Review:** run the same mutation against the PR's project item ID.
+2. **Record the handoff on the GitHub Issue/PR through REST.**
 
-3. **Verify both Issue and PR:**
-   ```bash
-   gh issue view #<N> --json projectItems
-   gh pr view #<PR> --json projectItems
-   ```
+3. **Verify vault validation and the REST receipt.**
 
 **Do not move to Review** just because a PR exists. Move to Review only when review is explicitly requested.
 
 ## Quick Reference: State Transitions
 
-| When | Issue Labels | Issue Status | PR Labels | PR Status |
-|------|-------------|-------------|-----------|-----------|
-| Start work | -agent:ready | In Progress | — | — |
-| Blocked mid-work | +agent:blocked,-agent:ready | Backlog | — | — |
-| Open draft PR | (no change) | In Progress | — | (draft, no Project status) |
-| Request review | (no change) | Review | — | Review |
-| Merge + verified | -agent:* | (verification owns) | — | (Done via verification skill) |
+| When | GitHub labels | Vault status / claim | PR state |
+|------|---------------|----------------------|----------|
+| Start work | -agent:ready | In Progress / active | — |
+| Blocked mid-work | +agent:blocked,-agent:ready | Blocked / released | — |
+| Open draft PR | (no change) | In Progress / active | draft |
+| Request review | (no change) | Review / released | open review handoff |
+| Merge + verified | -agent:* | Done / released | merged |
 
 ## Execution rules
 
@@ -304,16 +316,16 @@ When continuing through anchor drift:
 ## Implementation workflow
 
 1. Select the Issue according to priority and readiness rules.
-2. Run mandatory pickup claim wrapper before any lifecycle mutation:
-   - `scripts/issue_pickup_claim.sh --issue <N>`
-   - This wrapper enforces workspace isolation preflight before removing `agent:ready`.
+2. Run mandatory workspace pickup preflight, then claim through the vault-first procedure above.
+   Use `scripts/issue_pickup_claim.sh --issue <N>` as the final GitHub confirmation/fallback, never
+   before the vault claim when a matching ticket exists.
    - If preflight fails, stop and resolve branch/worktree collisions before claiming.
 3. Run delivered-state preflight before claim when target implementation paths are explicit:
    - Verify whether referenced target modules already exist in the repo.
    - If core implementation already exists, do not proceed as fresh implementation; route to `issue-maintenance-change-control` to correct stale or drifted contract state.
    - Treat passing acceptance tests as supporting evidence, not the sole gate for delivered classification.
    - If source specs still say "Not yet implemented" while shipped code exists, route the spec-state writeback through docs/governance repair rather than opening duplicate implementation work.
-4. **Execute Action: Begin Implementation Work** (update labels, Issue Project Status, verify).
+4. **Execute Action: Begin Implementation Work** (claim vault/fallback lease, update labels, verify).
 5. Run the BuilderOps routing checkpoint and create any needed operational record before the context
    becomes hidden local memory.
 6. Restate the bounded outcome from the Issue.
@@ -398,7 +410,7 @@ If blocked, do not guess. Report the blocker only if one of these is true:
 If blocked:
 
 - do not code past the blocker
-- correct Project status and labels so they reflect the blocked reality
+- move the vault ticket/fallback lease and GitHub labels so they reflect the blocked reality
 - recommend Issue maintenance when the task contract itself needs correction
 
 Do not block solely because an exact anchor label is absent if the governing doc passages still make the bounded task clear.
