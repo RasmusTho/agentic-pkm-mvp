@@ -680,13 +680,18 @@ class PgVectorIndex(VectorIndex):
         allowed to bulk-load from; it never partial-loads or filters, so a
         rebuild from this method is always a faithful mirror of the durable
         index.
+
+        ADR-0059 step 3: each row also carries its recorded ``model``/
+        ``provider`` identity columns (EMBEDREL-06; no DDL — the columns
+        already exist). This lets a cache-through rebuild recognize
+        reconcilable CTI-2 fallback rows without a second query.
         """
         _ensure_tables()
         with _connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT object_id, kind, source_ref, payload, embedding
+                    SELECT object_id, kind, source_ref, payload, embedding, model, provider
                     FROM store_vector_index
                     ORDER BY updated_at
                     """
@@ -699,6 +704,8 @@ class PgVectorIndex(VectorIndex):
                 "source_ref": row["source_ref"],
                 "payload": row["payload"] or {},
                 "embedding": coerce_floats(row["embedding"] or []),
+                "model": row["model"],
+                "provider": row["provider"],
             }
             for row in rows
         ]

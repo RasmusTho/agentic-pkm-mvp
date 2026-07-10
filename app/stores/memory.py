@@ -230,7 +230,16 @@ class MemoryVectorIndex(VectorIndex):
         return f"{identity_generation_component(self._identity)}:{self._seq}:{len(self._entries)}"
 
     def all_rows(self) -> list[dict]:
-        """Return every durable row for a cache rebuild (KERNEL-05, I-D3)."""
+        """Return every durable row for a cache rebuild (KERNEL-05, I-D3).
+
+        Contract uniformity with ``PgVectorIndex.all_rows()`` (ADR-0059 step 3):
+        each row also carries ``model``/``provider``. Unlike the Pg backend, this
+        in-memory store enforces a single store-wide identity at ``upsert()`` time
+        (dev/test-only; mixed-identity detection is Pg-only per
+        ``docs/EMBEDDING_RELIABILITY/DIMENSION_CONSISTENCY_AND_REINDEX.md`` "Out of
+        Scope"), so ``provider`` here reflects the identity snapshot recorded on the
+        entry rather than a genuinely divergent per-row value.
+        """
         return [
             {
                 "object_id": entry.object_id,
@@ -238,6 +247,8 @@ class MemoryVectorIndex(VectorIndex):
                 "source_ref": entry.source_ref,
                 "payload": dict(entry.payload or {}),
                 "embedding": list(entry.embedding or []),
+                "model": entry.model,
+                "provider": entry.identity.provider if entry.identity else None,
             }
             for entry in sorted(self._entries.values(), key=lambda e: e.seq)
         ]
