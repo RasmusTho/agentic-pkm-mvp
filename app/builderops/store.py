@@ -19,6 +19,7 @@ from app.builderops.models import (
     utc_now,
     validate_source_refs,
 )
+from app.builderops.config import validate_db_path_outside_vault
 from app.builderops.schema import DDL_STATEMENTS, SCHEMA_VERSION
 
 
@@ -61,16 +62,23 @@ class SqliteBuilderOpsStore:
     migrations.
     """
 
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, *, read_only: bool = False) -> None:
+        validate_db_path_outside_vault(Path(db_path))
         self._db_path = Path(db_path)
+        self._read_only = read_only
 
     @property
     def db_path(self) -> Path:
         return self._db_path
 
     def _connect(self) -> sqlite3.Connection:
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self._db_path)
+        validate_db_path_outside_vault(self._db_path)
+        if self._read_only:
+            uri = f"{self._db_path.absolute().as_uri()}?mode=ro"
+            conn = sqlite3.connect(uri, uri=True)
+        else:
+            self._db_path.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(self._db_path)
         conn.row_factory = sqlite3.Row
         return conn
 

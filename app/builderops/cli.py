@@ -269,7 +269,11 @@ def vault_paths_command(ctx: click.Context, as_json: bool) -> None:
 @click.argument("root", type=click.Path(file_okay=False, path_type=Path))
 @click.option("--json", "as_json", is_flag=True)
 def vault_init(root: Path, as_json: bool) -> None:
-    _emit(init_vault(root), as_json)
+    try:
+        payload = init_vault(root)
+    except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
 
 
 @vault.command("validate", help="Validate shared-vault separation and ticket status integrity.")

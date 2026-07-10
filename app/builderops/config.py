@@ -48,9 +48,37 @@ def load_paths(
 
 def _validate_separation(paths: BuilderOpsPaths) -> None:
     """Fail closed when mutable local state would enter the shared vault."""
-    if paths.vault_root is None:
-        return
-    vault = paths.vault_root.resolve(strict=False)
-    candidate = paths.db_path.resolve(strict=False)
-    if candidate == vault or vault in candidate.parents:
+    validate_db_path_outside_vault(paths.db_path, vault_root=paths.vault_root)
+
+
+def validate_db_path_outside_vault(
+    db_path: Path,
+    *,
+    vault_root: Path | None = None,
+) -> Path:
+    """Return the DB path after enforcing the shared-vault confinement invariant.
+
+    ``SqliteBuilderOpsStore`` calls this seam as well as configuration loading so
+    explicit API/tool and observe-only callers cannot bypass the invariant.
+    """
+
+    configured_root = vault_root
+    if configured_root is None:
+        raw_root = os.environ.get("BUILDEROPS_VAULT_ROOT", "").strip()
+        configured_root = Path(raw_root).expanduser() if raw_root else None
+    candidate_path = Path(db_path).expanduser()
+    candidate_lexical = candidate_path.absolute()
+    candidate = candidate_path.resolve(strict=False)
+    if configured_root is None:
+        return candidate
+    vault_path = configured_root.expanduser()
+    vault_lexical = vault_path.absolute()
+    vault = vault_path.resolve(strict=False)
+    if (
+        candidate_lexical == vault_lexical
+        or vault_lexical in candidate_lexical.parents
+        or candidate == vault
+        or vault in candidate.parents
+    ):
         raise ValueError("BUILDEROPS_DB_PATH must be outside BUILDEROPS_VAULT_ROOT")
+    return candidate

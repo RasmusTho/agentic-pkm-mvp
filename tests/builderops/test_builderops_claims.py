@@ -7,6 +7,8 @@ import pytest
 from click.testing import CliRunner
 
 from app.builderops.__main__ import _root as builderops_root
+from app.dispatcher.models import TaskRecord
+from app.dispatcher.signboard import _render_task
 
 
 def _env(tmp_path: Path) -> dict[str, str]:
@@ -228,4 +230,253 @@ def test_validate_rejects_incomplete_or_non_utf8_claims(
     assert result.exit_code != 0
     payload = json.loads(result.output.splitlines()[0])
     assert payload["ok"] is False
+    assert any(str(invalid) in error for error in payload["errors"])
+
+
+def test_queue_rejects_symlinked_ticket_and_claim_leaves_without_external_access(
+    tmp_path: Path,
+) -> None:
+    env = _env(tmp_path)
+    vault = Path(env["BUILDEROPS_VAULT_ROOT"])
+    ready = vault / "agent-delivery" / "Ready"
+    claims = vault / ".builderops" / "claims"
+    ready.mkdir(parents=True)
+    claims.mkdir(parents=True)
+    outside_ticket = tmp_path / "outside-ticket.md"
+    outside_ticket.write_text(
+        '---\nid: "BMI-01"\nstatus: "Ready"\n---\n\n# outside\n',
+        encoding="utf-8",
+    )
+    outside_claim = tmp_path / "outside-claim.json"
+    outside_claim.write_text(
+        json.dumps(
+            {
+                "ticket_id": "BMI-01",
+                "agent": "codex",
+                "claimed_at": "2026-07-10T08:00:00Z",
+                "expires_at": "2026-07-10T09:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    try:
+        (ready / "BMI-01.md").symlink_to(outside_ticket)
+        (claims / "BMI-01-codex-external.json").symlink_to(outside_claim)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not supported on this platform")
+
+    validated = _run(["vault", "validate", str(vault), "--json"], env)
+    claimed = _run(
+        ["vault", "claim", str(vault), "BMI-01", "--agent", "codex", "--json"],
+        env,
+    )
+    released = _run(
+        ["vault", "release", str(vault), "BMI-01", "--agent", "codex", "--json"],
+        env,
+    )
+
+    assert validated.exit_code != 0
+    assert "symlink" in validated.output.lower()
+    assert claimed.exit_code != 0
+    assert released.exit_code != 0
+    assert outside_ticket.exists()
+    assert outside_claim.exists()
+
+
+def test_queue_rejects_symlinked_agent_delivery_ancestor_for_claim_and_release(
+    tmp_path: Path,
+) -> None:
+    env = _env(tmp_path)
+    vault = Path(env["BUILDEROPS_VAULT_ROOT"])
+    aliased_delivery = vault / "aliased-delivery"
+    _ticket(vault / "alias-source")
+    source_delivery = vault / "alias-source" / "agent-delivery"
+    aliased_delivery.parent.mkdir(parents=True, exist_ok=True)
+    source_delivery.rename(aliased_delivery)
+    try:
+        (vault / "agent-delivery").symlink_to(aliased_delivery, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not supported on this platform")
+
+    claimed = _run(
+        ["vault", "claim", str(vault), "BMI-01", "--agent", "codex", "--json"],
+        env,
+    )
+    released = _run(
+        ["vault", "release", str(vault), "BMI-01", "--agent", "codex", "--json"],
+        env,
+    )
+
+    assert claimed.exit_code != 0
+    assert "agent-delivery root must not be a symlink" in claimed.output
+    assert released.exit_code != 0
+    assert "agent-delivery root must not be a symlink" in released.output
+    assert not (vault / ".builderops").exists()
+
+
+@pytest.mark.parametrize(
+    "frontmatter",
+    [
+        'status: "Ready"',
+        'id: "BMI-01"',
+        'id: "BMI-01"\nid: "BMI-02"\nstatus: "Ready"',
+        '- id\n- status',
+        '? [a, b]\n: x\nid: "BMI-01"\nstatus: "Ready"',
+        'id: 123\nstatus: "Ready"',
+        'id: "BMI-01"\nstatus: ["Ready"]',
+        'id: "BMI-01"\nstatus: "ready"\ncolumn: 5',
+        'id: "BMI-01"\nstatus: "unknown"',
+    ],
+)
+def test_queue_rejects_incomplete_or_ambiguous_ticket_frontmatter(
+    tmp_path: Path,
+    frontmatter: str,
+) -> None:
+    env = _env(tmp_path)
+    vault = Path(env["BUILDEROPS_VAULT_ROOT"])
+    ticket = vault / "agent-delivery" / "Ready" / "BMI-01.md"
+    ticket.parent.mkdir(parents=True)
+    ticket.write_text(f"---\n{frontmatter}\n---\n\n# ticket\n", encoding="utf-8")
+
+    validated = _run(["vault", "validate", str(vault), "--json"], env)
+    claimed = _run(
+        ["vault", "claim", str(vault), "BMI-01", "--agent", "codex", "--json"],
+        env,
+    )
+
+    assert validated.exit_code != 0
+    assert claimed.exit_code != 0
+    assert not list((vault / ".builderops" / "claims").glob("*.json"))
+
+
+def test_queue_rejects_non_utf8_ticket_without_crashing(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    vault = Path(env["BUILDEROPS_VAULT_ROOT"])
+    ticket = vault / "agent-delivery" / "Ready" / "BMI-01.md"
+    ticket.parent.mkdir(parents=True)
+    ticket.write_bytes(b"---\nid: BMI-01\nstatus: Ready\n---\n\xff\xfe")
+
+    validated = _run(["vault", "validate", str(vault), "--json"], env)
+    claimed = _run(
+        ["vault", "claim", str(vault), "BMI-01", "--agent", "codex", "--json"],
+        env,
+    )
+
+    assert validated.exit_code != 0
+    assert str(ticket) in validated.output
+    assert claimed.exit_code != 0
+    assert "unable to read ticket" in claimed.output
+
+
+def test_dispatcher_signboard_ticket_round_trips_vault_validation_and_claim(
+    tmp_path: Path,
+) -> None:
+    env = _env(tmp_path)
+    vault = Path(env["BUILDEROPS_VAULT_ROOT"])
+    ticket = vault / "agent-delivery" / "Ready" / "github-issue-3289.md"
+    ticket.parent.mkdir(parents=True)
+    ticket.write_text(
+        _render_task(
+            TaskRecord(
+                task_id="github-issue-3289",
+                issue_number=3289,
+                title="Configure external Yggdrasil artifact vault",
+                status="ready",
+                priority="high",
+                source_anchor_refs=["github:issue:3289"],
+                created_at="2026-07-10T08:00:00Z",
+                updated_at="2026-07-10T08:00:00Z",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    validated = _run(["vault", "validate", str(vault), "--json"], env)
+    claimed = _run(
+        [
+            "vault",
+            "claim",
+            str(vault),
+            "github-issue-3289",
+            "--agent",
+            "codex",
+            "--json",
+        ],
+        env,
+    )
+
+    assert validated.exit_code == 0, validated.output
+    assert claimed.exit_code == 0, claimed.output
+
+
+def test_queue_operations_reject_symlinked_vault_root_without_external_access(
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path / "outside"
+    _ticket(outside)
+    outside_sqlite = outside / "external.sqlite3"
+    outside_sqlite.write_bytes(b"SQLite format 3\x00" + b"external-marker")
+    alias = tmp_path / "shared-alias"
+    try:
+        alias.symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not supported on this platform")
+    env = {
+        "BUILDEROPS_VAULT_ROOT": str(alias),
+        "BUILDEROPS_DB_PATH": str(tmp_path / "local" / "builderops.sqlite3"),
+    }
+
+    validated = _run(["vault", "validate", str(alias), "--json"], env)
+    claimed = _run(
+        ["vault", "claim", str(alias), "BMI-01", "--agent", "codex", "--json"],
+        env,
+    )
+    released = _run(
+        ["vault", "release", str(alias), "BMI-01", "--agent", "codex", "--json"],
+        env,
+    )
+
+    assert validated.exit_code != 0
+    assert "root must not be a symlink" in validated.output
+    assert claimed.exit_code != 0
+    assert released.exit_code != 0
+    assert outside_sqlite.read_bytes() == b"SQLite format 3\x00" + b"external-marker"
+    assert not (outside / ".builderops").exists()
+
+
+@pytest.mark.parametrize(
+    ("claimed_at", "expires_at"),
+    [
+        ("2026-07-10T08:00:00", "2026-07-10T09:00:00Z"),
+        ("2026-07-10T08:00:00Z", "2026-07-10T08:00:00Z"),
+        ("2026-07-10T09:00:00Z", "2026-07-10T08:00:00Z"),
+    ],
+)
+def test_queue_rejects_invalid_claim_time_windows(
+    tmp_path: Path,
+    claimed_at: str,
+    expires_at: str,
+) -> None:
+    env = _env(tmp_path)
+    vault = Path(env["BUILDEROPS_VAULT_ROOT"])
+    _ticket(vault)
+    claims = vault / ".builderops" / "claims"
+    claims.mkdir(parents=True)
+    invalid = claims / "BMI-01-codex-invalid.json"
+    invalid.write_text(
+        json.dumps(
+            {
+                "ticket_id": "BMI-01",
+                "agent": "codex",
+                "claimed_at": claimed_at,
+                "expires_at": expires_at,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run(["vault", "validate", str(vault), "--json"], env)
+
+    assert result.exit_code != 0
+    payload = json.loads(result.output.splitlines()[0])
     assert any(str(invalid) in error for error in payload["errors"])

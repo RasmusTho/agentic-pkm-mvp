@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 
 import pytest
 from click.testing import CliRunner
 
 from app.builderops.__main__ import _root as builderops_root
+from app.builderops.boundary import BuilderOpsBoundary
+from app.builderops.completeness_report import load_records_from_db
 from app.builderops.config import load_paths
+from app.builderops.store import SqliteBuilderOpsStore
 
 
 def _run(args: list[str], env: dict[str, str]):
@@ -149,3 +153,127 @@ def test_validate_rejects_nested_sqlite_file(
 
     assert result.exit_code != 0
     assert str(nested) in result.output
+
+
+def test_all_builderops_store_entrypoints_reject_sqlite_inside_shared_vault(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault = tmp_path / "shared-vault"
+    vault.mkdir()
+    monkeypatch.setenv("BUILDEROPS_VAULT_ROOT", str(vault))
+
+    direct_path = vault / "direct.sqlite3"
+    with pytest.raises(ValueError, match="outside BUILDEROPS_VAULT_ROOT"):
+        SqliteBuilderOpsStore(direct_path).initialize()
+    assert not direct_path.exists()
+
+    boundary_path = vault / "boundary.sqlite3"
+    with pytest.raises(ValueError, match="outside BUILDEROPS_VAULT_ROOT"):
+        BuilderOpsBoundary.from_path(boundary_path)
+    assert not boundary_path.exists()
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    for name, open_store in (
+        ("direct-link.sqlite3", lambda path: SqliteBuilderOpsStore(path).initialize()),
+        ("boundary-link.sqlite3", lambda path: BuilderOpsBoundary.from_path(path)),
+    ):
+        linked_path = vault / name
+        target = outside / name
+        try:
+            linked_path.symlink_to(target)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks not supported on this platform")
+        with pytest.raises(ValueError, match="outside BUILDEROPS_VAULT_ROOT"):
+            open_store(linked_path)
+        assert not target.exists()
+
+    readable_target = outside / "completeness.sqlite3"
+    monkeypatch.delenv("BUILDEROPS_VAULT_ROOT")
+    SqliteBuilderOpsStore(readable_target).initialize()
+    monkeypatch.setenv("BUILDEROPS_VAULT_ROOT", str(vault))
+    linked_report = vault / "completeness.sqlite3"
+    linked_report.symlink_to(readable_target)
+
+    records, storage = load_records_from_db(linked_report)
+
+    assert records is None
+    assert storage["available"] is False
+    assert storage["reason"] == "unreadable_builderops_db"
+
+
+def test_completeness_report_is_read_only_across_missing_path_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "builderops.sqlite3"
+    db_path.write_bytes(b"existing")
+    original_exists = Path.exists
+    raced = False
+
+    def disappears_after_discovery(path: Path) -> bool:
+        nonlocal raced
+        if path == db_path and not raced:
+            raced = True
+            path.unlink()
+            return True
+        return original_exists(path)
+
+    monkeypatch.setattr(Path, "exists", disappears_after_discovery)
+
+    records, storage = load_records_from_db(db_path)
+
+    assert records is None
+    assert storage["available"] is False
+    assert storage["reason"] == "unreadable_builderops_db"
+    assert not os.path.lexists(db_path)
+
+
+@pytest.mark.parametrize("ancestor", ["agent-delivery", ".builderops"])
+def test_shared_vault_bootstrap_rejects_symlinked_ancestors_without_outside_writes(
+    tmp_path: Path,
+    ancestor: str,
+) -> None:
+    vault = tmp_path / "shared-vault"
+    outside = tmp_path / "outside"
+    vault.mkdir()
+    outside.mkdir()
+    try:
+        (vault / ancestor).symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not supported on this platform")
+    env = {
+        "BUILDEROPS_VAULT_ROOT": str(vault),
+        "BUILDEROPS_DB_PATH": str(tmp_path / "local" / "builderops.sqlite3"),
+    }
+
+    result = _run(["vault", "init", str(vault), "--json"], env)
+
+    assert result.exit_code != 0
+    assert "symlink" in result.output.lower()
+    assert list(outside.iterdir()) == []
+
+
+def test_validation_rejects_symlinked_sqlite_candidate_without_following_it(
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "shared-vault"
+    outside = tmp_path / "outside.sqlite3"
+    vault.mkdir()
+    outside.write_bytes(b"SQLite format 3\x00" + b"external-marker")
+    candidate = vault / "linked.sqlite3"
+    try:
+        candidate.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not supported on this platform")
+    env = {
+        "BUILDEROPS_VAULT_ROOT": str(vault),
+        "BUILDEROPS_DB_PATH": str(tmp_path / "local" / "builderops.sqlite3"),
+    }
+
+    result = _run(["vault", "validate", str(vault), "--json"], env)
+
+    assert result.exit_code != 0
+    assert "symlink" in result.output.lower()
+    assert outside.read_bytes() == b"SQLite format 3\x00" + b"external-marker"

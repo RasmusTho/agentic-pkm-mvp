@@ -112,7 +112,7 @@ def load_records_from_db(db_path: Path) -> tuple[list[dict[str, Any]] | None, di
             "reason": "missing_builderops_db",
         }
     try:
-        records = SqliteBuilderOpsStore(db_path).list_records()
+        records = SqliteBuilderOpsStore(db_path, read_only=True).list_records()
     except (sqlite3.Error, OSError, ValueError) as exc:
         return None, {
             "available": False,

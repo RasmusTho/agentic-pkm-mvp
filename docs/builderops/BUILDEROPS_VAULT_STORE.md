@@ -103,6 +103,23 @@ SQLite (`BUILDEROPS_DB_PATH`) remains machine-local and fails closed if configur
 vault. Provider credentials must remain machine-local; these vault commands neither accept nor
 write provider credentials.
 
+The SQLite separation check is a store-level invariant. CLI configuration, explicit API/MCP
+`BuilderOpsBoundary` paths, completeness-report inspection, and direct `SqliteBuilderOpsStore`
+construction all reach the same guard before SQLite can open or create a file. Completeness-report
+inspection opens existing databases in SQLite read-only mode so a discovery/open race cannot create
+a replacement file. The guard checks both lexical and resolved containment, so a database symlink
+located in the shared vault cannot redirect a store open to an outside target.
+
+Treat the shared tree as untrusted file input. Queue operations fail closed on a symlinked vault
+root, pre-existing symlinked queue/claim ancestors, and ticket, claim, or SQLite-candidate leaves rather than following
+them outside the vault. This is a static-entry confinement guarantee, not protection from a
+malicious same-host process swapping filesystem entries between system calls. Queue tickets require
+unique YAML mapping keys plus valid `id` and normalized `status` fields; optional dispatcher
+`column` must agree with status. Advisory claims require filename-safe ticket IDs, non-empty agents,
+timezone-aware timestamps, and an increasing claim interval. Claim filenames remain
+non-authoritative, and BMI-01 does not impose a maximum TTL or future-clock-skew limit because these
+files never grant exclusive ownership.
+
 Use the following operator checks before using a shared vault:
 
 ```bash
