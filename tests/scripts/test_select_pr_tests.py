@@ -122,6 +122,53 @@ def test_3383_shape_scripts_change_still_selects_out_of_subsystem_governance_tes
     assert "tests/governance/test_y.py" in selection.targets
 
 
+def test_docs_file_with_foreign_subsystem_test_still_gets_full_subsystem_coverage() -> None:
+    # A tests/** file OUTSIDE this branch's own blanket target dirs (DOCS_TARGETS)
+    # must still route the PR through the subsystem loop instead of being absorbed
+    # into a narrower docs-only run that drops the rest of that subsystem's tests.
+    selection = select_tests(["docs/foo.md", "tests/watcher/test_x.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("watcher_sync",)
+    assert "tests/watcher" in selection.targets
+    assert "tests/e2e/test_watcher_registry_e2e.py" in selection.targets
+
+
+def test_docs_file_with_unmapped_test_falls_back_to_full_suite() -> None:
+    # An unmapped tests/** path paired with a docs file must still reach the
+    # "no subsystem mapping matched" full-suite safety net, not get swallowed
+    # into a docs-only run that never even considers the subsystem loop.
+    selection = select_tests(["docs/foo.md", "tests/brandnew_subsystem/test_a.py"])
+
+    assert selection.full_suite is True
+    assert "no subsystem mapping matched" in selection.reason
+
+
+def test_deleted_test_file_is_not_appended_to_cli_output(tmp_path: Path) -> None:
+    output = tmp_path / "github-output.txt"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/select_pr_tests.py",
+            "--changed-file",
+            "scripts/x.sh",
+            "--changed-file",
+            "tests/governance/test_does_not_exist_at_head.py",
+            "--github-output",
+            str(output),
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "tests/governance/test_does_not_exist_at_head.py" not in result.stdout
+    text = output.read_text(encoding="utf-8")
+    assert "tests/governance/test_does_not_exist_at_head.py" not in text
+
+
 def test_cli_writes_github_output(tmp_path: Path) -> None:
     output = tmp_path / "github-output.txt"
 
