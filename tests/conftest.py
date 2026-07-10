@@ -208,6 +208,22 @@ def default_vault_layout_env(monkeypatch: pytest.MonkeyPatch):
     yield monkeypatch
 
 
+@pytest.fixture(autouse=True)
+def _reset_retrieval_tuning_cache():
+    """Reset the RetrievalTuning process cache (ADR-0059 D3, #3404) around every test.
+
+    Production code resolves this once per process from settings + env; tests monkeypatch
+    RERANK_*/RETRIEVAL_* env vars per-case, so the cache must not leak a stale resolution from one
+    test into the next.
+    """
+
+    from app.retrieval.tuning import reset_retrieval_tuning_cache
+
+    reset_retrieval_tuning_cache()
+    yield
+    reset_retrieval_tuning_cache()
+
+
 def pytest_addoption(parser) -> None:
     """Provide minimal timeout flags when pytest-timeout is unavailable."""
 

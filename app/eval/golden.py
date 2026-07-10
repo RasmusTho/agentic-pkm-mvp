@@ -11,6 +11,7 @@ import math
 
 from app.retrieval.hybrid import get_store, hybrid_search
 from app.retrieval import hybrid as retrieval_hybrid
+from app.retrieval.tuning import reset_retrieval_tuning_cache
 
 DATA_ROOT = Path("data") / "golden"
 CORPUS_PATH = DATA_ROOT / "corpus.jsonl"
@@ -26,6 +27,14 @@ MEMORY_RECALL_ROUTE_INTENTS = {"recall_into_ask", "low_trust_citation"}
 
 @contextmanager
 def _temporary_env(values: Dict[str, str | None]):
+    """Temporarily set/unset env vars for one eval run.
+
+    ``RERANK_ENABLE``/``RERANK_PROVIDER`` feed the ``RetrievalTuning`` surface (ADR-0059 D3,
+    #3404), which resolves once per process and caches. This harness intentionally toggles those
+    vars *within* a single process (baseline vs. candidate in :func:`evaluate_vs_baseline`), so the
+    cache must be busted on entry and exit or the candidate run would keep serving the baseline's
+    already-cached (stale) rerank config.
+    """
     old = {k: os.environ.get(k) for k in values}
     try:
         for key, value in values.items():
@@ -33,6 +42,7 @@ def _temporary_env(values: Dict[str, str | None]):
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+        reset_retrieval_tuning_cache()
         yield
     finally:
         for key, value in old.items():
@@ -40,6 +50,7 @@ def _temporary_env(values: Dict[str, str | None]):
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+        reset_retrieval_tuning_cache()
 
 
 def _snapshot_store(store) -> List[dict]:

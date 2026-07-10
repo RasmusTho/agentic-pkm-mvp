@@ -63,6 +63,48 @@ This weighted linear fusion is the ratified current topology (see
 encoding** — exact lexical match (BM25) weighted above fuzzy semantic match (embeddings), with a
 small overlap bonus — not an arbitrary tuning artifact.
 
+**Tuning config surface (ADR-0059 D3, #3404):** the fusion weights above, and the rerank gate
+described in *Optional Rerank*, are no longer literals/inline env reads — they come from a single
+typed `RetrievalTuning` config (`app/settings/models.py::RetrievalTuning`), settings-backed like
+`EmbeddingProfiles`, resolved once per process (never a per-query `os.getenv`) by
+`app.retrieval.tuning.get_retrieval_tuning()`. `app/retrieval/hybrid.py::_rank_eligible` reads
+`linear_weights` from it instead of the literal; `app/retrieval/hook_adapter.py` and
+`app/retrieval/hybrid_rerank_hook.py` read the `rerank`/`rerank_top_k` gate from it. With no
+override set anywhere, every field reproduces today's behavior exactly (parity-tested:
+`tests/retrieval/test_retrieval_tuning_config.py::test_default_config_ranking_parity`).
+
+Fields and defaults:
+- `fusion`: `linear` (default; the formula above) | `rrf` (**reserved, not implemented** — selecting
+  it raises `RetrievalStrategyNotImplementedError` at resolution rather than silently falling back;
+  ships behind ADR-0059 D3 step 5 / issue #3407, eval-gated)
+- `linear_weights`: `{bm25: 0.5, embedding: 0.4, overlap: 0.1}` — today's trust encoding, now visible
+  config; override via `RETRIEVAL_LINEAR_WEIGHTS="bm25,embedding,overlap"` (e.g. `"0.5,0.4,0.1"`)
+- `rrf_k`: `60` (reserved; dormant until `fusion="rrf"` ships)
+- `rrf_signal_weights`: `{lexical: 1.0, dense: 0.8}` — reserved per-signal multipliers on
+  `1/(k+rank)`, `lexical >= dense` by default so the trust hierarchy survives a future strategy swap
+  (dormant until `fusion="rrf"` ships)
+- `retrieve_depth`: `500` — **dormant by construction today.** The in-memory cache is full-corpus
+  (every document is already scored regardless of this value); the field exists now so the config
+  shape does not churn later if/when an ANN backend or a non-full-corpus cache makes it meaningful.
+  Documented as dormant, not silently ignored.
+- `rerank`: `off` (default, today's behavior) | `always` (reranks every result through the existing
+  optional rerank hook) | `conditional` (**reserved, not implemented** — a deterministic score-margin
+  gate, not a keyword classifier; selecting it raises `RetrievalStrategyNotImplementedError`; ships
+  behind ADR-0059 D3 step 5 / issue #3407)
+- `rerank_top_k`: `100`
+- `rerank_score_margin`: `0.2` — reserved conditional-gate threshold, dormant until
+  `rerank="conditional"` ships
+
+Env overrides (resolved once at process start, not per query): `RETRIEVAL_FUSION`,
+`RETRIEVAL_LINEAR_WEIGHTS`, `RETRIEVAL_RRF_K`, `RETRIEVAL_RRF_SIGNAL_WEIGHTS`,
+`RETRIEVAL_RETRIEVE_DEPTH`, `RETRIEVAL_RERANK`, `RETRIEVAL_RERANK_TOP_K`,
+`RETRIEVAL_RERANK_SCORE_MARGIN`. A junk override value fails loud (raises) rather than silently
+reverting to the default. The existing `RERANK_ENABLE`/`RERANK_TOP_K`/`RERANK_PROVIDER` env vars
+keep working as overrides into this surface (compat): `RERANK_ENABLE` truthy maps to `rerank="always"`
+when the new `RETRIEVAL_RERANK` knob is unset; `RERANK_TOP_K` maps to `rerank_top_k` when
+`RETRIEVAL_RERANK_TOP_K` is unset; `RERANK_PROVIDER` is unrelated to this config shape and continues
+to select the reranker implementation directly (`app/retrieval/rerank/provider.py`).
+
 **Live serving path — durable index via a cache-through (KERNEL-05, #2870; G1res-1, #2981):** the
 served source of truth is the durable Postgres/pgvector index (`PgVectorIndex` /
 `store_vector_index`). The in-process memory store (`MemoryHybridStore` in `app/retrieval/hybrid.py`)
@@ -95,12 +137,17 @@ metadata-filtered hybrid with **rerank off by default** (`RERANK_ENABLE` unset/f
 Rerank*).
 
 **Named future work (not current behavior):** RRF (Reciprocal Rank Fusion) over the weighted linear
-sum, HyDE / query expansion, and provenance-aware / low-trust signal weights are deferred behind the
-future `SearchPort` boundary (`docs/ROADMAP.md :: Abstraction Layer Hardening`). Adopting any of them
-is a new decision (a new ADR superseding ADR-0024); none changes the current scoring above. One such
-decision is already taken but not yet enacted: Episode-closure decay — a derived, post-fusion rank
-multiplier per `docs/adr/ADR-0058-event-horizon-closure-decay.md` (Accepted 2026-07-10), landing via
-ERE-06 (#3181); until that slice merges it is not current scoring behavior.
+sum is no longer an undecided placeholder — `docs/adr/ADR-0059-unified-retrieval-path-pgvector-read-authority.md`
+(Accepted, owner-ratified 2026-07-10) is the ADR-0024-anticipated "new ADR" that adopts it as a
+selectable, config-gated strategy (`RetrievalTuning.fusion="rrf"`, see above); it ships dark (config
+accepts the value, resolution raises not-implemented) until ADR-0059 D3 step 5 / issue #3407 plus an
+eval-gated owner call flips the default. HyDE / query expansion and provenance-aware / low-trust
+signal weights remain undecided future work, deferred behind the future `SearchPort` boundary
+(`docs/ROADMAP.md :: Abstraction Layer Hardening`); adopting either is still a new decision. None of
+this changes the current scoring above. One related decision is already taken but not yet enacted:
+Episode-closure decay — a derived, post-fusion rank multiplier per
+`docs/adr/ADR-0058-event-horizon-closure-decay.md` (Accepted 2026-07-10), landing via ERE-06
+(#3181); until that slice merges it is not current scoring behavior.
 
 ### Scope filter
 Optional operational-scope filtering:
@@ -117,12 +164,19 @@ Optional operational-scope filtering:
   - `docs/CONCEPTS/SALIENCE_AND_ATTENTIONAL_RELEVANCE_CONTRACT.md`
 
 ## Optional Rerank (Current)
-Rerank is opt-in and controlled by env vars:
-- `RERANK_ENABLE=1` to enable reordering
-- `RERANK_TOP_K` to limit how many results the reranker returns explicitly
-- `RERANK_PROVIDER` selects the implementation (`none`, `mock`, `ce_local`, `ce_http`)
+Rerank is opt-in, gated by the `RetrievalTuning.rerank` field (see *Scoring* above; `off` by
+default). It is still controlled by env vars, same effective knobs as before (ADR-0059 D3, #3404 —
+compat preserved):
+- `RERANK_ENABLE=1` to enable reordering (maps to `rerank="always"`)
+- `RERANK_TOP_K` to limit how many results the reranker returns explicitly (maps to `rerank_top_k`)
+- `RERANK_PROVIDER` selects the implementation (`none`, `mock`, `ce_local`, `ce_http`) — unrelated to
+  the `RetrievalTuning` shape, read directly by `app/retrieval/rerank/provider.py`
+- `rerank="conditional"` (deterministic score-margin gate) is reserved, not implemented yet — see
+  *Scoring* above
 
-Implementation lives under `app/retrieval/rerank/` and is applied via `app/retrieval/hook_adapter.py`.
+Implementation lives under `app/retrieval/rerank/` and is applied via `app/retrieval/hook_adapter.py`
+and `app/retrieval/hybrid_rerank_hook.py`, both of which resolve the gate through
+`app.retrieval.tuning.get_retrieval_tuning()`.
 
 ## Output Shape
 `hybrid_search` returns a list of dicts like:

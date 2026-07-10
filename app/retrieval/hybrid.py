@@ -15,6 +15,7 @@ except ImportError:
 
 from app.components.retrieval import embed_docs, embed_query
 from app.retrieval.hook_adapter import maybe_rerank
+from app.retrieval.tuning import get_retrieval_tuning
 
 # Conservative -> permissive ordering of evidence roles (semantic-dimensions.md). Mirrors
 # mimer_runtime/retrieval.py::_EVIDENCE_ORDER — the reference for the invariant SHAPE. The
@@ -495,7 +496,11 @@ def _rank_eligible(
             doc_tokens = set(_tokenize(doc.text, doc.language))
             overlap_bonus[i] = len(token_set & doc_tokens) / max(1, len(token_set))
 
-    combined = 0.5 * bm25_norm + 0.4 * emb_norm + 0.1 * overlap_bonus
+    # ADR-0059 D3 (#3404): fusion weights come from the process-resolved RetrievalTuning config
+    # instead of a literal. get_retrieval_tuning() already raises RetrievalStrategyNotImplementedError
+    # for fusion="rrf" at resolution time, so only "linear" ever reaches here.
+    weights = get_retrieval_tuning().linear_weights
+    combined = weights.bm25 * bm25_norm + weights.embedding * emb_norm + weights.overlap * overlap_bonus
     order = [int(i) for i in np.argsort(-combined)][:k]
 
     results: List[dict] = []
