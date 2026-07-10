@@ -223,12 +223,23 @@ def _is_full_suite_file(path: str) -> bool:
 
 
 def _is_docs_only(paths: tuple[str, ...]) -> bool:
-    return bool(paths) and all(path.startswith("docs/") or path in {"README.md", "AGENTS.md"} for path in paths)
+    # Changed tests/** files never disqualify a docs-only PR: they are scope
+    # signal from the PR's non-test files, appended separately (see
+    # _changed_test_targets) rather than folded into this classification.
+    non_test = tuple(path for path in paths if not path.startswith("tests/"))
+    return bool(non_test) and all(
+        path.startswith("docs/") or path in {"README.md", "AGENTS.md"} for path in non_test
+    )
 
 
 def _is_governance_only(paths: tuple[str, ...]) -> bool:
     governance_prefixes = (".github/", "docs/development/", "AGENTS.md", ".codex/")
-    return bool(paths) and all(path.startswith(governance_prefixes) for path in paths)
+    non_test = tuple(path for path in paths if not path.startswith("tests/"))
+    return bool(non_test) and all(path.startswith(governance_prefixes) for path in non_test)
+
+
+def _changed_test_targets(paths: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(path for path in paths if path.startswith("tests/"))
 
 
 def select_tests(changed_files: list[str]) -> Selection:
@@ -245,14 +256,22 @@ def select_tests(changed_files: list[str]) -> Selection:
     if any(path.startswith("alembic/") or path.startswith("tests/migrations/") for path in paths):
         return Selection(True, (), (), FULL_SUITE_REASONS[1])
 
+    changed_tests = _changed_test_targets(paths)
     targets = list(ALWAYS_TARGETS)
     subsystems: list[str] = []
 
     if _is_docs_only(paths):
-        return Selection(False, ("docs",), _dedupe([*targets, *DOCS_TARGETS]), "docs-only PR")
+        return Selection(
+            False, ("docs",), _dedupe([*targets, *DOCS_TARGETS, *changed_tests]), "docs-only PR"
+        )
 
     if _is_governance_only(paths):
-        return Selection(False, ("governance",), _dedupe([*targets, *GOVERNANCE_TARGETS]), "governance-only PR")
+        return Selection(
+            False,
+            ("governance",),
+            _dedupe([*targets, *GOVERNANCE_TARGETS, *changed_tests]),
+            "governance-only PR",
+        )
 
     for name, prefixes, subsystem_targets in SUBSYSTEMS:
         if any(path.startswith(prefix) for path in paths for prefix in prefixes):
@@ -262,12 +281,14 @@ def select_tests(changed_files: list[str]) -> Selection:
     if not subsystems:
         return Selection(True, (), (), FULL_SUITE_REASONS[2])
 
-    return Selection(False, _dedupe(subsystems), _dedupe(targets), "matched subsystem SoI")
+    return Selection(False, _dedupe(subsystems), _dedupe([*targets, *changed_tests]), "matched subsystem SoI")
 
 
 def changed_files_from_git(base_ref: str, head_ref: str) -> list[str]:
+    # --diff-filter=d excludes deleted paths: only files that still exist at
+    # head are candidates for the changed-tests-always-selected invariant.
     result = subprocess.run(
-        ["git", "diff", "--name-only", f"{base_ref}...{head_ref}"],
+        ["git", "diff", "--name-only", "--diff-filter=d", f"{base_ref}...{head_ref}"],
         check=True,
         capture_output=True,
         text=True,

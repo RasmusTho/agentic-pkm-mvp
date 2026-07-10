@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts.select_pr_tests import select_tests
 
 
@@ -75,6 +77,49 @@ def test_unowned_e2e_file_uses_full_suite_fallback() -> None:
 
     assert selection.full_suite is True
     assert "unowned e2e" in selection.reason
+
+
+@pytest.mark.parametrize(
+    ("changed_files", "expected_subsystems", "changed_test_path"),
+    [
+        pytest.param(
+            ["docs/development/TEST_STRATEGY_HOT_PATH.md", "tests/governance/test_new_thing.py"],
+            ("docs",),
+            "tests/governance/test_new_thing.py",
+            id="docs-only+test",
+        ),
+        pytest.param(
+            [".codex/skills/publish-pr/SKILL.md", "tests/scripts/test_new_helper.py"],
+            ("governance",),
+            "tests/scripts/test_new_helper.py",
+            id="governance-only+test",
+        ),
+        pytest.param(
+            ["scripts/x.sh", "tests/governance/test_y.py"],
+            ("ops_deploy",),
+            "tests/governance/test_y.py",
+            id="subsystem+out-of-subsystem-test",
+        ),
+    ],
+)
+def test_changed_test_files_always_selected(
+    changed_files: list[str], expected_subsystems: tuple[str, ...], changed_test_path: str
+) -> None:
+    selection = select_tests(changed_files)
+
+    assert selection.full_suite is False
+    assert selection.subsystems == expected_subsystems
+    assert changed_test_path in selection.targets
+
+
+def test_3383_shape_scripts_change_still_selects_out_of_subsystem_governance_test() -> None:
+    # Reproduces the #3383 false-green: an ops_deploy-scoped change (scripts/x.sh)
+    # must not silently drop a co-changed tests/governance/** file from the run.
+    selection = select_tests(["scripts/x.sh", "tests/governance/test_y.py"])
+
+    assert selection.full_suite is False
+    assert "ops_deploy" in selection.subsystems
+    assert "tests/governance/test_y.py" in selection.targets
 
 
 def test_cli_writes_github_output(tmp_path: Path) -> None:
