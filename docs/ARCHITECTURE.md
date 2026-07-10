@@ -716,11 +716,12 @@ Development control model:
 
 - Docs define intent, contracts, and owner boundaries.
 - GitHub Issues are the canonical task contract for implementation work.
-- GitHub Project v2 is an optional legacy projection, not a pickup gate.
-- Dispatcher SQLite is the active volatile coordination primitive for claim ordering, leases,
-  heartbeats, and completion; GitHub Issues / PRs / CI remain durable delivery truth.
-- The external BuilderOps Vault stores durable BuilderOps Markdown artifacts. It does not contain
-  dispatcher SQLite or active claims.
+- Builder Ops Vault is the active operational status surface for vault-backed work.
+- Local Agent Issue Dispatcher remains a transition/fallback coordination primitive for claim
+  ordering, leases, heartbeats, and completion until vault-backed queue adoption is complete.
+- GitHub Project v2 is deprecated in the delivery hot path and may exist only as optional/read-only
+  projection; GitHub Issue/PR truth still provides the external trace.
+- Dispatcher SQLite and provider credentials remain local; they are not stored in the external vault.
 - Coding agents are the execution layer that implement bounded Issues.
 - Pull requests are the implementation artifact.
 - CI/test workflows are the validation loop.
@@ -728,7 +729,7 @@ Development control model:
 
 Canonical delivery sequence:
 
-`Docs -> Issue -> Dispatcher claim -> Agent -> PR -> CI -> Feedback`
+`Docs -> Issue -> Builder Ops Vault/dispatcher transition -> Agent -> PR -> CI -> Feedback`
 
 Required Issue contract:
 
@@ -750,7 +751,7 @@ Required label ontology:
 - priority: `prio:high`, `prio:med`, `prio:low`
 - agent qualifiers: `agent:ready`, `agent:blocked`, `agent:needs-human`
 
-Optional legacy Project projection states:
+Required vault status folders and optional legacy Project projection states:
 
 - `Backlog -> Ready -> In Progress -> Review -> Done`
 
@@ -760,12 +761,15 @@ Optional Project field:
 
 Guardrails for builder agents:
 
-- A strictly validated `agent:ready` label is the external pickup qualifier.
-- Project Status is a rebuildable projection and does not gate pickup.
+- Builder Ops Vault `status` and folder location are the primary active lifecycle signal when a vault
+  ticket exists.
+- A strictly validated `agent:ready` label remains the external GitHub pickup qualifier during
+  transition, not a Project-v2 requirement for vault-backed work.
 - `In Progress` covers active implementation and open PR work before explicit review handoff.
 - `Review` begins only when review handoff is explicit, normally after review is requested.
 - Closed or delivered work must not retain `agent:*` labels.
-- Agents only pick Issues with a strictly validated `agent:ready` label and no conflicting dispatcher claim.
+- Agents pick vault tickets with `status=Ready` and no active claim; dispatcher/GitHub-label pickup
+  is the transition fallback.
 - Agents must stay within the linked Issue scope.
 - Agents must respect the linked Issue constraints.
 - Agents must satisfy the linked Issue acceptance criteria before claiming completion.

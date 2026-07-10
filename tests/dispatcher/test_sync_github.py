@@ -76,6 +76,7 @@ SAMPLE_ISSUE_BLOCKED = {
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def tmp_store(tmp_path: Path) -> SqliteStore:
     store = SqliteStore(tmp_path / "test_dispatcher.db")
@@ -99,6 +100,7 @@ def _mock_source(
 # AC: Pull-sync adapter interface exists and conforms to protocol
 # ---------------------------------------------------------------------------
 
+
 def test_pull_sync_adapter_interface() -> None:
     """PullSyncAdapter implements GitHubIssueSource consumer interface."""
     # Protocol inspection: source must provide list_issues and get_rate_limit
@@ -114,6 +116,7 @@ def test_pull_sync_adapter_interface() -> None:
 # ---------------------------------------------------------------------------
 # AC: normalize_github_issue maps fields correctly
 # ---------------------------------------------------------------------------
+
 
 def test_normalize_github_issue_to_task() -> None:
     """normalize_github_issue converts sample GitHub payload to TaskRecord."""
@@ -200,6 +203,7 @@ def test_agent_ready_issue_pickable_without_project_status(tmp_store: SqliteStor
 # AC: Sync state records metadata
 # ---------------------------------------------------------------------------
 
+
 def test_sync_state_records_metadata(tmp_store: SqliteStore) -> None:
     """record_sync_success persists provider identity, pull time, and rate-limit metadata."""
     pull_at = "2026-04-25T08:00:00+00:00"
@@ -234,6 +238,7 @@ def test_sync_state_records_provider_identity(tmp_store: SqliteStore) -> None:
 # ---------------------------------------------------------------------------
 # AC: Sync failure behavior is tested
 # ---------------------------------------------------------------------------
+
 
 def test_sync_failure_handling(tmp_store: SqliteStore) -> None:
     """record_sync_failure persists error state without corrupting task rows."""
@@ -283,6 +288,7 @@ def test_pull_sync_source_error_does_not_corrupt(tmp_store: SqliteStore) -> None
 # AC: Tests do not require GitHub API access
 # ---------------------------------------------------------------------------
 
+
 def test_no_live_github_api_access() -> None:
     """Confirm sync_github module never imports requests/httpx/github at module level."""
     import app.dispatcher.sync_github as mod
@@ -296,6 +302,7 @@ def test_no_live_github_api_access() -> None:
 # ---------------------------------------------------------------------------
 # AC: GitHub Projects is not used in the sync hot path
 # ---------------------------------------------------------------------------
+
 
 def test_sync_adapter_does_not_query_github_projects(tmp_store: SqliteStore) -> None:
     """PullSyncAdapter uses only list_issues and get_rate_limit — no Projects API."""
@@ -360,7 +367,9 @@ def test_pull_sync_emits_event_for_each_reconciled_task(tmp_store: SqliteStore) 
 
 
 def test_pull_sync_json_output_includes_reconciled_count(tmp_store: SqliteStore) -> None:
-    tmp_store.upsert_task(normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00"))
+    tmp_store.upsert_task(
+        normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
+    )
     source = _mock_source([], open_issues=[])
     adapter = PullSyncAdapter(store=tmp_store, source=source)
 
@@ -372,6 +381,7 @@ def test_pull_sync_json_output_includes_reconciled_count(tmp_store: SqliteStore)
 # ---------------------------------------------------------------------------
 # Full pull-sync integration (offline)
 # ---------------------------------------------------------------------------
+
 
 def test_pull_skips_malformed_issue_without_aborting(tmp_store: SqliteStore) -> None:
     """A malformed issue payload is skipped; valid issues still upsert and sync meta records skipped_count."""
@@ -499,6 +509,7 @@ def test_pull_upserts_tasks_into_store(tmp_store: SqliteStore) -> None:
 # AC: Pull-sync preserves local operational state (issue #669)
 # ---------------------------------------------------------------------------
 
+
 def test_pull_reopens_blocked_task_when_github_ready(tmp_store: SqliteStore) -> None:
     """A locally-blocked task transitions to ready when GitHub shows agent:ready."""
     # Pre-seed task as blocked locally
@@ -514,7 +525,9 @@ def test_pull_reopens_blocked_task_when_github_ready(tmp_store: SqliteStore) -> 
 
     stored = tmp_store.get_task("github-issue-101")
     assert stored is not None
-    assert stored.status == "ready", "pull-sync must reopen blocked task when upstream is agent:ready"
+    assert stored.status == "ready", (
+        "pull-sync must reopen blocked task when upstream is agent:ready"
+    )
     assert stored.blocked_reason is None
 
 
@@ -530,7 +543,10 @@ def test_pull_does_not_clobber_active_lease_status(tmp_store: SqliteStore) -> No
     tmp_store.upsert_task(claimed_task)
 
     # in_progress task (use a different issue number)
-    in_progress_issue = {**SAMPLE_ISSUE_LOW, "labels": [{"name": "agent:ready"}, {"name": "prio:low"}]}
+    in_progress_issue = {
+        **SAMPLE_ISSUE_LOW,
+        "labels": [{"name": "agent:ready"}, {"name": "prio:low"}],
+    }
     in_progress_task = normalize_github_issue(in_progress_issue, now=now)
     in_progress_task.status = "in_progress"
     tmp_store.upsert_task(in_progress_task)
@@ -586,7 +602,9 @@ def test_pull_updates_metadata_for_blocked_task(tmp_store: SqliteStore) -> None:
     assert stored is not None
     assert stored.status == "ready"
     assert stored.blocked_reason is None
-    assert stored.title == "Fix critical bug in queue selection (updated)", "title must be refreshed"
+    assert stored.title == "Fix critical bug in queue selection (updated)", (
+        "title must be refreshed"
+    )
     assert stored.priority == "high"
     assert stored.sync_state is not None
     assert stored.sync_state["sync_result"] == "ok"
@@ -706,16 +724,12 @@ def test_gh_cli_get_rate_limit_uses_valid_gh_flags_and_parses_rate_key() -> None
 
     args = mock_run.call_args.args[0]
     assert "--json" not in args, "gh api has no --json flag; use --jq"
-    # The more exhausted pool wins (core here).
+    # Dispatcher issue reads are REST-only, so core is the relevant pool.
     assert result == {"limit": 5000, "remaining": 4973, "reset": 1782894337, "used": 27}
 
 
-def test_gh_cli_get_rate_limit_reports_graphql_pool_when_graphql_exhausted() -> None:
-    """#2746 review finding: the audited exhaustion mode is GraphQL-at-zero
-    with REST core healthy. ``list_open_issues`` spends GraphQL, so the kill
-    switch must see the GraphQL pool — a core-only probe never fires in
-    exactly the scenario the guard exists for.
-    """
+def test_gh_cli_get_rate_limit_ignores_graphql_exhaustion_for_rest_intake() -> None:
+    """GraphQL exhaustion must not disable the REST-only intake path."""
     source = GhCliIssueSource()
     fake_result = MagicMock(
         returncode=0,
@@ -729,7 +743,7 @@ def test_gh_cli_get_rate_limit_reports_graphql_pool_when_graphql_exhausted() -> 
         result = source.get_rate_limit()
 
     assert result is not None
-    assert result["remaining"] == 0, "GraphQL exhaustion must surface as the budget signal"
+    assert result["remaining"] == 4900
 
 
 def test_gh_cli_get_rate_limit_returns_none_on_gh_failure() -> None:
@@ -804,53 +818,33 @@ def test_list_ready_issues_paginates_with_bodies() -> None:
     assert all("repos/RasmusTho/agentic-pkm-mvp/issues" in call for call in calls)
 
 
-def test_list_open_issues_paginates() -> None:
-    """AC4 (#2746 / GHAPI-M3): list_open_issues fetches in bounded cursor pages
-    instead of one ``gh issue list --limit 1000`` burst, with unchanged result
-    semantics (same dict shape: number/title/state/labels/createdAt/updatedAt).
-    """
+def test_list_open_issues_paginates_with_rest() -> None:
+    """The all-open snapshot uses bounded REST pages and stable result semantics."""
     import json as _json
 
     source = GhCliIssueSource()
     pages = [
-        {
-            "data": {
-                "repository": {
-                    "issues": {
-                        "pageInfo": {"hasNextPage": True, "endCursor": "CURSOR-1"},
-                        "nodes": [
-                            {
-                                "number": 101,
-                                "title": "First open issue",
-                                "state": "OPEN",
-                                "labels": {"nodes": [{"name": "agent:ready"}, {"name": "prio:high"}]},
-                                "createdAt": "2026-04-20T10:00:00Z",
-                                "updatedAt": "2026-04-21T12:00:00Z",
-                            }
-                        ],
-                    }
-                }
+        [
+            {
+                "number": 101,
+                "title": "First open issue",
+                "state": "open",
+                "labels": [{"name": "agent:ready"}, {"name": "prio:high"}],
+                "created_at": "2026-04-20T10:00:00Z",
+                "updated_at": "2026-04-21T12:00:00Z",
             }
-        },
-        {
-            "data": {
-                "repository": {
-                    "issues": {
-                        "pageInfo": {"hasNextPage": False, "endCursor": None},
-                        "nodes": [
-                            {
-                                "number": 102,
-                                "title": "Second open issue",
-                                "state": "OPEN",
-                                "labels": {"nodes": []},
-                                "createdAt": "2026-04-19T08:00:00Z",
-                                "updatedAt": "2026-04-19T09:00:00Z",
-                            }
-                        ],
-                    }
-                }
+        ],
+        [
+            {
+                "number": 102,
+                "title": "Second open issue",
+                "state": "open",
+                "labels": [],
+                "created_at": "2026-04-19T08:00:00Z",
+                "updated_at": "2026-04-19T09:00:00Z",
             }
-        },
+        ],
+        [],
     ]
     calls: list[list[str]] = []
 
@@ -858,21 +852,25 @@ def test_list_open_issues_paginates() -> None:
         calls.append(list(args))
         return MagicMock(returncode=0, stdout=_json.dumps(pages[len(calls) - 1]), stderr="")
 
-    with patch("subprocess.run", side_effect=fake_run):
+    with (
+        patch("app.dispatcher.sync_github.OPEN_ISSUES_PAGE_SIZE", 1),
+        patch("subprocess.run", side_effect=fake_run),
+    ):
         issues = source.list_open_issues("RasmusTho/agentic-pkm-mvp")
 
     # Unchanged result semantics.
     assert [issue["number"] for issue in issues] == [101, 102]
-    assert issues[0]["state"] == "OPEN"
+    assert issues[0]["state"] == "open"
     assert issues[0]["labels"] == [{"name": "agent:ready"}, {"name": "prio:high"}]
     assert issues[1]["labels"] == []
     assert issues[0]["createdAt"] == "2026-04-20T10:00:00Z"
     assert issues[0]["updatedAt"] == "2026-04-21T12:00:00Z"
 
-    # Paginated: two bounded page fetches, cursor threaded to the second page.
-    assert len(calls) == 2
-    assert not any("after=CURSOR-1" in arg for arg in calls[0])
-    assert any("after=CURSOR-1" in arg for arg in calls[1])
+    assert len(calls) == 3
+    assert any("page=1" in arg for arg in calls[0])
+    assert any("page=2" in arg for arg in calls[1])
+    assert any("page=3" in arg for arg in calls[2])
+    assert all("graphql" not in command for command in calls)
 
     # No --limit 1000 burst remains anywhere in the issued commands.
     for command in calls:
@@ -891,25 +889,16 @@ def test_list_open_issues_refuses_truncated_snapshot_at_page_cap() -> None:
     from app.dispatcher.sync_github import OPEN_ISSUES_MAX_PAGES
 
     source = GhCliIssueSource()
-    page = {
-        "data": {
-            "repository": {
-                "issues": {
-                    "pageInfo": {"hasNextPage": True, "endCursor": "CURSOR-N"},
-                    "nodes": [
-                        {
-                            "number": 1,
-                            "title": "endless",
-                            "state": "OPEN",
-                            "labels": {"nodes": []},
-                            "createdAt": "2026-04-20T10:00:00Z",
-                            "updatedAt": "2026-04-21T12:00:00Z",
-                        }
-                    ],
-                }
-            }
+    page = [
+        {
+            "number": 1,
+            "title": "endless",
+            "state": "open",
+            "labels": [],
+            "created_at": "2026-04-20T10:00:00Z",
+            "updated_at": "2026-04-21T12:00:00Z",
         }
-    }
+    ]
 
     calls: list[list[str]] = []
 
@@ -917,7 +906,10 @@ def test_list_open_issues_refuses_truncated_snapshot_at_page_cap() -> None:
         calls.append(list(args))
         return MagicMock(returncode=0, stdout=_json.dumps(page), stderr="")
 
-    with patch("subprocess.run", side_effect=fake_run):
+    with (
+        patch("app.dispatcher.sync_github.OPEN_ISSUES_PAGE_SIZE", 1),
+        patch("subprocess.run", side_effect=fake_run),
+    ):
         with pytest.raises(RuntimeError, match="truncated snapshot"):
             source.list_open_issues("RasmusTho/agentic-pkm-mvp")
 

@@ -28,39 +28,13 @@ from scripts.validate_issue_readiness import classify_issue_body
 
 PROVIDER_IDENTITY = "github"
 
-# GHAPI-M3 (#2746): the all-open-issues snapshot is fetched in bounded cursor
-# pages instead of one `gh issue list --limit 1000` burst. 10 pages of 100
-# preserves the previous 1000-issue ceiling.
+# The all-open-issues snapshot is fetched in bounded REST pages instead of a
+# GraphQL/`gh issue list` burst. Ten pages of 100 preserve the existing
+# 1000-issue fail-loud ceiling without spending the shared GraphQL pool.
 OPEN_ISSUES_PAGE_SIZE = 100
 OPEN_ISSUES_MAX_PAGES = 10
 READY_ISSUES_PAGE_SIZE = 100
 READY_ISSUES_MAX_PAGES = 25
-
-OPEN_ISSUES_QUERY = """
-query($owner: String!, $name: String!, $pageSize: Int!, $after: String) {
-  repository(owner: $owner, name: $name) {
-    issues(states: OPEN, first: $pageSize, after: $after,
-           orderBy: {field: CREATED_AT, direction: DESC}) {
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-      nodes {
-        number
-        title
-        state
-        labels(first: 100) {
-          nodes {
-            name
-          }
-        }
-        createdAt
-        updatedAt
-      }
-    }
-  }
-}
-"""
 
 _GITHUB_FAILURE_NETWORK_MARKERS = (
     "connection reset",
@@ -193,10 +167,11 @@ def classify_github_api_failure(
     retry_after_seconds = _parse_retry_after(text, headers)
     reset_epoch = _parse_reset_epoch(headers)
 
-    if (
-        normalized_error_type in {"RESOURCE_LIMITS_EXCEEDED", "NODE_LIMIT_EXCEEDED", "TIMEOUT"}
-        or any(marker in text for marker in _GITHUB_FAILURE_RESOURCE_LIMIT_MARKERS)
-    ):
+    if normalized_error_type in {
+        "RESOURCE_LIMITS_EXCEEDED",
+        "NODE_LIMIT_EXCEEDED",
+        "TIMEOUT",
+    } or any(marker in text for marker in _GITHUB_FAILURE_RESOURCE_LIMIT_MARKERS):
         return GitHubFailureClassification(
             kind="resource_limit",
             http_status=http_status,
@@ -308,10 +283,7 @@ def _ready_validation_failure(payload: dict[str, Any]) -> str | None:
     )
     if report.readiness_classification == "ready_candidate":
         return None
-    return (
-        "agent:ready skipped by strict readiness validation: "
-        f"{report.readiness_classification}"
-    )
+    return f"agent:ready skipped by strict readiness validation: {report.readiness_classification}"
 
 
 def normalize_github_issue(payload: dict[str, Any], now: str | None = None) -> TaskRecord:
@@ -368,6 +340,7 @@ def normalize_github_issue(payload: dict[str, Any], now: str | None = None) -> T
 # ---------------------------------------------------------------------------
 # Sync-state persistence helpers
 # ---------------------------------------------------------------------------
+
 
 def _meta_task_id(provider: str) -> str:
     return f"_sync_meta_{provider}"
@@ -454,6 +427,7 @@ def get_sync_meta(store: DispatcherStore, provider: str) -> dict[str, Any] | Non
 # ---------------------------------------------------------------------------
 # Pull-sync adapter protocol and implementation
 # ---------------------------------------------------------------------------
+
 
 class GitHubIssueSource(Protocol):
     """Minimal interface for a GitHub issue data source.
@@ -545,12 +519,9 @@ class GhCliIssueSource:
     def list_open_issues(self, repo: str, **kwargs: Any) -> list[dict[str, Any]]:
         """List all open issues with labels from the repo.
 
-        GHAPI-M3 (#2746): fetches in bounded cursor pages instead of one
-        ``gh issue list --limit 1000`` burst. Each page is a plain repository
-        ``issues`` GraphQL connection (the same transport class the old
-        ``gh issue list --search`` call used, minus the stricter search pool),
-        stopping early when the last page is reached. Result semantics are
-        unchanged: the same dict shape ``gh issue list --json`` produced.
+        Fetches bounded REST pages and filters pull requests returned by the
+        shared issues endpoint. Result semantics match ``list_issues`` without
+        consuming the shared GraphQL pool.
         """
         import json
         import subprocess
@@ -560,26 +531,22 @@ class GhCliIssueSource:
             raise RuntimeError(f"repo must be 'owner/name', got: {repo!r}")
 
         issues: list[dict[str, Any]] = []
-        after: str | None = None
-        for _page in range(OPEN_ISSUES_MAX_PAGES):
-            args = [
-                "gh",
-                "api",
-                "graphql",
-                "-f",
-                f"query={OPEN_ISSUES_QUERY}",
-                "-f",
-                f"owner={owner}",
-                "-f",
-                f"name={name}",
-                "-F",
-                f"pageSize={OPEN_ISSUES_PAGE_SIZE}",
-            ]
-            if after:
-                args.extend(["-f", f"after={after}"])
+        for page in range(1, OPEN_ISSUES_MAX_PAGES + 1):
             try:
                 result = subprocess.run(
-                    args,
+                    [
+                        "gh",
+                        "api",
+                        f"repos/{owner}/{name}/issues",
+                        "--method",
+                        "GET",
+                        "-f",
+                        "state=open",
+                        "-F",
+                        f"per_page={OPEN_ISSUES_PAGE_SIZE}",
+                        "-F",
+                        f"page={page}",
+                    ],
                     capture_output=True,
                     text=True,
                     check=False,
@@ -587,39 +554,33 @@ class GhCliIssueSource:
             except FileNotFoundError:
                 raise RuntimeError("gh CLI not found; ensure gh is installed and in PATH")
             if result.returncode != 0:
-                raise RuntimeError(f"gh api graphql (open issues) failed: {result.stderr}")
+                raise RuntimeError(f"gh api open issues failed: {result.stderr}")
             payload = json.loads(result.stdout)
-            connection = (
-                ((payload.get("data") or {}).get("repository") or {}).get("issues") or {}
-            )
-            for node in connection.get("nodes") or []:
-                labels = (node.get("labels") or {}).get("nodes") or []
+            if not isinstance(payload, list):
+                raise RuntimeError("gh api open issues returned a non-list payload")
+            for node in payload:
+                if node.get("pull_request"):
+                    continue
+                labels = node.get("labels") or []
                 issues.append(
                     {
                         "number": node.get("number"),
                         "title": node.get("title"),
                         "state": node.get("state"),
                         "labels": [{"name": label.get("name")} for label in labels],
-                        "createdAt": node.get("createdAt"),
-                        "updatedAt": node.get("updatedAt"),
+                        "createdAt": node.get("created_at"),
+                        "updatedAt": node.get("updated_at"),
                     }
                 )
-            page_info = connection.get("pageInfo") or {}
-            if not page_info.get("hasNextPage"):
+            if len(payload) < OPEN_ISSUES_PAGE_SIZE:
                 break
-            after = page_info.get("endCursor")
-            if not after:
-                # Fail loud rather than looping on a broken cursor.
-                raise RuntimeError(
-                    "gh api graphql (open issues) pagination did not return an end cursor"
-                )
         else:
-            # Page cap hit with hasNextPage still true. A silently truncated
+            # Page cap hit with every REST page full. A silently truncated
             # snapshot would let the stale reconcile treat still-open issues
             # as closed and mark their live tasks completed; fail loud so
             # pull() takes its existing snapshot-unavailable path instead.
             raise RuntimeError(
-                f"gh api graphql (open issues) exceeded {OPEN_ISSUES_MAX_PAGES} pages "
+                f"gh api open issues exceeded {OPEN_ISSUES_MAX_PAGES} pages "
                 "with more results remaining; refusing a truncated snapshot"
             )
         return issues
@@ -627,11 +588,9 @@ class GhCliIssueSource:
     def get_rate_limit(self) -> dict[str, Any] | None:
         """Current GitHub API budget signal for the kill switch.
 
-        Returns the more exhausted of the REST core and GraphQL pools:
-        ``list_open_issues`` spends GraphQL, and the audited exhaustion mode
-        (GHAPI, 2026-06-29) is GraphQL-at-zero with REST core healthy — a
-        core-only probe would never fire exactly when the guard matters.
-        Shape matches the old ``.rate`` payload (``remaining``/``reset``).
+        Both issue-list paths use REST core, so GraphQL exhaustion must not
+        disable the dispatcher/vault intake path. Shape matches the old
+        ``.rate`` payload (``remaining``/``reset``).
         """
         import json
         import subprocess
@@ -645,13 +604,9 @@ class GhCliIssueSource:
             )
             if result.returncode == 0:
                 resources = json.loads(result.stdout)
-                pools = [
-                    pool
-                    for pool in (resources.get("core"), resources.get("graphql"))
-                    if isinstance(pool, dict) and pool.get("remaining") is not None
-                ]
-                if pools:
-                    return min(pools, key=lambda pool: pool["remaining"])
+                core = resources.get("core")
+                if isinstance(core, dict) and core.get("remaining") is not None:
+                    return core
         except Exception:
             pass
         return None
@@ -687,6 +642,7 @@ class PullSyncAdapter:
         skipped. Essential read (agent:ready list) is always attempted.
         """
         import time as _time
+
         pull_at = datetime.now(timezone.utc).isoformat()
         rate_limit: dict[str, Any] | None = None
         try:
@@ -883,7 +839,11 @@ class PullSyncAdapter:
                                 task_id=task.task_id,
                                 event_type="sync.reconciled",
                                 actor=f"sync:{self._provider}",
-                                payload={"from": "blocked", "to": "ready", "reason": "agent-ready-label-present"},
+                                payload={
+                                    "from": "blocked",
+                                    "to": "ready",
+                                    "reason": "agent-ready-label-present",
+                                },
                             )
                         )
                         reconciled += 1

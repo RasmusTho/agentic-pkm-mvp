@@ -65,6 +65,21 @@ from app.builderops.retrospective_closure import (
     build_retrospective_closure_ledger,
 )
 from app.builderops.store import SqliteBuilderOpsStore
+from app.builderops.vault_queue import (
+    VaultQueueError,
+    claim_ticket,
+    import_dispatcher_tasks,
+    init_vault,
+    move_ticket,
+    next_ticket,
+    note_ticket,
+    release_ticket,
+    renew_ticket,
+    ticket_payload,
+    validate_vault,
+)
+from app.dispatcher.config import load_paths as load_dispatcher_paths
+from app.dispatcher.store import SqliteStore as DispatcherSqliteStore
 
 
 def _parse_json_object(value: str | None, *, field: str) -> dict[str, Any]:
@@ -826,6 +841,166 @@ def ready_repair_batch_plan(
     except ReadyRepairBatchError as exc:
         raise click.ClickException(str(exc)) from exc
     _emit(report, as_json)
+
+
+@builderops.group("vault", help="Operate the file-first Builder Ops Vault queue.")
+def vault() -> None:
+    """Markdown/YAML active work queue helpers."""
+
+
+@vault.command("init", help="Create vault folders and AGENTS.md contract.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.option("--json", "as_json", is_flag=True)
+def vault_init(root: Path, as_json: bool) -> None:
+    _emit(init_vault(root), as_json)
+
+
+@vault.command(
+    "import-dispatcher",
+    help="Plan or apply a one-time import from the dispatcher transition store.",
+)
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.option("--db-path", type=click.Path(dir_okay=False, path_type=Path), default=None)
+@click.option("--apply", "apply_import", is_flag=True, help="Write planned tickets.")
+@click.option("--json", "as_json", is_flag=True)
+def vault_import_dispatcher(
+    root: Path,
+    db_path: Path | None,
+    apply_import: bool,
+    as_json: bool,
+) -> None:
+    resolved_db = (db_path or load_dispatcher_paths().db_path).expanduser()
+    if not resolved_db.is_file():
+        raise click.ClickException(f"dispatcher database not found: {resolved_db}")
+    store = DispatcherSqliteStore(resolved_db)
+    try:
+        payload = import_dispatcher_tasks(
+            root,
+            [task.to_dict() for task in store.list_tasks()],
+            apply=apply_import,
+        )
+    except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    payload["dispatcher_db"] = str(resolved_db)
+    _emit(payload, as_json)
+
+
+@vault.command("validate", help="Validate vault ticket and claim invariants.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.option("--json", "as_json", is_flag=True)
+def vault_validate(root: Path, as_json: bool) -> None:
+    payload = validate_vault(root)
+    _emit(payload, as_json)
+    if not payload["ok"]:
+        raise click.ClickException("Builder Ops Vault validation failed")
+
+
+@vault.command("next", help="Return the next Ready ticket without an active claim.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.option("--json", "as_json", is_flag=True)
+def vault_next(root: Path, as_json: bool) -> None:
+    try:
+        ticket = next_ticket(root)
+    except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit({"ticket": ticket_payload(ticket) if ticket else None}, as_json)
+
+
+@vault.command("claim", help="Claim a vault ticket using a transient claim file.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.argument("ticket_ref")
+@click.option("--agent", required=True)
+@click.option("--session", default=None)
+@click.option("--ttl-minutes", default=120, show_default=True, type=int)
+@click.option("--takeover-stale", is_flag=True)
+@click.option("--json", "as_json", is_flag=True)
+def vault_claim(
+    root: Path,
+    ticket_ref: str,
+    agent: str,
+    session: str | None,
+    ttl_minutes: int,
+    takeover_stale: bool,
+    as_json: bool,
+) -> None:
+    try:
+        payload = claim_ticket(
+            root,
+            ticket_ref,
+            agent=agent,
+            session=session,
+            ttl_minutes=ttl_minutes,
+            takeover_stale=takeover_stale,
+        )
+    except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@vault.command("renew", help="Renew an active vault claim TTL.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.argument("ticket_ref")
+@click.option("--agent", required=True)
+@click.option("--ttl-minutes", default=120, show_default=True, type=int)
+@click.option("--json", "as_json", is_flag=True)
+def vault_renew(
+    root: Path,
+    ticket_ref: str,
+    agent: str,
+    ttl_minutes: int,
+    as_json: bool,
+) -> None:
+    try:
+        payload = renew_ticket(
+            root,
+            ticket_ref,
+            agent=agent,
+            ttl_minutes=ttl_minutes,
+        )
+    except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@vault.command("move", help="Move a vault ticket to a status folder and update YAML.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.argument("ticket_ref")
+@click.argument("status")
+@click.option("--actor", default="cli")
+@click.option("--json", "as_json", is_flag=True)
+def vault_move(root: Path, ticket_ref: str, status: str, actor: str, as_json: bool) -> None:
+    try:
+        payload = move_ticket(root, ticket_ref, status, actor=actor)
+    except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@vault.command("note", help="Append a meaningful note receipt to a vault ticket.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.argument("ticket_ref")
+@click.argument("note")
+@click.option("--actor", default="cli")
+@click.option("--json", "as_json", is_flag=True)
+def vault_note(root: Path, ticket_ref: str, note: str, actor: str, as_json: bool) -> None:
+    try:
+        payload = note_ticket(root, ticket_ref, note, actor=actor)
+    except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@vault.command("release", help="Release a vault claim file.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.argument("ticket_ref")
+@click.option("--agent", required=True)
+@click.option("--json", "as_json", is_flag=True)
+def vault_release(root: Path, ticket_ref: str, agent: str, as_json: bool) -> None:
+    try:
+        payload = release_ticket(root, ticket_ref, agent=agent)
+    except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
 
 
 @builderops.group("epic-run-state", help="Record local deliver-issue-set epic run state.")
