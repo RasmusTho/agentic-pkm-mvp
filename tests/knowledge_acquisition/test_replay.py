@@ -192,7 +192,7 @@ def test_replay_from_raw_no_source_egress_equivalent_output(tmp_path: Path) -> N
         conn=conn,
     )
     assert first.source_egress == 0
-    assert first.equivalent is True
+    assert first.equivalent is False
 
     # Replay again: derived levels re-run, candidate is first-write-wins preserved.
     second = run_replay(
@@ -247,6 +247,24 @@ def test_candidate_byte_identical_across_replay(tmp_path: Path) -> None:
     assert note_path.read_bytes() == bytes_first
 
 
+def test_fresh_candidate_write_does_not_claim_byte_identity(tmp_path: Path) -> None:
+    """A replay that freshly writes the candidate note is not byte-comparable.
+
+    The candidate renderer includes current timestamps. Until the note exists and
+    first-write-wins can preserve its bytes, the receipt must not claim byte identity.
+    """
+    conn = FakeOutboxConn()
+    vault = _vault(tmp_path / "vault")
+    raw_id = _persist_raw()
+
+    receipt = run_replay(raw_id, vault_context=vault, write_guard=_allowing_guard(), conn=conn)
+
+    candidate = next(stage for stage in receipt.stages if stage.stage == "candidate")
+    assert candidate.status == "written"
+    assert candidate.equivalence == "fresh_write_not_byte_comparable"
+    assert receipt.equivalent is False
+
+
 def _candidate_stage_path(receipt) -> str:
     for stage in receipt.stages:
         if stage.stage == "candidate":
@@ -275,6 +293,30 @@ def test_replay_runtime_guard_blocks_egress_seam(tmp_path: Path, monkeypatch: py
 
     with pytest.raises(SourceEgressBlockedError):
         run_replay(raw_id, vault_context=vault, write_guard=_allowing_guard())
+
+
+def test_replay_runtime_guard_stays_on_when_flag_false(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The compatibility flag cannot relax the KA-06 zero-source-egress guarantee."""
+    vault = _vault(tmp_path / "vault")
+    raw_id = _persist_raw()
+
+    import app.knowledge_acquisition.replay as replay_mod
+
+    def _normalize_that_egresses(raw_record):
+        youtube_plugin.yt_dlp_extract_info("https://youtube.com/watch?v=x")
+        raise AssertionError("unreachable: guard should have raised")
+
+    monkeypatch.setattr(replay_mod, "normalize", _normalize_that_egresses)
+
+    with pytest.raises(SourceEgressBlockedError):
+        run_replay(
+            raw_id,
+            vault_context=vault,
+            write_guard=_allowing_guard(),
+            assert_no_source_egress=False,
+        )
 
 
 def test_replay_dead_letters_normalize_failure(tmp_path: Path) -> None:

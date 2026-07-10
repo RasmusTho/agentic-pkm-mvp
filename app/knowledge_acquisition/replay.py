@@ -279,8 +279,8 @@ def run_replay(
     already knew about.
 
     ``assert_no_source_egress`` is honored as always-on: the egress guard is installed
-    regardless. The flag only governs whether the guard is active (it always is) — kept in
-    the signature so the CLI's `--assert-no-source-egress` maps to a real, named parameter.
+    regardless. The flag is retained for CLI/API compatibility with the named guarantee,
+    not as an escape hatch.
     """
     object_id, record = _resolve_raw_record(raw_record_id)
     content_identity = record.get("content_identity")
@@ -290,8 +290,7 @@ def run_replay(
         )
 
     egress_seen = 0
-    guard = _source_egress_guard() if assert_no_source_egress else contextlib.nullcontext()
-    with guard:
+    with _source_egress_guard():
         # Fresh-process equivalent: wipe the in-process extraction cache so the replay
         # genuinely re-runs every derived level from raw (see step 2 above).
         clear_extraction_results()
@@ -478,15 +477,15 @@ def _candidate_equivalence(write_result: CandidateWriteResult) -> tuple[bool, st
 
     - ``already_exists`` → byte-identical by first-write-wins preservation (the strong
       guarantee: the written artifact never changes on replay).
-    - ``written`` → this was the first materialization (a truly-empty-vault replay); the
-      artifact is reproduced fresh. Still equivalent for replay purposes, classed as
-      ``byte_identical`` because the render is deterministic given the same candidate.
+    - ``written`` → this was a fresh materialization. The candidate renderer stamps
+      current timestamps, so this receipt cannot truthfully claim byte identity against a
+      prior deleted artifact.
     - ``blocked`` → not equivalent; the guarded write was denied.
     """
     if write_result.status == "already_exists":
         return True, "byte_identical_first_write_preserved"
     if write_result.status == "written":
-        return True, "byte_identical"
+        return False, "fresh_write_not_byte_comparable"
     return False, "none"
 
 
