@@ -297,13 +297,18 @@ Rail compacts/collapses when only these states exist:
 - Suggestions idle;
 - generic session persistence status.
 
-### 8.4 Single posture/absence treatment
+### 8.4 Resting state — one dim line per lane (#3362, DESIGN_AUDIT.md §2/§6)
 
-Replace multiple inactive cards with one compact posture line, for example:
+Superseded the earlier single-posture-line-plus-details-disclosure treatment: at rest, each of the four named lanes collapses to exactly one dim line (label + one-word state), no box, no border, no explanatory paragraph, and no click-to-expand disclosure hiding the same content underneath:
 
-`Companion · idle — no active proposals. Details`
+```
+Suggestions  none
+Recall       nothing open
+Search       nothing yet
+Commitments  none
+```
 
-Details may reveal per-capability state, but default view should not stack inactive cards. Critical safety state must not be hidden.
+`Suggestions` folds together the Panel-idle badge and the Suggestions sub-lane (they described the same fact twice). `Recall` is the Reorient lane; `Search` is Find. A non-actionable degraded Resurface (guard-reported degraded, no candidate) is not one of the four lines — it folds into the one calm posture note ("Resurfacing is paused while the vault reconnects.") instead of an amber warning card; a healthy-empty Resurface renders nothing at all. Canvas session controls, the active-note-body-update flow, and the suggestion-flow structural marker are functional affordances outside this quieting — they render unconditionally, unaffected by lane rest/actionable state. Critical safety state must not be hidden; a lane expands to its full, unchanged card content the moment it has something to show.
 
 ## 9. State hierarchy
 

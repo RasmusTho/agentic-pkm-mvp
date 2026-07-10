@@ -69,6 +69,7 @@ from companion_ui.workspace.calm_degraded import (
     LANE_LABEL_GOVERNANCE_QUEUE,
     NOTHING_LOST,
     NOTHING_MUTATED,
+    RESURFACE_PAUSED_NOTE,
     blocked_reason,
     blocked_recourse,
     calm_degraded,
@@ -1292,6 +1293,73 @@ def _render_operator_telemetry_block(
         </details>
         <span class="workspace-freshness" data-testid="workspace-freshness" title="{_e(freshness_title)}">{_e(freshness_label)}</span>
       </section>"""
+
+
+_RAIL_RESTING_LINES: tuple[tuple[str, str, str], ...] = (
+    # (data-testid slug, label, one-word resting state) — audit §2.1/§6: each
+    # idle lane collapses to ONE dim line, no box, no explanatory paragraph.
+    # Panel/Suggestions merge into one line (`PANEL · IDLE` + the boxed
+    # "No active Panel proposal" both collapse into "Suggestions — none" per
+    # the audit's copy table — "remove; implied by the line above").
+    ("suggestions", "Suggestions", "none"),
+    ("recall", "Recall", "nothing open"),
+    ("search", "Search", "nothing yet"),
+)
+
+
+def _render_rail_resting_state(
+    *, resurface_paused: bool, commitments_state: str = "empty"
+) -> str:
+    """Render the quiet at-rest panel rail (#3362, DESIGN_AUDIT.md §2/§6).
+
+    Replaces the ten-idiom idle telemetry stack (`PANEL · IDLE`, boxed "No
+    active Panel proposal", `ambient · peripheral`, `Companion · active`, the
+    canvas-disabled paragraph, the FIND explanation, an amber Resurface
+    warning card, and an ISO `as of` commitments timestamp) with exactly one
+    dim line per lane, plus at most one calm posture note when Resurface is
+    non-actionable-degraded. Called only when the rail has nothing actionable
+    (``rail_actionable`` is False) — an actionable lane keeps its full,
+    unchanged card content via ``rail_cards_inner``, this function is never
+    used for that path.
+
+    ``commitments_state`` (``"empty"`` / ``"not-shown"`` / ``"degraded"`` —
+    every non-``"populated"`` state, since a populated surface already made
+    the rail actionable) drives the Commitments line's one-word state: the
+    copy table's "No commitments" applies to the confident-zero ``"empty"``
+    read; ``"not-shown"``/``"degraded"`` instead read "unavailable" so CI-2
+    ("never a confident empty surface when the durable read is degraded")
+    holds even in the quiet resting line — never both collapsed to the same
+    word. The classified state also stays on ``data-commitment-state`` so it
+    remains inspectable in the DOM regardless of the visible word.
+    """
+    commitments_word = "none" if commitments_state == "empty" else "unavailable"
+    lines_html = "".join(
+        f'<div class="rail-resting-line" data-testid="rail-resting-{slug}">'
+        f'<span class="rail-resting-label">{label}</span>'
+        f'<span class="rail-resting-state">{state}</span>'
+        "</div>"
+        for slug, label, state in _RAIL_RESTING_LINES
+    )
+    lines_html += (
+        '<div class="rail-resting-line" data-testid="rail-resting-commitments" '
+        f'data-commitment-state="{_e(commitments_state)}">'
+        '<span class="rail-resting-label">Commitments</span>'
+        f'<span class="rail-resting-state">{commitments_word}</span>'
+        "</div>"
+    )
+    note_html = (
+        '<div class="rail-resting-note" data-testid="workspace-rail-resting-note">'
+        f"{_e(RESURFACE_PAUSED_NOTE)}</div>"
+        if resurface_paused
+        else ""
+    )
+    return (
+        '<div class="rail-resting" data-testid="workspace-rail-resting" '
+        'data-rail-posture="idle">'
+        '<div class="rail-resting-head" data-testid="workspace-rail-resting-head">Companion</div>'
+        f"{lines_html}{note_html}"
+        "</div>"
+    )
 
 
 def _render_rail_empty_state(
@@ -2821,6 +2889,23 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
     # ambient strip's collapsed body (Codex P2). Transient/no-message states
     # (running, idle) are not content and stay ambient.
     rail_panel_message_present = panel_state_raw == "blocked" or bool(panel_message_raw)
+    # A Panel state machine step in flight (running/confirming/executing/
+    # receipt-displayed/...) is content the user must be able to see, even
+    # with no proposal/message payload yet — it is distinct from true rest
+    # (`idle`), which is exactly the state #3362 quiets to "Suggestions —
+    # none". Only literal `idle` (and the falsy/unset default) is resting.
+    rail_panel_in_progress = panel_state_raw not in ("idle", "", "unknown")
+    # A genuinely open/in-flight Canvas session (active/composing/paused/
+    # closed — anything past `idle`) is live activity the user is or was
+    # just doing, not resting-state telemetry; it keeps the rail's full
+    # (unchanged) card content, same as an in-flight Panel state above.
+    rail_canvas_in_progress = canvas_session_state_raw not in ("idle", "", "unknown")
+    # An active note-body-update flow with a real state (staged/success/
+    # blocked/failure) is an edit-in-progress or its outcome — content, not
+    # rest — while the disabled/idle placeholder stays quiet.
+    rail_body_update_in_progress = active_note_body_update_enabled and str(
+        fields.get("active_note_body_update_state") or "idle"
+    ) not in ("idle", "", "unknown")
     rail_actionable = bool(
         rail_has_proposal
         or rail_has_receipt
@@ -2830,6 +2915,9 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
         # receipt).
         or rail_safety_critical
         or rail_panel_message_present
+        or rail_panel_in_progress
+        or rail_canvas_in_progress
+        or rail_body_update_in_progress
         or reorient_actionable
         or commitments_actionable
         or candidates_actionable
@@ -2841,10 +2929,8 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
     rail_posture_token = "active" if rail_actionable else "idle"
     if rail_safety_critical:
         rail_posture_copy = "Companion &middot; needs attention"
-    elif rail_actionable:
-        rail_posture_copy = "Companion &middot; active"
     else:
-        rail_posture_copy = "Companion &middot; idle — no active proposals."
+        rail_posture_copy = "Companion &middot; active"
 
     guard_messages: list[str] = []
     if writeguard_status.lower() == "blocked":
@@ -2992,20 +3078,35 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
         identity_state_label=identity_state,
     )
 
-    # §§8–9 — compact posture chip + the detailed rail cards. When the rail is
-    # not actionable, the idle cards collapse behind one details affordance so
-    # the rail stops acting as a permanent status dump.
-    rail_posture_html = (
-        '<div class="rail-posture" data-testid="workspace-rail-posture" '
-        f'data-rail-posture="{rail_posture_token}">{rail_posture_copy}</div>'
-    )
-    rail_cards_inner = f"""
-        <div class="rail-state-row" data-testid="workspace-canvas-state">
-          <span class="rail-state-label">Canvas</span>
-          <span class="rail-state-value" data-canvas-state="{canvas_state}">{canvas_state_copy}</span>
-        </div>
-        {canvas_controls_html}
-        {active_note_body_update_html}
+    # §§8–9 (#1401) / #3362 (DESIGN_AUDIT.md §2, §6, top-10 #3) — the rail
+    # earns its full PROPOSAL/LANE card stack only when something in those
+    # lanes is actionable. At rest, the Panel/Suggestions header and the four
+    # named lanes (Find/Reorient/Resurface/Commitments) collapse to the quiet
+    # single-line-per-lane summary (``_render_rail_resting_state``) instead
+    # of the header/posture/lane card stack — not that stack merely hidden
+    # behind a collapsed disclosure. Canvas, the active-note-body-update
+    # flow, and the suggestion-flow structural marker are functional
+    # affordances the issue's Scope does not name for quieting (only their
+    # "state copy" is in scope) — they render unconditionally in both
+    # branches, unchanged. This slice quiets the RESTING state only.
+    if rail_actionable:
+        # #2453 (CUIDR-09/E2) — the explicit ambient/peripheral role label
+        # distinguishes the rail from the ⌘K palette (the fast path) and is
+        # existing actionable-state information content, not resting-state
+        # telemetry: it stays for an actionable render (only removed from the
+        # #3362 resting state, which never shows the header at all).
+        rail_header_html = f"""
+      <div class="rail-header" data-testid="workspace-panel-column-header">
+        <span class="rail-label" data-panel-state="{panel_state}">{'Panel&nbsp;&middot;&nbsp;idle' if panel_state_raw == 'idle' else 'Panel'}</span>
+        <span class="rail-badge" data-testid="workspace-panel-state" data-panel-state="{panel_state}">{panel_state_copy}</span>
+        <span class="rail-surface-role" data-testid="workspace-rail-surface-role"
+          data-surface-role="ambient" title="Same governed proposals as ⌘K — the rail is the ambient, peripheral path; ⌘K is the keyboard-first fast path.">ambient · peripheral</span>
+      </div>"""
+        rail_posture_html = (
+            '<div class="rail-posture" data-testid="workspace-rail-posture" '
+            f'data-rail-posture="{rail_posture_token}">{rail_posture_copy}</div>'
+        )
+        rail_lane_cards_html = f"""
         <div class="rail-state-row">
           <span class="rail-state-label">Panel</span>
           <span class="rail-state-value" data-testid="workspace-panel-label">{panel_label}</span>
@@ -3014,30 +3115,45 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
         {panel_message_html}
         {proposal_rows_html}
         {panel_response_html}
-        {suggestion_flow_html}
-        {suggestion_cards_html}
-        {shortcut_html}
-        {governance_receipts_html}
         {find_mode_html}
         {reorient_mode_html}
         {resurface_mode_html}
         {commitments_mode_html}
         {act_mode_html}
+        {rail_empty_state_html}"""
+    else:
+        rail_header_html = ""
+        rail_posture_html = ""
+        # Resurface folds into the one calm posture note line only when it is
+        # non-actionable-degraded (guard-reported degraded, no candidates) —
+        # guaranteed here since a populated Resurface list would already have
+        # made the rail actionable via ``candidates_actionable`` above.
+        rail_lane_cards_html = _render_rail_resting_state(
+            resurface_paused=guard_degraded,
+            commitments_state=str((fields.get("commitments_surface") or {}).get("state") or "not-shown"),
+        )
+    # Canvas / active-note-body-update / suggestion-flow / shortcuts /
+    # governance receipts / guard / persistence / panel-rail placeholder are
+    # functional affordances and always-relevant single-line notices, not
+    # part of the four #3362 audit lanes — they render unconditionally.
+    rail_cards_inner = f"""
+        <div class="rail-state-row" data-testid="workspace-canvas-state">
+          <span class="rail-state-label">Canvas</span>
+          <span class="rail-state-value" data-canvas-state="{canvas_state}">{canvas_state_copy}</span>
+        </div>
+        {canvas_controls_html}
+        {active_note_body_update_html}
+        {suggestion_flow_html}
+        {suggestion_cards_html}
+        {shortcut_html}
+        {governance_receipts_html}
         {guard_html}
         {persistence_html}
         {panel_rail}
-        {rail_empty_state_html}"""
-    if rail_actionable:
-        rail_body_html = (
-            f'<div class="rail-placeholder-body">{rail_cards_inner}\n      </div>'
-        )
-    else:
-        rail_body_html = (
-            '<div class="rail-placeholder-body">'
-            '<details class="rail-idle-details" data-testid="workspace-rail-idle-details">'
-            '<summary class="rail-idle-summary">Companion details</summary>'
-            f"{rail_cards_inner}\n      </details></div>"
-        )
+        {rail_lane_cards_html}"""
+    rail_body_html = (
+        f'<div class="rail-placeholder-body">{rail_cards_inner}\n      </div>'
+    )
 
     shell_html = f"""
   <div class="workspace-layout workspace-layout--three-col" data-rail-state="{rail_layout_state}">
@@ -3158,12 +3274,7 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
       aria-label="Companion rail — the ambient, peripheral path. Same governed proposals as ⌘K, which is the keyboard-first fast path."
       title="Ambient, peripheral path — same governed proposals as ⌘K (the keyboard-first fast path)."
       data-layout-desktop="side-rail">
-      <div class="rail-header" data-testid="workspace-panel-column-header">
-        <span class="rail-label" data-panel-state="{panel_state}">{'Panel&nbsp;&middot;&nbsp;idle' if panel_state_raw == 'idle' else 'Panel'}</span>
-        <span class="rail-badge" data-testid="workspace-panel-state" data-panel-state="{panel_state}">{panel_state_copy}</span>
-        <span class="rail-surface-role" data-testid="workspace-rail-surface-role"
-          data-surface-role="ambient" title="Same governed proposals as ⌘K — the rail is the ambient, peripheral path; ⌘K is the keyboard-first fast path.">ambient · peripheral</span>
-      </div>
+      {rail_header_html}
       {rail_posture_html}
       {rail_body_html}
       {panel_rail_open_loops_html}
@@ -4438,17 +4549,27 @@ def _render_suggestion_flow_region(fields: dict) -> str:
         for target in transitions
     )
     composer_state_token = "enabled" if composer_enabled else "locked"
+    # #3362 (DESIGN_AUDIT.md §2/§6): `SUGGESTIONS — Suggestions are idle.`
+    # is one of the flagged idle idioms — it collapses into the rail's
+    # "Suggestions — none" resting line, so this row is suppressed at true
+    # rest. The outer marker div (with its data-* attributes, incl.
+    # data-composer-state for JS/test hooks) still renders unconditionally.
+    state_row_html = (
+        ""
+        if _suggestion_state_raw == "idle"
+        else f"""
+          <div class="rail-state-row">
+            <span class="rail-state-label">Suggestions</span>
+            <span class="rail-state-value">{_e(suggestion_copy)}</span>
+          </div>"""
+    )
     return f"""
         <div
           class="suggestion-flow"
           data-testid="workspace-suggestion-flow"
           data-suggestion-state="{suggestion_state}"
           data-suggestion-dom-alias="{dom_alias}"
-          data-composer-state="{composer_state_token}">
-          <div class="rail-state-row">
-            <span class="rail-state-label">Suggestions</span>
-            <span class="rail-state-value">{_e(suggestion_copy)}</span>
-          </div>
+          data-composer-state="{composer_state_token}">{state_row_html}
           <div class="suggestion-composer-state" data-composer-state="{composer_state_token}">{composer_text}</div>
           <div class="suggestion-transitions">{transition_html}</div>
         </div>"""

@@ -68,13 +68,21 @@ def _rail_region(html: str) -> str:
 
 
 class TestIdleRendersOneLine:
-    """AC1 — idle state renders one-line strip."""
+    """AC1 — idle state renders one-line strip.
+
+    #3362 (DESIGN_AUDIT.md §2/§6) supersedes the original AC1 shape: the
+    resting rail no longer renders the per-lane sub-module markup (e.g.
+    ``reorient-mode``) behind a disclosure — it renders exactly one dim line
+    per lane (``workspace-rail-resting``), and "Recall — nothing open" is
+    that Reorient line.
+    """
 
     def test_idle_renders_one_line_strip(self) -> None:
         html = _render()
         rail = _rail_region(html)
-        # Reorient in idle state renders with data-section-state="idle"
-        assert 'data-section-state="idle"' in rail
+        assert 'data-testid="workspace-rail-resting"' in rail
+        assert 'data-testid="rail-resting-recall"' in rail
+        assert 'data-testid="reorient-mode"' not in rail
 
     def test_active_renders_agent_card(self) -> None:
         html = _render(
@@ -83,7 +91,7 @@ class TestIdleRendersOneLine:
             panel_state="proposals-staged",
         )
         rail = _rail_region(html)
-        assert 'data-section-state="active"' in rail
+        assert 'data-testid="workspace-rail-resting"' not in rail
 
 
 class TestIdleHasNoAgentChrome:
@@ -97,49 +105,33 @@ class TestIdleHasNoAgentChrome:
 
     def test_idle_reorient_has_no_agent_left_rule(self) -> None:
         html = _render()
-        # Scan the reorient section for --agent usage in style attributes
-        reorient_m = re.search(
-            r'data-testid="reorient-mode".*?</section>',
-            html,
-            re.DOTALL,
-        )
-        assert reorient_m
-        subtree = reorient_m.group()
-        # Should not contain inline agent-blue style
-        assert "border-left-color: var(--agent)" not in subtree
-        assert "panel-section--active" not in subtree
+        rail = _rail_region(html)
+        # The resting rail carries no reorient sub-module markup at all
+        # (#3362 — collapsed into the "Recall — nothing open" line), so
+        # there is no inline agent-blue style to leak.
+        assert "border-left-color: var(--agent)" not in rail
+        assert "panel-section--active" not in rail
 
 
 class TestReorientDefaultCollapsed:
-    """AC3 — Reorient defaults to one-line with recall ▾ disclosure."""
+    """AC3 — Reorient defaults to one-line (#3362 supersedes the recall ▾
+    disclosure shape: the resting rail shows "Recall — nothing open" with no
+    disclosure toggle at all — there is nothing to expand).
+    """
 
     def test_reorient_default_collapsed(self) -> None:
         html = _render()
-        assert 'data-testid="reorient-recall-disclosure"' in html
-        # Match the whole <summary> opening tag to check aria-expanded
-        trigger_m = re.search(
-            r'<summary[^>]*data-testid="reorient-recall-trigger"[^>]*>',
-            html,
-        )
-        assert trigger_m, "reorient-recall-trigger not found"
-        assert 'aria-expanded="false"' in trigger_m.group(), (
-            f"recall trigger not collapsed: {trigger_m.group()!r}"
-        )
+        rail = _rail_region(html)
+        assert 'data-testid="rail-resting-recall"' in rail
+        assert 'data-testid="reorient-recall-disclosure"' not in rail
 
     def test_reorient_verbose_body_hidden_initially(self) -> None:
         html = _render(reorient_sections=None)
-        body_m = re.search(
-            r'data-testid="reorient-recall-body"[^>]*>',
-            html,
-        )
-        assert body_m, "reorient-recall-body not found"
-        # Must be hidden (hidden attribute) or inside unopened details
-        details_m = re.search(
-            r'<details[^>]*data-testid="reorient-recall-disclosure"[^>]*>',
-            html,
-        )
-        assert details_m
-        assert " open" not in details_m.group(), "reorient disclosure is open by default"
+        rail = _rail_region(html)
+        # No reorient sub-module renders in the resting rail at all — the
+        # one-line "Recall — nothing open" summary is the entire surface.
+        assert 'data-testid="reorient-recall-body"' not in rail
+        assert 'data-testid="rail-resting-recall"' in rail
 
 
 class TestActiveCardRequiresProvenance:
@@ -208,18 +200,15 @@ class TestActionRowOrderAndFocus:
 
 
 class TestAllIdleColumnHeader:
-    """AC6 — column header reads Panel · idle when all sections idle."""
+    """AC6 — superseded by #3362 (DESIGN_AUDIT.md §2/§6): `PANEL · IDLE` plus
+    the boxed "No active Panel proposal" badge both collapse into the single
+    "Suggestions — none" resting line — the old column header (with its
+    Panel/idle badge) no longer renders when every lane is at rest.
+    """
 
     def test_all_idle_column_header(self) -> None:
         html = _render(panel_state="idle")
-        assert 'data-testid="workspace-panel-column-header"' in html
-        header_m = re.search(
-            r'data-testid="workspace-panel-column-header".*?</div>',
-            html,
-            re.DOTALL,
-        )
-        assert header_m
-        header_text = header_m.group()
-        # Should contain "Panel" and "idle" near each other
-        assert "Panel" in header_text
-        assert "idle" in header_text.lower()
+        assert 'data-testid="workspace-panel-column-header"' not in html
+        rail = _rail_region(html)
+        assert 'data-testid="workspace-rail-resting"' in rail
+        assert 'data-testid="rail-resting-suggestions"' in rail

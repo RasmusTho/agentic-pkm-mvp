@@ -539,21 +539,30 @@ class TestHumanFacingCopy:
 
 
 class TestRailEmptyState:
+    """#3362 (DESIGN_AUDIT.md §2/§6) supersedes AC7's consolidated "No active
+    session" box: at true rest the rail renders the quiet single-line-per-lane
+    summary (``workspace-rail-resting``) — a second box repeating the same
+    "nothing is happening" fact would itself violate the audit's "no boxes"
+    instruction, so the old box no longer renders at all.
+    """
+
     def test_rail_empty_state_present_when_fully_idle(self) -> None:
         html = _html()
         rail = _rail_region(html)
-        assert 'data-testid="workspace-rail-empty-state"' in rail
+        assert 'data-testid="workspace-rail-empty-state"' not in rail
+        assert 'data-testid="workspace-rail-resting"' in rail
 
     def test_rail_empty_state_carries_human_copy(self) -> None:
         html = _html()
+        rail = _rail_region(html)
         m = re.search(
-            r'data-testid="workspace-rail-empty-state".*?</div>',
-            html,
+            r'data-testid="workspace-rail-resting".*?</div>',
+            rail,
             re.DOTALL,
         )
         assert m
         text = m.group().lower()
-        assert "no active session" in text or "no active panel" in text or "nothing active" in text
+        assert "companion" in text
 
     def test_rail_empty_state_absent_when_proposals_present(self) -> None:
         html = _html(

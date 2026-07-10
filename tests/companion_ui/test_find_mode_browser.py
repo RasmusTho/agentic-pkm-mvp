@@ -132,10 +132,14 @@ def test_find_unavailable_state_renders_without_backend_payload() -> None:
         fields=fields,
     )
 
-    assert 'data-testid="find-mode"' in html
-    assert 'data-testid="find-unavailable-state"' in html
-    assert 'data-affordance-status="unavailable"' in html
-    assert "Find is unavailable" in html
+    # #3362 (DESIGN_AUDIT.md §2/§6): with nothing else actionable on the
+    # note, the rail is at rest — Find's unavailable explanation ("backend
+    # candidate payload") collapses into the single "Search — nothing yet"
+    # resting line rather than its own find-mode section.
+    assert 'data-testid="find-mode"' not in html
+    assert "backend candidate payload" not in html
+    assert 'data-testid="rail-resting-search"' in html
+    assert 'data-testid="workspace-rail-resting"' in html
 
 
 class _EmptyFindPayloadClient:
@@ -173,11 +177,12 @@ def test_find_empty_state_distinct_from_unavailable() -> None:
         fields=fields,
     )
 
-    assert 'data-testid="find-mode"' in html
-    assert 'data-testid="find-empty-state"' in html
-    assert 'data-testid="find-unavailable-state"' not in html
-    assert 'data-affordance-status="read-only"' in html
-    assert "Find returned no candidates" in html
+    # #3362 (DESIGN_AUDIT.md §2/§6): an empty-but-available Find result is
+    # still non-actionable — with nothing else on the note, the rail is at
+    # rest and collapses to the "Search — nothing yet" resting line.
+    assert 'data-testid="find-mode"' not in html
+    assert 'data-testid="rail-resting-search"' in html
+    assert 'data-testid="workspace-rail-resting"' in html
 
 
 class _MissingCitationFindClient:

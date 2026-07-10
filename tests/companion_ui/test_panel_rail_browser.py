@@ -68,7 +68,14 @@ def _html_for_panel(panel: dict[str, Any]) -> str:
 
 
 def test_all_panel_states_render() -> None:
-    for state in sorted(PANEL_STATES_REQUIRED):
+    # #3362 (DESIGN_AUDIT.md §2/§6): literal panel-state "idle" (nothing in
+    # flight, no message) is the resting state the panel rail now quiets to
+    # a single "Suggestions — none" line — the per-state badge asserted below
+    # no longer renders for it (see test_idle_panel_state_renders_resting_line
+    # below). Every OTHER panel state (a state-machine step in flight, or one
+    # carrying a message) stays fully visible — this slice quiets the RESTING
+    # state only.
+    for state in sorted(PANEL_STATES_REQUIRED - {"idle"}):
         panel: dict[str, Any] = {"state": state, "proposal_count": 0}
         if state == "proposals-staged":
             panel["proposal_count"] = 1
@@ -82,6 +89,13 @@ def test_all_panel_states_render() -> None:
         assert 'data-testid="workspace-panel-state"' in html
         assert state in html
         assert 'data-testid="workspace-panel-label"' in html
+
+
+def test_idle_panel_state_renders_resting_line() -> None:
+    html = _html_for_panel({"state": "idle", "proposal_count": 0})
+    assert 'data-testid="workspace-panel-state"' not in html
+    assert 'data-testid="workspace-rail-resting"' in html
+    assert 'data-testid="rail-resting-suggestions"' in html
 
 
 def test_proposal_rows_rendered() -> None:

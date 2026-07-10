@@ -181,7 +181,13 @@ def test_id_only_commitment_does_not_mask_other_commitments() -> None:
 
 def test_genuinely_empty_surface_still_reads_empty() -> None:
     """The fix must not regress the legitimate confident-empty state: a healthy
-    read with no commitments at all still renders ``empty``."""
+    read with no commitments at all still classifies as ``empty``.
+
+    #3362 (DESIGN_AUDIT.md §2/§6) supersedes the old verbose empty card: with
+    nothing else on the note actionable, the rail is at rest and Commitments
+    collapses to the "Commitments — none" resting line — the ``empty``
+    classification survives on ``data-commitment-state``.
+    """
     surface = {
         "next": [],
         "waiting": [],
@@ -191,9 +197,14 @@ def test_genuinely_empty_surface_still_reads_empty() -> None:
         "as_of": "2026-06-18T20:00:00+00:00",
     }
 
-    section = _commitments_section(_render(surface))
-    assert 'data-commitment-state="empty"' in section
-    assert "No active commitments." in section
+    html = _render(surface)
+    m = re.search(
+        r'data-testid="rail-resting-commitments"[^>]*>.*?</div>', html, re.DOTALL
+    )
+    assert m, "rail-resting-commitments line must be present"
+    line = m.group()
+    assert 'data-commitment-state="empty"' in line
+    assert "none" in line.lower()
 
 
 # --------------------------------------------------------------------------- #
