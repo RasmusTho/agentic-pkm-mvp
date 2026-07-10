@@ -21,6 +21,45 @@ Define one structured response contract and adapter boundary. Support configured
 API adapters or explicitly configured local commands. Run independent drafts before cross-review,
 limit adversarial rounds, and persist provider request IDs and output hashes.
 
+The implementation uses a BuilderOps-only adapter boundary; it does not reuse Product/Runtime LLM
+routing because that surface returns text without the required provider envelope and may select a
+mock fallback. Role adapters are configured explicitly through the machine-local
+`BUILDEROPS_INQUIRY_ADAPTERS_JSON` environment value. The shared vault stores only sanitized
+identity, request IDs, hashes, structured output, and classified receipts.
+
+Each role configuration must explicitly set matching `role_identity`, a non-mock provider, and a
+distinct adapter ID plus runtime-target fingerprint. This is operator attestation, not proof that a
+remote model is genuinely Fable; parent acceptance must retain provider-returned request evidence.
+Example shape (credentials stay in the separately named local environment variable):
+
+```json
+{
+  "fable": {
+    "kind": "anthropic",
+    "role_identity": "fable",
+    "adapter_id": "fable-primary",
+    "provider": "anthropic",
+    "model": "configured-fable-model",
+    "endpoint": "https://api.anthropic.com/v1/messages",
+    "api_key_env": "LOCAL_FABLE_API_KEY"
+  },
+  "gpt_codex": {
+    "kind": "openai",
+    "role_identity": "gpt_codex",
+    "adapter_id": "gpt-primary",
+    "provider": "openai",
+    "model": "configured-gpt-model",
+    "endpoint": "https://api.openai.com/v1/chat/completions",
+    "api_key_env": "LOCAL_OPENAI_API_KEY"
+  }
+}
+```
+
+The current repository and delivery host do not include an executable or configured Fable
+provider. A provider-enabled run therefore records `provider_unavailable` until an operator
+explicitly configures the `fable` role. It never substitutes Codex, Claude, Anthropic, OpenAI,
+mock, or the deterministic dry-run planner and calls that substitute Fable.
+
 ## Concretely
 
 ```bash
@@ -35,25 +74,46 @@ and audit evidence explicit.
 
 ## Acceptance Criteria
 
-- [ ] Independent Fable and GPT/Codex drafts receive the same immutable initial context packet.
+- [x] Independent Fable and GPT/Codex drafts receive the same immutable initial context packet.
   Verify: `tests/builderops/test_model_inquiry_runner.py::test_independent_drafts_share_context_hash`.
-- [ ] A review turn can only consume persisted input artifacts and emits schema-valid output.
+- [x] A review turn can only consume persisted input artifacts and emits schema-valid output.
   Verify: `tests/builderops/test_model_inquiry_runner.py::test_review_turn_uses_persisted_inputs_and_validates_output`.
-- [ ] Every persisted provider turn retains its provider request ID and output hash, and trace output
+- [x] Every persisted provider turn retains its adapter request ID, nullable real provider request
+  ID, request/input/context/output hashes, and adapter/provider/model identity, and trace output
   returns both values. Verify: `tests/builderops/test_model_inquiry_trace.py::test_trace_includes_provider_request_id_and_output_hash`.
-- [ ] The runner terminates at consensus, maximum rounds, provider refusal, or malformed output.
+- [x] The runner durably terminates at consensus, maximum rounds, provider refusal, malformed
+  output, unavailable provider, provider error, or persistence failure.
   Verify: `tests/builderops/test_model_inquiry_runner.py::test_runner_records_all_terminal_conditions`.
 
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/builderops/test_model_inquiry_runner.py`
+- `pytest -q tests/builderops/test_model_inquiry_adapters.py`
 - `scripts/builderops_cli.sh builderops inquiry run <fixture-run> --dry-run --json`
+
+## Response And Consensus Contract
+
+Provider output must be exactly one `builderops.model-turn-response.v1` JSON object. Extra or
+missing fields fail validation. The object carries stance, content, claims, risks, blocking
+questions, reviewed artifact refs, and an optional accepted artifact hash. Consensus exists only
+when both reviewer roles explicitly accept the same prior persisted artifact hash.
+
+Dry-run is a deterministic, read-only plan: it performs no adapter call and creates no vault or
+receipt file. Provider-enabled execution serializes one runner per inquiry on the host, persists a
+valid turn before any successor, and derives restart progress from deterministic turn IDs plus
+terminal receipts.
+
+Local commands receive canonical JSON on stdin with `shell=False`, an explicit environment
+allowlist, a timeout, and an incremental output ceiling. Stderr is discarded rather than persisted.
+HTTP and command adapters reject output containing a configured credential value. Raw provider
+errors, headers, argv, inherited environment, and credentials never enter receipts or trace.
 
 ## Out of Scope
 
 - silent fallback from one provider to another;
 - direct automation of a desktop UI;
 - external browsing or product/runtime writes.
+- provider-enabled parent acceptance without an explicitly configured Fable adapter.
 
 ## Related Docs
 

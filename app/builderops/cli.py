@@ -48,6 +48,8 @@ from app.builderops.epic_run_state import (
 )
 from app.builderops.models import BuilderOpsValidationError, normalize_actor
 from app.builderops.model_inquiry import ModelInquiryService
+from app.builderops.model_inquiry_adapters import AdapterUnavailableError
+from app.builderops.model_inquiry_runner import ModelInquiryRunner
 from app.builderops.pattern_routing import (
     PatternRoutingError,
     build_pattern_routing_report,
@@ -377,6 +379,24 @@ def inquiry_resume(inquiry_id: str, as_json: bool) -> None:
     try:
         payload = ModelInquiryService.from_env().resume(inquiry_id)
     except BuilderOpsValidationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@inquiry.command("run", help="Plan or execute bounded artifact-first model turns.")
+@click.argument("inquiry_id")
+@click.option("--dry-run", is_flag=True, help="Return a deterministic plan without mutations.")
+@click.option("--max-rounds", default=3, show_default=True, type=click.IntRange(1, 20))
+@click.option("--json", "as_json", is_flag=True)
+def inquiry_run(inquiry_id: str, dry_run: bool, max_rounds: int, as_json: bool) -> None:
+    try:
+        service = ModelInquiryService.from_env()
+        payload = ModelInquiryRunner(service).run(
+            inquiry_id,
+            max_rounds=max_rounds,
+            dry_run=dry_run,
+        )
+    except (AdapterUnavailableError, BuilderOpsValidationError) as exc:
         raise click.ClickException(str(exc)) from exc
     _emit(payload, as_json)
 

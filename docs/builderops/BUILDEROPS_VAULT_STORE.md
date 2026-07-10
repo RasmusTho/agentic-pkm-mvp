@@ -140,6 +140,19 @@ This does not promote iCloud advisory claims into distributed locks: independent
 devices can still race, and any resulting conflicting graph fails trace validation rather than
 being silently accepted.
 
+BMI-03 provider turns add adapter request ID, nullable provider-returned request ID,
+adapter/provider/model identity, canonical context/request/input/output hashes, phase, round, and
+stance to the immutable turn record. Valid output is committed before a successor request. Refusal,
+malformed output, unavailable adapters, provider errors, persistence failures, exhausted rounds,
+and consensus are recorded as canonical BuilderOps receipts.
+
+Role-to-adapter configuration and credentials remain machine-local. Shared inquiry files never
+store HTTP credentials, bearer headers, command argv, environment dumps, or raw stderr. The runner
+does not use Product/Runtime provider fallback: an unconfigured Fable role records
+`provider_unavailable`. Host-local inquiry-runner flock prevents duplicate provider execution by
+concurrent local CLI/API workers; cross-device iCloud coordination remains advisory and any
+conflicting synchronized graph fails closed.
+
 Treat the shared tree as untrusted file input. Queue operations fail closed on a symlinked vault
 root, any existing symlinked ancestor in the configured root path, pre-existing symlinked
 queue/claim ancestors, and ticket, claim, or SQLite-candidate leaves rather than following

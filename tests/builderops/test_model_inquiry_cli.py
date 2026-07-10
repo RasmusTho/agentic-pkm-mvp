@@ -354,3 +354,37 @@ def test_turn_transaction_is_serialized_across_processes(tmp_path: Path) -> None
     assert [turn["turn_id"] for turn in service.trace("inq_test_process_lock")["turns"]] == [
         "turn-a"
     ]
+
+
+def test_inquiry_run_dry_run_uses_common_runner(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    service = ModelInquiryService.from_env(env)
+    service.start(
+        question="Plan without provider calls",
+        workflow="fable-gpt-architecture",
+        inquiry_id="inq_test_cli_run",
+        source_refs=[{"ref_type": "github_issue", "ref": "#3291"}],
+    )
+    before = service.trace("inq_test_cli_run")
+
+    result = CliRunner().invoke(
+        builderops_root,
+        [
+            "builderops",
+            "inquiry",
+            "run",
+            "inq_test_cli_run",
+            "--dry-run",
+            "--max-rounds",
+            "2",
+            "--json",
+        ],
+        env=env,
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["dry_run"] is True
+    assert payload["unavailable_roles"] == ["fable", "gpt_codex"]
+    assert ModelInquiryService.from_env(env).trace("inq_test_cli_run") == before

@@ -6,7 +6,10 @@ import json
 import pytest
 
 from app.builderops.model_inquiry import ModelInquiryService
-from app.builderops.models import BuilderOpsValidationError
+from app.builderops.models import BuilderOpsValidationError, normalize_record
+from app.builderops.model_inquiry_adapters import ScriptedAdapter
+from app.builderops.model_inquiry_contract import RESPONSE_SCHEMA_VERSION, canonical_hash
+from app.builderops.model_inquiry_runner import ModelInquiryRunner
 
 
 def test_trace_links_question_turns_and_synthesis(tmp_path: Path) -> None:
@@ -158,3 +161,291 @@ def test_receipt_parent_symlink_cannot_escape_vault(tmp_path: Path) -> None:
             source_refs=refs,
         )
     assert list(outside.iterdir()) == []
+
+
+def test_trace_includes_provider_request_id_and_output_hash(tmp_path: Path) -> None:
+    vault = tmp_path / "shared-vault-provider"
+    vault.mkdir()
+    service = ModelInquiryService(vault)
+    refs = [{"ref_type": "github_issue", "ref": "#3291"}]
+    service.start(
+        question="Trace provider provenance",
+        workflow="fable-gpt-architecture",
+        inquiry_id="inq_test_provider_trace",
+        source_refs=refs,
+    )
+
+    def response(stance: str, reviewed: list[str]) -> str:
+        return json.dumps(
+            {
+                "schema_version": RESPONSE_SCHEMA_VERSION,
+                "stance": stance,
+                "content": f"{stance} output",
+                "claims": [],
+                "risks": [],
+                "blocking_questions": [],
+                "reviewed_artifact_refs": reviewed,
+                "accepted_artifact_hash": None,
+            }
+        )
+
+    reviewed = ["draft-fable", "draft-gpt_codex"]
+    adapters = {
+        role: ScriptedAdapter(
+            adapter_id=f"{role}-adapter",
+            provider=role,
+            model=f"{role}-model",
+            responses=[response("draft", []), response("revise", reviewed)],
+            calls=[],
+        )
+        for role in ("fable", "gpt_codex")
+    }
+    ModelInquiryRunner(service, adapters).run("inq_test_provider_trace", max_rounds=1)
+
+    trace = ModelInquiryService(vault).trace("inq_test_provider_trace")
+    provider_turns = [turn for turn in trace["turns"] if "adapter_request_id" in turn]
+    assert len(provider_turns) == 4
+    for turn in provider_turns:
+        assert turn["adapter_request_id"].startswith("adapter_req_")
+        assert turn["provider_request_id"].startswith("scripted-")
+        assert len(turn["request_hash"]) == 64
+        assert len(turn["context_hash"]) == 64
+        assert len(turn["input_hash"]) == 64
+        assert len(turn["output_hash"]) == 64
+        assert turn["adapter_id"]
+        assert turn["provider"]
+        assert turn["model"]
+        assert turn["source_refs"] == refs
+
+
+def test_trace_recomputes_provider_context_and_request_hashes(tmp_path: Path) -> None:
+    vault = tmp_path / "shared-vault-forged-provider"
+    vault.mkdir()
+    service = ModelInquiryService(vault)
+    refs = [{"ref_type": "github_issue", "ref": "#3291"}]
+    trace = service.start(
+        question="Reject forged provider lineage",
+        workflow="fable-gpt-architecture",
+        inquiry_id="inq_test_forged_provider",
+        source_refs=refs,
+    )
+    response = {
+        "schema_version": RESPONSE_SCHEMA_VERSION,
+        "stance": "draft",
+        "content": "forged lineage",
+        "claims": [],
+        "risks": [],
+        "blocking_questions": [],
+        "reviewed_artifact_refs": [],
+        "accepted_artifact_hash": None,
+    }
+    content = json.dumps(response, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    input_hash = canonical_hash(
+        [
+            {
+                "artifact_id": "question",
+                "artifact_hash": trace["question"]["artifact_hash"],
+            }
+        ]
+    )
+    service.commit_turn(
+        "inq_test_forged_provider",
+        turn_id="draft-fable",
+        sequence=0,
+        role="fable",
+        content=content,
+        input_artifact_refs=["question"],
+        source_refs=refs,
+        provider_metadata={
+            "adapter_request_id": f"adapter_req_{'1' * 32}",
+            "provider_request_id": "request-safe",
+            "adapter_id": "fable-adapter",
+            "provider": "fable",
+            "model": "fable-model",
+            "context_hash": "0" * 64,
+            "request_hash": "1" * 64,
+            "input_hash": input_hash,
+            "output_hash": canonical_hash(response),
+            "phase": "draft",
+            "round_index": 0,
+            "stance": "draft",
+            "accepted_artifact_hash": None,
+        },
+    )
+
+    with pytest.raises(BuilderOpsValidationError, match="context hash mismatch"):
+        service.trace("inq_test_forged_provider")
+
+
+def test_trace_rejects_forged_canonical_run_terminal_receipt(tmp_path: Path) -> None:
+    vault = tmp_path / "shared-vault-forged-terminal"
+    vault.mkdir()
+    service = ModelInquiryService(vault)
+    refs = [{"ref_type": "github_issue", "ref": "#3291"}]
+    service.start(
+        question="Reject forged terminal receipt",
+        workflow="fable-gpt-architecture",
+        inquiry_id="inq_test_forged_terminal",
+        source_refs=refs,
+    )
+    occurred_at = "2026-07-10T12:00:00+00:00"
+    receipt = normalize_record(
+        {
+            "id": "receipt_wrong",
+            "object_type": "BuilderOpsReceipt",
+            "summary": "Forged terminal",
+            "event_type": "inquiry_run_terminal",
+            "actor": {"actor_type": "agent", "id": "forger"},
+            "occurred_at": occurred_at,
+            "target_refs": [
+                {
+                    "ref_type": "builderops_inquiry",
+                    "ref": "wrong-inquiry",
+                    "authority_surface": "builderops",
+                }
+            ],
+            "action": "issue_ready",
+            "receipt_body": "Forged outcome.",
+            "idempotency_key": "wrong-key",
+            "source_refs": refs,
+            "created_by": {"actor_type": "agent", "id": "forger"},
+            "outcome": "issue_ready",
+            "details": {},
+            "created_at": occurred_at,
+            "updated_at": occurred_at,
+        }
+    )
+    receipt["artifact_hash"] = canonical_hash(receipt)
+    path = (
+        vault
+        / "model-inquiries"
+        / "inq_test_forged_terminal"
+        / "receipts"
+        / "aaa.json"
+    )
+    path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    with pytest.raises(BuilderOpsValidationError, match="invalid inquiry run terminal receipt"):
+        service.trace("inq_test_forged_terminal")
+
+    exact_vault = tmp_path / "shared-vault-false-consensus"
+    exact_vault.mkdir()
+    exact_service = ModelInquiryService(exact_vault)
+    exact_service.start(
+        question="Reject false consensus",
+        workflow="fable-gpt-architecture",
+        inquiry_id="inq_test_false_consensus",
+        source_refs=refs,
+    )
+    exact = normalize_record(
+        {
+            "id": "receipt_inq_test_false_consensus_run_terminal",
+            "object_type": "BuilderOpsReceipt",
+            "summary": "False consensus",
+            "event_type": "inquiry_run_terminal",
+            "actor": {"actor_type": "agent", "id": "forger"},
+            "occurred_at": occurred_at,
+            "target_refs": [
+                {
+                    "ref_type": "builderops_inquiry",
+                    "ref": "inq_test_false_consensus",
+                    "authority_surface": "builderops",
+                }
+            ],
+            "action": "consensus",
+            "receipt_body": "Structurally exact but false consensus.",
+            "idempotency_key": "inquiry:inq_test_false_consensus:run:terminal",
+            "source_refs": refs,
+            "created_by": {"actor_type": "agent", "id": "forger"},
+            "outcome": "consensus",
+            "details": {},
+            "created_at": occurred_at,
+            "updated_at": occurred_at,
+        }
+    )
+    exact["artifact_hash"] = canonical_hash(exact)
+    exact_path = (
+        exact_vault
+        / "model-inquiries"
+        / "inq_test_false_consensus"
+        / "receipts"
+        / "inquiry-run-terminal.json"
+    )
+    exact_path.write_text(json.dumps(exact), encoding="utf-8")
+    with pytest.raises(BuilderOpsValidationError, match="invalid round_index"):
+        exact_service.trace("inq_test_false_consensus")
+
+    failure_vault = tmp_path / "shared-vault-false-failure"
+    failure_vault.mkdir()
+    failure_service = ModelInquiryService(failure_vault)
+    failure_service.start(
+        question="Reject false provider failure",
+        workflow="fable-gpt-architecture",
+        inquiry_id="inq_test_false_failure",
+        source_refs=refs,
+    )
+    details = {
+        "adapter_request_id": "adapter_req_forged",
+        "classification": "provider adapter execution failed",
+    }
+    target = [
+        {
+            "ref_type": "builderops_inquiry",
+            "ref": "inq_test_false_failure",
+            "authority_surface": "builderops",
+        }
+    ]
+    attempt = normalize_record(
+        {
+            "id": "receipt_inq_test_false_failure_adapter_req_forged",
+            "object_type": "BuilderOpsReceipt",
+            "summary": "False provider attempt",
+            "event_type": "inquiry_provider_attempt_terminal",
+            "actor": {"actor_type": "agent", "id": "forger"},
+            "occurred_at": occurred_at,
+            "target_refs": target,
+            "action": "provider_error",
+            "receipt_body": "False attempt.",
+            "idempotency_key": "inquiry:inq_test_false_failure:attempt:adapter_req_forged",
+            "source_refs": refs,
+            "created_by": {"actor_type": "agent", "id": "forger"},
+            "adapter_request_id": "adapter_req_forged",
+            "outcome": "provider_error",
+            "details": details,
+            "created_at": occurred_at,
+            "updated_at": occurred_at,
+        }
+    )
+    attempt["artifact_hash"] = canonical_hash(attempt)
+    terminal = normalize_record(
+        {
+            "id": "receipt_inq_test_false_failure_run_terminal",
+            "object_type": "BuilderOpsReceipt",
+            "summary": "False run failure",
+            "event_type": "inquiry_run_terminal",
+            "actor": {"actor_type": "agent", "id": "forger"},
+            "occurred_at": occurred_at,
+            "target_refs": target,
+            "action": "provider_error",
+            "receipt_body": "False run failure.",
+            "idempotency_key": "inquiry:inq_test_false_failure:run:terminal",
+            "source_refs": refs,
+            "created_by": {"actor_type": "agent", "id": "forger"},
+            "outcome": "provider_error",
+            "details": details,
+            "created_at": occurred_at,
+            "updated_at": occurred_at,
+        }
+    )
+    terminal["artifact_hash"] = canonical_hash(terminal)
+    receipts_dir = (
+        failure_vault / "model-inquiries" / "inq_test_false_failure" / "receipts"
+    )
+    (receipts_dir / "attempt-adapter_req_forged.json").write_text(
+        json.dumps(attempt), encoding="utf-8"
+    )
+    (receipts_dir / "inquiry-run-terminal.json").write_text(
+        json.dumps(terminal), encoding="utf-8"
+    )
+    with pytest.raises(BuilderOpsValidationError, match="details do not match"):
+        failure_service.trace("inq_test_false_failure")

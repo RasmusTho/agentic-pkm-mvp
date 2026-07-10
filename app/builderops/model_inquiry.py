@@ -15,6 +15,11 @@ from typing import Any, cast
 from uuid import uuid4
 
 from app.builderops.config import load_paths
+from app.builderops.model_inquiry_contract import (
+    canonical_hash,
+    initial_context_packet,
+    model_turn_request_hash,
+)
 from app.builderops.models import (
     BuilderOpsConflictError,
     BuilderOpsValidationError,
@@ -37,6 +42,34 @@ READINESS_SCHEMA = "builderops.model-inquiry-readiness.v1"
 SAFE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
 READINESS_OUTCOMES = frozenset({"issue_ready", "needs_input", "not_ready"})
 TERMINAL_TURN_OUTCOMES = frozenset({"accepted", "completed", "failed", "not_ready", "refused"})
+RUN_TERMINAL_OUTCOMES = frozenset(
+    {
+        "consensus",
+        "max_rounds_exhausted",
+        "provider_refused",
+        "malformed_output",
+        "provider_unavailable",
+        "provider_error",
+        "persistence_failed",
+    }
+)
+PROVIDER_TURN_FIELDS = frozenset(
+    {
+        "adapter_request_id",
+        "provider_request_id",
+        "adapter_id",
+        "provider",
+        "model",
+        "context_hash",
+        "request_hash",
+        "input_hash",
+        "output_hash",
+        "phase",
+        "round_index",
+        "stance",
+        "accepted_artifact_hash",
+    }
+)
 _INQUIRY_LOCKS_GUARD = threading.Lock()
 _INQUIRY_LOCKS: dict[str, threading.RLock] = {}
 
@@ -146,6 +179,7 @@ class ModelInquiryService:
         content: str,
         input_artifact_refs: list[str],
         source_refs: list[dict[str, Any]],
+        provider_metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         safe_inquiry_id = _safe_id(inquiry_id, "inquiry_id")
         lock = _inquiry_lock(self._vault_root, safe_inquiry_id)
@@ -159,6 +193,7 @@ class ModelInquiryService:
                     content=content,
                     input_artifact_refs=input_artifact_refs,
                     source_refs=source_refs,
+                    provider_metadata=provider_metadata,
                 )
 
     def _commit_turn_locked(
@@ -171,6 +206,7 @@ class ModelInquiryService:
         content: str,
         input_artifact_refs: list[str],
         source_refs: list[dict[str, Any]],
+        provider_metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         inquiry_id = _safe_id(inquiry_id, "inquiry_id")
         turn_id = _safe_id(turn_id, "turn_id")
@@ -179,6 +215,7 @@ class ModelInquiryService:
         _validate_sequence(sequence)
         _validate_artifact_refs(input_artifact_refs)
         validate_source_refs(source_refs)
+        normalized_provider_metadata = _validate_provider_metadata(provider_metadata)
         directory = self._require_inquiry(inquiry_id)
         # Sequence is the atomic reservation key. Two concurrent writers for the
         # same successor slot therefore contend on one no-overwrite pathname.
@@ -204,6 +241,7 @@ class ModelInquiryService:
             "source_refs": source_refs,
             "created_at": _existing_timestamp(existing),
         }
+        payload.update(normalized_provider_metadata)
         payload["artifact_hash"] = _artifact_hash(payload)
         reservation_path = directory / "turn-ids" / f"{turn_id}.json"
         _, reservation_created = self._write_immutable_status(
@@ -352,6 +390,104 @@ class ModelInquiryService:
         receipt["artifact_hash"] = _artifact_hash(receipt)
         return self._write_immutable(path, receipt, label="immutable terminal receipt")
 
+    def commit_provider_attempt_receipt(
+        self,
+        inquiry_id: str,
+        *,
+        adapter_request_id: str,
+        outcome: str,
+        details: Mapping[str, Any],
+        source_refs: list[dict[str, Any]],
+        actor: Mapping[str, Any] | str | None = None,
+    ) -> dict[str, Any]:
+        inquiry_id = _safe_id(inquiry_id, "inquiry_id")
+        adapter_request_id = _safe_id(adapter_request_id, "adapter_request_id")
+        outcome = _safe_id(outcome, "provider attempt outcome")
+        validate_source_refs(source_refs)
+        sanitized = _validate_receipt_details(details)
+        directory = self._require_inquiry(inquiry_id)
+        path = directory / "receipts" / f"attempt-{adapter_request_id}.json"
+        existing = self._read_optional(path)
+        occurred_at = _existing_timestamp(existing)
+        actor_ref = normalize_actor(actor)
+        receipt = normalize_record(
+            {
+                "id": f"receipt_{inquiry_id}_{adapter_request_id}",
+                "object_type": "BuilderOpsReceipt",
+                "summary": f"Provider attempt {adapter_request_id} ended {outcome}",
+                "event_type": "inquiry_provider_attempt_terminal",
+                "actor": actor_ref,
+                "occurred_at": occurred_at,
+                "target_refs": [
+                    {
+                        "ref_type": "builderops_inquiry",
+                        "ref": inquiry_id,
+                        "authority_surface": "builderops",
+                    }
+                ],
+                "action": outcome,
+                "receipt_body": f"Provider attempt ended with classified outcome {outcome}.",
+                "idempotency_key": f"inquiry:{inquiry_id}:attempt:{adapter_request_id}",
+                "source_refs": source_refs,
+                "created_by": actor_ref,
+                "adapter_request_id": adapter_request_id,
+                "outcome": outcome,
+                "details": sanitized,
+                "created_at": occurred_at,
+                "updated_at": occurred_at,
+            }
+        )
+        receipt["artifact_hash"] = _artifact_hash(receipt)
+        return self._write_immutable(path, receipt, label="immutable provider attempt receipt")
+
+    def commit_run_terminal_receipt(
+        self,
+        inquiry_id: str,
+        *,
+        outcome: str,
+        details: Mapping[str, Any],
+        source_refs: list[dict[str, Any]],
+        actor: Mapping[str, Any] | str | None = None,
+    ) -> dict[str, Any]:
+        inquiry_id = _safe_id(inquiry_id, "inquiry_id")
+        if outcome not in RUN_TERMINAL_OUTCOMES:
+            raise BuilderOpsValidationError(f"unsupported inquiry run outcome: {outcome}")
+        validate_source_refs(source_refs)
+        sanitized = _validate_receipt_details(details)
+        directory = self._require_inquiry(inquiry_id)
+        path = directory / "receipts" / "inquiry-run-terminal.json"
+        existing = self._read_optional(path)
+        occurred_at = _existing_timestamp(existing)
+        actor_ref = normalize_actor(actor)
+        receipt = normalize_record(
+            {
+                "id": f"receipt_{inquiry_id}_run_terminal",
+                "object_type": "BuilderOpsReceipt",
+                "summary": f"Model inquiry {inquiry_id} ended {outcome}",
+                "event_type": "inquiry_run_terminal",
+                "actor": actor_ref,
+                "occurred_at": occurred_at,
+                "target_refs": [
+                    {
+                        "ref_type": "builderops_inquiry",
+                        "ref": inquiry_id,
+                        "authority_surface": "builderops",
+                    }
+                ],
+                "action": outcome,
+                "receipt_body": f"Inquiry runner reached terminal outcome {outcome}.",
+                "idempotency_key": f"inquiry:{inquiry_id}:run:terminal",
+                "source_refs": source_refs,
+                "created_by": actor_ref,
+                "outcome": outcome,
+                "details": sanitized,
+                "created_at": occurred_at,
+                "updated_at": occurred_at,
+            }
+        )
+        receipt["artifact_hash"] = _artifact_hash(receipt)
+        return self._write_immutable(path, receipt, label="immutable inquiry run terminal receipt")
+
     def trace(self, inquiry_id: str) -> dict[str, Any]:
         inquiry_id = _safe_id(inquiry_id, "inquiry_id")
         directory = self._require_inquiry(inquiry_id)
@@ -365,7 +501,8 @@ class ModelInquiryService:
                 raise BuilderOpsValidationError("foreign artifact in inquiry trace")
         receipts = self._read_receipts(directory)
         self._validate_manifest(manifest, question, receipts, inquiry_id)
-        self._validate_artifact_graph(turns, synthesis, readiness)
+        self._validate_artifact_graph(question, turns, synthesis, readiness)
+        self._validate_run_terminal_semantics(receipts, turns, synthesis)
         source_refs = _dedupe_source_refs(
             manifest.get("source_refs", []),
             question.get("source_refs", []),
@@ -523,11 +660,27 @@ class ModelInquiryService:
 
     @contextmanager
     def _inquiry_process_lock(self, inquiry_id: str) -> Iterator[None]:
+        with self._named_inquiry_lock(inquiry_id, ".turn-commit.lock", "turn commit"):
+            yield
+
+    @contextmanager
+    def inquiry_runner_lock(self, inquiry_id: str) -> Iterator[None]:
+        safe_id = _safe_id(inquiry_id, "inquiry_id")
+        with self._named_inquiry_lock(safe_id, ".inquiry-runner.lock", "inquiry runner"):
+            yield
+
+    @contextmanager
+    def _named_inquiry_lock(
+        self,
+        inquiry_id: str,
+        filename: str,
+        label: str,
+    ) -> Iterator[None]:
         directory = self._require_inquiry(inquiry_id)
-        path = directory / ".turn-commit.lock"
+        path = directory / filename
         self._validate_artifact_parent(path)
         if path.is_symlink():
-            raise BuilderOpsValidationError(f"turn commit lock must not be a symlink: {path}")
+            raise BuilderOpsValidationError(f"{label} lock must not be a symlink: {path}")
         flags = os.O_CREAT | os.O_RDWR
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
@@ -542,7 +695,7 @@ class ModelInquiryService:
             locked = True
             yield
         except OSError as exc:
-            raise BuilderOpsValidationError(f"unable to lock model inquiry: {inquiry_id}") from exc
+            raise BuilderOpsValidationError(f"unable to acquire {label} lock: {inquiry_id}") from exc
         finally:
             if descriptor is not None:
                 if locked:
@@ -592,6 +745,7 @@ class ModelInquiryService:
             _safe_id(str(turn.get("role", "")), "role")
             _validate_persisted_artifact_refs(turn.get("input_artifact_refs"))
             _validate_persisted_source_refs(turn.get("source_refs"))
+            _validate_provider_metadata_from_turn(turn)
             _validate_artifact_hash(turn, label=f"turn {turn_id}")
             reservation = self._read_required(reservations_dir / f"{turn_id}.json")
             expected_reservation = {
@@ -619,9 +773,13 @@ class ModelInquiryService:
         receipts_dir = directory / "receipts"
         if receipts_dir.is_symlink():
             raise BuilderOpsValidationError(f"receipt directory must not be a symlink: {receipts_dir}")
-        receipts = [self._read_required(path) for path in sorted(receipts_dir.glob("*.json"))]
+        receipt_files = [
+            (path, self._read_required(path)) for path in sorted(receipts_dir.glob("*.json"))
+        ]
+        receipts = [receipt for _, receipt in receipt_files]
         seen_ids: set[str] = set()
-        for receipt in receipts:
+        run_terminal_count = 0
+        for path, receipt in receipt_files:
             try:
                 normalized = normalize_record(receipt)
             except (TypeError, ValueError, KeyError) as exc:
@@ -633,6 +791,13 @@ class ModelInquiryService:
             if receipt_id in seen_ids:
                 raise BuilderOpsValidationError(f"duplicate inquiry receipt id: {receipt_id}")
             seen_ids.add(receipt_id)
+            if receipt.get("event_type") == "inquiry_run_terminal":
+                run_terminal_count += 1
+                _validate_run_terminal_receipt(directory.name, path, receipt)
+            elif receipt.get("event_type") == "inquiry_provider_attempt_terminal":
+                _validate_provider_attempt_receipt(directory.name, path, receipt)
+        if run_terminal_count > 1:
+            raise BuilderOpsValidationError("multiple inquiry run terminal receipts")
         return receipts
 
     def _validate_manifest(
@@ -689,12 +854,14 @@ class ModelInquiryService:
 
     def _validate_artifact_graph(
         self,
+        question: dict[str, Any],
         turns: list[dict[str, Any]],
         synthesis: dict[str, Any] | None,
         readiness: dict[str, Any] | None,
     ) -> None:
         turn_sequences = {turn["turn_id"]: turn["sequence"] for turn in turns}
         available = {"question", *turn_sequences}
+        artifacts: dict[str, dict[str, Any]] = {"question": question}
         for turn in turns:
             refs = set(turn.get("input_artifact_refs", []))
             if not refs or not refs <= available:
@@ -706,6 +873,69 @@ class ModelInquiryService:
                     raise BuilderOpsValidationError(
                         f"turn input sequence is not prior: {turn['turn_id']} -> {ref}"
                     )
+            if "adapter_request_id" in turn:
+                input_basis = [
+                    {
+                        "artifact_id": ref,
+                        "artifact_hash": artifacts[ref]["artifact_hash"],
+                    }
+                    for ref in turn["input_artifact_refs"]
+                ]
+                if turn["input_hash"] != _content_hash(
+                    json.dumps(
+                        input_basis,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                ):
+                    raise BuilderOpsValidationError(
+                        f"provider turn input hash mismatch: {turn['turn_id']}"
+                    )
+                expected_context = canonical_hash(
+                    initial_context_packet(
+                        inquiry_id=str(question["inquiry_id"]),
+                        workflow=str(question["workflow"]),
+                        question_artifact_id=str(question["artifact_id"]),
+                        question_artifact_hash=str(question["artifact_hash"]),
+                        source_refs=list(question["source_refs"]),
+                    )
+                )
+                if turn["context_hash"] != expected_context:
+                    raise BuilderOpsValidationError(
+                        f"provider turn context hash mismatch: {turn['turn_id']}"
+                    )
+                expected_request = model_turn_request_hash(
+                    inquiry_id=str(turn["inquiry_id"]),
+                    role=str(turn["role"]),
+                    phase=str(turn["phase"]),
+                    round_index=int(turn["round_index"]),
+                    context_hash=str(turn["context_hash"]),
+                    input_hash=str(turn["input_hash"]),
+                    input_artifact_refs=list(turn["input_artifact_refs"]),
+                    adapter_id=str(turn["adapter_id"]),
+                    provider=str(turn["provider"]),
+                    model=str(turn["model"]),
+                )
+                if turn["request_hash"] != expected_request:
+                    raise BuilderOpsValidationError(
+                        f"provider turn request hash mismatch: {turn['turn_id']}"
+                    )
+                if turn["adapter_request_id"] != f"adapter_req_{expected_request[:32]}":
+                    raise BuilderOpsValidationError(
+                        f"provider turn adapter request id mismatch: {turn['turn_id']}"
+                    )
+                if turn["stance"] == "accept":
+                    reviewed_hashes = {
+                        artifacts[ref]["artifact_hash"]
+                        for ref in turn["input_artifact_refs"]
+                        if ref != "question"
+                    }
+                    if turn["accepted_artifact_hash"] not in reviewed_hashes:
+                        raise BuilderOpsValidationError(
+                            f"provider turn accepts non-prior artifact: {turn['turn_id']}"
+                        )
+            artifacts[turn["turn_id"]] = turn
         if synthesis is not None:
             self._validate_derived_artifact(
                 synthesis,
@@ -761,6 +991,107 @@ class ModelInquiryService:
         _validate_persisted_artifact_refs(artifact.get("input_artifact_refs"))
         _validate_persisted_source_refs(artifact.get("source_refs"))
         _validate_artifact_hash(artifact, label="readiness")
+
+    def _validate_run_terminal_semantics(
+        self,
+        receipts: list[dict[str, Any]],
+        turns: list[dict[str, Any]],
+        synthesis: dict[str, Any] | None,
+    ) -> None:
+        terminal = next(
+            (
+                receipt
+                for receipt in receipts
+                if receipt.get("event_type") == "inquiry_run_terminal"
+            ),
+            None,
+        )
+        if terminal is None:
+            return
+        outcome = terminal["outcome"]
+        details = terminal["details"]
+        if outcome == "consensus":
+            accepted_hash = details.get("accepted_artifact_hash")
+            round_index = details.get("round_index")
+            if not isinstance(round_index, int) or isinstance(round_index, bool) or round_index < 0:
+                raise BuilderOpsValidationError("consensus terminal has invalid round_index")
+            accepted_turn = next(
+                (turn for turn in turns if turn.get("artifact_hash") == accepted_hash),
+                None,
+            )
+            accept_turns = [
+                turn
+                for turn in turns
+                if turn.get("phase") == "review"
+                and turn.get("round_index") == round_index
+                and turn.get("stance") == "accept"
+                and turn.get("accepted_artifact_hash") == accepted_hash
+            ]
+            if (
+                accepted_turn is None
+                or round_index > 19
+                or len(accept_turns) != 2
+                or {turn.get("role") for turn in accept_turns} != {"fable", "gpt_codex"}
+                or synthesis is None
+                or synthesis.get("input_artifact_refs") != [accepted_turn["turn_id"]]
+                or synthesis.get("content") != accepted_turn["content"]
+            ):
+                raise BuilderOpsValidationError("consensus terminal is not linked to accepted graph")
+            return
+        if outcome == "max_rounds_exhausted":
+            max_rounds = details.get("max_rounds")
+            if (
+                isinstance(max_rounds, bool)
+                or not isinstance(max_rounds, int)
+                or max_rounds < 1
+                or max_rounds > 20
+            ):
+                raise BuilderOpsValidationError("max-round terminal has invalid bound")
+            review_pairs = {
+                (turn.get("round_index"), turn.get("role"))
+                for turn in turns
+                if turn.get("phase") == "review"
+            }
+            expected_pairs = {
+                (round_index, role)
+                for round_index in range(max_rounds)
+                for role in ("fable", "gpt_codex")
+            }
+            draft_roles = {
+                turn.get("role") for turn in turns if turn.get("phase") == "draft"
+            }
+            review_turns = [turn for turn in turns if turn.get("phase") == "review"]
+            draft_turns = [turn for turn in turns if turn.get("phase") == "draft"]
+            accepted_groups: dict[tuple[int, str], set[str]] = {}
+            for turn in review_turns:
+                if turn.get("stance") != "accept":
+                    continue
+                key = (
+                    int(turn["round_index"]),
+                    str(turn["accepted_artifact_hash"]),
+                )
+                accepted_groups.setdefault(key, set()).add(str(turn["role"]))
+            proven_consensus = any(
+                roles == {"fable", "gpt_codex"} for roles in accepted_groups.values()
+            )
+            if (
+                review_pairs != expected_pairs
+                or draft_roles != {"fable", "gpt_codex"}
+                or len(review_turns) != 2 * max_rounds
+                or len(draft_turns) != 2
+                or proven_consensus
+            ):
+                raise BuilderOpsValidationError("max-round terminal has incomplete review graph")
+            return
+        attempts = [
+            receipt
+            for receipt in receipts
+            if receipt.get("event_type") == "inquiry_provider_attempt_terminal"
+            and receipt.get("outcome") == outcome
+            and receipt.get("details") == details
+        ]
+        if len(attempts) != 1:
+            raise BuilderOpsValidationError("failure terminal is not linked to one provider attempt")
 
     def _require_within_vault(self, candidate: Path, *, label: str) -> None:
         try:
@@ -957,6 +1288,198 @@ def _validate_persisted_source_refs(value: Any) -> None:
     if not isinstance(value, list) or not all(isinstance(ref, dict) for ref in value):
         raise BuilderOpsValidationError("source_refs must be a list of objects")
     validate_source_refs(value)
+
+
+def _validate_provider_metadata(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    if value is None:
+        return {}
+    payload = dict(value)
+    if set(payload) != PROVIDER_TURN_FIELDS:
+        raise BuilderOpsValidationError("provider turn metadata fields do not match contract")
+    for field in (
+        "adapter_request_id",
+        "adapter_id",
+        "provider",
+        "model",
+        "phase",
+        "stance",
+    ):
+        if not isinstance(payload[field], str) or not payload[field].strip():
+            raise BuilderOpsValidationError(f"provider turn {field} must be non-empty")
+    _safe_id(payload["adapter_request_id"], "adapter_request_id")
+    if payload["phase"] not in {"draft", "review"}:
+        raise BuilderOpsValidationError("provider turn phase must be draft or review")
+    if payload["stance"] not in {"draft", "accept", "revise"}:
+        raise BuilderOpsValidationError("refusal cannot be committed as a provider turn")
+    provider_request_id = payload["provider_request_id"]
+    if provider_request_id is not None and (
+        not isinstance(provider_request_id, str) or not provider_request_id.strip()
+    ):
+        raise BuilderOpsValidationError("provider_request_id must be null or non-empty")
+    if provider_request_id is not None:
+        lowered = provider_request_id.lower()
+        if (
+            len(provider_request_id) > 256
+            or any(
+                char
+                not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-"
+                for char in provider_request_id
+            )
+            or any(
+                token in lowered
+                for token in ("secret", "credential", "bearer", "api_key", "token")
+            )
+        ):
+            raise BuilderOpsValidationError("provider_request_id failed safe identifier validation")
+    for field in ("context_hash", "request_hash", "input_hash", "output_hash"):
+        _validate_sha256(payload[field], field)
+    accepted = payload["accepted_artifact_hash"]
+    if accepted is not None:
+        _validate_sha256(accepted, "accepted_artifact_hash")
+    if payload["stance"] == "accept" and accepted is None:
+        raise BuilderOpsValidationError("accept provider turn requires accepted artifact hash")
+    if payload["stance"] != "accept" and accepted is not None:
+        raise BuilderOpsValidationError("only accept provider turn may set accepted artifact hash")
+    round_index = payload["round_index"]
+    if isinstance(round_index, bool) or not isinstance(round_index, int) or round_index < 0:
+        raise BuilderOpsValidationError("provider turn round_index must be non-negative")
+    return payload
+
+
+def _validate_provider_metadata_from_turn(turn: Mapping[str, Any]) -> None:
+    present = PROVIDER_TURN_FIELDS & set(turn)
+    if not present:
+        return
+    if present != PROVIDER_TURN_FIELDS:
+        raise BuilderOpsValidationError("persisted provider turn metadata is incomplete")
+    _validate_provider_metadata({field: turn[field] for field in PROVIDER_TURN_FIELDS})
+    if turn["output_hash"] != turn.get("content_hash"):
+        raise BuilderOpsValidationError("provider turn output hash does not match stored response")
+
+
+def _validate_sha256(value: Any, field: str) -> None:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(char not in "0123456789abcdef" for char in value)
+    ):
+        raise BuilderOpsValidationError(f"{field} must be lowercase sha256")
+
+
+def _validate_receipt_details(value: Mapping[str, Any]) -> dict[str, Any]:
+    payload = dict(value)
+    forbidden = ("secret", "token", "api_key", "authorization", "stderr", "argv", "environment")
+
+    def visit(item: Any, path: str) -> None:
+        if item is None or isinstance(item, (str, int, float, bool)):
+            return
+        if isinstance(item, list):
+            for index, child in enumerate(item):
+                visit(child, f"{path}[{index}]")
+            return
+        if isinstance(item, dict):
+            for key, child in item.items():
+                if not isinstance(key, str) or any(token in key.lower() for token in forbidden):
+                    raise BuilderOpsValidationError(f"unsafe receipt detail key: {path}.{key}")
+                visit(child, f"{path}.{key}")
+            return
+        raise BuilderOpsValidationError(f"receipt detail is not JSON-safe: {path}")
+
+    visit(payload, "details")
+    return payload
+
+
+def _validate_run_terminal_receipt(
+    inquiry_id: str,
+    path: Path,
+    receipt: Mapping[str, Any],
+) -> None:
+    outcome = receipt.get("outcome")
+    expected_target = [
+        {
+            "ref_type": "builderops_inquiry",
+            "ref": inquiry_id,
+            "authority_surface": "builderops",
+        }
+    ]
+    if (
+        path.name != "inquiry-run-terminal.json"
+        or receipt.get("id") != f"receipt_{inquiry_id}_run_terminal"
+        or receipt.get("idempotency_key") != f"inquiry:{inquiry_id}:run:terminal"
+        or outcome not in RUN_TERMINAL_OUTCOMES
+        or receipt.get("action") != outcome
+        or receipt.get("target_refs") != expected_target
+        or not isinstance(receipt.get("details"), dict)
+    ):
+        raise BuilderOpsValidationError("invalid inquiry run terminal receipt")
+    _validate_receipt_details(cast(Mapping[str, Any], receipt["details"]))
+
+
+def _validate_provider_attempt_receipt(
+    inquiry_id: str,
+    path: Path,
+    receipt: Mapping[str, Any],
+) -> None:
+    request_id = _safe_id(str(receipt.get("adapter_request_id", "")), "adapter_request_id")
+    outcome = receipt.get("outcome")
+    allowed = RUN_TERMINAL_OUTCOMES - {"consensus", "max_rounds_exhausted"}
+    expected_target = [
+        {
+            "ref_type": "builderops_inquiry",
+            "ref": inquiry_id,
+            "authority_surface": "builderops",
+        }
+    ]
+    details = receipt.get("details")
+    if (
+        path.name != f"attempt-{request_id}.json"
+        or receipt.get("id") != f"receipt_{inquiry_id}_{request_id}"
+        or receipt.get("idempotency_key") != f"inquiry:{inquiry_id}:attempt:{request_id}"
+        or outcome not in allowed
+        or receipt.get("action") != outcome
+        or receipt.get("target_refs") != expected_target
+        or not isinstance(details, dict)
+        or details.get("adapter_request_id") != request_id
+    ):
+        raise BuilderOpsValidationError("invalid provider attempt terminal receipt")
+    _validate_receipt_details(cast(Mapping[str, Any], details))
+    if request_id == "adapter_req_configuration":
+        if (
+            outcome != "provider_unavailable"
+            or details
+            != {
+                "adapter_request_id": "adapter_req_configuration",
+                "classification": "explicit role adapter unavailable",
+            }
+        ):
+            raise BuilderOpsValidationError("invalid configuration attempt receipt")
+        return
+    expected_classifications = {
+        "provider_refused": "provider returned explicit refusal",
+        "malformed_output": "provider output failed strict response validation",
+        "provider_unavailable": "explicit role adapter unavailable",
+        "provider_error": "provider adapter execution failed",
+        "persistence_failed": "provider result was not durably committed",
+    }
+    expected_fields = {
+        "adapter_request_id",
+        "request_hash",
+        "context_hash",
+        "input_hash",
+        "output_hash",
+        "classification",
+    }
+    if set(details) != expected_fields or details.get("classification") != expected_classifications.get(
+        str(outcome)
+    ):
+        raise BuilderOpsValidationError("provider attempt details do not match outcome contract")
+    for field in ("request_hash", "context_hash", "input_hash"):
+        _validate_sha256(details.get(field), f"attempt {field}")
+    output_hash = details.get("output_hash")
+    if output_hash is not None:
+        _validate_sha256(output_hash, "attempt output_hash")
+    if request_id != f"adapter_req_{str(details['request_hash'])[:32]}":
+        raise BuilderOpsValidationError("provider attempt request ID does not match request hash")
 
 
 def _fsync_directory(path: Path) -> None:
