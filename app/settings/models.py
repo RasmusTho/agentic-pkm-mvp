@@ -276,6 +276,91 @@ class EmbeddingProfiles(BaseModel):
     )
 
 
+class LinearFusionWeights(BaseModel):
+    """Weights for the ratified linear-fusion strategy (ADR-0024, encoded as config by ADR-0059 D3).
+
+    Defaults (0.5/0.4/0.1) are today's trust encoding: exact lexical match (BM25) weighted above
+    fuzzy semantic match (embeddings), with a small overlap bonus. Changing these values is a
+    ranking-behavior change; the shipped default reproduces
+    `app/retrieval/hybrid.py::_rank_eligible` exactly.
+    """
+
+    bm25: float = Field(default=0.5, ge=0.0, description="Weight on the normalized BM25 (lexical) score.")
+    embedding: float = Field(default=0.4, ge=0.0, description="Weight on the normalized embedding (semantic) similarity score.")
+    overlap: float = Field(default=0.1, ge=0.0, description="Weight on the query/doc token-overlap bonus.")
+
+
+class RRFSignalWeights(BaseModel):
+    """Per-signal multipliers on ``1/(k + rank)`` for the reserved RRF fusion strategy.
+
+    Reserved by ADR-0059 D3 step 4 (config shape only); RRF itself ships dark until step 5
+    (issue #3407) plus an eval-gated owner call. ``lexical >= dense`` by default so the trust
+    hierarchy that the linear weights encode today survives a future strategy swap — weighted
+    RRF, not vanilla RRF.
+    """
+
+    lexical: float = Field(default=1.0, ge=0.0, description="Multiplier on the lexical (BM25) reciprocal-rank signal.")
+    dense: float = Field(default=0.8, ge=0.0, description="Multiplier on the dense (embedding) reciprocal-rank signal.")
+
+
+class RetrievalTuning(BaseModel):
+    """Typed, settings-backed, env-overridable retrieval tuning surface (ADR-0059 D3, #3404).
+
+    Resolved once per process via ``app.retrieval.tuning.get_retrieval_tuning()`` — never a
+    per-query ``os.getenv`` read. With no override set anywhere, every field below reproduces
+    today's ranking exactly (byte-identical parity is a hard constraint of #3404). ``fusion="rrf"``
+    and ``rerank="conditional"`` are visible-but-inert: the field type accepts them (so the shape
+    doesn't churn when step 5 / issue #3407 lands), but resolving a config that selects either one
+    raises an explicit not-implemented error rather than silently falling back to the default
+    strategy.
+    """
+
+    fusion: Literal["linear", "rrf"] = Field(
+        default="linear",
+        description="Fusion strategy. 'rrf' is reserved (ADR-0059 D3 step 5 / #3407) and not implemented yet.",
+    )
+    linear_weights: LinearFusionWeights = Field(default_factory=LinearFusionWeights)
+    rrf_k: int = Field(
+        default=60,
+        ge=1,
+        description="Reserved RRF k constant (30-40 favors top-1 precision per the ADR-0059 audit citations); dormant until fusion='rrf' ships.",
+    )
+    rrf_signal_weights: RRFSignalWeights = Field(default_factory=RRFSignalWeights)
+    retrieve_depth: int = Field(
+        default=500,
+        ge=1,
+        description=(
+            "Per-signal candidate depth. Dormant by construction today: the in-memory cache is "
+            "full-corpus, so every document is already scored regardless of this value. Recorded "
+            "now (ADR-0059 D3) so the config shape does not churn later if/when an ANN backend or a "
+            "non-full-corpus cache makes it meaningful; documented as dormant, not silently ignored."
+        ),
+    )
+    rerank: Literal["off", "always", "conditional"] = Field(
+        default="off",
+        description=(
+            "Rerank gate. 'off' (default) matches today's behavior. 'always' reranks every result "
+            "through the existing optional rerank hook. 'conditional' is reserved (ADR-0059 D3 step "
+            "5 / #3407, a deterministic score-margin gate, not a keyword classifier) and not "
+            "implemented yet."
+        ),
+    )
+    rerank_top_k: int = Field(
+        default=100,
+        ge=1,
+        description="Maximum results handed to the reranker when rerank is active.",
+    )
+    rerank_score_margin: float = Field(
+        default=0.2,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Score-margin threshold for the reserved conditional rerank gate (e.g. skip rerank when "
+            "the top BM25 result dominates by this margin). Dormant until rerank='conditional' ships."
+        ),
+    )
+
+
 class QaSettings(AgentBase):
     search_k: int = Field(default=8, description="Documents retrieved before filtering.")
     context_docs: int = Field(default=5, description="Documents kept in the final answer context.")
@@ -387,6 +472,7 @@ class SettingsBundle(BaseModel):
     providers: Providers = Field(default_factory=Providers)
     llm_routing: LLMRoutingSettings = Field(default_factory=LLMRoutingSettings)
     embedding_profiles: EmbeddingProfiles = Field(default_factory=EmbeddingProfiles)
+    retrieval_tuning: RetrievalTuning = Field(default_factory=RetrievalTuning)
     agents: Dict[str, Any] = Field(default_factory=dict)
     yggdrasil_paths: Optional[YggdrasilPaths] = None
     instance: InstanceSettings = Field(default_factory=InstanceSettings)

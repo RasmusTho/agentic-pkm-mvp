@@ -20,6 +20,7 @@ from .models import (
     ReviewerSettings,
     SettingsBundle,
     EmbeddingProfiles,
+    RetrievalTuning,
     YggdrasilPaths,
 )
 from app.config.environment import active_environment
@@ -53,6 +54,7 @@ def _build_bundle() -> SettingsBundle:
     providers_yaml = _read_yaml(RUNTIME / "providers.yaml")
     llm_routing_yaml = _read_yaml(RUNTIME / "llm_routing.yaml")
     embeddings_yaml = _read_yaml(RUNTIME / "embeddings.yaml")
+    retrieval_tuning_yaml = _read_yaml(RUNTIME / "retrieval_tuning.yaml")
     instance_yaml = _read_yaml(RUNTIME / "instance.yaml")
     yggdrasil_yaml = _read_yaml(RUNTIME / "yggdrasil.yaml")
     agents_dir = RUNTIME / "agents"
@@ -72,6 +74,12 @@ def _build_bundle() -> SettingsBundle:
             embedding_profiles = EmbeddingProfiles(**embeddings_yaml)
         except Exception:
             embedding_profiles = EmbeddingProfiles()
+    retrieval_tuning = RetrievalTuning()
+    if retrieval_tuning_yaml:
+        try:
+            retrieval_tuning = RetrievalTuning(**retrieval_tuning_yaml)
+        except Exception:
+            retrieval_tuning = RetrievalTuning()
     yggdrasil_paths = None
     if yggdrasil_yaml:
         try:
@@ -97,6 +105,7 @@ def _build_bundle() -> SettingsBundle:
         providers=Providers(**providers_yaml),
         llm_routing=LLMRoutingSettings(**llm_routing_yaml),
         embedding_profiles=embedding_profiles,
+        retrieval_tuning=retrieval_tuning,
         agents=agents,
         yggdrasil_paths=yggdrasil_paths,
         instance=instance_settings,

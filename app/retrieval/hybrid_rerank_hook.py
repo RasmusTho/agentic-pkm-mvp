@@ -1,18 +1,22 @@
 from __future__ import annotations
 
-import os
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, List
 
 from app.components.rerankers import get_reranker
 from app.retrieval.rerank import RerankItem
+from app.retrieval.tuning import get_retrieval_tuning
 
 
 def apply_optional_rerank(query: str, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    flag = os.getenv("RERANK_ENABLE", "").strip().lower()
-    if flag not in {"1", "true", "yes", "on"}:
+    """Apply the optional rerank hook, gated and sized by the process-resolved RetrievalTuning
+    surface (ADR-0059 D3, #3404). ``RERANK_ENABLE``/``RERANK_TOP_K`` keep working as overrides into
+    that surface (compat); ``RERANK_PROVIDER`` continues to select the reranker implementation
+    directly via :func:`app.components.rerankers.get_reranker` (untouched — provider selection is
+    not part of the D3 config shape)."""
+    tuning = get_retrieval_tuning()
+    if tuning.rerank != "always":
         return items
-    top_k_env = os.getenv("RERANK_TOP_K", "").strip()
-    top_k = int(top_k_env) if top_k_env.isdigit() else None
+    top_k = tuning.rerank_top_k
     reranker = get_reranker()
     rr_items = [
         RerankItem(
