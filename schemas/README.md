@@ -26,6 +26,7 @@ JSON Schemas used across the repo. Three groups live here:
 | [`memory-item.schema.json`](memory-item.schema.json) | [memory-model](../docs/architecture/memory-model.md) | `MemoryItem` — advisory machine memory + promotion boundary | [#2546](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2546) |
 | [`authority-transition.schema.json`](authority-transition.schema.json) | [authority-transition-flow](../docs/architecture/authority-transition-flow.md) | `AuthorityTransition` — governed durable mutation | [#2547](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2547) |
 | [`retrieval-result.schema.json`](retrieval-result.schema.json) | [retrieval-contract](../docs/architecture/retrieval-contract.md) | `RetrievalResult` — candidate evidence/context | [#2548](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2548) |
+| [`heimdal-control-notes.schema.json`](heimdal-control-notes.schema.json) | [Mimer client contract](../docs/contracts/MIMER_CLIENT_CONTRACT.md) | Published `_heimdal/**` note-kind, path, and field-authority manifest | [#3131](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3131) |
 
 ### Conventions
 
