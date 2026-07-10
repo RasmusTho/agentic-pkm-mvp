@@ -939,12 +939,15 @@ def test_list_open_issues_paginates() -> None:
 
 def test_list_open_issues_refuses_truncated_snapshot_at_page_cap() -> None:
     """#2746 review finding: when the page cap is hit with every REST page
-    still full, a silently truncated snapshot would let the stale reconcile
-    treat the missing (still-open) issues as closed and mark their live tasks
+    still full *and* a confirmation page beyond the cap also has data, a
+    silently truncated snapshot would let the stale reconcile treat the
+    missing (still-open) issues as closed and mark their live tasks
     completed. The fetch must fail loud instead, routing ``pull()`` into its
     existing snapshot-unavailable path. Updated by #3313 for the REST
-    transport (a full page no longer proves more results remain via a
-    GraphQL cursor, but the page cap itself is still the fail-loud trigger).
+    transport: a full page alone no longer proves more results remain (no
+    GraphQL cursor), so one bounded confirmation page beyond the cap is
+    fetched before failing loud — this test keeps that confirmation page
+    non-empty so truncation is genuinely proven.
     """
     import json as _json
 
@@ -966,10 +969,120 @@ def test_list_open_issues_refuses_truncated_snapshot_at_page_cap() -> None:
 
     def fake_run(args, **_kwargs):
         calls.append(list(args))
+        # Every page, including the confirmation page beyond the cap, is
+        # full — genuine truncation.
         return MagicMock(returncode=0, stdout=_json.dumps(full_page), stderr="")
 
     with patch("subprocess.run", side_effect=fake_run):
         with pytest.raises(RuntimeError, match="truncated snapshot"):
             source.list_open_issues("RasmusTho/agentic-pkm-mvp")
 
-    assert len(calls) == OPEN_ISSUES_MAX_PAGES
+    # OPEN_ISSUES_MAX_PAGES regular fetches plus one bounded confirmation fetch.
+    assert len(calls) == OPEN_ISSUES_MAX_PAGES + 1
+
+
+def test_list_open_issues_exact_page_multiple_is_not_truncated() -> None:
+    """#3313 review finding: a repo with exactly
+    OPEN_ISSUES_PAGE_SIZE * OPEN_ISSUES_MAX_PAGES open issues ends on a full
+    page with nothing left. Unlike GraphQL's ``hasNextPage`` cursor, a full
+    REST page alone cannot distinguish that from real truncation — the
+    bounded confirmation page beyond the cap must come back empty and the
+    fetch must succeed without raising.
+    """
+    import json as _json
+
+    from app.dispatcher.sync_github import OPEN_ISSUES_MAX_PAGES, OPEN_ISSUES_PAGE_SIZE
+
+    source = GhCliIssueSource()
+    full_page = [
+        {
+            "number": 1,
+            "title": "exact boundary",
+            "state": "open",
+            "labels": [],
+            "created_at": "2026-04-20T10:00:00Z",
+            "updated_at": "2026-04-21T12:00:00Z",
+        }
+    ] * OPEN_ISSUES_PAGE_SIZE
+
+    calls: list[list[str]] = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(list(args))
+        # The confirmation page (call OPEN_ISSUES_MAX_PAGES + 1) is empty:
+        # the previous full page really was the last one.
+        if len(calls) == OPEN_ISSUES_MAX_PAGES + 1:
+            return MagicMock(returncode=0, stdout="[]", stderr="")
+        return MagicMock(returncode=0, stdout=_json.dumps(full_page), stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        issues = source.list_open_issues("RasmusTho/agentic-pkm-mvp")
+
+    assert len(issues) == OPEN_ISSUES_PAGE_SIZE * OPEN_ISSUES_MAX_PAGES
+    assert len(calls) == OPEN_ISSUES_MAX_PAGES + 1
+
+
+def test_list_open_issues_pr_noise_does_not_exhaust_page_budget_early() -> None:
+    """#3313 review finding: the raw REST ``/issues`` endpoint mixes pull
+    requests into the same per_page budget as issues (filtered out only
+    after fetch), unlike the old GraphQL ``issues`` connection. A PR-heavy
+    repo must still be able to collect a real-issue count well beyond the
+    old 1000-issue ceiling without hitting OPEN_ISSUES_MAX_PAGES, because the
+    raw-page budget (OPEN_ISSUES_MAX_PAGES * OPEN_ISSUES_PAGE_SIZE) now has
+    headroom for PR noise.
+    """
+    import json as _json
+
+    from app.dispatcher.sync_github import OPEN_ISSUES_MAX_PAGES, OPEN_ISSUES_PAGE_SIZE
+
+    source = GhCliIssueSource()
+
+    def make_page(n: int, *, prs: int) -> list[dict[str, Any]]:
+        page = [
+            {
+                "number": n * 1000 + i,
+                "title": f"issue {n}-{i}",
+                "state": "open",
+                "labels": [],
+                "created_at": "2026-04-20T10:00:00Z",
+                "updated_at": "2026-04-21T12:00:00Z",
+            }
+            for i in range(OPEN_ISSUES_PAGE_SIZE - prs)
+        ]
+        page.extend(
+            {
+                "number": n * 1000 + 900 + i,
+                "title": f"pr {n}-{i}",
+                "state": "open",
+                "labels": [],
+                "created_at": "2026-04-20T10:00:00Z",
+                "updated_at": "2026-04-21T12:00:00Z",
+                "pull_request": {"url": "https://api.github.com/repos/o/r/pulls/1"},
+            }
+            for i in range(prs)
+        )
+        return page
+
+    calls: list[list[str]] = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(list(args))
+        page_num = len(calls)
+        # Half of every raw page (up to the cap) is pull-request noise; the
+        # confirmation page beyond the cap is empty (real end of results).
+        # The real-issue ceiling this exercises
+        # (OPEN_ISSUES_MAX_PAGES * PAGE_SIZE // 2) exceeds the old
+        # pre-#3313 1000-issue ceiling.
+        if page_num <= OPEN_ISSUES_MAX_PAGES:
+            return MagicMock(
+                returncode=0, stdout=_json.dumps(make_page(page_num, prs=OPEN_ISSUES_PAGE_SIZE // 2)), stderr=""
+            )
+        return MagicMock(returncode=0, stdout="[]", stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        issues = source.list_open_issues("RasmusTho/agentic-pkm-mvp")
+
+    expected_real_issues = OPEN_ISSUES_MAX_PAGES * (OPEN_ISSUES_PAGE_SIZE // 2)
+    assert expected_real_issues > 1000, "test should exercise beyond the old 1000-issue ceiling"
+    assert len(issues) == expected_real_issues
+    assert len(calls) == OPEN_ISSUES_MAX_PAGES + 1
