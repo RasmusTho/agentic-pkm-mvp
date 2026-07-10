@@ -74,6 +74,10 @@ Standing governance invariant: generic third-party MCP servers never receive vau
 MCP-originated writes route through Mimer's governed capture endpoint. ADR-0056's separate,
 owner-permitted direct-filesystem transport remains available only under the client contract's
 human-delegation and write-discipline rules.
+Executable specification lanes: `docs/MIMER_MCP_CLIENT_ADAPTER/` (B1) and
+`docs/KARAKEEP_MIMER_ACQUISITION/` (B2). B3 reuses the existing Heimdal/voice lanes (#3026/#3338),
+while B4 remains docs-enrichment work and B5 remains conditional; neither Direction A connector
+configuration nor those unready items create implementation issues in this handoff.
 
 ## Status vocabulary
 - **Shipped** — merged to main; code/doc exists.
