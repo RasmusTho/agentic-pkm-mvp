@@ -73,11 +73,20 @@ allowed to populate it, and it is warmed once at API startup (`_warm_retrieval_c
 (`app/retrieval/hybrid.py:hybrid_search`/`scoped_hybrid_search`, consumed through the typed
 `app/retrieval/capability.py` wrapper) shares the same warmed cache. Freshness is bounded, not
 per-query-live: `scoped_hybrid_search` revalidates the cache against a cheap durable
-store-generation token (`PgVectorIndex.generation()`, `app/stores/pg.py:634-649`) at most once per a
+store-generation token (`PgVectorIndex.generation()`, `app/stores/pg.py`) at most once per a
 configurable minimum interval (`_revalidate_cache_generation()`, `app/retrieval/hybrid.py:235-261`;
 default/floor 1s via `RETRIEVAL_GENERATION_MIN_CHECK_INTERVAL_S`), and forces a full rebuild on a
 generation mismatch — so a committed upsert/purge becomes visible without a process restart, bounded
-by that check interval rather than being instantly live. This closes the durable-spine direction ADR-0024
+by that check interval rather than being instantly live. **The token is identity-aware
+(ADR-0059 D2, #3403):** it is `identity_hash:count:max(updated_at)`, where `identity_hash` is a
+short stable hash of `vector_index_meta.identity_json` (empty-string component when no identity row
+exists) — every `VectorIndex` implementation (`PgVectorIndex`, `MemoryVectorIndex`) computes it via
+the shared `app/stores/base.py::identity_generation_component` helper. This closes a gap the
+row-count/`max(updated_at)` token alone left open: an ADR-0052 repin that rewrites the stored
+embedding identity WITHOUT rewriting any `store_vector_index` row now still moves the token and
+forces a rebuild, instead of silently continuing to serve stale-identity vectors across a repin.
+`_revalidate_cache_generation()` itself is unchanged — it only ever compares the token as an opaque
+string. This closes the durable-spine direction ADR-0024
 recorded and the once-per-process staleness gap that remained after KERNEL-05; see ADR-0024's
 2026-07-05 status annotation for what is now superseded. Remaining scope under the RAG/memory
 decomposition epic (#2314) is retrieval-quality work (RRF/HyDE/low-trust-weights/eval, next

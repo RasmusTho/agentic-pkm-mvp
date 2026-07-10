@@ -20,6 +20,7 @@ from .base import (
     RelationMembership,
     RelationIndex,
     VectorIndex,
+    identity_generation_component,
 )
 
 
@@ -218,10 +219,15 @@ class MemoryVectorIndex(VectorIndex):
         return len(self._entries)
 
     def generation(self) -> str:
-        """Opaque store-generation token (G1res-1, #2981): ``seq`` advances on
-        every upsert and the entry count drops on purge, so any committed
-        upsert/purge changes the token."""
-        return f"{self._seq}:{len(self._entries)}"
+        """Opaque store-generation token (G1res-1, #2981; identity-aware per
+        ADR-0059 D2, #3403): ``seq`` advances on every upsert and the entry
+        count drops on purge, so any committed upsert/purge changes the
+        token. The leading component is a short hash of the current store
+        identity (empty-string component when no identity has been
+        established yet), so a repin — the identity being replaced without
+        any entry being rewritten — also moves the token, matching
+        ``PgVectorIndex.generation()``."""
+        return f"{identity_generation_component(self._identity)}:{self._seq}:{len(self._entries)}"
 
     def all_rows(self) -> list[dict]:
         """Return every durable row for a cache rebuild (KERNEL-05, I-D3)."""
