@@ -139,14 +139,14 @@ Model + reasoning policy — Claude:
 - **Opus / high–xhigh effort** — architecture, unclear requirements, high defect cost, hard bugs, risk review, system/agent/workflow design, complex dependencies, or when human review would otherwise be expensive.
 - **Opus + Ultra Code / xhigh–max effort** — complex orchestration, repo-wide design, and security / data / migration / auth / concurrency / payments / external-API work, where the wrong direction costs more than the extra model spend.
 
-Model + reasoning policy — Codex: read the actual repo/session/config for the current Codex model and reasoning level; do not assume hardcoded values. As of GPT-5.6, OpenAI model names carry a durable capability tier (**Sol** = highest ceiling, **Terra** = balanced default, **Luna** = fast/cheap) that advances across generations; route by tier the same way the Claude ladder routes by model:
+Model + reasoning policy — Codex: read the actual repo/session/config for the current Codex model and reasoning level; do not assume hardcoded values. OpenAI model names carry a durable capability tier (**Sol** = highest ceiling, **Terra** = balanced default, **Luna** = fast/cheap; introduced with GPT-5.6) that advances across generations — route by tier the same way the Claude ladder routes by model, resolving the tier to the current generation's model id at config time:
 
 - **Luna / minimal–low reasoning** — mechanical, low-risk, auto-verifiable transforms (mirrors Haiku). Never for architecture, unclear requirements, or hidden correctness risk.
 - **Terra / medium reasoning** — DEFAULT for normal development: implementation, refactor, test fixes, small refactors, normal review (mirrors Sonnet/medium).
 - **Terra / high reasoning** — hard debugging, multi-file/multi-layer, test strategy, design trade-offs, risky review (mirrors Sonnet/high).
 - **Sol / high–xhigh reasoning** — architecture, migrations, auth/security/data, concurrency, external APIs, long autonomous tasks, complex orchestration/workflow design, or when human steering would likely exceed 10–15 min (mirrors Opus).
 
-Reasoning ladder (unchanged semantics): **minimal** (strict mechanics, search/replace, formatting, auto-tested output) · **low** (simple local low-risk) · **medium** (default interactive coding) · **high** (design trade-offs, risky review) · **xhigh** (architecture and high-blast-radius work). Propose a Codex model/reasoning change only when TCD justifies it.
+The tier bullets above are authoritative for the reasoning ladder as well (minimal–xhigh, unchanged semantics); do not maintain a separate reasoning table. Propose a Codex model/reasoning change only when TCD justifies it.
 
 Escalation triggers (raise model and/or reasoning, or route to a more specialized skill) — any of:
 
