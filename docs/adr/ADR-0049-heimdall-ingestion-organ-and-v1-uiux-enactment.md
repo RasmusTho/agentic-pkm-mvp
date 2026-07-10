@@ -68,6 +68,12 @@ v1 but the surface is **designed to inherit it**: the consent note already write
 grant + adapter change, not a redesign. The choice to enable B is a future owner decision carrying the
 third-party / GDPR weight; v1 does not incur it.
 
+> **Superseded in part by [ADR-0060](./ADR-0060-capture-posture-b-full-voice-identity.md) (2026-07-10):**
+> the owner has taken the reserved decision — the target posture is **B-full (always-on) with voice
+> identification**, activation staged behind explicit gates. Posture A remains operational until those
+> gates pass. This section's mechanism design (consent note carries the B-shaped machinery; enabling B
+> is a grant + adapter change) is unchanged; only the "not decided" status is superseded.
+
 ### 4. Native app — Topology C (one shell, two bounded clients, splittable)
 
 The native app is **one shell ("Yggdrasil")** hosting **two bounded internal clients** — a Heimdal

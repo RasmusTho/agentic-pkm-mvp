@@ -35,6 +35,11 @@ These are settled. Fable designs within them; it does not relitigate them.
 4. **Consent posture.** Single-party consent; **always-on capture OFF by default** (opt-in per
    place/session); third parties present must be **marked/degraded** in the resulting events. This is a
    guardrail, not a design variable. (`OWNER_DECISIONS.md` D-CONSENT)
+   **Posture ruling updated by [ADR-0060](../adr/ADR-0060-capture-posture-b-full-voice-identity.md)
+   (2026-07-10):** the owner has ruled the *target* posture B-full (always-on) with voice
+   identification, activation staged behind explicit gates. The mechanism here is unchanged —
+   opt-in per place/session and third-party marking/degradation stand; ungranted third parties
+   stay degraded even under B-full.
 5. **Raw-layer privacy seam.** The raw observation layer is **encrypted at rest and isolated**. Access
    is **policy-gated** (CrossScopeFlow-grant), available to trusted downstream agents under policy —
    not human-only, and not open. Only **published, minimized, attributed** events cross the seam by
