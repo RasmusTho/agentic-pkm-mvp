@@ -211,13 +211,17 @@ specs. Ranked by leverage:
   for this leg since it is Mimer's own worker doing the pulling, not an interactive MCP client.
   Karakeep's bundled MCP server is a free bonus for ad hoc Claude access to the reading archive
   directly (Direction A), independent of the ingestion job.
-- **B3 — Swedish-first voice capture pipeline.** Watched-folder / endpoint on the mac mini running
-  KB-Whisper (National Library of Sweden fine-tune; ~47% WER reduction vs whisper-large-v3 on
-  Swedish) or Parakeet-MLX, emitting markdown capture candidates into KAP intake. Sources: Voice
-  Memos/Shortcuts drops, Drafts audio, later Omi. For a dyslexic operator this is the
-  friction-killer; no consumer product ships this Swedish-first + local + vault-governed. (SaaS
-  shortcut exists — Voicenotes has an official MCP — but it moves raw voice off-device, against
-  the local-first capture posture.)
+- **B3 — Swedish-first voice capture improvement on the existing Heimdal lane.** This is not a new
+  KAP-direct pipeline: `docs/HEIMDAL_CAPTURE_CLIENT/README.md` and parent #3026 already own
+  watched-folder capture, preserve the raw-evidence seam, and assign transcription to the shared
+  hub-side `app/media/transcribe.py::run_asr`; #3338 separately guards that one-engine seam for
+  voice ASK. The remaining audit delta is to evaluate/configure a Swedish-strong local model
+  (KB-Whisper, the National Library of Sweden fine-tune, or Parakeet-MLX) inside that shared engine
+  and close the existing unattended capture→ASR→note/publish orchestration gap recorded by the
+  Heimdal spec. Sources remain Voice Memos/Shortcuts drops, the Heimdal native client, Drafts audio,
+  and later Omi. Backlog extraction must reconcile #3026/#3338 first and must not create a parallel
+  capture or KAP-write lane. For a dyslexic operator this is the friction-killer; the SaaS shortcut
+  (Voicenotes' official MCP) moves raw voice off-device, against the local-first capture posture.
 - **B4 — Direction C consumption slices.** CRE/KAP consuming external MCP signals via the existing
   flagged remote-MCP seam: HA presence/state → context dimensions; Todoist/Bring! tasks → commitment
   context (both D2-ruled, both Direction A adopt already — this slice is the runtime-consumption
