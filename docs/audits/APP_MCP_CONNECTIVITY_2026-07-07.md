@@ -1,4 +1,4 @@
-State: Advisory audit snapshot, 2026-07-07. App inventory taken from the operator's MacBook and mac mini on the audit date; MCP-ecosystem claims verified by web research the same day (the MCP ecosystem moves fast — re-verify before building). Subordinate to `docs/DOCS_INDEX.md` and owner contracts; owner docs win on disagreement.
+State: Advisory audit snapshot, 2026-07-07. App inventory taken from the operator's MacBook and mac mini on the audit date; MCP-ecosystem claims verified by web research the same day (the MCP ecosystem moves fast — re-verify before building). Owner ruled D1 2026-07-10 (§4): self-host Karakeep on the mac mini as the read-later/highlights/Mimer-ingestion source, keep Raindrop.io as the bookmark layer with its official MCP adopted (both, not either/or). D2 remains open — owner is weighing alternatives against work/Apple/family-sharing constraints. Subordinate to `docs/DOCS_INDEX.md` and owner contracts; owner docs win on disagreement.
 Doc role: Reference (audit snapshot)
 Authority: Evidence-based inventory of the operator's applications and their MCP (Model Context Protocol) connectivity status, with adopt/build/switch/drop verdicts and a roadmap handoff. Advisory only — app-switch decisions are the owner's; build items enter the backlog only through the normal feature-breakdown/issue path.
 
@@ -75,9 +75,10 @@ no replacement needed) · **keep/ignore** (fine as is, no agent surface warrante
 | App | MCP status | Verdict |
 |---|---|---|
 | Pocket | **Dead** — Mozilla shut it down 2025-07-08, API included; data export window closed 2025 | **drop/uninstall** (both Macs still have it) |
-| Instapaper | Alive but no official MCP; community server needs a manually-approved API key | **switch away** (owner decision D1, §4) |
-| Raindrop.io | **Official** MCP (beta, Pro plan) + strong community server (`adeze/raindrop-mcp`) | **adopt** — keep as the bookmark layer |
-| Readwise Reader | **Official hosted** MCP (`mcp2.readwise.io/mcp`) + export API built for PKM ingestion | **get** — recommended read-later/highlights pipeline (D1, §4) |
+| Instapaper | Alive but no official MCP; community server needs a manually-approved API key | **retired** — superseded by self-hosted Karakeep (D1 ruling, §4) |
+| Raindrop.io | **Official** MCP (beta, Pro plan) + strong community server (`adeze/raindrop-mcp`) | **adopt** — bookmark layer, official MCP adopted (D1 ruling, §4) |
+| Readwise Reader | **Official hosted** MCP (`mcp2.readwise.io/mcp`) + export API built for PKM ingestion | **not selected** — self-hosted Karakeep chosen instead: same ingestion value at $0 vs. $9.99+/mo, local-first (D1 ruling, §4) |
+| Karakeep (self-hosted, ex-Hoarder) | No official *vendor* MCP concept needed — **the self-hosted instance ships its own MCP server plus a clean REST API** (`karakeep-app/karakeep`, 27.2k★, AGPL-3.0, pushed 2026-07-06). AI auto-tagging, full-text search, notes/images/PDFs alongside links. | **build (adopted, D1 ruling, §4)** — Docker on the mac mini; REST API feeds the Mimer ingestion worker, MCP server is a free bonus for interactive Claude access to the reading archive |
 | Zotero | No official; community `54yyyu/zotero-mcp` is excellent (4.2k★, semantic search, PDF annotations, active) | **adopt** |
 
 ### 3.3 Tasks, lists, calendar, mail
@@ -128,27 +129,52 @@ Apple-app bridges that the vendor or an active community project will ship first
 
 ## 4. Owner decisions (switch forks)
 
-Only two forks genuinely need the owner; everything else in §3 is act-and-report.
+**D1 — Read-later consolidation — RESOLVED 2026-07-10.** Problem: three overlapping read-later
+tools; Pocket is dead, Instapaper is agent-hostile (gatekept API key, no official MCP), Raindrop
+is healthy but bookmark-shaped rather than reading/highlight-shaped. Re-framed against the actual
+goal (material flows into Mimer via ingestion, not "best consumer reading app"): MCP-protocol
+presence on the vendor side is irrelevant to a custom ingestion worker, which only needs a stable
+free API to poll. That reframing changes the answer from the SaaS pick in the first pass.
+- **Ruling:** self-host **Karakeep** (`karakeep-app/karakeep`, ex-Hoarder) on the mac mini via
+  Docker for reading + highlights + AI tagging + full-text search — $0, local-first, own REST API
+  for the ingestion worker plus a self-hosted MCP server as a bonus for interactive Claude access.
+  **Raindrop.io is kept, not replaced** — it stays the bookmark-archive layer with its official MCP
+  adopted (Direction A), a separate concern from Karakeep's reading/highlight/ingestion role.
+  Instapaper and Pocket are both retired.
+- *Superseded alternative:* Readwise Reader (official hosted MCP, $9.99+/mo) — same ingestion value
+  achievable at $0 with Karakeep once the requirement was correctly scoped to "free API for our own
+  ingest worker," not "best hosted reading UX."
+- *Superseded alternative:* Wallabag (self-hosted, MIT, mature REST API, Pocket-compatible import) —
+  a credible fallback if Karakeep's AI-tagging direction proves unwanted; not chosen, kept as a
+  named alternative in case Karakeep self-hosting is later abandoned.
+- Consequence: no new subscription; a new self-hosted Docker service to operate (backup/update
+  posture as for any mac mini service); the read-later/highlight surface and the bookmark surface
+  now live in two systems by design, not one, each doing the job it is actually shaped for.
 
-**D1 — Read-later consolidation.** Problem: three overlapping read-later tools; Pocket is dead,
-Instapaper is agent-hostile (gatekept API key, no official MCP), Raindrop is healthy.
-- *Recommended:* **Readwise Reader** for reading + highlights (official hosted MCP, export API
-  designed for PKM ingestion — highlights become KAP intake), Raindrop stays as bookmark archive.
-  Consequence: one new subscription; strongest agent-readable reading pipeline; Instapaper
-  archive exported once and retired.
-- *Alternative:* consolidate on **Raindrop only** (Pro unlocks its official MCP). Consequence: no
-  new tool, weaker highlight/annotation pipeline.
-- *Alternative:* keep Instapaper. Consequence: reading history stays invisible to agents.
-
-**D2 — Task home.** Problem: tasks are split across Microsoft To Do (being absorbed into Planner,
-no first-party agent surface) + Apple Reminders + Listonic (no API at all).
-- *Recommended:* **Todoist** as the single task home (only official hosted task MCP; groceries as
-  a shared Todoist project), Apple Reminders kept only as Siri/household capture that agents can
-  read via EventKit bridges. Consequence: one migration weekend; tasks become fully
-  agent-operable; To Do and Listonic retired.
-- *Alternative:* **Apple-native** — Reminders as primary (community EventKit MCPs, free, native
-  sharing), Bring! for groceries surfaced through Home Assistant. Consequence: no new
-  subscription, everything rides community bridges rather than vendor-supported endpoints.
+**D2 — Task home — OPEN, owner evaluating alternatives (as of 2026-07-10).** Problem: tasks are
+split across Microsoft To Do (being absorbed into Planner, no first-party agent surface) + Apple
+Reminders + Listonic (no API at all). The owner added three binding constraints that reframe this
+beyond a simple tool pick: must work well on the Apple device set, must work at a Microsoft-heavy
+job where the work computer may block new installs/connectors, and must support sharing a list
+with his spouse. Working hypothesis under consideration: **split by sphere, not by app** — leave
+work tasks in Microsoft untouched (zero new install/IT risk, team visibility preserved, no agent
+ever touches the work account) and pick a separate tool for the personal/household sphere that
+agents are allowed to read/write:
+- *Option A:* **Apple Reminders** for personal/household — native Family Sharing (built for the
+  spouse-sharing requirement), Siri capture, community EventKit MCP bridges (`iMCP`,
+  `mcp-server-apple-events`) on the mac mini, $0. Reachable read-only-ish from the work PC via
+  `icloud.com/reminders` (browser only, no install/admin rights needed) if cross-visibility is
+  wanted.
+- *Option B:* **Todoist** for personal/household — official hosted MCP (`Doist/todoist-mcp`),
+  shared projects work for spouse-sharing (she needs her own account), ~$60/yr, web client also
+  needs no install on a locked-down machine.
+- Open items only the owner can resolve: exact work-computer install/connector policy (unknown to
+  this audit); whether Bring!'s store-level offer integration actually covers Swedish chains
+  (unverified — DACH-market signal only, do not assume it before switching for that specific
+  feature).
+- Not recommended: forcing one tool to also carry the work sphere — no task manager here fixes an
+  employer-owned device's IT policy, and mixing a personal agent-governed tool with work-assigned,
+  team-visible tasks creates a governance problem this audit's §2 invariant would flag anyway.
 
 ## 5. Build list (ranked) — and explicit non-builds
 
@@ -160,17 +186,24 @@ specs. Ranked by leverage:
   of the client contract the `mimer-*` skills already encode
   (`docs/contracts/MIMER_CLIENT_CONTRACT.md`). Every MCP client the owner touches becomes a
   governed vault client. Nothing else in this audit multiplies value like this item.
-- **B2 — Swedish-first voice capture pipeline.** Watched-folder / endpoint on the mac mini running
+- **B2 — Karakeep self-host (D1 ruling, decided not speculative).** Docker deployment on the mac
+  mini (`karakeep-app/karakeep`, AGPL-3.0, $0); a scheduled ingest job (`app/ingest/`-adjacent)
+  pulls saved links/notes/highlights via its REST API and writes candidates into the vault through
+  Mimer's governed capture path — same shape as B1's ingestion pattern, no MCP transport required
+  for this leg since it is Mimer's own worker doing the pulling, not an interactive MCP client.
+  Karakeep's bundled MCP server is a free bonus for ad hoc Claude access to the reading archive
+  directly (Direction A), independent of the ingestion job.
+- **B3 — Swedish-first voice capture pipeline.** Watched-folder / endpoint on the mac mini running
   KB-Whisper (National Library of Sweden fine-tune; ~47% WER reduction vs whisper-large-v3 on
   Swedish) or Parakeet-MLX, emitting markdown capture candidates into KAP intake. Sources: Voice
   Memos/Shortcuts drops, Drafts audio, later Omi. For a dyslexic operator this is the
   friction-killer; no consumer product ships this Swedish-first + local + vault-governed. (SaaS
   shortcut exists — Voicenotes has an official MCP — but it moves raw voice off-device, against
   the local-first capture posture.)
-- **B3 — Direction C consumption slices.** CRE/KAP consuming external MCP signals via the existing
+- **B4 — Direction C consumption slices.** CRE/KAP consuming external MCP signals via the existing
   flagged remote-MCP seam: HA presence/state → context dimensions; calendar/tasks → commitment
-  context; Readwise highlights → KAP intake. Sequenced behind B1 and the owner's D1/D2 choices.
-- **B4 (optional, trivial) — Kodi MCP** over JSON-RPC, only if media control from chat is actually
+  context. Sequenced behind B1/B2 and the owner's D2 choice.
+- **B5 (optional, trivial) — Kodi MCP** over JSON-RPC, only if media control from chat is actually
   wanted; HA's Kodi integration may make it moot.
 
 Explicit **non-builds**: Listonic (switch instead), Grammarly (drop), SVT Play (no sanctioned
@@ -189,9 +222,16 @@ developer.raindrop.io MCP page (200). Research-agent-sourced claims flagged inli
 agents themselves could not fully verify (Affinity connector transport, LightBurn UDP command set,
 Zoom tool enumeration). Re-verify any claim before an implementation issue cites it.
 
+Spot-verified live on 2026-07-10 (D1 decision support): `karakeep-app/karakeep` (27.2k★,
+archived=false, license AGPL-3.0, pushed 2026-07-06); Raindrop.io REST API confirmed free-tier
+accessible via non-expiring test token (120 req/min), MCP itself remains Pro-gated per
+`developer.raindrop.io`; `wallabag/wallabag` confirmed MIT-licensed, free self-host, Pocket-format
+import support (named alternative, not selected).
+
 ## 7. Roadmap handoff
 
 `docs/ROADMAP.md :: External-connectivity (MCP) sequencing` now carries the bounded forward line:
-Direction A adoption is operator configuration (no backlog), Direction B (B1) is the first build
-candidate pending feature-breakdown, Direction C stays deferred behind B1 + D1/D2. This audit is
-the evidence base; it decides nothing by itself.
+Direction A adoption is operator configuration (no backlog), Direction B (B1 Mimer MCP server, B2
+Karakeep self-host per the D1 ruling) is the build line pending feature-breakdown, Direction C
+stays deferred behind B1/B2 + D2. This audit is the evidence base; it decides nothing by itself
+beyond the D1 ruling the owner already made.

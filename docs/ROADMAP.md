@@ -54,13 +54,17 @@ Workspace) is operator configuration, not backlog work, and creates no roadmap c
 the existing governed ask/capture/retrieve/receipt endpoints, realizing the client contract the
 `mimer-*` skills already encode (`docs/contracts/MIMER_CLIENT_CONTRACT.md`); it enters the backlog
 only through feature-breakdown, and no MCP server exists today (`app/mcp/vault_tools.py` is
-internal plumbing, not a transport). **Direction C — Mimer as an MCP client** (Home Assistant
-presence/state, calendar, tasks, reading history consumed as CRE context signals and Knowledge
-Acquisition Platform intake) is the concrete successor to the deferred CRE "external connectors"
-line and stays sequenced behind Direction B plus the audit's owner decisions D1/D2 (read-later
-and task-home consolidation). Standing governance invariant: agent writes to the vault route
-through Mimer's governed write path only — generic third-party vault-writing MCP servers are
-excluded regardless of direction.
+internal plumbing, not a transport). A second build item joins it on the same footing: the audit's
+D1 owner decision (read-later consolidation) is ruled — self-host Karakeep on the mac mini as the
+free, local-first read-later/highlights source feeding Mimer ingestion via its REST API, alongside
+Raindrop.io kept (not replaced) as the bookmark layer with its official MCP adopted. **Direction
+C — Mimer as an MCP client** (Home Assistant presence/state, calendar, tasks, reading history
+consumed as CRE context signals and Knowledge Acquisition Platform intake) is the concrete
+successor to the deferred CRE "external connectors" line and stays sequenced behind the Direction B
+build items plus D2 (task-home consolidation), which remains open — the owner is weighing
+alternatives against work/Apple/family-sharing constraints. Standing governance invariant: agent
+writes to the vault route through Mimer's governed write path only — generic third-party
+vault-writing MCP servers are excluded regardless of direction.
 
 ## Status vocabulary
 - **Shipped** — merged to main; code/doc exists.
