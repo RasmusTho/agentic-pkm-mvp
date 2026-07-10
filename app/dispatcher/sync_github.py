@@ -28,39 +28,24 @@ from scripts.validate_issue_readiness import classify_issue_body
 
 PROVIDER_IDENTITY = "github"
 
-# GHAPI-M3 (#2746): the all-open-issues snapshot is fetched in bounded cursor
-# pages instead of one `gh issue list --limit 1000` burst. 10 pages of 100
+# GHAPI-M3 (#2746): the all-open-issues snapshot is fetched in bounded pages
+# instead of one `gh issue list --limit 1000` burst. 10 pages of 100
 # preserves the previous 1000-issue ceiling.
+#
+# #3313: the snapshot is fetched via bounded REST pages (`gh api
+# repos/{owner}/{name}/issues`) rather than a paginated GraphQL query, the
+# same transport `list_issues` (the ready-issues path) already used. This
+# removes GraphQL pool consumption from this hot dispatcher path. It does not
+# change `get_rate_limit`'s kill-switch signal: GraphQL is still spent by
+# other dispatcher/scripts hot paths (`app/dispatcher/poll_backoff.py`,
+# `scripts/reconcile_project_status.py`), so the shared "is GitHub API
+# healthy enough to do expensive work" probe here continues to reflect the
+# more-exhausted of REST core/GraphQL rather than narrowing to what this
+# class itself now spends.
 OPEN_ISSUES_PAGE_SIZE = 100
 OPEN_ISSUES_MAX_PAGES = 10
 READY_ISSUES_PAGE_SIZE = 100
 READY_ISSUES_MAX_PAGES = 25
-
-OPEN_ISSUES_QUERY = """
-query($owner: String!, $name: String!, $pageSize: Int!, $after: String) {
-  repository(owner: $owner, name: $name) {
-    issues(states: OPEN, first: $pageSize, after: $after,
-           orderBy: {field: CREATED_AT, direction: DESC}) {
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-      nodes {
-        number
-        title
-        state
-        labels(first: 100) {
-          nodes {
-            name
-          }
-        }
-        createdAt
-        updatedAt
-      }
-    }
-  }
-}
-"""
 
 _GITHUB_FAILURE_NETWORK_MARKERS = (
     "connection reset",
@@ -545,12 +530,12 @@ class GhCliIssueSource:
     def list_open_issues(self, repo: str, **kwargs: Any) -> list[dict[str, Any]]:
         """List all open issues with labels from the repo.
 
-        GHAPI-M3 (#2746): fetches in bounded cursor pages instead of one
-        ``gh issue list --limit 1000`` burst. Each page is a plain repository
-        ``issues`` GraphQL connection (the same transport class the old
-        ``gh issue list --search`` call used, minus the stricter search pool),
-        stopping early when the last page is reached. Result semantics are
-        unchanged: the same dict shape ``gh issue list --json`` produced.
+        #3313: fetches bounded REST pages (the same transport ``list_issues``
+        already used for the ready-issues path) instead of a paginated
+        GraphQL query, and filters pull requests returned by the shared
+        issues endpoint. Result semantics are unchanged: the same dict shape
+        (``number``/``title``/``state``/``labels``/``createdAt``/``updatedAt``)
+        the previous GraphQL path produced.
         """
         import json
         import subprocess
@@ -560,26 +545,22 @@ class GhCliIssueSource:
             raise RuntimeError(f"repo must be 'owner/name', got: {repo!r}")
 
         issues: list[dict[str, Any]] = []
-        after: str | None = None
-        for _page in range(OPEN_ISSUES_MAX_PAGES):
-            args = [
-                "gh",
-                "api",
-                "graphql",
-                "-f",
-                f"query={OPEN_ISSUES_QUERY}",
-                "-f",
-                f"owner={owner}",
-                "-f",
-                f"name={name}",
-                "-F",
-                f"pageSize={OPEN_ISSUES_PAGE_SIZE}",
-            ]
-            if after:
-                args.extend(["-f", f"after={after}"])
+        for page in range(1, OPEN_ISSUES_MAX_PAGES + 1):
             try:
                 result = subprocess.run(
-                    args,
+                    [
+                        "gh",
+                        "api",
+                        f"repos/{owner}/{name}/issues",
+                        "--method",
+                        "GET",
+                        "-f",
+                        "state=open",
+                        "-F",
+                        f"per_page={OPEN_ISSUES_PAGE_SIZE}",
+                        "-F",
+                        f"page={page}",
+                    ],
                     capture_output=True,
                     text=True,
                     check=False,
@@ -587,39 +568,33 @@ class GhCliIssueSource:
             except FileNotFoundError:
                 raise RuntimeError("gh CLI not found; ensure gh is installed and in PATH")
             if result.returncode != 0:
-                raise RuntimeError(f"gh api graphql (open issues) failed: {result.stderr}")
+                raise RuntimeError(f"gh api open issues failed: {result.stderr}")
             payload = json.loads(result.stdout)
-            connection = (
-                ((payload.get("data") or {}).get("repository") or {}).get("issues") or {}
-            )
-            for node in connection.get("nodes") or []:
-                labels = (node.get("labels") or {}).get("nodes") or []
+            if not isinstance(payload, list):
+                raise RuntimeError("gh api open issues returned a non-list payload")
+            for node in payload:
+                if node.get("pull_request"):
+                    continue
+                labels = node.get("labels") or []
                 issues.append(
                     {
                         "number": node.get("number"),
                         "title": node.get("title"),
                         "state": node.get("state"),
                         "labels": [{"name": label.get("name")} for label in labels],
-                        "createdAt": node.get("createdAt"),
-                        "updatedAt": node.get("updatedAt"),
+                        "createdAt": node.get("created_at"),
+                        "updatedAt": node.get("updated_at"),
                     }
                 )
-            page_info = connection.get("pageInfo") or {}
-            if not page_info.get("hasNextPage"):
+            if len(payload) < OPEN_ISSUES_PAGE_SIZE:
                 break
-            after = page_info.get("endCursor")
-            if not after:
-                # Fail loud rather than looping on a broken cursor.
-                raise RuntimeError(
-                    "gh api graphql (open issues) pagination did not return an end cursor"
-                )
         else:
-            # Page cap hit with hasNextPage still true. A silently truncated
-            # snapshot would let the stale reconcile treat still-open issues
-            # as closed and mark their live tasks completed; fail loud so
-            # pull() takes its existing snapshot-unavailable path instead.
+            # Page cap hit with every REST page still full. A silently
+            # truncated snapshot would let the stale reconcile treat still-open
+            # issues as closed and mark their live tasks completed; fail loud
+            # so pull() takes its existing snapshot-unavailable path instead.
             raise RuntimeError(
-                f"gh api graphql (open issues) exceeded {OPEN_ISSUES_MAX_PAGES} pages "
+                f"gh api open issues exceeded {OPEN_ISSUES_MAX_PAGES} pages "
                 "with more results remaining; refusing a truncated snapshot"
             )
         return issues
@@ -627,11 +602,16 @@ class GhCliIssueSource:
     def get_rate_limit(self) -> dict[str, Any] | None:
         """Current GitHub API budget signal for the kill switch.
 
-        Returns the more exhausted of the REST core and GraphQL pools:
-        ``list_open_issues`` spends GraphQL, and the audited exhaustion mode
-        (GHAPI, 2026-06-29) is GraphQL-at-zero with REST core healthy — a
-        core-only probe would never fire exactly when the guard matters.
-        Shape matches the old ``.rate`` payload (``remaining``/``reset``).
+        Returns the more exhausted of the REST core and GraphQL pools. As of
+        #3313, neither ``list_issues`` nor ``list_open_issues`` spends
+        GraphQL any more — both use REST — but this probe intentionally keeps
+        checking both pools rather than narrowing to REST core only: other
+        dispatcher/scripts hot paths still spend GraphQL
+        (``app/dispatcher/poll_backoff.py``, ``scripts/reconcile_project_status.py``),
+        and the audited exhaustion mode (GHAPI, 2026-06-29) is GraphQL-at-zero
+        with REST core healthy — a core-only probe would never fire exactly
+        when the guard matters. Shape matches the old ``.rate`` payload
+        (``remaining``/``reset``).
         """
         import json
         import subprocess
