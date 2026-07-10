@@ -297,13 +297,18 @@ Rail compacts/collapses when only these states exist:
 - Suggestions idle;
 - generic session persistence status.
 
-### 8.4 Single posture/absence treatment
+### 8.4 Resting state — one dim line per lane (#3362, DESIGN_AUDIT.md §2/§6)
 
-Replace multiple inactive cards with one compact posture line, for example:
+Superseded the earlier single-posture-line-plus-details-disclosure treatment: at rest, each of the four named lanes collapses to exactly one dim line (label + one-word state), no box, no border, no explanatory paragraph, and no click-to-expand disclosure hiding the same content underneath:
 
-`Companion · idle — no active proposals. Details`
+```
+Suggestions  none
+Recall       nothing open
+Search       nothing yet
+Commitments  none
+```
 
-Details may reveal per-capability state, but default view should not stack inactive cards. Critical safety state must not be hidden.
+`Suggestions` folds together the Panel-idle badge and the Suggestions sub-lane (they described the same fact twice). `Recall` is the Reorient lane; `Search` is Find. A non-actionable degraded Resurface (guard-reported degraded, no candidate) is not one of the four lines — it folds into the one calm posture note ("Resurfacing is paused while the vault reconnects.") instead of an amber warning card; a healthy-empty Resurface renders nothing at all. The collapse is **per-lane, not whole-rail**: a lane expands to its full, unchanged card content the moment it has something to show, while its idle siblings keep resting as dim lines — a populated lane never drags the idle Panel header (`ambient · peripheral`, "No active Panel proposal") back into view. Canvas also rests: with no session and no recovery/conflict it renders nothing (a hidden marker keeps the container testid), and the full controls suite — including its unavailable reason-states — returns whenever a session exists, recovery/conflict is flagged, or WriteGuard blocks. The active-note-body-update flow and the suggestion-flow structural marker render unconditionally. Critical safety state must not be hidden, and a safety warning is never contradicted by a co-rendered "nothing pending" empty-state (the old consolidated empty-state box is gone). A degraded commitments read's `degraded_reason` stays reachable on the resting line's `data-degraded-reason`/`title` — demoted, not destroyed.
 
 ## 9. State hierarchy
 

@@ -227,10 +227,30 @@ def test_next_action_distinguished_from_review_cycle() -> None:
 def test_degraded_or_absent_commitments_render_safely() -> None:
     """AC3: when the field is absent or the API reports a degraded read, the UI
     degrades to not-shown / unavailable rather than a confident empty surface or
-    a crash."""
+    a crash.
+
+    #3362 (DESIGN_AUDIT.md §2/§6) supersedes the verbose per-state
+    ``commitments-mode`` section for every non-``populated`` read: with
+    nothing else on the note actionable, the rail is at rest and the
+    Commitments lane collapses into the resting-state summary
+    (``workspace-rail-resting``). CI-2 still holds there: the resting line's
+    one-word state is "none" ONLY for a genuinely healthy-empty read;
+    degraded/not-shown reads say "unavailable" instead — the underlying
+    classification also survives on ``data-commitment-state`` for DOM-level
+    inspection.
+    """
+
+    def _resting_commitments_line(html: str) -> str:
+        m = re.search(
+            r'data-testid="rail-resting-commitments"[^>]*>.*?</div>',
+            html,
+            re.DOTALL,
+        )
+        assert m, "rail-resting-commitments line must be present"
+        return m.group()
 
     # (a) Degraded read: the durable source failed. The surface must say so —
-    # unavailable, with the reason — never "you have zero commitments".
+    # unavailable — never "you have zero commitments".
     degraded_html = _render(
         {
             "next": [],
@@ -243,22 +263,23 @@ def test_degraded_or_absent_commitments_render_safely() -> None:
             "degraded_reason": "durable_read_failed",
         }
     )
-    degraded_section = _commitments_section(degraded_html)
-    assert 'data-commitment-state="degraded"' in degraded_section
-    assert 'data-affordance-status="unavailable"' in degraded_section
-    assert "durable_read_failed" in degraded_section
-    assert "unavailable" in degraded_section.lower()
+    degraded_line = _resting_commitments_line(degraded_html)
+    assert 'data-commitment-state="degraded"' in degraded_line
+    assert "unavailable" in degraded_line.lower()
     # Must NOT claim a confident empty surface when degraded.
-    assert "no commitments" not in degraded_section.lower()
-    assert "you're all caught up" not in degraded_section.lower()
+    assert "none" not in degraded_line.lower()
+    # #3362 review finding 6 — the server-declared degraded_reason is demoted
+    # from visible copy but stays reachable (data attribute + hover title).
+    assert 'data-degraded-reason="durable_read_failed"' in degraded_line
+    assert 'title="Commitments read degraded: durable_read_failed"' in degraded_line
 
     # (b) Absent field: an older payload with no ``commitments`` at all. The
     # surface must degrade to not-shown, not crash and not imply zero commitments.
     absent_html = _render(None)
-    absent_section = _commitments_section(absent_html)
-    assert 'data-commitment-state="not-shown"' in absent_section
-    assert 'data-affordance-status="unavailable"' in absent_section
-    assert "no commitments" not in absent_section.lower()
+    absent_line = _resting_commitments_line(absent_html)
+    assert 'data-commitment-state="not-shown"' in absent_line
+    assert "unavailable" in absent_line.lower()
+    assert "none" not in absent_line.lower()
 
     # (c) Genuinely empty but healthy read: this is the ONE case where a
     # confident "nothing here" is legitimate, and it must be distinct from the
@@ -275,12 +296,12 @@ def test_degraded_or_absent_commitments_render_safely() -> None:
             "degraded_reason": None,
         }
     )
-    empty_section = _commitments_section(empty_html)
-    assert 'data-commitment-state="empty"' in empty_section
-    assert 'data-affordance-status="read-only"' in empty_section
+    empty_line = _resting_commitments_line(empty_html)
+    assert 'data-commitment-state="empty"' in empty_line
+    assert "none" in empty_line.lower()
     # The healthy-empty state is NOT the degraded/not-shown state.
-    assert 'data-commitment-state="degraded"' not in empty_section
-    assert 'data-commitment-state="not-shown"' not in empty_section
+    assert 'data-commitment-state="degraded"' not in empty_line
+    assert 'data-commitment-state="not-shown"' not in empty_line
 
 
 def test_commitment_visual_fidelity_markers() -> None:
@@ -373,9 +394,17 @@ def test_waiting_by_state_with_nonwaiting_kind_reads_as_waiting() -> None:
 
 
 def test_empty_surface_is_affirmative_not_degraded() -> None:
-    """The healthy-empty state is an affirmative '0 active' with the green dot and
-    an 'commitments ok' footer — confidently distinct from the amber degraded
-    state, and it must not borrow degraded/absent vocabulary."""
+    """The healthy-empty state is an affirmative, confident zero — distinct
+    from the amber degraded state, and it must not borrow degraded/absent
+    vocabulary.
+
+    #3362 (DESIGN_AUDIT.md §2/§6) supersedes the old verbose empty card (green
+    dot, "0 active", `commitments ok · 0 active · as of <ISO>`): with nothing
+    else on the note actionable, the rail is at rest and Commitments
+    collapses to the quiet "Commitments — none" resting line — no ISO
+    timestamp, still distinguishable from degraded/not-shown via
+    ``data-commitment-state``.
+    """
     empty_html = _render(
         {
             "next": [],
@@ -389,10 +418,15 @@ def test_empty_surface_is_affirmative_not_degraded() -> None:
             "as_of": "2026-06-17T20:00:00+00:00",
         }
     )
-    section = _commitments_section(empty_html)
-    assert 'data-commitment-state="empty"' in section
-    assert "commitments-empty-dot" in section
-    assert "0 active" in section
-    assert "commitments ok" in section
-    # Never the unavailable/degraded vocabulary.
-    assert "unavailable" not in section.lower()
+    m = re.search(
+        r'data-testid="rail-resting-commitments"[^>]*>.*?</div>',
+        empty_html,
+        re.DOTALL,
+    )
+    assert m, "rail-resting-commitments line must be present"
+    line = m.group()
+    assert 'data-commitment-state="empty"' in line
+    assert "none" in line.lower()
+    # Never the unavailable/degraded vocabulary, and no ISO timestamp leak.
+    assert "unavailable" not in line.lower()
+    assert "2026-06-17T20:00:00" not in line

@@ -1,13 +1,16 @@
-"""Right rail compaction for non-actionable states (#1401).
+"""Right rail compaction for non-actionable states (#1401, quieted by #3362).
 
 Applies ``ADAPTIVE_WORKSPACE_LAYOUT_HANDOFF.md`` §§8, 9, 11: the right
 companion rail must earn its space. When only non-actionable states exist (no
 proposals, no candidates, Canvas idle/disabled, Find unavailable, Resurface
-degraded, suggestions idle, generic persistence), the rail collapses the noisy
-idle cards into a single compact posture treatment. Actionable and
+degraded, suggestions idle, generic persistence), the rail collapses to the
+quiet #3362 (DESIGN_AUDIT.md §2/§6) resting state: one dim line per lane
+(``workspace-rail-resting``) — not the ten-idiom idle telemetry stack, and not
+that stack merely hidden behind a details disclosure. Actionable and
 safety-critical states — active Panel proposal, Panel receipt/block reason,
-WriteGuard block, Canvas recovery/conflict — keep the rail expanded. Internal
-runtime/test labels must not leak into the default human copy.
+WriteGuard block, Canvas recovery/conflict, a Panel state-machine step in
+flight — keep the rail expanded with its full, unchanged card content.
+Internal runtime/test labels must not leak into the resting copy.
 
 SSR markup/contract tests against the rendered dev-page HTML.
 """
@@ -17,7 +20,10 @@ from __future__ import annotations
 from companion_ui.workspace.serve_dev_page import render_index_html
 
 _IDLE_TOKENS = (
-    "in_memory",
+    # "in_memory" intentionally excluded — the canvas-session-persistence
+    # notice is a real, always-relevant single-line notice (#3362 Scope does
+    # not name it for quieting) and legitimately renders in the resting rail
+    # when the fixture declares in-memory persistence.
     "SUGGESTION idle",
     "FIND unavailable",
     "composer enabled",
@@ -106,11 +112,13 @@ def _layout_open_tag(html: str) -> str:
 
 def test_right_rail_compacts_non_actionable_states():
     rail = _rail(_html())
-    # A single compact posture treatment is present...
-    assert 'data-testid="workspace-rail-posture"' in rail
+    # The single compact resting treatment is present (#3362): one dim line
+    # per lane, `data-rail-posture="idle"` carried on the resting block itself
+    # (the separate `workspace-rail-posture` element only renders when the
+    # rail is actionable).
+    assert 'data-testid="workspace-rail-posture"' not in rail
+    assert 'data-testid="workspace-rail-resting"' in rail
     assert 'data-rail-posture="idle"' in rail
-    # ...and the noisy idle cards are collapsed behind one details affordance.
-    assert 'data-testid="workspace-rail-idle-details"' in rail
 
 
 # ---------------------------------------------------------------------------
@@ -120,14 +128,14 @@ def test_right_rail_compacts_non_actionable_states():
 
 def test_right_rail_does_not_render_multiple_idle_cards():
     rail = _rail(_html())
-    posture_idx = rail.index('data-testid="workspace-rail-posture"')
-    details_idx = rail.index('data-testid="workspace-rail-idle-details"')
-    # Exactly one compact posture group is the default visible treatment.
-    assert rail.count('data-testid="workspace-rail-posture"') == 1
-    # The idle canvas/panel cards live inside the collapsed details, not as
-    # separate top-level cards above it.
-    canvas_idx = rail.index('data-testid="workspace-canvas-state"')
-    assert posture_idx < details_idx < canvas_idx
+    # Exactly one compact resting group is the default visible treatment...
+    assert rail.count('data-testid="workspace-rail-resting"') == 1
+    # ...and the Panel-lane idle card (badge/ambient-peripheral, boxed "No
+    # active Panel proposal") does not render at all in the resting rail
+    # (#3362) — not merely collapsed behind a details affordance. Canvas
+    # stays present (a functional affordance out of #3362's Scope, not one
+    # of the four collapsing lanes).
+    assert 'data-testid="workspace-panel-column-header"' not in rail
 
 
 # ---------------------------------------------------------------------------
@@ -145,8 +153,11 @@ def test_active_panel_proposal_keeps_rail_expanded():
         }
     ]
     rail = _rail(_html(panel_state="proposals-staged", panel_proposal_count=1, panel_proposals=proposals))
-    # Rail is expanded (no idle compaction) and the proposal is visible.
-    assert 'data-testid="workspace-rail-idle-details"' not in rail
+    # The Panel/Suggestions lane is expanded (its resting line is gone, the
+    # proposal is visible) — per-lane collapse means idle SIBLING lanes still
+    # rest as dim lines alongside it (#3362 review finding 1).
+    assert 'data-testid="rail-resting-suggestions"' not in rail
+    assert 'data-testid="workspace-panel-proposal-row"' in rail
     assert 'data-rail-posture="active"' in rail
 
 
@@ -166,7 +177,7 @@ def test_panel_receipt_or_block_reason_keeps_outcome_visible():
         },
     }
     rail = _rail(_html(panel_last_response=response))
-    assert 'data-testid="workspace-rail-idle-details"' not in rail
+    assert 'data-testid="rail-resting-suggestions"' not in rail
     assert 'data-testid="workspace-panel-receipt"' in rail
 
 
@@ -177,8 +188,13 @@ def test_panel_receipt_or_block_reason_keeps_outcome_visible():
 
 def test_writeguard_block_overrides_compaction():
     rail = _rail(_html(guard_writeguard_status="blocked"))
-    assert 'data-testid="workspace-rail-idle-details"' not in rail
+    # The safety warning is visible and never contradicted by a co-rendered
+    # "No active session / nothing pending" empty-state (#3362 review
+    # finding 3 — the old consolidated box is gone entirely).
     assert 'data-testid="workspace-guard-indicator"' in rail
+    assert 'data-testid="workspace-rail-empty-state"' not in rail
+    assert "No active session" not in rail
+    assert "needs attention" in rail
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +204,10 @@ def test_writeguard_block_overrides_compaction():
 
 def test_canvas_recovery_overrides_compaction():
     rail = _rail(_html(canvas_recovery_needed=True))
-    assert 'data-testid="workspace-rail-idle-details"' not in rail
+    # Recovery keeps the full canvas controls suite visible (not the hidden
+    # resting marker).
+    assert 'data-testid="workspace-canvas-state"' in rail
+    assert 'data-canvas-rest="true"' not in rail
 
 
 # ---------------------------------------------------------------------------
@@ -199,13 +218,14 @@ def test_canvas_recovery_overrides_compaction():
 def test_internal_labels_do_not_leak_to_default_copy():
     html = _html()
     rail = _rail(html)
-    details_idx = rail.index('data-testid="workspace-rail-idle-details"')
-    head = rail[:details_idx]
-    # The default (pre-details) rail copy is the human posture line...
-    assert "Companion" in head
-    # ...and carries no internal/test labels (those live behind the details).
+    # The resting rail's own head line is the human "Companion" word (#3362)...
+    assert "Companion" in rail
+    # ...and none of the runtime/test-internal labels the old idle telemetry
+    # stack used to surface leak into the quiet resting rail at all — they no
+    # longer render anywhere in the idle state, not merely behind a details
+    # disclosure.
     for token in _IDLE_TOKENS:
-        assert token not in head, f"internal label {token!r} leaked into default rail copy"
+        assert token not in rail, f"internal label {token!r} leaked into resting rail copy"
 
 
 # ---------------------------------------------------------------------------
@@ -232,32 +252,36 @@ def test_rail_compacts_for_degraded_disabled_only_state():
     assert 'data-rail-posture="idle"' in rail
     assert "needs attention" not in rail
     # The disabled/degraded cards collapse behind the single details treatment.
-    assert 'data-testid="workspace-rail-idle-details"' in rail
+    assert 'data-testid="workspace-rail-resting"' in rail
 
 
 def test_generic_guard_degraded_alone_is_not_actionable():
     rail = _rail(_html(guard_degraded=True))
     assert 'data-rail-posture="idle"' in rail
-    assert 'data-testid="workspace-rail-idle-details"' in rail
+    assert 'data-testid="workspace-rail-resting"' in rail
 
 
 def test_idle_reorient_payload_does_not_expand_rail():
     # An empty-section reorient dict must not force the rail open.
     rail = _rail(_html(reorient_sections={"open_loops": [], "facts": []}))
     assert 'data-rail-posture="idle"' in rail
-    assert 'data-testid="workspace-rail-idle-details"' in rail
+    assert 'data-testid="workspace-rail-resting"' in rail
 
 
 def test_actionable_reorient_with_items_still_expands_rail():
-    # A reorient payload with real items is an actionable orientation step.
+    # A reorient payload with real items is an actionable orientation step:
+    # the Recall lane expands to its full reorient card (its resting line is
+    # gone), while idle sibling lanes still rest per-lane.
     rail = _rail(_html(reorient_sections={"open_loops": [{"text": "Close loop X", "source_path": "n.md"}]}))
-    assert 'data-testid="workspace-rail-idle-details"' not in rail
+    assert 'data-testid="rail-resting-recall"' not in rail
+    assert 'data-testid="reorient-mode"' in rail
 
 
 def test_writeguard_block_still_expands_despite_compaction_fix():
     # Safety-critical write block must remain visible (regression guard).
     rail = _rail(_html(guard_writeguard_status="blocked", guard_degraded=True))
-    assert 'data-testid="workspace-rail-idle-details"' not in rail
+    assert 'data-testid="workspace-guard-indicator"' in rail
+    assert "needs attention" in rail
     assert 'data-testid="workspace-guard-indicator"' in rail
 
 
@@ -285,10 +309,10 @@ def test_idle_shell_rail_is_ambient_strip():
     rail = _rail(html)
     # ...and the rail posture is idle (no active proposals).
     assert 'data-rail-posture="idle"' in rail
-    # The idle sub-module cards do not render as a visible stack — they are
-    # collapsed behind the single details affordance (minimal presence cue),
-    # not a permanently-reserved third of cards.
-    assert 'data-testid="workspace-rail-idle-details"' in rail
+    # The idle sub-module cards do not render as a visible stack — each idle
+    # lane is one dim resting line (#3362), not a permanently-reserved third
+    # of cards.
+    assert 'data-testid="workspace-rail-resting"' in rail
 
 
 def test_active_payload_expands_rail():
@@ -305,7 +329,7 @@ def test_active_payload_expands_rail():
     assert 'data-rail-state="active"' in layout
     rail = _rail(html)
     assert 'data-rail-posture="active"' in rail
-    assert 'data-testid="workspace-rail-idle-details"' not in rail
+    assert 'data-testid="rail-resting-suggestions"' not in rail
 
 
 def test_receipt_alone_expands_rail():
@@ -322,7 +346,7 @@ def test_receipt_alone_expands_rail():
     }
     html = _html(panel_last_response=response)
     assert 'data-rail-state="active"' in _layout_open_tag(html)
-    assert 'data-testid="workspace-rail-idle-details"' not in _rail(html)
+    assert 'data-testid="rail-resting-suggestions"' not in _rail(html)
 
 
 def test_governance_receipt_alone_expands_rail():
@@ -400,7 +424,7 @@ def test_panel_blocked_state_keeps_rail_active():
     # hidden behind the ambient strip's collapsed body (Codex P2).
     html = _html(panel_state="blocked", panel_message="Action not permitted")
     assert 'data-rail-state="active"' in _layout_open_tag(html)
-    assert 'data-testid="workspace-rail-idle-details"' not in _rail(html)
+    assert 'data-testid="rail-resting-suggestions"' not in _rail(html)
 
 
 def test_panel_no_match_state_keeps_rail_active():
@@ -415,7 +439,7 @@ def test_panel_no_match_state_keeps_rail_active():
         ),
     )
     assert 'data-rail-state="active"' in _layout_open_tag(html)
-    assert 'data-testid="workspace-rail-idle-details"' not in _rail(html)
+    assert 'data-testid="rail-resting-suggestions"' not in _rail(html)
 
 
 def test_nonempty_panel_message_keeps_rail_active():
@@ -455,7 +479,11 @@ def test_populated_commitments_keep_rail_active():
         }
     )
     assert 'data-rail-state="active"' in _layout_open_tag(html)
-    assert 'data-testid="workspace-rail-idle-details"' not in _rail(html)
+    # Per-lane (#3362): the populated Commitments lane renders full content
+    # (its resting line is gone); idle sibling lanes still rest as dim lines.
+    rail = _rail(html)
+    assert 'data-testid="rail-resting-commitments"' not in rail
+    assert 'data-testid="commitments-mode"' in rail
 
 
 def test_nonpopulated_commitments_states_stay_ambient():
@@ -478,7 +506,9 @@ def test_find_candidates_keep_rail_active():
         find_payload_available=True,
     )
     assert 'data-rail-state="active"' in _layout_open_tag(html)
-    assert 'data-testid="workspace-rail-idle-details"' not in _rail(html)
+    rail = _rail(html)
+    assert 'data-testid="rail-resting-search"' not in rail
+    assert 'data-testid="find-mode"' in rail
 
 
 def test_resurface_candidates_keep_rail_active():
@@ -488,7 +518,9 @@ def test_resurface_candidates_keep_rail_active():
         resurface_candidates=[{"title": "Why now", "note_path": "n.md", "reason": "due"}]
     )
     assert 'data-rail-state="active"' in _layout_open_tag(html)
-    assert 'data-testid="workspace-rail-idle-details"' not in _rail(html)
+    rail = _rail(html)
+    assert 'data-testid="resurface-mode"' in rail
+    assert 'data-testid="workspace-rail-resting-note"' not in rail
 
 
 def test_empty_find_resurface_payloads_stay_ambient():

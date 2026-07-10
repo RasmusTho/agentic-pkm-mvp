@@ -15,6 +15,16 @@ from tests.companion_ui.vault_browser_test_helpers import (
 )
 
 
+def _rail(html: str) -> str:
+    """Isolate the rendered rail markup, excluding the page-wide ``<style>``
+    block — global CSS selectors reference every testid regardless of
+    whether the element actually renders, so an "absent from html" assertion
+    must be scoped past ``<style>`` to mean anything (#3362)."""
+    start = html.index('data-testid="workspace-agent-rail"')
+    end = html.index("</aside>", start)
+    return html[start:end]
+
+
 class _FakeClient:
     def get(self, url: str, *, params: dict[str, Any]) -> dict[str, Any]:
         if is_vault_browser_get(url):
@@ -211,22 +221,31 @@ def _render_empty_resurface(*, degraded: bool = False) -> str:
 
 
 def test_resurface_empty_state_is_visible() -> None:
-    html = _render_empty_resurface()
+    """#3362 (DESIGN_AUDIT.md §2/§6) supersedes the old affirmative "at rest"
+    card: with nothing else on the note actionable, a healthy-empty Resurface
+    read is genuinely silent — it is not one of the four resting lanes
+    (Suggestions/Recall/Search/Commitments) and produces no line at all,
+    matching the "Panel rail — at rest" mockup (redesigns.html §1)."""
+    rail = _rail(_render_empty_resurface())
 
-    assert 'data-testid="resurface-mode"' in html
-    assert 'data-testid="resurface-empty-state"' in html
-    assert 'data-affordance-status="read-only"' in html
-    assert "No Resurface candidates are available" in html
-    assert "Nothing needs action" in html
+    assert 'data-testid="resurface-mode"' not in rail
+    assert 'data-testid="resurface-empty-state"' not in rail
+    assert "No Resurface candidates are available" not in rail
+    assert 'data-testid="workspace-rail-resting"' in rail
+    assert 'data-testid="workspace-rail-resting-note"' not in rail
 
 
 def test_resurface_degraded_state_is_visible() -> None:
-    html = _render_empty_resurface(degraded=True)
+    """#3362 (DESIGN_AUDIT.md §2/§6) supersedes the amber degraded warning
+    card: a non-actionable degraded Resurface folds into the ONE calm rail
+    posture note instead."""
+    rail = _rail(_render_empty_resurface(degraded=True))
 
-    assert 'data-testid="resurface-mode"' in html
-    assert 'data-testid="resurface-degraded-state"' in html
-    assert 'data-affordance-status="unavailable"' in html
-    assert "runtime reported degraded guard state" in html
+    assert 'data-testid="resurface-mode"' not in rail
+    assert 'data-testid="resurface-degraded-state"' not in rail
+    assert "runtime reported degraded guard state" not in rail
+    assert 'data-testid="workspace-rail-resting-note"' in rail
+    assert "Resurfacing is paused while the vault reconnects." in rail
 
 
 def _resurface_section(html: str) -> str:
@@ -255,21 +274,18 @@ def test_resurface_css_hook_present_on_populated_rail() -> None:
 
 
 def test_resurface_empty_and_degraded_are_distinguishable() -> None:
-    """Empty (healthy / green) and degraded (amber / "can't say") must never
-    collapse into one visual. The CSS keys the two treatments off distinct
-    testids plus the section affordance status, so pin that they stay distinct."""
-    empty = _resurface_section(_render_empty_resurface())
-    degraded = _resurface_section(_render_empty_resurface(degraded=True))
+    """Empty (healthy — silent) and degraded (the one calm posture note) must
+    never collapse into one treatment. #3362 (DESIGN_AUDIT.md §2/§6)
+    supersedes the old amber-card-vs-green-card CSS distinction: healthy-empty
+    produces no rail line at all, degraded produces exactly the one posture
+    note — still two clearly distinct outcomes."""
+    empty_html = _render_empty_resurface()
+    degraded_html = _render_empty_resurface(degraded=True)
 
-    assert 'data-testid="resurface-empty-state"' in empty
-    assert 'data-testid="resurface-degraded-state"' not in empty
-    assert 'data-affordance-status="read-only"' in empty
-    # Healthy-empty must NOT carry the unavailable hook the degraded CSS paints amber.
-    assert 'data-affordance-status="unavailable"' not in empty
+    assert 'data-testid="workspace-rail-resting-note"' not in empty_html
 
-    assert 'data-testid="resurface-degraded-state"' in degraded
-    assert 'data-testid="resurface-empty-state"' not in degraded
-    assert 'data-affordance-status="unavailable"' in degraded
+    assert 'data-testid="workspace-rail-resting-note"' in degraded_html
+    assert "Resurfacing is paused while the vault reconnects." in degraded_html
 
 
 def test_resurface_visual_pass_enables_no_action() -> None:
@@ -419,12 +435,14 @@ def test_resurface_no_withheld_line_when_nothing_held() -> None:
 
 
 def test_resurface_empty_is_affirmative_and_settled() -> None:
-    """Empty-healthy reads as intentional calm ("at rest", green dot, affirmative
-    lead + sub-line), never a dashboard waiting to be filled."""
-    section = _resurface_section(_render_empty_resurface())
-    assert ">at rest<" in section
-    assert "Nothing is asking for your attention." in section
-    assert "quiet period, not an empty shelf" in section
-    # No urgency vocabulary leaks into the settled state.
-    assert "urgent" not in section.lower()
-    assert 'data-persistence-backed="true"' not in section
+    """Empty-healthy reads as intentional calm, never a dashboard waiting to be
+    filled. #3362 (DESIGN_AUDIT.md §2/§6) supersedes the old affirmative
+    "at rest" card copy: the most settled, calmest treatment is silence — no
+    line, no card, no urgency vocabulary anywhere in the render."""
+    html = _render_empty_resurface()
+    rail = _rail(html)
+    assert ">at rest<" not in rail
+    assert 'data-testid="resurface-empty-state"' not in rail
+    # No urgency vocabulary leaks into the settled (silent) state.
+    assert "urgent" not in html.lower()
+    assert 'data-persistence-backed="true"' not in html

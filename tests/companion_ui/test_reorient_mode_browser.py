@@ -205,8 +205,13 @@ def test_reorient_empty_state_visible() -> None:
         },
     )
 
-    assert 'data-testid="reorient-empty-state"' in html
-    assert "no orientation payload is available" in html
+    # #3362 (DESIGN_AUDIT.md §2/§6) supersedes the old idle recall-disclosure
+    # copy: with nothing else on the note actionable, the rail is at rest and
+    # Reorient collapses to the "Recall — nothing open" resting line, not its
+    # own `reorient-empty-state` explanatory paragraph.
+    assert 'data-testid="reorient-empty-state"' not in html
+    assert "no orientation payload is available" not in html
+    assert 'data-testid="rail-resting-recall"' in html
 
 
 def test_workspace_reorient_failure_degrades_without_blocking_note_load(

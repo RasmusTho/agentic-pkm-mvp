@@ -166,17 +166,19 @@ class TestDevControlsDisclosure:
 
 class TestPanelDisabledSuppression:
     def test_canvas_body_edit_unavailable_suppressed_when_canvas_disabled(self) -> None:
+        # #3362 tightens the original suppression: a disabled canvas with no
+        # active session rests entirely (hidden marker, no unavailable
+        # element at all) — the strongest form of "suppressed". The visible
+        # unavailable copy only exists inside an actual session context.
         html = _html(guard_canvas_enabled=False)
-        # When canvas is disabled the unavailable element must be hidden.
+        assert "Body edit composer unavailable" not in html
+        assert "Canvas editing is currently disabled" not in html
         m = re.search(
-            r'data-testid="workspace-canvas-body-edit-unavailable"[^>]*>',
+            r'data-testid="workspace-canvas-session-controls"[^>]*>',
             html,
         )
-        assert m, "canvas-body-edit-unavailable element must be present in DOM"
-        snippet = m.group()
-        assert "hidden" in snippet or 'data-affordance-status="blocked"' in snippet, (
-            "canvas-body-edit-unavailable must carry hidden or blocked status when suppressed"
-        )
+        assert m, "canvas controls container marker must remain in DOM"
+        assert "hidden" in m.group() or 'data-canvas-rest="true"' in m.group()
 
     def test_active_note_body_update_blocked_suppressed_when_disabled(self) -> None:
         # active_note_body_update_enabled defaults to guard_workspace_update_available
@@ -192,16 +194,15 @@ class TestPanelDisabledSuppression:
         )
 
     def test_no_duplicate_canvas_unavailable_messages(self) -> None:
+        # #3362: with canvas disabled and no session, the canvas lane rests —
+        # ZERO canvas-unavailable messages render (the strongest possible
+        # no-duplicates guarantee; the guard indicator alone communicates the
+        # disabled state).
         html = _html(guard_canvas_enabled=False, guard_workspace_update_available=False)
-        # canvas-body-edit-unavailable must be suppressed (hidden attr or --suppressed modifier)
-        # when canvas is disabled — no duplicate "Body editing unavailable" banner.
-        m = re.search(
-            r'class="canvas-body-edit-unavailable canvas-body-edit-unavailable--suppressed"[^>]* hidden',
-            html,
-        )
-        assert m, (
-            "canvas-body-edit-unavailable must carry --suppressed and hidden when canvas is disabled"
-        )
+        assert "Body edit composer unavailable" not in html
+        assert "Body editing is unavailable" not in html
+        assert "Canvas editing is currently disabled" not in html
+        assert 'data-canvas-rest="true"' in html
 
 
 # ---------------------------------------------------------------------------

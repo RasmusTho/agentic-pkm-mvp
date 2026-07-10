@@ -359,6 +359,24 @@ EDITING_PAUSED: Final[str] = "Editing paused — see Settings › Connection"
 #: a specific feature flag (guard degraded / workspace update unavailable).
 FEATURES_PAUSED: Final[str] = "Some features paused"
 
+# ---------------------------------------------------------------------------
+# Panel rail resting-state posture note (#3362 / DESIGN_AUDIT §2, §6, top-10
+# #3).
+#
+# At rest the panel rail collapses to one dim line per lane (Suggestions /
+# Recall / Search / Commitments). A non-actionable degraded Resurface (the
+# runtime reported a degraded guard state, so no candidate payload is
+# actionable) no longer renders a persistent amber warning card — it folds
+# into this single calm posture note line, in the same voice as the shared
+# vault-reconnect banner (`workspace_posture.CALM_RECONNECT_BANNER_TEXT`)
+# but scoped to the Resurface capability specifically, per the audit's §6
+# copy replacement table.
+# ---------------------------------------------------------------------------
+
+#: The one wording for "Resurface is non-actionable because the runtime
+#: reported a degraded guard state", shown as the rail's resting-state note.
+RESURFACE_PAUSED_NOTE: Final[str] = "Resurfacing is paused while the vault reconnects."
+
 
 def calm_feature_status(
     *,
