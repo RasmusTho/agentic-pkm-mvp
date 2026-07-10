@@ -61,9 +61,14 @@ Raindrop.io kept (not replaced) as the bookmark layer with its official MCP adop
 C — Mimer as an MCP client** (Home Assistant presence/state, calendar, tasks, reading history
 consumed as CRE context signals and Knowledge Acquisition Platform intake) is the concrete
 successor to the deferred CRE "external connectors" line and stays sequenced behind the Direction B
-build items plus D2 (task-home consolidation), which remains open — the owner is weighing
-alternatives against work/Apple/family-sharing constraints. Standing governance invariant: agent
-writes to the vault route through Mimer's governed write path only — generic third-party
+build items. D2 (task-home consolidation) is also ruled: Todoist for personal/household tasks
+(cross-platform, spouse is Android) and Bring! for the shared grocery list, both adopted via
+Direction A (official/community MCP through Home Assistant); work tasks stay on Microsoft's tools
+untouched, deferred behind the not-yet-built Mimer work-satellite (own LLM API, isolated from the
+personal instance) named in `docs/plans/PROTOCOL_SATELLITE_SYNC.md` — that satellite-sync protocol
+remains Spec/planned, not implemented, and is the actual gap if work coverage is ever built.
+Standing governance invariant: agent writes to the vault route through Mimer's governed write path
+only — generic third-party
 vault-writing MCP servers are excluded regardless of direction.
 
 ## Status vocabulary

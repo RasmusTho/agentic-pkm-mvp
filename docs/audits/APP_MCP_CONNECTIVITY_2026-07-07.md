@@ -1,4 +1,4 @@
-State: Advisory audit snapshot, 2026-07-07. App inventory taken from the operator's MacBook and mac mini on the audit date; MCP-ecosystem claims verified by web research the same day (the MCP ecosystem moves fast — re-verify before building). Owner ruled D1 2026-07-10 (§4): self-host Karakeep on the mac mini as the read-later/highlights/Mimer-ingestion source, keep Raindrop.io as the bookmark layer with its official MCP adopted (both, not either/or). D2 remains open — owner is weighing alternatives against work/Apple/family-sharing constraints. Subordinate to `docs/DOCS_INDEX.md` and owner contracts; owner docs win on disagreement.
+State: Advisory audit snapshot, 2026-07-07. App inventory taken from the operator's MacBook and mac mini on the audit date; MCP-ecosystem claims verified by web research the same day (the MCP ecosystem moves fast — re-verify before building). Owner ruled D1 2026-07-10 (§4): self-host Karakeep on the mac mini as the read-later/highlights/Mimer-ingestion source, keep Raindrop.io as the bookmark layer with its official MCP adopted (both, not either/or). Owner ruled D2 2026-07-11 (§4): Todoist for personal/household tasks (spouse is Android, ruling out Apple Reminders as the shared surface), Bring! for the shared grocery list specifically, work stays on Microsoft's tools untouched, deferred behind the not-yet-built Mimer work-satellite. Subordinate to `docs/DOCS_INDEX.md` and owner contracts; owner docs win on disagreement.
 Doc role: Reference (audit snapshot)
 Authority: Evidence-based inventory of the operator's applications and their MCP (Model Context Protocol) connectivity status, with adopt/build/switch/drop verdicts and a roadmap handoff. Advisory only — app-switch decisions are the owner's; build items enter the backlog only through the normal feature-breakdown/issue path.
 
@@ -85,10 +85,11 @@ no replacement needed) · **keep/ignore** (fine as is, no agent surface warrante
 
 | App | MCP status | Verdict |
 |---|---|---|
-| Microsoft To Do | No official MCP; product being absorbed into Planner; community Graph wrappers only | **switch away** (owner decision D2, §4) |
-| Todoist | **Official hosted** MCP (`Doist/todoist-mcp`, `ai.todoist.net/mcp`, active) — only task manager with a first-party hosted endpoint | **get** — recommended task home (D2, §4) |
-| Apple Reminders | Community, healthy (`mattt/iMCP` bridge; `FradSer/mcp-server-apple-events`, EventKit-native) | **adopt as secondary** — Siri capture + shared household lists |
-| Listonic | No API at all (dev portal is their B2B agency site); reverse-engineered HA shims only | **switch away** — to Bring! (Platinum-quality native HA integration) or a Todoist project (D2, §4) |
+| Microsoft To Do | No official MCP; product being absorbed into Planner; community Graph wrappers only | **retained, work-only** — untouched for now, no agent access (D2 ruling, §4; future work-satellite territory) |
+| Todoist | **Official hosted** MCP (`Doist/todoist-mcp`, `ai.todoist.net/mcp`, active) — only task manager with a first-party hosted endpoint | **adopted** — personal/household task home (D2 ruling, §4); native Android + iOS solves the spouse-sharing requirement that Reminders couldn't |
+| Apple Reminders | Community, healthy (`mattt/iMCP` bridge; `FradSer/mcp-server-apple-events`, EventKit-native) | **not selected as the shared hub** — no native Android app, `icloud.com` web fallback can't create/delete lists or notify; Reminders ruled out once the spouse's Android phone was factored in (D2 ruling, §4) |
+| Listonic | No API at all (dev portal is their B2B agency site); reverse-engineered HA shims only | **retired** — replaced by Bring! (D2 ruling, §4) |
+| Bring! | No official vendor API, but a **Platinum-quality first-party Home Assistant integration** (`miaucl/bring-api`, 63★, active, pushed 2026-07-06) surfaces lists as `todo.*` entities; agent access via HA's official `mcp_server` or the very active `homeassistant-ai/ha-mcp` (3.9k★) | **adopted** — dedicated shared grocery list (D2 ruling, §4); free, native iOS **and** Android, built for exactly this use case |
 | Apple Calendar / Google Calendar | **Official** Anthropic Google Workspace connectors (Calendar full read/write); Google-managed MCP servers now GA; Fantastical has an official Mac MCP if wanted | **adopt** (connectors) |
 | Gmail / Apple Mail | Anthropic connector: Gmail read + draft-only (no send, deliberate safety cap); community `taylorwilsdon/google_workspace_mcp` (2.8k★) adds real send; Apple Mail MCPs are AppleScript-fragile | **adopt** read/draft; escalate to community server only if send-from-agent is ever wanted |
 | Outlook / OneNote / M365 (mac mini) | Anthropic M365 connector is read-only + business tenant; community `Softeria/ms-365-mcp-server` (820★, active) covers Graph read-write | **later** — only if M365 remains in real use |
@@ -151,30 +152,38 @@ free API to poll. That reframing changes the answer from the SaaS pick in the fi
   posture as for any mac mini service); the read-later/highlight surface and the bookmark surface
   now live in two systems by design, not one, each doing the job it is actually shaped for.
 
-**D2 — Task home — OPEN, owner evaluating alternatives (as of 2026-07-10).** Problem: tasks are
-split across Microsoft To Do (being absorbed into Planner, no first-party agent surface) + Apple
-Reminders + Listonic (no API at all). The owner added three binding constraints that reframe this
-beyond a simple tool pick: must work well on the Apple device set, must work at a Microsoft-heavy
-job where the work computer may block new installs/connectors, and must support sharing a list
-with his spouse. Working hypothesis under consideration: **split by sphere, not by app** — leave
-work tasks in Microsoft untouched (zero new install/IT risk, team visibility preserved, no agent
-ever touches the work account) and pick a separate tool for the personal/household sphere that
-agents are allowed to read/write:
-- *Option A:* **Apple Reminders** for personal/household — native Family Sharing (built for the
-  spouse-sharing requirement), Siri capture, community EventKit MCP bridges (`iMCP`,
-  `mcp-server-apple-events`) on the mac mini, $0. Reachable read-only-ish from the work PC via
-  `icloud.com/reminders` (browser only, no install/admin rights needed) if cross-visibility is
-  wanted.
-- *Option B:* **Todoist** for personal/household — official hosted MCP (`Doist/todoist-mcp`),
-  shared projects work for spouse-sharing (she needs her own account), ~$60/yr, web client also
-  needs no install on a locked-down machine.
-- Open items only the owner can resolve: exact work-computer install/connector policy (unknown to
-  this audit); whether Bring!'s store-level offer integration actually covers Swedish chains
-  (unverified — DACH-market signal only, do not assume it before switching for that specific
-  feature).
-- Not recommended: forcing one tool to also carry the work sphere — no task manager here fixes an
-  employer-owned device's IT policy, and mixing a personal agent-governed tool with work-assigned,
-  team-visible tasks creates a governance problem this audit's §2 invariant would flag anyway.
+**D2 — Task home — RESOLVED 2026-07-11.** Problem: tasks are split across Microsoft To Do (being
+absorbed into Planner, no first-party agent surface) + Apple Reminders + Listonic (no API at all).
+The owner added binding constraints beyond a simple tool pick: must work well on the Apple device
+set, must work at a Microsoft-heavy job where the work computer may block new installs/connectors,
+and must support sharing a list with his spouse — who has **Android, not iPhone**. That last fact
+eliminated Apple Reminders as the shared-list surface: Reminders has no native Android app, and
+the `icloud.com` web fallback cannot create/delete lists, move items, or send notifications — a
+visibly degraded experience for a co-owner of the list, not a real option.
+- **Ruling — split by sphere, not by app:**
+  - **Work stays on Microsoft's tools, untouched.** Zero new install/IT risk, team visibility
+    preserved, no agent (personal or otherwise) touches the work account today. This is not a
+    permanent exclusion — it is staged behind the not-yet-built Mimer work-satellite (§ below),
+    which would eventually bridge Microsoft Graph/To Do/Planner through its own, isolated LLM. See
+    `docs/plans/PROTOCOL_SATELLITE_SYNC.md` and `docs/CONCEPTS/INSTANCE_DEVICE_AND_REPLICA_CONTRACT.md`
+    for the existing (Spec/planned, not implemented) satellite architecture this defers to;
+    `InstanceSettings.role: Literal["master", "satellite"]` already exists in the settings schema
+    (`app/settings/models.py:366`) and local satellite role-gating already shipped (#1869/#1935/
+    #2185/#2220) — only cross-instance sync (the piece that would carry this) remains unbuilt.
+  - **Todoist** for general personal/household tasks — official hosted MCP (`Doist/todoist-mcp`),
+    native apps on **both** iOS and Android so neither spouse gets a degraded experience, free tier
+    allows 5 collaborators per shared project (spouse needs no paid account), ~$60/yr for the
+    owner's Pro tier, web client needs no install if ever wanted on the work machine.
+  - **Bring!** for the shared grocery list specifically, not folded into Todoist — free, native on
+    both platforms, purpose-built for exactly this (real-time shared list, store-aisle sorting),
+    agent-accessible via Home Assistant (`miaucl/bring-api` backing a Platinum-quality first-party
+    HA integration, exposed to agents via HA's official `mcp_server` or the more capable
+    `homeassistant-ai/ha-mcp`). Chosen over a plain Todoist "Groceries" project because the owner
+    confirmed the grocery-specific UX is worth a second app.
+  - Microsoft To Do and Listonic are both retired for the personal/household sphere.
+- *Open flag, unverified:* whether Bring!'s store-level offer integration covers Swedish chains is
+  still unconfirmed (DACH-market signal only) — the ruling stands regardless since shared-list
+  UX/cross-platform parity, not store offers, was the deciding factor.
 
 ## 5. Build list (ranked) — and explicit non-builds
 
@@ -201,8 +210,9 @@ specs. Ranked by leverage:
   shortcut exists — Voicenotes has an official MCP — but it moves raw voice off-device, against
   the local-first capture posture.)
 - **B4 — Direction C consumption slices.** CRE/KAP consuming external MCP signals via the existing
-  flagged remote-MCP seam: HA presence/state → context dimensions; calendar/tasks → commitment
-  context. Sequenced behind B1/B2 and the owner's D2 choice.
+  flagged remote-MCP seam: HA presence/state → context dimensions; Todoist/Bring! tasks → commitment
+  context (both D2-ruled, both Direction A adopt already — this slice is the runtime-consumption
+  follow-on, not the connection itself). Sequenced behind B1/B2.
 - **B5 (optional, trivial) — Kodi MCP** over JSON-RPC, only if media control from chat is actually
   wanted; HA's Kodi integration may make it moot.
 
@@ -228,10 +238,18 @@ accessible via non-expiring test token (120 req/min), MCP itself remains Pro-gat
 `developer.raindrop.io`; `wallabag/wallabag` confirmed MIT-licensed, free self-host, Pocket-format
 import support (named alternative, not selected).
 
+Spot-verified live on 2026-07-11 (D2 decision support): `miaucl/bring-api` (63★, archived=false,
+pushed 2026-07-06); `home-assistant.io/integrations/bring/` reachable (200); Todoist free-tier
+collaborator limit (5 per personal project) confirmed via `todoist.com/help` — spouse needs no
+paid account for the shared project.
+
 ## 7. Roadmap handoff
 
 `docs/ROADMAP.md :: External-connectivity (MCP) sequencing` now carries the bounded forward line:
-Direction A adoption is operator configuration (no backlog), Direction B (B1 Mimer MCP server, B2
-Karakeep self-host per the D1 ruling) is the build line pending feature-breakdown, Direction C
-stays deferred behind B1/B2 + D2. This audit is the evidence base; it decides nothing by itself
-beyond the D1 ruling the owner already made.
+Direction A adoption is operator configuration (no backlog) and now includes both D2-ruled
+connections (Todoist, Bring! via Home Assistant); Direction B (B1 Mimer MCP server, B2 Karakeep
+self-host per the D1 ruling) is the build line pending feature-breakdown; Direction C stays
+deferred behind B1/B2. Both owner decisions (D1, D2) are now resolved; the only forward-looking
+open thread from this audit is the Mimer work-satellite (own LLM, staged, unimplemented) named
+under D2's ruling. This audit is the evidence base; it decides nothing by itself beyond the D1/D2
+rulings the owner already made.
