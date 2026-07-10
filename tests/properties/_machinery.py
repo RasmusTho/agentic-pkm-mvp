@@ -648,6 +648,12 @@ def find_write_frontmatter_call_sites(root: Path = APP_ROOT) -> list[tuple[str, 
 #                           asserts its own action string caller-side
 #                           (defense-in-depth, pre-dates #2953).
 WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
+    ("app/briefing/compose.py", 245): (
+        "guarded_by_caller: compose_briefing asserts write_guard."
+        "assert_writes_allowed(BRIEFING_WRITE_ACTION) before the private atomic "
+        "staging directory is created, and passes the same guard/action through "
+        "to the port's own guard (#3315)."
+    ),
     ("app/relevance/materialization.py", 66): (
         "guarded_by_caller: materialize_moment asserts write_guard."
         "assert_writes_allowed(MOMENT_MATERIALIZE_ACTION) immediately before "
