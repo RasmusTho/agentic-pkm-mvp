@@ -29,9 +29,18 @@ def render_briefing_listen_affordance(
           aria-disabled="{aria_disabled}"{disabled}
           onclick="briefingListen.play(this)">Listen</button>
   <p data-testid="briefing-listen-status" role="status">{reason}</p>
+  <section data-testid="briefing-speech-plan" hidden></section>
 </section>
 <script>
 (function () {{
+  function errorMessage(data) {{
+    var detail = data && data.detail;
+    if (detail && typeof detail === 'object') {{
+      return detail.reason || detail.message || 'Local TTS unavailable.';
+    }}
+    return detail || (data && (data.reason || data.message)) || 'Local TTS unavailable.';
+  }}
+
   function postJson(path, payload) {{
     return fetch(path, {{
       method: 'POST',
@@ -40,7 +49,7 @@ def render_briefing_listen_affordance(
     }}).then(function (response) {{
       return response.json().then(function (data) {{
         if (!response.ok) {{
-          throw new Error((data && data.detail) || 'Local TTS unavailable.');
+          throw new Error(errorMessage(data));
         }}
         return data;
       }});
@@ -60,6 +69,43 @@ def render_briefing_listen_affordance(
     if (status) {{ status.textContent = message; }}
   }}
 
+  function escapeHtml(value) {{
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }}
+
+  function renderSpeechPlan(surface, plan) {{
+    var node = surface.querySelector('[data-testid="briefing-speech-plan"]');
+    if (!node || !plan) {{ return; }}
+    var warnings = Array.isArray(plan.warnings) ? plan.warnings.slice() : [];
+    if (plan.mixed_language && warnings.indexOf('mixed_language') < 0) {{
+      warnings.push('mixed_language');
+    }}
+    if (plan.provider_available === false) {{
+      warnings.push(plan.provider_reason || 'provider_available false');
+    }}
+    var cache = plan.cached ? 'cached' : 'not cached';
+    var segments = Array.isArray(plan.segments) ? plan.segments : [];
+    var segmentRows = segments.map(function (segment) {{
+      return '<li>' + escapeHtml(segment.language || plan.language || 'unknown') +
+        ' / ' + escapeHtml(segment.provider || plan.provider || 'unknown') +
+        ' / ' + escapeHtml(segment.voice_id || plan.voice_id || 'unknown') +
+        ' / ' + cache + ': ' + escapeHtml(segment.text || '') + '</li>';
+    }}).join('');
+    var warningRows = warnings.map(function (warning) {{
+      return '<li class="tts-warning">' + escapeHtml(warning) + '</li>';
+    }}).join('');
+    node.hidden = false;
+    node.innerHTML =
+      '<div class="tts-plan-text">' + escapeHtml(plan.normalized_text || '') + '</div>' +
+      '<ul class="tts-plan-segments">' + segmentRows + '</ul>' +
+      '<ul class="tts-plan-warnings">' + warningRows + '</ul>';
+  }}
+
   window.briefingListen = {{
     play: function (button) {{
       var surface = surfaceFor(button);
@@ -69,6 +115,7 @@ def render_briefing_listen_affordance(
       setStatus(surface, 'Planning local audio.');
       postJson('/api/companion/tts/plan', {{text: text, rate: 1.0}})
         .then(function (plan) {{
+          renderSpeechPlan(surface, plan);
           if (plan.enabled === false) {{
             throw new Error('Local TTS is disabled.');
           }}
@@ -110,4 +157,3 @@ def render_briefing_listen_affordance(
 }}());
 </script>
 """.strip()
-
