@@ -110,6 +110,36 @@ inspection opens existing databases in SQLite read-only mode so a discovery/open
 a replacement file. The guard checks both lexical and resolved containment, so a database symlink
 located in the shared vault cannot redirect a store open to an outside target.
 
+### Model-inquiry artifact records
+
+Pre-ticket model inquiries are durable file-first records under
+`$BUILDEROPS_VAULT_ROOT/model-inquiries/<inquiry_id>/`. Their immutable question, ordered turns,
+optional synthesis/readiness artifacts, and canonical `BuilderOpsReceipt` files are shared artifacts,
+not SQLite rows. A manifest written after the question and start receipt is the inquiry commit
+marker. Trace reads fail closed on missing receipts, invalid hashes, dangling input references,
+foreign inquiry IDs, or symlinked artifact paths.
+
+Inquiry writes serialize to a same-directory temporary file and install the final pathname with a
+no-overwrite link. Equal retries reconcile to the existing value; a different payload for an
+already committed path is a conflict. Local SQLite remains the mutable machine-local operational
+index and is neither created nor treated as durable inquiry authority in the shared vault.
+Turn filenames reserve their numeric sequence slot atomically on one filesystem, and turn-ID
+reservation files independently reserve the logical identity. Canonical artifact hashes bind
+content plus provenance and causal edges, while manifests and terminal receipts bind the relevant
+artifact hash. Reservation publication, turn publication, and conflict cleanup are serialized per
+inquiry across threads and processes on one host using an OS advisory file lock. Orphaned
+reservations remain visible as an incomplete trace and can be reconciled by an exact retry.
+
+The configured filesystem must support same-directory hard links, file `fsync`, and directory
+`fsync`. Inquiry creation and each immutable write enforce those operations and fail closed when
+the filesystem rejects them. A post-link directory-sync failure is reported as incomplete; an
+equal retry reconciles the installed payload and retries the directory sync. Newly created
+directory entries are synced through their parent chain before start returns.
+
+This does not promote iCloud advisory claims into distributed locks: independently synchronized
+devices can still race, and any resulting conflicting graph fails trace validation rather than
+being silently accepted.
+
 Treat the shared tree as untrusted file input. Queue operations fail closed on a symlinked vault
 root, any existing symlinked ancestor in the configured root path, pre-existing symlinked
 queue/claim ancestors, and ticket, claim, or SQLite-candidate leaves rather than following

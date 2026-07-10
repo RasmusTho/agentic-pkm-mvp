@@ -47,6 +47,7 @@ from app.builderops.epic_run_state import (
     update_epic_run_state,
 )
 from app.builderops.models import BuilderOpsValidationError, normalize_actor
+from app.builderops.model_inquiry import ModelInquiryService
 from app.builderops.pattern_routing import (
     PatternRoutingError,
     build_pattern_routing_report,
@@ -311,6 +312,71 @@ def vault_release(root: Path, ticket_ref: str, agent: str, as_json: bool) -> Non
     try:
         payload = release_ticket(root, ticket_ref, agent=agent)
     except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@builderops.group("inquiry", help="Persist and inspect pre-ticket model inquiry artifacts.")
+def inquiry() -> None:
+    """File-first inquiry start, trace, and restart planning."""
+
+
+@inquiry.command("start", help="Persist an immutable inquiry question before model execution.")
+@click.option(
+    "--question-file",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option("--workflow", required=True)
+@click.option("--inquiry-id", default=None)
+@click.option("--source-ref", multiple=True)
+@click.option("--created-by", default=None)
+@click.option("--json", "as_json", is_flag=True)
+def inquiry_start(
+    question_file: Path,
+    workflow: str,
+    inquiry_id: str | None,
+    source_ref: tuple[str, ...],
+    created_by: str | None,
+    as_json: bool,
+) -> None:
+    try:
+        question = question_file.read_text(encoding="utf-8")
+        refs = (
+            _parse_refs(source_ref)
+            if source_ref
+            else [{"ref_type": "file", "ref": str(question_file.resolve())}]
+        )
+        payload = ModelInquiryService.from_env().start(
+            question=question,
+            workflow=workflow,
+            inquiry_id=inquiry_id,
+            source_refs=refs,
+            created_by=_parse_actor(created_by),
+        )
+    except (OSError, UnicodeError, BuilderOpsValidationError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@inquiry.command("trace", help="Return a deterministic trace over committed inquiry artifacts.")
+@click.argument("inquiry_id")
+@click.option("--json", "as_json", is_flag=True)
+def inquiry_trace(inquiry_id: str, as_json: bool) -> None:
+    try:
+        payload = ModelInquiryService.from_env().trace(inquiry_id)
+    except BuilderOpsValidationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@inquiry.command("resume", help="Plan restart continuation without executing a provider.")
+@click.argument("inquiry_id")
+@click.option("--json", "as_json", is_flag=True)
+def inquiry_resume(inquiry_id: str, as_json: bool) -> None:
+    try:
+        payload = ModelInquiryService.from_env().resume(inquiry_id)
+    except BuilderOpsValidationError as exc:
         raise click.ClickException(str(exc)) from exc
     _emit(payload, as_json)
 
