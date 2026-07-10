@@ -30,8 +30,20 @@ builderops_find_git_common_venv() {
     return 1
 }
 
+# BUILDEROPS_PYTHON: explicit interpreter override, honored first. Must be an
+# executable path (e.g. set by CI/tests to `sys.executable`). Never inferred —
+# if set but not executable, resolution fails loud rather than falling back to
+# venv discovery. Desktop use is unaffected: the fail-loud no-venv path below
+# only runs when this override is unset.
 builderops_resolve_python() {
     local app_root="$1"
+    if [ -n "${BUILDEROPS_PYTHON:-}" ]; then
+        if [ -x "$BUILDEROPS_PYTHON" ]; then
+            echo "$BUILDEROPS_PYTHON"
+            return 0
+        fi
+        return 1
+    fi
     builderops_find_venv "$app_root" 2>/dev/null \
         || builderops_find_git_common_venv "$app_root" 2>/dev/null
 }

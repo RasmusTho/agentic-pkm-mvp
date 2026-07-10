@@ -71,6 +71,7 @@ def _configured_env(tmp_path: Path) -> dict[str, str]:
     return {
         **os.environ,
         "PATH": "/usr/bin:/bin",
+        "BUILDEROPS_PYTHON": sys.executable,
         "BUILDEROPS_VAULT_ROOT": str(vault),
         "BUILDEROPS_INQUIRY_ADAPTERS_JSON": json.dumps(config),
     }
@@ -151,7 +152,7 @@ def test_claude_package_uses_common_launcher_contract(tmp_path: Path) -> None:
 
 
 def test_skill_preflight_reports_missing_dependencies(tmp_path: Path) -> None:
-    clean_env = {"PATH": os.environ["PATH"]}
+    clean_env = {"PATH": os.environ["PATH"], "BUILDEROPS_PYTHON": sys.executable}
     missing_vault = subprocess.run(
         [str(LAUNCHER), "Question"],
         cwd=REPO_ROOT,
@@ -203,3 +204,34 @@ def test_skill_preflight_reports_missing_dependencies(tmp_path: Path) -> None:
     assert missing_executable.returncode == 2
     assert "local command unavailable" in missing_executable.stderr
     assert not (vault / "model-inquiries").exists()
+
+
+def test_launcher_fails_loud_without_venv_or_override(tmp_path: Path) -> None:
+    # Isolated copy so venv walk-up can't discover this checkout's real .venv,
+    # proving the fail-loud path holds when BUILDEROPS_PYTHON is unset.
+    isolated_scripts = tmp_path / "isolated" / "scripts"
+    isolated_lib = isolated_scripts / "lib"
+    isolated_lib.mkdir(parents=True)
+    launcher_copy = isolated_scripts / "start_model_inquiry.sh"
+    launcher_copy.write_text(LAUNCHER.read_text(encoding="utf-8"), encoding="utf-8")
+    launcher_copy.chmod(0o755)
+    (isolated_lib / "resolve_repo_python.sh").write_text(
+        (REPO_ROOT / "scripts" / "lib" / "resolve_repo_python.sh").read_text(
+            encoding="utf-8"
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [str(launcher_copy), "--help"],
+        cwd=isolated_scripts.parent,
+        env={"PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert (
+        "Model inquiry launch requires the repo virtualenv" in result.stderr
+    ), result.stderr

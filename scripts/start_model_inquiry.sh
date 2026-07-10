@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Worktree-safe desktop-skill entrypoint for the Python model inquiry launcher.
+# Set BUILDEROPS_PYTHON to an executable interpreter path to override the
+# repo-.venv discovery below (e.g. for CI/tests with no checked-out venv).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
