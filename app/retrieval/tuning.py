@@ -12,9 +12,12 @@ into this surface (compat). ``RERANK_PROVIDER`` selects the reranker *implementa
 (`app/retrieval/rerank/provider.py`), which is unrelated to the D3 config shape and stays read
 directly at reranker-construction time — untouched by this module.
 
-Selecting ``fusion="rrf"`` or ``rerank="conditional"`` raises :class:`RetrievalStrategyNotImplementedError`
-at resolution time — these strategies are visible-but-inert until ADR-0059 D3 step 5 (issue #3407)
-plus an eval-gated owner call.
+``fusion="rrf"`` (weighted RRF, ``app/retrieval/hybrid.py::_rank_eligible``) and
+``rerank="conditional"`` (deterministic BM25-margin gate, ``app/retrieval/hook_adapter.py``) are
+implemented (ADR-0059 D3 step 5, issue #3407). Both resolve successfully and ship dark: the
+defaults stay ``fusion="linear"`` / ``rerank="off"``, and flipping either default is a separate
+owner call gated on eval evidence, recorded against ADR-0059 — never a silent behavior change from
+this module.
 """
 
 from __future__ import annotations
@@ -40,12 +43,13 @@ class RetrievalTuningError(ValueError):
 
 
 class RetrievalStrategyNotImplementedError(RetrievalTuningError):
-    """Raised when a resolved config selects a visible-but-inert strategy (ADR-0059 D3 step 5).
+    """Historical marker type (ADR-0059 D3 step 5, issue #3407).
 
-    ``fusion="rrf"`` and ``rerank="conditional"`` are valid field values (the config *shape* already
-    carries them so it does not churn later) but are not implemented yet; sibling issue #3407 wires
-    them behind an eval gate plus an owner call. Selecting either must raise here rather than
-    silently falling back to the current default strategy.
+    Before #3407, selecting ``fusion="rrf"`` or ``rerank="conditional"`` raised this at resolution
+    time because the strategies did not exist yet. Both are now implemented and resolve
+    successfully; this class is kept (unused by this module) only so any external code that still
+    references it by name does not break on import. Do not raise it for new not-implemented
+    strategies — use :class:`RetrievalTuningError` directly.
     """
 
 
@@ -155,16 +159,9 @@ def _resolve_retrieval_tuning() -> RetrievalTuning:
     except ValidationError as exc:
         raise RetrievalTuningError(f"invalid retrieval tuning config: {exc}") from exc
 
-    if resolved.fusion == "rrf":
-        raise RetrievalStrategyNotImplementedError(
-            "fusion='rrf' is not implemented yet (ADR-0059 D3 step 5 / issue #3407); "
-            "selecting it is visible-but-inert and must not silently fall back to 'linear'."
-        )
-    if resolved.rerank == "conditional":
-        raise RetrievalStrategyNotImplementedError(
-            "rerank='conditional' is not implemented yet (ADR-0059 D3 step 5 / issue #3407); "
-            "selecting it is visible-but-inert and must not silently fall back to 'off'/'always'."
-        )
+    # fusion="rrf" and rerank="conditional" are implemented (ADR-0059 D3 step 5, #3407) and resolve
+    # like any other valid config value. Neither is the shipped default; a default flip is a
+    # separate owner call gated on eval evidence, recorded against ADR-0059 — not enforced here.
     return resolved
 
 
