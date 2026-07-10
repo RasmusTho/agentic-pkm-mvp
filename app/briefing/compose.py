@@ -12,7 +12,7 @@ import tempfile
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal, TypeAlias, get_args
 
 import yaml
 
@@ -26,6 +26,7 @@ from app.knowledge.contracts import WriteReceipt
 from app.knowledge.write_ops import write_note_relative
 from app.receipts.decision_receipt_log import iter_decision_receipts
 from app.relevance.now_surface import collect_now_moments
+from app.relevance.schema import NeedBasis, URGENCY_ORDER
 from app.services.commitment_persistence import commitment_artifact_path, load_commitments
 from app.vault.manager import VaultContext
 from app.vault.paths import get_vault_system_dir_rel
@@ -48,6 +49,7 @@ SECTION_TITLES: dict[SectionName, str] = {
     "moments": "Moments",
     "decision_receipts": "Decision receipts",
 }
+NEED_BASIS_VALUES: tuple[str, ...] = get_args(NeedBasis)
 
 
 class BriefingReadError(RuntimeError):
@@ -347,8 +349,8 @@ def _read_moments(
             raise _InvalidSourceRecord
         moment_id = _required_canonical_text(record, "moment_id")
         title = _required_display_text(record, "title")
-        need_basis = _required_text(record, "need_basis")
-        urgency_band = _required_text(record, "urgency_band")
+        need_basis = _required_enum_text(record, "need_basis", NEED_BASIS_VALUES)
+        urgency_band = _required_enum_text(record, "urgency_band", URGENCY_ORDER)
         raw_refs = record.get("surfaced_refs")
         if not isinstance(raw_refs, list):
             raise _InvalidSourceRecord
@@ -380,7 +382,9 @@ def _read_moments(
                 surfaced_refs=tuple(surfaced_refs),
             )
         )
-    urgency_order = {"routine": 0, "timely": 1, "pressing": 2, "critical": 3}
+    urgency_order: dict[str, int] = {
+        band: rank for rank, band in enumerate(URGENCY_ORDER)
+    }
     items.sort(key=lambda item: (-urgency_order.get(item.urgency_band, -1), item.moment_id))
     return tuple(items)
 
@@ -640,8 +644,10 @@ def _item_from_mapping(
                 raise _InvalidSourceRecord
             return CommitmentBriefingItem(
                 commitment_id=commitment_id,
-                commitment_kind=_required_text(raw, "commitment_kind"),
-                state=_required_text(raw, "state"),
+                commitment_kind=_required_enum_text(
+                    raw, "commitment_kind", FIRST_WAVE_COMMITMENT_KINDS
+                ),
+                state=_required_enum_text(raw, "state", COMMITMENT_STATE_VALUES),
                 summary=_required_display_text(raw, "summary"),
                 artifact_path=artifact_path,
                 target_ref=_optional_canonical_text(raw, "target_ref"),
@@ -674,8 +680,8 @@ def _item_from_mapping(
             return MomentBriefingItem(
                 moment_id=moment_id,
                 title=_required_display_text(raw, "title"),
-                need_basis=_required_text(raw, "need_basis"),
-                urgency_band=_required_text(raw, "urgency_band"),
+                need_basis=_required_enum_text(raw, "need_basis", NEED_BASIS_VALUES),
+                urgency_band=_required_enum_text(raw, "urgency_band", URGENCY_ORDER),
                 artifact_path=artifact_path,
                 surfaced_refs=tuple(normalized_refs),
             )
@@ -721,6 +727,15 @@ def _required_text(mapping: dict[str, Any], key: str) -> str:
 def _required_canonical_text(mapping: dict[str, Any], key: str) -> str:
     value = mapping.get(key)
     if not isinstance(value, str) or not _is_canonical_reference_text(value):
+        raise _InvalidSourceRecord
+    return value
+
+
+def _required_enum_text(
+    mapping: dict[str, Any], key: str, allowed: tuple[str, ...]
+) -> str:
+    value = mapping.get(key)
+    if not isinstance(value, str) or value not in allowed:
         raise _InvalidSourceRecord
     return value
 
