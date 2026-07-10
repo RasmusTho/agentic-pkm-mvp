@@ -22,7 +22,7 @@ from app.builderops.ckm_reevaluation import (
     CkmReevaluationError,
     build_ckm_reevaluation_report,
 )
-from app.builderops.config import load_paths
+from app.builderops.config import BuilderOpsPaths, load_paths
 from app.builderops.evidence_bridge import (
     EvidenceBridgeError,
     build_evidence_bridge_report,
@@ -65,6 +65,14 @@ from app.builderops.retrospective_closure import (
     build_retrospective_closure_ledger,
 )
 from app.builderops.store import SqliteBuilderOpsStore
+from app.builderops.vault_queue import (
+    VaultQueueError,
+    claim_ticket,
+    init_vault,
+    release_ticket,
+    validate_vault,
+    vault_paths,
+)
 
 
 def _parse_json_object(value: str | None, *, field: str) -> dict[str, Any]:
@@ -196,12 +204,9 @@ def _extract_pr_head_sha(pull_request: Mapping[str, Any]) -> str:
 
 
 def _store(ctx: click.Context) -> SqliteBuilderOpsStore:
-    db_path = ctx.obj.get("db_path") if ctx.obj else None
-    if db_path is None:
-        paths = load_paths()
-        paths.ensure()
-        db_path = paths.db_path
-    store = SqliteBuilderOpsStore(Path(db_path))
+    paths = _effective_paths(ctx)
+    paths.ensure()
+    store = SqliteBuilderOpsStore(paths.db_path)
     store.initialize()
     return store
 
@@ -238,6 +243,76 @@ def _handle_create(
 def builderops(ctx: click.Context, db_path: Path | None) -> None:
     ctx.ensure_object(dict)
     ctx.obj["db_path"] = db_path
+
+
+def _effective_paths(ctx: click.Context) -> BuilderOpsPaths:
+    try:
+        return load_paths(db_path_override=ctx.obj.get("db_path"))
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@builderops.group("vault", help="Operate the file-first Builder Ops Vault queue.")
+def vault() -> None:
+    """Shared Markdown queue and advisory TTL-claim helpers."""
+
+
+@vault.command("paths", help="Show shared vault and local operational paths.")
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def vault_paths_command(ctx: click.Context, as_json: bool) -> None:
+    paths = _effective_paths(ctx)
+    _emit(vault_paths(paths), as_json)
+
+
+@vault.command("init", help="Create shared Markdown queue directories only.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.option("--json", "as_json", is_flag=True)
+def vault_init(root: Path, as_json: bool) -> None:
+    try:
+        payload = init_vault(root)
+    except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@vault.command("validate", help="Validate shared-vault separation and ticket status integrity.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.option("--json", "as_json", is_flag=True)
+@click.pass_context
+def vault_validate(ctx: click.Context, root: Path, as_json: bool) -> None:
+    paths = _effective_paths(ctx)
+    payload = validate_vault(root, paths)
+    _emit(payload, as_json)
+    if not payload["ok"]:
+        raise click.ClickException("Builder Ops Vault validation failed")
+
+
+@vault.command("claim", help="Write a shared advisory TTL claim for a Ready ticket.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.argument("ticket_ref")
+@click.option("--agent", required=True)
+@click.option("--ttl-minutes", default=120, show_default=True, type=int)
+@click.option("--json", "as_json", is_flag=True)
+def vault_claim(root: Path, ticket_ref: str, agent: str, ttl_minutes: int, as_json: bool) -> None:
+    try:
+        payload = claim_ticket(root, ticket_ref, agent=agent, ttl_minutes=ttl_minutes)
+    except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@vault.command("release", help="Release this agent's shared advisory ticket claims.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.argument("ticket_ref")
+@click.option("--agent", required=True)
+@click.option("--json", "as_json", is_flag=True)
+def vault_release(root: Path, ticket_ref: str, agent: str, as_json: bool) -> None:
+    try:
+        payload = release_ticket(root, ticket_ref, agent=agent)
+    except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
 
 
 @builderops.command("create-worklog", help="Create an AgentWorklog record.")

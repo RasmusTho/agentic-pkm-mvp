@@ -719,8 +719,9 @@ Development control model:
 - GitHub Project v2 is an optional legacy projection, not a pickup gate.
 - Dispatcher SQLite is the active volatile coordination primitive for claim ordering, leases,
   heartbeats, and completion; GitHub Issues / PRs / CI remain durable delivery truth.
-- The external BuilderOps Vault stores durable BuilderOps Markdown artifacts. It does not contain
-  dispatcher SQLite or active claims.
+- The external BuilderOps Vault stores durable BuilderOps Markdown artifacts plus shared TTL-based
+  advisory claim signals. It does not contain dispatcher SQLite or authoritative leases; advisory
+  files provide visibility only and never distributed-lock semantics.
 - Coding agents are the execution layer that implement bounded Issues.
 - Pull requests are the implementation artifact.
 - CI/test workflows are the validation loop.

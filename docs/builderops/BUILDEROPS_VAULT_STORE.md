@@ -88,6 +88,51 @@ Override mechanisms:
 The default path is repo-local runtime state and is ignored by Git via `runtime/builderops/`. It is
 not `$CODEX_HOME`, not local hidden memory, not repo authority, and not a reviewed docs surface.
 
+### Shared artifact vault and advisory claim signals
+
+`BUILDEROPS_VAULT_ROOT` may point to the dedicated Yggdrasil BuilderOps vault. It is a shared
+Markdown artifact root, not a database or lock service. `builderops vault init` creates
+`agent-delivery/<status>/` directories plus `.builderops/claims/` for TTL-based advisory signals.
+It never creates SQLite files or provider credentials there.
+
+`builderops vault init` creates `.builderops/claims/` in the shared vault for TTL-based advisory
+claim signals. Multiple agents may write claims for the same ticket. These files improve queue
+visibility and stale-recovery, but are explicitly not distributed locks: iCloud gives no global
+atomic/exclusive guarantee and a live claim must never be interpreted as exclusive ownership.
+SQLite (`BUILDEROPS_DB_PATH`) remains machine-local and fails closed if configured under the shared
+vault. Provider credentials must remain machine-local; these vault commands neither accept nor
+write provider credentials.
+
+The SQLite separation check is a store-level invariant. CLI configuration, explicit API/MCP
+`BuilderOpsBoundary` paths, completeness-report inspection, and direct `SqliteBuilderOpsStore`
+construction all reach the same guard before SQLite can open or create a file. Completeness-report
+inspection opens existing databases in SQLite read-only mode so a discovery/open race cannot create
+a replacement file. The guard checks both lexical and resolved containment, so a database symlink
+located in the shared vault cannot redirect a store open to an outside target.
+
+Treat the shared tree as untrusted file input. Queue operations fail closed on a symlinked vault
+root, any existing symlinked ancestor in the configured root path, pre-existing symlinked
+queue/claim ancestors, and ticket, claim, or SQLite-candidate leaves rather than following
+them outside the vault. This is a static-entry confinement guarantee, not protection from a
+malicious same-host process swapping filesystem entries between system calls. Queue tickets require
+unique YAML mapping keys plus valid `id` and normalized `status` fields; optional dispatcher
+`column` must agree with status. Advisory claims require filename-safe ticket IDs, non-empty agents,
+timezone-aware timestamps, and an increasing claim interval. Blank agent identities are rejected
+before write. Claim filenames remain non-authoritative: release matches the validated payload's
+ticket and agent, never the filename prefix. BMI-01 does not impose a maximum TTL or future-clock-skew limit because these
+files never grant exclusive ownership.
+
+Use the following operator checks before using a shared vault:
+
+```bash
+scripts/builderops_cli.sh builderops vault paths --json
+scripts/builderops_cli.sh builderops vault init "$BUILDEROPS_VAULT_ROOT" --json
+scripts/builderops_cli.sh builderops vault validate "$BUILDEROPS_VAULT_ROOT" --json
+```
+
+Signboard may render the resulting `agent-delivery/` Markdown tree for a human. It is a projection
+only and is never an automation API or a source of authoritative lease state.
+
 Projection regeneration reads from the selected store path using the same mechanisms. Automation
 worktrees that regenerate checked-in projection views should set the intended store explicitly with
 `BUILDEROPS_DB_PATH`, `BUILDEROPS_STATE_DIR`, or `--db-path`; otherwise the guard in the projection

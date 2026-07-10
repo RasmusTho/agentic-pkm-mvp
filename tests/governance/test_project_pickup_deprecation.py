@@ -78,11 +78,13 @@ def test_builderops_authority_roles_are_explicit() -> None:
     assert "labels, Project status, skill routing" not in process_map
 
 
-def test_external_vault_excludes_volatile_coordination_state() -> None:
+def test_external_vault_separates_authoritative_leases_from_advisory_claims() -> None:
     contract = _read(
         "docs/BUILDEROPS_MODEL_INQUIRY/EXTERNAL_BUILDEROPS_VAULT_CONFIGURATION.md"
     )
 
     assert "shared Markdown artifacts" in contract
-    assert "local-only claims root" in contract
-    assert "without creating SQLite files or live leases inside it" in contract
+    assert "TTL-based advisory claim signals" in contract
+    assert "local authoritative dispatcher leases" in contract
+    assert "without creating SQLite files or provider credentials" in contract
+    assert "exclusive distributed" in contract

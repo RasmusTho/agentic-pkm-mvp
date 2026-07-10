@@ -41,13 +41,15 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 | --- | --- | --- |
 | GitHub Issues / PRs / CI | Durable delivery lifecycle and merge truth | Hard authority |
 | Dispatcher SQLite | Volatile operational coordination (queue, claims, leases, heartbeats, local progress) | Operational authority only |
-| external BuilderOps Vault | Durable BuilderOps Markdown artifacts; never SQLite or live claims | BuilderOps artifact authority |
+| external BuilderOps Vault | Durable BuilderOps Markdown artifacts plus shared advisory TTL claims; never SQLite or authoritative leases | BuilderOps artifact authority |
 | GitHub Project / Signboard / external boards | Human-facing views | Optional projection, not hot path |
 
 Normative boundary:
 - GitHub remains the durable development source of truth.
 - Dispatcher SQLite owns volatile operational multi-agent coordination state.
-- The external BuilderOps Vault stores durable Markdown artifacts while SQLite and active claims stay local to the dispatcher host.
+- The external BuilderOps Vault stores durable Markdown artifacts and non-exclusive TTL claim
+  signals. Dispatcher SQLite remains local and owns authoritative leases; vault claims are advisory
+  visibility only and never distributed locks.
 - External boards (including GitHub Projects) are optional projections and must not be required in the agent hot path.
 
 ## Non-Goals (MVP)
