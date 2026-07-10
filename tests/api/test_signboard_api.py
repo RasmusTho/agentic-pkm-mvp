@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.api.app import app
 from app.dispatcher.events import JsonlEventWriter
+from app.dispatcher.leases import claim
 from app.dispatcher.models import TaskRecord
 from app.dispatcher.store import SqliteStore
 
@@ -85,6 +86,21 @@ def test_move_uses_dispatcher_then_reexports(tmp_path: Path, monkeypatch) -> Non
     assert any(event.event_type == "task.moved" for event in store.list_events())
 
 
+def test_claimed_card_completes_with_its_lease_holder(tmp_path: Path, monkeypatch) -> None:
+    store = _configure(tmp_path, monkeypatch)
+    task = _seed(store)
+    claim(store, task.task_id, "signboard-agent")
+
+    response = TestClient(app).post(
+        f"/api/signboard/cards/{task.task_id}/move",
+        json={"status": "Done", "actor": "signboard-agent"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert store.get_task(task.task_id).status == "completed"
+    assert store.get_task(task.task_id).lease_id is None
+
+
 def test_block_requires_reason_and_path_traversal_is_rejected(tmp_path: Path, monkeypatch) -> None:
     store = _configure(tmp_path, monkeypatch)
     task = _seed(store)
@@ -106,3 +122,5 @@ def test_signboard_remote_mutations_send_api_key_header() -> None:
     script = (Path(__file__).parents[2] / "app/web/static/signboard.js").read_text(encoding="utf-8")
     assert "X-API-Key" in script
     assert "sessionStorage" not in script
+    assert "actor = 'signboard-ui'" in script
+    assert "card.claimed_by || 'signboard-ui'" in script
