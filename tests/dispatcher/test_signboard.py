@@ -146,10 +146,16 @@ def test_notes_quoting_receipts_heading_survive_reexport(
     export_signboard(store, board)
     card = next(board.glob(f"**/{ready.task_id}--*.md"))
     original = card.read_text(encoding="utf-8")
+    # The quoted line is a genuine standalone "## Receipts" heading line (not
+    # embedded mid-sentence), so it round-trips through the same
+    # `line.strip() == "## Receipts"` match the real boundary uses. Only
+    # matching the *last* such line (the generator's own) instead of the
+    # first (the human's quoted one) keeps the text below it intact.
     hand_written = original.replace(
         "## Notes\n\n## Receipts",
         "## Notes\n\n"
-        "Reminder: cards end with a ## Receipts heading, see below.\n"
+        "Reminder: cards end with a heading like this one:\n"
+        "## Receipts\n"
         "Don't lose this last line either.\n\n"
         "## Receipts",
     )
@@ -158,7 +164,7 @@ def test_notes_quoting_receipts_heading_survive_reexport(
     export_signboard(store, board)
 
     content = next(board.glob(f"**/{ready.task_id}--*.md")).read_text(encoding="utf-8")
-    assert "Reminder: cards end with a ## Receipts heading, see below." in content
+    assert "Reminder: cards end with a heading like this one:" in content
     assert "Don't lose this last line either." in content
 
 
