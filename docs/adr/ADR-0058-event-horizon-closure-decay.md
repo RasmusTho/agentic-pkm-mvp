@@ -18,7 +18,7 @@ ADR-0051 enacted the `Episode` entity and named its load-bearing property: **clo
 
 The intuition to formalize: **value is lost at a triggering event, not as a function of age.** The grocery list becomes worthless the moment the shopping is done — whether that takes an hour or a month. This is Radvansky's working-model flush: crossing an event boundary purges the situation model, and material bound to the flushed situation drops in accessibility while open situations stay hot (the Zeigarnik reinterpretation). A TTL cannot express this; it decays the wrong things (long-lived open concerns) and fails to decay the right ones (short-lived closed errands).
 
-What is missing is the formal middle: *which* closure signals fire, *what* decay does to retrieval mechanically, *how* the artifact↔episode binding mediates it, and *proof* that the model cannot violate the doctrines it sits inside — retrieval-is-candidate (ADR-0039), markdown-canonical/index-disposable, and the low-trust posture. This draft supplies that middle for the owner's ruling.
+What was missing was the formal middle: *which* closure signals fire, *what* decay does to retrieval mechanically, *how* the artifact↔episode binding mediates it, and *proof* that the model cannot violate the doctrines it sits inside — retrieval-is-candidate (ADR-0039), markdown-canonical/index-disposable, and the low-trust posture. This ADR supplies that middle and records the owner's ruling on it.
 
 ## Decision (owner, 2026-07-10)
 
@@ -58,7 +58,7 @@ decay_factor ∈ [η_min, 1.0],  η_min > 0 strictly
 
 - The grocery list bound to both `weekly-errands` (closed) and `party-planning` (open) stays fully hot until the party is over.
 - `episode_ref` means **originated-in**, not about-ness: a retrospective *about* a closed episode originates in a new (writing) episode and does not cool with its subject. Aboutness is an ordinary link; only the origination binding mediates decay.
-- **`pending` bindings count as bound** for decay purposes. ADR-0051 §5's opt-out posture (silence is acceptance) plus the non-destructive, reversible nature of a rank signal make this proportionate; a `pending` binding still confers no authority (semantic-dimensions.md). A softened dampener for `pending` is an owner-open knob (Q2), not a model requirement.
+- **`pending` bindings count as bound** for decay purposes (decided by acceptance, §Owner-open Q2). ADR-0051 §5's opt-out posture (silence is acceptance) plus the non-destructive, reversible nature of a rank signal make this proportionate; a `pending` binding still confers no authority (semantic-dimensions.md). A softened dampener for `pending` remains a permissible future tuning knob, not a model requirement.
 
 ### 4. Reversibility: the factor is derived, never stored
 
@@ -73,7 +73,7 @@ The decay factor is **recomputed** — at query/cache-revalidation time — from
 1. **Evergreen notes without `episode_ref`:** factor 1.0 forever. Decay is *opt-in by binding* — nothing ever decays for merely lacking an episode, and nothing ever decays for being old. This is the anti-TTL property, load-bearing, restated as a rule: **absence of episodic origin is absence of decay.**
 2. **Artifacts shared across episodes:** MAX rule (§3). One open binding keeps the artifact fully hot; partial closure is invisible. (A per-binding weighted blend was considered and rejected: it makes the factor depend on *how many* situations something touched, which measures promiscuity, not liveness.)
 3. **Identity under re-cut after decay applied:** since nothing was applied *to the artifact* (§4), there is nothing stale to repair on the artifact side. The only failure mode is a dangling episode id, which fails open (visible, flagged, advisory) — mirroring the established posture that missing lineage is advisory, never a gate.
-4. **Closed episode, still-open upward goal:** the artifact cools anyway. The model leans on ADR-0051 commitment 5 (episodic → semantic is *transformation/coexistence*): what remains project-relevant from a closed episode should live on in semantic derivatives (notes, decisions), which carry their own liveness; the episodic originals are exactly what *should* cool. Whether an open goal should nonetheless soften the dampener is owner-open (Q3).
+4. **Closed episode, still-open upward goal:** the artifact cools anyway — decided by acceptance (§Owner-open Q3). The model leans on ADR-0051 commitment 5 (episodic → semantic is *transformation/coexistence*): what remains project-relevant from a closed episode should live on in semantic derivatives (notes, decisions), which carry their own liveness; the episodic originals are exactly what *should* cool.
 5. **Artifact bound to an episode that never closes** (an abandoned errand nobody ends): stays hot indefinitely — correctly, per the model; staleness of *episodes* is the engine's problem (a time-gap shift is grounds to propose closure), not retrieval's.
 
 ## Constraints honored
@@ -106,7 +106,7 @@ The decay factor is **recomputed** — at query/cache-revalidation time — from
 
 ## Owner-open questions (posture after the 2026-07-10 acceptance)
 
-The owner accepted the model **as drafted**, which resolves the drafted defaults into decided posture and leaves the following genuinely open:
+The owner accepted the model **as drafted**, which resolves two of the five drafted defaults into decided posture (items 2 and 3 below); the rest stay genuinely open:
 
 1. **The curve (RQ3) — open, runtime tuning:** η (initial post-closure factor), tail shape (flat step vs. decline to η_min), and per-scope variation (work vs. creative/RPG vs. private). The shape class (step-at-closure + floor + reinforcement resets) is accepted; parameters are named provisional constants tuned after live data (ERE-06 v1 = single step-down factor). Never requires revisiting this ADR.
 2. **`pending` bindings — decided by acceptance:** full dampening (§3). A softened-factor variant remains a permissible future tuning knob, not a model change.
