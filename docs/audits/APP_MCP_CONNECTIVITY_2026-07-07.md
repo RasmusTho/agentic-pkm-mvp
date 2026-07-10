@@ -1,4 +1,4 @@
-State: Advisory audit snapshot, 2026-07-07. App inventory taken from the operator's MacBook and mac mini on the audit date; MCP-ecosystem claims verified by web research the same day (the MCP ecosystem moves fast — re-verify before building). Owner ruled D1 2026-07-10 (§4): self-host Karakeep on the mac mini as the read-later/highlights/Mimer-ingestion source, keep Raindrop.io as the bookmark layer with its official MCP adopted (both, not either/or). Owner ruled D2 2026-07-11 (§4): Todoist for personal/household tasks (spouse is Android, ruling out Apple Reminders as the shared surface), Bring! for the shared grocery list specifically, work stays on Microsoft's tools untouched, deferred behind the not-yet-built Mimer work-satellite. Subordinate to `docs/DOCS_INDEX.md` and owner contracts; owner docs win on disagreement.
+State: Advisory audit snapshot, 2026-07-07. App inventory taken from the operator's MacBook and mac mini on the audit date; MCP-ecosystem claims verified by web research the same day (the MCP ecosystem moves fast — re-verify before building). Owner ruled D1 2026-07-10 (§4): self-host Karakeep on the mac mini as the read-later/highlights/Mimer-ingestion source, keep Raindrop.io as the bookmark layer with its official MCP adopted (both, not either/or). Owner ruled D2 2026-07-10 (§4): Todoist for personal/household tasks (spouse is Android, ruling out Apple Reminders as the shared surface), Bring! for the shared grocery list specifically, work stays on Microsoft's tools untouched, deferred behind the not-yet-built Mimer work-satellite. Subordinate to `docs/DOCS_INDEX.md` and owner contracts; owner docs win on disagreement.
 Doc role: Reference (audit snapshot)
 Authority: Evidence-based inventory of the operator's applications and their MCP (Model Context Protocol) connectivity status, with adopt/build/switch/drop verdicts and a roadmap handoff. Advisory only — app-switch decisions are the owner's; build items enter the backlog only through the normal feature-breakdown/issue path.
 
@@ -35,20 +35,26 @@ what makes the roadmap handoff bounded:
 - **Direction B — Mimer as an MCP server (build).** Today external agents reach Mimer through the
   repo-local `mimer-*` skills over HTTP (`docs/contracts/MIMER_CLIENT_CONTRACT.md`). No MCP server
   exists — `app/mcp/vault_tools.py` is internal orchestrator plumbing, not a transport. A thin MCP
-  server over the existing governed endpoints (ask / capture / retrieve / receipts) would let every
-  MCP client the owner uses (Claude apps, ChatGPT desktop, Codex) reach the vault through the
-  governed path. This is the single highest-leverage build item in this audit.
+  server over the existing ask / capture / retrieve / read-note / health endpoints, forwarding the
+  governed receipt already returned by capture, would let every MCP client the owner uses (Claude
+  apps, ChatGPT desktop, Codex) reach the vault through the governed path. MCP is explicitly not a
+  current client transport under `docs/adr/ADR-0056-mimer-client-contract-and-transports.md`; B1
+  therefore requires a superseding ADR decision that ratifies MCP as an additional adapter before
+  implementation. This is the single highest-leverage build item in this audit.
 - **Direction C — Mimer as an MCP client (runtime consumption, later).** The runtime consuming
   external MCP servers as signal sources: Home Assistant presence/state, calendar, tasks, reading
   history as CRE context dimensions and Knowledge Acquisition Platform intake. The flagged remote
   MCP multiplex seam (`docs/ROADMAP.md :: Post-v5.6 follow-ups`) is the landing zone; the CRE
   "external connectors" deferral gets its concrete priority list from this audit.
 
-Governance invariant (all three directions): **the vault write path stays governed.** Third-party
+Governance invariant (all three directions): **generic third-party MCP servers never write the
+vault.** Third-party
 Obsidian MCP servers exist (fragmented ecosystem, and the most common REST-API plugin had a
 documented silent-overwrite data-loss bug, coddingtonbear/obsidian-local-rest-api issue #237) —
-none of them may be pointed at a real vault with write access. Agent writes go through Mimer's
-capture/write endpoints (WriteGuard + receipts) or not at all. This is the moat, not an
+none of them may be pointed at a real vault with write access. MCP-originated writes use Mimer's
+governed capture endpoint (WriteGuard + receipt). The separate owner-permitted direct-filesystem
+transport remains available only under the discipline and human delegation defined by
+`docs/contracts/MIMER_CLIENT_CONTRACT.md` §§2, 5–6 and ADR-0056. This is the moat, not an
 inconvenience.
 
 ## 3. Inventory and verdicts
@@ -67,7 +73,7 @@ no replacement needed) · **keep/ignore** (fine as is, no agent surface warrante
 | Apple Notes | Community only (small, embedding-search variants exist) | **later** — low value while the vault is canonical |
 | Apple Journal | No API, no automation, manual export only — confirmed not integratable | **switch practice** — journal into the vault (or Drafts) if journaling should feed Mimer |
 | Apple Freeform | No scripting surface found | **ignore** |
-| Apple Voice Memos | Community MCP extracts Apple's own transcripts from `.m4a` (`jwulff/apple-voice-memo-mcp`) | **build-adjacent** — feeds the voice pipeline (§5 B2) |
+| Apple Voice Memos | Community MCP extracts Apple's own transcripts from `.m4a` (`jwulff/apple-voice-memo-mcp`) | **build-adjacent** — feeds the voice pipeline (§5 B3) |
 | Omi wearable | **Official** MCP (memories/conversations/action items) + REST API + open-source platform | **adopt when worn** — strengthens Posture A in `docs/` capture-posture material; only independent wearable left (Limitless→Meta, Bee→Amazon) |
 
 ### 3.2 Read-later, bookmarks, references
@@ -152,7 +158,7 @@ free API to poll. That reframing changes the answer from the SaaS pick in the fi
   posture as for any mac mini service); the read-later/highlight surface and the bookmark surface
   now live in two systems by design, not one, each doing the job it is actually shaped for.
 
-**D2 — Task home — RESOLVED 2026-07-11.** Problem: tasks are split across Microsoft To Do (being
+**D2 — Task home — RESOLVED 2026-07-10.** Problem: tasks are split across Microsoft To Do (being
 absorbed into Planner, no first-party agent surface) + Apple Reminders + Listonic (no API at all).
 The owner added binding constraints beyond a simple tool pick: must work well on the Apple device
 set, must work at a Microsoft-heavy job where the work computer may block new installs/connectors,
@@ -190,11 +196,14 @@ visibly degraded experience for a co-owner of the list, not a real option.
 Build items are advisory here; they enter the backlog through feature-breakdown with their own
 specs. Ranked by leverage:
 
-- **B1 — Mimer MCP server (Direction B).** Thin MCP transport over the existing governed
-  endpoints: `ask`, `capture`, `retrieve`/search, receipt read-back — the server-side realization
-  of the client contract the `mimer-*` skills already encode
-  (`docs/contracts/MIMER_CLIENT_CONTRACT.md`). Every MCP client the owner touches becomes a
-  governed vault client. Nothing else in this audit multiplies value like this item.
+- **B1 — Mimer MCP server (Direction B).** First ratify MCP as an additional client adapter by
+  superseding ADR-0056's explicit deferral, then build a thin MCP transport over the existing
+  `ask`, governed `capture`, `retrieve`/search, read-note, and health endpoints. Capture returns
+  its governed receipt in the same response; a separate receipt read-back endpoint is neither
+  shipped nor part of this item. The server preserves the authority envelope the `mimer-*` skills
+  and `docs/contracts/MIMER_CLIENT_CONTRACT.md` already encode without claiming MCP is currently a
+  contracted transport. Every MCP client the owner touches becomes a governed vault client.
+  Nothing else in this audit multiplies value like this item.
 - **B2 — Karakeep self-host (D1 ruling, decided not speculative).** Docker deployment on the mac
   mini (`karakeep-app/karakeep`, AGPL-3.0, $0); a scheduled ingest job (`app/ingest/`-adjacent)
   pulls saved links/notes/highlights via its REST API and writes candidates into the vault through
@@ -238,7 +247,7 @@ accessible via non-expiring test token (120 req/min), MCP itself remains Pro-gat
 `developer.raindrop.io`; `wallabag/wallabag` confirmed MIT-licensed, free self-host, Pocket-format
 import support (named alternative, not selected).
 
-Spot-verified live on 2026-07-11 (D2 decision support): `miaucl/bring-api` (63★, archived=false,
+Spot-verified live on 2026-07-10 (D2 decision support): `miaucl/bring-api` (63★, archived=false,
 pushed 2026-07-06); `home-assistant.io/integrations/bring/` reachable (200); Todoist free-tier
 collaborator limit (5 per personal project) confirmed via `todoist.com/help` — spouse needs no
 paid account for the shared project.

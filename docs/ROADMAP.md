@@ -50,11 +50,14 @@ inventoried in `docs/audits/APP_MCP_CONNECTIVITY_2026-07-07.md` (advisory snapsh
 directions are deliberately kept separate. **Direction A — assistant connectors** (Claude/agent
 sessions connecting to third-party MCP servers such as Home Assistant, Todoist, Drafts, Google
 Workspace) is operator configuration, not backlog work, and creates no roadmap claims.
-**Direction B — Mimer as an MCP server** is the first build candidate: a thin MCP transport over
-the existing governed ask/capture/retrieve/receipt endpoints, realizing the client contract the
-`mimer-*` skills already encode (`docs/contracts/MIMER_CLIENT_CONTRACT.md`); it enters the backlog
-only through feature-breakdown, and no MCP server exists today (`app/mcp/vault_tools.py` is
-internal plumbing, not a transport). A second build item joins it on the same footing: the audit's
+**Direction B — Mimer as an MCP server** is the first build candidate: after a superseding ADR
+ratifies MCP as an additional adapter (ADR-0056 explicitly excludes it today), build a thin MCP
+transport over the existing ask, governed-capture, retrieve/search, read-note, and health endpoints.
+Capture's response already carries its governed receipt; no separate receipt read-back endpoint is
+claimed. The adapter preserves the authority envelope the `mimer-*` skills and
+`docs/contracts/MIMER_CLIENT_CONTRACT.md` encode; it enters the backlog only through
+feature-breakdown, and no MCP server exists today (`app/mcp/vault_tools.py` is internal plumbing,
+not a transport). A second build item joins it on the same footing: the audit's
 D1 owner decision (read-later consolidation) is ruled — self-host Karakeep on the mac mini as the
 free, local-first read-later/highlights source feeding Mimer ingestion via its REST API, alongside
 Raindrop.io kept (not replaced) as the bookmark layer with its official MCP adopted. **Direction
@@ -67,9 +70,10 @@ Direction A (official/community MCP through Home Assistant); work tasks stay on 
 untouched, deferred behind the not-yet-built Mimer work-satellite (own LLM API, isolated from the
 personal instance) named in `docs/plans/PROTOCOL_SATELLITE_SYNC.md` — that satellite-sync protocol
 remains Spec/planned, not implemented, and is the actual gap if work coverage is ever built.
-Standing governance invariant: agent writes to the vault route through Mimer's governed write path
-only — generic third-party
-vault-writing MCP servers are excluded regardless of direction.
+Standing governance invariant: generic third-party MCP servers never receive vault write access;
+MCP-originated writes route through Mimer's governed capture endpoint. ADR-0056's separate,
+owner-permitted direct-filesystem transport remains available only under the client contract's
+human-delegation and write-discipline rules.
 
 ## Status vocabulary
 - **Shipped** — merged to main; code/doc exists.
