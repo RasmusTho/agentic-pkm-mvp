@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from dataclasses import dataclass, asdict
@@ -15,7 +16,7 @@ from app.db.dsn import resolve_dsn
 from app.db.errors import StoreSchemaMissingError
 from app.embedding_config import coerce_floats, l2_normalize
 
-from .base import ObjectStore, RelationIndex, RelationMembership, VectorIndex
+from .base import ObjectStore, RelationIndex, RelationMembership, VectorIndex, _IDENTITY_HASH_LEN
 
 _TABLES_READY = False
 
@@ -632,26 +633,45 @@ class PgVectorIndex(VectorIndex):
         return int(list(row.values())[0] or 0)
 
     def generation(self) -> str:
-        """Cheap opaque store-generation token (G1res-1, #2981).
+        """Cheap opaque store-generation token (G1res-1, #2981; identity-aware
+        per ADR-0059 D2, #3403).
 
         ``count(*)`` changes on purge; ``max(updated_at)`` advances on every
-        upsert (the upsert path always writes ``updated_at = now()``), so any
-        committed upsert/purge changes the token without a row scan.
+        upsert (the upsert path always writes ``updated_at = now()``); the
+        leading component is a short hash of ``vector_index_meta.identity_json``
+        (empty-string component when no identity row exists yet), so an
+        ADR-0052 repin that rewrites the identity WITHOUT touching any
+        ``store_vector_index`` row also moves the token. All three signals
+        come from one query — the identity lookup is a scalar subquery
+        against the single-row (``id = 1``) ``vector_index_meta`` table, so
+        this stays a single cheap query with no row scan.
         """
         _ensure_tables()
         with _connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT count(*) AS total, COALESCE(max(updated_at)::text, '') AS latest "
+                    "SELECT "
+                    "(SELECT identity_json FROM vector_index_meta WHERE id = 1) AS identity_json, "
+                    "count(*) AS total, "
+                    "COALESCE(max(updated_at)::text, '') AS latest "
                     "FROM store_vector_index"
                 )
                 row = cur.fetchone()
         if not row:
-            return "0:"
-        if isinstance(row, dict):
-            return f"{int(row.get('total') or 0)}:{row.get('latest') or ''}"
-        values = list(row.values())
-        return f"{int(values[0] or 0)}:{values[1] or ''}"
+            identity_json, total, latest = None, 0, ""
+        elif isinstance(row, dict):
+            identity_json = row.get("identity_json")
+            total = int(row.get("total") or 0)
+            latest = row.get("latest") or ""
+        else:
+            values = list(row.values())
+            identity_json = values[0]
+            total = int(values[1] or 0)
+            latest = values[2] or ""
+        identity_hash = hashlib.sha256((identity_json or "").encode("utf-8")).hexdigest()[
+            :_IDENTITY_HASH_LEN
+        ]
+        return f"{identity_hash}:{total}:{latest}"
 
     def all_rows(self) -> List[dict]:
         """Return every durable row for a cache rebuild (KERNEL-05, I-D3).
