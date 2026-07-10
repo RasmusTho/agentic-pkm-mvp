@@ -123,9 +123,10 @@ def compose_briefing(
 
     vault_root = _vault_root(vault_context)
     system_dir = get_vault_system_dir_rel(vault_root)
-    note_rel_path = (
-        PurePosixPath(system_dir) / BRIEFINGS_DIR_NAME / f"{for_date.isoformat()}.md"
-    ).as_posix()
+    note_rel_path = briefing_note_path(
+        vault_context=vault_context,
+        for_date=for_date,
+    ).relative_to(vault_root).as_posix()
 
     sections: dict[SectionName, BriefingSection] = {
         "commitments": _read_section(
@@ -176,7 +177,7 @@ def load_briefing(
 
     vault_root = _vault_root(vault_context)
     system_dir = get_vault_system_dir_rel(vault_root)
-    target = vault_root / system_dir / BRIEFINGS_DIR_NAME / f"{for_date.isoformat()}.md"
+    target = briefing_note_path(vault_context=vault_context, for_date=for_date)
     if not target.exists():
         return None
     try:
@@ -196,6 +197,14 @@ def load_briefing(
         raise
     except Exception as exc:
         raise BriefingReadError("briefing note is unreadable") from exc
+
+
+def briefing_note_path(*, vault_context: VaultContext, for_date: date) -> Path:
+    """Return the canonical durable path used as automatic idempotency truth."""
+
+    vault_root = _vault_root(vault_context)
+    system_dir = get_vault_system_dir_rel(vault_root)
+    return vault_root / system_dir / BRIEFINGS_DIR_NAME / f"{for_date.isoformat()}.md"
 
 
 def _atomic_write(
@@ -801,5 +810,6 @@ __all__ = [
     "DecisionReceiptBriefingItem",
     "MomentBriefingItem",
     "compose_briefing",
+    "briefing_note_path",
     "load_briefing",
 ]

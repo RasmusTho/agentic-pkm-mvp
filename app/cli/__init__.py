@@ -33,6 +33,7 @@ from app.cli.settings_explain import build_settings_explain_payload, emit_settin
 from app.cli.builderops import builderops as builderops_cli
 from app.cli.vault import vault as vault_cli
 from app.cli.ops import ops as ops_cli
+from app.cli.briefing import briefing_group
 
 
 from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root, resolve_system_settings_path
@@ -1924,6 +1925,7 @@ cli.add_command(watcher_group, name="watcher")
 cli.add_command(vault_watcher_run)
 cli.add_command(vault_watcher_daemon)
 cli.add_command(heimdal_group, name="heimdal")
+cli.add_command(briefing_group, name="briefing")
 
 @cli.command(name="embed-probe", help="Sanity-check embeddings provider model + dimension.")
 @click.option("--profile", default="default", show_default=True, help="Embedding profile (default or deterministic/test)")

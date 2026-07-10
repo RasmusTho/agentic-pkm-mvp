@@ -8,8 +8,15 @@ from app.briefing.compose import (
     CommitmentBriefingItem,
     DecisionReceiptBriefingItem,
     MomentBriefingItem,
+    briefing_note_path,
     compose_briefing,
     load_briefing,
+)
+from app.briefing.trigger import (
+    BriefingTriggerResult,
+    first_contact_briefing,
+    regenerate_briefing,
+    scheduled_briefing_tick,
 )
 
 __all__ = [
@@ -20,6 +27,11 @@ __all__ = [
     "CommitmentBriefingItem",
     "DecisionReceiptBriefingItem",
     "MomentBriefingItem",
+    "BriefingTriggerResult",
+    "briefing_note_path",
     "compose_briefing",
     "load_briefing",
+    "first_contact_briefing",
+    "regenerate_briefing",
+    "scheduled_briefing_tick",
 ]

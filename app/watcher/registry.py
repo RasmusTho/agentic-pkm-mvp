@@ -15,6 +15,7 @@ from uuid import uuid4
 import yaml
 
 from app.agents.panel.agent import handle_note_update
+from app.briefing.trigger import scheduled_briefing_tick
 from app.agents.panel_agent.policy import watcher_panel_candidate_for_path
 from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
 from app.events.schema import OutboxEvent
@@ -1336,6 +1337,7 @@ def run_registry_once(config_path: Path) -> dict[str, dict[str, object]]:
         )
         for spec in cfg.specs
     }
+    summaries["briefing"] = _run_briefing_tick(cfg, now=now)
     enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
     write_registry_heartbeat(
         path=cfg.heartbeat_path,
@@ -1366,6 +1368,7 @@ def run_registry_forever(config_path: Path, *, max_ticks: int | None = None) -> 
             spec.name: _run_spec_tick(cfg, spec, states[spec.name], now=now, states=states)
             for spec in cfg.specs
         }
+        summaries["briefing"] = _run_briefing_tick(cfg, now=now)
         enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
         write_registry_heartbeat(
             path=cfg.heartbeat_path,
@@ -1404,6 +1407,27 @@ def run_registry_forever(config_path: Path, *, max_ticks: int | None = None) -> 
         dynamic_sleep = max((state.dynamic_sleep_seconds or 0.0) for state in states.values())
         sleep_seconds = max(cfg.tick_sleep_seconds, dynamic_sleep)
         time.sleep(sleep_seconds)
+
+
+def _run_briefing_tick(cfg: RegistryConfig, *, now: float) -> dict[str, object]:
+    """Run the sparse Daily Briefing hook once per registry cycle."""
+
+    if not cfg.enable:
+        return {"triggered": False, "reason": "watcher_disabled"}
+    try:
+        context = VaultManager().validate_vault(cfg.vault_path)
+        result = scheduled_briefing_tick(
+            vault_context=context,
+            now=datetime.fromtimestamp(now, tz=timezone.utc),
+        )
+        return {
+            "triggered": result.triggered,
+            "reason": result.reason,
+            "date": result.briefing_date.isoformat(),
+        }
+    except Exception as exc:
+        logger.exception("daily briefing scheduled tick failed")
+        return {"triggered": False, "reason": "generation_failed", "error": str(exc)}
 
 
 __all__ = [

@@ -3895,6 +3895,23 @@ def queue_vault_browser_review(
     )
 
 
+@router.post("/briefing/first-contact")
+def trigger_first_contact_briefing() -> dict[str, object]:
+    """Run the derived day-start fallback without widening orientation reads."""
+
+    from app.briefing.trigger import first_contact_briefing
+
+    context = _companion_vault_context_with_lazy_last_active(get_vault_manager())
+    if context.status != "selected" or not context.active_vault_path:
+        return {"triggered": False, "reason": "vault_not_selected"}
+    result = first_contact_briefing(vault_context=context)
+    return {
+        "triggered": result.triggered,
+        "reason": result.reason,
+        "date": result.briefing_date.isoformat(),
+    }
+
+
 @router.get(
     "/orientation",
     response_model=WorkspaceOrientationResponse | VaultSelectionRequiredResponse,

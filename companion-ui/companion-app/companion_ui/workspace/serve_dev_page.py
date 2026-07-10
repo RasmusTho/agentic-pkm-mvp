@@ -16014,6 +16014,14 @@ def make_handler(
             if parsed.path not in {"/", "/workspace"}:
                 self._send_unknown_document_route()
                 return
+            try:
+                self._client.post(
+                    "/api/companion/briefing/first-contact",
+                    json={},
+                )
+            except Exception:
+                # Briefing is derived; a trigger failure must not block entry.
+                pass
             body = handle_get(
                 query_string=parsed.query,
                 client=self._client,
