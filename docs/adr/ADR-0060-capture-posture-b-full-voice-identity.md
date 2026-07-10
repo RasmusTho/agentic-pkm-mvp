@@ -112,8 +112,10 @@ device/private bindings require (ADR-0046 categories iii/v).
   supersede path ADR-0049 itself names ("capture posture flips to always-on-default").
 - D-CONSENT is refined in realization, not reversed: opt-in per place/session, third-party
   degradation default, and single-party declaration for ungranted parties all stand.
-- HEIM-3 (consent-gated capture), HEIM-4 (seam minimization), and HEIM-5 (policy-gated raw
-  access) are load-bearing preconditions of B-full, not relaxed by it.
+- HEIM-3 (consent-gated capture), HEIM-4 (seam minimization), HEIM-5 (policy-gated raw access),
+  and HEIM-6 (attribution honesty: voiceprint match confidence is never silently upgraded;
+  ungranted/unknown speakers stay explicitly unresolved, never guessed to a canonical identity)
+  are load-bearing preconditions of B-full, not relaxed by it.
 - Markdown-first (ADR-0049 §2) holds: the durable record of a continuous stream is episode-level,
   minimized, human-legible artifacts — the two declared bends (attention firehose, device
   telemetry) remain the only sanctioned UI-only lenses.
