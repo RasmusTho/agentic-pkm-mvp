@@ -29,38 +29,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Locate the repo venv.  The .venv is created in the main repo checkout; git
-# worktrees usually do not have their own .venv.
-_find_venv() {
-    local dir="$1"
-    while [ "$dir" != "/" ]; do
-        if [ -x "$dir/.venv/bin/python3" ]; then
-            echo "$dir/.venv/bin/python3"
-            return 0
-        fi
-        dir="$(dirname "$dir")"
-    done
-    return 1
-}
-
-_find_git_common_venv() {
-    local common_dir
-    common_dir="$(git -C "$APP_ROOT" rev-parse --git-common-dir 2>/dev/null)" || return 1
-    if [ -n "$common_dir" ] && [ "${common_dir#/}" = "$common_dir" ]; then
-        common_dir="$(cd "$APP_ROOT/$common_dir" && pwd)"
-    fi
-
-    local canonical_root
-    canonical_root="$(dirname "$common_dir")"
-    if [ -x "$canonical_root/.venv/bin/python3" ]; then
-        echo "$canonical_root/.venv/bin/python3"
-        return 0
-    fi
-    return 1
-}
+source "$SCRIPT_DIR/lib/resolve_repo_python.sh"
 
 # Prefer the repo venv to guarantee click, pydantic, and all BuilderOps deps.
-PYTHON="$(_find_venv "$APP_ROOT" 2>/dev/null || _find_git_common_venv 2>/dev/null)" || true
+PYTHON="$(builderops_resolve_python "$APP_ROOT")" || true
 if [ -z "$PYTHON" ]; then
     echo "ERROR: BuilderOps CLI requires the repo virtualenv, but no usable .venv/bin/python3 was found." >&2
     echo "Run from the canonical checkout, or create the canonical repo venv first:" >&2

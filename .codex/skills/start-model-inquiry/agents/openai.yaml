@@ -1,0 +1,4 @@
+interface:
+  display_name: "Start Model Inquiry"
+  short_description: "Launch a durable pre-ticket model inquiry"
+  default_prompt: "Use $start-model-inquiry to investigate this development question before creating a ticket."

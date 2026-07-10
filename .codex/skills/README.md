@@ -80,6 +80,9 @@ on CI checks — and the optional `--codex` verdict path — via REST without dr
   - classifies the issue as Product/Runtime System, Builder System, or boundary work before pickup
   - before coding, update lifecycle state truthfully: move active work to `In Progress` and remove `agent:ready`
   - use that transition as the minimal shared claim/lease compatibility signal in multi-agent environments
+- `start-model-inquiry`
+  - launch a durable pre-ticket Fable/GPT inquiry through the shared BuilderOps command after
+    fail-closed vault and adapter preflight; issue promotion remains a separate governed step
 - `issue-maintenance-change-control`
   - repair stale or false Issue / PR / label / Project state before or during execution
 - `deliver-issue-set`
