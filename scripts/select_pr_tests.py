@@ -8,15 +8,17 @@ from pathlib import Path
 
 ALWAYS_TARGETS = (
     "tests/ci",
-    "tests/governance/test_branch_guardrail_packet.py",
-    "tests/ops/test_ci_workflow.py",
-    "tests/scripts/test_select_pr_tests.py",
+)
+
+PR_MARKER_EXPRESSION = (
+    "not pg and not alpha_llm and not alpha_llm_live and not panel_llm_e2e "
+    "and not eval and not browser_runtime and not human_uat and not uat_integrated_runtime"
 )
 
 FULL_SUITE_REASONS = (
     "shared CI/test/runtime configuration changed",
     "database migration or schema surface changed",
-    "no subsystem mapping matched",
+    "changed files have no subsystem owner",
 )
 
 FULL_SUITE_EXACT = {
@@ -26,12 +28,9 @@ FULL_SUITE_EXACT = {
     "requirements.txt",
     "dev-requirements.txt",
     "docker-compose.test.yml",
-    ".github/workflows/ci.yml",
-    "scripts/select_pr_tests.py",
 }
 
 FULL_SUITE_PREFIXES = (
-    ".github/workflows/",
     "alembic/",
     "tests/conftest.py",
     "app/db/",
@@ -41,7 +40,6 @@ FULL_SUITE_PREFIXES = (
 DOCS_TARGETS = (
     "tests/docs",
     "tests/architecture",
-    "tests/governance",
 )
 
 GOVERNANCE_TARGETS = (
@@ -71,13 +69,11 @@ E2E_TARGETS = {
     ),
     "llm_eval": (
         "tests/e2e/test_llm_routing_e2e.py",
-        "tests/e2e/test_panel_llm_e2e.py",
     ),
     "promotion_panel": (
         "tests/e2e/test_panel_to_promotion_consume.py",
         "tests/e2e/test_panel_watcher_e2e.py",
         "tests/e2e/test_promotion_intent_to_index.py",
-        "tests/e2e/test_panel_llm_e2e.py",
     ),
     "ops_deploy": (
         "tests/e2e/test_operator_workflows.py",
@@ -88,8 +84,22 @@ E2E_TARGETS = {
 E2E_OWNER_BY_FILE = {
     target: subsystem for subsystem, targets in E2E_TARGETS.items() for target in targets
 }
+E2E_OWNER_BY_FILE["tests/e2e/test_panel_llm_e2e.py"] = "promotion_panel"
+
+GENERIC_PR_EXCLUDED_TARGETS = frozenset({"tests/e2e/test_panel_llm_e2e.py"})
 
 SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
+    (
+        "builder_system",
+        (
+            "app/builderops/",
+            "app/dispatcher/",
+            "tests/builderops/",
+            "tests/dispatcher/",
+            "docs/builderops/",
+        ),
+        ("tests/builderops", "tests/dispatcher", "tests/governance"),
+    ),
     (
         "settings",
         ("app/settings/", "docs/settings/", "tests/settings/", "tests/config/"),
@@ -193,12 +203,14 @@ class Selection:
     subsystems: tuple[str, ...]
     targets: tuple[str, ...]
     reason: str
+    unowned_paths: tuple[str, ...] = ()
 
     @property
     def pytest_args(self) -> str:
+        marker = f'-m "{PR_MARKER_EXPRESSION}"'
         if self.full_suite:
-            return '-q -m "not pg"'
-        return " ".join(("-q", '-m "not pg"', *self.targets))
+            return f"-q {marker}"
+        return " ".join(("-q", marker, *self.targets))
 
 
 def _normalize(path: str) -> str:
@@ -250,14 +262,21 @@ def _is_docs_only(paths: tuple[str, ...]) -> bool:
 def _is_governance_only(paths: tuple[str, ...]) -> bool:
     governance_prefixes = (".github/", "docs/development/", "AGENTS.md", ".codex/")
     non_test = _non_test_signal(paths, GOVERNANCE_TARGETS)
-    return bool(non_test) and all(path.startswith(governance_prefixes) for path in non_test)
+    return bool(non_test) and all(
+        path.startswith(governance_prefixes) or path == "scripts/select_pr_tests.py"
+        for path in non_test
+    )
 
 
 def _changed_test_targets(paths: tuple[str, ...]) -> tuple[str, ...]:
     # Restricted to .py so a co-changed non-test tests/** artifact (fixture,
     # README, etc.) is never handed to pytest as a positional target — pytest
     # errors hard ("not found") on a path it can't collect as a test module.
-    return tuple(path for path in paths if path.startswith("tests/") and path.endswith(".py"))
+    return tuple(
+        path
+        for path in paths
+        if path.startswith("tests/") and path.endswith(".py") and path not in GENERIC_PR_EXCLUDED_TARGETS
+    )
 
 
 def select_tests(changed_files: list[str]) -> Selection:
@@ -269,7 +288,8 @@ def select_tests(changed_files: list[str]) -> Selection:
         return Selection(True, (), (), FULL_SUITE_REASONS[0])
 
     if any(path.startswith("tests/e2e/") and path not in E2E_OWNER_BY_FILE for path in paths):
-        return Selection(True, (), (), "unowned e2e test changed")
+        unowned = tuple(path for path in paths if path.startswith("tests/e2e/") and path not in E2E_OWNER_BY_FILE)
+        return Selection(False, ("unowned",), (), "unowned e2e test changed", unowned)
 
     if any(path.startswith("alembic/") or path.startswith("tests/migrations/") for path in paths):
         return Selection(True, (), (), FULL_SUITE_REASONS[1])
@@ -277,12 +297,12 @@ def select_tests(changed_files: list[str]) -> Selection:
     changed_tests = _changed_test_targets(paths)
     targets = list(ALWAYS_TARGETS)
 
-    if _is_docs_only(paths):
-        targets.extend(DOCS_TARGETS)
-        subsystems, reason = ("docs",), "docs-only PR"
-    elif _is_governance_only(paths):
+    if _is_governance_only(paths):
         targets.extend(GOVERNANCE_TARGETS)
         subsystems, reason = ("governance",), "governance-only PR"
+    elif _is_docs_only(paths):
+        targets.extend(DOCS_TARGETS)
+        subsystems, reason = ("docs",), "docs-only PR"
     else:
         matched: list[str] = []
         for name, prefixes, subsystem_targets in SUBSYSTEMS:
@@ -290,7 +310,7 @@ def select_tests(changed_files: list[str]) -> Selection:
                 matched.append(name)
                 targets.extend(subsystem_targets)
         if not matched:
-            return Selection(True, (), (), FULL_SUITE_REASONS[2])
+            return Selection(False, ("unowned",), (), FULL_SUITE_REASONS[2], paths)
         subsystems, reason = _dedupe(matched), "matched subsystem SoI"
 
     # Every scoped branch funnels through this single return, so a changed
@@ -344,11 +364,15 @@ def main() -> int:
             selection.subsystems,
             _existing_test_targets(selection.targets),
             selection.reason,
+            selection.unowned_paths,
         )
     print(f"full_suite={'true' if selection.full_suite else 'false'}")
     print(f"subsystems={','.join(selection.subsystems) or 'all'}")
     print(f"pytest_args={selection.pytest_args}")
     print(f"reason={selection.reason}")
+    if selection.unowned_paths:
+        print(f"unowned_paths={','.join(selection.unowned_paths)}")
+        return 2
 
     if args.github_output:
         _write_github_output(args.github_output, selection)

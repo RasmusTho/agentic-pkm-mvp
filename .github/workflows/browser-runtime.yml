@@ -3,6 +3,12 @@ name: Companion UI Browser Runtime
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+    paths:
+      - 'companion-ui/**'
+      - 'app/api/**'
+      - 'app/web/**'
+      - 'tests/companion_ui/**'
+      - '.github/workflows/browser-runtime.yml'
 
 concurrency:
   group: companion-ui-browser-runtime-${{ github.ref }}

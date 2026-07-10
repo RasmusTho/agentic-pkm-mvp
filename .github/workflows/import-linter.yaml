@@ -13,6 +13,10 @@ name: import-linter
 
 on:
   pull_request:
+    paths:
+      - 'app/**'
+      - 'importlinter.ini'
+      - '.github/workflows/import-linter.yaml'
   workflow_dispatch:
 
 permissions: read-all
