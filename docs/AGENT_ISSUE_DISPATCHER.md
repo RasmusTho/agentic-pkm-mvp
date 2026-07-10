@@ -5,8 +5,8 @@ Owner: Delivery governance / multi-agent coordination
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed (GitHub issue contracts + repo governance docs)
-Last reviewed: 2026-04-25
-Last verified against: #617, #621, #622, #623, #624, #625, #637, #639, #640, #561, AGENTS.md, docs/ARCHITECTURE.md, docs/development/GITHUB_GOVERNANCE_SETUP.md, .github/github-governance.yml
+Last reviewed: 2026-07-10
+Last verified against: #617, #621, #622, #623, #624, #625, #637, #639, #640, #561, #3312, AGENTS.md, docs/ARCHITECTURE.md, docs/development/GITHUB_GOVERNANCE_SETUP.md, .github/github-governance.yml
 
 # Agent Issue Dispatcher (MVP Contract)
 
@@ -350,11 +350,22 @@ reconciliation helper.
 
 ### Signboard projection
 
-The dispatcher can export the active Builder Ops queue into a Signboard-compatible Markdown board:
+The dispatcher can export the active Builder Ops queue into a Signboard-compatible Markdown board.
+`export-signboard` takes an optional directory argument. When omitted, it resolves a default path
+from the existing active-vault-selection mechanism (`app.vault.manager.get_vault_manager`, the
+same Option 2 selection state the companion UI uses) — no manually typed path is required:
 
 ```bash
+python -m app.dispatcher export-signboard --json
+# writes into <active vault>/BuilderOpsVault/agent-delivery
+
 python -m app.dispatcher export-signboard ~/BuilderOpsVault/agent-delivery --json
+# explicit path still supported when no vault is selected or a different
+# location is wanted
 ```
+
+If no vault is currently selected and no explicit path is given, the command fails loud with a
+clear error instead of guessing a location.
 
 The exporter writes one Markdown file per dispatcher task under status columns:
 
@@ -383,11 +394,19 @@ Manual lifecycle changes should use dispatcher commands, for example:
 ```bash
 python -m app.dispatcher move github-issue-123 --status review --agent codex --json
 python -m app.dispatcher block github-issue-123 --reason "waiting for owner decision" --agent claude --json
-python -m app.dispatcher export-signboard ~/BuilderOpsVault/agent-delivery --json
+python -m app.dispatcher export-signboard --json
 ```
 
 The generated Markdown frontmatter is projection state only. Do not patch generated Signboard cards
 as the source of a claim, heartbeat, or lifecycle transition.
+
+Each generated card carries a `## Notes` section the human may hand-edit directly in the vault.
+Re-running `export-signboard` refreshes the generated frontmatter and body but splices any existing
+`## Notes` content back in unchanged — it never blind-overwrites human-authored notes. The exporter
+still only touches cards it generated (keyed by `generated_by: dispatcher.signboard`); unrelated
+files are left alone. The Signboard projection has no write path for claim, lease, or lock state —
+it remains a durable Markdown projection only, per the Source-of-Truth Boundaries above and
+ADR-0010.
 
 ### Epic-runner lifecycle planning
 
