@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Signboard · BuilderOps</title>
+  <link rel="stylesheet" href="/static/signboard.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div><p class="eyebrow">BuilderOps · local projection</p><h1>Signboard</h1></div>
+      <div class="actions"><input id="search" type="search" placeholder="Search title, issue, label…" aria-label="Search cards"><input id="api-key" type="password" placeholder="API key for remote moves" aria-label="API key for remote moves" autocomplete="off"><button id="refresh">Refresh projection</button></div>
+    </header>
+    <p class="authority">Cards are rendered from Markdown. Dispatcher remains the source of truth; moves are exported back into this projection.</p>
+    <div id="filters" class="filters" aria-label="Priority filters"></div>
+    <p id="notice" class="notice" role="status"></p>
+    <section id="board" class="board" aria-live="polite"><div class="loading">Loading Signboard…</div></section>
+  </main>
+  <aside id="detail" class="detail" aria-hidden="true"><button id="close-detail" class="close" aria-label="Close details">×</button><div id="detail-content"></div></aside>
+  <script src="/static/signboard.js"></script>
+</body>
+</html>

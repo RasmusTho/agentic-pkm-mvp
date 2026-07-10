@@ -54,6 +54,9 @@ ENV
   if [ -n "${TTS_ENABLED:-}" ]; then
     printf "TTS_ENABLED=%s\n" "$TTS_ENABLED" >> "$runtime_env_path"
   fi
+  if [ -n "${SIGNBOARD_ROOT:-}" ]; then
+    printf "SIGNBOARD_ROOT=%s\n" "$SIGNBOARD_ROOT" >> "$runtime_env_path"
+  fi
   echo "Exported no-vault idle runtime env -> $runtime_env_path"
   exit 0
 fi
@@ -111,6 +114,7 @@ export DATABASE_URL DB_DSN
 
 cat > "$runtime_env_path" <<ENV
 WATCHER_RUNTIME_ENV_FILE=$watcher_runtime_env_file
+DISPATCHER_HOST_STATE_DIR=${DISPATCHER_HOST_STATE_DIR:-$ROOT/runtime/dispatcher}
 VAULT_HOST_ROOT=$vault_host_root
 VAULT_ROOT=$container_vault_root
 LOCAL_UID=$local_uid
@@ -118,6 +122,10 @@ LOCAL_GID=$local_gid
 DATABASE_URL=$DATABASE_URL
 DB_DSN=$DB_DSN
 ENV
+
+if [ -n "${SIGNBOARD_ROOT:-}" ]; then
+  printf "SIGNBOARD_ROOT=%s\n" "$SIGNBOARD_ROOT" >> "$runtime_env_path"
+fi
 
 python3 - <<'PY' >> "$runtime_env_path"
 from __future__ import annotations

@@ -126,6 +126,11 @@ try:
 except ImportError:
     version_router = None
 
+try:
+    from app.api.routes.signboard import router as signboard_router
+except ImportError:
+    signboard_router = None
+
 static_dir = Path(__file__).resolve().parent.parent / "web" / "static"
 logger = logging.getLogger(__name__)
 
@@ -253,6 +258,8 @@ def _create_app() -> FastAPI:
         application.include_router(capture_router, prefix="/api")
     if version_router is not None:
         application.include_router(version_router)
+    if signboard_router is not None:
+        application.include_router(signboard_router, prefix="/api")
     return application
 
 
@@ -264,3 +271,9 @@ async def index() -> HTMLResponse:
     """Interim dashboard for status visibility and manual ASK checks."""
     index_path = static_dir / "index.html"
     return HTMLResponse(index_path.read_text(encoding="utf-8"))
+
+
+@app.get("/signboard", response_class=HTMLResponse)
+async def signboard_page() -> HTMLResponse:
+    """Local visual view over the dispatcher Signboard projection."""
+    return HTMLResponse((static_dir / "signboard.html").read_text(encoding="utf-8"))

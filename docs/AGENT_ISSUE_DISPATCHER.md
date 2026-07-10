@@ -410,6 +410,24 @@ files are left alone. The Signboard projection has no write path for claim, leas
 it remains a durable Markdown projection only, per the Source-of-Truth Boundaries above and
 ADR-0010.
 
+### Local visual Signboard
+
+The FastAPI runtime also exposes a local visual board at `/signboard`. Its API reads only the
+generated Markdown files beneath `SIGNBOARD_ROOT` (default:
+`~/BuilderOpsVault/agent-delivery`) and renders the six exporter columns. A refresh explicitly
+runs the normal exporter. Card moves are loopback/API-key protected and invoke dispatcher service
+operations (`move`, `block`, or `complete`) before immediately re-exporting the projection; the UI
+never writes card files or the SQLite database itself. `SIGNBOARD_ROOT` is operator configuration,
+not request input, and card reads are containment-checked after symlink resolution.
+
+`make dev-start-full` and the prod full-stack launcher refresh the board as part of their existing
+BuilderOps dispatcher bootstrap. The launcher resolves `SIGNBOARD_ROOT` to an absolute host path
+and forwards it into the API container, which has `/Users` mounted at the same path. On a Mac mini
+develop stack, use the existing API port over Tailscale:
+`http://<mac-mini-tailnet-name>:18001/signboard`. Remote refreshes and moves require the configured
+`API_KEY`, entered into the Signboard session field and sent only as `X-API-Key`; it is not stored
+in URLs or browser persistence. No separate Signboard process is started.
+
 ### Epic-runner lifecycle planning
 
 `deliver-issue-set` coordinators may use the local dry-run lifecycle planner to preview common

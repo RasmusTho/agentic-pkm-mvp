@@ -93,7 +93,9 @@ def export_signboard(store: SqliteStore, board_root: Path) -> dict[str, Any]:
     for column in sorted(set(STATUS_COLUMNS.values())):
         (root / column).mkdir(parents=True, exist_ok=True)
 
-    tasks = store.list_tasks()
+    # Synchronization metadata is stored alongside tasks for dispatcher
+    # compatibility, but it is not a user-facing Signboard card.
+    tasks = [task for task in store.list_tasks() if task.status != "_meta"]
     written: list[str] = []
     for task in tasks:
         filename = _task_filename(task)

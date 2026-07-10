@@ -65,6 +65,14 @@ source "scripts/lib/runtime_endpoint_probe.sh"
 source "scripts/lib/start_full_system_env.sh"
 apply_start_full_system_defaults
 
+# Signboard is a dispatcher projection. Resolve this on the host before the
+# BuilderOps bootstrap and forward the same absolute path into the API
+# container via tmp/runtime.env; ``/Users`` is mounted at the same path.
+SIGNBOARD_ROOT="$(python3 -c 'from pathlib import Path; import os; print(Path(os.environ.get("SIGNBOARD_ROOT", "~/BuilderOpsVault/agent-delivery")).expanduser().resolve())')"
+export SIGNBOARD_ROOT
+DISPATCHER_HOST_STATE_DIR="$(python3 -c 'from pathlib import Path; import os; print(Path(os.environ.get("DISPATCHER_HOST_STATE_DIR", "runtime/dispatcher")).expanduser().resolve())')"
+export DISPATCHER_HOST_STATE_DIR
+
 if [ -n "${DATABASE_URL:-}" ] && [ -z "${DB_DSN:-}" ]; then
   DB_DSN="$DATABASE_URL"
 fi
