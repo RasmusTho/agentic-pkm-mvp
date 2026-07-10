@@ -37,7 +37,7 @@ def parse_anchors(section: str) -> List[Tuple[str, str | None]]:
     Returns list of (doc_path, anchor_id) tuples for markdown references.
     GitHub issue/PR references are represented as ("#1234", None).
     """
-    anchors = []
+    anchors: List[Tuple[str, str | None]] = []
     lines = section.split('\n')
 
     for line in lines:
@@ -71,7 +71,11 @@ def _looks_like_stable_anchor(anchor_id: str | None) -> bool:
     return bool(re.fullmatch(r'[A-Z0-9][A-Z0-9_-]{2,}', anchor_id.strip()))
 
 
-def find_anchor_in_doc(doc_path: str, anchor_id: str) -> bool:
+def find_anchor_in_doc(
+    doc_path: str,
+    anchor_id: str,
+    repo_root: Path | None = None,
+) -> bool:
     """
     Check if the anchor ID exists in the document.
 
@@ -79,7 +83,7 @@ def find_anchor_in_doc(doc_path: str, anchor_id: str) -> bool:
     1. Heading anchors: `## ANCHOR-ID-in-heading-text`
     2. Marked anchors: `<!-- anchor: ANCHOR-ID -->` or similar patterns
     """
-    file_path = Path(doc_path)
+    file_path = (repo_root or Path.cwd()) / doc_path
 
     if not file_path.exists():
         return False
@@ -123,7 +127,10 @@ def find_anchor_in_doc(doc_path: str, anchor_id: str) -> bool:
     return False
 
 
-def validate_issue_body(body: str) -> Tuple[bool, List[str]]:
+def validate_issue_body(
+    body: str,
+    repo_root: Path | None = None,
+) -> Tuple[bool, List[str]]:
     """
     Validate an issue body.
 
@@ -143,6 +150,8 @@ def validate_issue_body(body: str) -> Tuple[bool, List[str]]:
         errors.append("Source Anchors section is empty or malformed. Expected format: `docs/PATH.md :: ANCHOR-ID`")
         return False, errors
 
+    root = (repo_root or Path.cwd()).resolve()
+
     # Validate each anchor
     for doc_path, anchor_id in anchors:
         if _is_github_ref(doc_path):
@@ -151,12 +160,26 @@ def validate_issue_body(body: str) -> Tuple[bool, List[str]]:
             errors.append(f"Invalid anchor path: '{doc_path}' must be a markdown file (.md)")
             continue
 
-        file_path = Path(doc_path)
+        relative_path = Path(doc_path)
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            errors.append(f"Anchor path must be repository-relative: {doc_path}")
+            continue
+        file_path = root / relative_path
+        resolved = file_path.resolve(strict=False)
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            errors.append(f"Anchor path escapes repository root: {doc_path}")
+            continue
         if not file_path.exists():
             errors.append(f"Anchor file not found: {doc_path}")
             continue
 
-        if _looks_like_stable_anchor(anchor_id) and not find_anchor_in_doc(doc_path, anchor_id or ""):
+        if _looks_like_stable_anchor(anchor_id) and not find_anchor_in_doc(
+            doc_path,
+            anchor_id or "",
+            root,
+        ):
             errors.append(f"Anchor not found in {doc_path}: {anchor_id}")
 
     return len(errors) == 0, errors

@@ -17,6 +17,7 @@ from uuid import uuid4
 from app.builderops.config import load_paths
 from app.builderops.model_inquiry_contract import (
     canonical_hash,
+    github_issue_url_matches,
     initial_context_packet,
     model_turn_request_hash,
 )
@@ -39,6 +40,7 @@ QUESTION_SCHEMA = "builderops.model-inquiry-question.v1"
 TURN_SCHEMA = "builderops.model-inquiry-turn.v1"
 SYNTHESIS_SCHEMA = "builderops.model-inquiry-synthesis.v1"
 READINESS_SCHEMA = "builderops.model-inquiry-readiness.v1"
+PROMOTION_INTENT_SCHEMA = "builderops.model-inquiry-promotion-intent.v1"
 SAFE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
 READINESS_OUTCOMES = frozenset({"issue_ready", "needs_input", "not_ready"})
 TERMINAL_TURN_OUTCOMES = frozenset({"accepted", "completed", "failed", "not_ready", "refused"})
@@ -335,6 +337,234 @@ class ModelInquiryService:
         payload["artifact_hash"] = _artifact_hash(payload)
         return self._write_immutable(path, payload, label="immutable readiness artifact")
 
+    def commit_readiness_receipt(
+        self,
+        inquiry_id: str,
+        *,
+        source_refs: list[dict[str, Any]],
+        actor: Mapping[str, Any] | str | None = None,
+    ) -> dict[str, Any]:
+        inquiry_id = _safe_id(inquiry_id, "inquiry_id")
+        validate_source_refs(source_refs)
+        trace = self.trace(inquiry_id)
+        directory = self._require_inquiry(inquiry_id)
+        readiness = trace.get("readiness")
+        if not isinstance(readiness, dict):
+            raise BuilderOpsValidationError("readiness receipt requires readiness evidence")
+        outcome = str(readiness["outcome"])
+        if outcome == "issue_ready" and readiness.get("input_artifact_refs") != ["synthesis"]:
+            raise BuilderOpsValidationError("readiness receipt requires synthesis as sole input")
+        if readiness.get("source_refs") != source_refs:
+            raise BuilderOpsValidationError("readiness receipt source refs must match evidence")
+        input_artifacts = _readiness_input_artifacts(
+            question=trace["question"],
+            turns=trace["turns"],
+            synthesis=trace["synthesis"],
+            readiness=readiness,
+        )
+        path = directory / "receipts" / "readiness-terminal.json"
+        existing = self._read_optional(path)
+        occurred_at = _existing_timestamp(existing, fallback=readiness["created_at"])
+        actor_ref = normalize_actor(actor)
+        receipt = normalize_record(
+            {
+                "id": f"receipt_{inquiry_id}_readiness_terminal",
+                "object_type": "BuilderOpsReceipt",
+                "summary": f"Model inquiry {inquiry_id} readiness is {outcome}",
+                "event_type": "inquiry_readiness_terminal",
+                "actor": actor_ref,
+                "occurred_at": occurred_at,
+                "target_refs": [
+                    {
+                        "ref_type": "builderops_inquiry",
+                        "ref": inquiry_id,
+                        "authority_surface": "builderops",
+                    }
+                ],
+                "action": outcome,
+                "receipt_body": f"Canonical readiness evaluation ended {outcome}.",
+                "idempotency_key": f"inquiry:{inquiry_id}:readiness:terminal",
+                "source_refs": source_refs,
+                "created_by": actor_ref,
+                "readiness_artifact_hash": readiness["artifact_hash"],
+                "input_artifacts": input_artifacts,
+                "created_at": occurred_at,
+                "updated_at": occurred_at,
+            }
+        )
+        receipt["artifact_hash"] = _artifact_hash(receipt)
+        return self._write_immutable(path, receipt, label="immutable readiness receipt")
+
+    def commit_promotion_intent(
+        self,
+        inquiry_id: str,
+        *,
+        repository: str,
+        marker: str,
+        title: str,
+        issue_body: str,
+        source_refs: list[dict[str, Any]],
+        actor: Mapping[str, Any] | str | None = None,
+    ) -> dict[str, Any]:
+        inquiry_id = _safe_id(inquiry_id, "inquiry_id")
+        validate_source_refs(source_refs)
+        directory = self._require_inquiry(inquiry_id)
+        readiness = self._read_required(directory / "readiness.json")
+        synthesis = self._read_required(directory / "synthesis.json")
+        path = directory / "promotion-intent.json"
+        existing = self._read_optional(path)
+        actor_ref = normalize_actor(actor)
+        payload = {
+            "schema": PROMOTION_INTENT_SCHEMA,
+            "artifact_id": "promotion-intent",
+            "object_type": "PromotionIntent",
+            "inquiry_id": inquiry_id,
+            "target_authority_surface": "github_issue",
+            "target_repository": repository,
+            "promotion_marker": marker,
+            "title": title,
+            "issue_body": issue_body,
+            "issue_body_hash": _content_hash(issue_body),
+            "readiness_artifact_hash": readiness["artifact_hash"],
+            "synthesis_artifact_hash": synthesis["artifact_hash"],
+            "source_refs": source_refs,
+            "created_by": actor_ref,
+            "created_at": _existing_timestamp(existing),
+        }
+        payload["artifact_hash"] = _artifact_hash(payload)
+        self._validate_promotion_intent(
+            payload,
+            inquiry_id=inquiry_id,
+            readiness=readiness,
+            synthesis=synthesis,
+        )
+        return self._write_immutable(path, payload, label="immutable promotion intent")
+
+    def commit_promotion_receipt(
+        self,
+        inquiry_id: str,
+        *,
+        intent: Mapping[str, Any],
+        issue_number: int,
+        issue_url: str,
+        issue_created_at: str,
+        source_refs: list[dict[str, Any]],
+        actor: Mapping[str, Any] | str | None = None,
+    ) -> dict[str, Any]:
+        inquiry_id = _safe_id(inquiry_id, "inquiry_id")
+        if (
+            isinstance(issue_number, bool)
+            or not isinstance(issue_number, int)
+            or issue_number < 1
+        ):
+            raise BuilderOpsValidationError("GitHub issue number must be positive")
+        validate_source_refs(source_refs)
+        directory = self._require_inquiry(inquiry_id)
+        persisted_intent = self._read_required(directory / "promotion-intent.json")
+        if dict(intent) != persisted_intent:
+            raise BuilderOpsValidationError("promotion receipt intent does not match persisted intent")
+        if source_refs != intent.get("source_refs"):
+            raise BuilderOpsValidationError("promotion receipt source refs must match intent")
+        if not github_issue_url_matches(
+            issue_url,
+            intent["target_repository"],
+            issue_number,
+        ):
+            raise BuilderOpsValidationError("GitHub issue URL does not match target repository")
+        if not isinstance(issue_created_at, str) or not issue_created_at.strip():
+            raise BuilderOpsValidationError("GitHub issue created_at must be non-empty")
+        path = directory / "receipts" / "promotion-github-issue.json"
+        existing = self._read_optional(path)
+        occurred_at = _existing_timestamp(existing, fallback=issue_created_at)
+        actor_ref = normalize_actor(actor)
+        issue_ref = f"{intent['target_repository']}#{issue_number}"
+        receipt = normalize_record(
+            {
+                "id": f"receipt_{inquiry_id}_promotion_github_issue",
+                "object_type": "BuilderOpsReceipt",
+                "summary": f"Promoted model inquiry {inquiry_id} to GitHub Issue",
+                "event_type": "inquiry_promotion_terminal",
+                "actor": actor_ref,
+                "occurred_at": occurred_at,
+                "target_refs": [
+                    {
+                        "ref_type": "builderops_inquiry",
+                        "ref": inquiry_id,
+                        "authority_surface": "builderops",
+                    },
+                    {
+                        "ref_type": "github_issue",
+                        "ref": issue_ref,
+                        "authority_surface": "github",
+                    },
+                ],
+                "action": "promoted",
+                "receipt_body": "Explicit REST promotion created or reconciled one GitHub Issue.",
+                "idempotency_key": f"inquiry:{inquiry_id}:promotion:github_issue",
+                "source_refs": source_refs,
+                "created_by": actor_ref,
+                "promotion_intent_artifact_hash": intent["artifact_hash"],
+                "promotion_marker": intent["promotion_marker"],
+                "github_issue_number": issue_number,
+                "github_issue_url": issue_url,
+                "created_at": occurred_at,
+                "updated_at": occurred_at,
+            }
+        )
+        receipt["artifact_hash"] = _artifact_hash(receipt)
+        return self._write_immutable(path, receipt, label="immutable promotion receipt")
+
+    def commit_delivery_reference(
+        self,
+        inquiry_id: str,
+        *,
+        delivery_ref: Mapping[str, Any],
+        source_refs: list[dict[str, Any]],
+        actor: Mapping[str, Any] | str | None = None,
+    ) -> dict[str, Any]:
+        inquiry_id = _safe_id(inquiry_id, "inquiry_id")
+        ref = dict(delivery_ref)
+        validate_source_refs([ref], "delivery_ref")
+        allowed = {"github_pull_request", "verification_receipt", "owner_doc"}
+        if ref.get("ref_type") not in allowed:
+            raise BuilderOpsValidationError(
+                f"delivery ref_type must be one of: {', '.join(sorted(allowed))}"
+            )
+        validate_source_refs(source_refs)
+        directory = self._require_inquiry(inquiry_id)
+        ref_hash = canonical_hash(ref)[:24]
+        path = directory / "receipts" / f"delivery-{ref_hash}.json"
+        existing = self._read_optional(path)
+        occurred_at = _existing_timestamp(existing)
+        actor_ref = normalize_actor(actor)
+        receipt = normalize_record(
+            {
+                "id": f"receipt_{inquiry_id}_delivery_{ref_hash}",
+                "object_type": "BuilderOpsReceipt",
+                "summary": f"Linked delivery reference for inquiry {inquiry_id}",
+                "event_type": "inquiry_delivery_linked",
+                "actor": actor_ref,
+                "occurred_at": occurred_at,
+                "target_refs": [
+                    {
+                        "ref_type": "builderops_inquiry",
+                        "ref": inquiry_id,
+                        "authority_surface": "builderops",
+                    },
+                    ref,
+                ],
+                "action": "link_delivery",
+                "receipt_body": "Appended one delivery reference to the inquiry trace.",
+                "idempotency_key": f"inquiry:{inquiry_id}:delivery:{ref_hash}",
+                "source_refs": source_refs,
+                "created_by": actor_ref,
+                "created_at": occurred_at,
+                "updated_at": occurred_at,
+            }
+        )
+        receipt["artifact_hash"] = _artifact_hash(receipt)
+        return self._write_immutable(path, receipt, label="immutable delivery receipt")
+
     def commit_terminal_turn_receipt(
         self,
         inquiry_id: str,
@@ -488,7 +718,7 @@ class ModelInquiryService:
         receipt["artifact_hash"] = _artifact_hash(receipt)
         return self._write_immutable(path, receipt, label="immutable inquiry run terminal receipt")
 
-    def trace(self, inquiry_id: str) -> dict[str, Any]:
+    def trace(self, inquiry_id: str, *, include_delivery: bool = False) -> dict[str, Any]:
         inquiry_id = _safe_id(inquiry_id, "inquiry_id")
         directory = self._require_inquiry(inquiry_id)
         manifest = self._read_required(directory / "manifest.json")
@@ -496,12 +726,35 @@ class ModelInquiryService:
         turns = self._read_turns(directory, inquiry_id)
         synthesis = self._read_optional(directory / "synthesis.json")
         readiness = self._read_optional(directory / "readiness.json")
+        promotion_intent = self._read_optional(directory / "promotion-intent.json")
         for artifact in [synthesis, readiness]:
             if artifact is not None and artifact.get("inquiry_id") != inquiry_id:
                 raise BuilderOpsValidationError("foreign artifact in inquiry trace")
-        receipts = self._read_receipts(directory)
+        readiness_inputs = (
+            _readiness_input_artifacts(
+                question=question,
+                turns=turns,
+                synthesis=synthesis,
+                readiness=readiness,
+            )
+            if readiness is not None
+            else None
+        )
+        receipts = self._read_receipts(
+            directory,
+            readiness=readiness,
+            readiness_input_artifacts=readiness_inputs,
+            promotion_intent=promotion_intent,
+        )
         self._validate_manifest(manifest, question, receipts, inquiry_id)
         self._validate_artifact_graph(question, turns, synthesis, readiness)
+        if promotion_intent is not None:
+            self._validate_promotion_intent(
+                promotion_intent,
+                inquiry_id=inquiry_id,
+                readiness=readiness,
+                synthesis=synthesis,
+            )
         self._validate_run_terminal_semantics(receipts, turns, synthesis)
         source_refs = _dedupe_source_refs(
             manifest.get("source_refs", []),
@@ -510,7 +763,7 @@ class ModelInquiryService:
             *((artifact or {}).get("source_refs", []) for artifact in [synthesis, readiness]),
             *(receipt.get("source_refs", []) for receipt in receipts),
         )
-        return {
+        result = {
             "inquiry": manifest,
             "question": question,
             "turns": turns,
@@ -526,6 +779,54 @@ class ModelInquiryService:
                 "readiness": readiness is not None,
             },
         }
+        if include_delivery:
+            result["delivery_refs"] = _delivery_refs(receipts)
+            result["promotion_intent"] = promotion_intent
+        return result
+
+    def _validate_promotion_intent(
+        self,
+        intent: dict[str, Any],
+        *,
+        inquiry_id: str,
+        readiness: dict[str, Any] | None,
+        synthesis: dict[str, Any] | None,
+    ) -> None:
+        if (
+            intent.get("schema") != PROMOTION_INTENT_SCHEMA
+            or intent.get("artifact_id") != "promotion-intent"
+            or intent.get("object_type") != "PromotionIntent"
+            or intent.get("inquiry_id") != inquiry_id
+            or intent.get("target_authority_surface") != "github_issue"
+            or readiness is None
+            or synthesis is None
+            or intent.get("readiness_artifact_hash") != readiness.get("artifact_hash")
+            or intent.get("synthesis_artifact_hash") != synthesis.get("artifact_hash")
+        ):
+            raise BuilderOpsValidationError("invalid inquiry promotion intent")
+        if not isinstance(intent.get("title"), str) or not intent["title"].strip():
+            raise BuilderOpsValidationError("invalid promotion intent title")
+        if len(intent["title"].strip()) > 200 or "\n" in intent["title"] or "\r" in intent["title"]:
+            raise BuilderOpsValidationError("invalid promotion intent title")
+        if not isinstance(intent.get("issue_body"), str) or not intent["issue_body"].strip():
+            raise BuilderOpsValidationError("invalid promotion intent issue body")
+        repository = intent.get("target_repository")
+        marker = intent.get("promotion_marker")
+        if (
+            not isinstance(repository, str)
+            or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository)
+            or not isinstance(marker, str)
+            or not re.fullmatch(
+                rf"<!-- builderops-inquiry-promotion:{re.escape(inquiry_id)}:[0-9a-f]{{64}} -->",
+                marker,
+            )
+            or marker not in intent["issue_body"]
+        ):
+            raise BuilderOpsValidationError("invalid promotion intent marker or repository")
+        if intent.get("issue_body_hash") != _content_hash(intent["issue_body"]):
+            raise BuilderOpsValidationError("promotion intent issue body hash mismatch")
+        _validate_persisted_source_refs(intent.get("source_refs"))
+        _validate_artifact_hash(intent, label="promotion intent")
 
     def resume(self, inquiry_id: str) -> dict[str, Any]:
         trace = self.trace(inquiry_id)
@@ -670,6 +971,12 @@ class ModelInquiryService:
             yield
 
     @contextmanager
+    def inquiry_promotion_lock(self, inquiry_id: str) -> Iterator[None]:
+        safe_id = _safe_id(inquiry_id, "inquiry_id")
+        with self._named_inquiry_lock(safe_id, ".inquiry-promotion.lock", "inquiry promotion"):
+            yield
+
+    @contextmanager
     def _named_inquiry_lock(
         self,
         inquiry_id: str,
@@ -693,9 +1000,10 @@ class ModelInquiryService:
                 _fsync_directory(path.parent)
             fcntl.flock(descriptor, fcntl.LOCK_EX)
             locked = True
-            yield
         except OSError as exc:
             raise BuilderOpsValidationError(f"unable to acquire {label} lock: {inquiry_id}") from exc
+        try:
+            yield
         finally:
             if descriptor is not None:
                 if locked:
@@ -769,7 +1077,14 @@ class ModelInquiryService:
             )
         return sorted(turns, key=lambda item: (item["sequence"], item["turn_id"]))
 
-    def _read_receipts(self, directory: Path) -> list[dict[str, Any]]:
+    def _read_receipts(
+        self,
+        directory: Path,
+        *,
+        readiness: Mapping[str, Any] | None = None,
+        readiness_input_artifacts: list[dict[str, str]] | None = None,
+        promotion_intent: Mapping[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         receipts_dir = directory / "receipts"
         if receipts_dir.is_symlink():
             raise BuilderOpsValidationError(f"receipt directory must not be a symlink: {receipts_dir}")
@@ -796,6 +1111,23 @@ class ModelInquiryService:
                 _validate_run_terminal_receipt(directory.name, path, receipt)
             elif receipt.get("event_type") == "inquiry_provider_attempt_terminal":
                 _validate_provider_attempt_receipt(directory.name, path, receipt)
+            elif receipt.get("event_type") == "inquiry_readiness_terminal":
+                _validate_readiness_terminal_receipt(
+                    directory.name,
+                    path,
+                    receipt,
+                    readiness,
+                    readiness_input_artifacts,
+                )
+            elif receipt.get("event_type") == "inquiry_promotion_terminal":
+                _validate_promotion_terminal_receipt(
+                    directory.name,
+                    path,
+                    receipt,
+                    promotion_intent,
+                )
+            elif receipt.get("event_type") == "inquiry_delivery_linked":
+                _validate_delivery_receipt(directory.name, path, receipt)
         if run_terminal_count > 1:
             raise BuilderOpsValidationError("multiple inquiry run terminal receipts")
         return receipts
@@ -1413,6 +1745,147 @@ def _validate_run_terminal_receipt(
     ):
         raise BuilderOpsValidationError("invalid inquiry run terminal receipt")
     _validate_receipt_details(cast(Mapping[str, Any], receipt["details"]))
+
+
+def _validate_readiness_terminal_receipt(
+    inquiry_id: str,
+    path: Path,
+    receipt: Mapping[str, Any],
+    readiness: Mapping[str, Any] | None,
+    input_artifacts: list[dict[str, str]] | None,
+) -> None:
+    if readiness is None or input_artifacts is None:
+        raise BuilderOpsValidationError("readiness receipt has no loaded readiness evidence")
+    outcome = readiness.get("outcome")
+    expected_target = [
+        {
+            "ref_type": "builderops_inquiry",
+            "ref": inquiry_id,
+            "authority_surface": "builderops",
+        }
+    ]
+    if (
+        path.name != "readiness-terminal.json"
+        or receipt.get("id") != f"receipt_{inquiry_id}_readiness_terminal"
+        or receipt.get("idempotency_key") != f"inquiry:{inquiry_id}:readiness:terminal"
+        or receipt.get("action") != outcome
+        or receipt.get("target_refs") != expected_target
+        or receipt.get("readiness_artifact_hash") != readiness.get("artifact_hash")
+        or receipt.get("input_artifacts") != input_artifacts
+        or receipt.get("source_refs") != readiness.get("source_refs")
+        or outcome not in READINESS_OUTCOMES
+    ):
+        raise BuilderOpsValidationError("invalid inquiry readiness terminal receipt")
+
+
+def _validate_promotion_terminal_receipt(
+    inquiry_id: str,
+    path: Path,
+    receipt: Mapping[str, Any],
+    intent: Mapping[str, Any] | None,
+) -> None:
+    if intent is None:
+        raise BuilderOpsValidationError("promotion receipt has no loaded promotion intent")
+    targets = receipt.get("target_refs")
+    issue_number = receipt.get("github_issue_number")
+    if (
+        path.name != "promotion-github-issue.json"
+        or receipt.get("id") != f"receipt_{inquiry_id}_promotion_github_issue"
+        or receipt.get("idempotency_key") != f"inquiry:{inquiry_id}:promotion:github_issue"
+        or receipt.get("action") != "promoted"
+        or receipt.get("promotion_intent_artifact_hash") != intent.get("artifact_hash")
+        or receipt.get("promotion_marker") != intent.get("promotion_marker")
+        or receipt.get("source_refs") != intent.get("source_refs")
+        or isinstance(issue_number, bool)
+        or not isinstance(issue_number, int)
+        or issue_number < 1
+        or not isinstance(targets, list)
+        or len(targets) != 2
+        or not isinstance(targets[0], dict)
+        or not isinstance(targets[1], dict)
+        or targets[0]
+        != {
+            "ref_type": "builderops_inquiry",
+            "ref": inquiry_id,
+            "authority_surface": "builderops",
+        }
+        or targets[1].get("ref_type") != "github_issue"
+        or targets[1].get("ref") != f"{intent.get('target_repository')}#{issue_number}"
+        or not isinstance(receipt.get("github_issue_url"), str)
+        or not github_issue_url_matches(
+            receipt["github_issue_url"],
+            intent.get("target_repository"),
+            issue_number,
+        )
+    ):
+        raise BuilderOpsValidationError("invalid inquiry promotion terminal receipt")
+
+
+def _validate_delivery_receipt(
+    inquiry_id: str,
+    path: Path,
+    receipt: Mapping[str, Any],
+) -> None:
+    targets = receipt.get("target_refs")
+    if not isinstance(targets, list) or len(targets) != 2:
+        raise BuilderOpsValidationError("invalid inquiry delivery receipt")
+    delivery_ref = targets[1]
+    if not isinstance(delivery_ref, dict):
+        raise BuilderOpsValidationError("invalid inquiry delivery receipt")
+    ref_hash = canonical_hash(delivery_ref)[:24]
+    if (
+        path.name != f"delivery-{ref_hash}.json"
+        or receipt.get("id") != f"receipt_{inquiry_id}_delivery_{ref_hash}"
+        or receipt.get("idempotency_key") != f"inquiry:{inquiry_id}:delivery:{ref_hash}"
+        or receipt.get("action") != "link_delivery"
+        or targets[0]
+        != {
+            "ref_type": "builderops_inquiry",
+            "ref": inquiry_id,
+            "authority_surface": "builderops",
+        }
+        or delivery_ref.get("ref_type")
+        not in {"github_pull_request", "verification_receipt", "owner_doc"}
+    ):
+        raise BuilderOpsValidationError("invalid inquiry delivery receipt")
+
+
+def _readiness_input_artifacts(
+    *,
+    question: Mapping[str, Any],
+    turns: list[dict[str, Any]],
+    synthesis: Mapping[str, Any] | None,
+    readiness: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    artifacts: dict[str, Mapping[str, Any]] = {"question": question}
+    if synthesis is not None:
+        artifacts["synthesis"] = synthesis
+    artifacts.update({str(turn["turn_id"]): turn for turn in turns})
+    result: list[dict[str, str]] = []
+    for ref in readiness.get("input_artifact_refs", []):
+        artifact = artifacts.get(str(ref))
+        if artifact is None or not isinstance(artifact.get("artifact_hash"), str):
+            raise BuilderOpsValidationError("readiness receipt has missing input artifact")
+        result.append(
+            {"artifact_id": str(ref), "artifact_hash": str(artifact["artifact_hash"])}
+        )
+    if not result:
+        raise BuilderOpsValidationError("readiness receipt requires input artifacts")
+    return result
+
+
+def _delivery_refs(receipts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    for receipt in receipts:
+        if receipt.get("event_type") not in {
+            "inquiry_promotion_terminal",
+            "inquiry_delivery_linked",
+        }:
+            continue
+        for ref in receipt.get("target_refs", [])[1:]:
+            if isinstance(ref, dict):
+                refs.append(dict(ref))
+    return sorted(refs, key=lambda item: (str(item.get("ref_type")), str(item.get("ref"))))
 
 
 def _validate_provider_attempt_receipt(

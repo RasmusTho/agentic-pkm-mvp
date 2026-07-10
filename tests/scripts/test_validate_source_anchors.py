@@ -65,6 +65,31 @@ def test_validate_source_anchors_rejects_missing_doc_path(
     assert errors == ["Anchor file not found: docs/MISSING.md"]
 
 
+def test_validate_source_anchors_rejects_absolute_and_symlink_escape(
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path / "outside.md"
+    outside.write_text("## OUTSIDE-ANCHOR\n", encoding="utf-8")
+    repo = tmp_path / "repo"
+    docs = repo / "docs"
+    docs.mkdir(parents=True)
+    (docs / "escape.md").symlink_to(outside)
+
+    absolute_ok, absolute_errors = validate_issue_body(
+        f"## Source Anchors\n- `{outside}`\n",
+        repo,
+    )
+    escape_ok, escape_errors = validate_issue_body(
+        "## Source Anchors\n- `docs/escape.md :: OUTSIDE-ANCHOR`\n",
+        repo,
+    )
+
+    assert absolute_ok is False
+    assert absolute_errors == [f"Anchor path must be repository-relative: {outside}"]
+    assert escape_ok is False
+    assert escape_errors == ["Anchor path escapes repository root: docs/escape.md"]
+
+
 def test_validate_source_anchors_rejects_missing_explicit_stable_anchor(
     tmp_path: Path,
     monkeypatch,

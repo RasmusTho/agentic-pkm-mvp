@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -50,6 +51,12 @@ from app.builderops.models import BuilderOpsValidationError, normalize_actor
 from app.builderops.model_inquiry import ModelInquiryService
 from app.builderops.model_inquiry_adapters import AdapterUnavailableError
 from app.builderops.model_inquiry_runner import ModelInquiryRunner
+from app.builderops.model_inquiry_promotion import (
+    DEFAULT_LABELS,
+    GhApiIssueClient,
+    ModelInquiryPromotionError,
+    ModelInquiryPromotionGateway,
+)
 from app.builderops.pattern_routing import (
     PatternRoutingError,
     build_pattern_routing_report,
@@ -363,10 +370,98 @@ def inquiry_start(
 
 @inquiry.command("trace", help="Return a deterministic trace over committed inquiry artifacts.")
 @click.argument("inquiry_id")
+@click.option("--include-delivery", is_flag=True)
 @click.option("--json", "as_json", is_flag=True)
-def inquiry_trace(inquiry_id: str, as_json: bool) -> None:
+def inquiry_trace(inquiry_id: str, include_delivery: bool, as_json: bool) -> None:
     try:
-        payload = ModelInquiryService.from_env().trace(inquiry_id)
+        payload = ModelInquiryService.from_env().trace(
+            inquiry_id,
+            include_delivery=include_delivery,
+        )
+    except BuilderOpsValidationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@inquiry.command("evaluate", help="Persist canonical issue-readiness evidence and receipt.")
+@click.argument("inquiry_id")
+@click.option("--created-by", default=None)
+@click.option("--json", "as_json", is_flag=True)
+def inquiry_evaluate(
+    inquiry_id: str,
+    created_by: str | None,
+    as_json: bool,
+) -> None:
+    try:
+        service = ModelInquiryService.from_env()
+        gateway = ModelInquiryPromotionGateway(service)
+        payload = gateway.evaluate(inquiry_id, actor=_parse_actor(created_by))
+    except BuilderOpsValidationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@inquiry.command("promote", help="Explicitly promote an issue-ready inquiry through GitHub REST.")
+@click.argument("inquiry_id")
+@click.option("--create-issue", is_flag=True, help="Authorize one REST Issue authority crossing.")
+@click.option("--repository", default=None, help="GitHub owner/name; defaults to environment.")
+@click.option("--label", "labels", multiple=True)
+@click.option("--created-by", default=None)
+@click.option("--json", "as_json", is_flag=True)
+def inquiry_promote(
+    inquiry_id: str,
+    create_issue: bool,
+    repository: str | None,
+    labels: tuple[str, ...],
+    created_by: str | None,
+    as_json: bool,
+) -> None:
+    if not create_issue:
+        raise click.ClickException("--create-issue is required for explicit authority crossing")
+    repository = repository or os.environ.get("BUILDEROPS_GITHUB_REPOSITORY") or os.environ.get(
+        "GITHUB_REPOSITORY"
+    )
+    if not repository:
+        raise click.ClickException(
+            "--repository or BUILDEROPS_GITHUB_REPOSITORY is required"
+        )
+    try:
+        service = ModelInquiryService.from_env()
+        gateway = ModelInquiryPromotionGateway(
+            service,
+            repository=repository,
+            client=GhApiIssueClient(repository),
+        )
+        payload = gateway.promote(
+            inquiry_id,
+            labels=labels or DEFAULT_LABELS,
+            actor=_parse_actor(created_by),
+        )
+    except (BuilderOpsValidationError, ModelInquiryPromotionError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@inquiry.command("link-delivery", help="Append one PR, verification, or owner-doc trace ref.")
+@click.argument("inquiry_id")
+@click.option("--delivery-ref", required=True, help="JSON ref or ref_type:ref shorthand.")
+@click.option("--created-by", default=None)
+@click.option("--json", "as_json", is_flag=True)
+def inquiry_link_delivery(
+    inquiry_id: str,
+    delivery_ref: str,
+    created_by: str | None,
+    as_json: bool,
+) -> None:
+    try:
+        service = ModelInquiryService.from_env()
+        trace = service.trace(inquiry_id)
+        payload = service.commit_delivery_reference(
+            inquiry_id,
+            delivery_ref=_parse_ref(delivery_ref),
+            source_refs=list(trace["source_refs"]),
+            actor=_parse_actor(created_by),
+        )
     except BuilderOpsValidationError as exc:
         raise click.ClickException(str(exc)) from exc
     _emit(payload, as_json)

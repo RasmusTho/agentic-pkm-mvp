@@ -21,6 +21,7 @@ from app.builderops.__main__ import _root as builderops_standalone_root
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BUILDEROPS_WRAPPER = REPO_ROOT / "scripts" / "builderops_cli.sh"
+BUILDEROPS_PYTHON_RESOLVER = REPO_ROOT / "scripts" / "lib" / "resolve_repo_python.sh"
 
 
 # ---------------------------------------------------------------------------
@@ -38,6 +39,16 @@ def _json(output: str):
 def _write_executable(path: Path, content: str) -> None:
     path.write_text(content)
     path.chmod(0o755)
+
+
+def _copy_builderops_wrapper(worktree_root: Path) -> None:
+    scripts = worktree_root / "scripts"
+    (scripts / "lib").mkdir(parents=True)
+    (scripts / "builderops_cli.sh").write_text(BUILDEROPS_WRAPPER.read_text())
+    (scripts / "builderops_cli.sh").chmod(0o755)
+    (scripts / "lib" / "resolve_repo_python.sh").write_text(
+        BUILDEROPS_PYTHON_RESOLVER.read_text()
+    )
 
 
 def test_standalone_list_returns_json(tmp_path: Path) -> None:
@@ -243,10 +254,8 @@ def test_builderops_wrapper_finds_canonical_venv_from_codex_worktree(tmp_path: P
     (canonical_root / ".git").mkdir(parents=True)
     canonical_python.parent.mkdir(parents=True)
     fakebin.mkdir()
-    (worktree_root / "scripts").mkdir(parents=True)
+    _copy_builderops_wrapper(worktree_root)
     (worktree_root / "app").mkdir()
-    (worktree_root / "scripts" / "builderops_cli.sh").write_text(BUILDEROPS_WRAPPER.read_text())
-    (worktree_root / "scripts" / "builderops_cli.sh").chmod(0o755)
 
     _write_executable(
         canonical_python,
@@ -307,9 +316,7 @@ def test_builderops_wrapper_missing_venv_message(tmp_path: Path) -> None:
 
     (canonical_root / ".git").mkdir(parents=True)
     fakebin.mkdir()
-    (worktree_root / "scripts").mkdir(parents=True)
-    (worktree_root / "scripts" / "builderops_cli.sh").write_text(BUILDEROPS_WRAPPER.read_text())
-    (worktree_root / "scripts" / "builderops_cli.sh").chmod(0o755)
+    _copy_builderops_wrapper(worktree_root)
     _write_executable(
         fakebin / "git",
         f"""#!/usr/bin/env bash

@@ -1,6 +1,6 @@
-State: Incremental implementation in progress. BMI-01 through BMI-03 are implemented; desktop
-launchers, promotion, and end-to-end acceptance remain pending. A real Fable acceptance run also
-requires an explicitly configured local adapter, which is not present on the current delivery host.
+State: BMI-01 through BMI-05 are implemented; parent end-to-end acceptance remains pending. A real
+Fable acceptance run requires an explicitly configured local adapter, which is not present on the
+current delivery host.
 Doc role: Specification directory
 Authority: Defines the BuilderOps pre-ticket model-inquiry capability and its task decomposition. BuilderOps Vault authority remains owned by ADR-0010.
 Owner: BuilderOps governance
@@ -49,6 +49,10 @@ BMI-03 adds `builderops inquiry run`. Its `--dry-run` mode is deterministic and 
 provider-enabled mode uses explicit per-role adapters, strict response validation, durable terminal
 receipts, and no provider fallback.
 
+BMI-04 adds worktree-safe Codex and portable Claude launchers over the same command. BMI-05 adds the
+structured Issue proposal, readiness receipt, file-first PromotionIntent, REST-only Issue crossing,
+crash reconciliation marker, and append-only delivery references.
+
 ## Execution Order
 
 `BMI-01 -> BMI-02 -> BMI-03 -> BMI-04 -> BMI-05`
@@ -83,16 +87,16 @@ Partial failure examples:
 
 ## Capability Acceptance Criteria
 
-- [ ] An operator can start and resume a pre-ticket inquiry from a BuilderOps command without
+- [x] An operator can start and resume a pre-ticket inquiry from a BuilderOps command without
   copying model output between tools. Verify: `tests/builderops/test_model_inquiry_cli.py::test_start_and_resume_inquiry`.
-- [ ] Each turn, synthesis, and readiness result can be traced to the source question and its input
+- [x] Each turn, synthesis, and readiness result can be traced to the source question and its input
   artifacts. Verify: `tests/builderops/test_model_inquiry_trace.py::test_trace_links_question_turns_and_synthesis`.
-- [ ] Shared iCloud artifacts never place SQLite databases or provider credentials in the
+- [x] Shared iCloud artifacts never place SQLite databases or provider credentials in the
   synchronized vault, and claim files remain explicitly advisory. Verify:
   `tests/builderops/test_builderops_paths.py::test_shared_vault_bootstrap_creates_advisory_claims_but_never_sqlite`.
-- [ ] A GitHub Issue is created only after readiness and promotion evidence are recorded. Verify:
+- [x] A GitHub Issue is created only after readiness and promotion evidence are recorded. Verify:
   `tests/builderops/test_model_inquiry_promotion.py::test_issue_promotion_requires_ready_receipt`.
-- [ ] Desktop launcher instructions invoke the common BuilderOps command rather than a desktop-app
+- [x] Desktop launcher instructions invoke the common BuilderOps command rather than a desktop-app
   automation protocol. Verify: doc writeback at `.codex/skills/start-model-inquiry/SKILL.md` and
   packaged Claude skill manifest.
 
