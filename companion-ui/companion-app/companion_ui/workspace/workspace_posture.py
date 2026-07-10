@@ -22,6 +22,8 @@ module's scope (DESIGN_AUDIT.md §3.1's "rail lane copy" is explicitly Slice B
 
 from __future__ import annotations
 
+import json
+
 WORKSPACE_VAULT_POSTURES: tuple[str, ...] = ("healthy", "degraded")
 
 # The one reachability classification: which vault_state values count as
@@ -31,18 +33,34 @@ REACHABLE_VAULT_STATES: frozenset[str] = frozenset({"ok"})
 
 # Transport-level failure markers that classify an *unstructured* error
 # string as "the runtime itself is unreachable" (#3361, DESIGN_AUDIT.md §3.1
-# bug B2). Single shared constant consumed by BOTH
+# bug B2). Single shared constant consumed (via
+# ``is_runtime_unreachable_error`` below) by BOTH
 # `serve_dev_page._render_error_section` / `_is_runtime_unreachable` AND
 # `entry_state._is_runtime_unavailable_error` — the entry-state mirror must
 # stay in lockstep, otherwise a DNS failure renders unreachable *copy* while
 # the entry state still resolves `shell_active` and drops the Retry /
 # System-map affordances.
+#
+# The markers are error-SHAPED phrases, not bare topic words (round-2 review
+# finding): ordinary prose can legitimately contain "network" ("Note not
+# found for Notes/Network Diagram.md") or "errno" as a note-path fragment,
+# and a bare-substring match would misclassify a note-load failure as the
+# runtime being down. Real transport failures always carry one of the
+# phrases below ("[Errno 61] Connection refused", "Network is unreachable",
+# "The read operation timed out", "Temporary failure in name resolution").
 TRANSPORT_UNAVAILABLE_MARKERS: tuple[str, ...] = (
     "connection refused",
     "timed out",
-    "timeout",
-    "network",
-    "errno",
+    "timeouterror",
+    "connecttimeout",
+    "readtimeout",
+    "timeout of ",
+    "timeout exceeded",
+    "network is unreachable",
+    "network error",
+    "networkerror",
+    "network failure",
+    "[errno",
     "name or service not known",
     "nodename nor servname",
     "name resolution",
@@ -67,6 +85,59 @@ RECONNECTING_PICKER_SUB = (
     "Your configured vault is reconnecting. Open it now, or browse for "
     "another."
 )
+
+
+def error_detail(error: str) -> dict:
+    """The structured ``detail`` dict from an ``HTTP <code>: {json}`` error.
+
+    The workspace HTTP client wraps contract errors as
+    ``HTTP <status>: <body>`` (``WorkspaceClientHTTPError``); the body's
+    ``detail`` object carries the server-declared ``error`` kind. Anything
+    else — plain prose, transport exception text — yields ``{}``.
+    """
+    if not error.startswith("HTTP "):
+        return {}
+    _, _, maybe_json = error.partition(": ")
+    if not maybe_json:
+        return {}
+    try:
+        payload = json.loads(maybe_json)
+    except json.JSONDecodeError:
+        return {}
+    detail = payload.get("detail")
+    return detail if isinstance(detail, dict) else {}
+
+
+def is_runtime_unreachable_error(error: str) -> bool:
+    """The ONE classifier for "this error means the runtime is unreachable".
+
+    Consumed by both ``serve_dev_page`` (error copy + vault-setup-form
+    suppression) and ``entry_state`` (no_vault resolution) so the two can
+    never diverge (#3361 round-2 review finding — the entry-state mirror
+    previously lacked the structured-error short-circuit and re-classified a
+    note-load failure whose text happened to contain a transport word).
+
+    Classification, in order:
+
+    - empty error: not unreachable;
+    - declared ``runtime_unavailable`` kind or a bare ``HTTP 503``: unreachable;
+    - any OTHER declared error kind (``note_not_found``, ...): NOT a
+      transport failure, no matter what words its user data contains — a
+      note_not_found payload for ``Network/Runbook.md`` must never classify
+      as the runtime being down;
+    - otherwise (unstructured exception/transport text): unreachable iff it
+      carries one of the error-shaped :data:`TRANSPORT_UNAVAILABLE_MARKERS`.
+    """
+    if not error:
+        return False
+    detail = error_detail(error)
+    error_kind = str(detail.get("error") or "")
+    lowered = error.lower()
+    if error_kind == "runtime_unavailable" or lowered.startswith("http 503"):
+        return True
+    if error_kind:
+        return False
+    return any(marker in lowered for marker in TRANSPORT_UNAVAILABLE_MARKERS)
 
 
 def vault_state_from_provenance(vault_provenance: str) -> str:

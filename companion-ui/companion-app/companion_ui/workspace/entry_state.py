@@ -36,7 +36,7 @@ import html as _html
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from companion_ui.workspace.workspace_posture import TRANSPORT_UNAVAILABLE_MARKERS
+from companion_ui.workspace.workspace_posture import is_runtime_unreachable_error
 
 ENTRY_STATES: tuple[str, ...] = (
     "boot",
@@ -149,19 +149,21 @@ def _is_runtime_unavailable_error(error: str) -> bool:
 
     Covers the contract's HTTP 503 ``runtime_unavailable`` payload and
     request-level network failures (connection refused, timeout, DNS/errno).
-    The transport markers are the SHARED
-    ``workspace_posture.TRANSPORT_UNAVAILABLE_MARKERS`` constant — the same
-    set ``serve_dev_page`` uses to classify error copy (#3361): if this
-    mirror lagged, a DNS failure would render unreachable copy while the
-    entry state still resolved ``shell_active``, dropping the Retry /
-    System-map affordances.
+    The classification itself is the SHARED
+    ``workspace_posture.is_runtime_unreachable_error`` — the exact function
+    ``serve_dev_page`` uses to classify error copy (#3361 round-2 review):
+    it short-circuits on any structured error kind (``note_not_found``, ...)
+    so a note-load failure whose path/message happens to contain a transport
+    word ("Notes/Network Diagram.md") is never re-classified as the runtime
+    being down, which would drop the note context and show the no-vault page.
+
+    The ``runtime_unavailable``-substring check is kept for the payload
+    shapes this resolver historically accepted (a bare
+    ``runtime_unavailable`` token without the HTTP wrapper).
     """
-    lowered = error.lower()
-    if "runtime_unavailable" in lowered:
+    if "runtime_unavailable" in error.lower():
         return True
-    if lowered.startswith("http 503"):
-        return True
-    return any(marker in lowered for marker in TRANSPORT_UNAVAILABLE_MARKERS)
+    return is_runtime_unreachable_error(error)
 
 
 def _as_dict(value: object) -> dict:

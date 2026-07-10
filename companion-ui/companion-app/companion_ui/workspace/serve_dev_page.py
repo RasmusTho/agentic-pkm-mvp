@@ -159,8 +159,9 @@ from companion_ui.workspace.workspace_posture import (
     CANT_REACH_VAULT_COPY,
     RECONNECTING_PICKER_SUB,
     RECONNECTING_PICKER_TITLE,
-    TRANSPORT_UNAVAILABLE_MARKERS,
     derive_vault_posture,
+    error_detail,
+    is_runtime_unreachable_error,
     render_posture_banner,
     vault_posture_chip_suffix,
     vault_state_from_provenance,
@@ -6170,17 +6171,9 @@ def _render_panel_confirm_response(response: dict) -> str:
 
 
 def _error_detail(error: str) -> dict:
-    if not error.startswith("HTTP "):
-        return {}
-    _, _, maybe_json = error.partition(": ")
-    if not maybe_json:
-        return {}
-    try:
-        payload = json.loads(maybe_json)
-    except json.JSONDecodeError:
-        return {}
-    detail = payload.get("detail")
-    return detail if isinstance(detail, dict) else {}
+    # #3361 round-2 — the parse lives in workspace_posture.error_detail so the
+    # entry_state mirror consumes the identical structured-error detection.
+    return error_detail(error)
 
 
 def _is_remote_page_origin(hostname: str) -> bool:
@@ -7159,7 +7152,10 @@ def _render_error_section(
     # Q23 — provenance behind a Details disclosure; Q24 — suppress the form).
     lowered = error.lower()
     contract_unavailable = error_kind == "runtime_unavailable" or lowered.startswith("http 503")
-    runtime_unavailable = any(marker in lowered for marker in TRANSPORT_UNAVAILABLE_MARKERS)
+    # #3361 round-2 — shared classifier (structured short-circuit + shaped
+    # transport markers); True here only for the unstructured-transport case
+    # since the contract case was classified above.
+    runtime_unavailable = not contract_unavailable and is_runtime_unreachable_error(error)
     # #2124 — same 503/transport shape, two causes. From a remote page origin
     # the likely cause is "wrong device" (the browser hit the API's localhost
     # bind, unreachable from that device), so render the distinct remote-access
@@ -7208,24 +7204,11 @@ def _is_runtime_unreachable(error: str) -> bool:
     (#2123 AC1; open-questions Q24). Mirrors the classification in
     ``_render_error_section`` so the banner and the form stay in lockstep.
     """
-    if not error:
-        return False
-    detail = _error_detail(error)
-    error_kind = str(detail.get("error") or "")
-    lowered = error.lower()
-    if error_kind == "runtime_unavailable" or lowered.startswith("http 503"):
-        return True
-    # The transport-substring fallback applies ONLY to unstructured error
-    # strings (e.g. "[Errno 61] Connection refused", which carry no JSON detail).
-    # A structured error with a declared kind is not a transport failure, so it
-    # must not be reclassified as unreachable just because its user data happens
-    # to contain a transport word — e.g. a note_not_found payload for
-    # "Network/Runbook.md" would otherwise hit the "network" marker and wrongly
-    # strip the still-usable vault-setup form. This mirrors _render_error_section,
-    # which resolves the declared error kind before any transport classification.
-    if error_kind:
-        return False
-    return any(marker in lowered for marker in TRANSPORT_UNAVAILABLE_MARKERS)
+    # #3361 round-2 — the classification is the shared
+    # workspace_posture.is_runtime_unreachable_error (structured-error
+    # short-circuit + error-shaped transport markers), consumed identically
+    # by the entry_state mirror so the two can never diverge again.
+    return is_runtime_unreachable_error(error)
 
 
 def _render_vault_unreachable_state(error: str, *, retry_html: str) -> str:

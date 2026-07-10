@@ -306,3 +306,38 @@ def test_misconfigured_vault_keeps_create_cta_despite_reconnecting_flag() -> Non
     assert RECONNECTING_PICKER_SUB.lower() not in visible
     # And the strictly-uninitialized CTA testid still does not appear here.
     assert 'data-testid="vault-picker-initialize-submit"' not in html
+# ---------------------------------------------------------------------------
+# Round-2 review finding — a note-load failure whose path/message contains a
+# transport word must NOT be re-classified as the runtime being down
+# ---------------------------------------------------------------------------
+def test_note_load_failure_with_transport_word_stays_shell_active() -> None:
+    """The entry-state classifier is the same shared
+    `is_runtime_unreachable_error` the error-copy classifier uses: a
+    note-load failure keeps its note context (shell_active + note_load_failed)
+    even when its text contains "Network"/"Errno"-adjacent prose, both as
+    plain prose and as the structured HTTP 404 shape the page server passes.
+    """
+    for error in (
+        # The verified round-2 repro: plain prose with "Network" in the path.
+        "Note not found for Notes/Network Diagram.md",
+        # The structured shape WorkspaceClientHTTPError actually produces.
+        (
+            'HTTP 404: {"detail": {"error": "note_not_found", '
+            '"note_path": "Notes/Network Diagram.md", '
+            '"message": "No note exists"}}'
+        ),
+        # Structured shape with a timeout-flavoured note path.
+        (
+            'HTTP 404: {"detail": {"error": "note_not_found", '
+            '"note_path": "Notes/Timeout errno handling.md", '
+            '"message": "No note exists"}}'
+        ),
+    ):
+        resolution = resolve_entry_state(
+            note_path="Notes/Network Diagram.md", error=error
+        )
+        assert resolution.state == "shell_active", (
+            f"{error!r} resolved {resolution.state!r}, expected shell_active"
+        )
+        assert resolution.degraded is True
+        assert "entry_state_note_load_failed" in resolution.degraded_reasons
