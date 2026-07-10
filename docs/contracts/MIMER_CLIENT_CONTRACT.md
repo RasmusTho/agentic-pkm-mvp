@@ -18,7 +18,7 @@ This is the single hub contract for every external client of Mimer (the shipped 
 
 The families share almost the entire seam (same HTTP API, same vault, same invariants, same auth gap), so one artifact serves both; where postures differ, the difference is stated per family in place. This closes audit item T2 (`docs/audits/YGGDRASIL_ECOSYSTEM_2026-07-06.md` §10): "Mimer client contract" now greps to a real file, and `bifrost#1`/#3023 Source Anchors can resolve here.
 
-**What this contract is not.** It is not an SDK, not a schema registry, and not a consistency mechanism. The `_heimdal/**` note-shape schema (audit G3) and the full multi-writer consistency model (#3114) remain named follow-on work (§9).
+**What this contract is not.** It is not an SDK or a consistency mechanism. The published `_heimdal/**` schema is a client-facing manifest, while runtime parsing/enforcement remains in `app/heimdal/settings_notes.py`; the full multi-writer mechanism remains follow-on work (§9 F6).
 
 ## 2. Classification and transports
 
@@ -105,7 +105,7 @@ The owner has ruled that direct filesystem vault writes by external clients are 
 
 - **Declared agent workspace roots** (AGENT-FLOWS §7) are the default write surface for app agents: drafting, synthesis, notes the client itself authors. Output lands at draft-zone standing — observed, classified, never auto-canonical.
 - **Human-directed edits to any vault note** are permitted when the human directs the edit in the live session (matching ADR-0055's writer set, which does not restrict which notes the human's own session may touch). The client discipline of §6 (read-fresh, ownership courtesy, atomic replace) applies with full force here, because this is exactly the surface where a collision destroys human-authored prose — and it is exactly the "rewritten note class" ADR-0055 targets for its stale-detection + conflict-staging mechanism once enacted.
-- **Bifrost shells** additionally read/write the `_heimdal/**` control surface (settings/interests/consent/attention) — that is their product surface. Its note shapes are today an in-process convention (`app/heimdal/settings_notes.py`; audit G3): Bifrost tracks the hub, and shape changes are a named drift risk until the schema is published (§9 F7).
+- **Bifrost shells** additionally read/write the `_heimdal/**` control surface (settings/interests/consent/attention) — that is their product surface. Its versioned client schema is [`schemas/heimdal-control-notes.schema.json`](../../schemas/heimdal-control-notes.schema.json), mechanically checked against the runtime registry in `app/heimdal/settings_notes.py`. The schema is a published contract view; the registry remains the runtime authority.
 
 ### Exclusion list — never direct-write, either family
 
@@ -132,13 +132,32 @@ agent_provenance:
 
 This is a v1 convention owned by this contract: advisory to the runtime today (observation-time classification may read it; nothing enforces it), binding on clients now, and the input to the per-agent identity slice (§9 F2). It exists so the AGENT-FLOWS §13 questions ("who wrote this, under what delegation, into which zone") stay answerable without the runtime.
 
+### Bifrost coordinated filesystem access
+
+Per ADR-0055 item 5, Bifrost uses Apple's coordinated-access APIs — `NSFileCoordinator` / `UIDocument` — for vault files, not plain `FileManager` I/O. This preserves offline-first operation while cooperating with iCloud's coordination layer; it does not replace the hub's stale-detection or conflict-artifact responsibilities.
+
 ## 6. Concurrent-writer safety model
 
 This is the load-bearing section. The writer set over one iCloud-synced vault is now: the Mac runtime, the human in Obsidian, Bifrost shells, and external app agents — plus iCloud sync as a transport that can materialize conflicts as files.
 
 ### Substrate guarantee, stated honestly
 
-**Decided, not yet enacted.** `docs/adr/ADR-0055-vault-multiwriter-consistency-model.md` (Accepted 2026-07-07, supersedes ADR-0053, resolves #3114) is the owner's ruling on the full multi-writer model: atomic writes everywhere; stale-detection + detect-and-stage conflict artifacts for **rewritten note classes** (human prose, `_heimdal/**` control notes, companion notes); last-write-wins retained for **append-only classes** (capture/inbox appends, event logs); iCloud conflicted-copy quarantine at ingest; writer-identity/timestamp provenance tagging; enforcement at GATE tier via `WriteGuard`, generalized to also cover `append_note_relative` (closing INV-VW2). ADR-0055 is explicit that it is the decision, not the mechanism — enactment (schema/contract materialization, the classification table, the `append_note_relative` fix, stale-check generalization) is separate downstream work that has **not shipped yet**.
+**Decided, runtime mechanism not yet enacted.** `docs/adr/ADR-0055-vault-multiwriter-consistency-model.md` (Accepted 2026-07-07, supersedes ADR-0053, resolves #3114) is the owner's ruling on the full multi-writer model: atomic writes everywhere; stale-detection + detect-and-stage conflict artifacts for **rewritten note classes**; last-write-wins retained for **append-only classes**; iCloud conflicted-copy quarantine at ingest; writer-identity/timestamp provenance tagging; enforcement at GATE tier via `WriteGuard`, generalized to also cover `append_note_relative` (closing INV-VW2). The schema and classification contract are published below; the runtime mechanism remains #3132 feature work, and the `append_note_relative` guard repair remains #3129.
+
+### Note-classification contract (ADR-0055 item 6)
+
+All writers consume this table; individual runtime code must not create a competing class mapping. `rewritten` means atomic replace plus the stale-detection/conflict-staging mechanism when #3132 lands. `append-only` means atomic append with no stale check; `create-once` is the Sources-zone variant, where a re-derivation creates a new note rather than rewriting the original.
+
+| Path / note pattern | Class | Contract posture |
+| --- | --- | --- |
+| `_heimdal/**` (except the explicit append-only rows below) | rewritten | Control notes use the published schema; stale detection and conflict staging apply when enacted. |
+| `_heimdal/steering.log.md` | append-only | Immutable steering entries append through the governed append seam. |
+| human-authored Markdown outside managed append-only zones | rewritten | Preserve human prose; never silently overwrite a stale version. |
+| `⚙️ System/companions/**`, legacy `_system/companions/**` | rewritten | Runtime-owned companion notes; direct client writes remain forbidden. |
+| `<inbox_dir_rel>/inbox.md` | append-only | Governed capture endpoint only; direct filesystem writes are forbidden. |
+| event-log producer paths | append-only | Append-only event history; no rewritten-note stale check. |
+| `Sources/**` (settings-resolved default root) | append-only / create-once | Sensor/acquisition writers create material notes; re-derivation makes a new note, never a silent rewrite. |
+| Episode notes (the Episode Note Store's materialized Markdown) | rewritten | Re-cut/re-time and human edits, including `closed`, require rewritten-note protection. |
 
 Until that enactment lands, today's runtime substrate is unchanged from what ADR-0053 described: concurrent writes to the same vault note resolve as **silent last-write-wins**. The general write primitive is a blind in-place overwrite with no stale check (`app/knowledge/adapters.py:29-40`); compare-and-swap exists only in the panel-watcher family (`OptimisticWriteGuard`, `app/components/concurrency.py:118-131`); `append_note_relative` does not itself assert the WriteGuard (audit INV-VW2); iCloud conflicted copies are ingested as ordinary notes (INV-VW3 absent).
 
@@ -211,7 +230,7 @@ Named follow-on work; each routes through `feature-breakdown`/`docs-to-issue`, n
 - **F4 — API versioning + published OpenAPI for the client surface.** The hub API is unversioned and `api/openapi.yaml` documents 2 of 23+ route modules (audit §3; the surface is still growing); a client-publishable contract needs both.
 - **F5 — Client-visible idempotency key on capture.** Lets a client retry safely after `not_acknowledged`/timeout instead of verify-by-read (§6 W5).
 - **F6 — Full multi-writer consistency model: enactment.** The decision itself is made — `docs/adr/ADR-0055-vault-multiwriter-consistency-model.md` (Accepted 2026-07-07) resolves #3114 and gates B2 (#3024). What remains is **T2/T3 enactment**: the note-class classification table, closing INV-VW2 (`append_note_relative` WriteGuard coverage), the INV-VW1 stale-check generalization, INV-VW3 conflict-copy handling, and writer provenance at the substrate. This contract's §6 discipline is the interim client-side complement to today's unenacted mechanism, not a substitute for it.
-- **F7 — `_heimdal/**` published note-shape schema (audit G3).** Publish the `settings_notes.py` registry as a versioned schema artifact so a hub-side shape change cannot silently break a shipped Bifrost client.
+- **F7 — `_heimdal/**` published note-shape schema (audit G3): delivered by #3131.** [`schemas/heimdal-control-notes.schema.json`](../../schemas/heimdal-control-notes.schema.json) publishes the registry's note kinds, paths, authorities, sections, and field-authority split. `tests/heimdal/test_published_control_surface_schema.py` prevents drift from `settings_notes.py`; schema-version evolution remains a future contract change, not a silent runtime edit.
 
 ## 10. SBS reconciliation
 
