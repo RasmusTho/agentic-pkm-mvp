@@ -1,4 +1,4 @@
-State: Advisory research capture. Owner-ratified ideation session 2026-07-07. Grounds the five closed-loop capability specifications; not itself a specification.
+State: Advisory research capture. Owner-ratified ideation session 2026-07-07. Grounds the seven closed-loop capability specifications; not itself a specification.
 
 # Yggdrasil Closed Loops — owner ideation capture (2026-07-07)
 

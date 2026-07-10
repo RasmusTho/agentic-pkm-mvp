@@ -11,7 +11,7 @@ Title on GitHub: `[Daily Briefing] parent: one generated, provenance-cited, audi
 
 ## Context
 
-`docs/research/yggdrasil-closed-loops-ideation.md` (owner-ratified ideation, 2026-07-07) identified five uncaptured "closed loops" across already-live verticals; Daily Briefing is loop 1 and the owner-ratified **build-first** priority — highest value-to-effort on substrate that is already live (commitments surfacing, the Contextual Relevance Engine, the decision-receipt log, mixed sv/en TTS) and it becomes the distribution surface the other four loops deliver through as they land.
+`docs/research/yggdrasil-closed-loops-ideation.md` (owner-ratified ideation, 2026-07-07) identified seven uncaptured "closed loops" across already-live verticals; Daily Briefing is loop 1 and the owner-ratified **build-first** priority — highest value-to-effort on substrate that is already live (commitments surfacing, the Contextual Relevance Engine, the decision-receipt log, mixed sv/en TTS) and it becomes the distribution surface the other loops deliver through as they land.
 
 This capability also implements the **egress seam the Episode Resolution Engine deliberately excluded**: ADR-0054 and `docs/EPISODE_RESOLUTION_ENGINE/README.md` place notifications/TTS playback outside the ERE boundary on purpose. Daily Briefing is the other side of that seam — it is the first thing that actually reads and speaks derived signal to the human, not the engine that produces the signal.
 

@@ -33,8 +33,8 @@ The owner is dyslexic and Swedish/English mixed; every read/type surface works a
 | decision receipts of the day | **live** | `app/receipts/decision_receipt_log.py::iter_decision_receipts`, filtered to today | receipt entry (`object_id`, `vault_uuid`, `key`, `created_at`) |
 | captures/observations of the day | **live** (new read shape) | new-today candidate/inbox artifacts written to the vault, e.g. `app/knowledge_acquisition/candidate_writeback.py::write_candidate_note` output filtered to today's creation timestamp | candidate/source note ref |
 | chat sessions (the reflection conversation itself) | **live** | existing chat-session surface (`app/chat/session_log.py`); see Seams / in-flight dependency note on #2805/#2807 | `session_id`, transcript ref |
-| episode debriefs | **future** (`docs/EPISODE_DEBRIEF/` does not exist yet) | named as a future enrichment seam only — not a dependency | n/a |
-| Heimdal screen-stream time-spans | **future** (`docs/HEIMDAL_SCREEN_STREAM/` does not exist yet) | named as a future enrichment seam only — not a dependency | n/a |
+| episode debriefs | **future** (spec'd in `docs/EPISODE_DEBRIEF/`, same wave; delivery blocked on ERE core) | named as a future enrichment seam only — not a dependency | n/a |
+| Heimdal screen-stream time-spans | **future** (spec'd in `docs/HEIMDAL_SCREEN_STREAM/`, same wave) | named as a future enrichment seam only — not a dependency | n/a |
 
 A source absent from this table (mood/sentiment analytics, multi-day rollups, auto-publish) is excluded deliberately — see Out of Scope.
 

@@ -12,7 +12,7 @@ Title on GitHub: `[Standing Questions] parent: durable open-question entity with
 ## Context
 
 `docs/research/yggdrasil-closed-loops-ideation.md` (owner-ratified ideation, 2026-07-07) names Standing
-Questions as loop 3 of five uncaptured closed loops: an architect carries open questions for months;
+Questions as loop 3 of seven uncaptured closed loops: an architect carries open questions for months;
 ASK only answers from what exists *now*; the Knowledge Acquisition Platform deliberately ends at
 `candidate` (`docs/KNOWLEDGE_ACQUISITION/README.md`) with no durable open-question entity to match its
 output against over time. This capability is fully specified in `docs/STANDING_QUESTIONS/` (this spec

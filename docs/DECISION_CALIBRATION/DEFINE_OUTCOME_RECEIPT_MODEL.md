@@ -35,6 +35,9 @@ Decision Calibration task builds on.
    `app/receipts/decision_receipt_log.py` line for line: `app/receipts/outcome_receipt_log.py` with
    `append_outcome_receipt()`, `iter_outcome_receipts()`, `build_receipt()`,
    `outcome_receipts_dir()`. Storage: `vault/<system_dir>/receipts/decision_outcomes/` — dated JSONL
+   (Sibling note: `SCHEDULE_DECISION_REVISITS.md`/CAL-02 ships a second peer log module,
+   `app/receipts/revisit_dismissal_log.py`, mirroring the same pattern — keep this module's shape
+   cleanly reusable so the two stay one pattern, not two divergent append-only-log implementations.)
    shards (`decision_outcomes-YYYYMM.jsonl`), one schema-versioned JSON object per outcome, append-only.
    **JSONL, not markdown** — decision outcomes are structured verdicts (a vocabulary value + optional
    note + a rung index), the exact same shape rationale `docs/DECISION_RECEIPT_LOG/README.md ::

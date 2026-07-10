@@ -1,4 +1,4 @@
-State: Specification directory — FILED (parent #3314; children #3315–#3319 filed 2026-07-07, all agent:blocked at filing per the uniform closed-loops filing policy). System-level source of truth for building the Daily Briefing capability, the first (owner-ratified priority) of the five Yggdrasil closed loops identified in `docs/research/yggdrasil-closed-loops-ideation.md`. Grounded in that ideation capture; not itself a plan for the other four loops. GitHub issues are execution artifacts; this spec remains the contract.
+State: Specification directory — FILED (parent #3314; children #3315–#3319 filed 2026-07-07, all agent:blocked at filing per the uniform closed-loops filing policy). System-level source of truth for building the Daily Briefing capability, the first (owner-ratified priority) of the seven Yggdrasil closed loops identified in `docs/research/yggdrasil-closed-loops-ideation.md`. Grounded in that ideation capture; not itself a plan for the other four loops. GitHub issues are execution artifacts; this spec remains the contract.
 Doc role: Capability specification (feature-breakdown lane)
 Temporal class: strategic
 Review cadence: event-driven (task merges, parent-issue lifecycle)
@@ -29,7 +29,7 @@ Strategically, this capability is also the **distribution seam** the Episode Res
 | CRE relevance picks (materialized Moments) | **live** | `app/relevance/now_surface.py::collect_now_moments` | `moment_id`, `surfaced_refs[].ref` |
 | decision receipts | **live** | `app/receipts/decision_receipt_log.py::iter_decision_receipts` | `receipt` entry (`object_id`, `vault_uuid`, `key`, `created_at`) |
 | calendar entries / today's episodes | **planned** (blocked on ERE-09 + ERE-02) | `docs/EPISODE_RESOLUTION_ENGINE/CALENDAR_STREAM_ADAPTER.md` registered stream + episode-note projection | episode note ref / calendar UID |
-| future: decision-revisit prompts, standing-question updates, episode debriefs | **not designed here** | named as future input seams only (`docs/DECISION_CALIBRATION/`, `docs/STANDING_QUESTIONS/`, `docs/EPISODE_DEBRIEF/`, none of which exist as spec directories yet) | n/a |
+| future: decision-revisit prompts, standing-question updates, episode debriefs | **not designed here** | named as future input seams only — their spec directories (`docs/DECISION_CALIBRATION/`, `docs/STANDING_QUESTIONS/`, `docs/EPISODE_DEBRIEF/`) ship in the same closed-loops wave and each names the briefing as its delivery seam; wiring them in is future work owned by those capabilities | n/a |
 
 A source absent from this table (OS push, email, wake-word/always-listening, briefing-as-write-authority) is excluded deliberately — see Out of Scope.
 

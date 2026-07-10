@@ -1,4 +1,4 @@
-State: Specification directory — FILED (parent #3325; children #3326–#3330 filed 2026-07-07, all agent:blocked at filing per the uniform closed-loops filing policy). System-level source of truth for building Standing Questions, the third of the five uncaptured closed loops named in `docs/research/yggdrasil-closed-loops-ideation.md`. Grounded in that ideation capture; not itself the grounding research. GitHub issues are execution artifacts; this spec remains the contract.
+State: Specification directory — FILED (parent #3325; children #3326–#3330 filed 2026-07-07, all agent:blocked at filing per the uniform closed-loops filing policy). System-level source of truth for building Standing Questions, the third of the seven uncaptured closed loops named in `docs/research/yggdrasil-closed-loops-ideation.md`. Grounded in that ideation capture; not itself the grounding research. GitHub issues are execution artifacts; this spec remains the contract.
 Doc role: Capability specification (feature-breakdown lane)
 Temporal class: strategic
 Review cadence: event-driven (task merges, parent-issue lifecycle)
