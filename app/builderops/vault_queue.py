@@ -159,6 +159,9 @@ def claim_ticket(
     agent: str,
     ttl_minutes: int,
 ) -> dict[str, Any]:
+    agent = agent.strip()
+    if not agent:
+        raise VaultQueueError("agent must be non-empty")
     ticket = resolve_ticket(root, ticket_ref)
     if ticket.path.parent.name != "Ready" or ticket.status_column != "Ready":
         raise VaultQueueError(f"ticket {ticket.ticket_id} is not Ready")
@@ -178,9 +181,16 @@ def claim_ticket(
 
 
 def release_ticket(root: Path, ticket_ref: str, *, agent: str) -> dict[str, Any]:
+    agent = agent.strip()
+    if not agent:
+        raise VaultQueueError("agent must be non-empty")
     ticket = resolve_ticket(root, ticket_ref)
     claims_root = _claims_root(root, create=False)
-    own_claims = [path for path in claims_root.glob(f"{ticket.ticket_id}-{_safe_agent(agent)}-*.json") if _read_claim(path).get("agent") == agent]
+    own_claims = []
+    for path in claims_root.glob("*.json"):
+        claim = _read_claim(path)
+        if claim["ticket_id"] == ticket.ticket_id and claim["agent"] == agent:
+            own_claims.append(path)
     if not own_claims:
         raise VaultQueueError(f"ticket {ticket.ticket_id} has no advisory claim by {agent}")
     for claim_path in own_claims:
@@ -412,4 +422,10 @@ def _trusted_vault_root(root: Path) -> Path:
     expanded = Path(root).expanduser()
     if expanded.is_symlink():
         raise VaultQueueError(f"shared vault root must not be a symlink: {expanded}")
+    absolute = expanded.absolute()
+    for ancestor in absolute.parents:
+        if ancestor.is_symlink():
+            raise VaultQueueError(
+                f"shared vault path ancestor must not be a symlink: {ancestor}"
+            )
     return expanded.resolve(strict=False)

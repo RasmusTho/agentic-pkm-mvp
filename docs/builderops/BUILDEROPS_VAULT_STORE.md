@@ -111,13 +111,15 @@ a replacement file. The guard checks both lexical and resolved containment, so a
 located in the shared vault cannot redirect a store open to an outside target.
 
 Treat the shared tree as untrusted file input. Queue operations fail closed on a symlinked vault
-root, pre-existing symlinked queue/claim ancestors, and ticket, claim, or SQLite-candidate leaves rather than following
+root, any existing symlinked ancestor in the configured root path, pre-existing symlinked
+queue/claim ancestors, and ticket, claim, or SQLite-candidate leaves rather than following
 them outside the vault. This is a static-entry confinement guarantee, not protection from a
 malicious same-host process swapping filesystem entries between system calls. Queue tickets require
 unique YAML mapping keys plus valid `id` and normalized `status` fields; optional dispatcher
 `column` must agree with status. Advisory claims require filename-safe ticket IDs, non-empty agents,
-timezone-aware timestamps, and an increasing claim interval. Claim filenames remain
-non-authoritative, and BMI-01 does not impose a maximum TTL or future-clock-skew limit because these
+timezone-aware timestamps, and an increasing claim interval. Blank agent identities are rejected
+before write. Claim filenames remain non-authoritative: release matches the validated payload's
+ticket and agent, never the filename prefix. BMI-01 does not impose a maximum TTL or future-clock-skew limit because these
 files never grant exclusive ownership.
 
 Use the following operator checks before using a shared vault:

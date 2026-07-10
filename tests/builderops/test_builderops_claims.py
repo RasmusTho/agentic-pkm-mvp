@@ -444,6 +444,91 @@ def test_queue_operations_reject_symlinked_vault_root_without_external_access(
     assert not (outside / ".builderops").exists()
 
 
+def test_queue_operations_reject_symlinked_vault_ancestor_without_external_access(
+    tmp_path: Path,
+) -> None:
+    outside_parent = tmp_path / "outside-parent"
+    outside_vault = outside_parent / "shared"
+    _ticket(outside_vault)
+    marker = outside_vault / "external-marker"
+    marker.write_text("untouched", encoding="utf-8")
+    alias_parent = tmp_path / "alias-parent"
+    try:
+        alias_parent.symlink_to(outside_parent, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not supported on this platform")
+    aliased_vault = alias_parent / "shared"
+    env = {
+        "BUILDEROPS_VAULT_ROOT": str(aliased_vault),
+        "BUILDEROPS_DB_PATH": str(tmp_path / "local" / "builderops.sqlite3"),
+    }
+
+    validated = _run(["vault", "validate", str(aliased_vault), "--json"], env)
+    claimed = _run(
+        ["vault", "claim", str(aliased_vault), "BMI-01", "--agent", "codex", "--json"],
+        env,
+    )
+    released = _run(
+        ["vault", "release", str(aliased_vault), "BMI-01", "--agent", "codex", "--json"],
+        env,
+    )
+
+    assert validated.exit_code != 0
+    assert "ancestor must not be a symlink" in validated.output
+    assert claimed.exit_code != 0
+    assert released.exit_code != 0
+    assert marker.read_text(encoding="utf-8") == "untouched"
+    assert not (outside_vault / ".builderops").exists()
+
+
+def test_release_uses_payload_identity_and_rejects_blank_agents(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    vault = Path(env["BUILDEROPS_VAULT_ROOT"])
+    _ticket(vault)
+    claims = vault / ".builderops" / "claims"
+    claims.mkdir(parents=True)
+    mismatched = claims / "BMI-01-codex-mismatch.json"
+    mismatched.write_text(
+        json.dumps(
+            {
+                "ticket_id": "BMI-02",
+                "agent": "codex",
+                "claimed_at": "2026-07-10T08:00:00Z",
+                "expires_at": "2026-07-10T09:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    payload_match = claims / "non-authoritative-filename.json"
+    payload_match.write_text(
+        json.dumps(
+            {
+                "ticket_id": "BMI-01",
+                "agent": "codex",
+                "claimed_at": "2026-07-10T08:00:00Z",
+                "expires_at": "2026-07-10T09:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    released = _run(
+        ["vault", "release", str(vault), "BMI-01", "--agent", "codex", "--json"],
+        env,
+    )
+    blank = _run(
+        ["vault", "claim", str(vault), "BMI-01", "--agent", "   ", "--json"],
+        env,
+    )
+
+    assert released.exit_code == 0, released.output
+    assert mismatched.exists()
+    assert not payload_match.exists()
+    assert blank.exit_code != 0
+    assert "agent must be non-empty" in blank.output
+    assert list(claims.glob("*.json")) == [mismatched]
+
+
 @pytest.mark.parametrize(
     ("claimed_at", "expires_at"),
     [

@@ -54,13 +54,16 @@ one semantic queue contract.
 
 Advisory claims are JSON mappings with non-empty string `ticket_id`, `agent`, `claimed_at`, and
 `expires_at`. IDs are filename-safe, timestamps are timezone-aware, and `claimed_at < expires_at`.
-Claim filenames are non-authoritative; the validated payload identifies the signal. Clock skew and
+Blank agent identities are rejected before publication. Claim filenames are non-authoritative; the
+validated payload identifies the signal and release selects only payloads whose `ticket_id` and
+`agent` both match the request. Clock skew and
 maximum TTL are not rejected in BMI-01 because the files provide visibility, not exclusion.
 
 ## Failure Model
 
 The shared iCloud tree and imported queue/claim files are untrusted inputs. Init, validation,
-claim, release, and SQLite scanning reject a symlinked vault root and pre-existing symlinked `agent-delivery`, status,
+claim, release, and SQLite scanning reject a symlinked vault root, any existing symlinked ancestor
+in the configured root path, and pre-existing symlinked `agent-delivery`, status,
 `.builderops`, and `claims` directories and reject symlinked ticket, claim, or database-candidate
 leaves before reading, writing, unlinking, or recursing through them. These checks prevent a static
 vault entry from aliasing an outside path. They do not claim race-free protection against a
