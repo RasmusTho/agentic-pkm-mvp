@@ -291,12 +291,15 @@ class LinearFusionWeights(BaseModel):
 
 
 class RRFSignalWeights(BaseModel):
-    """Per-signal multipliers on ``1/(k + rank)`` for the reserved RRF fusion strategy.
+    """Per-signal multipliers on ``1/(k + rank)`` for the weighted RRF fusion strategy.
 
-    Reserved by ADR-0059 D3 step 4 (config shape only); RRF itself ships dark until step 5
-    (issue #3407) plus an eval-gated owner call. ``lexical >= dense`` by default so the trust
-    hierarchy that the linear weights encode today survives a future strategy swap — weighted
-    RRF, not vanilla RRF.
+    Implemented behind ``fusion="rrf"`` (ADR-0059 D3 step 5, issue #3407); still ships dark — the
+    default ``fusion`` stays ``"linear"`` until an eval-gated owner call flips it. ``lexical >=
+    dense`` by default so the trust hierarchy that the linear weights encode today survives the
+    strategy swap — weighted RRF, not vanilla RRF. The token-overlap signal (the linear formula's
+    third, smallest term) is intentionally not exposed here as a user-tunable weight — it is not
+    part of the trust-hierarchy knob this model guards; see
+    ``app/retrieval/hybrid.py::_RRF_OVERLAP_WEIGHT`` for its fixed multiplier.
     """
 
     lexical: float = Field(default=1.0, ge=0.0, description="Multiplier on the lexical (BM25) reciprocal-rank signal.")
@@ -309,21 +312,24 @@ class RetrievalTuning(BaseModel):
     Resolved once per process via ``app.retrieval.tuning.get_retrieval_tuning()`` — never a
     per-query ``os.getenv`` read. With no override set anywhere, every field below reproduces
     today's ranking exactly (byte-identical parity is a hard constraint of #3404). ``fusion="rrf"``
-    and ``rerank="conditional"`` are visible-but-inert: the field type accepts them (so the shape
-    doesn't churn when step 5 / issue #3407 lands), but resolving a config that selects either one
-    raises an explicit not-implemented error rather than silently falling back to the default
-    strategy.
+    and ``rerank="conditional"`` are implemented (ADR-0059 D3 step 5, issue #3407) but ship dark:
+    selecting either is a valid, resolvable config choice, never the shipped default. A default
+    flip is a separate owner call gated on eval evidence, recorded against ADR-0059.
     """
 
     fusion: Literal["linear", "rrf"] = Field(
         default="linear",
-        description="Fusion strategy. 'rrf' is reserved (ADR-0059 D3 step 5 / #3407) and not implemented yet.",
+        description=(
+            "Fusion strategy. 'linear' (default) matches today's ranking exactly. 'rrf' is "
+            "implemented (ADR-0059 D3 step 5 / #3407, weighted RRF) but ships dark: selecting it "
+            "is a deliberate operator/eval action, never the shipped default."
+        ),
     )
     linear_weights: LinearFusionWeights = Field(default_factory=LinearFusionWeights)
     rrf_k: int = Field(
         default=60,
         ge=1,
-        description="Reserved RRF k constant (30-40 favors top-1 precision per the ADR-0059 audit citations); dormant until fusion='rrf' ships.",
+        description="RRF k constant (30-40 favors top-1 precision per the ADR-0059 audit citations); used only when fusion='rrf'.",
     )
     rrf_signal_weights: RRFSignalWeights = Field(default_factory=RRFSignalWeights)
     retrieve_depth: int = Field(
@@ -340,9 +346,10 @@ class RetrievalTuning(BaseModel):
         default="off",
         description=(
             "Rerank gate. 'off' (default) matches today's behavior. 'always' reranks every result "
-            "through the existing optional rerank hook. 'conditional' is reserved (ADR-0059 D3 step "
-            "5 / #3407, a deterministic score-margin gate, not a keyword classifier) and not "
-            "implemented yet."
+            "through the existing optional rerank hook. 'conditional' is implemented (ADR-0059 D3 "
+            "step 5 / #3407): a deterministic score-margin gate, not a keyword classifier — it "
+            "reranks only when the top BM25 result does not already dominate. Ships dark; the "
+            "default stays 'off'."
         ),
     )
     rerank_top_k: int = Field(
@@ -355,8 +362,9 @@ class RetrievalTuning(BaseModel):
         ge=0.0,
         le=1.0,
         description=(
-            "Score-margin threshold for the reserved conditional rerank gate (e.g. skip rerank when "
-            "the top BM25 result dominates by this margin). Dormant until rerank='conditional' ships."
+            "Score-margin threshold for the conditional rerank gate: rerank is skipped when the "
+            "top-1 vs top-2 normalized-BM25 gap over the admitted candidate set is >= this value. "
+            "Used only when rerank='conditional'."
         ),
     )
 

@@ -10,8 +10,9 @@
   the default triplet.
 - test_rerank_env_compat: legacy `RERANK_ENABLE`/`RERANK_TOP_K`/`RERANK_PROVIDER` env vars still
   control rerank through the new `RetrievalTuning` surface.
-- test_unimplemented_strategies_fail_explicitly: selecting `fusion="rrf"` or `rerank="conditional"`
-  raises `RetrievalStrategyNotImplementedError` at resolution, every time, never a silent fallback.
+- test_reserved_strategies_resolve_and_stay_non_default: selecting `fusion="rrf"` or
+  `rerank="conditional"` resolves successfully (ADR-0059 D3 step 5, #3407) without changing the
+  process-wide default when unset.
 """
 
 from __future__ import annotations
@@ -25,7 +26,6 @@ from app.components.retrieval import embed_query
 from app.retrieval.hook_adapter import maybe_rerank
 from app.retrieval.hybrid import get_store, hybrid_search
 from app.retrieval.tuning import (
-    RetrievalStrategyNotImplementedError,
     RetrievalTuningError,
     get_retrieval_tuning,
     reset_retrieval_tuning_cache,
@@ -209,20 +209,24 @@ def test_rerank_env_compat(monkeypatch: pytest.MonkeyPatch) -> None:
     assert [o["id"] for o in out_default] == ["a", "b", "c"]
 
 
-def test_unimplemented_strategies_fail_explicitly(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reserved_strategies_resolve_and_stay_non_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR-0059 D3 step 5 (#3407): fusion='rrf' and rerank='conditional' are implemented and
+    resolve like any other valid config value — no more not-implemented raise. Selecting either is
+    an explicit override; leaving both unset still resolves to the 'linear'/'off' defaults."""
     monkeypatch.setenv("RETRIEVAL_FUSION", "rrf")
     reset_retrieval_tuning_cache()
-    with pytest.raises(RetrievalStrategyNotImplementedError):
-        get_retrieval_tuning()
-    # Never cached as a silent fallback to "linear": raises again on the next call too.
-    with pytest.raises(RetrievalStrategyNotImplementedError):
-        get_retrieval_tuning()
+    tuning = get_retrieval_tuning()
+    assert tuning.fusion == "rrf"
 
     monkeypatch.delenv("RETRIEVAL_FUSION", raising=False)
     reset_retrieval_tuning_cache()
     monkeypatch.setenv("RETRIEVAL_RERANK", "conditional")
     reset_retrieval_tuning_cache()
-    with pytest.raises(RetrievalStrategyNotImplementedError):
-        get_retrieval_tuning()
-    with pytest.raises(RetrievalStrategyNotImplementedError):
-        get_retrieval_tuning()
+    tuning = get_retrieval_tuning()
+    assert tuning.rerank == "conditional"
+
+    monkeypatch.delenv("RETRIEVAL_RERANK", raising=False)
+    reset_retrieval_tuning_cache()
+    tuning = get_retrieval_tuning()
+    assert tuning.fusion == "linear"
+    assert tuning.rerank == "off"

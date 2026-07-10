@@ -537,6 +537,62 @@ def _denials_for_excluded(
     )
 
 
+# Fixed multiplier for the token-overlap signal under weighted RRF fusion (ADR-0059 D3 step 5,
+# #3407). `RRFSignalWeights` (app/settings/models.py) intentionally exposes only `lexical`/`dense`
+# — overlap is the linear formula's smallest, non-primary term and is not part of the
+# lexical>=dense trust-hierarchy knob those two fields guard (docs/MIMER_CAPABILITY_HARDENING/
+# RETRIEVAL_EMBEDDINGS_AND_CONTEXT.md's precedent: "overlap folds into the lexical rank ... under
+# RRF"). 0.2 preserves the same 5:4:1 ratio the linear defaults encode (0.5:0.4:0.1) against the
+# RRF defaults' 2x scaling (lexical=1.0, dense=0.8): 0.1 * (1.0/0.5) = 0.2. Fixed rather than
+# read from config: overriding lexical/dense via env does not change this term.
+_RRF_OVERLAP_WEIGHT = 0.2
+
+
+def _rrf_ranks(raw_scores: np.ndarray) -> np.ndarray:
+    """1-based ranks over ``raw_scores``, descending (rank 1 = highest raw score).
+
+    Ties are broken deterministically by ascending original index — the same tie-break the linear
+    branch gets from ``np.argsort`` for well-separated floats, made explicit here because RRF is
+    rank-based by construction and a tie in a raw signal must still resolve to a stable rank.
+    """
+    n = len(raw_scores)
+    if n == 0:
+        return np.zeros(0, dtype=np.float32)
+    # Primary key -raw_scores (ascending -> highest score first); secondary key ascending index
+    # breaks ties. np.lexsort sorts by the LAST key first.
+    order = np.lexsort((np.arange(n), -np.asarray(raw_scores, dtype=np.float32)))
+    ranks = np.empty(n, dtype=np.float32)
+    ranks[order] = np.arange(1, n + 1, dtype=np.float32)
+    return ranks
+
+
+def _weighted_rrf_combined(
+    bm25_raw: np.ndarray,
+    emb_raw: np.ndarray,
+    overlap_bonus: np.ndarray,
+    tuning,
+) -> np.ndarray:
+    """Weighted RRF fusion (ADR-0059 D3 step 5, #3407), scoped to the ELIGIBLE partition only.
+
+    Per-signal rank lists (BM25, embedding, overlap) combined as
+    ``sum(w_s / (rrf_k + rank_s))``, then min-max normalized so the exposed score stays in
+    ``[0, 1]`` — the same contract the linear branch already holds. Default ``rrf_signal_weights``
+    keep ``lexical >= dense`` so ADR-0024's trust hierarchy (exact lexical match weighted above
+    fuzzy semantic match) survives the strategy swap.
+    """
+    weights = tuning.rrf_signal_weights
+    rrf_k = tuning.rrf_k
+    bm25_rank = _rrf_ranks(bm25_raw)
+    emb_rank = _rrf_ranks(emb_raw)
+    overlap_rank = _rrf_ranks(overlap_bonus)
+    rrf_scores = (
+        weights.lexical / (rrf_k + bm25_rank)
+        + weights.dense / (rrf_k + emb_rank)
+        + _RRF_OVERLAP_WEIGHT / (rrf_k + overlap_rank)
+    ).astype(np.float32)
+    return _normalize(rrf_scores)
+
+
 def _rank_eligible(
     query: str,
     docs: List[Document],
@@ -554,6 +610,11 @@ def _rank_eligible(
     candidate set nor shift the normalization of eligible rows (the correctness bug the prefilter
     closes). Each result dict carries ``evidence_role_in_context`` clamped ordinally ``<=`` its
     intrinsic role.
+
+    Fusion strategy (ADR-0059 D3, #3404/#3407) is selected by the process-resolved
+    ``RetrievalTuning.fusion``: ``"linear"`` (default) reproduces today's literal formula exactly;
+    ``"rrf"`` uses weighted Reciprocal Rank Fusion over the same eligible partition. Either way the
+    exposed contract is identical: same candidate set, same result-dict shape, ``score in [0, 1]``.
     """
     if not eligible_idx:
         return []
@@ -583,11 +644,15 @@ def _rank_eligible(
             doc_tokens = set(_tokenize(doc.text, doc.language))
             overlap_bonus[i] = len(token_set & doc_tokens) / max(1, len(token_set))
 
-    # ADR-0059 D3 (#3404): fusion weights come from the process-resolved RetrievalTuning config
-    # instead of a literal. get_retrieval_tuning() already raises RetrievalStrategyNotImplementedError
-    # for fusion="rrf" at resolution time, so only "linear" ever reaches here.
-    weights = get_retrieval_tuning().linear_weights
-    combined = weights.bm25 * bm25_norm + weights.embedding * emb_norm + weights.overlap * overlap_bonus
+    # ADR-0059 D3 (#3404/#3407): fusion strategy and weights come from the process-resolved
+    # RetrievalTuning config instead of a literal. "linear" reproduces today's formula exactly
+    # (parity-tested); "rrf" is the weighted-RRF alternative, dark by default.
+    tuning = get_retrieval_tuning()
+    if tuning.fusion == "rrf":
+        combined = _weighted_rrf_combined(bm25_raw, emb_raw, overlap_bonus, tuning)
+    else:
+        weights = tuning.linear_weights
+        combined = weights.bm25 * bm25_norm + weights.embedding * emb_norm + weights.overlap * overlap_bonus
     order = [int(i) for i in np.argsort(-combined)][:k]
 
     results: List[dict] = []

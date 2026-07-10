@@ -9,12 +9,18 @@ from app.retrieval.tuning import get_retrieval_tuning
 
 def apply_optional_rerank(query: str, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Apply the optional rerank hook, gated and sized by the process-resolved RetrievalTuning
-    surface (ADR-0059 D3, #3404). ``RERANK_ENABLE``/``RERANK_TOP_K`` keep working as overrides into
-    that surface (compat); ``RERANK_PROVIDER`` continues to select the reranker implementation
-    directly via :func:`app.components.rerankers.get_reranker` (untouched — provider selection is
-    not part of the D3 config shape)."""
+    surface (ADR-0059 D3, #3404/#3407). ``RERANK_ENABLE``/``RERANK_TOP_K`` keep working as
+    overrides into that surface (compat); ``RERANK_PROVIDER`` continues to select the reranker
+    implementation directly via :func:`app.components.rerankers.get_reranker` (untouched —
+    provider selection is not part of the D3 config shape).
+
+    This function always applies the hook once called; the WHETHER-to-call decision (including the
+    ``"conditional"`` score-margin gate) lives in ``app/retrieval/hook_adapter.py::maybe_rerank``,
+    the sole production caller. The only local guard here is ``rerank="off"`` — kept so direct
+    callers (tests, other consumers) get the same inert-by-default behavior without duplicating the
+    gate logic."""
     tuning = get_retrieval_tuning()
-    if tuning.rerank != "always":
+    if tuning.rerank == "off":
         return items
     top_k = tuning.rerank_top_k
     reranker = get_reranker()
