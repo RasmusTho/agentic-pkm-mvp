@@ -101,6 +101,37 @@ def test_reexport_preserves_human_authored_notes(tmp_env, store, tmp_path: Path)
     assert "Don't forget to ping the owner before merging." in content
 
 
+def test_notes_containing_a_markdown_heading_survive_reexport(
+    tmp_env, store, tmp_path: Path
+) -> None:
+    """A human note that itself contains a "## "-prefixed line (a pasted
+    heading, a quoted snippet) must not be truncated at that line — only the
+    generator's own "## Receipts" heading is a real section boundary."""
+    tasks = seed_tasks(store)
+    ready = next(t for t in tasks if t.status == "ready")
+    board = tmp_path / "board"
+
+    export_signboard(store, board)
+    card = next(board.glob(f"**/{ready.task_id}--*.md"))
+    original = card.read_text(encoding="utf-8")
+    hand_written = original.replace(
+        "## Notes\n\n## Receipts",
+        "## Notes\n\n"
+        "Reminder: format headings like this:\n"
+        "## Something\n"
+        "Don't drop this line please.\n\n"
+        "## Receipts",
+    )
+    card.write_text(hand_written, encoding="utf-8")
+
+    export_signboard(store, board)
+
+    content = next(board.glob(f"**/{ready.task_id}--*.md")).read_text(encoding="utf-8")
+    assert "Reminder: format headings like this:" in content
+    assert "## Something" in content
+    assert "Don't drop this line please." in content
+
+
 def test_reexport_with_empty_notes_stays_empty(tmp_env, store, tmp_path: Path) -> None:
     tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")

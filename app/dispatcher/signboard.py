@@ -23,7 +23,7 @@ from app.vault.manager import get_vault_manager
 DEFAULT_SIGNBOARD_SUBPATH = Path("BuilderOpsVault") / "agent-delivery"
 
 _NOTES_HEADING = "## Notes"
-_HEADING_PREFIX = "## "
+_RECEIPTS_HEADING = "## Receipts"
 
 
 class NoActiveVaultError(RuntimeError):
@@ -107,18 +107,18 @@ def export_signboard(store: SqliteStore, board_root: Path) -> dict[str, Any]:
         # card, if any, is the freshest source; stale cards elsewhere are a
         # fallback so a rename/status-move doesn't drop notes.
         preserved_notes: str | None = None
-        if target.exists() and _is_generated_card(target):
-            preserved_notes = _extract_notes_section(target.read_text(encoding="utf-8"))
+        target_text = _read_card_text(target)
+        if target_text is not None and _is_generated_card_text(target_text):
+            preserved_notes = _extract_notes_section(target_text)
 
         for column in sorted(set(STATUS_COLUMNS.values())):
             for candidate in (root / column).glob(f"{task.task_id}--*.md"):
                 if candidate == target:
                     continue
-                if _is_generated_card(candidate):
+                candidate_text = _read_card_text(candidate)
+                if candidate_text is not None and _is_generated_card_text(candidate_text):
                     if preserved_notes is None:
-                        preserved_notes = _extract_notes_section(
-                            candidate.read_text(encoding="utf-8")
-                        )
+                        preserved_notes = _extract_notes_section(candidate_text)
                     candidate.unlink()
 
         for column in sorted(set(STATUS_COLUMNS.values())):
@@ -143,23 +143,35 @@ def _task_filename(task: TaskRecord) -> str:
     return f"{task.task_id}--{title}.md"
 
 
-def _is_generated_card(path: Path) -> bool:
+def _read_card_text(path: Path) -> str | None:
+    """Read a card's text, tolerating a missing/unreadable file (returns None)."""
     try:
-        return "generated_by: dispatcher.signboard" in path.read_text(
-            encoding="utf-8",
-            errors="ignore",
-        )
+        return path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
-        return False
+        return None
+
+
+def _is_generated_card_text(text: str) -> bool:
+    return "generated_by: dispatcher.signboard" in text
+
+
+def _is_generated_card(path: Path) -> bool:
+    text = _read_card_text(path)
+    return text is not None and _is_generated_card_text(text)
 
 
 def _extract_notes_section(text: str) -> str | None:
     """Return the human-authored body of a card's "## Notes" section, if any.
 
     The section runs from just below the "## Notes" heading up to (but not
-    including) the next "## " heading (the existing "## Receipts" heading is
-    the boundary). Returns ``None`` when there is no "## Notes" heading or
-    the section is blank, so callers can fall back to the default stub.
+    including) the next "## Receipts" heading — the *only* other heading
+    ``_render_task`` ever generates, so it is the boundary marker rather than
+    "any line starting with '## '". A generic heading-prefix boundary would
+    silently truncate human notes that themselves contain a pasted Markdown
+    heading (e.g. a quoted "## Something" line), which defeats the whole
+    point of preserving human-authored content verbatim. Returns ``None``
+    when there is no "## Notes" heading or the section is blank, so callers
+    can fall back to the default stub.
     """
 
     lines = text.splitlines()
@@ -170,7 +182,7 @@ def _extract_notes_section(text: str) -> str | None:
 
     end = len(lines)
     for i in range(start + 1, len(lines)):
-        if lines[i].startswith(_HEADING_PREFIX):
+        if lines[i].strip() == _RECEIPTS_HEADING:
             end = i
             break
 
