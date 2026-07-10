@@ -501,6 +501,11 @@ def test_invalid_returned_item_degrades_whole_section(
         ("summary", 1),
         ("commitment_kind", 1),
         ("state", 1),
+        ("summary", "   "),
+        ("summary", "Summary\x00bad"),
+        ("target_ref", " Projects/A.md "),
+        ("target_ref", "Projects/A.md\nProjects/B.md"),
+        ("commitment_id", " bad "),
     ],
 )
 def test_invalid_commitment_scalar_degrades_whole_section(

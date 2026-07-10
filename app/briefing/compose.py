@@ -280,22 +280,29 @@ def _read_commitments(
     ):
         raise _InvalidSourceRecord
     for record in records:
+        normalized_summary = (
+            _one_line(record.summary) if isinstance(record.summary, str) else None
+        )
         if (
             not isinstance(record.commitment_id, str)
-            or not record.commitment_id.strip()
+            or not _is_canonical_reference_text(record.commitment_id)
             or not isinstance(record.commitment_kind, str)
             or record.commitment_kind not in FIRST_WAVE_COMMITMENT_KINDS
             or not isinstance(record.state, str)
             or record.state not in COMMITMENT_STATE_VALUES
             or (
                 record.summary is not None
-                and not isinstance(record.summary, str)
+                and (
+                    normalized_summary is None
+                    or not normalized_summary
+                    or not normalized_summary.isprintable()
+                )
             )
             or (
                 record.target_ref is not None
                 and (
                     not isinstance(record.target_ref, str)
-                    or not record.target_ref.strip()
+                    or not _is_canonical_reference_text(record.target_ref)
                 )
             )
         ):
@@ -731,6 +738,10 @@ def _format_utc(value: datetime) -> str:
 
 def _one_line(value: str) -> str:
     return " ".join(value.split())
+
+
+def _is_canonical_reference_text(value: str) -> bool:
+    return bool(value) and value == _one_line(value) and value.isprintable()
 
 
 __all__ = [
