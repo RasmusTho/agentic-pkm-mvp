@@ -1,5 +1,6 @@
-State: Incremental implementation in progress. BMI-01 and BMI-02 are implemented; provider turns,
-desktop launchers, promotion, and end-to-end acceptance remain pending.
+State: Incremental implementation in progress. BMI-01 through BMI-03 are implemented; desktop
+launchers, promotion, and end-to-end acceptance remain pending. A real Fable acceptance run also
+requires an explicitly configured local adapter, which is not present on the current delivery host.
 Doc role: Specification directory
 Authority: Defines the BuilderOps pre-ticket model-inquiry capability and its task decomposition. BuilderOps Vault authority remains owned by ADR-0010.
 Owner: BuilderOps governance
@@ -43,6 +44,10 @@ its advisory claim files never guarantee exclusive ownership.
 BMI-02 stores its durable record graph under
 `$BUILDEROPS_VAULT_ROOT/model-inquiries/<inquiry_id>/`. The CLI and HTTP routes share one service;
 `resume` only returns a restart plan until BMI-03 supplies bounded provider execution.
+
+BMI-03 adds `builderops inquiry run`. Its `--dry-run` mode is deterministic and read-only;
+provider-enabled mode uses explicit per-role adapters, strict response validation, durable terminal
+receipts, and no provider fallback.
 
 ## Execution Order
 
