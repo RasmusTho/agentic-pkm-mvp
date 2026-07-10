@@ -58,6 +58,7 @@ def test_builderops_bootstrap_degrades_without_github_access(tmp_path: Path) -> 
             "DISPATCHER_STATE_DIR": str(tmp_path / "dispatcher"),
             "DISPATCHER_DB_PATH": str(tmp_path / "dispatcher" / "dispatcher.sqlite3"),
             "DISPATCHER_EVENTS_PATH": str(tmp_path / "dispatcher" / "events.jsonl"),
+            "SIGNBOARD_ROOT": str(tmp_path / "signboard"),
             "BUILDEROPS_DB_PATH": str(tmp_path / "builderops" / "builderops.sqlite3"),
         }
     )
@@ -87,6 +88,9 @@ def test_builderops_bootstrap_degrades_without_github_access(tmp_path: Path) -> 
     assert payload["status"] == "degraded"
     assert "gh_not_found" in payload["reasons"]
     assert payload["dispatcher"]["db_exists"] is True
+    assert payload["signboard"]["status"] == "ok"
+    assert payload["signboard"]["count"] == 0
+    assert (tmp_path / "signboard" / "Ready").is_dir()
     assert payload["builderops"]["wrapper"] == "scripts/builderops_cli.sh"
     assert payload["builderops"]["status"] in {"ok", "degraded"}
     if payload["builderops"]["status"] == "degraded":

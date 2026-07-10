@@ -54,6 +54,9 @@ ENV
   if [ -n "${TTS_ENABLED:-}" ]; then
     printf "TTS_ENABLED=%s\n" "$TTS_ENABLED" >> "$runtime_env_path"
   fi
+  if [ -n "${SIGNBOARD_ROOT:-}" ]; then
+    printf "SIGNBOARD_ROOT=%s\n" "$SIGNBOARD_ROOT" >> "$runtime_env_path"
+  fi
   echo "Exported no-vault idle runtime env -> $runtime_env_path"
   exit 0
 fi
@@ -118,6 +121,10 @@ LOCAL_GID=$local_gid
 DATABASE_URL=$DATABASE_URL
 DB_DSN=$DB_DSN
 ENV
+
+if [ -n "${SIGNBOARD_ROOT:-}" ]; then
+  printf "SIGNBOARD_ROOT=%s\n" "$SIGNBOARD_ROOT" >> "$runtime_env_path"
+fi
 
 python3 - <<'PY' >> "$runtime_env_path"
 from __future__ import annotations

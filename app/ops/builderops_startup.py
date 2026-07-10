@@ -233,6 +233,45 @@ def _builderops_readiness(*, root: Path, env: dict[str, str], result: dict[str, 
     return builderops
 
 
+def _signboard_export(
+    *,
+    python_bin: str,
+    root: Path,
+    env: dict[str, str],
+    dispatcher: dict[str, Any],
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Refresh the non-authoritative board after dispatcher startup.
+
+    ``SIGNBOARD_ROOT`` is normalized by the full-stack launcher and forwarded
+    into the API container, so the exporter and the visual route share one
+    host-visible projection path.
+    """
+    board_root = env.get("SIGNBOARD_ROOT")
+    if not board_root:
+        _append_reason(result, "signboard_root_missing")
+        return {"status": "degraded", "reason": "signboard_root_missing"}
+    if not dispatcher.get("db_exists"):
+        _append_reason(result, "signboard_dispatcher_unavailable")
+        return {"status": "degraded", "reason": "signboard_dispatcher_unavailable", "root": board_root}
+
+    exported = _run(
+        [python_bin, "-m", "app.dispatcher", "export-signboard", board_root, "--json"],
+        cwd=root,
+        env=env,
+    )
+    payload = _json_or_empty(exported.stdout)
+    if exported.returncode != 0 or payload.get("ok") is not True:
+        _append_reason(result, "signboard_export_failed")
+        return {
+            "status": "degraded",
+            "reason": "signboard_export_failed",
+            "root": board_root,
+            "detail": payload.get("error") or _snippet(exported.stderr or exported.stdout),
+        }
+    return {"status": "ok", "root": payload.get("root", board_root), "count": payload.get("count", 0)}
+
+
 def _builderops_db_path(root: Path, env: dict[str, str]) -> str:
     if env.get("BUILDEROPS_DB_PATH"):
         return env["BUILDEROPS_DB_PATH"]
@@ -290,6 +329,13 @@ def run_bootstrap(args: argparse.Namespace) -> dict[str, Any]:
         gh_bin=args.gh_bin,
         rate_limit_min=args.rate_limit_min,
         skip_github_sync=args.skip_github_sync,
+        result=result,
+    )
+    result["signboard"] = _signboard_export(
+        python_bin=sys.executable,
+        root=root,
+        env=env,
+        dispatcher=result["dispatcher"],
         result=result,
     )
     result["builderops"] = _builderops_readiness(root=root, env=env, result=result)
