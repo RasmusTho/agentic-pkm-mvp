@@ -2,7 +2,7 @@
 name: Package and Harden Mimer MCP Transport
 description: Package the owner-accepted MCP wire transport with explicit trust enforcement, configuration, lifecycle, and health
 task_id: MIMER-MCP-03
-source_anchor: "docs/contracts/MIMER_CLIENT_CONTRACT.md :: MCP transport and trust posture"
+source_anchor: "docs/MIMER_MCP_CLIENT_ADAPTER/README.md :: Cross-Task Invariants / Interaction Safety"
 parent_capability: Mimer MCP Client Adapter
 prerequisites: [MIMER-MCP-01]
 depends_on: [RATIFY_MCP_CLIENT_ADAPTER.md]

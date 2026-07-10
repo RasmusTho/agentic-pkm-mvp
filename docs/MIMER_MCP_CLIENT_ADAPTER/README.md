@@ -98,7 +98,7 @@ In shorthand: `MIMER-MCP-01 -> (MIMER-MCP-02 || MIMER-MCP-03) -> MIMER-MCP-04`.
   Verify: `tests/mcp/test_mimer_server_smoke.py::test_composed_mimer_mcp_journey`
 - [ ] Acceptance evidence and owner-doc writeback are reconciled without claiming unverified client
       compatibility.
-  Verify: runtime acceptance receipt on the parent feature issue plus doc writeback at `docs/STATUS.md :: MCP`
+  Verify: runtime acceptance receipt on the parent feature issue plus doc writeback at `docs/STATUS.md :: Current Snapshot`
 
 ## Verification Path
 

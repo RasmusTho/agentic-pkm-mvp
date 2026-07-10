@@ -2,7 +2,7 @@
 name: Expose Governed Mimer Tools Over MCP
 description: Implement the exact MCP tool surface by delegating to existing Mimer client operations and preserving governed receipts
 task_id: MIMER-MCP-02
-source_anchor: "docs/contracts/MIMER_CLIENT_CONTRACT.md :: MCP adapter surface"
+source_anchor: "docs/MIMER_MCP_CLIENT_ADAPTER/README.md :: Capability-Level Acceptance Criteria"
 parent_capability: Mimer MCP Client Adapter
 prerequisites: [MIMER-MCP-01]
 depends_on: [RATIFY_MCP_CLIENT_ADAPTER.md]

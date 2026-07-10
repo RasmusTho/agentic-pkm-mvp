@@ -53,9 +53,11 @@ distributed transaction.
 ## Acceptance Criteria
 
 - [ ] Contract assigns Karakeep fetch, identity, revision, provenance, attribution/entity mentions,
-  and publication exclusively to Heimdal, and maps every saved-item field into the mandatory
-  identity/time/actor/entity/content/confidence/provenance/sensitivity/consent families of
-  `heimdal.observation.published.v1`. Verify: `tests/heimdal/test_karakeep_handoff_contract.py::test_karakeep_mapping_conforms_to_canonical_published_v1_schema`.
+  and publication exclusively to Heimdal. It maps every saved item to the schema-required
+  `observation_id`, `episode_id`, `observed_at_start`, `attributions`, `confidence`, `provenance`,
+  `sensitivity`, and `consent` fields, while defining `entity_mentions`, `content`, and all other
+  optional/nullable fields only when applicable—never by falsely making them required. Verify:
+  `tests/heimdal/test_karakeep_handoff_contract.py::test_karakeep_mapping_conforms_to_canonical_published_v1_schema`.
 - [ ] Handoff reuses the append-only Heimdal observation log and sanctioned
   `app.heimdal.publish.publish_full_observation` / `read_observations_for_consumer` /
   `advance_cursor_for_consumer` APIs; adapter checkpoint and existing `mimer.candidate_projector`

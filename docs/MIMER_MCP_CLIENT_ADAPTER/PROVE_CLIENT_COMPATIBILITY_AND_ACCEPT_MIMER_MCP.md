@@ -56,7 +56,7 @@ one synthetic call.
   Verify: runtime acceptance receipt on the parent feature issue
 - [ ] Every child has a delivery receipt and owner-doc resolution; current-state docs and the local
       spec state are reconciled to exactly the accepted support level.
-  Verify: doc writeback at `docs/STATUS.md :: MCP`, `docs/ARCHITECTURE.md :: MCP/tools`, `docs/ROADMAP.md :: External-connectivity (MCP) sequencing`, `docs/MIMER_MCP_CLIENT_ADAPTER/README.md :: Relationship to GitHub Issues`, and `docs/MIMER_MCP_CLIENT_ADAPTER/PARENT_FEATURE_ISSUE.md :: State`
+  Verify: doc writeback at `docs/STATUS.md :: Current Snapshot`, `docs/ARCHITECTURE.md :: MCP/tools`, `docs/ROADMAP.md :: External-connectivity (MCP) sequencing`, `docs/MIMER_MCP_CLIENT_ADAPTER/README.md :: Relationship to GitHub Issues`, and `docs/MIMER_MCP_CLIENT_ADAPTER/PARENT_FEATURE_ISSUE.md :: State`
 
 ## How to Verify (Pre-Merge)
 
