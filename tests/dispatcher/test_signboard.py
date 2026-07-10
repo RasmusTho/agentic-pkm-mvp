@@ -132,6 +132,36 @@ def test_notes_containing_a_markdown_heading_survive_reexport(
     assert "Don't drop this line please." in content
 
 
+def test_notes_quoting_receipts_heading_survive_reexport(
+    tmp_env, store, tmp_path: Path
+) -> None:
+    """A human quoting the literal text "## Receipts" earlier in their own
+    notes must not be mistaken for the generator's real trailing boundary —
+    only the *last* "## Receipts" line (always the generator's own) is the
+    true boundary."""
+    tasks = seed_tasks(store)
+    ready = next(t for t in tasks if t.status == "ready")
+    board = tmp_path / "board"
+
+    export_signboard(store, board)
+    card = next(board.glob(f"**/{ready.task_id}--*.md"))
+    original = card.read_text(encoding="utf-8")
+    hand_written = original.replace(
+        "## Notes\n\n## Receipts",
+        "## Notes\n\n"
+        "Reminder: cards end with a ## Receipts heading, see below.\n"
+        "Don't lose this last line either.\n\n"
+        "## Receipts",
+    )
+    card.write_text(hand_written, encoding="utf-8")
+
+    export_signboard(store, board)
+
+    content = next(board.glob(f"**/{ready.task_id}--*.md")).read_text(encoding="utf-8")
+    assert "Reminder: cards end with a ## Receipts heading, see below." in content
+    assert "Don't lose this last line either." in content
+
+
 def test_reexport_with_empty_notes_stays_empty(tmp_env, store, tmp_path: Path) -> None:
     tasks = seed_tasks(store)
     ready = next(t for t in tasks if t.status == "ready")

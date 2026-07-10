@@ -164,14 +164,14 @@ def _extract_notes_section(text: str) -> str | None:
     """Return the human-authored body of a card's "## Notes" section, if any.
 
     The section runs from just below the "## Notes" heading up to (but not
-    including) the next "## Receipts" heading — the *only* other heading
-    ``_render_task`` ever generates, so it is the boundary marker rather than
-    "any line starting with '## '". A generic heading-prefix boundary would
-    silently truncate human notes that themselves contain a pasted Markdown
-    heading (e.g. a quoted "## Something" line), which defeats the whole
-    point of preserving human-authored content verbatim. Returns ``None``
-    when there is no "## Notes" heading or the section is blank, so callers
-    can fall back to the default stub.
+    including) the *last* "## Receipts" heading in the file — the only other
+    heading ``_render_task`` ever generates, and always the final line of
+    generated structure (nothing follows it but a trailing blank line). Using
+    the last occurrence rather than the first means a human quoting the
+    literal text "## Receipts" earlier in their own notes does not get
+    mistaken for the real boundary; only the generator's actual trailing
+    heading does. Returns ``None`` when there is no "## Notes" heading or the
+    section is blank, so callers can fall back to the default stub.
     """
 
     lines = text.splitlines()
@@ -184,7 +184,6 @@ def _extract_notes_section(text: str) -> str | None:
     for i in range(start + 1, len(lines)):
         if lines[i].strip() == _RECEIPTS_HEADING:
             end = i
-            break
 
     section_lines = lines[start + 1 : end]
     while section_lines and section_lines[0] == "":
