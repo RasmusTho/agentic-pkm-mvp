@@ -732,6 +732,67 @@ def test_gh_cli_get_rate_limit_reports_graphql_pool_when_graphql_exhausted() -> 
     assert result["remaining"] == 0, "GraphQL exhaustion must surface as the budget signal"
 
 
+def test_pull_kill_switch_fires_when_graphql_exhausted_and_core_healthy(
+    tmp_store: SqliteStore,
+) -> None:
+    """#3313 regression: end-to-end through the real ``GhCliIssueSource`` and
+    ``PullSyncAdapter.pull()``, exercising the documented 2026-06-29
+    exhaustion mode (GraphQL pool at zero, REST core healthy). Even though
+    ``list_open_issues`` and ``list_issues`` are both REST as of #3313,
+    ``get_rate_limit`` must still surface the GraphQL exhaustion so the
+    dispatcher kill switch skips the non-essential open-issues scan — proving
+    the REST transport conversion did not narrow the shared kill-switch
+    signal.
+    """
+    import json as _json
+
+    source = GhCliIssueSource()
+    rate_limit_payload = _json.dumps(
+        {
+            "core": {"limit": 5000, "remaining": 4900, "reset": 1782894337, "used": 100},
+            "graphql": {"limit": 5000, "remaining": 0, "reset": 1782894337, "used": 5000},
+        }
+    )
+
+    calls: list[list[str]] = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(list(args))
+        if "rate_limit" in args:
+            return MagicMock(returncode=0, stdout=rate_limit_payload, stderr="")
+        if "graphql" in args:
+            raise AssertionError(
+                "no gh api graphql call should be issued by GhCliIssueSource after #3313"
+            )
+        # Any REST issues-list call (ready-issues or open-issues) — return an
+        # empty page so pagination stops immediately if it is reached.
+        return MagicMock(returncode=0, stdout="[]", stderr="")
+
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+
+    with patch("subprocess.run", side_effect=fake_run):
+        adapter.pull("RasmusTho/agentic-pkm-mvp")
+
+    # The kill switch must have skipped the non-essential open-issues scan:
+    # only the rate_limit probe and the essential ready-issues read happen.
+    # The ready-issues (essential) call carries `labels=agent:ready`; the
+    # open-issues (non-essential) call does not.
+    assert any("rate_limit" in call for call in calls)
+    ready_issue_calls = [call for call in calls if "labels=agent:ready" in call]
+    open_issue_calls = [
+        call
+        for call in calls
+        if any("repos/RasmusTho/agentic-pkm-mvp/issues" in arg for arg in call)
+        and "labels=agent:ready" not in call
+    ]
+    assert len(ready_issue_calls) == 1, calls
+    assert open_issue_calls == [], "kill switch must skip the non-essential open-issues scan"
+
+    sync_meta = get_sync_meta(tmp_store, PROVIDER_IDENTITY)
+    assert sync_meta is not None
+    assert sync_meta.get("kill_switch_active") is True
+
+
 def test_gh_cli_get_rate_limit_returns_none_on_gh_failure() -> None:
     """Non-zero gh exit (auth failure, invalid flags, network error) yields None, not a crash."""
     source = GhCliIssueSource()
@@ -805,52 +866,47 @@ def test_list_ready_issues_paginates_with_bodies() -> None:
 
 
 def test_list_open_issues_paginates() -> None:
-    """AC4 (#2746 / GHAPI-M3): list_open_issues fetches in bounded cursor pages
-    instead of one ``gh issue list --limit 1000`` burst, with unchanged result
-    semantics (same dict shape: number/title/state/labels/createdAt/updatedAt).
+    """AC4 (#2746 / GHAPI-M3), updated by #3313: list_open_issues fetches in
+    bounded REST pages instead of one ``gh issue list --limit 1000`` burst
+    (and, since #3313, instead of a paginated GraphQL query), with unchanged
+    result semantics (same dict shape:
+    number/title/state/labels/createdAt/updatedAt) and pull requests filtered
+    out of the shared issues endpoint.
     """
     import json as _json
 
     source = GhCliIssueSource()
     pages = [
-        {
-            "data": {
-                "repository": {
-                    "issues": {
-                        "pageInfo": {"hasNextPage": True, "endCursor": "CURSOR-1"},
-                        "nodes": [
-                            {
-                                "number": 101,
-                                "title": "First open issue",
-                                "state": "OPEN",
-                                "labels": {"nodes": [{"name": "agent:ready"}, {"name": "prio:high"}]},
-                                "createdAt": "2026-04-20T10:00:00Z",
-                                "updatedAt": "2026-04-21T12:00:00Z",
-                            }
-                        ],
-                    }
-                }
+        [
+            {
+                "number": 101,
+                "title": "First open issue",
+                "state": "open",
+                "labels": [{"name": "agent:ready"}, {"name": "prio:high"}],
+                "created_at": "2026-04-20T10:00:00Z",
+                "updated_at": "2026-04-21T12:00:00Z",
             }
-        },
-        {
-            "data": {
-                "repository": {
-                    "issues": {
-                        "pageInfo": {"hasNextPage": False, "endCursor": None},
-                        "nodes": [
-                            {
-                                "number": 102,
-                                "title": "Second open issue",
-                                "state": "OPEN",
-                                "labels": {"nodes": []},
-                                "createdAt": "2026-04-19T08:00:00Z",
-                                "updatedAt": "2026-04-19T09:00:00Z",
-                            }
-                        ],
-                    }
-                }
-            }
-        },
+        ]
+        * 100,
+        [
+            {
+                "number": 102,
+                "title": "Second open issue",
+                "state": "open",
+                "labels": [],
+                "created_at": "2026-04-19T08:00:00Z",
+                "updated_at": "2026-04-19T09:00:00Z",
+            },
+            {
+                "number": 103,
+                "title": "PR returned by issues endpoint",
+                "state": "open",
+                "labels": [],
+                "created_at": "2026-04-19T08:00:00Z",
+                "updated_at": "2026-04-19T09:00:00Z",
+                "pull_request": {"url": "https://api.github.com/repos/o/r/pulls/103"},
+            },
+        ],
     ]
     calls: list[list[str]] = []
 
@@ -861,18 +917,20 @@ def test_list_open_issues_paginates() -> None:
     with patch("subprocess.run", side_effect=fake_run):
         issues = source.list_open_issues("RasmusTho/agentic-pkm-mvp")
 
-    # Unchanged result semantics.
-    assert [issue["number"] for issue in issues] == [101, 102]
-    assert issues[0]["state"] == "OPEN"
+    # Unchanged result semantics; the PR node is filtered out.
+    assert [issue["number"] for issue in issues] == [101] * 100 + [102]
+    assert issues[0]["state"] == "open"
     assert issues[0]["labels"] == [{"name": "agent:ready"}, {"name": "prio:high"}]
-    assert issues[1]["labels"] == []
+    assert issues[-1]["labels"] == []
     assert issues[0]["createdAt"] == "2026-04-20T10:00:00Z"
     assert issues[0]["updatedAt"] == "2026-04-21T12:00:00Z"
 
-    # Paginated: two bounded page fetches, cursor threaded to the second page.
+    # Paginated: two bounded page fetches via REST, not a single GraphQL burst.
     assert len(calls) == 2
-    assert not any("after=CURSOR-1" in arg for arg in calls[0])
-    assert any("after=CURSOR-1" in arg for arg in calls[1])
+    assert any("page=1" in arg for arg in calls[0])
+    assert any("page=2" in arg for arg in calls[1])
+    assert any("repos/RasmusTho/agentic-pkm-mvp/issues" in arg for arg in calls[0])
+    assert not any(arg == "graphql" for call in calls for arg in call)
 
     # No --limit 1000 burst remains anywhere in the issued commands.
     for command in calls:
@@ -880,45 +938,151 @@ def test_list_open_issues_paginates() -> None:
 
 
 def test_list_open_issues_refuses_truncated_snapshot_at_page_cap() -> None:
-    """#2746 review finding: when the page cap is hit with ``hasNextPage``
-    still true, a silently truncated snapshot would let the stale reconcile
-    treat the missing (still-open) issues as closed and mark their live tasks
+    """#2746 review finding: when the page cap is hit with every REST page
+    still full *and* a confirmation page beyond the cap also has data, a
+    silently truncated snapshot would let the stale reconcile treat the
+    missing (still-open) issues as closed and mark their live tasks
     completed. The fetch must fail loud instead, routing ``pull()`` into its
-    existing snapshot-unavailable path.
+    existing snapshot-unavailable path. Updated by #3313 for the REST
+    transport: a full page alone no longer proves more results remain (no
+    GraphQL cursor), so one bounded confirmation page beyond the cap is
+    fetched before failing loud — this test keeps that confirmation page
+    non-empty so truncation is genuinely proven.
     """
     import json as _json
 
-    from app.dispatcher.sync_github import OPEN_ISSUES_MAX_PAGES
+    from app.dispatcher.sync_github import OPEN_ISSUES_MAX_PAGES, OPEN_ISSUES_PAGE_SIZE
 
     source = GhCliIssueSource()
-    page = {
-        "data": {
-            "repository": {
-                "issues": {
-                    "pageInfo": {"hasNextPage": True, "endCursor": "CURSOR-N"},
-                    "nodes": [
-                        {
-                            "number": 1,
-                            "title": "endless",
-                            "state": "OPEN",
-                            "labels": {"nodes": []},
-                            "createdAt": "2026-04-20T10:00:00Z",
-                            "updatedAt": "2026-04-21T12:00:00Z",
-                        }
-                    ],
-                }
-            }
+    full_page = [
+        {
+            "number": 1,
+            "title": "endless",
+            "state": "open",
+            "labels": [],
+            "created_at": "2026-04-20T10:00:00Z",
+            "updated_at": "2026-04-21T12:00:00Z",
         }
-    }
+    ] * OPEN_ISSUES_PAGE_SIZE
 
     calls: list[list[str]] = []
 
     def fake_run(args, **_kwargs):
         calls.append(list(args))
-        return MagicMock(returncode=0, stdout=_json.dumps(page), stderr="")
+        # Every page, including the confirmation page beyond the cap, is
+        # full — genuine truncation.
+        return MagicMock(returncode=0, stdout=_json.dumps(full_page), stderr="")
 
     with patch("subprocess.run", side_effect=fake_run):
         with pytest.raises(RuntimeError, match="truncated snapshot"):
             source.list_open_issues("RasmusTho/agentic-pkm-mvp")
 
-    assert len(calls) == OPEN_ISSUES_MAX_PAGES
+    # OPEN_ISSUES_MAX_PAGES regular fetches plus one bounded confirmation fetch.
+    assert len(calls) == OPEN_ISSUES_MAX_PAGES + 1
+
+
+def test_list_open_issues_exact_page_multiple_is_not_truncated() -> None:
+    """#3313 review finding: a repo with exactly
+    OPEN_ISSUES_PAGE_SIZE * OPEN_ISSUES_MAX_PAGES open issues ends on a full
+    page with nothing left. Unlike GraphQL's ``hasNextPage`` cursor, a full
+    REST page alone cannot distinguish that from real truncation — the
+    bounded confirmation page beyond the cap must come back empty and the
+    fetch must succeed without raising.
+    """
+    import json as _json
+
+    from app.dispatcher.sync_github import OPEN_ISSUES_MAX_PAGES, OPEN_ISSUES_PAGE_SIZE
+
+    source = GhCliIssueSource()
+    full_page = [
+        {
+            "number": 1,
+            "title": "exact boundary",
+            "state": "open",
+            "labels": [],
+            "created_at": "2026-04-20T10:00:00Z",
+            "updated_at": "2026-04-21T12:00:00Z",
+        }
+    ] * OPEN_ISSUES_PAGE_SIZE
+
+    calls: list[list[str]] = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(list(args))
+        # The confirmation page (call OPEN_ISSUES_MAX_PAGES + 1) is empty:
+        # the previous full page really was the last one.
+        if len(calls) == OPEN_ISSUES_MAX_PAGES + 1:
+            return MagicMock(returncode=0, stdout="[]", stderr="")
+        return MagicMock(returncode=0, stdout=_json.dumps(full_page), stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        issues = source.list_open_issues("RasmusTho/agentic-pkm-mvp")
+
+    assert len(issues) == OPEN_ISSUES_PAGE_SIZE * OPEN_ISSUES_MAX_PAGES
+    assert len(calls) == OPEN_ISSUES_MAX_PAGES + 1
+
+
+def test_list_open_issues_pr_noise_does_not_exhaust_page_budget_early() -> None:
+    """#3313 review finding: the raw REST ``/issues`` endpoint mixes pull
+    requests into the same per_page budget as issues (filtered out only
+    after fetch), unlike the old GraphQL ``issues`` connection. A PR-heavy
+    repo must still be able to collect a real-issue count well beyond the
+    old 1000-issue ceiling without hitting OPEN_ISSUES_MAX_PAGES, because the
+    raw-page budget (OPEN_ISSUES_MAX_PAGES * OPEN_ISSUES_PAGE_SIZE) now has
+    headroom for PR noise.
+    """
+    import json as _json
+
+    from app.dispatcher.sync_github import OPEN_ISSUES_MAX_PAGES, OPEN_ISSUES_PAGE_SIZE
+
+    source = GhCliIssueSource()
+
+    def make_page(n: int, *, prs: int) -> list[dict[str, Any]]:
+        page = [
+            {
+                "number": n * 1000 + i,
+                "title": f"issue {n}-{i}",
+                "state": "open",
+                "labels": [],
+                "created_at": "2026-04-20T10:00:00Z",
+                "updated_at": "2026-04-21T12:00:00Z",
+            }
+            for i in range(OPEN_ISSUES_PAGE_SIZE - prs)
+        ]
+        page.extend(
+            {
+                "number": n * 1000 + 900 + i,
+                "title": f"pr {n}-{i}",
+                "state": "open",
+                "labels": [],
+                "created_at": "2026-04-20T10:00:00Z",
+                "updated_at": "2026-04-21T12:00:00Z",
+                "pull_request": {"url": "https://api.github.com/repos/o/r/pulls/1"},
+            }
+            for i in range(prs)
+        )
+        return page
+
+    calls: list[list[str]] = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(list(args))
+        page_num = len(calls)
+        # Half of every raw page (up to the cap) is pull-request noise; the
+        # confirmation page beyond the cap is empty (real end of results).
+        # The real-issue ceiling this exercises
+        # (OPEN_ISSUES_MAX_PAGES * PAGE_SIZE // 2) exceeds the old
+        # pre-#3313 1000-issue ceiling.
+        if page_num <= OPEN_ISSUES_MAX_PAGES:
+            return MagicMock(
+                returncode=0, stdout=_json.dumps(make_page(page_num, prs=OPEN_ISSUES_PAGE_SIZE // 2)), stderr=""
+            )
+        return MagicMock(returncode=0, stdout="[]", stderr="")
+
+    with patch("subprocess.run", side_effect=fake_run):
+        issues = source.list_open_issues("RasmusTho/agentic-pkm-mvp")
+
+    expected_real_issues = OPEN_ISSUES_MAX_PAGES * (OPEN_ISSUES_PAGE_SIZE // 2)
+    assert expected_real_issues > 1000, "test should exercise beyond the old 1000-issue ceiling"
+    assert len(issues) == expected_real_issues
+    assert len(calls) == OPEN_ISSUES_MAX_PAGES + 1
