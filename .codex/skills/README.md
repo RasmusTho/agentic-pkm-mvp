@@ -60,6 +60,13 @@ Do not rely on a human remembering where BuilderOps material belongs.
 5. **Automation checkpoint:** recurring Codex automations for this repo must read the relevant
    workflow skill and route high-churn operational material to BuilderOps first. `docs/learning-log.md`
    is historical/fallback only; generated projections are readable views only.
+6. **Analysis checkpoint (no PR in flight):** the checkpoints above are anchored to work that is
+   already implementation-, delivery-, or automation-bound. A standalone research pass, prior-art
+   sweep, architecture analysis, or other chat-turn work product that answers a question but produces
+   no PR still needs a home — it does not get a pass just because none of checkpoints 1-5 fired. Before
+   treating that thread as closed, create the matching BuilderOps record (usually `AgentWorklog`) for
+   any findings, sources, or process narrative worth keeping, unless the material is trivial enough
+   that losing it costs nothing.
 
 ## Skill routing
 
