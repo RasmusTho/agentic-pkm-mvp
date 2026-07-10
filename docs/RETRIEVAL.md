@@ -136,6 +136,23 @@ paragraph), not the serving-path migration, which is delivered. Default retrieva
 metadata-filtered hybrid with **rerank off by default** (`RERANK_ENABLE` unset/false; see *Optional
 Rerank*).
 
+**The durable index is the vector read authority; the serving path never embeds documents
+(ADR-0059 D1, step 2):** `rebuild_from_durable_index()` now passes each row's stored `embedding`
+through to the cache document it builds, and `MemoryHybridStore._ensure_indexes()`
+(`app/retrieval/hybrid.py`) computes only BM25/tokenization for documents that already carry a
+preloaded vector — it never calls the document-embedding client for them. This closes the R1 gap
+ADR-0059 recorded: previously every generation-mismatch rebuild re-embedded the entire corpus on the
+**read** path, which scaled cost/latency with vault size and could fire the sanctioned Gemini
+write-path fallback (ADR-0023/ADR-0052) from a query. Mixed-identity rows (CTI-2 fallback writes)
+load as-is — they are dimension-matched and L2-renormalized by construction, so the cache scores them
+the same way `PgVectorIndex.search()` already does. A durable row whose stored vector is
+unexpectedly empty/missing does not fail the rebuild: it is logged and picked up by the store's
+per-document lazy-embed fallback, scoped to that row only. The lazy-embed path otherwise exists only
+for test-seeded corpora built directly via `set_documents()`/`add_document()` without an
+`embedding` — it is unreachable from `rebuild_from_durable_index()` given ingest always writes
+vectors. Query embedding is unchanged: embedded live, per query, with the primary identity (CTI-3).
+See `docs/adr/ADR-0059-unified-retrieval-path-pgvector-read-authority.md :: D1`.
+
 **Named future work (not current behavior):** RRF (Reciprocal Rank Fusion) over the weighted linear
 sum is no longer an undecided placeholder — `docs/adr/ADR-0059-unified-retrieval-path-pgvector-read-authority.md`
 (Accepted, owner-ratified 2026-07-10) is the ADR-0024-anticipated "new ADR" that adopts it as a

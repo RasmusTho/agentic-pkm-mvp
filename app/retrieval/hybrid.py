@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 import os
 import time
@@ -16,6 +17,8 @@ except ImportError:
 from app.components.retrieval import embed_docs, embed_query
 from app.retrieval.hook_adapter import maybe_rerank
 from app.retrieval.tuning import get_retrieval_tuning
+
+_logger = logging.getLogger(__name__)
 
 # Conservative -> permissive ordering of evidence roles (semantic-dimensions.md). Mirrors
 # mimer_runtime/retrieval.py::_EVIDENCE_ORDER — the reference for the invariant SHAPE. The
@@ -95,6 +98,18 @@ class ScopedRetrieval:
     active_scope: str | None = None
 
 
+def _normalize_embedding(raw: Any) -> list[float] | None:
+    """Coerce a caller-supplied embedding into ``list[float] | None``.
+
+    An empty/missing value normalizes to ``None`` — the store's signal that
+    this document has no preloaded vector and is a candidate for the
+    per-document lazy-embed fallback (ADR-0059 D1).
+    """
+    if not raw:
+        return None
+    return [float(v) for v in raw]
+
+
 @dataclass
 class Document:
     doc_id: str
@@ -102,9 +117,24 @@ class Document:
     language: Optional[str] = None
     source_ref: Optional[str] = None
     payload: dict[str, Any] | None = None
+    # Preloaded vector from the durable index (ADR-0059 D1). ``None`` means no
+    # stored vector was supplied and the document is embedded lazily, on
+    # first score computation, via the explicit fallback in ``_ensure_indexes``.
+    embedding: Optional[list[float]] = None
 
 
 class MemoryHybridStore:
+    """Warm cache-through of the durable vector index (KERNEL-05, I-D3).
+
+    ADR-0059 D1: the store loads whatever vectors its documents were given
+    (typically the durable index's stored ``embedding`` column, passed
+    through by ``rebuild_from_durable_index``) and never re-embeds a document
+    that already carries one. Documents without a preloaded vector — only
+    test-seeded corpora via ``set_documents()``/``add_document()`` without an
+    ``embedding`` — are embedded lazily and exactly once, per document, the
+    first time scores are computed.
+    """
+
     def __init__(self) -> None:
         self._docs: List[Document] = []
         self._bm25: Optional[BM25Okapi] = None
@@ -126,6 +156,7 @@ class MemoryHybridStore:
         language: Optional[str] = None,
         source_ref: Optional[str] = None,
         payload: Optional[dict[str, Any]] = None,
+        embedding: Optional[list[float]] = None,
     ) -> None:
         self._docs.append(
             Document(
@@ -134,6 +165,7 @@ class MemoryHybridStore:
                 language=language,
                 source_ref=source_ref,
                 payload=dict(payload or {}),
+                embedding=_normalize_embedding(embedding),
             )
         )
         self._invalidate()
@@ -146,6 +178,7 @@ class MemoryHybridStore:
                 language=doc.get("language"),
                 source_ref=doc.get("source_ref"),
                 payload=dict(doc.get("payload") or {}),
+                embedding=_normalize_embedding(doc.get("embedding")),
             )
             for doc in docs
         ]
@@ -153,6 +186,25 @@ class MemoryHybridStore:
 
     def all(self) -> List[Document]:
         return list(self._docs)
+
+    def _fill_missing_embeddings_lazily(self) -> None:
+        """Explicit lazy-embed fallback (ADR-0059 D1), scoped to only the
+        documents that were seeded without a preloaded vector.
+
+        Never reachable from ``rebuild_from_durable_index()`` once ingest
+        always writes vectors (it does today) — this exists for test-seeded
+        corpora built via ``set_documents()``/``add_document()`` without an
+        ``embedding``, and for the fail-safe single-row fallback when a
+        durable row's stored vector is unexpectedly empty/missing (rebuild
+        never crashes on that; see ``rebuild_from_durable_index``).
+        """
+        missing_idx = [i for i, doc in enumerate(self._docs) if not doc.embedding]
+        if not missing_idx:
+            return
+        texts = [self._docs[i].text for i in missing_idx]
+        vectors, _ = embed_docs(texts)
+        for i, vector in zip(missing_idx, vectors):
+            self._docs[i].embedding = list(vector)
 
     def _ensure_indexes(self) -> None:
         if not self._docs:
@@ -165,13 +217,26 @@ class MemoryHybridStore:
         if self._bm25 is None and self._tokenized:
             self._bm25 = BM25Okapi(self._tokenized)
         if self._embeddings is None:
-            texts = [doc.text for doc in self._docs]
-            vectors, _ = embed_docs(texts)
-            if not vectors:
+            # ADR-0059 D1: use each document's preloaded vector where present;
+            # embed only the documents that still lack one (explicit fallback,
+            # never the whole corpus when vectors were already supplied).
+            self._fill_missing_embeddings_lazily()
+            vectors = [doc.embedding or [] for doc in self._docs]
+            if not any(vectors):
                 self._embeddings = np.zeros((0, 0), dtype=np.float32)
                 self._emb_norms = np.zeros(0, dtype=np.float32)
             else:
-                self._embeddings = np.array(vectors, dtype=np.float32)
+                dim = next(len(v) for v in vectors if v)
+                for doc, vector in zip(self._docs, vectors):
+                    if vector and len(vector) != dim:
+                        raise ValueError(
+                            "hybrid store embedding dim mismatch for doc "
+                            f"{doc.doc_id!r}: expected {dim}, got {len(vector)}"
+                        )
+                self._embeddings = np.array(
+                    [vector if vector else [0.0] * dim for vector in vectors],
+                    dtype=np.float32,
+                )
                 norms = np.linalg.norm(self._embeddings, axis=1)
                 norms[norms == 0] = 1e-9
                 self._emb_norms = norms
@@ -276,6 +341,15 @@ def rebuild_from_durable_index(*, force: bool = False) -> int:
     after a kill-and-restart simulation or an explicit operator-triggered
     reindex).
 
+    ADR-0059 D1: each row's stored ``embedding`` is passed through to the
+    cache as-is (mixed-identity rows load as-is; they are dimension-matched
+    and L2-renormalized by construction at write time — ADR-0023/ADR-0052) so
+    the serving path never re-embeds a document that the durable index
+    already has a vector for. A row whose stored vector is unexpectedly
+    empty/missing does not fail the rebuild: it is loaded with ``embedding``
+    unset and picked up by the store's per-document lazy-embed fallback the
+    first time scores are computed (fail-safe, logged, never a crash).
+
     Returns the number of documents loaded into the cache.
     """
     global _REBUILT_FROM_DURABLE_INDEX, _REBUILD_GENERATION, _LAST_GENERATION_CHECK_MONOTONIC
@@ -290,11 +364,15 @@ def rebuild_from_durable_index(*, force: bool = False) -> int:
     generation = index.generation()
 
     docs: list[dict] = []
+    missing_embeddings = 0
     for row in index.all_rows():
         payload = row.get("payload") or {}
         text = _row_text(payload)
         if not text:
             continue
+        embedding = row.get("embedding") or None
+        if not embedding:
+            missing_embeddings += 1
         docs.append(
             {
                 "doc_id": str(row["object_id"]),
@@ -302,7 +380,16 @@ def rebuild_from_durable_index(*, force: bool = False) -> int:
                 "language": payload.get("language"),
                 "source_ref": row.get("source_ref"),
                 "payload": payload,
+                "embedding": embedding,
             }
+        )
+    if missing_embeddings:
+        _logger.warning(
+            "rebuild_from_durable_index: %d/%d durable rows have no stored "
+            "embedding; falling back to per-document lazy embedding for "
+            "those rows only",
+            missing_embeddings,
+            len(docs),
         )
     _STORE.set_documents(docs)
     _REBUILT_FROM_DURABLE_INDEX = True

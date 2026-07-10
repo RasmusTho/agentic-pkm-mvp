@@ -31,6 +31,12 @@ APP_ROOT = REPO_ROOT / "app"
 @pytest.fixture(autouse=True)
 def _isolate_stores(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("STORE_BACKEND", "memory")
+    # ADR-0059 D1 (#3405): the serving path now scores with each row's
+    # STORED vector instead of silently re-embedding every document with the
+    # live runtime identity, so the fixtures' 8-dim seed vectors below must
+    # match the dim the live query embedder resolves to (previously masked
+    # by the read-path re-embed this ADR removes).
+    monkeypatch.setenv("EMBED_DIM", "8")
     reset_store_backends()
     hybrid.get_store().set_documents([])
     hybrid.reset_durable_rebuild_state()
