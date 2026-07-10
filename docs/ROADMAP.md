@@ -45,6 +45,36 @@ deliberate-suppression receipt per candidate and projects threshold-cleared in-a
 remaining reach-out work is OS-push delivery and external connectors, which stay deferred; routine
 issue movement for this line belongs in BuilderOps RoadmapExecutionItem records.
 
+External-connectivity (MCP) sequencing: the operator's app estate and its MCP surface are
+inventoried in `docs/audits/APP_MCP_CONNECTIVITY_2026-07-07.md` (advisory snapshot). Three
+directions are deliberately kept separate. **Direction A — assistant connectors** (Claude/agent
+sessions connecting to third-party MCP servers such as Home Assistant, Todoist, Drafts, Google
+Workspace) is operator configuration, not backlog work, and creates no roadmap claims.
+**Direction B — Mimer as an MCP server** is the first build candidate: after a superseding ADR
+ratifies MCP as an additional adapter (ADR-0056 explicitly excludes it today), build a thin MCP
+transport over the existing ask, governed-capture, retrieve/search, read-note, and health endpoints.
+Capture's response already carries its governed receipt; no separate receipt read-back endpoint is
+claimed. The adapter preserves the authority envelope the `mimer-*` skills and
+`docs/contracts/MIMER_CLIENT_CONTRACT.md` encode; it enters the backlog only through
+feature-breakdown, and no MCP server exists today (`app/mcp/vault_tools.py` is internal plumbing,
+not a transport). A second build item joins it on the same footing: the audit's
+D1 owner decision (read-later consolidation) is ruled — self-host Karakeep on the mac mini as the
+free, local-first read-later/highlights source feeding Mimer ingestion via its REST API, alongside
+Raindrop.io kept (not replaced) as the bookmark layer with its official MCP adopted. **Direction
+C — Mimer as an MCP client** (Home Assistant presence/state, calendar, tasks, reading history
+consumed as CRE context signals and Knowledge Acquisition Platform intake) is the concrete
+successor to the deferred CRE "external connectors" line and stays sequenced behind the Direction B
+build items. D2 (task-home consolidation) is also ruled: Todoist for personal/household tasks
+(cross-platform, spouse is Android) and Bring! for the shared grocery list, both adopted via
+Direction A (official/community MCP through Home Assistant); work tasks stay on Microsoft's tools
+untouched, deferred behind the not-yet-built Mimer work-satellite (own LLM API, isolated from the
+personal instance) named in `docs/plans/PROTOCOL_SATELLITE_SYNC.md` — that satellite-sync protocol
+remains Spec/planned, not implemented, and is the actual gap if work coverage is ever built.
+Standing governance invariant: generic third-party MCP servers never receive vault write access;
+MCP-originated writes route through Mimer's governed capture endpoint. ADR-0056's separate,
+owner-permitted direct-filesystem transport remains available only under the client contract's
+human-delegation and write-discipline rules.
+
 ## Status vocabulary
 - **Shipped** — merged to main; code/doc exists.
 - **Operationally accepted** — proven on real vault/external samples with runbook/soak.
@@ -98,6 +128,7 @@ issue movement for this line belongs in BuilderOps RoadmapExecutionItem records.
   - Canvas-session scaffolding is shipped in bounded form through #598/#599/#600/#601, and owner-doc promotion has landed via subsequent docs work: session logs, body-scoped co-authoring, governance-intent routing, and a gated API/CLI surface now exist behind `CANVAS_ENABLED`. Broader hybrid Panel/Chat behavior and richer Chat cognition remain separate follow-up work.
 - **Later**
   - Watcher auto-exec of panel plans with guardrails and rollback; richer panel actions (summary/reply) via tool/MCP boundary.
+  - External-connectivity (MCP) line: Mimer-as-MCP-server first build candidate (Direction B), then runtime consumption of external MCP signal sources (Direction C) — sequencing and governance invariant in `External-connectivity (MCP) sequencing` above; evidence base `docs/audits/APP_MCP_CONNECTIVITY_2026-07-07.md`.
   - PanelAgent 2.0 expansion beyond the current slices remains bounded even after real-vault acceptance; break new behavior into smaller tracked slices first.
   - Reasoning/reflective layers with eval gates; expanded observability counters for orchestration/A2A.
   - Collaboration/multi-user after single-user flows are stable.
