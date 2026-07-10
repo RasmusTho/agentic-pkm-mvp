@@ -82,6 +82,10 @@ services:
         required: false
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     volumes:
+      # Dispatcher remains host-owned operational state. Mount its one shared
+      # directory so the API Signboard routes and startup bootstrap use the
+      # same SQLite projection source.
+      - "${DISPATCHER_HOST_STATE_DIR:?dispatcher host state required}:/app/runtime/dispatcher"
       # Legacy /app/vault compatibility mount removed from the base compose
       # (#2386, Slice 05D of #2311): a no-vault startup must not synthesize a
       # repo-local ./vault bind. The /app/vault compatibility mount now lives in

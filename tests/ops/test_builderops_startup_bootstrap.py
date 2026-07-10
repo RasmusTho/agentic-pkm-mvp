@@ -19,6 +19,8 @@ def test_dev_start_full_invokes_builderops_bootstrap() -> None:
     assert "scripts/start_full_system.sh" in dev_target
     assert "scripts/start_builderops_services.sh" in start_script
     assert "builderops_bootstrap" in start_script
+    compose = (REPO_ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+    assert "DISPATCHER_HOST_STATE_DIR" in compose
 
 
 def test_prod_start_full_invokes_builderops_bootstrap() -> None:

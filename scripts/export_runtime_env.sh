@@ -114,6 +114,7 @@ export DATABASE_URL DB_DSN
 
 cat > "$runtime_env_path" <<ENV
 WATCHER_RUNTIME_ENV_FILE=$watcher_runtime_env_file
+DISPATCHER_HOST_STATE_DIR=${DISPATCHER_HOST_STATE_DIR:-$ROOT/runtime/dispatcher}
 VAULT_HOST_ROOT=$vault_host_root
 VAULT_ROOT=$container_vault_root
 LOCAL_UID=$local_uid
