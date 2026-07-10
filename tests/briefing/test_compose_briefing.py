@@ -559,6 +559,8 @@ def test_invalid_commitment_scalar_degrades_whole_section(
     [
         ("moment_id", " padded "),
         ("moment_id", "moment\nother"),
+        ("moment_id", "../../secret"),
+        ("moment_id", "nested/moment"),
         ("ref", " Notes/A.md "),
         ("ref", "Notes/A.md\nNotes/B.md"),
         ("ref", "Notes/\x00.md"),
@@ -893,6 +895,33 @@ def test_load_briefing_rejects_noncanonical_categorical_values(
         if field == "urgency_band":
             body = body.replace("[timely]", f"[{invalid_value}]", 1)
 
+    target.write_text(
+        f"---\n{yaml.safe_dump(payload, sort_keys=False)}---\n{body}",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(BriefingReadError):
+        load_briefing(vault_context=context, for_date=BRIEFING_DATE)
+
+
+def test_load_briefing_rejects_unsafe_moment_id_in_provenance_path(
+    vault: tuple[Path, VaultContext],
+) -> None:
+    root, context = vault
+    _seed_moment(root, "moment-1")
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    target = _target(root)
+    text = target.read_text(encoding="utf-8")
+    _opening, yaml_text, body = text.split("---\n", 2)
+    payload = yaml.safe_load(yaml_text)
+    item = payload["sections"]["moments"]["items"][0]
+    item["moment_id"] = "../../secret"
+    item["artifact_path"] = "_system/moments/../../secret.md"
+    body = body.replace("_system/moments/moment-1.md", item["artifact_path"], 1)
     target.write_text(
         f"---\n{yaml.safe_dump(payload, sort_keys=False)}---\n{body}",
         encoding="utf-8",

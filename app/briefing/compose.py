@@ -8,6 +8,7 @@ dated note. It never writes back to a source or acquires authority over source s
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
@@ -187,6 +188,7 @@ def load_briefing(
             vault_root=vault_root,
             system_dir=system_dir,
         )
+        # Canonical re-render makes frontmatter and body one tamper-evident projection.
         if content != _render_note(note):
             raise BriefingReadError("briefing body disagrees with structured content")
         return note
@@ -348,6 +350,8 @@ def _read_moments(
         if not isinstance(record, dict):
             raise _InvalidSourceRecord
         moment_id = _required_canonical_text(record, "moment_id")
+        if not _is_safe_artifact_id(moment_id):
+            raise _InvalidSourceRecord
         title = _required_display_text(record, "title")
         need_basis = _required_enum_text(record, "need_basis", NEED_BASIS_VALUES)
         urgency_band = _required_enum_text(record, "urgency_band", URGENCY_ORDER)
@@ -654,6 +658,8 @@ def _item_from_mapping(
             )
         if name == "moments" and raw.get("source") == "moment":
             moment_id = _required_canonical_text(raw, "moment_id")
+            if not _is_safe_artifact_id(moment_id):
+                raise _InvalidSourceRecord
             artifact_path = _required_canonical_text(raw, "artifact_path")
             expected_artifact_path = (
                 PurePosixPath(system_dir) / "moments" / f"{moment_id}.md"
@@ -779,6 +785,11 @@ def _one_line(value: str) -> str:
 
 def _is_canonical_reference_text(value: str) -> bool:
     return bool(value) and value == _one_line(value) and value.isprintable()
+
+
+def _is_safe_artifact_id(value: str) -> bool:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip()).strip("-._")
+    return bool(cleaned) and value == cleaned
 
 
 __all__ = [
