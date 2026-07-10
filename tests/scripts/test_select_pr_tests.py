@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts.select_pr_tests import select_tests
 
 
@@ -75,6 +77,149 @@ def test_unowned_e2e_file_uses_full_suite_fallback() -> None:
 
     assert selection.full_suite is True
     assert "unowned e2e" in selection.reason
+
+
+@pytest.mark.parametrize(
+    ("changed_files", "expected_subsystems", "changed_test_path"),
+    [
+        pytest.param(
+            ["docs/development/TEST_STRATEGY_HOT_PATH.md", "tests/governance/test_new_thing.py"],
+            ("docs",),
+            "tests/governance/test_new_thing.py",
+            id="docs-only+test",
+        ),
+        pytest.param(
+            [".codex/skills/publish-pr/SKILL.md", "tests/scripts/test_new_helper.py"],
+            ("governance",),
+            "tests/scripts/test_new_helper.py",
+            id="governance-only+test",
+        ),
+        pytest.param(
+            ["scripts/x.sh", "tests/governance/test_y.py"],
+            ("ops_deploy",),
+            "tests/governance/test_y.py",
+            id="subsystem+out-of-subsystem-test",
+        ),
+    ],
+)
+def test_changed_test_files_always_selected(
+    changed_files: list[str], expected_subsystems: tuple[str, ...], changed_test_path: str
+) -> None:
+    selection = select_tests(changed_files)
+
+    assert selection.full_suite is False
+    assert selection.subsystems == expected_subsystems
+    assert changed_test_path in selection.targets
+
+
+def test_3383_shape_scripts_change_still_selects_out_of_subsystem_governance_test() -> None:
+    # Reproduces the #3383 false-green: an ops_deploy-scoped change (scripts/x.sh)
+    # must not silently drop a co-changed tests/governance/** file from the run.
+    selection = select_tests(["scripts/x.sh", "tests/governance/test_y.py"])
+
+    assert selection.full_suite is False
+    assert "ops_deploy" in selection.subsystems
+    assert "tests/governance/test_y.py" in selection.targets
+
+
+def test_docs_file_with_foreign_subsystem_test_still_gets_full_subsystem_coverage() -> None:
+    # A tests/** file OUTSIDE this branch's own blanket target dirs (DOCS_TARGETS)
+    # must still route the PR through the subsystem loop instead of being absorbed
+    # into a narrower docs-only run that drops the rest of that subsystem's tests.
+    selection = select_tests(["docs/foo.md", "tests/watcher/test_x.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("watcher_sync",)
+    assert "tests/watcher" in selection.targets
+    assert "tests/e2e/test_watcher_registry_e2e.py" in selection.targets
+
+
+def test_docs_file_with_unmapped_test_falls_back_to_full_suite() -> None:
+    # An unmapped tests/** path paired with a docs file must still reach the
+    # "no subsystem mapping matched" full-suite safety net, not get swallowed
+    # into a docs-only run that never even considers the subsystem loop.
+    selection = select_tests(["docs/foo.md", "tests/brandnew_subsystem/test_a.py"])
+
+    assert selection.full_suite is True
+    assert "no subsystem mapping matched" in selection.reason
+
+
+def test_governance_file_with_foreign_subsystem_test_still_gets_full_subsystem_coverage() -> None:
+    # Governance-only analog of the docs-only case above: _is_governance_only
+    # shares the same _non_test_signal/_within_target_dirs tolerance logic,
+    # parameterized on GOVERNANCE_TARGETS instead of DOCS_TARGETS.
+    selection = select_tests([".codex/skills/x/SKILL.md", "tests/watcher/test_x.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("watcher_sync",)
+    assert "tests/watcher" in selection.targets
+    assert "tests/e2e/test_watcher_registry_e2e.py" in selection.targets
+
+
+def test_governance_file_with_unmapped_test_falls_back_to_full_suite() -> None:
+    selection = select_tests([".codex/skills/x/SKILL.md", "tests/brandnew_subsystem/test_a.py"])
+
+    assert selection.full_suite is True
+    assert "no subsystem mapping matched" in selection.reason
+
+
+def test_governance_target_exact_file_entry_is_tolerated() -> None:
+    # GOVERNANCE_TARGETS' one non-directory entry (tests/ops/test_ci_workflow.py)
+    # must be matched by _within_target_dirs' exact-equality branch, not just
+    # its directory-prefix branch.
+    selection = select_tests([".codex/skills/x/SKILL.md", "tests/ops/test_ci_workflow.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("governance",)
+
+
+def test_existing_static_targets_survive_the_cli_existence_filter(tmp_path: Path) -> None:
+    output = tmp_path / "github-output.txt"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/select_pr_tests.py",
+            "--changed-file",
+            "app/settings/runtime.py",
+            "--github-output",
+            str(output),
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    # Real, checked-in .py targets (ALWAYS_TARGETS) must survive
+    # _existing_test_targets unfiltered — only nonexistent paths are dropped.
+    assert "tests/scripts/test_select_pr_tests.py" in result.stdout
+    assert "tests/governance/test_branch_guardrail_packet.py" in result.stdout
+
+
+def test_deleted_test_file_is_not_appended_to_cli_output(tmp_path: Path) -> None:
+    output = tmp_path / "github-output.txt"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/select_pr_tests.py",
+            "--changed-file",
+            "scripts/x.sh",
+            "--changed-file",
+            "tests/governance/test_does_not_exist_at_head.py",
+            "--github-output",
+            str(output),
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "tests/governance/test_does_not_exist_at_head.py" not in result.stdout
+    text = output.read_text(encoding="utf-8")
+    assert "tests/governance/test_does_not_exist_at_head.py" not in text
 
 
 def test_cli_writes_github_output(tmp_path: Path) -> None:

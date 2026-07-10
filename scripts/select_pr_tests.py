@@ -222,13 +222,42 @@ def _is_full_suite_file(path: str) -> bool:
     return path in FULL_SUITE_EXACT or any(path.startswith(prefix) for prefix in FULL_SUITE_PREFIXES)
 
 
+def _within_target_dirs(path: str, target_dirs: tuple[str, ...]) -> bool:
+    return any(path == target or path.startswith(f"{target}/") for target in target_dirs)
+
+
+def _non_test_signal(paths: tuple[str, ...], tolerated_test_dirs: tuple[str, ...]) -> tuple[str, ...]:
+    # A changed tests/** path already inside this branch's own blanket target
+    # dirs is scope-neutral: that directory runs either way, so it must not
+    # disqualify the classification. A tests/** path OUTSIDE those dirs is real
+    # scope signal (another subsystem, or an unmapped surface) and must still
+    # be able to route the PR through the subsystem loop / full-suite fallback
+    # instead of being silently absorbed into a narrower docs/governance run.
+    return tuple(
+        path
+        for path in paths
+        if not (path.startswith("tests/") and _within_target_dirs(path, tolerated_test_dirs))
+    )
+
+
 def _is_docs_only(paths: tuple[str, ...]) -> bool:
-    return bool(paths) and all(path.startswith("docs/") or path in {"README.md", "AGENTS.md"} for path in paths)
+    non_test = _non_test_signal(paths, DOCS_TARGETS)
+    return bool(non_test) and all(
+        path.startswith("docs/") or path in {"README.md", "AGENTS.md"} for path in non_test
+    )
 
 
 def _is_governance_only(paths: tuple[str, ...]) -> bool:
     governance_prefixes = (".github/", "docs/development/", "AGENTS.md", ".codex/")
-    return bool(paths) and all(path.startswith(governance_prefixes) for path in paths)
+    non_test = _non_test_signal(paths, GOVERNANCE_TARGETS)
+    return bool(non_test) and all(path.startswith(governance_prefixes) for path in non_test)
+
+
+def _changed_test_targets(paths: tuple[str, ...]) -> tuple[str, ...]:
+    # Restricted to .py so a co-changed non-test tests/** artifact (fixture,
+    # README, etc.) is never handed to pytest as a positional target — pytest
+    # errors hard ("not found") on a path it can't collect as a test module.
+    return tuple(path for path in paths if path.startswith("tests/") and path.endswith(".py"))
 
 
 def select_tests(changed_files: list[str]) -> Selection:
@@ -245,24 +274,29 @@ def select_tests(changed_files: list[str]) -> Selection:
     if any(path.startswith("alembic/") or path.startswith("tests/migrations/") for path in paths):
         return Selection(True, (), (), FULL_SUITE_REASONS[1])
 
+    changed_tests = _changed_test_targets(paths)
     targets = list(ALWAYS_TARGETS)
-    subsystems: list[str] = []
 
     if _is_docs_only(paths):
-        return Selection(False, ("docs",), _dedupe([*targets, *DOCS_TARGETS]), "docs-only PR")
+        targets.extend(DOCS_TARGETS)
+        subsystems, reason = ("docs",), "docs-only PR"
+    elif _is_governance_only(paths):
+        targets.extend(GOVERNANCE_TARGETS)
+        subsystems, reason = ("governance",), "governance-only PR"
+    else:
+        matched: list[str] = []
+        for name, prefixes, subsystem_targets in SUBSYSTEMS:
+            if any(path.startswith(prefix) for path in paths for prefix in prefixes):
+                matched.append(name)
+                targets.extend(subsystem_targets)
+        if not matched:
+            return Selection(True, (), (), FULL_SUITE_REASONS[2])
+        subsystems, reason = _dedupe(matched), "matched subsystem SoI"
 
-    if _is_governance_only(paths):
-        return Selection(False, ("governance",), _dedupe([*targets, *GOVERNANCE_TARGETS]), "governance-only PR")
-
-    for name, prefixes, subsystem_targets in SUBSYSTEMS:
-        if any(path.startswith(prefix) for path in paths for prefix in prefixes):
-            subsystems.append(name)
-            targets.extend(subsystem_targets)
-
-    if not subsystems:
-        return Selection(True, (), (), FULL_SUITE_REASONS[2])
-
-    return Selection(False, _dedupe(subsystems), _dedupe(targets), "matched subsystem SoI")
+    # Every scoped branch funnels through this single return, so a changed
+    # tests/** file is always unioned in exactly once — no per-branch splice
+    # to forget if a future branch is added here (the #3383 failure mode).
+    return Selection(False, subsystems, _dedupe([*targets, *changed_tests]), reason)
 
 
 def changed_files_from_git(base_ref: str, head_ref: str) -> list[str]:
@@ -273,6 +307,13 @@ def changed_files_from_git(base_ref: str, head_ref: str) -> list[str]:
         text=True,
     )
     return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def _existing_test_targets(targets: tuple[str, ...]) -> tuple[str, ...]:
+    # Deleted/renamed test files must never reach pytest as a positional
+    # target (pytest errors hard on a path that no longer exists). Directory
+    # targets (never end in .py) always pass through unfiltered.
+    return tuple(target for target in targets if not target.endswith(".py") or Path(target).is_file())
 
 
 def _write_github_output(path: str, selection: Selection) -> None:
@@ -297,6 +338,13 @@ def main() -> int:
         changed = changed_files_from_git(args.base_ref, args.head_ref)
 
     selection = select_tests(changed)
+    if not selection.full_suite:
+        selection = Selection(
+            selection.full_suite,
+            selection.subsystems,
+            _existing_test_targets(selection.targets),
+            selection.reason,
+        )
     print(f"full_suite={'true' if selection.full_suite else 'false'}")
     print(f"subsystems={','.join(selection.subsystems) or 'all'}")
     print(f"pytest_args={selection.pytest_args}")
