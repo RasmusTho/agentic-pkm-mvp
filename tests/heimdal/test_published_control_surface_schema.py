@@ -65,3 +65,4 @@ def test_note_classification_contract_covers_decided_rows() -> None:
         assert f"| {pattern} | {note_class} |" in contract
 
     assert "`NSFileCoordinator` / `UIDocument`" in contract
+    assert "#3131 supplies the published note-classification table" in contract
