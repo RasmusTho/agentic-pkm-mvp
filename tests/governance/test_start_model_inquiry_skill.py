@@ -235,3 +235,21 @@ def test_launcher_fails_loud_without_venv_or_override(tmp_path: Path) -> None:
     assert (
         "Model inquiry launch requires the repo virtualenv" in result.stderr
     ), result.stderr
+
+
+def test_launcher_fails_loud_with_invalid_override(tmp_path: Path) -> None:
+    bogus = tmp_path / "not-a-python"
+    bogus.write_text("not executable", encoding="utf-8")
+
+    result = subprocess.run(
+        [str(LAUNCHER), "--help"],
+        cwd=REPO_ROOT,
+        env={"PATH": "/usr/bin:/bin", "BUILDEROPS_PYTHON": str(bogus)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "BUILDEROPS_PYTHON is set to" in result.stderr
+    assert "not an executable file" in result.stderr

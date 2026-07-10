@@ -38,10 +38,11 @@ builderops_find_git_common_venv() {
 builderops_resolve_python() {
     local app_root="$1"
     if [ -n "${BUILDEROPS_PYTHON:-}" ]; then
-        if [ -x "$BUILDEROPS_PYTHON" ]; then
+        if [ -f "$BUILDEROPS_PYTHON" ] && [ -x "$BUILDEROPS_PYTHON" ]; then
             echo "$BUILDEROPS_PYTHON"
             return 0
         fi
+        echo "BUILDEROPS_PYTHON is set to '$BUILDEROPS_PYTHON' but is not an executable file." >&2
         return 1
     fi
     builderops_find_venv "$app_root" 2>/dev/null \
