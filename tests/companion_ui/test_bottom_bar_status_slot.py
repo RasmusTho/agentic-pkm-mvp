@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from companion_ui.workspace.calm_degraded import CANVAS_OFF, EDITING_PAUSED
 from companion_ui.workspace.serve_dev_page import render_index_html
 
 from tests.companion_ui._orphan_text import assert_no_orphan_text
@@ -95,10 +96,15 @@ def _bottom_bar_region(html: str) -> str:
 
 
 def test_status_slot_reserved_above_pills() -> None:
-    # Degraded posture (a benign disabled-feature note): the status slot must
-    # render as its own region, markup-adjacent to but structurally outside
-    # the pill row, so pills and status can never occupy the same box.
-    html = _shell(guard_update_flow_available=False, guard_workspace_update_available=False)
+    # Benign disabled-feature note: guard_update_flow_available=False while
+    # guard_workspace_update_available stays True. This is the exact silent
+    # state #3364 exists to surface — posture stays "ok" (the posture
+    # computation never inspects update_flow_available) while
+    # _render_body_edit_panel simultaneously hides body editing on that flag —
+    # so the slot must fire from the flag itself, not the posture token. The
+    # slot renders as its own region, markup-adjacent to but structurally
+    # outside the pill row, so pills and status can never occupy the same box.
+    html = _shell(guard_update_flow_available=False)
     slot_match = _status_slot(html)
     assert slot_match, "reserved status slot must render when a status exists"
     slot_markup = slot_match.group(0)
@@ -131,19 +137,36 @@ def test_status_slot_reserved_above_pills() -> None:
 
 
 def test_status_tone_calm_unless_true_error() -> None:
-    # Benign disabled-feature status (a channel flag is off, runtime is
-    # otherwise fine): calm tone, not the destructive/alarm class.
-    calm_html = _shell(guard_update_flow_available=False, guard_workspace_update_available=False)
+    # Benign disabled-feature status (the update-flow channel is off, runtime
+    # is otherwise fine — posture stays "ok"): calm tone, not the
+    # destructive/alarm class, with the calm_degraded module's editing-paused
+    # copy (the sole emitter of unavailable-state copy; no inline literal).
+    calm_html = _shell(guard_update_flow_available=False)
     calm_slot = _status_slot(calm_html)
     assert calm_slot, "benign-status fixture must render the slot"
     calm_markup = calm_slot.group(0)
     assert 'data-tone="calm"' in calm_markup
-    assert "channel disabled" in calm_markup
+    assert EDITING_PAUSED in calm_markup
 
     calm_tone_rule = re.search(
         r'\.workspace-status-slot\{[^}]*color:\s*var\(--fg-3\)', calm_html
     )
     assert calm_tone_rule, "the default (calm) tone must use --fg-3"
+
+    # Canvas-off idiom is unified: the slot and the operator drawer's runtime
+    # pill both read calm_degraded.CANVAS_OFF for the same server-declared
+    # fact ("one slot, one string" — issue #3364 Constraints). Both flags off
+    # also exercises the joined multi-note composition.
+    canvas_html = _shell(guard_canvas_enabled=False)
+    canvas_slot = _status_slot(canvas_html)
+    assert canvas_slot, "canvas-off fixture must render the slot"
+    assert CANVAS_OFF in canvas_slot.group(0)
+    assert 'data-tone="calm"' in canvas_slot.group(0)
+    both_html = _shell(guard_update_flow_available=False, guard_canvas_enabled=False)
+    both_slot = _status_slot(both_html)
+    assert both_slot, "multi-flag fixture must render the slot"
+    assert EDITING_PAUSED in both_slot.group(0)
+    assert CANVAS_OFF in both_slot.group(0)
 
     # True-error fixture (WriteGuard is genuinely blocking writes — the vault
     # itself is unavailable, not a benign disabled-feature note): the slot

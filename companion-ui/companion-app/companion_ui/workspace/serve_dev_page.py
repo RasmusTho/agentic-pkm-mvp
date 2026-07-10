@@ -63,6 +63,7 @@ from companion_ui.renderer import (
 )
 from companion_ui.renderer.link_resolver import VaultLinkResolver
 from companion_ui.workspace.calm_degraded import (
+    CANVAS_OFF,
     DEFER_CONSEQUENCE,
     LANE_BODY_EDIT,
     LANE_LABEL_GOVERNANCE_QUEUE,
@@ -71,6 +72,7 @@ from companion_ui.workspace.calm_degraded import (
     blocked_reason,
     blocked_recourse,
     calm_degraded,
+    calm_feature_status,
     humanise_degraded_reason,
     humanise_prose,
     humanise_provenance_token,
@@ -678,12 +680,20 @@ def _compose_bottom_bar_status(
     note).
 
     Reuses the single posture source of truth (``_compute_primary_posture``,
-    #1260) instead of inventing a second status idiom. Only the severe
-    postures (``blocked`` — WriteGuard is blocking writes, so vault settings
-    are genuinely unavailable; ``unavailable`` — the vault itself is
-    unresolved) are true errors and keep the alarm tone. ``degraded`` covers
-    benign disabled-feature notes (a channel/canvas flag is off while the
-    runtime is otherwise fine) and always renders calm.
+    #1260) for the true-error tier, and the ``calm_degraded`` module — the
+    sole emitter of unavailable-state copy — for every string, so no status
+    idiom is invented here. Only the severe postures (``blocked`` — WriteGuard
+    is blocking writes, so vault settings are genuinely unavailable;
+    ``unavailable`` — the vault itself is unresolved) are true errors and keep
+    the alarm tone.
+
+    The benign tier is composed from the individual guard flags, NOT from the
+    posture token alone: ``update_flow_available`` is deliberately absent from
+    ``_compute_primary_posture`` (posture stays "ok" when only the update-flow
+    channel is off), yet ``_render_body_edit_panel`` hides body editing on
+    exactly that flag — the silent state #3364 exists to surface. So the calm
+    note fires whenever a named feature flag is off, regardless of posture,
+    with a generic fallback when the posture is degraded for an unnamed reason.
 
     Returns ``(status_text, is_error)``. An empty ``status_text`` means there
     is nothing to show; the caller collapses the slot in that case.
@@ -692,16 +702,14 @@ def _compose_bottom_bar_status(
         return calm_degraded("Vault settings", "writes are blocked", NOTHING_MUTATED), True
     if posture == "unavailable":
         return calm_degraded("Vault settings", "vault is unresolved", NOTHING_LOST), True
-    if posture == "degraded":
-        parts: list[str] = []
-        if not update_flow_available:
-            parts.append("channel disabled")
-        if not canvas_enabled:
-            parts.append("canvas disabled")
-        if not parts:
-            parts.append("some features paused")
-        return " · ".join(parts), False
-    return "", False
+    return (
+        calm_feature_status(
+            update_flow_available=update_flow_available,
+            canvas_enabled=canvas_enabled,
+            otherwise_degraded=posture == "degraded",
+        ),
+        False,
+    )
 
 
 def _render_bottom_bar_status_slot(status_text: str, *, is_error: bool = False) -> str:
@@ -1124,7 +1132,10 @@ def _render_operator_telemetry_block(
     if not fields:
         return ""
     freshness_label, freshness_title = _workspace_header_freshness(fields)
-    canvas_token = "canvas off" if not canvas_enabled else "canvas on"
+    # #3364: CANVAS_OFF is the one shared wording for canvas-disabled — the
+    # bottom-bar status slot (calm_feature_status) reads the same constant, so
+    # the operator pill and the slot can never drift into two idioms.
+    canvas_token = CANVAS_OFF if not canvas_enabled else "canvas on"
     runtime_token = (
         "runtime degraded"
         if posture in {"blocked", "degraded", "unavailable"}
