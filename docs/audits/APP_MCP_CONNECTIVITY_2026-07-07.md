@@ -205,10 +205,11 @@ specs. Ranked by leverage:
   contracted transport. Every MCP client the owner touches becomes a governed vault client.
   Nothing else in this audit multiplies value like this item.
 - **B2 — Karakeep self-host (D1 ruling, decided not speculative).** Docker deployment on the mac
-  mini (`karakeep-app/karakeep`, AGPL-3.0, $0); a scheduled ingest job (`app/ingest/`-adjacent)
-  pulls saved links/notes/highlights via its REST API and writes candidates into the vault through
-  Mimer's governed capture path — same shape as B1's ingestion pattern, no MCP transport required
-  for this leg since it is Mimer's own worker doing the pulling, not an interactive MCP client.
+  mini (`karakeep-app/karakeep`, AGPL-3.0, $0). ADR-0049 controls the constituent boundary:
+  Heimdal pulls links/notes/highlights through Karakeep's REST API, attributes them, and publishes
+  durable evidence; Mimer/KAP starts at that handoff and refines it into deterministic,
+  review-required candidates through the governed candidate-writeback path. This leg does not use
+  companion capture and requires no MCP transport.
   Karakeep's bundled MCP server is a free bonus for ad hoc Claude access to the reading archive
   directly (Direction A), independent of the ingestion job.
 - **B3 — Swedish-first voice capture improvement on the existing Heimdal lane.** This is not a new
@@ -222,12 +223,16 @@ specs. Ranked by leverage:
   and later Omi. Backlog extraction must reconcile #3026/#3338 first and must not create a parallel
   capture or KAP-write lane. For a dyslexic operator this is the friction-killer; the SaaS shortcut
   (Voicenotes' official MCP) moves raw voice off-device, against the local-first capture posture.
-- **B4 — Direction C consumption slices.** CRE/KAP consuming external MCP signals via the existing
-  flagged remote-MCP seam: HA presence/state → context dimensions; Todoist/Bring! tasks → commitment
-  context (both D2-ruled, both Direction A adopt already — this slice is the runtime-consumption
-  follow-on, not the connection itself). Sequenced behind B1/B2.
-- **B5 (optional, trivial) — Kodi MCP** over JSON-RPC, only if media control from chat is actually
-  wanted; HA's Kodi integration may make it moot.
+- **B4 — Direction C consumption slices — enrich docs before backlog.** CRE/KAP consuming external
+  MCP signals remains sequenced behind B1/B2, but the current docs do not yet define lawful mappings
+  for HA presence/state → non-authoritative context or Todoist/Bring! tasks → commitment projections.
+  Authority, provenance, freshness/deletion, deduplication, privacy, read-only posture, and remote
+  failure semantics must be contracted per signal family before feature-breakdown. Direction A
+  connector setup remains operator configuration and must not be filed as implementation work.
+- **B5 (optional) — Kodi MCP — not actionable yet.** A direct JSON-RPC adapter is considered only
+  after the owner wants media control from chat and chooses it over Home Assistant's existing Kodi
+  integration. The HA route is Direction A operator configuration; no issue or spec is created from
+  this conditional item now.
 
 Explicit **non-builds**: Listonic (switch instead), Grammarly (drop), SVT Play (no sanctioned
 surface; delegate to Kodi addon), LightBurn (SVG handoff pattern instead), Bambu-direct
@@ -260,9 +265,11 @@ paid account for the shared project.
 
 `docs/ROADMAP.md :: External-connectivity (MCP) sequencing` now carries the bounded forward line:
 Direction A adoption is operator configuration (no backlog) and now includes both D2-ruled
-connections (Todoist, Bring! via Home Assistant); Direction B (B1 Mimer MCP server, B2 Karakeep
-self-host per the D1 ruling) is the build line pending feature-breakdown; Direction C stays
-deferred behind B1/B2. Both owner decisions (D1, D2) are now resolved; the only forward-looking
-open thread from this audit is the Mimer work-satellite (own LLM, staged, unimplemented) named
-under D2's ruling. This audit is the evidence base; it decides nothing by itself beyond the D1/D2
-rulings the owner already made.
+connections (Todoist, Bring! via Home Assistant); Direction B (B1 Mimer MCP server, parent #3366,
+and B2 Karakeep self-host/acquisition, parent #3367) is filed through
+`docs/MIMER_MCP_CLIENT_ADAPTER/` and `docs/KARAKEEP_MIMER_ACQUISITION/`; Direction C stays
+deferred behind B1/B2 and requires signal-family contracts before backlog extraction. B5 remains a
+conditional product choice, not backlog. Both owner decisions (D1, D2) are resolved. The Mimer
+work-satellite (own LLM, staged, unimplemented) remains a separate forward thread under D2's
+ruling, outside this build list. This audit remains evidence; the specification directories and
+GitHub issues are the executable task contracts.

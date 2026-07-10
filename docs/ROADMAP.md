@@ -59,8 +59,10 @@ claimed. The adapter preserves the authority envelope the `mimer-*` skills and
 feature-breakdown, and no MCP server exists today (`app/mcp/vault_tools.py` is internal plumbing,
 not a transport). A second build item joins it on the same footing: the audit's
 D1 owner decision (read-later consolidation) is ruled — self-host Karakeep on the mac mini as the
-free, local-first read-later/highlights source feeding Mimer ingestion via its REST API, alongside
-Raindrop.io kept (not replaced) as the bookmark layer with its official MCP adopted. **Direction
+free, local-first read-later/highlights source. Per ADR-0049, Heimdal owns Karakeep REST fetch,
+attribution, and the durable published-evidence handoff; Mimer/KAP owns refinement into
+review-required candidates after that handoff. Raindrop.io stays (not replaced) as the bookmark
+layer with its official MCP adopted. **Direction
 C — Mimer as an MCP client** (Home Assistant presence/state, calendar, tasks, reading history
 consumed as CRE context signals and Knowledge Acquisition Platform intake) is the concrete
 successor to the deferred CRE "external connectors" line and stays sequenced behind the Direction B
@@ -74,6 +76,10 @@ Standing governance invariant: generic third-party MCP servers never receive vau
 MCP-originated writes route through Mimer's governed capture endpoint. ADR-0056's separate,
 owner-permitted direct-filesystem transport remains available only under the client contract's
 human-delegation and write-discipline rules.
+Executable specification lanes: `docs/MIMER_MCP_CLIENT_ADAPTER/` (B1) and
+`docs/KARAKEEP_MIMER_ACQUISITION/` (B2). B3 reuses the existing Heimdal/voice lanes (#3026/#3338),
+while B4 remains docs-enrichment work and B5 remains conditional; neither Direction A connector
+configuration nor those unready items create implementation issues in this handoff.
 
 ## Status vocabulary
 - **Shipped** — merged to main; code/doc exists.
