@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import importlib
 import threading
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -17,7 +18,6 @@ from app.briefing.trigger import (
 )
 from app.vault.manager import VaultContext
 from app.write_guard import WriteGuard, WritesBlockedError
-from app.watcher.registry import BriefingTickCadence, _run_briefing_tick
 
 BRIEFING_DATE = date(2026, 7, 10)
 MORNING = datetime(2026, 7, 10, 5, 15, tzinfo=timezone.utc)  # 07:15 Stockholm
@@ -192,9 +192,14 @@ def test_manual_regenerate_preserves_vault_local_write_ceiling(tmp_path: Path) -
 
 
 def test_registry_briefing_tick_has_bounded_retry_cadence(tmp_path: Path) -> None:
+    registry = importlib.import_module("app.watcher.registry")
     context = _context(tmp_path)
-    cfg = SimpleNamespace(enable=True, vault_path=Path(context.active_vault_path or ""))
-    cadence = BriefingTickCadence(interval_seconds=900)
+    cfg = SimpleNamespace(
+        enable=True,
+        vault_path=Path(context.active_vault_path or ""),
+        stop_file=tmp_path / "watcher.stop",
+    )
+    cadence = registry.BriefingTickCadence(interval_seconds=900)
     trigger_result = SimpleNamespace(
         triggered=False,
         reason="generation_failed",
@@ -202,19 +207,33 @@ def test_registry_briefing_tick_has_bounded_retry_cadence(tmp_path: Path) -> Non
     )
     manager = SimpleNamespace(validate_vault=lambda _root: context)
     with (
-        patch("app.watcher.registry.VaultManager", return_value=manager),
-        patch(
-            "app.watcher.registry.scheduled_briefing_tick",
+        patch.object(registry, "VaultManager", return_value=manager),
+        patch.object(
+            registry,
+            "scheduled_briefing_tick",
             return_value=trigger_result,
         ) as scheduled,
     ):
-        first = _run_briefing_tick(cfg, now=1000, cadence=cadence)
-        second = _run_briefing_tick(cfg, now=1001, cadence=cadence)
-        third = _run_briefing_tick(cfg, now=1900, cadence=cadence)
+        first = registry._run_briefing_tick(cfg, now=1000, cadence=cadence)
+        second = registry._run_briefing_tick(cfg, now=1001, cadence=cadence)
+        third = registry._run_briefing_tick(cfg, now=1900, cadence=cadence)
     assert first["reason"] == "generation_failed"
     assert second == {"triggered": False, "reason": "cadence_not_due"}
     assert third["reason"] == "generation_failed"
     assert scheduled.call_count == 2
+
+
+def test_registry_briefing_tick_honors_watcher_stop_file(tmp_path: Path) -> None:
+    registry = importlib.import_module("app.watcher.registry")
+    stop_file = tmp_path / "watcher.stop"
+    stop_file.write_text("paused", encoding="utf-8")
+    cfg = SimpleNamespace(enable=True, vault_path=tmp_path, stop_file=stop_file)
+    cadence = registry.BriefingTickCadence(interval_seconds=900)
+    with patch.object(registry, "scheduled_briefing_tick") as scheduled:
+        result = registry._run_briefing_tick(cfg, now=1000, cadence=cadence)
+    assert result == {"triggered": False, "reason": "watcher_paused"}
+    assert cadence.last_attempt_at is None
+    scheduled.assert_not_called()
 
 
 def test_automatic_trigger_preserves_write_guard(tmp_path: Path) -> None:

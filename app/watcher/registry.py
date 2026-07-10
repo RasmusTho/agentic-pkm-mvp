@@ -1448,6 +1448,8 @@ def _run_briefing_tick(
 
     if not cfg.enable:
         return {"triggered": False, "reason": "watcher_disabled"}
+    if cfg.stop_file.exists():
+        return {"triggered": False, "reason": "watcher_paused"}
     if not cadence.claim_if_due(now=now):
         return {"triggered": False, "reason": "cadence_not_due"}
     try:
