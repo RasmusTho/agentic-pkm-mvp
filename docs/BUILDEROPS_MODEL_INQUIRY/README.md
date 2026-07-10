@@ -1,4 +1,5 @@
-State: Specification directory for a Builder System capability. Backlog filed; not yet implemented.
+State: Incremental implementation in progress. BMI-01 and BMI-02 are implemented; provider turns,
+desktop launchers, promotion, and end-to-end acceptance remain pending.
 Doc role: Specification directory
 Authority: Defines the BuilderOps pre-ticket model-inquiry capability and its task decomposition. BuilderOps Vault authority remains owned by ADR-0010.
 Owner: BuilderOps governance
@@ -38,6 +39,10 @@ its advisory claim files never guarantee exclusive ownership.
 | [Model Turn Adapters](MODEL_TURN_ADAPTERS.md) | BMI-03 | Structured command/API adapter contract, retries, and bounded adversarial loop. |
 | [Desktop Skill Launchers](DESKTOP_SKILL_LAUNCHERS.md) | BMI-04 | Codex and Claude Desktop skill packages that invoke the shared inquiry command. |
 | [Promotion And Traceability](PROMOTION_AND_TRACEABILITY.md) | BMI-05 | Readiness gate, PromotionIntent, Issue creation, and delivery lineage. |
+
+BMI-02 stores its durable record graph under
+`$BUILDEROPS_VAULT_ROOT/model-inquiries/<inquiry_id>/`. The CLI and HTTP routes share one service;
+`resume` only returns a restart plan until BMI-03 supplies bounded provider execution.
 
 ## Execution Order
 

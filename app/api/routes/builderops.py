@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.builderops.boundary import BuilderOpsBoundary
+from app.builderops.model_inquiry import ModelInquiryService
 from app.builderops.models import BuilderOpsConflictError, BuilderOpsLeaseError, BuilderOpsValidationError
 
 router = APIRouter(prefix="/builderops", tags=["builderops"])
@@ -50,8 +51,20 @@ class ReceiptAppendRequest(BuilderOpsCreateBase):
     idempotency_key: str
 
 
+class InquiryStartRequest(BaseModel):
+    question: str
+    workflow: str
+    inquiry_id: str | None = None
+    source_refs: list[dict[str, Any]] = Field(min_length=1)
+    created_by: dict[str, Any] | str | None = None
+
+
 def _boundary() -> BuilderOpsBoundary:
     return BuilderOpsBoundary.from_path()
+
+
+def _inquiry_service() -> ModelInquiryService:
+    return ModelInquiryService.from_env()
 
 
 def _payload(model: BaseModel) -> dict[str, Any]:
@@ -116,6 +129,31 @@ async def create_promotion_intent(request: PromotionIntentCreateRequest) -> dict
 async def append_receipt(request: ReceiptAppendRequest) -> dict[str, Any]:
     try:
         return {"record": _boundary().append_receipt(_payload(request))}
+    except BuilderOpsValidationError as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post("/inquiries")
+async def start_inquiry(request: InquiryStartRequest) -> dict[str, Any]:
+    try:
+        trace = _inquiry_service().start(**_payload(request))
+        return {"trace": trace}
+    except BuilderOpsValidationError as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/inquiries/{inquiry_id}/trace")
+async def trace_inquiry(inquiry_id: str) -> dict[str, Any]:
+    try:
+        return {"trace": _inquiry_service().trace(inquiry_id)}
+    except BuilderOpsValidationError as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post("/inquiries/{inquiry_id}/resume")
+async def resume_inquiry(inquiry_id: str) -> dict[str, Any]:
+    try:
+        return {"resume": _inquiry_service().resume(inquiry_id)}
     except BuilderOpsValidationError as exc:
         raise _http_error(exc) from exc
 
