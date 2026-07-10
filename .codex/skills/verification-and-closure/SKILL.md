@@ -102,14 +102,15 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 
 Verification owns the merge decision.
 
-For autonomous delivery, run the full gate chain unattended per `AGENTS.md :: Agency default`: wait for required checks to go green and resolve the local review gate, then merge — do not ask the owner to babysit. The prerequisites below are never waived (an unprotected branch does not relax them); only the human watching is removed.
+For autonomous delivery, run the full gate chain unattended per `AGENTS.md :: Agency default`: wait for required checks and repo-standard checks that cover the PR to go green, classify any red check before merge, and resolve the local review gate — do not ask the owner to babysit. The prerequisites below are never waived (an unprotected branch or non-required GitHub check does not relax them); only the human watching is removed.
 
 Wait **how** matters for CI: follow `_shared/CI_WAIT_CONTRACT.md` — use the shared `app.dispatcher.poll_backoff` helper through `scripts/await_pr_checks.sh <PR>` (no `--codex`; the review gate now runs locally per `Running the local review gate` below, not through the shared verdict poller), REST check-runs only, interval + cap + exponential backoff, honor `Retry-After` and x-ratelimit-reset headers, sleep the bulk of CI up front, and back off ≥60–120s. Never tight-poll `gh pr checks` or `gh pr view --json mergeStateStatus`; they are GraphQL and drain the budget shared by every concurrent agent.
 
 Prerequisites for merge:
 
 - current SHA truth is intact
-- required checks are green on the current head SHA
+- required checks and repo-standard checks that cover the changed surface are green on the current head SHA
+- any red check that covers the changed surface is a hard stop until fixed, rerun green, or explicitly classified as unrelated by evidence; this includes `Unit tests (not pg)` even when branch protection does not require it
 - no unresolved blocking review comments remain
 - the local review gate is resolved (see `Running the local review gate` below, including `Re-triggering after a fix`) — a clean run, or a run whose findings are all fixed-and-re-verified or explicitly waived by the owner, is a pass; any unresolved finding blocks until addressed; a fix alone, without the required re-verification, does not satisfy this prerequisite
 - when a review-thread closure trigger applies, no addressed review thread remains unresolved without a reply naming the fixing PR or merge commit
@@ -122,7 +123,7 @@ Prerequisites for merge:
 ### Running the local review gate 🤖
 
 The PR review gate runs locally via the built-in `/code-review` skill instead of waiting on an
-external GitHub-native reviewer bot. Run it once the PR's required checks are green (per
+external GitHub-native reviewer bot. Run it once the PR's required and relevant repo-standard checks are green (per
 `_shared/CI_WAIT_CONTRACT.md`, without `--codex`) and before merge:
 
 - This section is an explicit repo-local authorization for any delivery or closure agent to spawn the

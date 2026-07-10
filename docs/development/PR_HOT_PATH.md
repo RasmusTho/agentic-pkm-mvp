@@ -35,7 +35,8 @@ Default rule:
 - run the smallest checks that still cover the changed surface
 - do not expand into a full governance sweep for a low-risk PR
 - required checks must be known, current, and attached to the current head SHA
-- failing checks must be classified before merge
+- relevant repo-standard checks that cover the changed surface must be current, even when GitHub branch protection does not require them
+- failing checks that cover the changed surface are hard stops until fixed, rerun green, or explicitly classified as unrelated by evidence; `Unit tests (not pg)` is a hard stop when red on an app/test/runtime-affecting PR
 
 ## PR Body Preparation
 
@@ -228,9 +229,9 @@ Low-risk wording or reference-only skill edits may stay on the hot path if safet
 
 - current SHA truth before merge
 - branch/worktree sanity before commit, push, or merge
-- required checks must be known and non-stale
+- required and relevant repo-standard checks must be known and non-stale
 - blocking review feedback must be addressed or explicitly classified
 - review-thread closure checks are trigger-based; ordinary PRs without prior-review anchors or known unresolved feedback stay on the lightweight hot path
-- failing required tests or checks must be classified before merge
+- failing required tests or checks must be classified before merge; failing relevant repo-standard checks cannot be bypassed just because the branch is unprotected
 - minimal delivery receipt is required
 - delivery traceability must be preserved through either an issue-backed PR or a direct repair block
