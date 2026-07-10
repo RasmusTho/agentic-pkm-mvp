@@ -80,6 +80,22 @@ def normalize_note_path(value: str | None, *, vault_root: Path) -> str | None:
     return path.as_posix().removeprefix("./")
 
 
+def record_source_label(record: dict[str, Any]) -> str | None:
+    """Best-effort component/source label for a record.
+
+    Different emitters shape the outbox ``source`` field differently: some
+    write a plain string (``app.events.schema.make_outbox_event``), others
+    write a nested object carrying ``component``/``name``/``trigger``
+    (``app.events.panel.PanelEventSource``). Both shapes are read here so
+    downstream display-field derivation (run labels) can key off a single
+    normalized string regardless of emitter.
+    """
+    source = record.get("source")
+    if isinstance(source, dict):
+        return first_str(source.get("component"), source.get("name"), source.get("trigger"))
+    return first_str(source)
+
+
 def coerce_timestamp(value: Any) -> str:
     if isinstance(value, datetime):
         return value.isoformat().replace("+00:00", "Z")
@@ -182,4 +198,5 @@ __all__ = [
     "read_receipt_source_records",
     "record_event",
     "record_payload",
+    "record_source_label",
 ]

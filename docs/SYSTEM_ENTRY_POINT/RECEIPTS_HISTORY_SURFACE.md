@@ -21,12 +21,17 @@ Give governed outcomes a place to live beyond a transient toast. Receipts are th
 - Renders a bounded list of **existing runtime-produced receipt projections** (outcome — success / blocked / logged / partial / rejected — id, target path/artifact, timestamp), with the shipped receipt-pill semantics and authority colors.
 - Strictly read-only: the surface queries existing receipt projections only; it adds no receipt-write path, performs no aggregation the runtime does not declare, and **never invents, edits, or re-derives a receipt**.
 - Blocked receipts render with their guard posture per `BLOCKED_AND_STALE_STATE_SPEC.md` — history shows held boundaries as held boundaries, not errors.
+- **Receipts v2 (#3363, audit `companion-ui/design_handoff/2026-07-07-uat-design-audit/DESIGN_AUDIT.md` §3.2):** the runtime projection (`app/receipts/artifact_receipts.py`) additionally declares `display_verb`, `run_key`, `run_label`, and `target_absolute` for `panel.action.logged`/`panel.action.blocked` rows, with documented fallbacks (`"Recorded"` / `"Run"`) when a record does not declare enough — still never invented by the UI. Rows render grouped under run headers (label + relative time), leading with verb + vault-relative target; the absolute path is hover-only (`title`); the receipt hash and absolute ISO timestamp sit behind a per-row "integrity" disclosure instead of the always-visible row text.
 
 ## Concretely
 
 ```text
 receipts.open → modal over the anchor
-rows: "receipt · success · note/foo.md · 2026-06-10T09:12Z", "receipt · blocked (WriteGuard) · …"
+Governed capture · 2 min ago
+  Appended to   Inbox/inbox.md      ⌄ integrity
+  Linked        settings/workflow.md  ⌄ integrity
+Vault sync · 14 min ago
+  Created       Projects/…/README.md  ⌄ integrity
 no action buttons besides inspect/dismiss; Esc → anchor
 ```
 
@@ -46,10 +51,20 @@ A governed system the human cannot audit afterwards degrades into "trust me." Hi
   Verify: `tests/companion_ui/test_receipts_history_surface.py::test_empty_history_is_honest`
 - [ ] The modal dismisses to the anchor with no route reset.
   Verify: `tests/companion_ui/test_receipts_history_surface.py::test_dismisses_to_anchor`
+- [x] (#3363) The backend projection declares `display_verb`, `run_key`, `run_label`, and `target_absolute` for `panel.action.logged`/`panel.action.blocked` rows, with documented fallbacks.
+  Verify: `tests/receipts/test_artifact_receipts_display_fields.py::test_projection_declares_display_fields`
+- [x] (#3363) History rows render grouped under run headers (label + relative time), verb + vault-relative target first, ordered most-recent-first within and across runs.
+  Verify: `tests/companion_ui/test_receipts_history_v2.py::test_rows_grouped_by_run`
+- [x] (#3363) No absolute filesystem path appears in the always-visible text of a row; the absolute path is reachable via hover/disclosure.
+  Verify: `tests/companion_ui/test_receipts_history_v2.py::test_target_paths_vault_relative`
+- [x] (#3363) Receipt hash and absolute ISO timestamp are inside a per-row disclosure (`integrity`), not in the always-visible row text.
+  Verify: `tests/companion_ui/test_receipts_history_v2.py::test_hash_behind_integrity_disclosure`
 
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/companion_ui/test_receipts_history_surface.py`
+- `pytest -q tests/companion_ui/test_receipts_history_v2.py`
+- `pytest -q tests/receipts/test_artifact_receipts_display_fields.py`
 - `pytest -q tests/companion_ui/test_vault_browser_receipts.py`
 - `ruff check app tests`
 

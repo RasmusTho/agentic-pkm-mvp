@@ -18,8 +18,13 @@ Give governed outcomes a place to live beyond a transient toast:
   projections**: the per-note ``receipts`` rows the runtime already serves on
   ``GET /api/companion/vault-browser`` (projected from governed outbox
   records and promotion receipts by ``app/receipts/artifact_receipts.py``).
-  Outcome, id, target path, and timestamp render verbatim — the runtime's
-  words, never re-classified, never re-derived.
+  Rows are grouped under run headers by the runtime-declared ``run_key``
+  (Receipts v2, #3363), verb + vault-relative target lead each row, the
+  absolute path is hover-only, and the receipt hash + absolute ISO timestamp
+  sit behind a per-row "integrity" disclosure. Every displayed value —
+  verb, run label, target, hash, timestamp — is the runtime's own word or a
+  documented fallback when the runtime record does not declare one; never
+  re-classified, never invented.
 - Strictly read-only: the surface performs reads only. There is no receipt
   creation, no mutation affordance, no aggregation the runtime does not
   declare, and no receipt is ever invented, edited, or re-derived. A surface
@@ -40,6 +45,7 @@ and serves the server-rendered fragment at
 from __future__ import annotations
 
 import html as _html
+from datetime import datetime, timezone
 from typing import Any
 
 from companion_ui.workspace.guidance_layer import (
@@ -76,6 +82,16 @@ RECEIPTS_HISTORY_MAX_ROWS = 50
 # own ``state`` word — the UI never re-classifies an outcome into "blocked".
 GUARD_HELD_RECEIPT_STATES: tuple[str, ...] = ("blocked",)
 
+# Receipts v2 (#3363) display-field fallbacks. The runtime projection
+# (app/receipts/artifact_receipts.py) declares ``display_verb``, ``run_key``,
+# ``run_label``, and ``target_absolute`` with its own documented fallbacks;
+# these mirror the same honest defaults so an older runtime payload that does
+# not yet carry the new fields still renders a calm, truthful row instead of
+# a blank or invented one. The UI never derives a verb or run the runtime did
+# not declare.
+RECEIPT_DISPLAY_VERB_FALLBACK = "Recorded"
+RECEIPT_RUN_LABEL_FALLBACK = "Run"
+
 
 def _e(value: object) -> str:
     return _html.escape(str(value if value is not None else ""), quote=True)
@@ -87,6 +103,14 @@ def _row_from_receipt(receipt: dict, *, note_path: str) -> dict[str, Any]:
     Every rendered field is the runtime's own value. ``guard_held`` is the
     one presentation flag, mapped only from the runtime-declared ``state``
     per :data:`GUARD_HELD_RECEIPT_STATES`.
+
+    Receipts v2 (#3363): ``verb``, ``run_key``, ``run_label``, and
+    ``target_absolute`` read the runtime-declared ``display_verb``,
+    ``run_key``, ``run_label``, and ``target_absolute`` fields verbatim when
+    present. When the runtime record does not declare them (older payload,
+    or a record the projection could not classify further), the row falls
+    back to the same honest defaults the runtime itself documents — the UI
+    never derives a verb or run the runtime did not declare.
     """
     state = str(receipt.get("state") or "")
     target = str(
@@ -95,15 +119,22 @@ def _row_from_receipt(receipt: dict, *, note_path: str) -> dict[str, Any]:
         or note_path
         or ""
     )
+    receipt_id = str(receipt.get("receipt_id") or "")
+    trace_id = str(receipt.get("trace_id") or "")
+    run_key = str(receipt.get("run_key") or "") or (trace_id or receipt_id)
     return {
-        "receipt_id": str(receipt.get("receipt_id") or ""),
+        "receipt_id": receipt_id,
         "status": str(receipt.get("status") or state or ""),
         "state": state,
         "guard_held": state in GUARD_HELD_RECEIPT_STATES,
         "target": target,
+        "target_absolute": str(receipt.get("target_absolute") or target or ""),
         "timestamp": str(receipt.get("timestamp") or ""),
         "action_type": str(receipt.get("action_type") or ""),
-        "trace_id": str(receipt.get("trace_id") or ""),
+        "trace_id": trace_id,
+        "verb": str(receipt.get("display_verb") or "") or RECEIPT_DISPLAY_VERB_FALLBACK,
+        "run_key": run_key,
+        "run_label": str(receipt.get("run_label") or "") or RECEIPT_RUN_LABEL_FALLBACK,
     }
 
 
@@ -196,8 +227,81 @@ def governance_counts_row_html(governance: object) -> str:
     )
 
 
+def _parse_timestamp(value: str) -> datetime | None:
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _relative_time(timestamp: str, *, now: datetime) -> str:
+    """Presentation-only relative time, e.g. ``2 min ago``.
+
+    Server-rendered relative to the caller-supplied reference time (payload
+    time or request time); the runtime's absolute timestamp is always kept
+    verbatim elsewhere (the per-row integrity disclosure) so nothing here
+    replaces the runtime's own value — it is purely a second, friendlier
+    rendering of it. Returns ``""`` when the runtime timestamp cannot be
+    parsed, so callers can omit the relative-time suffix entirely rather than
+    show a wrong or invented duration.
+    """
+    parsed = _parse_timestamp(timestamp)
+    if parsed is None:
+        return ""
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    reference = now if now.tzinfo is not None else now.replace(tzinfo=timezone.utc)
+    delta_seconds = (reference - parsed).total_seconds()
+    if delta_seconds < 0:
+        delta_seconds = 0
+    if delta_seconds < 60:
+        return "just now"
+    minutes = int(delta_seconds // 60)
+    if minutes < 60:
+        return f"{minutes} min ago"
+    hours = int(delta_seconds // 3600)
+    if hours < 24:
+        return f"{hours} hr ago"
+    days = int(delta_seconds // 86400)
+    return f"{days} day{'s' if days != 1 else ''} ago"
+
+
+def _group_rows_by_run(
+    rows: list[dict[str, Any]], *, now: datetime
+) -> list[dict[str, Any]]:
+    """Group already most-recent-first rows by the runtime-declared run key.
+
+    Preserves the incoming (most-recent-first) row order both within a group
+    and across groups: a group is placed at the position of the first row
+    that belongs to it, so the group holding the single most recent row
+    always renders first. Grouping is presentation bookkeeping only — it
+    never merges receipts the runtime did not already tag with the same
+    ``run_key``.
+    """
+    groups: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for row in rows:
+        run_key = row["run_key"]
+        if run_key not in groups:
+            groups[run_key] = {
+                "run_key": run_key,
+                "run_label": row["run_label"],
+                "relative_time": _relative_time(row["timestamp"], now=now),
+                "rows": [],
+            }
+            order.append(run_key)
+        groups[run_key]["rows"].append(row)
+    return [groups[key] for key in order]
+
+
 def receipts_history_view(
-    payload: dict, *, max_rows: int = RECEIPTS_HISTORY_MAX_ROWS
+    payload: dict,
+    *,
+    max_rows: int = RECEIPTS_HISTORY_MAX_ROWS,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     """Pure projection of the vault-browser payload into the history view.
 
@@ -213,6 +317,14 @@ def receipts_history_view(
       runtime-declared ``receipt_id`` (the runtime may attach the same
       receipt to several notes), ordered most-recent-first by the
       runtime-declared timestamp, and bounded to ``max_rows``.
+
+    Receipts v2 (#3363): ``groups`` presents the same bounded ``rows`` list
+    grouped by the runtime-declared ``run_key`` (reusing ``trace_id`` when
+    the runtime attaches one), most-recent-first within and across runs —
+    grouping is applied after the bound, so the bound still counts receipt
+    rows, not runs. ``now`` is the relative-time reference (defaults to the
+    current UTC time); callers may pass a fixed value for deterministic
+    server rendering/testing.
 
     No aggregation the runtime does not declare: no counts are derived beyond
     the rendered list length, no outcomes are merged, nothing is invented.
@@ -240,9 +352,12 @@ def receipts_history_view(
             rows.append(row)
     rows.sort(key=lambda row: str(row.get("timestamp") or ""), reverse=True)
     truncated = len(rows) > max_rows
+    bounded_rows = rows[:max_rows]
+    reference_now = now or datetime.now(tz=timezone.utc)
     return {
         "source_available": source_available,
-        "rows": rows[:max_rows],
+        "rows": bounded_rows,
+        "groups": _group_rows_by_run(bounded_rows, now=reference_now),
         "truncated": truncated,
     }
 
@@ -261,35 +376,65 @@ def _row_html(row: dict[str, Any]) -> str:
             'data-testid="receipts-history-guard-note" data-tone="calm">'
             "guard-held — boundary held; nothing was mutated</span>"
         )
+    # Receipts v2 (#3363): verb + vault-relative target lead the row (the
+    # always-visible text); the absolute path moves to the title attribute
+    # for hover, and the receipt hash + absolute ISO timestamp collapse
+    # behind a per-row "integrity" disclosure — never in the always-visible
+    # row text. data-receipt-status/data-receipt-state keep the runtime's
+    # own outcome word available to callers without displaying it as the
+    # lead text (the verb is the lead now, per the design audit).
     return (
         '<li class="receipts-history-row" data-testid="receipts-history-row" '
         f'data-receipt-id="{_e(row["receipt_id"])}" '
         f'data-receipt-status="{_e(row["status"])}" '
         f'data-receipt-state="{_e(row["state"])}" '
         f'data-guard-held="{guard_held}">'
-        '<span class="receipts-history-outcome" '
-        f'data-testid="receipts-history-outcome">{_e(row["status"])}</span>'
+        '<span class="receipts-history-verb" '
+        f'data-testid="receipts-history-verb">{_e(row["verb"])}</span>'
         '<span class="receipts-history-target" '
-        f'data-testid="receipts-history-target">{_e(row["target"])}</span>'
+        f'data-testid="receipts-history-target" '
+        f'title="{_e(row["target_absolute"])}">{_e(row["target"])}</span>'
+        '<details class="receipts-history-integrity" '
+        'data-testid="receipts-history-integrity">'
+        '<summary data-testid="receipts-history-integrity-summary">integrity</summary>'
         '<span class="receipts-history-timestamp" '
         f'data-testid="receipts-history-timestamp">{_e(row["timestamp"])}</span>'
         '<span class="receipts-history-id" '
         f'data-testid="receipts-history-id">{_e(row["receipt_id"])}</span>'
+        "</details>"
         f"{guard_note}</li>"
     )
 
 
-def receipts_history_fragment(payload: dict) -> str:
+def _run_group_html(group: dict[str, Any]) -> str:
+    header_text = group["run_label"]
+    if group["relative_time"]:
+        header_text = f"{group['run_label']} · {group['relative_time']}"
+    return (
+        '<li class="receipts-history-run" data-testid="receipts-history-run" '
+        f'data-run-key="{_e(group["run_key"])}">'
+        '<div class="receipts-history-run-header" '
+        f'data-testid="receipts-history-run-header">{_e(header_text)}</div>'
+        '<ol class="receipts-history-run-rows" '
+        'data-testid="receipts-history-run-rows">'
+        + "".join(_row_html(row) for row in group["rows"])
+        + "</ol></li>"
+    )
+
+
+def receipts_history_fragment(payload: dict, *, now: datetime | None = None) -> str:
     """Server-rendered history fragment from the existing runtime projection.
 
-    Pure render of runtime-declared receipt rows — outcome, id, target, and
-    timestamp exactly as supplied. Served at
-    :data:`RECEIPTS_HISTORY_FRAGMENT_ROUTE` and injected into the modal body
-    by the controller. Three honest states, mirroring the shipped inspector
-    semantics: rows, empty (source connected, none found), and source not
-    connected.
+    Pure render of runtime-declared receipt rows, grouped under run headers
+    (Receipts v2, #3363): verb + vault-relative target lead each row, the
+    absolute path is hover-only (title attribute), and the receipt hash +
+    absolute ISO timestamp sit behind a per-row "integrity" disclosure.
+    Served at :data:`RECEIPTS_HISTORY_FRAGMENT_ROUTE` and injected into the
+    modal body by the controller. Three honest states, mirroring the shipped
+    inspector semantics: rows, empty (source connected, none found), and
+    source not connected.
     """
-    view = receipts_history_view(payload)
+    view = receipts_history_view(payload, now=now)
     if not view["source_available"]:
         body = (
             '<p class="receipts-history-unavailable" '
@@ -308,7 +453,7 @@ def receipts_history_fragment(payload: dict) -> str:
         body = (
             '<ol class="receipts-history-list" '
             'data-testid="receipts-history-list">'
-            + "".join(_row_html(row) for row in view["rows"])
+            + "".join(_run_group_html(group) for group in view["groups"])
             + "</ol>"
         )
     truncated = "true" if view["truncated"] else "false"
@@ -431,24 +576,43 @@ def receipts_history_modal_markup() -> str:
     .receipts-history-list {
       display: flex;
       flex-direction: column;
+      gap: 12px;
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+    .receipts-history-run {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .receipts-history-run-header {
+      color: var(--fg-3, #3d5570);
+      font-family: var(--font-mono, monospace);
+      font-size: var(--text-xs, 11px);
+    }
+    .receipts-history-run-rows {
+      display: flex;
+      flex-direction: column;
       gap: 6px;
       list-style: none;
       margin: 0;
       padding: 0;
     }
     .receipts-history-row {
+      align-items: baseline;
       border: 1px solid var(--border, #152030);
       border-radius: 8px;
       display: flex;
-      flex-direction: column;
-      gap: 2px;
+      flex-wrap: wrap;
+      gap: 8px;
       padding: 8px 10px;
     }
-    .receipts-history-outcome {
+    .receipts-history-verb {
       color: var(--fg-1, #dce8f0);
-      font-family: var(--font-mono, monospace);
-      font-size: var(--text-xs, 11px);
-      text-transform: lowercase;
+      font-family: var(--font-ui, sans-serif);
+      font-size: var(--text-sm, 13px);
+      font-weight: 600;
     }
     .receipts-history-target {
       color: var(--fg-2, #7a9ab8);
@@ -456,6 +620,18 @@ def receipts_history_modal_markup() -> str:
       font-size: var(--text-sm, 13px);
       word-break: break-all;
     }
+    .receipts-history-integrity {
+      color: var(--fg-3, #3d5570);
+      flex-basis: 100%;
+      font-family: var(--font-mono, monospace);
+      font-size: var(--text-xs, 11px);
+    }
+    .receipts-history-integrity summary {
+      cursor: pointer;
+      list-style: none;
+    }
+    .receipts-history-integrity summary::-webkit-details-marker { display: none; }
+    .receipts-history-integrity summary::before { content: "\2304 "; }
     .receipts-history-timestamp,
     .receipts-history-id {
       color: var(--fg-3, #3d5570);
@@ -469,7 +645,7 @@ def receipts_history_modal_markup() -> str:
       border-color: var(--amber-dim, #805010);
       border-left: 3px solid var(--amber, #f09030);
     }
-    .receipts-history-row[data-guard-held="true"] .receipts-history-outcome {
+    .receipts-history-row[data-guard-held="true"] .receipts-history-verb {
       color: var(--amber, #f09030);
     }
     .receipts-history-guard-note {
@@ -578,6 +754,8 @@ def receipts_history_script() -> str:
 
 __all__ = [
     "GUARD_HELD_RECEIPT_STATES",
+    "RECEIPT_DISPLAY_VERB_FALLBACK",
+    "RECEIPT_RUN_LABEL_FALLBACK",
     "RECEIPTS_HISTORY_FRAGMENT_ROUTE",
     "RECEIPTS_HISTORY_MAX_ROWS",
     "RECEIPTS_OVERLAY_ID",

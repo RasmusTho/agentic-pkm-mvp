@@ -13,6 +13,7 @@ from app.receipts.outbox_sources import (
     read_receipt_source_records,
     record_event,
     record_payload,
+    record_source_label,
 )
 from app.receipts.promotion_receipts import query_promotion_receipts
 
@@ -27,6 +28,85 @@ _RECEIPT_SUPPORTING_EVENTS = {
     "panel.action.blocked",
     "panel.action.logged",
 }
+
+# Display-field fallbacks (#3363, Receipts v2). The UI must never invent a
+# verb or run the runtime did not declare -- these are the honest defaults
+# used only when the governed record does not carry enough to name either.
+DISPLAY_VERB_FALLBACK = "Recorded"
+RUN_LABEL_FALLBACK = "Run"
+
+# Known reason/intent-type vocabulary already emitted by producers under
+# app/curation and app/agents/panel_agent -- additive display-only mapping,
+# never a re-classification of the record's own status/state/action_type.
+_VERB_BY_REASON: dict[str, str] = {
+    "curation_finding_proposed": "Proposed",
+}
+_VERB_BY_INTENT_TYPE: dict[str, str] = {
+    "append": "Appended to",
+    "create": "Created",
+    "link": "Linked",
+    "zone_move": "Moved",
+}
+
+# Known emitter component labels (app.events.schema source / PanelEventSource
+# component) mapped to a human run label. Anything else falls back to
+# RUN_LABEL_FALLBACK rather than guessing.
+_RUN_LABEL_BY_SOURCE: dict[str, str] = {
+    "panel_agent.confirmation": "Governed capture",
+    "curation.proposal_writer": "Curation pass",
+}
+
+
+def _display_verb(event: str, payload: dict[str, Any]) -> str:
+    if event == "panel.action.blocked":
+        return "Blocked"
+    declared = first_str(payload.get("display_verb"), payload.get("verb"))
+    if declared:
+        return declared
+    intent_type = first_str(
+        payload.get("intent_type"),
+        nested(payload, "action", "intent_type"),
+        nested(payload, "mapping", "intent_type"),
+    )
+    if intent_type:
+        mapped = _VERB_BY_INTENT_TYPE.get(intent_type.strip().lower())
+        if mapped:
+            return mapped
+    reason = first_str(payload.get("reason"))
+    if reason:
+        mapped_reason = _VERB_BY_REASON.get(reason)
+        if mapped_reason:
+            return mapped_reason
+    return DISPLAY_VERB_FALLBACK
+
+
+def _run_label(record: dict[str, Any], payload: dict[str, Any]) -> str:
+    declared = first_str(payload.get("run_label"))
+    if declared:
+        return declared
+    source_label = record_source_label(record)
+    if source_label:
+        mapped = _RUN_LABEL_BY_SOURCE.get(source_label)
+        if mapped:
+            return mapped
+    return RUN_LABEL_FALLBACK
+
+
+def _run_key(record: dict[str, Any], payload: dict[str, Any], receipt_id: str) -> str:
+    declared = first_str(payload.get("run_key"))
+    if declared:
+        return declared
+    trace_id = first_str(record.get("trace_id"), payload.get("trace_id"))
+    return trace_id or receipt_id
+
+
+def _target_absolute(raw_target: str | None, *, vault_root: Path) -> str | None:
+    if not raw_target:
+        return None
+    path = Path(raw_target).expanduser()
+    if path.is_absolute():
+        return path.as_posix()
+    return (vault_root / path).as_posix()
 
 
 def receipts_for_artifacts(
@@ -117,16 +197,14 @@ def _project_receipt_record(
         nested(payload, "note", "uuid"),
         nested(payload, "artifact_linkage", "note_uuid"),
     )
-    artifact_path = normalize_note_path(
-        first_str(
-            payload.get("artifact_path"),
-            payload.get("note_path"),
-            payload.get("path"),
-            nested(payload, "note", "path"),
-            nested(payload, "artifact_linkage", "note_path"),
-        ),
-        vault_root=vault_root,
+    raw_target = first_str(
+        payload.get("artifact_path"),
+        payload.get("note_path"),
+        payload.get("path"),
+        nested(payload, "note", "path"),
+        nested(payload, "artifact_linkage", "note_path"),
     )
+    artifact_path = normalize_note_path(raw_target, vault_root=vault_root)
     if not artifact_uuid and not artifact_path:
         return None
 
@@ -157,6 +235,12 @@ def _project_receipt_record(
         "status": status,
         "timestamp": timestamp,
         "state": state,
+        # Additive display fields (#3363, Receipts v2) -- always declared with
+        # documented fallbacks; existing fields above keep their names/values.
+        "display_verb": _display_verb(event, payload),
+        "run_key": _run_key(record, payload, receipt_id),
+        "run_label": _run_label(record, payload),
+        "target_absolute": _target_absolute(raw_target, vault_root=vault_root),
     }
     return receipt, artifact_uuid, artifact_path
 
@@ -192,4 +276,9 @@ def _requested_by(record: dict[str, Any], payload: dict[str, Any]) -> str | None
     )
 
 
-__all__ = ["ArtifactReceiptTarget", "receipts_for_artifacts"]
+__all__ = [
+    "ArtifactReceiptTarget",
+    "DISPLAY_VERB_FALLBACK",
+    "RUN_LABEL_FALLBACK",
+    "receipts_for_artifacts",
+]
