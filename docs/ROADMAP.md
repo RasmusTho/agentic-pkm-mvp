@@ -45,6 +45,23 @@ deliberate-suppression receipt per candidate and projects threshold-cleared in-a
 remaining reach-out work is OS-push delivery and external connectors, which stay deferred; routine
 issue movement for this line belongs in BuilderOps RoadmapExecutionItem records.
 
+External-connectivity (MCP) sequencing: the operator's app estate and its MCP surface are
+inventoried in `docs/audits/APP_MCP_CONNECTIVITY_2026-07-07.md` (advisory snapshot). Three
+directions are deliberately kept separate. **Direction A — assistant connectors** (Claude/agent
+sessions connecting to third-party MCP servers such as Home Assistant, Todoist, Drafts, Google
+Workspace) is operator configuration, not backlog work, and creates no roadmap claims.
+**Direction B — Mimer as an MCP server** is the first build candidate: a thin MCP transport over
+the existing governed ask/capture/retrieve/receipt endpoints, realizing the client contract the
+`mimer-*` skills already encode (`docs/contracts/MIMER_CLIENT_CONTRACT.md`); it enters the backlog
+only through feature-breakdown, and no MCP server exists today (`app/mcp/vault_tools.py` is
+internal plumbing, not a transport). **Direction C — Mimer as an MCP client** (Home Assistant
+presence/state, calendar, tasks, reading history consumed as CRE context signals and Knowledge
+Acquisition Platform intake) is the concrete successor to the deferred CRE "external connectors"
+line and stays sequenced behind Direction B plus the audit's owner decisions D1/D2 (read-later
+and task-home consolidation). Standing governance invariant: agent writes to the vault route
+through Mimer's governed write path only — generic third-party vault-writing MCP servers are
+excluded regardless of direction.
+
 ## Status vocabulary
 - **Shipped** — merged to main; code/doc exists.
 - **Operationally accepted** — proven on real vault/external samples with runbook/soak.
@@ -98,6 +115,7 @@ issue movement for this line belongs in BuilderOps RoadmapExecutionItem records.
   - Canvas-session scaffolding is shipped in bounded form through #598/#599/#600/#601, and owner-doc promotion has landed via subsequent docs work: session logs, body-scoped co-authoring, governance-intent routing, and a gated API/CLI surface now exist behind `CANVAS_ENABLED`. Broader hybrid Panel/Chat behavior and richer Chat cognition remain separate follow-up work.
 - **Later**
   - Watcher auto-exec of panel plans with guardrails and rollback; richer panel actions (summary/reply) via tool/MCP boundary.
+  - External-connectivity (MCP) line: Mimer-as-MCP-server first build candidate (Direction B), then runtime consumption of external MCP signal sources (Direction C) — sequencing and governance invariant in `External-connectivity (MCP) sequencing` above; evidence base `docs/audits/APP_MCP_CONNECTIVITY_2026-07-07.md`.
   - PanelAgent 2.0 expansion beyond the current slices remains bounded even after real-vault acceptance; break new behavior into smaller tracked slices first.
   - Reasoning/reflective layers with eval gates; expanded observability counters for orchestration/A2A.
   - Collaboration/multi-user after single-user flows are stable.
