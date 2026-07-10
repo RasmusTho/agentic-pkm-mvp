@@ -126,6 +126,12 @@ def test_session_open_and_close_call_canvas_api() -> None:
 
 
 def test_edit_controls_disabled_outside_active() -> None:
+    # #3362 (DESIGN_AUDIT.md §2/§6) supersedes the per-action unavailable
+    # explanations for a genuinely idle canvas (no session, no recovery/
+    # conflict): the canvas lane rests silently behind a hidden marker — no
+    # edit affordance and no idle prose. The full controls suite (including
+    # the unavailable reason-states) still renders whenever a session exists
+    # (see test_session_state_indicator) or recovery/conflict is flagged.
     html = _html_for_canvas(
         session_id=None,
         session_state="idle",
@@ -133,8 +139,10 @@ def test_edit_controls_disabled_outside_active() -> None:
     )
 
     assert 'data-testid="workspace-canvas-edit-submit"' not in html
-    assert 'data-testid="workspace-canvas-action-unavailable"' in html
-    assert 'data-action="apply-body-edit"' in html
+    assert 'data-canvas-rest="true"' in html
+    assert "Canvas action is unavailable" not in html
+    assert "No active Canvas session" not in html
+    assert "Body edit composer unavailable" not in html
 
 
 def test_session_state_indicator() -> None:

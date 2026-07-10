@@ -268,6 +268,10 @@ def test_degraded_or_absent_commitments_render_safely() -> None:
     assert "unavailable" in degraded_line.lower()
     # Must NOT claim a confident empty surface when degraded.
     assert "none" not in degraded_line.lower()
+    # #3362 review finding 6 — the server-declared degraded_reason is demoted
+    # from visible copy but stays reachable (data attribute + hover title).
+    assert 'data-degraded-reason="durable_read_failed"' in degraded_line
+    assert 'title="Commitments read degraded: durable_read_failed"' in degraded_line
 
     # (b) Absent field: an older payload with no ``commitments`` at all. The
     # surface must degrade to not-shown, not crash and not imply zero commitments.

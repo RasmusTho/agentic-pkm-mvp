@@ -525,12 +525,17 @@ class TestHumanFacingCopy:
             assert leak not in lower_html
 
     def test_default_canvas_unavailable_actions_are_reason_states_not_buttons(self) -> None:
+        # #3362 supersedes the visible reason-state for a canvas with no
+        # active session: no action buttons AND no unavailable prose — the
+        # canvas lane rests silently (hidden marker only). Reason-states
+        # still render inside an actual session context.
         html = _html(guard_canvas_enabled=False, guard_workspace_update_available=False)
         assert 'data-testid="workspace-canvas-start"' not in html
         assert 'data-testid="workspace-canvas-close"' not in html
         assert 'data-testid="workspace-canvas-edit-submit"' not in html
         assert 'data-testid="workspace-canvas-undo"' not in html
-        assert 'data-testid="workspace-canvas-action-unavailable"' in html
+        assert "Canvas editing is currently disabled" not in html
+        assert 'data-canvas-rest="true"' in html
 
 
 # ---------------------------------------------------------------------------

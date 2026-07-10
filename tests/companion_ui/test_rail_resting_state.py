@@ -119,6 +119,19 @@ def test_idle_rail_is_single_line_per_lane() -> None:
     assert "Suggestions are idle." not in rail
     assert "Canvas editing is currently disabled" not in rail
 
+    # Review finding 2 — the fixture is canvas_enabled=True with NO active
+    # session: none of the canvas idle prose renders at rest.
+    assert "No active Canvas session" not in rail
+    assert "Body edit composer unavailable" not in rail
+    assert "Canvas action is unavailable" not in rail
+    assert "No active Canvas session to close" not in rail
+    assert "No undo is available" not in rail
+
+    # The old consolidated empty-state box is gone too (superseded by the
+    # per-lane resting lines).
+    assert "No active session" not in rail
+    assert 'data-testid="workspace-rail-empty-state"' not in rail
+
     # None of the removed strings (audit §6 copy table).
     for token in _REMOVED_STRINGS:
         assert token not in rail, f"removed string {token!r} still present"
@@ -185,9 +198,15 @@ def test_lane_expands_only_with_content() -> None:
             panel_proposals=proposals,
         )
     )
-    assert 'data-testid="workspace-rail-resting"' not in populated_rail
+    # The populated Suggestions lane expands to its full card (its resting
+    # line is gone); the collapse is per-lane, so idle sibling lanes still
+    # rest as dim lines alongside the expanded one.
+    assert 'data-testid="rail-resting-suggestions"' not in populated_rail
     assert 'data-testid="workspace-panel-proposal-row"' in populated_rail
     assert "Add a link" in populated_rail
+    assert 'data-testid="rail-resting-recall"' in populated_rail
+    assert 'data-testid="rail-resting-search"' in populated_rail
+    assert 'data-testid="rail-resting-commitments"' in populated_rail
 
     # (b) A non-actionable degraded Resurface (guard-reported degraded, no
     # candidates) renders exactly one calm posture note line — no amber
@@ -200,3 +219,77 @@ def test_lane_expands_only_with_content() -> None:
     assert "runtime reported degraded guard state" not in degraded_rail
     assert "&#9888;" not in degraded_rail  # no warning-triangle glyph
     assert "⚠" not in degraded_rail
+
+
+# ---------------------------------------------------------------------------
+# Review finding 1 — mixed state: one lane populated, the others idle. The
+# populated lane keeps its full content; the idle lanes rest as dim lines;
+# none of the removed strings re-appear.
+# ---------------------------------------------------------------------------
+
+
+def test_mixed_state_populated_lane_does_not_reexpand_idle_lanes() -> None:
+    rail = _rail(
+        _html(
+            commitments_surface={
+                "state": "populated",
+                "next_action": [{"summary": "Reply to Anna", "commitment_id": "c-anna"}],
+                "review_cycle": [],
+                "as_of": "2026-06-22T10:00:00Z",
+            }
+        )
+    )
+    # The populated Commitments lane renders full content...
+    assert 'data-testid="commitments-mode"' in rail
+    assert "Reply to Anna" in rail
+    assert 'data-testid="rail-resting-commitments"' not in rail
+    # ...the idle sibling lanes rest as dim lines...
+    assert 'data-testid="rail-resting-suggestions"' in rail
+    assert 'data-testid="rail-resting-recall"' in rail
+    assert 'data-testid="rail-resting-search"' in rail
+    # ...and none of the removed idle idioms leak back in via the sibling.
+    for token in _REMOVED_STRINGS:
+        assert token not in rail, f"removed string {token!r} re-appeared in mixed state"
+    assert "Suggestions are idle." not in rail
+    assert "Find is unavailable" not in rail
+    assert 'data-testid="workspace-panel-column-header"' not in rail
+    assert 'data-testid="workspace-rail-posture"' not in rail
+
+
+# ---------------------------------------------------------------------------
+# Review finding 3 — a safety warning never co-renders with a contradictory
+# "nothing pending" empty-state.
+# ---------------------------------------------------------------------------
+
+
+def test_safety_warning_never_coexists_with_empty_state() -> None:
+    rail = _rail(_html(guard_writeguard_status="blocked"))
+    assert 'data-testid="workspace-guard-indicator"' in rail
+    assert "WriteGuard blocked" in rail
+    # The contradictory consolidated empty-state box must not co-render.
+    assert 'data-testid="workspace-rail-empty-state"' not in rail
+    assert "No active session" not in rail
+    assert "Nothing pending" not in rail
+    # The posture chip says needs-attention, not idle reassurance.
+    assert "needs attention" in rail
+
+
+# ---------------------------------------------------------------------------
+# Review finding 4 — the resting markup is styled: the page carries the
+# .rail-resting* rules (one line per lane, dim tones, thin separators).
+# ---------------------------------------------------------------------------
+
+
+def test_rail_resting_styles_present() -> None:
+    html = _html()
+    assert ".rail-resting-line {" in html
+    assert ".rail-resting-label {" in html
+    assert ".rail-resting-state {" in html
+    assert ".rail-resting-note {" in html
+    # The state word is the dim mono token from the mockup.
+    line_rule = html.split(".rail-resting-state {", 1)[1].split("}", 1)[0]
+    assert "var(--fg-3)" in line_rule
+    assert "var(--font-mono)" in line_rule
+    # The dead pre-#3362 disclosure styles are gone.
+    assert ".rail-idle-details" not in html
+    assert ".rail-idle-summary" not in html

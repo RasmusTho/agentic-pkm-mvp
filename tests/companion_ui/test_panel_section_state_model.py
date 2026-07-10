@@ -91,7 +91,10 @@ class TestIdleRendersOneLine:
             panel_state="proposals-staged",
         )
         rail = _rail_region(html)
-        assert 'data-testid="workspace-rail-resting"' not in rail
+        # Per-lane (#3362): the active Suggestions lane renders its full card
+        # (its resting line is gone); idle sibling lanes still rest.
+        assert 'data-testid="rail-resting-suggestions"' not in rail
+        assert 'data-testid="workspace-panel-proposal-row"' in rail
 
 
 class TestIdleHasNoAgentChrome:
