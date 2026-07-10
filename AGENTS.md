@@ -166,7 +166,7 @@ Human time is the dominant TCD term, so the default posture is to **act**, not t
 
 - Escalate to the human (`agent:needs-human` / "ask you") **only** for decisions that are irreversible, external-facing, or genuinely ambiguous in authority — not for work that is merely non-trivial. `agent:needs-human` on a buildable, bounded slice is usually defensive posture: classify on evidence first, and defer only when a named human decision, missing input, or authority question actually blocks the work.
 - `log + Git` is the safety net, not a human gate. Reversible, in-scope, bounded work proceeds without asking.
-- Every escalation that survives this gate goes through `.codex/skills/owner-decision-brief`: re-test the gate, then deliver the ask as one standalone plain-language decision brief.
+- Owner asks route through `.codex/skills/owner-decision-brief`: discretionary escalations re-test this gate first (contractual operator gates are never re-tested away — they fire as their skills define), and every ask that reaches the owner is delivered as one standalone plain-language decision brief.
 - **Autonomous delivery** runs the full gate chain unattended: wait for CI green and resolve the local review gate (`verification-and-closure :: Running the local review gate`), then merge — the owner is not asked to babysit. The CI + review gate is never waived (an unprotected branch does not relax it); only the human *watching* is removed. Quality is preserved by the gate, not by the wait.
 
 This is human-first, not human-absent: the owner still owns irreversible, external, and strategic calls — agents just stop interrupting for reversible ones.
