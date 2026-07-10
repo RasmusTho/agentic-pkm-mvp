@@ -36,12 +36,11 @@ PROVIDER_IDENTITY = "github"
 # repos/{owner}/{name}/issues`) rather than a paginated GraphQL query, the
 # same transport `list_issues` (the ready-issues path) already used. This
 # removes GraphQL pool consumption from this hot dispatcher path. It does not
-# change `get_rate_limit`'s kill-switch signal: GraphQL is still spent by
-# other dispatcher/scripts hot paths (`app/dispatcher/poll_backoff.py`,
-# `scripts/reconcile_project_status.py`), so the shared "is GitHub API
-# healthy enough to do expensive work" probe here continues to reflect the
-# more-exhausted of REST core/GraphQL rather than narrowing to what this
-# class itself now spends.
+# change `get_rate_limit`'s kill-switch signal: other dispatcher and scripts
+# GraphQL callers audited in #3313 still spend GraphQL independently, so the
+# shared "is GitHub API healthy enough to do expensive work" probe here
+# continues to reflect the more-exhausted of REST core/GraphQL rather than
+# narrowing to what this class itself now spends.
 OPEN_ISSUES_PAGE_SIZE = 100
 OPEN_ISSUES_MAX_PAGES = 10
 READY_ISSUES_PAGE_SIZE = 100
@@ -606,11 +605,11 @@ class GhCliIssueSource:
         #3313, neither ``list_issues`` nor ``list_open_issues`` spends
         GraphQL any more — both use REST — but this probe intentionally keeps
         checking both pools rather than narrowing to REST core only: other
-        dispatcher/scripts hot paths still spend GraphQL
-        (``app/dispatcher/poll_backoff.py``, ``scripts/reconcile_project_status.py``),
-        and the audited exhaustion mode (GHAPI, 2026-06-29) is GraphQL-at-zero
-        with REST core healthy — a core-only probe would never fire exactly
-        when the guard matters. Shape matches the old ``.rate`` payload
+        dispatcher/scripts hot paths audited in #3313 still spend GraphQL
+        independently (CI polling, Project-status reconciliation), and the
+        audited exhaustion mode (GHAPI, 2026-06-29) is GraphQL-at-zero with
+        REST core healthy — a core-only probe would never fire exactly when
+        the guard matters. Shape matches the old ``.rate`` payload
         (``remaining``/``reset``).
         """
         import json
