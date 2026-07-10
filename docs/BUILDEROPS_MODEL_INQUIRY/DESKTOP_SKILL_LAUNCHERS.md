@@ -18,10 +18,18 @@ orchestrator inside either chat history.
 
 ## What This Task Does
 
-Create a repo-local `start-model-inquiry` skill and a portable Claude custom-skill package. Both
-validate the shared vault and call the repo-supported `scripts/builderops_cli.sh builderops inquiry
-start` command. They display the returned `inquiry_id` and final state; they do not reimplement
+Create a repo-local `start-model-inquiry` skill and a portable Claude custom-skill package. Both call
+the repo-owned `scripts/start_model_inquiry.sh` entrypoint, which resolves the same canonical repo
+virtualenv as the BuilderOps CLI wrapper. Its Python launcher validates the shared vault and both
+explicit role adapters **before mutation**, calls the repo-supported
+`scripts/builderops_cli.sh builderops inquiry start` command, then calls the common `inquiry run`
+command. It displays the returned `inquiry_id` and terminal outcome; neither skill reimplements
 orchestration in prompt prose.
+
+The portable Claude package is an instruction package, not a host-filesystem bridge. Its execution
+environment must already be able to access the repository checkout, shared vault, and configured
+adapters. If it cannot, preflight fails loudly. The package never guesses an application-private
+path or automates another desktop app.
 
 ## Concretely
 
@@ -36,17 +44,21 @@ other.
 
 ## Acceptance Criteria
 
-- [ ] The Codex skill invokes the common BuilderOps inquiry command and reports its inquiry ID.
+- [x] The Codex skill invokes the common BuilderOps inquiry command and reports its inquiry ID.
   Verify: `tests/governance/test_start_model_inquiry_skill.py::test_codex_skill_calls_common_command`.
-- [ ] The Claude package contains the same launcher contract and no desktop-control automation.
+- [x] The Claude package contains the same launcher contract and no desktop-control automation.
   Verify: `tests/governance/test_start_model_inquiry_skill.py::test_claude_package_uses_common_launcher_contract`.
-- [ ] Launcher preflight fails loudly when the shared vault or required adapter is unavailable.
+- [x] Launcher preflight fails loudly when the shared vault or required adapter is unavailable.
   Verify: `tests/governance/test_start_model_inquiry_skill.py::test_skill_preflight_reports_missing_dependencies`.
 
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/governance/test_start_model_inquiry_skill.py`
 - `python3 scripts/lint_skills_consistency.py`
+- `python3 scripts/package_claude_skill.py --output /tmp/start-model-inquiry.zip`
+
+The generated ZIP contains `start-model-inquiry/SKILL.md` at its root and is uploaded manually by
+the operator. Generated archives are release artifacts and remain outside Git source control.
 
 ## Out of Scope
 
