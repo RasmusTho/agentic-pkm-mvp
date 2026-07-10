@@ -88,7 +88,10 @@ GUARD_HELD_RECEIPT_STATES: tuple[str, ...] = ("blocked",)
 # these mirror the same honest defaults so an older runtime payload that does
 # not yet carry the new fields still renders a calm, truthful row instead of
 # a blank or invented one. The UI never derives a verb or run the runtime did
-# not declare.
+# not declare. Deliberately a value mirror, not an import: companion_ui has
+# no dependency on the ``app`` backend package anywhere (the page server
+# proxies the runtime over HTTP), and these two strings do not justify
+# introducing one — tests pin both sides to the same literals.
 RECEIPT_DISPLAY_VERB_FALLBACK = "Recorded"
 RECEIPT_RUN_LABEL_FALLBACK = "Run"
 

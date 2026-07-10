@@ -45,13 +45,17 @@ _VERB_BY_INTENT_TYPE: dict[str, str] = {
     "append": "Appended to",
     "create": "Created",
     "link": "Linked",
+    "promotion": "Promoted",
     "zone_move": "Moved",
 }
 
 # Known emitter component labels (app.events.schema source / PanelEventSource
 # component) mapped to a human run label. Anything else falls back to
-# RUN_LABEL_FALLBACK rather than guessing.
+# RUN_LABEL_FALLBACK rather than guessing. "panel_agent" is the mainstream
+# graph.py ``_build_panel_source()`` component stamped on the bulk of real
+# panel.action.logged records.
 _RUN_LABEL_BY_SOURCE: dict[str, str] = {
+    "panel_agent": "Governed action",
     "panel_agent.confirmation": "Governed capture",
     "curation.proposal_writer": "Curation pass",
 }
@@ -163,6 +167,23 @@ def receipts_for_artifacts(
     promotion_projection = query_promotion_receipts(vault_root=vault_root, records=records)
     for row in promotion_projection.rows:
         receipt = row.to_artifact_receipt()
+        # Receipts v2 display fields for promotion receipts (#3363), enriched
+        # at the merge point where vault_root is available. Promotion rows are
+        # already authority-validated (promotion.transition.applied), so the
+        # verb/run label name the transition family the record itself declares.
+        # The verb only claims "Promoted" for an applied outcome; any held or
+        # failed outcome keeps the honest fallback so the lead verb never
+        # asserts an effect the record does not declare.
+        receipt.update(
+            {
+                "display_verb": (
+                    "Promoted" if receipt.get("state") == "applied" else DISPLAY_VERB_FALLBACK
+                ),
+                "run_key": first_str(row.trace_id, receipt.get("receipt_id")),
+                "run_label": "Promotion",
+                "target_absolute": _target_absolute(row.artifact_path, vault_root=vault_root),
+            }
+        )
         promotion_matched: set[str] = set()
         if row.artifact_uuid and row.artifact_uuid in uuid_targets:
             promotion_matched.add(uuid_targets[row.artifact_uuid].note_path)

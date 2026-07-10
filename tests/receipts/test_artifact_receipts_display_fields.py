@@ -218,6 +218,181 @@ def test_fallbacks_when_record_declares_nothing(tmp_path: Path) -> None:
     assert row["run_key"] == row["receipt_id"]
 
 
+def test_panel_agent_source_and_promotion_intent_map_to_display_fields(tmp_path: Path) -> None:
+    """Mainstream graph.py records: ``_build_panel_source()`` stamps
+    ``source.component="panel_agent"`` and ``_logged_event`` embeds the full
+    action mapping (including ``intent_type``) under ``payload.mapping`` --
+    the bulk of real panel.action.logged rows must not land on generic
+    fallbacks.
+    """
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    outbox_path = tmp_path / "outbox.jsonl"
+
+    records = [
+        # graph.py logged record with mapping.intent_type="promotion"
+        # (the resolution branch embeds the mapping dump).
+        {
+            "event": "panel.action.logged",
+            "event_id": "evt-promo-intent-1",
+            "trace_id": "trace-panel-1",
+            "source": {"component": "panel_agent", "trigger": "runtime", "sot": "v5.0-runtime1"},
+            "timestamp": "2026-07-10T09:30:00Z",
+            "payload": {
+                "note": {"uuid": "uuid-3", "path": "Notes/promote-me.md"},
+                "panel_id": "panel-1",
+                "action": {"id": "a-1", "label": "Promote this note", "checked": True},
+                "reason": "trust_verb_missing",
+                "mapping": {
+                    "id": "a-1",
+                    "intent_type": "promotion",
+                    "downstream_event": "promote.intent.created",
+                    "trust_verb": None,
+                    "params": {},
+                },
+            },
+        },
+        # graph.py logged record with no intent_type at all -- source
+        # component alone must still map to the governed run label.
+        {
+            "event": "panel.action.logged",
+            "event_id": "evt-panel-plain-1",
+            "trace_id": "trace-panel-2",
+            "source": {"component": "panel_agent", "trigger": "runtime", "sot": "v5.0-runtime1"},
+            "timestamp": "2026-07-10T09:31:00Z",
+            "payload": {
+                "note": {"uuid": "uuid-3", "path": "Notes/promote-me.md"},
+                "panel_id": "panel-1",
+                "action": {"id": "a-2", "label": "Log this", "checked": True},
+                "reason": "no_actions_matched",
+            },
+        },
+    ]
+    _write_records(outbox_path, records)
+
+    rows = _project(vault_root, outbox_path, note_path="Notes/promote-me.md")
+    assert len(rows) == 2
+    by_id = {row["receipt_id"]: row for row in rows}
+
+    promo = by_id["evt-promo-intent-1"]
+    assert promo["display_verb"] == "Promoted"
+    assert promo["run_label"] == "Governed action"
+    assert promo["run_key"] == "trace-panel-1"
+
+    plain = by_id["evt-panel-plain-1"]
+    assert plain["display_verb"] == DISPLAY_VERB_FALLBACK
+    assert plain["run_label"] == "Governed action"
+
+
+def test_promotion_transition_receipts_carry_display_fields(tmp_path: Path) -> None:
+    """promotion.transition.applied rows merged by ``receipts_for_artifacts``
+    also declare the Receipts v2 display fields -- they must not always land
+    on the "Recorded"/"Run" fallbacks.
+    """
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    outbox_path = tmp_path / "outbox.jsonl"
+
+    def _promotion_record(event_id: str, outcome_status: str, timestamp: str) -> dict:
+        return {
+            "event": "promotion.transition.applied",
+            "event_id": event_id,
+            "trace_id": f"trace-{event_id}",
+            "source": "promotion.executor",
+            "timestamp": timestamp,
+            "payload": {
+                "note_uuid": "uuid-promo",
+                "note_path": "Projects/plan.md",
+                "authority": {"requested_by": "owner", "approved_by": "owner"},
+                "basis": {"source_event": "evt-intent"},
+                "outcome": {"status": outcome_status, "maturity": "seed"},
+                "artifact_linkage": {"note_uuid": "uuid-promo", "note_path": "Projects/plan.md"},
+            },
+        }
+
+    _write_records(
+        outbox_path,
+        [
+            _promotion_record("promo-applied", "applied", "2026-07-10T09:40:00Z"),
+            _promotion_record("promo-blocked", "blocked", "2026-07-10T09:41:00Z"),
+        ],
+    )
+
+    rows = _project(
+        vault_root, outbox_path, note_path="Projects/plan.md", artifact_uuid="uuid-promo"
+    )
+    assert len(rows) == 2
+    by_id = {row["receipt_id"]: row for row in rows}
+
+    applied = by_id["promo-applied"]
+    assert applied["display_verb"] == "Promoted"
+    assert applied["run_label"] == "Promotion"
+    assert applied["run_key"] == "trace-promo-applied"
+    assert applied["target_absolute"] == str(vault_root / "Projects" / "plan.md")
+
+    # A held promotion never claims "Promoted" as its lead verb.
+    blocked = by_id["promo-blocked"]
+    assert blocked["state"] == "blocked"
+    assert blocked["display_verb"] == DISPLAY_VERB_FALLBACK
+    assert blocked["run_label"] == "Promotion"
+
+
+def test_display_fields_survive_vault_browser_serialization(tmp_path: Path) -> None:
+    """The production serving path: ``_attach_receipts_to_notes`` validates
+    each projected receipt through ``VaultReceiptState`` (pydantic drops
+    undeclared keys at ``model_validate``), so the display fields must be
+    declared on the model or they silently never reach the
+    /api/companion/vault-browser payload.
+    """
+    import os
+    from unittest.mock import patch
+
+    from app.api.routes.companion import (
+        VaultBrowserNoteState,
+        VaultReceiptState,
+        _attach_receipts_to_notes,
+    )
+
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    outbox_path = tmp_path / "outbox.jsonl"
+    record = {
+        "event": "panel.action.logged",
+        "event_id": "evt-serialize-1",
+        "trace_id": "trace-serialize-1",
+        "source": "panel_agent.confirmation",
+        "timestamp": "2026-07-10T09:50:00Z",
+        "payload": {"note_uuid": "uuid-s1", "note_path": "Inbox/inbox.md"},
+    }
+    _write_records(outbox_path, [record])
+
+    # Model round-trip: the projected dict survives model_validate +
+    # model_dump with the display fields intact.
+    projected = _project(vault_root, outbox_path, note_path="Inbox/inbox.md")[0]
+    dumped = VaultReceiptState.model_validate(projected).model_dump()
+    assert dumped["display_verb"] == projected["display_verb"]
+    assert dumped["run_key"] == "trace-serialize-1"
+    assert dumped["run_label"] == "Governed capture"
+    assert dumped["target_absolute"] == str(vault_root / "Inbox" / "inbox.md")
+
+    # Full attach path: the same fields survive the real vault-browser
+    # note-attachment flow end to end.
+    note = VaultBrowserNoteState(
+        note_path="Inbox/inbox.md",
+        title="Inbox",
+        zone="inbox",
+        uuid="uuid-s1",
+    )
+    with patch.dict(os.environ, {"INDEX_OUTBOX_PATH": str(outbox_path)}):
+        attached = _attach_receipts_to_notes([note], vault_root=vault_root)
+    assert attached[0].receipts is not None
+    receipt_state = attached[0].receipts[0]
+    assert receipt_state.display_verb == projected["display_verb"]
+    assert receipt_state.run_key == "trace-serialize-1"
+    assert receipt_state.run_label == "Governed capture"
+    assert receipt_state.target_absolute == str(vault_root / "Inbox" / "inbox.md")
+
+
 def test_target_absolute_none_when_no_path_declared(tmp_path: Path) -> None:
     vault_root = tmp_path / "vault"
     vault_root.mkdir()

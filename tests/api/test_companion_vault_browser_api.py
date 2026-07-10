@@ -377,6 +377,11 @@ def test_vault_browser_includes_receipts_from_outbox_projection(
             "status": "applied",
             "timestamp": "2026-05-30T12:00:00Z",
             "state": "applied",
+            # Receipts v2 display fields (#3363) — additive, runtime-declared.
+            "display_verb": "Promoted",
+            "run_key": "trace-receipt-1279",
+            "run_label": "Promotion",
+            "target_absolute": str(tmp_path / "vault" / "notes" / "receipt.md"),
         }
     ]
 
