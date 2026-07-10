@@ -16,7 +16,12 @@ from typing import Any, Literal, TypeAlias
 
 import yaml
 
-from app.domain.commitments import CommitmentRecord, query_next_and_waiting_commitments
+from app.domain.commitments import (
+    COMMITMENT_STATE_VALUES,
+    FIRST_WAVE_COMMITMENT_KINDS,
+    CommitmentRecord,
+    query_next_and_waiting_commitments,
+)
 from app.knowledge.contracts import WriteReceipt
 from app.knowledge.write_ops import write_note_relative
 from app.receipts.decision_receipt_log import iter_decision_receipts
@@ -271,6 +276,27 @@ def _read_commitments(
         isinstance(record, CommitmentRecord) for record in records
     ):
         raise _InvalidSourceRecord
+    for record in records:
+        if (
+            not isinstance(record.commitment_id, str)
+            or not record.commitment_id.strip()
+            or not isinstance(record.commitment_kind, str)
+            or record.commitment_kind not in FIRST_WAVE_COMMITMENT_KINDS
+            or not isinstance(record.state, str)
+            or record.state not in COMMITMENT_STATE_VALUES
+            or (
+                record.summary is not None
+                and not isinstance(record.summary, str)
+            )
+            or (
+                record.target_ref is not None
+                and (
+                    not isinstance(record.target_ref, str)
+                    or not record.target_ref.strip()
+                )
+            )
+        ):
+            raise _InvalidSourceRecord
     queried = query_next_and_waiting_commitments(records)
     selected: dict[str, tuple[int, CommitmentRecord]] = {}
     for group, group_records in enumerate((queried.next_items, queried.waiting_items)):
@@ -284,8 +310,6 @@ def _read_commitments(
     for _group, record in sorted(
         selected.values(), key=lambda pair: (pair[0], pair[1].commitment_id)
     ):
-        if not record.commitment_id.strip():
-            raise _InvalidSourceRecord
         items.append(
             CommitmentBriefingItem(
                 commitment_id=record.commitment_id,
