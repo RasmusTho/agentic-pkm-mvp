@@ -345,8 +345,8 @@ def _read_moments(
     for record in records:
         if not isinstance(record, dict):
             raise _InvalidSourceRecord
-        moment_id = _required_text(record, "moment_id")
-        title = _required_text(record, "title")
+        moment_id = _required_canonical_text(record, "moment_id")
+        title = _required_display_text(record, "title")
         need_basis = _required_text(record, "need_basis")
         urgency_band = _required_text(record, "urgency_band")
         raw_refs = record.get("surfaced_refs")
@@ -356,12 +356,12 @@ def _read_moments(
         for raw_ref in raw_refs:
             if not isinstance(raw_ref, dict):
                 raise _InvalidSourceRecord
-            ref = _required_text(raw_ref, "ref")
-            why = _required_text(raw_ref, "why")
-            normalized: dict[str, Any] = {"ref": ref, "why": _one_line(why)}
+            ref = _required_canonical_text(raw_ref, "ref")
+            why = _required_display_text(raw_ref, "why")
+            normalized: dict[str, Any] = {"ref": ref, "why": why}
             uuid = raw_ref.get("uuid")
             if uuid is not None:
-                if not isinstance(uuid, str) or not uuid.strip():
+                if not isinstance(uuid, str) or not _is_canonical_reference_text(uuid):
                     raise _InvalidSourceRecord
                 normalized["uuid"] = uuid
             surfaced_refs.append(normalized)
@@ -371,7 +371,7 @@ def _read_moments(
         items.append(
             MomentBriefingItem(
                 moment_id=moment_id,
-                title=_one_line(title),
+                title=title,
                 need_basis=need_basis,
                 urgency_band=urgency_band,
                 artifact_path=(
@@ -400,11 +400,13 @@ def _read_decision_receipts(
     for record in records:
         if not isinstance(record, dict):
             raise _InvalidSourceRecord
-        object_id = _required_text(record, "object_id")
-        key = _required_text(record, "key")
-        created = _parse_datetime(_required_text(record, "created_at"))
+        object_id = _required_canonical_text(record, "object_id")
+        key = _required_canonical_text(record, "key")
+        created = _parse_datetime(_required_canonical_text(record, "created_at"))
         raw_uuid = record.get("vault_uuid")
-        if raw_uuid is not None and (not isinstance(raw_uuid, str) or not raw_uuid.strip()):
+        if raw_uuid is not None and (
+            not isinstance(raw_uuid, str) or not _is_canonical_reference_text(raw_uuid)
+        ):
             raise _InvalidSourceRecord
         if not window_start <= created < window_end:
             continue
@@ -632,21 +634,21 @@ def _item_from_mapping(
         raise BriefingReadError("briefing item must be a mapping")
     try:
         if name == "commitments" and raw.get("source") == "commitment":
-            commitment_id = _required_text(raw, "commitment_id")
-            artifact_path = _required_text(raw, "artifact_path")
+            commitment_id = _required_canonical_text(raw, "commitment_id")
+            artifact_path = _required_canonical_text(raw, "artifact_path")
             if artifact_path != commitment_artifact_path(commitment_id, vault_root):
                 raise _InvalidSourceRecord
             return CommitmentBriefingItem(
                 commitment_id=commitment_id,
                 commitment_kind=_required_text(raw, "commitment_kind"),
                 state=_required_text(raw, "state"),
-                summary=_required_text(raw, "summary"),
+                summary=_required_display_text(raw, "summary"),
                 artifact_path=artifact_path,
-                target_ref=_optional_text(raw, "target_ref"),
+                target_ref=_optional_canonical_text(raw, "target_ref"),
             )
         if name == "moments" and raw.get("source") == "moment":
-            moment_id = _required_text(raw, "moment_id")
-            artifact_path = _required_text(raw, "artifact_path")
+            moment_id = _required_canonical_text(raw, "moment_id")
+            artifact_path = _required_canonical_text(raw, "artifact_path")
             expected_artifact_path = (
                 PurePosixPath(system_dir) / "moments" / f"{moment_id}.md"
             ).as_posix()
@@ -658,18 +660,20 @@ def _item_from_mapping(
             normalized_refs: list[dict[str, Any]] = []
             for ref in refs:
                 normalized_ref: dict[str, Any] = {
-                    "ref": _required_text(ref, "ref"),
-                    "why": _required_text(ref, "why"),
+                    "ref": _required_canonical_text(ref, "ref"),
+                    "why": _required_display_text(ref, "why"),
                 }
                 ref_uuid = ref.get("uuid")
                 if ref_uuid is not None:
-                    if not isinstance(ref_uuid, str) or not ref_uuid.strip():
+                    if not isinstance(ref_uuid, str) or not _is_canonical_reference_text(
+                        ref_uuid
+                    ):
                         raise _InvalidSourceRecord
                     normalized_ref["uuid"] = ref_uuid
                 normalized_refs.append(normalized_ref)
             return MomentBriefingItem(
                 moment_id=moment_id,
-                title=_required_text(raw, "title"),
+                title=_required_display_text(raw, "title"),
                 need_basis=_required_text(raw, "need_basis"),
                 urgency_band=_required_text(raw, "urgency_band"),
                 artifact_path=artifact_path,
@@ -678,14 +682,15 @@ def _item_from_mapping(
         if name == "decision_receipts" and raw.get("source") == "decision_receipt":
             vault_uuid = raw.get("vault_uuid")
             if vault_uuid is not None and (
-                not isinstance(vault_uuid, str) or not vault_uuid.strip()
+                not isinstance(vault_uuid, str)
+                or not _is_canonical_reference_text(vault_uuid)
             ):
                 raise _InvalidSourceRecord
-            created_at = _required_text(raw, "created_at")
+            created_at = _required_canonical_text(raw, "created_at")
             parsed_created_at = _parse_datetime(created_at)
             if created_at != _format_utc(parsed_created_at):
                 raise _InvalidSourceRecord
-            receipt_path = _required_text(raw, "receipt_path")
+            receipt_path = _required_canonical_text(raw, "receipt_path")
             expected_receipt_path = (
                 PurePosixPath(system_dir)
                 / "receipts"
@@ -695,9 +700,9 @@ def _item_from_mapping(
             if receipt_path != expected_receipt_path:
                 raise _InvalidSourceRecord
             return DecisionReceiptBriefingItem(
-                object_id=_required_text(raw, "object_id"),
+                object_id=_required_canonical_text(raw, "object_id"),
                 vault_uuid=vault_uuid,
-                key=_required_text(raw, "key"),
+                key=_required_canonical_text(raw, "key"),
                 created_at=created_at,
                 receipt_path=receipt_path,
             )
@@ -713,13 +718,30 @@ def _required_text(mapping: dict[str, Any], key: str) -> str:
     return value.strip()
 
 
-def _optional_text(mapping: dict[str, Any], key: str) -> str | None:
+def _required_canonical_text(mapping: dict[str, Any], key: str) -> str:
+    value = mapping.get(key)
+    if not isinstance(value, str) or not _is_canonical_reference_text(value):
+        raise _InvalidSourceRecord
+    return value
+
+
+def _optional_canonical_text(mapping: dict[str, Any], key: str) -> str | None:
     value = mapping.get(key)
     if value is None:
         return None
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str) or not _is_canonical_reference_text(value):
         raise _InvalidSourceRecord
-    return value.strip()
+    return value
+
+
+def _required_display_text(mapping: dict[str, Any], key: str) -> str:
+    value = mapping.get(key)
+    if not isinstance(value, str):
+        raise _InvalidSourceRecord
+    normalized = _one_line(value)
+    if not normalized or not normalized.isprintable():
+        raise _InvalidSourceRecord
+    return normalized
 
 
 def _parse_datetime(value: str) -> datetime:

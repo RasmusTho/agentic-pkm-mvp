@@ -550,6 +550,101 @@ def test_invalid_commitment_scalar_degrades_whole_section(
     assert len(note.sections["decision_receipts"].items) == 1
 
 
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("moment_id", " padded "),
+        ("moment_id", "moment\nother"),
+        ("ref", " Notes/A.md "),
+        ("ref", "Notes/A.md\nNotes/B.md"),
+        ("ref", "Notes/\x00.md"),
+        ("uuid", " uuid "),
+        ("uuid", "uuid\nother"),
+    ],
+)
+def test_invalid_moment_provenance_text_degrades_whole_section(
+    vault: tuple[Path, VaultContext],
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    invalid_value: str,
+) -> None:
+    from app.briefing import compose as compose_module
+
+    root, context = vault
+    raw_ref: dict[str, object] = {"ref": "Notes/A.md", "why": "Useful", "uuid": "uuid"}
+    record: dict[str, object] = {
+        "moment_id": "moment-bad",
+        "title": "Moment bad",
+        "need_basis": "reorientation",
+        "urgency_band": "timely",
+        "surfaced_refs": [raw_ref],
+    }
+    if field == "moment_id":
+        record[field] = invalid_value
+    else:
+        raw_ref[field] = invalid_value
+    monkeypatch.setattr(compose_module, "collect_now_moments", lambda *_: [record])
+    _seed_commitment(context, "commitment-kept", kind="next_action", state="next")
+    _seed_receipts(root, [_receipt("receipt-kept", "2026-07-09T12:00:00Z")])
+
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    note = load_briefing(vault_context=context, for_date=BRIEFING_DATE)
+
+    assert note is not None
+    assert note.degraded_sections == ("moments",)
+    assert note.sections["moments"].reason == "invalid_source_record"
+    assert note.sections["moments"].items == ()
+    assert len(note.sections["commitments"].items) == 1
+    assert len(note.sections["decision_receipts"].items) == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("object_id", " padded "),
+        ("object_id", "object\nother"),
+        ("object_id", "object\x00bad"),
+        ("key", " review "),
+        ("key", "review\nother"),
+        ("vault_uuid", " uuid "),
+        ("vault_uuid", "uuid\nother"),
+        ("created_at", " 2026-07-09T12:00:00Z "),
+    ],
+)
+def test_invalid_receipt_provenance_text_degrades_whole_section(
+    vault: tuple[Path, VaultContext],
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    invalid_value: str,
+) -> None:
+    from app.briefing import compose as compose_module
+
+    root, context = vault
+    record = _receipt("receipt-bad", "2026-07-09T12:00:00Z")
+    record[field] = invalid_value
+    monkeypatch.setattr(compose_module, "iter_decision_receipts", lambda *_: [record])
+    _seed_commitment(context, "commitment-kept", kind="next_action", state="next")
+    _seed_moment(root, "moment-kept")
+
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    note = load_briefing(vault_context=context, for_date=BRIEFING_DATE)
+
+    assert note is not None
+    assert note.degraded_sections == ("decision_receipts",)
+    assert note.sections["decision_receipts"].reason == "invalid_source_record"
+    assert note.sections["decision_receipts"].items == ()
+    assert len(note.sections["commitments"].items) == 1
+    assert len(note.sections["moments"].items) == 1
+
+
 def test_invalid_receipt_timestamp_degrades_receipt_section(
     vault: tuple[Path, VaultContext], monkeypatch: pytest.MonkeyPatch
 ) -> None:
