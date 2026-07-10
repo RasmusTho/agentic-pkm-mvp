@@ -52,7 +52,11 @@ class TestVaultUnreachableBanner:
         assert 'data-testid="workspace-vault-chip"' in html
         assert 'data-state="unreachable"' in html
         assert 'data-testid="workspace-vault-unreachable-banner"' in html
-        assert "last sync" in html
+        # #3361 (DESIGN_AUDIT.md §3.1) — the banner now carries the single
+        # calm posture sentence shared with the topbar chip, not a "last
+        # sync" timestamp (that copy independently narrated degradation,
+        # which is exactly the contradiction #3361 fixes).
+        assert "Some features are paused while the vault reconnects" in html
         assert 'data-testid="workspace-vault-retry"' in html
 
     def test_banner_appears_when_provenance_is_unreachable(self) -> None:

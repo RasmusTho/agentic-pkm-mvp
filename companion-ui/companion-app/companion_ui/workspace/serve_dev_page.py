@@ -155,6 +155,17 @@ from companion_ui.workspace.workspace_http_client import (
     WorkspaceClientError,
     WorkspaceClientHTTPError,
 )
+from companion_ui.workspace.workspace_posture import (
+    CANT_REACH_VAULT_COPY,
+    RECONNECTING_PICKER_SUB,
+    RECONNECTING_PICKER_TITLE,
+    derive_vault_posture,
+    error_detail,
+    is_runtime_unreachable_error,
+    render_posture_banner,
+    vault_posture_chip_suffix,
+    vault_state_from_provenance,
+)
 
 _DEFAULT_HOST = "0.0.0.0"
 _DEFAULT_PORT = 8111
@@ -762,6 +773,7 @@ def _render_workspace_header_strip(
     vault_name: str,
     vault_channel: str,
     vault_provenance: str,
+    vault_posture: str,
     writeguard_status: str,
     canvas_enabled: bool,
     update_flow_available: bool,
@@ -793,13 +805,12 @@ def _render_workspace_header_strip(
         if is_prod
         else '<span class="workspace-dev-ribbon" data-testid="workspace-dev-ribbon">DEV</span>'
     )
-    vp_lower = str(vault_provenance).lower()
-    if vp_lower == "unreachable":
-        vault_state = "unreachable"
-    elif vp_lower == "unresolved":
-        vault_state = "unresolved"
-    else:
-        vault_state = "ok"
+    # #3361 review finding 1 — the three-way vault_state comes from the ONE
+    # shared classifier; the reachability posture arrives as the
+    # `vault_posture` parameter, derived exactly once by the caller from
+    # this same provenance, so the chip and the calm banner can never
+    # disagree by construction.
+    vault_state = vault_state_from_provenance(vault_provenance)
     # §5.2 — Browse Vault routes to the canonical left-pane browse surface, not
     # the modal overlay (which is a narrow responsive fallback only).
     browse_target = "#vault-browser-left-pane"
@@ -814,6 +825,7 @@ def _render_workspace_header_strip(
     coarse_posture = coarse_vault_posture(
         vault_state=vault_state, primary_posture=posture
     )
+    vault_chip_suffix = vault_posture_chip_suffix(vault_posture)
     # CUIDR-04 (#2447): the runtime/diagnostic telemetry that left the front
     # edge is built by `_render_operator_telemetry_block(fields, ...)` and
     # rendered INSIDE the operator drawer body (the operator layer), not on
@@ -826,9 +838,9 @@ def _render_workspace_header_strip(
         data-region="workspace-header">
         <div class="workspace-header-row" data-testid="workspace-header-row">
           <a class="workspace-wordmark" data-testid="workspace-wordmark" href="/" aria-label="Return to vault root">Yggdrasil</a>
-          <a class="workspace-vault-chip" data-testid="workspace-vault-chip" data-state="{vault_state}" data-vault-provenance="{_e(vault_provenance)}" href="{browse_target}" data-browse-target="vault-browser-pane" onclick="vaultBrowser.focus(); return false;">
+          <a class="workspace-vault-chip" data-testid="workspace-vault-chip" data-state="{vault_state}" data-vault-posture="{vault_posture}" data-vault-provenance="{_e(vault_provenance)}" href="{browse_target}" data-browse-target="vault-browser-pane" onclick="vaultBrowser.focus(); return false;">
             <span class="workspace-vault-dot" data-testid="workspace-vault-status-dot" data-coarse-posture="{coarse_posture}" aria-hidden="true"></span>
-            <span class="workspace-vault-chip-label" data-testid="workspace-vault-chip-label" title="{vault_name} · vault {vault_state}">{vault_name} · vault {vault_state}</span>
+            <span class="workspace-vault-chip-label" data-testid="workspace-vault-chip-label" title="{vault_name} · {vault_chip_suffix}">{vault_name} · {vault_chip_suffix}</span>
           </a>
           <!-- #2590: the "V" chip opens the reused Choose-a-vault overlay for
                vault *switching* (one graphical language with the cold picker and
@@ -1333,16 +1345,6 @@ def _render_read_only_pill() -> str:
     )
 
 
-def _render_vault_unreachable_banner(last_sync: str = "") -> str:
-    sync_label = f"last sync {last_sync}" if last_sync else "last sync unavailable"
-    return (
-        f'<div class="workspace-vault-unreachable-banner" data-testid="workspace-vault-unreachable-banner">'
-        f"<span>Vault unreachable — {sync_label}. Showing cached view.</span>"
-        f'<a href="#workspace-runtime-status" class="banner-retry-link" data-testid="workspace-vault-retry">retry</a>'
-        f"</div>"
-    )
-
-
 def _render_ingest_unbound_banner(detail: str = "") -> str:
     """Surface #3119: the watcher/worker are not confirmed bound to the
     selected vault. A vault chosen or initialized through the Companion UI
@@ -1351,9 +1353,11 @@ def _render_ingest_unbound_banner(detail: str = "") -> str:
     not a bug). Without this banner that divergence is completely silent:
     captures succeed on disk while never being ingested/findable.
 
-    Mirrors ``_render_vault_unreachable_banner``'s shape (div + testid +
-    message + link) so it reads as the same passive-availability class of
-    warning rather than new UI machinery.
+    Mirrors ``workspace_posture.render_posture_banner``'s shape (div +
+    testid + message + link) so it reads as the same passive-availability
+    class of warning rather than new UI machinery. This is a distinct axis
+    (ingest binding, not vault reachability, #3361 DESIGN_AUDIT.md §3.1) and
+    intentionally stays its own banner.
     """
 
     message = _e(detail) if detail else "captures here may not be ingested, indexed, or made findable."
@@ -2612,6 +2616,15 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
         guard_degraded=guard_degraded,
     )
     effective_vault_provenance = "unreachable" if vault_unreachable else str(vault_provenance)
+    # #3361 (DESIGN_AUDIT.md §3.1) — the single derived vault-reachability
+    # posture, computed EXACTLY ONCE per render from the same three-way
+    # vault_state. Both the topbar chip (via the parameter below) and the one
+    # calm banner consume this value; neither re-derives it from a different
+    # input (review finding 1: a provenance-"unresolved" render previously
+    # showed a degraded chip with no banner — the B5 contradiction itself).
+    vault_posture = derive_vault_posture(
+        vault_state_from_provenance(effective_vault_provenance)
+    )
     workspace_header_strip_html = _render_workspace_header_strip(
         fields=fields,
         posture=posture_token,
@@ -2622,6 +2635,7 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
         vault_name=vault_name,
         vault_channel=vault_channel,
         vault_provenance=effective_vault_provenance,
+        vault_posture=vault_posture,
         writeguard_status=writeguard_status,
         canvas_enabled=canvas_enabled,
         update_flow_available=update_flow_available,
@@ -2694,13 +2708,10 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
         identity_chips_html=identity_chips_html,
         rendered_props=rendered_props,
     )
-    vault_unreachable_banner_html = (
-        _render_vault_unreachable_banner(
-            last_sync=fields.get("vault_last_sync_label") or fields.get("runtime_last_ingest_at") or ""
-        )
-        if vault_unreachable
-        else ""
-    )
+    # #3361 (DESIGN_AUDIT.md §3.1) — the ONE calm banner consumes the SAME
+    # `vault_posture` value the topbar chip received (derived exactly once
+    # above), so the two surfaces agree by construction.
+    vault_unreachable_banner_html = render_posture_banner(vault_posture)
     # #3119 — independent of vault reachability: the watcher/worker may be
     # bound to a different vault (or no vault at all) than the one the API
     # just selected/served this note from. Only render when the runtime
@@ -6160,17 +6171,9 @@ def _render_panel_confirm_response(response: dict) -> str:
 
 
 def _error_detail(error: str) -> dict:
-    if not error.startswith("HTTP "):
-        return {}
-    _, _, maybe_json = error.partition(": ")
-    if not maybe_json:
-        return {}
-    try:
-        payload = json.loads(maybe_json)
-    except json.JSONDecodeError:
-        return {}
-    detail = payload.get("detail")
-    return detail if isinstance(detail, dict) else {}
+    # #3361 round-2 — the parse lives in workspace_posture.error_detail so the
+    # entry_state mirror consumes the identical structured-error detection.
+    return error_detail(error)
 
 
 def _is_remote_page_origin(hostname: str) -> bool:
@@ -6314,6 +6317,30 @@ def _render_vault_selection_required_section(payload: object) -> str:
     )
     requested = str(data.get("requested_note_path") or "")
     configured = str(data.get("configured_vault_root") or "")
+    # #3361 (DESIGN_AUDIT.md §3.1 bug B1 / redesigns.html §3 "After —
+    # configured vault, no false CTA") — a configured vault the runtime
+    # currently cannot reach is a distinct case from ordinary first-contact
+    # ``no_vault_bound`` (a configured-but-not-yet-opened vault is the
+    # ordinary #2564 shape and keeps its plain "Choose a vault" copy). The
+    # runtime declares this explicitly on an additive
+    # ``runtime_reconnecting`` flag (never inferred from reason alone, per
+    # the "never invent a posture the runtime did not declare" constraint);
+    # absent/false is the default for every existing payload shape. Only a
+    # configured, non-uninitialized, non-misconfigured vault earns the
+    # "reconnecting" copy — the Initialize CTA stays reserved for
+    # reason="uninitialized" either way, and a genuinely-missing configured
+    # folder (``vault_root_misconfigured``) wins over the reconnecting flag
+    # (review finding 3): telling a human their missing folder is
+    # "reconnecting" while suppressing the only working create/initialize
+    # action would leave the picker with no working affordance at all.
+    is_reconnecting = (
+        bool(data.get("runtime_reconnecting"))
+        and bool(configured)
+        and not is_uninitialized
+        and not is_missing_configured
+    )
+    if is_reconnecting:
+        message = _e(RECONNECTING_PICKER_SUB)
     context = data.get("context") if isinstance(data.get("context"), dict) else {}
     settings_path = str(context.get("settings_path") or data.get("settings_path") or "")
     requested_html = (
@@ -6431,6 +6458,8 @@ def _render_vault_selection_required_section(payload: object) -> str:
     # field, no Role select — just an honest confirm button for the path the
     # human already chose. The general ``no_vault_bound`` picker never renders it.
     initialize_html = ""
+    # (is_reconnecting is mutually exclusive with both reasons by
+    # construction above, so it needs no re-check here.)
     if (is_uninitialized or is_missing_configured) and configured:
         initialize_copy = (
             "This vault folder is missing. Create and initialize it here to "
@@ -6438,6 +6467,19 @@ def _render_vault_selection_required_section(payload: object) -> str:
             if is_missing_configured
             else "This vault isn’t initialized yet. Initialize it to enable "
             "writes into this folder."
+        )
+        # #3361 (DESIGN_AUDIT.md §3.1 AC) — "the Initialize CTA renders only
+        # when reason == 'uninitialized'": the canonical
+        # `vault-picker-initialize-submit` testid is reserved for that exact
+        # state. `vault_root_misconfigured` (folder genuinely missing, #2565
+        # Codex P2) keeps its own working create/initialize action — a
+        # distinct, legitimate case — but under a distinct testid so it is
+        # never mistaken for the false-positive "Initialize this vault" CTA
+        # bug B1 describes on a live, merely-unreachable vault.
+        submit_testid = (
+            "vault-picker-initialize-submit"
+            if is_uninitialized
+            else "vault-picker-create-submit"
         )
         initialize_html = (
             '<div class="vault-picker-initialize" '
@@ -6447,7 +6489,7 @@ def _render_vault_selection_required_section(payload: object) -> str:
             f"{initialize_copy}"
             "</p>"
             '<button type="button" class="vault-picker-initialize-button" '
-            'data-testid="vault-picker-initialize-submit" '
+            f'data-testid="{submit_testid}" '
             'data-intent="vault.initialize" data-api-method="POST" '
             'data-api-path="/api/companion/vault/initialize" '
             f'data-vault-path="{_e(configured)}">Initialize this vault</button>'
@@ -6466,9 +6508,10 @@ def _render_vault_selection_required_section(payload: object) -> str:
     return f"""
     <section class="vault-selection-required" data-region="vault-selection-required"
       data-testid="vault-selection-required" data-reason="{reason}"
+      data-reconnecting="{"true" if is_reconnecting else "false"}"
       data-entry-state="no_vault">
       <details class="vault-picker" data-testid="vault-picker" open>
-        <summary class="vault-picker-title" data-testid="vault-picker-title">Choose a vault</summary>
+        <summary class="vault-picker-title" data-testid="vault-picker-title">{RECONNECTING_PICKER_TITLE if is_reconnecting else "Choose a vault"}</summary>
         <div class="vault-picker-recents-mode" data-testid="vault-picker-recents-mode"
           data-mode="recents">
           <p class="vault-selection-summary">{message}</p>
@@ -6859,8 +6902,12 @@ def _render_vault_picker_script() -> str:
         return;
       }
       // Initialize the already-selected-but-uninitialized vault (#2564 Codex
-      // P2): reuse the existing vault.initialize authority (no typed-path field).
-      var init = event.target && event.target.closest('[data-testid="vault-picker-initialize-submit"]');
+      // P2), or create/initialize a genuinely-missing configured folder
+      // (#2565 Codex P2) — both reuse the existing vault.initialize
+      // authority (no typed-path field). #3361 gave the two cases distinct
+      // testids (vault-picker-initialize-submit / vault-picker-create-submit)
+      // so the shared class stays the click-binding selector for both.
+      var init = event.target && event.target.closest('.vault-picker-initialize-button');
       if (init) {
         var errEl = picker.querySelector('[data-testid="vault-picker-initialize-error"]');
         initializeVault(init.getAttribute('data-vault-path') || '', init, errEl, 'Confirm initialize');
@@ -7105,10 +7152,10 @@ def _render_error_section(
     # Q23 — provenance behind a Details disclosure; Q24 — suppress the form).
     lowered = error.lower()
     contract_unavailable = error_kind == "runtime_unavailable" or lowered.startswith("http 503")
-    runtime_unavailable = any(
-        marker in lowered
-        for marker in ("connection refused", "timed out", "timeout", "network")
-    )
+    # #3361 round-2 — shared classifier (structured short-circuit + shaped
+    # transport markers); True here only for the unstructured-transport case
+    # since the contract case was classified above.
+    runtime_unavailable = not contract_unavailable and is_runtime_unreachable_error(error)
     # #2124 — same 503/transport shape, two causes. From a remote page origin
     # the likely cause is "wrong device" (the browser hit the API's localhost
     # bind, unreachable from that device), so render the distinct remote-access
@@ -7127,11 +7174,21 @@ def _render_error_section(
         if runtime_unavailable
         else ""
     )
+    # #3361 (DESIGN_AUDIT.md §3.1 bug B2) — an unstructured error string (no
+    # declared `error_kind`) is exception/transport text (errno, DNS,
+    # "Connection refused", ...) that must never reach visible copy. A
+    # structured error (`error_kind` present) already carries sanitized,
+    # server-authored detail fields, so it keeps the existing display.
+    message_html = (
+        f'<span class="error-message"><code>{_e(error)}</code></span>'
+        if error_kind
+        else f'<span class="error-message">{CANT_REACH_VAULT_COPY}</span>'
+    )
     return f"""
   <div class="error-state" data-testid="workspace-error-state" data-error-kind="{'runtime-unavailable' if runtime_unavailable else 'api-error'}">
     <span class="error-label">{runtime_label}</span>
     {runtime_marker}
-    <span class="error-message"><code>{_e(error)}</code></span>{retry_html}
+    {message_html}{retry_html}
   </div>"""
 
 
@@ -7147,27 +7204,11 @@ def _is_runtime_unreachable(error: str) -> bool:
     (#2123 AC1; open-questions Q24). Mirrors the classification in
     ``_render_error_section`` so the banner and the form stay in lockstep.
     """
-    if not error:
-        return False
-    detail = _error_detail(error)
-    error_kind = str(detail.get("error") or "")
-    lowered = error.lower()
-    if error_kind == "runtime_unavailable" or lowered.startswith("http 503"):
-        return True
-    # The transport-substring fallback applies ONLY to unstructured error
-    # strings (e.g. "[Errno 61] Connection refused", which carry no JSON detail).
-    # A structured error with a declared kind is not a transport failure, so it
-    # must not be reclassified as unreachable just because its user data happens
-    # to contain a transport word — e.g. a note_not_found payload for
-    # "Network/Runbook.md" would otherwise hit the "network" marker and wrongly
-    # strip the still-usable vault-setup form. This mirrors _render_error_section,
-    # which resolves the declared error kind before any transport classification.
-    if error_kind:
-        return False
-    return any(
-        marker in lowered
-        for marker in ("connection refused", "timed out", "timeout", "network")
-    )
+    # #3361 round-2 — the classification is the shared
+    # workspace_posture.is_runtime_unreachable_error (structured-error
+    # short-circuit + error-shaped transport markers), consumed identically
+    # by the entry_state mirror so the two can never diverge again.
+    return is_runtime_unreachable_error(error)
 
 
 def _render_vault_unreachable_state(error: str, *, retry_html: str) -> str:

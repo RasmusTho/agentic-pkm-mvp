@@ -467,7 +467,10 @@ class TestRenderIndexHtml:
             error="Connection refused",
         )
         assert "error" in html.lower() or "Error" in html
-        assert "Connection refused" in html
+        # #3361 (DESIGN_AUDIT.md §3.1 bug B2) — an unstructured transport
+        # error never echoes its raw text; the calm posture copy replaces it.
+        assert "Connection refused" not in html
+        assert "Can't reach the vault right now" in html
 
     def test_note_not_found_renders_distinct_state(self) -> None:
         from companion_ui.workspace.serve_dev_page import handle_get
@@ -516,8 +519,12 @@ class TestRenderIndexHtml:
             api_base_url="http://127.0.0.1:18001",
             error="<b>bad</b>",
         )
+        # #3361 (DESIGN_AUDIT.md §3.1 bug B2) — an unstructured error string
+        # never reaches user-facing copy at all (not even escaped): the calm
+        # posture copy replaces it, so there is nothing to inject.
         assert "<b>bad</b>" not in html
-        assert "&lt;b&gt;" in html
+        assert "&lt;b&gt;" not in html
+        assert "Can't reach the vault right now" in html
 
     def test_valid_html_doctype(self) -> None:
         from companion_ui.workspace.serve_dev_page import render_index_html
@@ -664,7 +671,10 @@ class TestHandleGet:
             client=client,
             api_base_url="http://127.0.0.1:19999",
         )
-        assert "Connection refused" in html
+        # #3361 (DESIGN_AUDIT.md §3.1 bug B2) — the raw transport error never
+        # reaches visible copy; the calm posture copy replaces it.
+        assert "Connection refused" not in html
+        assert "Can't reach the vault right now" in html
         assert "error" in html.lower() or "Error" in html
 
     def test_api_base_url_shown_in_output(self) -> None:
@@ -725,7 +735,10 @@ class TestLiveServer:
         )
         assert resp.status_code == 200
         assert "error" in resp.text.lower() or "Error" in resp.text
-        assert "Connection refused" in resp.text
+        # #3361 (DESIGN_AUDIT.md §3.1 bug B2) — the raw transport error never
+        # reaches visible copy; the calm posture copy replaces it.
+        assert "Connection refused" not in resp.text
+        assert "Can't reach the vault right now" in resp.text
 
 
 # ---------------------------------------------------------------------------
