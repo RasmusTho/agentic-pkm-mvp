@@ -88,7 +88,10 @@ Rerank*).
 **Named future work (not current behavior):** RRF (Reciprocal Rank Fusion) over the weighted linear
 sum, HyDE / query expansion, and provenance-aware / low-trust signal weights are deferred behind the
 future `SearchPort` boundary (`docs/ROADMAP.md :: Abstraction Layer Hardening`). Adopting any of them
-is a new decision (a new ADR superseding ADR-0024); none changes the current scoring above.
+is a new decision (a new ADR superseding ADR-0024); none changes the current scoring above. One such
+decision is already taken but not yet enacted: Episode-closure decay — a derived, post-fusion rank
+multiplier per `docs/adr/ADR-0058-event-horizon-closure-decay.md` (Accepted 2026-07-10), landing via
+ERE-06 (#3181); until that slice merges it is not current scoring behavior.
 
 ### Scope filter
 Optional operational-scope filtering:
