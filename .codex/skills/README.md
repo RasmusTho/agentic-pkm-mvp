@@ -115,6 +115,8 @@ on CI checks — and the optional `--codex` verdict path — via REST without dr
   - backlog and GitHub-state reconciliation support when doc/backlog drift is the main problem
 - `capture-learning`
   - micro-skill: create one BuilderOps `LearningSignal` when a builder-workflow plan divergence occurs; invoke on divergence, not on normal work; use `docs/learning-log.md` only as historical/compatibility fallback; never treat builder learning as runtime/user memory without Product System authority
+- `owner-decision-brief`
+  - micro-skill: invoke at the moment any workflow is about to ask the owner for a decision (`agent:needs-human`, an operator ask, an inline question); first re-test the escalation against `AGENTS.md :: Agency default` and act instead when an agent can take the decision as well or better, then deliver each surviving owner decision as one standalone plain-language brief (decision, why-you, options with owner-facing consequences, recommendation, no-answer default) — never a codenamed decision menu, never project jargon
 - `learning-retrospective`
   - cadence-triggered: read BuilderOps `LearningSignal` records and the generated learning-summary projection, include historical `docs/learning-log.md` compatibility entries only when needed, cluster by upstream artifact, and propose concrete edits for human review; when explicitly requested, run autonomous maintenance by applying safe governance fixes, creating Issues for unresolved work, and recording a BuilderOps retrospective receipt
 - `learning-to-issue`
