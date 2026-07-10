@@ -1,6 +1,6 @@
 ---
 name: Fetch Karakeep Reading Evidence
-description: Implement a read-only Karakeep REST source plugin with pagination, revision identity, durable cursor, and item isolation.
+description: Implement Heimdal's read-only Karakeep REST adapter, identity/provenance/attribution, durable producer cursor, and published handoff.
 task_id: KMA-03
 source_anchor: "docs/KARAKEEP_MIMER_ACQUISITION/README.md :: Cross-Task Invariants / Interaction Safety"
 parent_capability: Karakeep Mimer Acquisition
@@ -13,19 +13,20 @@ can_parallelize_with: [DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE]
 
 ## Purpose
 
-Acquire saved reading evidence through KAP's source-plugin boundary without writing Karakeep or the
-vault and without losing evidence on paging/restart failures.
+Acquire saved reading evidence through Heimdal's ingestion-organ boundary, attribute what was
+observed, and publish the durable handoff Mimer consumes.
 
 ## What This Task Does
 
-Implement a read-only plugin adjacent to `app/knowledge_acquisition/` that fetches paginated links,
-notes, and highlights; normalizes source response errors; persists immutable raw records; records
-source revision/provenance; and commits a monotonic cursor only after durable page handling.
+Implement a read-only adapter under `app/heimdal/` that fetches paginated links, notes, and
+highlights; assigns stable identity/revision; stamps provenance, confidence, attribution and entity
+mentions; publishes the contracted evidence; and commits Heimdal's monotonic producer cursor only
+after publication is durable. It never imports or invokes `app.knowledge_acquisition`.
 
 ## Concretely
 
 One-shot invocation accepts runtime endpoint/credential references, fetches bounded pages, returns
-counts and item-scoped errors, and emits no secret-bearing log/event fields.
+counts, published evidence references, and item-scoped errors, and emits no secret-bearing fields.
 
 ## Why This Matters
 
@@ -34,29 +35,31 @@ continuous acquisition complete, replayable, and safe under ordinary network fai
 
 ## SBS Impact
 
-Product/Runtime: EBF primary, DRI secondary. Derived/rebuildable raw writes only; read-only external
-API boundary; no HKA write and no companion capture.
+Product/Runtime: Heimdal/EBF primary with EXE/DRI handoff support. Read-only external API boundary;
+published evidence is non-HKA. Mimer/KAP and companion capture are not called.
 
 ## Restart / Durability Posture
 
-Raw records and cursor/checkpoint are durable. Crash before checkpoint replays the page; stable
-identity makes repeats no-ops. Crash after checkpoint cannot occur before represented items are
-durably accepted or item-scoped dead-lettered.
+Published evidence and Heimdal's producer cursor are durable. Crash before checkpoint replays the
+page; stable identity makes repeated publication a no-op. Producer cursor advancement does not wait
+for Mimer refinement once the handoff is durable.
 
 ## Acceptance Criteria
 
-- [ ] Plugin fetches paginated links, notes, and highlights into the contracted raw shape with full
-  source provenance. Verify: `tests/knowledge_acquisition/test_karakeep_fetch.py::test_incremental_fetch_persists_all_reading_evidence_and_resumes`.
+- [ ] Heimdal fetches paginated links, notes, and highlights and publishes contracted evidence with
+  identity, revision, provenance, confidence, attribution, and entity mentions. Verify: `tests/heimdal/test_karakeep_ingestion.py::test_incremental_fetch_attributes_and_publishes_reading_evidence`.
 - [ ] Duplicate revision is a traced no-op; changed content creates revision lineage without
-  overwriting raw evidence. Verify: `tests/knowledge_acquisition/test_karakeep_fetch.py::test_duplicate_is_noop_and_changed_revision_preserves_lineage`.
+  overwriting published evidence. Verify: `tests/heimdal/test_karakeep_ingestion.py::test_duplicate_is_noop_and_changed_revision_preserves_lineage`.
 - [ ] Mid-page crash/retry cannot skip or duplicate durable evidence and cursor never regresses.
-  Verify: `tests/knowledge_acquisition/test_karakeep_fetch.py::test_page_failure_replays_before_cursor_advance`.
+  Verify: `tests/heimdal/test_karakeep_ingestion.py::test_page_failure_replays_before_producer_cursor_advance`.
 - [ ] Auth/rate-limit/unavailable and malformed-item failures are legible, item/page isolated, and
-  secret-safe. Verify: `tests/knowledge_acquisition/test_karakeep_fetch.py::test_failures_are_bounded_and_credentials_are_redacted`.
+  secret-safe. Verify: `tests/heimdal/test_karakeep_ingestion.py::test_failures_are_bounded_and_credentials_are_redacted`.
+- [ ] Production adapter publishes the handoff without importing/calling Mimer KAP or capture.
+  Verify: `tests/heimdal/test_karakeep_ingestion.py::test_adapter_stops_at_published_handoff`.
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/knowledge_acquisition/test_karakeep_fetch.py` (stubbed HTTP; no network)
+- `pytest -q tests/heimdal/test_karakeep_ingestion.py` (stubbed HTTP; no network)
 - `ruff check app tests && mypy app`
 
 ## Out of Scope
@@ -66,10 +69,10 @@ values, browser scraping, and Karakeep MCP.
 
 ## Related Docs
 
-- `docs/KNOWLEDGE_ACQUISITION/SOURCE_PLUGIN_CONTRACT.md`
-- `docs/KNOWLEDGE_ACQUISITION/REPLAY_AND_STAGE_EVENTS.md`
+- `docs/adr/ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md`
+- `docs/HEIMDAL/FABLE_COMPANION.md`
 
 ## Related GitHub Issues
 
-Future child after KMA-01; parallel with KMA-02. TCD hint: strongest available model / high reasoning;
+Issue #3374 after KMA-01; parallel with KMA-02. TCD hint: strongest available model / high reasoning;
 external API, pagination, secrets, and crash-safe cursor semantics have high defect cost.

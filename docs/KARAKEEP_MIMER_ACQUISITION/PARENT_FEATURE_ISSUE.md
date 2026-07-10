@@ -6,35 +6,37 @@ contract pointer; GitHub owns live backlog and validation state.
 ## Context
 
 D1 in `docs/audits/APP_MCP_CONNECTIVITY_2026-07-07.md` selects self-hosted Karakeep as the
-read-later/highlight source. This feature implements B2 through KAP, not companion capture, while
-preserving review-required authority and replayable acquisition.
+read-later/highlight source. Accepted ADR-0049 requires Heimdal to own every external
+watch→fetch→attribute→publish front end and Mimer to begin at refinement. This feature implements B2
+across that handoff, not companion capture, while preserving review-required authority.
 
 ## Scope
 
-Define the reading-source contract; deploy a managed Karakeep service; fetch saved links, notes, and
-highlights incrementally; normalize and write deterministic KAP reading candidates through
-`candidate_writeback`; schedule safe runs; and prove the real test-channel flow.
+Define the Heimdal published-evidence→Mimer refinement contract; deploy a managed Karakeep service;
+fetch, identify, attribute, and publish saved links/notes/highlights in Heimdal; consume the handoff
+in Mimer/KAP through `candidate_writeback`; coordinate safe runs; and prove the real flow.
 
 ## Source Anchors
 
 - `docs/audits/APP_MCP_CONNECTIVITY_2026-07-07.md :: §5 B2 — Karakeep self-host`
 - `docs/KARAKEEP_MIMER_ACQUISITION/README.md :: Capability boundary`
 - `docs/KNOWLEDGE_ACQUISITION/README.md :: Cross-Task Invariants / Interaction Safety`
+- `docs/adr/ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md :: Decision §1`
 
 ## SBS Impact
 
-- Primary subsystem: EBF (Karakeep acquisition-source adapter)
-- Secondary subsystem(s): DRI, HKA, SIP, GOV, OEF
-- Write class: derived/rebuildable raw artifacts plus governed mechanical draft-candidate write
+- Primary subsystem: Heimdal/EBF → Mimer/DRI runtime boundary
+- Secondary subsystem(s): HKA, SIP, GOV, OEF, EXE
+- Write class: derived/rebuildable published evidence plus governed mechanical draft-candidate write
 - Authority impact: source and AI output remain non-authoritative and review-required
-- Persistence impact: durable raw records, cursor/checkpoint, candidate note, and receipts
-- Derived/rebuildable impact: normalize/extract/candidate assembly remains replayable from raw
+- Persistence impact: durable Heimdal published evidence/source cursor; separate Mimer consumer cursor, candidate note, and receipts
+- Derived/rebuildable impact: Mimer refinement remains replayable from published evidence
 - Human knowledge impact: creates draft source candidates only; no promotion
 - Memory impact: none
 - Retrieval/context impact: later indexing may consume accepted candidate artifacts; no ranking change
 - Sync/deployment impact: adds a managed mac-mini service and scheduled acquisition worker
 - External boundary impact: Karakeep REST reads; endpoint and credential values remain operator-owned
-- New or changed contract: Karakeep reading-source and candidate mapping under KAP
+- New or changed contract: Heimdal Karakeep published-evidence → Mimer KAP refinement handoff
 - Owner-doc impact: follow-up after acceptance
 - Transition debt impact: adds bounded service operations; reduces read-later ingestion gap
 - Fitness rule impact: strengthens external-source provenance, idempotency, and secret containment
@@ -43,6 +45,9 @@ highlights incrementally; normalize and write deterministic KAP reading candidat
 
 - KAP `candidate_writeback` is the only candidate materialization path; never `/api/capture` or a
   companion-capture adapter.
+- Heimdal alone contacts Karakeep and owns source identity, provenance, attribution/entity mentions,
+  producer cursor, and durable publication; Mimer begins only at published evidence.
+- Heimdal and Mimer use separate cursors; no direct cross-constituent call or distributed transaction.
 - No Karakeep MCP integration is built here.
 - No private endpoint or credential value is committed, logged, or specified.
 - No auto-promotion, overwrite of existing human artifacts, or cursor advance before durable work.
@@ -54,25 +59,26 @@ highlights incrementally; normalize and write deterministic KAP reading candidat
 - [ ] A saved link with note/highlight reaches a deterministic draft KAP candidate with complete
   Karakeep provenance and no capture call. Verify: `tests/knowledge_acquisition/test_karakeep_candidate_writeback.py::test_reading_candidate_uses_kap_writeback_not_capture`.
 - [ ] Restart, duplicate fetch, partial page failure, and overlapping schedule do not skip or
-  duplicate evidence. Verify: `tests/knowledge_acquisition/test_karakeep_schedule.py::test_failed_or_overlapping_run_never_advances_cursor_unsafely`.
-- [ ] Real test-channel proof records source item, raw identity, candidate path, stage receipts,
+  duplicate evidence across either constituent. Verify: `tests/heimdal/test_karakeep_schedule.py::test_failed_or_overlapping_run_preserves_constituent_cursors`.
+- [ ] Real test-channel proof records source item, published-evidence identity, candidate path, both
+  cursors, stage receipts,
   replay result, and secret-free logs. Verify: validation receipt on this issue using
   `docs/KARAKEEP_MIMER_ACQUISITION/PROVE_AND_ACCEPT_KARAKEEP_TO_MIMER.md :: Acceptance Criteria`.
 - [ ] Owner docs are promoted only after acceptance. Verify: doc writeback at
-  `docs/KARAKEEP_MIMER_ACQUISITION/README.md :: State` plus the governing KAP owner-doc status.
+  `docs/KARAKEEP_MIMER_ACQUISITION/README.md :: State` plus the governing Heimdal and KAP owner-doc status.
 
 ## Implementation Tasks
 
 Specification: `docs/KARAKEEP_MIMER_ACQUISITION/`.
 
-1. #3372 — define reading-source and candidate contract.
+1. #3372 — define Heimdal acquisition/published-evidence → Mimer refinement contract.
 2. #3373 — deploy Karakeep as a managed service, parallel with fetch implementation.
-3. #3374 — fetch Karakeep reading evidence, parallel with deployment.
-4. #3375 — normalize and write reading candidates.
-5. #3377 — schedule incremental acquisition.
+3. #3374 — Heimdal fetches, attributes, and publishes Karakeep evidence, parallel with deployment.
+4. #3375 — Mimer consumes published evidence and writes reading candidates.
+5. #3377 — coordinate incremental producer/consumer acquisition.
 6. #3376 — prove and accept Karakeep → Mimer.
 
-Order: `1 → (2 ∥ 3) → 4 → 5 → 6`.
+Order: `1 → (2 ∥ 3 → 4) → 5 → 6`.
 
 ## Verification Path
 
@@ -94,18 +100,19 @@ bidirectional sync or mutation of Karakeep; backups beyond the service runbook c
 ## Suggested Validation
 
 - `python3 scripts/docs_guard.py`
-- `pytest -q tests/knowledge_acquisition/test_karakeep_contract.py`
-- `pytest -q tests/knowledge_acquisition/test_karakeep_fetch.py`
+- `pytest -q tests/heimdal/test_karakeep_handoff_contract.py`
+- `pytest -q tests/heimdal/test_karakeep_ingestion.py`
 - `pytest -q tests/knowledge_acquisition/test_karakeep_candidate_writeback.py`
-- `pytest -q tests/knowledge_acquisition/test_karakeep_schedule.py`
+- `pytest -q tests/heimdal/test_karakeep_schedule.py`
 - `pytest -q tests/ops/test_karakeep_service_contract.py`
 - Final test-channel procedure in `PROVE_AND_ACCEPT_KARAKEEP_TO_MIMER.md`.
 
 ## Source Docs
 
 - `docs/KARAKEEP_MIMER_ACQUISITION/README.md`
+- `docs/adr/ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md`
+- `docs/HEIMDAL/FABLE_COMPANION.md`
 - `docs/KNOWLEDGE_ACQUISITION/README.md`
-- `docs/KNOWLEDGE_ACQUISITION/SOURCE_PLUGIN_CONTRACT.md`
 - `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md`
 
 ## Applies learning (optional)

@@ -18,7 +18,7 @@ weakening the governed capture path.
 
 ## What This Task Does
 
-- Adds a server/tool module that declares the exact ratified tools and schemas.
+- Adds a server/tool module that declares the exact owner-accepted tools and schemas.
 - Delegates ask, retrieve/search, note-read, and health to their existing client-contract
   operations.
 - Delegates capture to the existing governed capture operation and returns its receipt envelope
@@ -92,8 +92,8 @@ human may see an uncertain outcome rather than a duplicate hidden replay.
 
 ## Related GitHub Issues
 
-Create one child issue after MIMER-MCP-01 lands. It may run in parallel with MIMER-MCP-03 when file
-ownership is isolated. TCD hint: **Codex / xhigh** because an external protocol maps an
+Issue #3368 stays blocked until ADR-0058 is Accepted and links the explicit owner-decision receipt;
+merging the spec or a Proposed ADR is insufficient. It may then run in parallel with MIMER-MCP-03
+when file ownership is isolated. TCD hint: **Codex / xhigh** because an external protocol maps an
 authority-bearing write and subtle ambiguous-failure semantics; require architecture/security
 review plus the full non-Postgres suite.
-

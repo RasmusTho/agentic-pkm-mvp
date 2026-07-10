@@ -1,6 +1,6 @@
 ---
 name: Package and Harden Mimer MCP Transport
-description: Package the ratified MCP wire transport with explicit trust enforcement, configuration, lifecycle, and health
+description: Package the owner-accepted MCP wire transport with explicit trust enforcement, configuration, lifecycle, and health
 task_id: MIMER-MCP-03
 source_anchor: "docs/contracts/MIMER_CLIENT_CONTRACT.md :: MCP transport and trust posture"
 parent_capability: Mimer MCP Client Adapter
@@ -13,12 +13,12 @@ can_parallelize_with: [Expose Governed Mimer Tools Over MCP]
 
 ## Purpose
 
-Turn the ratified adapter boundary into a deterministic, installable process without widening the
+Turn the owner-accepted adapter boundary into a deterministic, installable process without widening the
 current LAN/loopback/tailnet trust envelope or relying on shell-history startup.
 
 ## What This Task Does
 
-- Adds the ratified MCP SDK/runtime dependency and a stable executable entrypoint.
+- Adds the owner-selected MCP SDK/runtime dependency and a stable executable entrypoint.
 - Implements only the transport(s), bind defaults, authentication, and origin/trust checks selected
   by MIMER-MCP-01.
 - Adds typed configuration with fail-closed validation and secret-safe diagnostics.
@@ -29,7 +29,7 @@ current LAN/loopback/tailnet trust envelope or relying on shell-history startup.
 ## Concretely
 
 ```text
-python -m app.mimer_mcp --transport <ratified-value>
+python -m app.mimer_mcp --transport <owner-selected-value>
   -> validate typed config
   -> refuse an unapproved bind/auth posture
   -> start MCP lifecycle
@@ -43,14 +43,14 @@ authentication, leaks secrets, or leaves an unsupervised process that disappears
 
 ## Acceptance Criteria
 
-- [ ] The packaged entrypoint negotiates the ratified MCP transport and shuts down cleanly without
+- [ ] The packaged entrypoint negotiates the owner-selected MCP transport and shuts down cleanly without
       orphaned listeners or requests.
   Verify: `tests/mcp/test_mimer_server_transport.py::test_transport_lifecycle_negotiates_and_shuts_down_cleanly`
 - [ ] Typed configuration rejects unsupported transports, unapproved network exposure, missing
       required auth, and malformed secrets before listener startup.
   Verify: `tests/mcp/test_mimer_server_security.py::test_invalid_or_unsafe_configuration_fails_before_bind`
 - [ ] The production request path rejects an untrusted or unauthenticated caller according to the
-      ratified posture; header-only/unit-guard tests are insufficient.
+      owner-accepted posture; header-only/unit-guard tests are insufficient.
   Verify: `tests/mcp/test_mimer_server_security.py::test_transport_rejects_untrusted_production_call`
 - [ ] Health/readiness and logs identify transport state and dependency degradation without exposing
       credentials; a supervised restart restores service without replaying in-flight capture.
@@ -70,8 +70,8 @@ authentication, leaks secrets, or leaves an unsupervised process that disappears
 
 - Tool semantics owned by MIMER-MCP-02.
 - Concrete private host bindings, credentials, desktop-client edits, or operator fleet cutover.
-- A shared ecosystem registry, dynamic remote discovery, or support for transports not ratified by
-  MIMER-MCP-01.
+- A shared ecosystem registry, dynamic remote discovery, or support for transports not selected in
+  the owner-accepted ADR-0058 decision.
 
 ## Restart / Durability Posture
 
@@ -90,7 +90,7 @@ transport, preventing a restart from duplicating an append whose acknowledgement
 
 ## Related GitHub Issues
 
-Create one child issue after MIMER-MCP-01 lands. It may run in parallel with MIMER-MCP-02 under an
-isolated worktree. TCD hint: **Codex / xhigh** because this is security-sensitive external transport
+Issue #3369 stays blocked until ADR-0058 is Accepted and links the explicit owner-decision receipt;
+merging the spec or a Proposed ADR is insufficient. It may then run in parallel with MIMER-MCP-02
+under an isolated worktree. TCD hint: **Codex / xhigh** because this is security-sensitive external transport
 and deployment work; require security review and production-call-site trust tests.
-

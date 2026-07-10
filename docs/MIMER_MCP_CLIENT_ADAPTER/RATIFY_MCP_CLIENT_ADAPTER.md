@@ -1,6 +1,6 @@
 ---
-name: Ratify MCP Client Adapter
-description: Admit a constituent-owned Mimer MCP adapter through the ADR and client-contract authority path
+name: Prepare MCP Client Adapter Decision
+description: Draft the MCP topology, transport, and authentication decision for explicit owner ruling before any adapter is admitted
 task_id: MIMER-MCP-01
 source_anchor: "docs/audits/APP_MCP_CONNECTIVITY_2026-07-07.md :: §5 Build list — B1"
 parent_capability: Mimer MCP Client Adapter
@@ -9,50 +9,57 @@ depends_on: []
 can_parallelize_with: []
 ---
 
-# Ratify MCP Client Adapter
+# Prepare MCP Client Adapter Decision
 
 ## Purpose
 
-Current authority explicitly excludes MCP from Mimer's client transports. This task makes the
-architecture decision that must exist before implementation can truthfully begin.
+Current authority explicitly excludes MCP from Mimer's client transports, and only D1/D2—not MCP
+topology, wire transport, or authentication—have been owner-ruled. This task prepares a decision
+proposal and then waits for the owner's explicit receipt; it does not autonomously make the ruling.
 
 ## What This Task Does
 
-- Authors a superseding ADR that revisits ADR-0047's concrete-server trigger and ADR-0056's fixed
-  transport set.
-- Ratifies Mimer/constituent ownership, protocol-tier status, supported wire transport(s), trust
-  posture, and the exact operation boundary.
-- Updates the Mimer client contract and architecture references without claiming a running server.
+- Drafts `docs/adr/ADR-0058-mimer-mcp-client-adapter.md` with `State: Proposed`, revisiting
+  ADR-0047's concrete-server trigger and ADR-0056's fixed transport set.
+- Presents explicit alternatives, consequences, and a reasoned recommendation for server ownership,
+  protocol-tier topology, supported wire transport(s), authentication/trust posture, and the exact
+  operation boundary.
+- Leaves current authority and the Mimer client contract unchanged until an owner-decision receipt
+  accepts one option. Only then may the ADR become Accepted and record supersession precisely.
 - Resolves whether the internal tool-policy contract is unaffected or needs a narrow clarification;
   it never conflates the external server with the internal ToolProvider.
 
 ## Concretely
 
 ```text
-before: transports = HTTP API + direct filesystem; MCP deferred
-after:  transports = HTTP API + direct filesystem + ratified MCP adapter
-        MCP capture -> existing governed capture operation -> existing receipt
-        internal app/mcp/vault_tools.py remains non-transport plumbing
+current: transports = HTTP API + direct filesystem; MCP deferred
+proposal: ADR-0058 State=Proposed
+          options(topology, wire transport, auth) + consequences + recommendation
+gate:     owner-decision receipt on #3371
+accepted path only: update ADR state/supersession + client contract to the ruled option
 ```
 
 ## Why This Matters
 
-Implementing first would silently overturn two accepted ADRs and leave server ownership, exposure,
-and authority ambiguous. A durable decision makes later code review mechanical rather than
-re-litigating topology in every PR.
+Implementing first—or letting an agent label its own recommendation Accepted—would silently
+overturn two accepted ADRs and usurp an explicitly deferred owner choice. A durable proposal plus
+owner receipt makes later code review mechanical without fabricating authority.
 
 ## Acceptance Criteria
 
-- [ ] A new ADR explicitly supersedes/reconciles ADR-0047 and ADR-0056 for this concrete adapter,
-      including constituent ownership, protocol-tier status, selected transport(s), binding/auth
-      posture, and consequences.
-  Verify: doc writeback at `docs/adr/ :: Mimer MCP adapter decision`
-- [ ] The Mimer client contract admits MCP as an additional adapter while preserving the three hard
-      authority invariants, both existing transports, and ambiguous-write handling.
-  Verify: doc writeback at `docs/contracts/MIMER_CLIENT_CONTRACT.md :: Classification and transports`
-- [ ] The contracted MCP operation table contains exactly ask, governed capture, retrieve/search,
-      note read, and health; it explicitly excludes generic vault write and receipt read-back.
-  Verify: doc writeback at `docs/contracts/MIMER_CLIENT_CONTRACT.md :: MCP adapter surface`
+- [ ] ADR-0058 exists in Proposed state and enumerates topology, wire-transport, and authentication
+      alternatives, consequences, and a recommendation without claiming acceptance or supersession.
+  Verify: doc writeback at `docs/adr/ADR-0058-mimer-mcp-client-adapter.md :: Options and recommendation`
+- [ ] The proposal fixes the invariant operation boundary—ask, governed capture, retrieve/search,
+      note read, and health—and explicitly excludes generic vault write and receipt read-back across
+      every option.
+  Verify: doc writeback at `docs/adr/ADR-0058-mimer-mcp-client-adapter.md :: Invariants across all options`
+- [ ] The explicit owner ruling is recorded on #3371 and linked from the ADR before its state becomes
+      Accepted or it claims to supersede/reconcile ADR-0047/ADR-0056.
+  Verify: owner-decision receipt on GitHub Issue #3371 linked from `docs/adr/ADR-0058-mimer-mcp-client-adapter.md :: Owner decision receipt`
+- [ ] Only after an accepting owner receipt, the Mimer client contract reflects exactly the selected
+      topology/transport/auth option while preserving its authority and ambiguous-write invariants.
+  Verify: doc writeback at `docs/contracts/MIMER_CLIENT_CONTRACT.md :: Classification and transports` plus the linked owner-decision receipt on #3371
 - [ ] Architecture and ecosystem-federation references distinguish the external client adapter
       from the internal MCP ToolProvider and carry no shipped-server claim.
   Verify: doc writeback at `docs/ARCHITECTURE.md :: MCP/tools` and `docs/architecture/ecosystem-federation.md :: Dual-role + MCP`
@@ -63,8 +70,10 @@ re-litigating topology in every PR.
 
 - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/architecture/test_docs_index.py`
 - `rg -n "MCP adapter|MCP transport|receipt read-back|vault_tools|protocol-tier" docs/adr docs/contracts/MIMER_CLIENT_CONTRACT.md docs/ARCHITECTURE.md docs/architecture/ecosystem-federation.md`
-- Review the new ADR and client-contract table against every doc-target AC above and confirm no line
-  claims implementation exists.
+- Confirm `docs/adr/ADR-0058-mimer-mcp-client-adapter.md` stays `State: Proposed` and contains no
+  superseding/Accepted claim unless the linked #3371 owner-decision receipt exists.
+- Review the selected client-contract writeback against that receipt, if and only if the owner has
+  accepted an option; otherwise confirm the current contract is unchanged.
 
 ## Out of Scope
 
@@ -82,6 +91,8 @@ re-litigating topology in every PR.
 
 ## Related GitHub Issues
 
-Create one ready child issue under the parent. TCD hint: **Opus / xhigh** (or equivalent
-frontier architecture capability) because this changes an external protocol/security boundary and
-two durable decisions; architecture-quality review is mandatory.
+Issue #3371 remains **`agent:needs-human` after the specification merges**. An Opus/xhigh (or
+equivalent frontier architecture capability) may draft alternatives, consequences, and a
+recommendation to minimize owner review time, but it cannot choose for the owner or mark ADR-0058
+Accepted. After the explicit owner receipt, use the same high-assurance architecture capability to
+apply the selected decision exactly; architecture-quality review remains mandatory.

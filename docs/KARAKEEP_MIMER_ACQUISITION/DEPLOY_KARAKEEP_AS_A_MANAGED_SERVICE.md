@@ -21,11 +21,13 @@ specific endpoint or credential values into repo truth.
 Add the repo-owned deployment manifest/runbook integration, pinned image policy, durable volumes,
 health/readiness check, restart behavior, backup/update procedure, and fail-loud startup validation.
 Configuration references existing secret/env mechanisms; committed fixtures use placeholders only.
+The service is Heimdal's external source dependency; Mimer has no direct Karakeep connection.
 
 ## Concretely
 
-A standard service lifecycle can start, stop, inspect, update, and restore Karakeep. Mimer acquisition
-does not run unless health is green. Logs and rendered configuration are secret-safe.
+A standard service lifecycle can start, stop, inspect, update, and restore Karakeep. Heimdal fetch
+does not run unless health is green; Mimer consumption of already-published evidence remains
+available when the service is down. Logs and rendered configuration are secret-safe.
 
 ## Why This Matters
 
@@ -34,8 +36,8 @@ health behavior prevent an unavailable or half-upgraded source from looking like
 
 ## SBS Impact
 
-Product/Runtime: OEF primary, EBF secondary. Deployment/config write class; external service boundary
-added. No Builder System or public-ingress change.
+Product/Runtime: OEF primary, Heimdal/EBF secondary. Deployment/config write class; the dependency is
+explicitly on Heimdal's side of the boundary. No Builder System or public-ingress change.
 
 ## Restart / Durability Posture
 
@@ -48,7 +50,7 @@ container lifecycle.
 - [ ] Deployment pins an explicit image/version and declares durable volumes, healthcheck, and
   restart behavior. Verify: `tests/ops/test_karakeep_service_contract.py::test_service_manifest_is_pinned_persistent_and_health_checked`.
 - [ ] Startup fails before acquisition when required config references are absent or health is red.
-  Verify: `tests/ops/test_karakeep_service_contract.py::test_unhealthy_or_unconfigured_service_blocks_acquisition`.
+  Verify: `tests/ops/test_karakeep_service_contract.py::test_unhealthy_service_blocks_heimdal_fetch_not_mimer_replay`.
 - [ ] Committed manifest, rendered test config, and logs contain no credential or private endpoint
   value. Verify: `tests/ops/test_karakeep_service_contract.py::test_service_manifest_is_health_checked_and_secret_free`.
 - [ ] Backup/update/rollback steps name durable data and a verification check. Verify: doc writeback
@@ -66,10 +68,11 @@ Karakeep product customization, and interactive MCP configuration.
 
 ## Related Docs
 
+- `docs/adr/ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md`
 - `docs/ENVIRONMENTS.md`
 - `docs/runbooks/` deployment patterns
 
 ## Related GitHub Issues
 
-Future child after KMA-01; parallel with KMA-03. TCD hint: Sonnet/standard model, medium reasoning;
+Issue #3373 after KMA-01; parallel with KMA-03. TCD hint: Sonnet/standard model, medium reasoning;
 mechanical deployment with high-value secret and rollback checks.

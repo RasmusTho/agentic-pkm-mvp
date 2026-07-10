@@ -205,10 +205,11 @@ specs. Ranked by leverage:
   contracted transport. Every MCP client the owner touches becomes a governed vault client.
   Nothing else in this audit multiplies value like this item.
 - **B2 — Karakeep self-host (D1 ruling, decided not speculative).** Docker deployment on the mac
-  mini (`karakeep-app/karakeep`, AGPL-3.0, $0); a scheduled ingest job (`app/ingest/`-adjacent)
-  pulls saved links/notes/highlights via its REST API and writes candidates into the vault through
-  Mimer's governed capture path — same shape as B1's ingestion pattern, no MCP transport required
-  for this leg since it is Mimer's own worker doing the pulling, not an interactive MCP client.
+  mini (`karakeep-app/karakeep`, AGPL-3.0, $0). ADR-0049 controls the constituent boundary:
+  Heimdal pulls links/notes/highlights through Karakeep's REST API, attributes them, and publishes
+  durable evidence; Mimer/KAP starts at that handoff and refines it into deterministic,
+  review-required candidates through the governed candidate-writeback path. This leg does not use
+  companion capture and requires no MCP transport.
   Karakeep's bundled MCP server is a free bonus for ad hoc Claude access to the reading archive
   directly (Direction A), independent of the ingestion job.
 - **B3 — Swedish-first voice capture improvement on the existing Heimdal lane.** This is not a new

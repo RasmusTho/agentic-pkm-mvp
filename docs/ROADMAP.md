@@ -59,8 +59,10 @@ claimed. The adapter preserves the authority envelope the `mimer-*` skills and
 feature-breakdown, and no MCP server exists today (`app/mcp/vault_tools.py` is internal plumbing,
 not a transport). A second build item joins it on the same footing: the audit's
 D1 owner decision (read-later consolidation) is ruled — self-host Karakeep on the mac mini as the
-free, local-first read-later/highlights source feeding Mimer ingestion via its REST API, alongside
-Raindrop.io kept (not replaced) as the bookmark layer with its official MCP adopted. **Direction
+free, local-first read-later/highlights source. Per ADR-0049, Heimdal owns Karakeep REST fetch,
+attribution, and the durable published-evidence handoff; Mimer/KAP owns refinement into
+review-required candidates after that handoff. Raindrop.io stays (not replaced) as the bookmark
+layer with its official MCP adopted. **Direction
 C — Mimer as an MCP client** (Home Assistant presence/state, calendar, tasks, reading history
 consumed as CRE context signals and Knowledge Acquisition Platform intake) is the concrete
 successor to the deferred CRE "external connectors" line and stays sequenced behind the Direction B

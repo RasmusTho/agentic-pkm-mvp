@@ -1,11 +1,11 @@
 ---
 name: Schedule Incremental Karakeep Acquisition
-description: Run bounded incremental acquisition with overlap exclusion, health gating, honest receipts, and safe checkpointing.
+description: Coordinate bounded Heimdal producer and Mimer consumer schedules with separate leases, cursors, and honest receipts.
 task_id: KMA-05
 source_anchor: "docs/KARAKEEP_MIMER_ACQUISITION/README.md :: Execution order"
 parent_capability: Karakeep Mimer Acquisition
-prerequisites: [KMA-04]
-depends_on: [NORMALIZE_AND_WRITE_READING_CANDIDATES]
+prerequisites: [KMA-02, KMA-04]
+depends_on: [DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE, NORMALIZE_AND_WRITE_READING_CANDIDATES]
 can_parallelize_with: []
 ---
 
@@ -13,20 +13,21 @@ can_parallelize_with: []
 
 ## Purpose
 
-Turn the proven one-shot flow into unattended bounded acquisition without concurrent runs, silent
-failure, or unsafe cursor advancement.
+Turn the two proven one-shot halves into unattended bounded acquisition without merging Heimdal and
+Mimer ownership, overlapping a constituent's own runs, or coupling their cursors.
 
 ## What This Task Does
 
-Add the runtime entrypoint and managed schedule, service-health preflight, one-run lease/lock, bounded
-page/item limits, timeout/backoff, per-run summary receipt, and failure exit semantics. Scheduling
-invokes the same one-shot pipeline; it does not duplicate source or write logic.
+Add coordinated scheduling for the Heimdal producer and Mimer consumer. Each has its own entrypoint,
+lease, cursor, bounded work, timeout/backoff and receipt. Karakeep health gates only Heimdal fetch;
+Mimer may drain published evidence while Karakeep is down. Coordination occurs through the durable
+handoff, never an in-process cross-constituent call or shared transaction.
 
 ## Concretely
 
-Each invocation reports fetched/new/no-op/failed/written/blocked counts, start/end cursor, health, and
-trace id. A second overlapping invocation exits as `already_running`; partial failure exits nonzero
-and retains a safe checkpoint.
+The combined operator receipt reports Heimdal fetched/published outcomes and producer cursor
+separately from Mimer consumed/written/blocked outcomes and consumer cursor. Either half may fail or
+lag without falsifying the other half's durable success.
 
 ## Why This Matters
 
@@ -35,30 +36,30 @@ routine poll from silently skipping evidence or duplicating governed writes.
 
 ## SBS Impact
 
-Product/Runtime: OEF/EXE primary; EBF and DRI secondary. Runtime control-loop and observability change;
-no authority semantics change.
+Product/Runtime boundary work: OEF/EXE coordination around Heimdal/EBF producer and Mimer/DRI
+consumer. Runtime control-loop and observability change; constituent ownership is preserved.
 
 ## Restart / Durability Posture
 
-The lease expires or is safely recoverable after process death. The durable cursor is the restart
-point; run receipts are append-only diagnostics. Schedule state cannot substitute for raw evidence or
-candidate durability.
+Each lease expires or is recoverable independently. Heimdal's producer cursor restarts from durable
+publication; Mimer's consumer cursor restarts from durable candidate outcome. Schedule state cannot
+substitute for either constituent's durable state.
 
 ## Acceptance Criteria
 
-- [ ] Production scheduled entrypoint health-gates and invokes the one-shot KAP pipeline with bounded
-  work. Verify: `tests/knowledge_acquisition/test_karakeep_schedule.py::test_schedule_calls_health_gated_bounded_pipeline`.
-- [ ] Overlapping runs cannot execute source or write calls concurrently. Verify:
-  `tests/knowledge_acquisition/test_karakeep_schedule.py::test_overlap_returns_already_running_without_side_effects`.
-- [ ] Failure/timeout/restart keeps safe cursor state and next run resumes idempotently. Verify:
-  `tests/knowledge_acquisition/test_karakeep_schedule.py::test_failed_or_overlapping_run_never_advances_cursor_unsafely`.
-- [ ] Run receipt is truthful, item-scoped, traceable, and secret-safe. Verify:
-  `tests/knowledge_acquisition/test_karakeep_schedule.py::test_run_receipt_counts_outcomes_and_redacts_configuration`.
+- [ ] Scheduler health-gates only Heimdal fetch and lets Mimer consume durable handoff while source is
+  unavailable. Verify: `tests/heimdal/test_karakeep_schedule.py::test_source_health_gates_producer_not_consumer`.
+- [ ] Per-constituent leases prevent same-side overlap without creating a shared execution lock.
+  Verify: `tests/heimdal/test_karakeep_schedule.py::test_constituent_leases_are_independent`.
+- [ ] Failure/timeout/restart preserves both independent cursors and resumes idempotently. Verify:
+  `tests/heimdal/test_karakeep_schedule.py::test_failed_or_overlapping_run_preserves_constituent_cursors`.
+- [ ] Receipt distinguishes published from consumed/written/blocked outcomes and is secret-safe.
+  Verify: `tests/heimdal/test_karakeep_schedule.py::test_boundary_receipt_reports_each_constituent_truthfully`.
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/knowledge_acquisition/test_karakeep_schedule.py`
-- `pytest -q tests/knowledge_acquisition/test_karakeep_fetch.py tests/knowledge_acquisition/test_karakeep_candidate_writeback.py`
+- `pytest -q tests/heimdal/test_karakeep_schedule.py`
+- `pytest -q tests/heimdal/test_karakeep_ingestion.py tests/knowledge_acquisition/test_karakeep_handoff_consumer.py`
 - `ruff check app tests && mypy app`
 
 ## Out of Scope
@@ -68,10 +69,11 @@ mutation, and credentials/endpoints.
 
 ## Related Docs
 
+- `docs/adr/ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md`
 - `docs/ENVIRONMENTS.md`
 - `docs/OBSERVABILITY.md`
 
 ## Related GitHub Issues
 
-Future child after KMA-04. TCD hint: standard/strong model, high reasoning; concurrency, restart, and
+Issue #3377 after KMA-02 and KMA-04. TCD hint: standard/strong model, high reasoning; concurrency, restart, and
 checkpoint safety dominate the small code surface.
