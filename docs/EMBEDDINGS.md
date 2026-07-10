@@ -196,7 +196,8 @@ This identity must be:
   `assert_embed_dim` — it never silently writes.
 - A fallback-written index is **mixed-identity** (vectors from different providers occupy different
   vector spaces). This state is surfaced loudly by `index doctor` as an error and is reconcilable —
-  not terminal.
+  not terminal. Each retrieval-cache rebuild also logs the mixed-identity row count (content-free;
+  ADR-0059 step 3), and `index doctor` reports the same count as a reconcile signal.
 - Once the primary provider recovers, run `index reconcile` (`python -m app.cli index reconcile`) to
   re-embed fallback-written vectors under the primary identity, converging the index back to one
   identity (CTI-1).

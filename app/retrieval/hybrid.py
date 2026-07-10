@@ -14,6 +14,7 @@ try:
 except ImportError:
     process = None
 
+from app.components.embeddings import get_embedding_identity
 from app.components.retrieval import embed_docs, embed_query
 from app.retrieval.hook_adapter import maybe_rerank
 from app.retrieval.tuning import get_retrieval_tuning
@@ -350,6 +351,14 @@ def rebuild_from_durable_index(*, force: bool = False) -> int:
     unset and picked up by the store's per-document lazy-embed fallback the
     first time scores are computed (fail-safe, logged, never a crash).
 
+    ADR-0059 step 3 (mixed-identity observability, #3406): each row's
+    recorded ``provider``/``model`` is compared against the active primary
+    embedding identity (resolved the same way the write path resolves its
+    default — ``get_embedding_identity()``, see ``app/stores/pg.py``). Rows
+    that diverge are CTI-2 reconcilable fallback writes; they are counted
+    and logged as a reconcile signal (never re-embedded, never mutated).
+    Observability only — no ranking or write-path change.
+
     Returns the number of documents loaded into the cache.
     """
     global _REBUILT_FROM_DURABLE_INDEX, _REBUILD_GENERATION, _LAST_GENERATION_CHECK_MONOTONIC
@@ -362,10 +371,21 @@ def rebuild_from_durable_index(*, force: bool = False) -> int:
     # Capture the generation BEFORE reading rows: a write racing the rebuild
     # then triggers the next generation check instead of being missed.
     generation = index.generation()
+    active_identity = get_embedding_identity()
 
     docs: list[dict] = []
     missing_embeddings = 0
+    mixed_identity_count = 0
+    mixed_identity_tuples: set[tuple[Any, Any]] = set()
     for row in index.all_rows():
+        row_provider = row.get("provider")
+        row_model = row.get("model")
+        if (row_provider or row_model) and (row_provider, row_model) != (
+            active_identity.provider,
+            active_identity.model,
+        ):
+            mixed_identity_count += 1
+            mixed_identity_tuples.add((row_provider, row_model))
         payload = row.get("payload") or {}
         text = _row_text(payload)
         if not text:
@@ -391,6 +411,17 @@ def rebuild_from_durable_index(*, force: bool = False) -> int:
             missing_embeddings,
             len(docs),
         )
+    # ADR-0059 step 3: one structured, content-free line per rebuild — count and
+    # identity tuples only, never note title/text. Zero mixed rows is the common
+    # case and stays at info level (never warning); this is a reconcile signal
+    # for the index doctor, not a fault.
+    _logger.info(
+        "rebuild_from_durable_index: mixed_identity_count=%d primary_provider=%s primary_model=%s identities=%s",
+        mixed_identity_count,
+        active_identity.provider,
+        active_identity.model,
+        sorted(str(t) for t in mixed_identity_tuples),
+    )
     _STORE.set_documents(docs)
     _REBUILT_FROM_DURABLE_INDEX = True
     _REBUILD_GENERATION = generation

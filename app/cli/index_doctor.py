@@ -58,6 +58,12 @@ def doctor(as_json: bool, strict: bool, warn: bool, coverage: bool) -> None:
             for entry in mixed:
                 click.echo(f"  - {tuple(entry)}")
             click.echo("Recommended repair: python -m app.cli index reconcile")
+        mixed_identity_count = result.get("mixed_identity_count") or 0
+        if mixed_identity_count:
+            click.echo(
+                f"Mixed-identity rows (reconcile signal, ADR-0059): {mixed_identity_count} "
+                "row(s) diverge from the active primary embedding identity."
+            )
         completeness = result.get("metadata_completeness") or {}
         if completeness.get("missing_count"):
             click.echo(

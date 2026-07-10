@@ -143,6 +143,7 @@ def diagnose_index(*, use_cache: bool = False, include_vault_coverage: bool = Fa
     warnings: list[str] = []
     empty_index = False
     mixed_identities: list[tuple] = []
+    mixed_identity_count = 0
     metadata_completeness: Dict[str, Any] | None = None
     content_hash_staleness: Dict[str, Any] | None = None
 
@@ -196,6 +197,17 @@ def diagnose_index(*, use_cache: bool = False, include_vault_coverage: bool = Fa
                         "Mixed embedding identities in index: "
                         f"{distinct}. Run '{_RECONCILE_HINT}' to converge."
                     )
+                # ADR-0059 step 3 (#3406): row count diverging from the active primary
+                # identity — a reconcile signal, distinct from "is the index mixed at
+                # all" above. Keys on (provider, model) only, matching the comparison
+                # rebuild_from_durable_index() makes against get_embedding_identity().
+                # Content-free: counts and identity tuples only, no row/note content.
+                mixed_identity_count = sum(
+                    int(entry.get("count") or 0)
+                    for entry in identity_tuples
+                    if (entry.get("provider"), entry.get("model"))
+                    != (expected_identity.provider, expected_identity.model)
+                )
             # Metadata/provenance completeness (#2324). Distinct from identity drift/mixed-
             # identity above: a row can carry one consistent identity and still be missing
             # language/provenance/embedding-identity-stamp fields required by the
@@ -290,6 +302,7 @@ def diagnose_index(*, use_cache: bool = False, include_vault_coverage: bool = Fa
         "status": status,
         "pg_state": pg_state,
         "mixed_identities": mixed_identities,
+        "mixed_identity_count": mixed_identity_count,
         "metadata_completeness": metadata_completeness,
         "content_hash_staleness": content_hash_staleness,
         "vault_coverage": vault_coverage,
