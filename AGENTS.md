@@ -60,7 +60,9 @@ Repo-local workflow helpers live under `.codex/skills/`. They do not replace thi
 
 For GitHub implementation work, loading `.codex/skills/issue-to-code/SKILL.md` is mandatory before coding.
 That skill owns the pickup rule:
-when active work begins, move the governing Issue/Project state to `In Progress` and remove `agent:ready` before local edits so another agent does not pick up the same task.
+when active work begins, claim the matching Builder Ops Vault ticket (`Ready -> In Progress`) and
+then remove `agent:ready` through REST before local edits. Use dispatcher/GitHub-label fallback only
+when no vault ticket exists.
 
 Execution discipline:
 
@@ -71,11 +73,11 @@ Execution discipline:
 
 Workflow state model:
 
-- Issue state is for claim/active/block/closure flow: `Ready`, `In Progress`, `Blocked`, `Done`.
-- PR/Project-item state is for review/integration/delivery projection: `Review`, `In Progress`, `Blocked`, `Done`.
+- Builder Ops Vault ticket state is for claim/active/review/block/closure flow: `Ready`, `In Progress`, `Review`, `Blocked`, `Done`.
+- GitHub Issue/PR state is for external contract/publication truth; Project v2 is an optional deprecated projection.
 - Default PR mode is open (non-draft). Draft PR is opt-in and requires an explicit reason.
 - `Review` is the agent-review phase before verification; it is not a human-waiting synonym.
-- PR/project `Done` should be projected by automation where possible; skills should only fallback-correct when projection drifts.
+- Vault `Done` is written after verified merge; optional Project drift is cold-path maintenance.
 - `pr-integration` is a conditional repair/readiness step, not a mandatory hop after every publish.
 
 BuilderOps Vault workflow boundary:
@@ -177,10 +179,10 @@ Many agents run against this repo at once. C_coordination, C_delay, and C_rework
 - **Dedicated worktree by default.** Any concurrent implementation or publication runs in its own `git worktree`, never the shared root worktree. Do not edit, commit, or push from the shared root checkout while other agents may be active. The publish/claim boundary (`scripts/agent_workspace_preflight.sh`) enforces this by default and refuses the shared root worktree — set `PKM_ALLOW_SHARED_ROOT=1` for deliberate solo work in the root.
 - **Never switch the shared root worktree's branch out from under a concurrent agent.** Branch switches happen in your own worktree. The shared-root HEAD thrash is a real, recurring loss — uncommitted work rides an unexpected checkout.
 - **Branch-truth before write.** Capture `EXPECTED_BRANCH` / `EXPECTED_WORKTREE` at branch creation and run the branch-truth gate before commit and before push (`_shared/BRANCH_TRUTH_GATE.md`). Proportionality never relaxes this.
-- **Smallest shared lease, then local.** Claim the issue/lane with the minimal shared handshake (`Ready -> In Progress`, remove `agent:ready`), then keep execution local and deterministic. One active lease per issue.
+- **Smallest shared lease, then local.** During the Builder Ops Vault transition, claim active work through the vault file contract (`builderops vault claim`) when a vault ticket exists; otherwise use the dispatcher/GitHub-label fallback. Keep execution local and deterministic. One active lease per issue or vault ticket.
 - **Right-size fan-out.** Parallelize only independent issues with isolated worktrees, explicit return receipts, and an explicit token/quality rationale. Over-fanning raises C_coordination faster than it cuts C_delay — when in doubt, fewer agents.
 - **Reconcile races on evidence, do not redo.** On a claim or delivery collision, the latest unreleased lease governs; verify on `origin/main` and close your duplicate rather than re-implementing.
-- **Shared-budget awareness.** The GitHub API budget (5,000/hr) is shared across every concurrent agent, and GraphQL exhausts first. A tool call's real cost is its *marginal cost to all agents*, not to your task — so never busy-wait on a shared budget, prefer the transport that spares the scarce bucket (REST `gh api` over GraphQL `gh pr`/`gh issue`/`gh repo`; `git push --delete` over the API for branch ops), and read the free `gh api rate_limit` endpoint before assuming exhaustion. The same rule covers any pooled resource (CI runners, the embedding/Ollama queue). For waiting on CI checks (and the optional `--codex` verdict path, inactive as the default gate) specifically, follow `_shared/CI_WAIT_CONTRACT.md` — a tight `gh pr checks` loop drains the shared GraphQL bucket to zero and stalls every other agent.
+- **Shared-budget awareness.** The GitHub API budget (5,000/hr) is shared across every concurrent agent, and GraphQL exhausts first. GraphQL is forbidden in the Builder System hot path: do not use `gh api graphql`, `gh project`, GitHub Project v2 mutations, or GraphQL-backed check polling for routine delivery. Prefer REST `gh api` for GitHub issue/label/PR reads and writes, and read the free `gh api rate_limit` endpoint before assuming exhaustion. The same rule covers any pooled resource (CI runners, the embedding/Ollama queue). For waiting on CI checks, follow `_shared/CI_WAIT_CONTRACT.md` — a tight `gh pr checks` loop drains the shared GraphQL bucket to zero and stalls every other agent.
 - **Fail-closed gate composition.** Any command whose exit code gates a subsequent action (commit, push, merge, receipt) must run bare with its status captured directly (`rc=$?`) — never composed with `|| echo`, `| tail`, `| grep`, backgrounding, or anything that substitutes another command's exit status for the gate's. A gate whose failure mode is silent success is not a gate. (Instances: BRANCH_TRUTH_GATE `|| echo` 2026-06-13; PR #2759 pipe-masked merge gate 2026-07-02.)
 
 ### TCD output blocks
@@ -310,7 +312,9 @@ For implementation work, GitHub Issues are the canonical task contract.
 
 Builder-agent rules:
 
-- Only pick work from a GitHub Issue that is both `Status=Ready` and labeled `agent:ready`.
+- For vault-backed work, pick an unclaimed vault ticket whose folder/YAML status is `Ready` and
+  whose linked GitHub Issue is labeled `agent:ready`. Without a vault ticket, use the documented
+  dispatcher/GitHub-label transition fallback.
 - Read the full Issue before editing.
 - Treat `Context`, `Scope`, `Source Anchors`, `Constraints`, `Acceptance Criteria`, `Out of Scope`, `Suggested Validation`, and `Source Docs` as binding.
 - Every `Acceptance Criterion` must declare its verification inline with a `Verify:` marker: a concrete test pointer (`tests/...::test_name`) for behavioral criteria, or a concrete non-test target (doc writeback path plus anchor, runtime receipt, roadmap diff) for non-behavioral criteria. ACs without a resolvable `Verify:` target are not executable and the Issue must not be `agent:ready`.
@@ -320,27 +324,41 @@ Builder-agent rules:
 - Do not expand scope beyond the Issue without updating the task contract first.
 - Do not create new backlog work in GitHub without stable `Source Anchors` that point to the most local governing doc items.
 - Prefer stable anchor IDs over prose fragments when the source doc is likely to produce multiple Issues over time.
-- Treat GitHub Issues as the canonical backlog receipt. GitHub Project is the shared operating board when available; inline doc markers such as `Tracked by: #...` are secondary convenience notes only.
-- Prefer Issues plus truthful agent labels and linked PR state as harder authority than Project state if they drift.
-- Use Project `Status` as the pickup and coordination projection. `agent:ready` is only the pickup qualifier for `Status=Ready`; blocked labels belong on non-active work, and closed issues must not retain `agent:*` labels.
+- Treat GitHub Issues as the canonical external backlog receipt. Active operational status moves to the separate Builder Ops Vault when a vault ticket exists; inline doc markers such as `Tracked by: #...` are secondary convenience notes only.
+- Prefer vault status for active delivery, GitHub Issues/PRs for public traceability, and repo state for code truth. GitHub Project v2 is deprecated in the hot path and must not be used as the operational source of truth.
+- Use `agent:ready` as the external pickup qualifier during transition, but do not require Project `Status=Ready` for vault-backed active work. Blocked labels belong on non-active GitHub work, and closed issues must not retain `agent:*` labels.
 - When a PR delivers a tracked backlog item, update the owner doc to describe shipped reality and rewrite roadmap/plan wording so it no longer reads as pending work.
-- Prefer GitHub REST endpoints for routine issue/label/PR operations; use GraphQL when REST does not express the required operation.
-- When GraphQL is required, resolve stable identifiers once per run and reuse cached values instead of repeating lookup queries.
-- Batch project-field GraphQL mutations into one bounded pass near workflow completion, rather than interleaving repeated mutations throughout intake.
+- Prefer GitHub REST endpoints for routine issue/label/PR operations. Do not use GraphQL or `gh project` in Builder System hot-path automation. Any cold-path exception must be explicit, bounded, and outside queue/claim/CI/merge loops.
 
-## Dispatcher policy
+## Vault and dispatcher transition policy
 
-The Agent Issue Dispatcher is an operational coordination layer for multi-agent issue pickup and execution.
+Builder Ops Vault is the primary operational coordination layer for multi-agent issue pickup and
+execution. The Agent Issue Dispatcher remains an implemented transition fallback only when no
+matching vault ticket exists.
+
+**Vault agent loop (normal case):**
+1. **Validate**: `builderops vault validate <root> --json`.
+2. **Next**: `builderops vault next <root> --json` — priority-ordered Ready ticket without an active claim.
+3. **Claim**: `builderops vault claim <root> <ticket-or-issue> --agent <agent_id> --session <session_id> --json`.
+4. **Confirm externally**: remove `agent:ready` through REST; release the vault claim if confirmation fails.
+5. **Work**: execute the bounded Issue contract.
+6. **Renew**: `builderops vault renew <root> <ticket> --agent <agent_id> --json` before TTL expiry.
+7. **Handoff/closure**: move to `Review` and release at review handoff; verified merge moves to
+   `Done`, which releases the claim. `Blocked`, `Ready`, and `Backlog` transitions also release it.
+
+Do not acquire a dispatcher lease for the same ticket/Issue while a vault claim exists.
+
+**Dispatcher transition fallback:**
 
 **Database location:**
 - Local dispatcher state lives in `runtime/dispatcher/dispatcher.sqlite3` (configurable via `DISPATCHER_STATE_DIR` env var).
 - Dispatcher state directory is `.gitignore`'d and is not committed.
 
-**Agent loop (normal case, dispatcher available):**
+**Agent loop (only when no vault ticket exists and dispatcher is available):**
 1. **Status check**: `dispatcher status --json` — verify `db_exists: true`; if false or exit non-zero, fall back to GitHub-label-only claim (see below).
 2. **Next**: `dispatcher next --json --agent <agent_id>` — request next eligible `ready` task.
 3. **Claim**: `dispatcher claim <task_id> --agent <agent_id> --ttl-minutes 90 --json` — acquire 90-minute lease.
-4. **Confirm**: `gh issue edit <issue_number> --remove-label agent:ready` — confirm claim in GitHub (unchanged from current behaviour).
+4. **Confirm**: remove `agent:ready` through the REST label endpoint.
 5. **Work**: execute issue scope (implementation, testing, doc updates).
 6. **Heartbeat** (every ~30 min during active work): `dispatcher heartbeat <task_id> --agent <agent_id> --json` — renew lease before 90-min expiry.
 7. **Closure**: `dispatcher complete <task_id> --agent <agent_id> --json` (successful work) or `dispatcher release <task_id> --agent <agent_id> --json` (abandoned/blocked).
@@ -350,16 +368,18 @@ The Agent Issue Dispatcher is an operational coordination layer for multi-agent 
 - Heartbeat interval: **~30 minutes** of active execution (before 90-min expiry).
 - Agents must heartbeat before expiry or the dispatcher will mark the lease expired and the task becomes claimable by others.
 
-**Fallback (dispatcher unavailable):**
+**Final fallback (no vault ticket and dispatcher unavailable):**
 - If `dispatcher status --json` returns `db_exists: false` or exits non-zero (missing DB, corrupted state, network failure, etc.):
   - Skip dispatcher entirely.
-  - Use GitHub-label-only claim: `gh issue edit <issue_number> --remove-label agent:ready` (current behaviour, unchanged).
+  - Use a REST GitHub-label-only claim.
   - No dispatcher heartbeat or completion — GitHub label state is the only record.
-  - **Log the fallback in the PR body** with the failure reason (e.g., "Dispatcher unavailable (db_exists: false) — used GitHub-label-only claim").
+  - **Log the fallback in the PR body** with the reason (e.g., "No vault ticket; dispatcher
+    unavailable (db_exists: false) — used REST GitHub-label-only claim").
 - If any dispatcher command fails during work (non-zero exit from heartbeat, update, etc.):
   - Log the failure, continue with local work, do not retry dispatcher commands in a loop.
   - At closure, attempt `dispatcher complete`; if it fails, continue with PR closure via GitHub.
 
 **Multi-agent collision handling:**
 - Dispatcher claims are atomic per lease and per agent ID.
-- If two agents attempt to claim the same task, the dispatcher responds with a clear conflict error; the agent must fall back to GitHub-label-only or re-request `next`.
+- If two agents attempt to claim the same task, the active vault/dispatcher lease wins. The losing
+  agent must request another ticket; it must not downgrade to label-only and double-implement.

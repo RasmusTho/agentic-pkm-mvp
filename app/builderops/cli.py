@@ -37,6 +37,21 @@ from app.builderops.retrospective_closure import (
     build_retrospective_closure_ledger,
 )
 from app.builderops.store import SqliteBuilderOpsStore
+from app.builderops.vault_queue import (
+    VaultQueueError,
+    claim_ticket,
+    init_vault,
+    import_dispatcher_tasks,
+    move_ticket,
+    next_ticket,
+    note_ticket,
+    release_ticket,
+    renew_ticket,
+    ticket_payload,
+    validate_vault,
+)
+from app.dispatcher.config import load_paths as load_dispatcher_paths
+from app.dispatcher.store import SqliteStore as DispatcherSqliteStore
 
 
 def _parse_json_object(value: str | None, *, field: str) -> dict[str, Any]:
@@ -84,9 +99,7 @@ def _parse_ref(value: str) -> dict[str, Any]:
     if value.startswith("{"):
         return _parse_json_object(value, field="ref")
     if ":" not in value:
-        raise click.BadParameter(
-            "refs must be JSON objects or shorthand like github_issue:#1501"
-        )
+        raise click.BadParameter("refs must be JSON objects or shorthand like github_issue:#1501")
     ref_type, ref = value.split(":", 1)
     if not ref_type or not ref:
         raise click.BadParameter("ref shorthand requires ref_type and ref")
@@ -122,9 +135,7 @@ def _emit_projection_results(payload: list[dict[str, Any]], as_json: bool) -> No
         _emit(payload, True)
         return
     for item in payload:
-        click.echo(
-            f"{item['projection_type']}\t{item['record_count']}\t{item['path']}"
-        )
+        click.echo(f"{item['projection_type']}\t{item['record_count']}\t{item['path']}")
 
 
 def _epic_run_state_payload(
@@ -194,7 +205,9 @@ def builderops(ctx: click.Context, db_path: Path | None) -> None:
 @click.option("--summary", required=True)
 @click.option("--body", required=True)
 @click.option("--task-context", default="{}", help="JSON object with task context.")
-@click.option("--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref.")
+@click.option(
+    "--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref."
+)
 @click.option("--created-by", default=None, help="Actor JSON object or agent id.")
 @click.option("--idempotency-key", default=None)
 @click.option("--promotion-status", default=None)
@@ -233,7 +246,9 @@ def create_worklog(
 @click.option("--summary", required=True)
 @click.option("--content", required=True)
 @click.option("--signal-type", required=True)
-@click.option("--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref.")
+@click.option(
+    "--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref."
+)
 @click.option("--created-by", default=None, help="Actor JSON object or agent id.")
 @click.option("--idempotency-key", default=None)
 @click.option("--promotion-status", default=None)
@@ -275,7 +290,9 @@ def create_learning_signal(
 @click.option("--target-ref", required=True)
 @click.option("--target-authority-class", required=True)
 @click.option("--intended-output", required=True)
-@click.option("--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref.")
+@click.option(
+    "--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref."
+)
 @click.option("--created-by", default=None, help="Actor JSON object or agent id.")
 @click.option("--idempotency-key", default=None)
 @click.option("--json", "as_json", is_flag=True)
@@ -331,7 +348,9 @@ def create_promotion_intent(
 )
 @click.option("--next-review-owner", default=None)
 @click.option("--review-note", default=None)
-@click.option("--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref.")
+@click.option(
+    "--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref."
+)
 @click.option("--created-by", default=None, help="Actor JSON object or agent id.")
 @click.option("--idempotency-key", default=None)
 @click.option("--json", "as_json", is_flag=True)
@@ -392,11 +411,15 @@ def create_docs_freshness_record(
 @click.option("--event-type", required=True)
 @click.option("--actor", required=True, help="Actor JSON object or agent id.")
 @click.option("--occurred-at", required=True)
-@click.option("--target-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref.")
+@click.option(
+    "--target-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref."
+)
 @click.option("--action", required=True)
 @click.option("--receipt-body", required=True)
 @click.option("--idempotency-key", required=True)
-@click.option("--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref.")
+@click.option(
+    "--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref."
+)
 @click.option("--created-by", default=None, help="Actor JSON object or agent id.")
 @click.option("--json", "as_json", is_flag=True)
 @click.pass_context
@@ -443,7 +466,9 @@ def append_receipt(
 @click.option("--last-movement", default=None)
 @click.option("--next-decision", required=True)
 @click.option("--shipped-ref", multiple=True, help="JSON ref or shorthand ref_type:ref.")
-@click.option("--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref.")
+@click.option(
+    "--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref."
+)
 @click.option("--created-by", default=None, help="Actor JSON object or agent id.")
 @click.option("--idempotency-key", default=None)
 @click.option("--json", "as_json", is_flag=True)
@@ -584,6 +609,166 @@ def evidence_bridge_classify(
     _emit(payload, as_json)
 
 
+@builderops.group("vault", help="Operate the file-first Builder Ops Vault queue.")
+def vault() -> None:
+    """Markdown/YAML active work queue helpers."""
+
+
+@vault.command("init", help="Create vault folders and AGENTS.md contract.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.option("--json", "as_json", is_flag=True)
+def vault_init(root: Path, as_json: bool) -> None:
+    _emit(init_vault(root), as_json)
+
+
+@vault.command(
+    "import-dispatcher",
+    help="Plan or apply a one-time import from the dispatcher transition store.",
+)
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.option("--db-path", type=click.Path(dir_okay=False, path_type=Path), default=None)
+@click.option("--apply", "apply_import", is_flag=True, help="Write planned tickets.")
+@click.option("--json", "as_json", is_flag=True)
+def vault_import_dispatcher(
+    root: Path,
+    db_path: Path | None,
+    apply_import: bool,
+    as_json: bool,
+) -> None:
+    resolved_db = (db_path or load_dispatcher_paths().db_path).expanduser()
+    if not resolved_db.is_file():
+        raise click.ClickException(f"dispatcher database not found: {resolved_db}")
+    store = DispatcherSqliteStore(resolved_db)
+    try:
+        payload = import_dispatcher_tasks(
+            root,
+            [task.to_dict() for task in store.list_tasks()],
+            apply=apply_import,
+        )
+    except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    payload["dispatcher_db"] = str(resolved_db)
+    _emit(payload, as_json)
+
+
+@vault.command("validate", help="Validate vault ticket and claim invariants.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.option("--json", "as_json", is_flag=True)
+def vault_validate(root: Path, as_json: bool) -> None:
+    payload = validate_vault(root)
+    _emit(payload, as_json)
+    if not payload["ok"]:
+        raise click.ClickException("Builder Ops Vault validation failed")
+
+
+@vault.command("next", help="Return the next Ready ticket without an active claim.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.option("--json", "as_json", is_flag=True)
+def vault_next(root: Path, as_json: bool) -> None:
+    try:
+        ticket = next_ticket(root)
+    except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit({"ticket": ticket_payload(ticket) if ticket else None}, as_json)
+
+
+@vault.command("claim", help="Claim a vault ticket using a transient claim file.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.argument("ticket_ref")
+@click.option("--agent", required=True)
+@click.option("--session", default=None)
+@click.option("--ttl-minutes", default=120, show_default=True, type=int)
+@click.option("--takeover-stale", is_flag=True)
+@click.option("--json", "as_json", is_flag=True)
+def vault_claim(
+    root: Path,
+    ticket_ref: str,
+    agent: str,
+    session: str | None,
+    ttl_minutes: int,
+    takeover_stale: bool,
+    as_json: bool,
+) -> None:
+    try:
+        payload = claim_ticket(
+            root,
+            ticket_ref,
+            agent=agent,
+            session=session,
+            ttl_minutes=ttl_minutes,
+            takeover_stale=takeover_stale,
+        )
+    except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@vault.command("renew", help="Renew an active vault claim TTL.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.argument("ticket_ref")
+@click.option("--agent", required=True)
+@click.option("--ttl-minutes", default=120, show_default=True, type=int)
+@click.option("--json", "as_json", is_flag=True)
+def vault_renew(
+    root: Path,
+    ticket_ref: str,
+    agent: str,
+    ttl_minutes: int,
+    as_json: bool,
+) -> None:
+    try:
+        payload = renew_ticket(
+            root,
+            ticket_ref,
+            agent=agent,
+            ttl_minutes=ttl_minutes,
+        )
+    except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@vault.command("move", help="Move a vault ticket to a status folder and update YAML.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.argument("ticket_ref")
+@click.argument("status")
+@click.option("--actor", default="cli")
+@click.option("--json", "as_json", is_flag=True)
+def vault_move(root: Path, ticket_ref: str, status: str, actor: str, as_json: bool) -> None:
+    try:
+        payload = move_ticket(root, ticket_ref, status, actor=actor)
+    except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@vault.command("note", help="Append a meaningful note receipt to a vault ticket.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.argument("ticket_ref")
+@click.argument("note")
+@click.option("--actor", default="cli")
+@click.option("--json", "as_json", is_flag=True)
+def vault_note(root: Path, ticket_ref: str, note: str, actor: str, as_json: bool) -> None:
+    try:
+        payload = note_ticket(root, ticket_ref, note, actor=actor)
+    except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
+@vault.command("release", help="Release a vault claim file.")
+@click.argument("root", type=click.Path(file_okay=False, path_type=Path))
+@click.argument("ticket_ref")
+@click.option("--agent", required=True)
+@click.option("--json", "as_json", is_flag=True)
+def vault_release(root: Path, ticket_ref: str, agent: str, as_json: bool) -> None:
+    try:
+        payload = release_ticket(root, ticket_ref, agent=agent)
+    except VaultQueueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    _emit(payload, as_json)
+
+
 @builderops.group("epic-run-state", help="Record local deliver-issue-set epic run state.")
 def epic_run_state() -> None:
     """Local coordination evidence for deliver-issue-set runs."""
@@ -645,9 +830,7 @@ def record_epic_run_state(
                     f"{existing_state['epic_issue_number']}"
                 )
             state = (
-                update_epic_run_state(run_id, root=root, **updates)
-                if updates
-                else existing_state
+                update_epic_run_state(run_id, root=root, **updates) if updates else existing_state
             )
         else:
             state = create_epic_run_state(
@@ -867,7 +1050,9 @@ def release_lease(
 @click.option("--actor", required=True, help="Actor JSON object or agent id.")
 @click.option("--lease-id", required=True)
 @click.option("--idempotency-key", required=True)
-@click.option("--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref.")
+@click.option(
+    "--source-ref", multiple=True, required=True, help="JSON ref or shorthand ref_type:ref."
+)
 @click.option("--summary", required=True)
 @click.option("--action", required=True)
 @click.option("--receipt-body", required=True)
@@ -907,7 +1092,9 @@ def transition(
     _emit(result, as_json)
 
 
-@builderops.command("promotion-preview", help="Render a PromotionIntent proposal without side effects.")
+@builderops.command(
+    "promotion-preview", help="Render a PromotionIntent proposal without side effects."
+)
 @click.argument("record_id")
 @click.option("--json", "as_json", is_flag=True)
 @click.pass_context
@@ -923,7 +1110,9 @@ def promotion_preview(
     _emit(proposal, as_json)
 
 
-@builderops.command("promotion-dry-run", help="Render a promotion proposal and append a dry-run receipt.")
+@builderops.command(
+    "promotion-dry-run", help="Render a promotion proposal and append a dry-run receipt."
+)
 @click.argument("record_id")
 @click.option("--actor", required=True, help="Actor JSON object or agent id.")
 @click.option("--idempotency-key", required=True)
@@ -950,7 +1139,9 @@ def promotion_dry_run(
     _emit(result, as_json)
 
 
-@builderops.command("promotion-transition", help="Transition a PromotionIntent through the gateway.")
+@builderops.command(
+    "promotion-transition", help="Transition a PromotionIntent through the gateway."
+)
 @click.argument("record_id")
 @click.option(
     "--decision",

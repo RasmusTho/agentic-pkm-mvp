@@ -247,24 +247,34 @@ Observable signals:
 - Sync meta row (`_sync_meta:github`) carries `sync_result` and `sync_note` for last-attempt observability.
 - `get_sync_meta(store, provider)` returns the raw metadata dict for CLI or diagnostic use.
 
-## Optional Future Projections
+## Builder Ops Vault Transition
 
-The following are described as **optional projections only** and are not part of the dispatcher hot path.
-The dispatcher SQLite store is the Builder System control plane for active queue, lease, heartbeat,
-and lifecycle status. Projection surfaces render or repair that state; they do not replace it.
+The dispatcher remains an implemented coordination primitive, but it is no longer the long-term
+Builder System control plane. Active operational status is moving to the separate Builder Ops Vault
+defined in `docs/development/BUILDER_OPS_VAULT_QUEUE.md`. During transition:
+
+- GitHub Issues/PRs remain the external traceability and publication trail.
+- Builder Ops Vault is the active operational truth when a vault ticket exists.
+- Dispatcher SQLite remains a fallback/bridge for existing issue pickup, lease, heartbeat, and
+  completion flows until those flows are migrated.
+- GitHub Project v2 is deprecated in the hot path and may exist only as optional/read-only projection.
+- Signboard is a replaceable UI over vault files, not an automation API.
+
+The following are projection or transition surfaces only:
 
 | Target | Type | Status |
 | --- | --- | --- |
-| Signboard Markdown board | Local generated projection | Implemented via `python -m app.dispatcher export-signboard <path>` |
-| GitHub Projects board | Deprecated optional projection | Not in dispatcher hot path (see Source-of-Truth Boundaries) |
+| Builder Ops Vault Markdown queue | Active operational truth | MVP via `python3 -m app.builderops builderops vault ...` |
+| Signboard Markdown board | Replaceable UI projection | Reads/moves vault files after format spike; not the automation API |
+| Dispatcher SQLite queue | Transition/fallback coordination | Existing hot-path primitive until vault-backed queue is adopted |
+| GitHub Projects board | Deprecated optional/read-only projection | Not in dispatcher/vault hot path |
 | Plane / Vikunja / Baserow | Optional external board | Not implemented — future scope only |
-| Local Markdown/JSON dashboard | Optional local projection | Signboard export is the current Markdown projection |
+| Local Markdown/JSON dashboard | Optional local projection | Future Kvasir/BuilderOps view over the same file contract |
 | CLI sync-status command | Optional surface | Expressible via `get_sync_meta` in a future `disp sync-status` command |
 
-External boards and GitHub Projects are projections only and must not become required for core queue/lease/claim behavior.
-Agents must use dispatcher commands for work selection and mutation. Signboard files are generated
-for human kanban inspection and should not be treated as authoritative input unless a future
-two-way projection command explicitly validates and imports them.
+Agents must use `builderops vault` commands for vault-backed work selection and mutation. Dispatcher
+commands remain valid only for work that has not yet moved into the vault. Do not automate Signboard
+itself; the vault file contract is the API.
 
 ## Operational Deployment
 
@@ -306,54 +316,32 @@ The bootstrap is idempotent and operational-only:
 
 The structured receipt is written to `tmp/builderops_startup_status.json` and merged under
 `builderops_bootstrap` in `tmp/startup_status.json`. The receipt is operational coordination state:
-GitHub Issues/PRs/CI remain durable delivery truth, dispatcher state remains a local lease/queue
-surface, and GitHub Project remains an optional projection.
+GitHub Issues/PRs/CI remain durable external delivery truth, the Builder Ops Vault is the active
+operational truth when present, dispatcher state remains a transition/fallback lease surface, and
+GitHub Project remains a deprecated optional projection.
 
 GitHub Project v2 / GraphQL reconciliation stays out of dispatcher `next`, `claim`, `heartbeat`,
 and `complete`. Low-frequency/batched projection repair is exposed separately through
 `scripts/reconcile_builderops_project_status.sh`, which delegates to the existing project
 reconciliation helper.
 
-### Signboard projection
+### Builder Ops Vault CLI
 
-The dispatcher can export the active Builder Ops queue into a Signboard-compatible Markdown board:
-
-```bash
-python -m app.dispatcher export-signboard ~/BuilderOpsVault/agent-delivery --json
-```
-
-The exporter writes one Markdown file per dispatcher task under status columns:
-
-```text
-Backlog/
-Ready/
-In Progress/
-Review/
-Blocked/
-Done/
-```
-
-Canonical dispatcher statuses are mapped as follows:
-
-| Dispatcher status | Signboard column |
-| --- | --- |
-| `backlog` | `Backlog` |
-| `ready` | `Ready` |
-| `claimed`, `in_progress` | `In Progress` |
-| `review` | `Review` |
-| `blocked` | `Blocked` |
-| `completed`, `done` | `Done` |
-
-Manual lifecycle changes should use dispatcher commands, for example:
+The first vault-backed CLI surface is:
 
 ```bash
-python -m app.dispatcher move github-issue-123 --status review --agent codex --json
-python -m app.dispatcher block github-issue-123 --reason "waiting for owner decision" --agent claude --json
-python -m app.dispatcher export-signboard ~/BuilderOpsVault/agent-delivery --json
+python3 -m app.builderops builderops vault init "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Yggdrasil BuilderOps" --json
+python3 -m app.builderops builderops vault validate "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Yggdrasil BuilderOps" --json
+python3 -m app.builderops builderops vault next "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Yggdrasil BuilderOps" --json
+python3 -m app.builderops builderops vault claim "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Yggdrasil BuilderOps" ticket-2686 --agent codex --json
+python3 -m app.builderops builderops vault renew "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Yggdrasil BuilderOps" ticket-2686 --agent codex --json
+python3 -m app.builderops builderops vault move "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Yggdrasil BuilderOps" ticket-2686 "Review" --actor codex --json
+python3 -m app.builderops builderops vault note "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Yggdrasil BuilderOps" ticket-2686 "review requested" --actor codex --json
+python3 -m app.builderops builderops vault release "$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Yggdrasil BuilderOps" ticket-2686 --agent codex --json
 ```
 
-The generated Markdown frontmatter is projection state only. Do not patch generated Signboard cards
-as the source of a claim, heartbeat, or lifecycle transition.
+The vault ticket files are authoritative operational input. Signboard can display them if its disk
+format spike proves it preserves frontmatter and folder moves without corrupting metadata.
 
 ### Epic-runner lifecycle planning
 

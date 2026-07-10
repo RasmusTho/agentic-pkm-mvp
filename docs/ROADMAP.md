@@ -381,13 +381,14 @@ Explicit rule: "LLM reasoning must never directly trigger execution."
 
 ## Delivery Control Plane (GitHub)
 
-The repo now adopts a GitHub-based delivery control plane for implementation work:
+The repo now adopts a Builder System delivery control plane for implementation work:
 
 - Docs/ADRs/owner docs define intent and architecture.
 - GitHub Issues are the canonical task contract.
-- GitHub Project v2 is the delivery state machine.
-- Local Agent Issue Dispatcher is the active hot-path claim/heartbeat coordination layer; GitHub
-  Issues, labels, PRs, and Project state remain the durable lifecycle truth.
+- Builder Ops Vault is the active operational status surface for vault-backed work.
+- Local Agent Issue Dispatcher remains a transition/fallback claim and heartbeat coordination layer;
+  GitHub Issues, labels, and PRs remain the durable external trace.
+- GitHub Project v2 is deprecated in the hot path and may exist only as optional/read-only projection.
 - Coding agents execute only bounded Issues.
 - PR + CI are the validation loop.
 

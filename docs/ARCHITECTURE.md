@@ -716,9 +716,11 @@ Development control model:
 
 - Docs define intent, contracts, and owner boundaries.
 - GitHub Issues are the canonical task contract for implementation work.
-- GitHub Project v2 is the delivery state machine.
-- Local Agent Issue Dispatcher is the active operational coordination primitive for claim ordering,
-  leases, heartbeats, and completion; GitHub Issue/PR truth still outranks dispatcher state.
+- Builder Ops Vault is the active operational status surface for vault-backed work.
+- Local Agent Issue Dispatcher remains a transition/fallback coordination primitive for claim
+  ordering, leases, heartbeats, and completion until vault-backed queue adoption is complete.
+- GitHub Project v2 is deprecated in the delivery hot path and may exist only as optional/read-only
+  projection; GitHub Issue/PR truth still provides the external trace.
 - Coding agents are the execution layer that implement bounded Issues.
 - Pull requests are the implementation artifact.
 - CI/test workflows are the validation loop.
@@ -726,7 +728,7 @@ Development control model:
 
 Canonical delivery sequence:
 
-`Docs -> Issue -> Project -> Agent -> PR -> CI -> Feedback`
+`Docs -> Issue -> Builder Ops Vault/dispatcher transition -> Agent -> PR -> CI -> Feedback`
 
 Required Issue contract:
 
@@ -748,7 +750,7 @@ Required label ontology:
 - priority: `prio:high`, `prio:med`, `prio:low`
 - agent qualifiers: `agent:ready`, `agent:blocked`, `agent:needs-human`
 
-Required Project state machine:
+Required vault status folders:
 
 - `Backlog -> Ready -> In Progress -> Review -> Done`
 
@@ -758,12 +760,15 @@ Optional Project field:
 
 Guardrails for builder agents:
 
-- Project `Status` is the primary lifecycle signal.
-- `agent:ready` qualifies an Issue for pickup only when `Status=Ready`.
+- Builder Ops Vault `status` and folder location are the primary active lifecycle signal when a vault
+  ticket exists.
+- `agent:ready` remains an external GitHub pickup qualifier during transition, not a Project-v2
+  requirement for vault-backed work.
 - `In Progress` covers active implementation and open PR work before explicit review handoff.
 - `Review` begins only when review handoff is explicit, normally after review is requested.
 - Closed or delivered work must not retain `agent:*` labels.
-- Agents only pick Issues with `Status=Ready` and label `agent:ready`.
+- Agents pick vault tickets with `status=Ready` and no active claim; dispatcher/GitHub-label pickup
+  is the transition fallback.
 - Agents must stay within the linked Issue scope.
 - Agents must respect the linked Issue constraints.
 - Agents must satisfy the linked Issue acceptance criteria before claiming completion.

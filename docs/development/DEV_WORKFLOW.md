@@ -189,21 +189,22 @@ For implementation work, the delivery loop is:
 
 State model for lane-based delivery:
 
-- Issue state supports claim and bounded execution truth: `Ready`, `In Progress`, `Blocked`, `Done`.
-- PR/Project-item state supports review/integration projection: `Review`, `In Progress`, `Blocked`, `Done`.
+- Builder Ops Vault ticket state supports claim and bounded execution truth: `Ready`, `In Progress`, `Review`, `Blocked`, `Done`.
+- GitHub Issue/PR state supports external traceability and publication; Project v2 is an optional deprecated projection.
 - Keep issue and PR state separate in multi-slice lanes where several implementation issues can feed the same lane PR.
-- `issue-to-code` owns fast issue claim (`Ready` -> `In Progress` and remove `agent:ready`) to prevent double-pick.
-  - Claim must run through `scripts/issue_pickup_claim.sh --issue <N>` so workspace preflight is enforced before label mutation.
+- `issue-to-code` owns vault-first claim (`Ready` -> `In Progress`, active claim file, then remove
+  `agent:ready`) to prevent double-pick. Workspace preflight runs before the vault claim; dispatcher
+  and GitHub-label-only claim remain transition fallbacks when no vault ticket exists.
 - Open PR is the default publication mode. Draft PR is opt-in and requires an explicit reason.
 - `Review` is the agent-review gate before verification, not a generic waiting state.
 - `pr-integration` is conditional and should be used when mergeability/CI attachment/reviewability needs repair; it is not required after every publication.
 - Workspace isolation is mandatory for multi-agent work: one active Codex session per worktree/branch checkout.
-- Prefer automation for PR/project-item projection (especially `Done` on terminal PR state) and use manual skill writes as fallback correction when drift is detected.
+- Keep hot-path lifecycle mutations local/REST-only; Project projection repair belongs to explicit cold-path maintenance.
 
 Execution rule:
 
 - do not start non-trivial implementation without a governing Issue
-- prefer Issues with `Status=Ready` and label `agent:ready`
+- prefer unclaimed vault tickets with folder/YAML `status=Ready` linked to Issues labeled `agent:ready`
 - use the linked Issue as the bounded source of truth for scope and acceptance
 - implementation PRs should usually link the governing slice / child issue
 - do not implement directly from a feature / capability issue when the work is clearly multi-slice
@@ -216,12 +217,11 @@ Optional repo-local Codex skills may assist with either lane from `.codex/skills
 Lifecycle truth rule:
 
 - GitHub Issue state and linked PR/merge state are the harder lifecycle authority.
-- Project `Status` is the preferred projection of that lifecycle for pickup and board visibility.
-- `agent:ready` qualifies an Issue for pickup only when `Status=Ready`.
-- `In Progress` covers active implementation, including draft PRs and open PRs before explicit review handoff.
-- `Review` begins only when the PR becomes the explicit review handoff artifact, normally after review is requested.
+- Builder Ops Vault folder/YAML status plus the claim file govern active pickup and lease truth.
+- `agent:ready` qualifies an Issue externally; vault-backed pickup additionally requires an unclaimed `Ready` ticket.
+- `In Progress` covers active implementation; `Review` begins only at explicit review handoff.
 - closed or delivered work must not retain `agent:*` labels.
-- if Project state drifts because automation cannot update the board, correct it opportunistically without treating the drift itself as a delivery blocker
+- Project drift is corrected only in cold-path maintenance and never blocks vault-backed delivery
 
 ## Acceptance verifiability
 
