@@ -533,7 +533,11 @@ def _note_from_frontmatter(
         "authority_role": "derived",
         "briefing_date": expected_date.isoformat(),
     }
-    if any(frontmatter.get(key) != value for key, value in required_identity.items()):
+    if any(
+        type(frontmatter.get(key)) is not type(value)
+        or frontmatter.get(key) != value
+        for key, value in required_identity.items()
+    ):
         raise BriefingReadError("briefing identity or schema is incompatible")
     degraded_raw = frontmatter.get("degraded_sections")
     sections_raw = frontmatter.get("sections")

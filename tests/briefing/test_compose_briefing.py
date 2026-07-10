@@ -562,6 +562,38 @@ def test_load_briefing_round_trip_absent_and_invalid_schema(
 
 
 @pytest.mark.parametrize(
+    ("field", "malformed_value"),
+    [
+        ("schema_version", True),
+        ("schema_version", 1.0),
+        ("agent_maintained", 1),
+        ("read_only", 1),
+    ],
+)
+def test_load_briefing_rejects_scalar_type_confusion(
+    vault: tuple[Path, VaultContext],
+    field: str,
+    malformed_value: object,
+) -> None:
+    root, context = vault
+    compose_briefing(
+        vault_context=context,
+        for_date=BRIEFING_DATE,
+        write_guard=WriteGuard(lambda: {"state": "healthy"}),
+    )
+    target = _target(root)
+    payload = yaml.safe_load(target.read_text(encoding="utf-8").split("---", 2)[1])
+    payload[field] = malformed_value
+    target.write_text(
+        f"---\n{yaml.safe_dump(payload, sort_keys=False)}---\nmalformed\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(BriefingReadError):
+        load_briefing(vault_context=context, for_date=BRIEFING_DATE)
+
+
+@pytest.mark.parametrize(
     "malformed_case",
     [
         "empty_surfaced_ref",
