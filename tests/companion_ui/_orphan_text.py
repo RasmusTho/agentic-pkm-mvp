@@ -35,6 +35,8 @@ CONTAINER_TESTIDS: frozenset[str] = frozenset(
         "workspace-operator-telemetry-region",
         "workspace-bottom-bar",
         "workspace-surface-icon-map",
+        # #3364 (DESIGN_AUDIT §4.1, B3): reserved bottom-bar status slot.
+        "workspace-status-slot",
         # Runtime status popover rows
         "workspace-runtime-status-popover",
         "workspace-runtime-channel",

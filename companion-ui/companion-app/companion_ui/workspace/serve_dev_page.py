@@ -63,13 +63,16 @@ from companion_ui.renderer import (
 )
 from companion_ui.renderer.link_resolver import VaultLinkResolver
 from companion_ui.workspace.calm_degraded import (
+    CANVAS_OFF,
     DEFER_CONSEQUENCE,
     LANE_BODY_EDIT,
     LANE_LABEL_GOVERNANCE_QUEUE,
     NOTHING_LOST,
+    NOTHING_MUTATED,
     blocked_reason,
     blocked_recourse,
     calm_degraded,
+    calm_feature_status,
     humanise_degraded_reason,
     humanise_prose,
     humanise_provenance_token,
@@ -664,6 +667,73 @@ def _compute_primary_posture(
     return "ok", "Online"
 
 
+def _compose_bottom_bar_status(
+    *,
+    posture: str,
+    canvas_enabled: bool,
+    update_flow_available: bool,
+) -> tuple[str, bool]:
+    """Compose the reserved bottom-bar status slot's text + tone (#3364,
+    DESIGN_AUDIT §4.1 / B3: a runtime-composed channel / vault-settings status
+    string used to render behind the pill cluster, clipped and unreadable at
+    every width, and alarm-red for what was usually a benign disabled-feature
+    note).
+
+    Reuses the single posture source of truth (``_compute_primary_posture``,
+    #1260) for the true-error tier, and the ``calm_degraded`` module — the
+    sole emitter of unavailable-state copy — for every string, so no status
+    idiom is invented here. Only the severe postures (``blocked`` — WriteGuard
+    is blocking writes, so vault settings are genuinely unavailable;
+    ``unavailable`` — the vault itself is unresolved) are true errors and keep
+    the alarm tone.
+
+    The benign tier is composed from the individual guard flags, NOT from the
+    posture token alone: ``update_flow_available`` is deliberately absent from
+    ``_compute_primary_posture`` (posture stays "ok" when only the update-flow
+    channel is off), yet ``_render_body_edit_panel`` hides body editing on
+    exactly that flag — the silent state #3364 exists to surface. So the calm
+    note fires whenever a named feature flag is off, regardless of posture,
+    with a generic fallback when the posture is degraded for an unnamed reason.
+
+    Returns ``(status_text, is_error)``. An empty ``status_text`` means there
+    is nothing to show; the caller collapses the slot in that case.
+    """
+    if posture == "blocked":
+        return calm_degraded("Vault settings", "writes are blocked", NOTHING_MUTATED), True
+    if posture == "unavailable":
+        return calm_degraded("Vault settings", "vault is unresolved", NOTHING_LOST), True
+    return (
+        calm_feature_status(
+            update_flow_available=update_flow_available,
+            canvas_enabled=canvas_enabled,
+            otherwise_degraded=posture == "degraded",
+        ),
+        False,
+    )
+
+
+def _render_bottom_bar_status_slot(status_text: str, *, is_error: bool = False) -> str:
+    """Reserved status slot rendered ABOVE the bottom-bar pill row (#3364).
+
+    A distinct, own-positioned region — never a child of ``.workspace-bottom-bar``
+    — so the pill cluster (Map/History/Memory/Search/Settings/Help) and this
+    status can never occupy the same box, at any tested width. Collapses to an
+    empty string when there is no status to show. Tone defaults to calm
+    (``--fg-3`` + an info glyph); only a true-error status (``is_error=True``)
+    uses the destructive/alarm tone + glyph.
+    """
+    if not status_text:
+        return ""
+    tone = "error" if is_error else "calm"
+    glyph = "&#9888;" if is_error else "&#9432;"
+    return (
+        '<div class="workspace-status-slot" data-testid="workspace-status-slot" '
+        f'data-region="status-slot" data-tone="{tone}">'
+        f'<span class="workspace-status-slot-glyph" aria-hidden="true">{glyph}</span>'
+        f'<span class="workspace-status-slot-text">{_e(status_text)}</span>'
+        "</div>"
+    )
+
 
 def _workspace_header_freshness(fields: dict) -> tuple[str, str]:
     raw = (
@@ -1062,7 +1132,10 @@ def _render_operator_telemetry_block(
     if not fields:
         return ""
     freshness_label, freshness_title = _workspace_header_freshness(fields)
-    canvas_token = "canvas off" if not canvas_enabled else "canvas on"
+    # #3364: CANVAS_OFF is the one shared wording for canvas-disabled — the
+    # bottom-bar status slot (calm_feature_status) reads the same constant, so
+    # the operator pill and the slot can never drift into two idioms.
+    canvas_token = CANVAS_OFF if not canvas_enabled else "canvas on"
     runtime_token = (
         "runtime degraded"
         if posture in {"blocked", "degraded", "unavailable"}
@@ -2388,14 +2461,17 @@ def _plain_workspace_heading_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _render_note_section(fields: dict) -> tuple[str, str]:
+def _render_note_section(fields: dict) -> tuple[str, str, str]:
     """Render the workspace shell from render_fields() output.
 
-    Returns ``(shell_html, operator_telemetry_html)``. The second element is
-    the relocated runtime/diagnostic telemetry block (#2447, CUIDR-04) — it is
-    built here where its derived inputs are in scope, but rendered by the
-    caller **inside the operator drawer** (the operator layer, above the
-    backdrop), off the front edge.
+    Returns ``(shell_html, operator_telemetry_html, bottom_bar_status_html)``.
+    The second element is the relocated runtime/diagnostic telemetry block
+    (#2447, CUIDR-04) — it is built here where its derived inputs are in
+    scope, but rendered by the caller **inside the operator drawer** (the
+    operator layer, above the backdrop), off the front edge. The third element
+    is the reserved bottom-bar status slot (#3364, DESIGN_AUDIT §4.1) — also
+    built here where posture/canvas/update-flow are in scope, but rendered by
+    the caller as its own fixed-position region above the pill row.
 
     Uses Yggdrasil design tokens. Stable data-testid / data-region attributes
     match the region constants in real_note_workspace_shell.py for future
@@ -2559,6 +2635,17 @@ def _render_note_section(fields: dict) -> tuple[str, str]:
         orientation_freshness=str(fields.get("orientation_freshness") or ""),
         orientation_as_of=str(fields.get("orientation_as_of") or ""),
         orientation_trace_id=str(fields.get("orientation_trace_id") or ""),
+    )
+    # #3364 (DESIGN_AUDIT §4.1, B3): the reserved bottom-bar status slot. Built
+    # here where posture/canvas/update-flow are already in scope; rendered by
+    # the caller as its own fixed-position region above the pill row.
+    bottom_bar_status_text, bottom_bar_status_is_error = _compose_bottom_bar_status(
+        posture=posture_token,
+        canvas_enabled=canvas_enabled,
+        update_flow_available=update_flow_available,
+    )
+    bottom_bar_status_html = _render_bottom_bar_status_slot(
+        bottom_bar_status_text, is_error=bottom_bar_status_is_error
     )
     # CUIDR-04 (#2447): build the relocated runtime/diagnostic telemetry block
     # for the operator drawer (the operator layer), off the front edge. Returned
@@ -3081,7 +3168,7 @@ def _render_note_section(fields: dict) -> tuple[str, str]:
     </div>
     {portrait_sheet_html}
   </div>"""
-    return shell_html, operator_telemetry_html
+    return shell_html, operator_telemetry_html, bottom_bar_status_html
 
 
 def _render_active_note_body_update_flow(
@@ -10087,10 +10174,21 @@ def vendor_static_assets() -> dict[str, tuple[str, bytes]]:
 
 
 def _render_help_toggle(
-    include_settings: bool = False, include_runtime_launchers: bool = False
+    include_settings: bool = False,
+    include_runtime_launchers: bool = False,
+    status_slot_html: str = "",
 ) -> str:
     """The composed bottom bar (#2447, CUIDR-04) — one container, no stray
-    fixed siblings at the bottom edge.
+    fixed siblings at the bottom edge, plus (#3364) the one deliberate
+    exception: the reserved status slot rendered immediately before it.
+
+    The status slot (``status_slot_html``, built by
+    ``_render_bottom_bar_status_slot``) is its own fixed-position region, not
+    a child of ``.workspace-bottom-bar`` — DESIGN_AUDIT §4.1/B3 found a
+    runtime-composed channel/vault-settings status string rendering *behind*
+    this pill cluster, clipped at every width. Keeping the slot markup-adjacent
+    but structurally outside the pill row means the two can never occupy the
+    same box again. Renders empty when there is no status (collapsed slot).
 
     Bottom-bar launcher model (NAV-1/NAV-2/NAV-4, ui-audit; Codex P2 #2636):
 
@@ -10125,7 +10223,7 @@ def _render_help_toggle(
     visible regardless of which shell layout is active — the adaptive shell
     hides the legacy ``.topbar``, so a header-embedded control would not show.
     """
-    return (
+    return status_slot_html + (
         '<div class="workspace-bottom-bar" data-testid="workspace-bottom-bar" '
         'data-region="bottom-bar">'
         # The System Map is the never-clipping overflow surface that hosts the
@@ -10222,14 +10320,28 @@ def _render_help_drawer() -> str:
     /* CUIDR-04 (#2447): one composed bottom bar. The bar is the single fixed
        element at the bottom edge; its controls (Help, and the layout's sheet
        triggers / body-edit hint) are children, never independently positioned
-       fixed siblings. */
+       fixed siblings — except (#3364) the reserved status slot below, which is
+       deliberately its OWN fixed region stacked above the bar so a status can
+       never again render behind (or inside) the pill row. */
     .workspace-bottom-bar{position:fixed;bottom:18px;right:18px;z-index:999;
       display:inline-flex;align-items:center;gap:8px}
-    /* Lift the composed bottom bar above the ~60px portrait-sheet peek line
-       (.portrait-sheet[data-current-snap="peek"]{height:60px;bottom:0;
-       z-index:20}) on narrow viewports so the two read as one composed bottom
-       edge instead of the bar layering over the peek (CUIDR-04 bottom-edge
-       collision, #2462).
+    /* #3364 (DESIGN_AUDIT §4.1, B3): reserved status slot, stacked directly
+       above the bottom bar with a fixed clearance comfortably taller than any
+       pill (~36-40px) so the two boxes never overlap at any tested width.
+       Calm tone (--fg-3 + info glyph) by default; only data-tone="error"
+       (a true error, not a benign disabled-feature note) uses the destructive
+       tone + glyph. Collapsed entirely (renders "") when there is no status. */
+    .workspace-status-slot{position:fixed;bottom:calc(18px + 44px);right:18px;
+      z-index:999;display:inline-flex;align-items:center;gap:6px;
+      max-width:280px;padding:4px 2px;font:400 12px/1.3 'JetBrains Mono',monospace;
+      color:var(--fg-3);text-align:right}
+    .workspace-status-slot[data-tone="error"]{color:var(--destructive)}
+    .workspace-status-slot-glyph{flex:0 0 auto}
+    /* Lift the composed bottom bar (and the status slot above it) above the
+       ~60px portrait-sheet peek line (.portrait-sheet[data-current-snap="peek"]
+       {height:60px;bottom:0;z-index:20}) on narrow viewports so the two read
+       as one composed bottom edge instead of the bar layering over the peek
+       (CUIDR-04 bottom-edge collision, #2462).
          Gated on a visible peek via :has() on <body>: when the sheet is closed
        (display:none) or absent (orientation / no-sheet renders) the bar must
        rest at the bottom edge, not float 60px up leaving a dead gap (#2462
@@ -10240,6 +10352,7 @@ def _render_help_drawer() -> str:
        in the body at equal specificity. Co-located with the base rule above. */
     @media (max-width: 899px){
       body:has(.portrait-sheet[data-current-snap="peek"]) .workspace-bottom-bar{bottom:calc(60px + 18px)}
+      body:has(.portrait-sheet[data-current-snap="peek"]) .workspace-status-slot{bottom:calc(60px + 18px + 44px)}
     }
     .help-toggle,.map-toggle,.settings-toggle,
     .receipts-toggle,.memory-toggle,.cmd-toggle{position:static;
@@ -10446,6 +10559,10 @@ def render_index_html(
     # drawer (rendered below, as a sibling of the shell above the backdrop) can
     # embed it. Empty for error/vault-selection states (no runtime payload).
     operator_telemetry_html = ""
+    # #3364 (DESIGN_AUDIT §4.1, B3): reserved bottom-bar status slot. Empty for
+    # error/vault-selection states (no runtime payload to derive a status from,
+    # same gating as operator_telemetry_html above).
+    bottom_bar_status_html = ""
     if vault_selection_required is not None:
         content_section = _render_vault_selection_required_section(vault_selection_required)
     elif error:
@@ -10456,7 +10573,7 @@ def render_index_html(
             route_error=route_error,
         )
     elif fields is not None:
-        content_section, operator_telemetry_html = _render_note_section(fields)
+        content_section, operator_telemetry_html, bottom_bar_status_html = _render_note_section(fields)
     # When the runtime is unreachable the error banner already carries the only
     # truthful affordances (Retry, System map). The vault-setup form (open /
     # initialize / recent / settings flags) is a false affordance — the runtime
@@ -14411,7 +14528,7 @@ def render_index_html(
   </style>
 </head>
 <body data-diagnostics="{'true' if diagnostics else 'false'}" data-posture-emphasis="{DEFAULT_POSTURE_EMPHASIS}" {entry_state_attributes(entry_resolution)}>
-  {_render_help_toggle(include_settings=True, include_runtime_launchers=fields is not None)}
+  {_render_help_toggle(include_settings=True, include_runtime_launchers=fields is not None, status_slot_html=bottom_bar_status_html)}
   <div class="topbar">
     <div class="topbar-api">
       <span class="api-label">Server-side runtime</span>

@@ -337,6 +337,56 @@ def is_mapped_token(token: object) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Benign feature-off status notes (#3364 / DESIGN_AUDIT §4.1, B3).
+#
+# The bottom-bar reserved status slot surfaces benign disabled-feature notes
+# (a channel/canvas flag is off while the runtime is otherwise fine). Those
+# notes are unavailable-state copy, so they live HERE — this module is the
+# sole code path that emits unavailable/error copy on any user-facing surface
+# — and every surface describing the same fact must use the same string
+# ("one slot, one string": the operator drawer's canvas pill and the status
+# slot both read CANVAS_OFF, never divergent inline literals).
+# ---------------------------------------------------------------------------
+
+#: The one wording for "canvas editing is disabled by runtime configuration".
+#: Shared by the operator-drawer runtime pill and the bottom-bar status slot.
+CANVAS_OFF: Final[str] = "canvas off"
+#: Benign editing/channel-paused note (mockup copy, redesigns.html section 4):
+#: the update-flow channel is disabled, so body editing is paused. Points at
+#: the Settings surface that owns the connection state.
+EDITING_PAUSED: Final[str] = "Editing paused — see Settings › Connection"
+#: Generic calm note when the runtime is degraded for a reason not covered by
+#: a specific feature flag (guard degraded / workspace update unavailable).
+FEATURES_PAUSED: Final[str] = "Some features paused"
+
+
+def calm_feature_status(
+    *,
+    update_flow_available: bool,
+    canvas_enabled: bool,
+    otherwise_degraded: bool,
+) -> str:
+    """Compose the calm benign-status note for the bottom-bar status slot.
+
+    Presentation only: the flags are server-declared guard values; this never
+    classifies state. Returns the joined note ("Editing paused — see Settings
+    › Connection · canvas off") or "" when nothing is off — the caller
+    collapses the slot on empty. ``otherwise_degraded`` covers a degraded
+    posture with no specific feature flag to name (guard degraded / workspace
+    update unavailable): it renders the generic FEATURES_PAUSED note rather
+    than saying nothing.
+    """
+    parts: list[str] = []
+    if not update_flow_available:
+        parts.append(EDITING_PAUSED)
+    if not canvas_enabled:
+        parts.append(CANVAS_OFF)
+    if not parts and otherwise_degraded:
+        parts.append(FEATURES_PAUSED)
+    return " · ".join(parts)
+
+
+# ---------------------------------------------------------------------------
 # Agent-lane labeling (CUIDR-08 / C2).
 #
 # The two agent lanes differ on the single most trust-critical dimension in the
