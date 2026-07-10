@@ -409,7 +409,10 @@ class TestErrorState:
             re.DOTALL,
         )
         assert error_match, "workspace-error-state region not found"
-        assert "Connection refused by host" in error_match.group()
+        # #3361 (DESIGN_AUDIT.md §3.1 bug B2) — the raw transport error never
+        # reaches the visible region; the calm posture copy replaces it.
+        assert "Connection refused by host" not in error_match.group()
+        assert "Can't reach the vault right now" in error_match.group()
 
     def test_no_note_regions_in_error_only_page(self) -> None:
         """Workspace shell regions must not appear when only error is rendered."""
@@ -425,8 +428,12 @@ class TestErrorState:
 
     def test_error_html_escaping(self) -> None:
         html = _html_error("<script>xss</script>")
+        # #3361 (DESIGN_AUDIT.md §3.1 bug B2) — an unstructured error string
+        # never reaches user-facing copy at all (not even escaped): the calm
+        # posture copy replaces it, so there is nothing to inject.
         assert "<script>xss</script>" not in html
-        assert "&lt;script&gt;" in html
+        assert "&lt;script&gt;" not in html
+        assert "Can't reach the vault right now" in html
 
 
 # ---------------------------------------------------------------------------
