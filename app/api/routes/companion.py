@@ -1533,6 +1533,14 @@ class VaultReceiptState(BaseModel):
     status: str
     timestamp: str
     state: str
+    # Receipts v2 display fields (#3363) — additive, optional. Declared by the
+    # projection (app/receipts/artifact_receipts.py) with documented fallbacks;
+    # without these declarations pydantic would silently drop the keys at
+    # model_validate and the vault-browser payload would never carry them.
+    display_verb: str | None = None
+    run_key: str | None = None
+    run_label: str | None = None
+    target_absolute: str | None = None
 
 
 class VaultAgentMemoryPostureItemState(BaseModel):
