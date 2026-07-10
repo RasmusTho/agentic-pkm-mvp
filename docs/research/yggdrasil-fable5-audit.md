@@ -11,6 +11,22 @@ source_of_truth: mixed — cites Mimer code (`path:line`) and external sources (
 
 State: Draft (advisory research, 2026-07-05). Field scan + gap analysis; claims no shipped reality of its own; every recommendation is a proposal for owner review.
 
+> **Status annotation (2026-07-10, adversarial architecture review — delivery status + three corrections):**
+> This draft is superseded in part by delivery. Read the gap list against current reality:
+>
+> - **G1 (pgvector serving) is DELIVERED** — KERNEL-05 (#2870) made `rebuild_from_durable_index()` the sole production path populating the in-process cache, and G1res-1 (#2981, PR #3003) added the bounded generation-freshness check. ADR-0024 carries the matching 2026-07-05 annotation; `docs/RETRIEVAL.md :: Hybrid Search :: Scoring` describes the live path.
+> - **G3 (Swedish embeddings) mechanism is DELIVERED and the cutover ran** — the selectable `bge-m3` profile shipped (ADR-0052, #2984) and the per-channel cutover executed (#3124). The validating SV/EN eval (G3-2, #2985) is the remaining open item and is the regression guard for owner ruling R2's switch-without-benchmark.
+> - **G2 (synthesis) is SUBSTANTIALLY DELIVERED** under parent #2980: vault-lint (#2986), propose-only writer (#2987), connect pass (#2994), declined-proposal ledger (#2995), cluster digest + activation records (#2998), contradiction pass (#2999). `docs/STATUS.md` shows `connection_proposal` / `synthesis_note_proposal` as gated-active. Only the auto-fix act-tier flip (G2-3) remains, deferred behind ADR-0048.
+> - **G4 / G5 / G6 / R4 (Track P) are deferred by design** — designed in `docs/MIMER_CAPABILITY_HARDENING/` (note: this spec directory was renamed from `YGGDRASIL_CAPABILITY_HARDENING`), no child issues filed. Per the 2026-07-10 review: G5's RRF carries an ADR-0024 burden of proof (the linear weights are a deliberate trust encoding; adoption is a new ADR gated on #2985's evidence), G6 as drafted would introduce an ungoverned context source (see correction 3 below) and should be redesigned through the admissibility contract if revived, and G4's cost premise is weaker than stated (see correction 2).
+>
+> Three corrections to claims in the body text (the draft below is left unedited; these annotations win):
+>
+> 1. **The write-gate code anchor is wrong (§II matrix).** `app/write_guard.py` gates writes on runtime **health state** (`WRITE_BLOCKED_STATES`), not on human consent. The human write-gate this audit celebrates is the Panel confirmation chain — checked checkbox in a valid `AI-åtgärder` section → policy/admissibility gate → WriteGuard → receipt (`docs/PANEL_AGENT.md :: Canonical confirmation semantics`) — plus typed `CrossScopeFlow` grants. The differentiator is that distributed enforcement chain, not the WriteGuard class.
+> 2. **§III's "pgvector is authority" means storage source-of-truth only.** Under ADR-0039, retrieval output is candidate context, never authority; 'authority' is a reserved word in this system. Likewise §I's "proactive loop wastes reasoning" (G4) overstates: the shipped tick runs a deterministic local evaluator (`DeterministicRelevanceEvaluator`), so state-diffing saves receipt/attention churn, not model cost — §VIII's cost reframing already half-concedes this.
+> 3. **G6's "small, additive" framing understates it.** A session hot-cache injected into context assembly is a **new admitted-context class**; an ungoverned recency cache would let recency stand in for permission, colliding with the scope-prefilter invariant (`app/retrieval/hybrid.py` — eligibility before ranking, denials never silent) and ADR-0037/ADR-0039. If revived, it is a design decision through the context-admissibility contract, not a small slice.
+>
+> §VIII's decision tree ("never a paid frontier model in the hot path") is superseded by owner ruling R4 in §IX (runtime SHOULD support paid models as a routable tier; local Ollama stays the default) — R4 is recorded below but the §VIII tree was not updated; treat §IX as governing.
+
 # Mimer × Fable 5 — Field Scan, Inspiration & Gap Analysis
 
 **Date:** 2026-07-05
