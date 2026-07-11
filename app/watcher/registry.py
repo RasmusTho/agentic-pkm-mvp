@@ -15,6 +15,7 @@ from uuid import uuid4
 import yaml
 
 from app.agents.panel.agent import handle_note_update
+from app.briefing.trigger import scheduled_briefing_tick
 from app.agents.panel_agent.policy import watcher_panel_candidate_for_path
 from app.components.concurrency import OptimisticWriteGuard, VersionMismatch
 from app.events.schema import OutboxEvent
@@ -47,6 +48,7 @@ _TRUE_VALUES = {"1", "true", "yes", "on"}
 DEFAULT_SCOPE_GLOB = "*.md,**/*.md"
 
 MIN_TICK_SLEEP_SECONDS = 0.05
+BRIEFING_TICK_INTERVAL_SECONDS = 15 * 60
 
 _WRITE_GUARD = OptimisticWriteGuard()
 
@@ -590,6 +592,25 @@ class WatcherSummary:
 class WatcherTickResult:
     summary: WatcherSummary
     last_trace_id: str | None
+
+
+@dataclass
+class BriefingTickCadence:
+    """Best-effort retry cadence; never the briefing generation truth."""
+
+    last_attempt_at: float | None = None
+    interval_seconds: float = BRIEFING_TICK_INTERVAL_SECONDS
+
+    def claim_if_due(self, *, now: float) -> bool:
+        if (
+            self.last_attempt_at is not None
+            and now - self.last_attempt_at < self.interval_seconds
+        ):
+            return False
+        # Claim before composition so a failed write cannot create a tight
+        # watcher retry loop. The dated note remains the idempotency truth.
+        self.last_attempt_at = now
+        return True
 
 
 def _expand_env_values(value: object) -> object:
@@ -1336,6 +1357,11 @@ def run_registry_once(config_path: Path) -> dict[str, dict[str, object]]:
         )
         for spec in cfg.specs
     }
+    summaries["briefing"] = _run_briefing_tick(
+        cfg,
+        now=now,
+        cadence=BriefingTickCadence(),
+    )
     enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
     write_registry_heartbeat(
         path=cfg.heartbeat_path,
@@ -1358,6 +1384,7 @@ def run_registry_forever(config_path: Path, *, max_ticks: int | None = None) -> 
         for spec in cfg.specs
     }
     tick_limit = max_ticks if max_ticks is not None and max_ticks > 0 else None
+    briefing_cadence = BriefingTickCadence()
 
     tick = 0
     while True:
@@ -1366,6 +1393,11 @@ def run_registry_forever(config_path: Path, *, max_ticks: int | None = None) -> 
             spec.name: _run_spec_tick(cfg, spec, states[spec.name], now=now, states=states)
             for spec in cfg.specs
         }
+        summaries["briefing"] = _run_briefing_tick(
+            cfg,
+            now=now,
+            cadence=briefing_cadence,
+        )
         enqueue_failures_total = sum(state.enqueue_failures_total for state in states.values())
         write_registry_heartbeat(
             path=cfg.heartbeat_path,
@@ -1406,8 +1438,39 @@ def run_registry_forever(config_path: Path, *, max_ticks: int | None = None) -> 
         time.sleep(sleep_seconds)
 
 
+def _run_briefing_tick(
+    cfg: RegistryConfig,
+    *,
+    now: float,
+    cadence: BriefingTickCadence,
+) -> dict[str, object]:
+    """Run the sparse Daily Briefing hook once per registry cycle."""
+
+    if not cfg.enable:
+        return {"triggered": False, "reason": "watcher_disabled"}
+    if cfg.stop_file.exists():
+        return {"triggered": False, "reason": "watcher_paused"}
+    if not cadence.claim_if_due(now=now):
+        return {"triggered": False, "reason": "cadence_not_due"}
+    try:
+        context = VaultManager().validate_vault(cfg.vault_path)
+        result = scheduled_briefing_tick(
+            vault_context=context,
+            now=datetime.fromtimestamp(now, tz=timezone.utc),
+        )
+        return {
+            "triggered": result.triggered,
+            "reason": result.reason,
+            "date": result.briefing_date.isoformat(),
+        }
+    except Exception as exc:
+        logger.exception("daily briefing scheduled tick failed")
+        return {"triggered": False, "reason": "generation_failed", "error": str(exc)}
+
+
 __all__ = [
     "WatcherSpec",
+    "BriefingTickCadence",
     "RegistryConfig",
     "load_registry_config",
     "run_registry_once",
