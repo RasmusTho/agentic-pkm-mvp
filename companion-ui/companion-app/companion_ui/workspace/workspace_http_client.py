@@ -55,6 +55,23 @@ class WorkspaceClientNetworkError(WorkspaceClientError):
     """Network-level failure (connection refused, timeout, DNS, etc.)."""
 
 
+def _transport_error_message(exc: httpx.RequestError) -> str:
+    """Return transport text that the shared unreachable classifier can use.
+
+    Some ``httpx`` transport exceptions (notably ``ReadTimeout(\"\")`` and
+    ``ConnectTimeout(\"\")``) stringify to an empty string.  The workspace
+    posture classifier intentionally treats empty values as unclassified, so
+    retain a canonical transport marker at this boundary rather than letting a
+    real runtime outage fall through to the generic error state.
+    """
+    message = str(exc).strip()
+    if message:
+        return message
+    if isinstance(exc, httpx.TimeoutException):
+        return "timed out"
+    return "network error"
+
+
 # ---------------------------------------------------------------------------
 # Live HTTP client
 # ---------------------------------------------------------------------------
@@ -103,7 +120,7 @@ class WorkspaceHttpClient:
         try:
             resp = httpx.get(full_url, **get_kwargs)
         except httpx.RequestError as exc:
-            raise WorkspaceClientNetworkError(str(exc)) from exc
+            raise WorkspaceClientNetworkError(_transport_error_message(exc)) from exc
         if resp.status_code >= 400:
             raise WorkspaceClientHTTPError(resp.status_code, resp.text)
         return resp.json()
@@ -132,7 +149,7 @@ class WorkspaceHttpClient:
                 request_kwargs["headers"] = headers
             resp = httpx.post(full_url, **request_kwargs)
         except httpx.RequestError as exc:
-            raise WorkspaceClientNetworkError(str(exc)) from exc
+            raise WorkspaceClientNetworkError(_transport_error_message(exc)) from exc
         if resp.status_code >= 400:
             raise WorkspaceClientHTTPError(resp.status_code, resp.text)
         return resp.json()
@@ -143,7 +160,7 @@ class WorkspaceHttpClient:
         try:
             resp = httpx.delete(full_url, params=params, timeout=self._timeout)
         except httpx.RequestError as exc:
-            raise WorkspaceClientNetworkError(str(exc)) from exc
+            raise WorkspaceClientNetworkError(_transport_error_message(exc)) from exc
         if resp.status_code >= 400:
             raise WorkspaceClientHTTPError(resp.status_code, resp.text)
         return resp.json()
