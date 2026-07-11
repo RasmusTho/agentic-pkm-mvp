@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from pathlib import Path
 
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
@@ -74,3 +77,52 @@ def test_health_handles_future_heartbeat_timestamp(tmp_path, monkeypatch) -> Non
     status = str(watcher.get("status") or "")
     assert status in {"future", "invalid", "stale"}
     assert "future" in str(watcher.get("detail") or "").lower() or status == "future"
+
+
+@pytest.mark.asyncio
+async def test_slow_api_health_does_not_block_healthz(monkeypatch) -> None:
+    """
+    /api/health MUST run its (potentially slow, blocking-I/O) checks off the
+    event loop so a slow or hung upstream probe (e.g. Ollama) cannot starve
+    the trivial /healthz endpoint that container healthchecks depend on.
+
+    Regression for the 2026-07-11 prod outage: run_health() was called
+    inline inside `async def health()`, so its blocking httpx calls to
+    Ollama (once directly, again per LLM task route) froze the single
+    uvicorn event loop and took /healthz down with it.
+    """
+    import app.api.routes.health as health_route
+
+    def _slow_blocking_run_health() -> dict:
+        # Simulate the blocking I/O run_health() performs (e.g. httpx.get
+        # to Ollama) with a plain time.sleep so it would starve the loop
+        # if it ran inline instead of on a worker thread.
+        time.sleep(1.0)
+        return {"ok": True, "required_ok": True, "checks": {}, "runtime": {}}
+
+    monkeypatch.setattr(health_route, "run_health", _slow_blocking_run_health)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        start = time.monotonic()
+        # Fire the slow request first without yielding, so the event loop
+        # picks it up before the cheap probe below — mirroring real
+        # concurrent load where a poller's in-flight request is already
+        # executing when /healthz arrives. If run_health() runs inline on
+        # the loop, this blocking call monopolizes the *only* OS thread and
+        # /healthz cannot even begin until it releases the thread.
+        slow_task = asyncio.create_task(client.get("/api/health"))
+        healthz_resp = await client.get("/healthz")
+        healthz_elapsed = time.monotonic() - start
+
+        slow_resp = await slow_task
+
+    assert healthz_resp.status_code == 200
+    assert healthz_resp.json() == {"ok": True}
+    # /healthz must stay cheap regardless of how long /api/health takes —
+    # if the event loop were blocked, this would take ~1s (or more, under
+    # concurrent load) instead of resolving near-instantly.
+    assert healthz_elapsed < 0.5, f"/healthz took {healthz_elapsed:.3f}s while /api/health was in flight"
+
+    assert slow_resp.status_code == 200
+    assert slow_resp.json()["ok"] is True
