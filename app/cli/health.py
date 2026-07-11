@@ -148,7 +148,7 @@ def _check_ollama() -> Dict[str, Any]:
             data={"provider": provider},
         )
     try:
-        resp = httpx.get(f"{base}/api/tags", timeout=_env_float("HEALTH_PROBE_TIMEOUT", 2.0))
+        resp = httpx.get(f"{base}/api/tags", timeout=_health_probe_timeout())
         resp.raise_for_status()
         data = resp.json()
         result = _result(
@@ -161,6 +161,14 @@ def _check_ollama() -> Dict[str, Any]:
     result["provider"] = provider
     result["base_url"] = base
     return result
+
+
+def _health_probe_timeout() -> float:
+    """Return the short, health-only timeout without coupling to LLM generation."""
+    try:
+        return float(os.environ.get("HEALTH_PROBE_TIMEOUT", "2"))
+    except (TypeError, ValueError):
+        return 2.0
 
 
 def _check_llm_router() -> Dict[str, Any]:
