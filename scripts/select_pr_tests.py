@@ -143,6 +143,11 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/health", "tests/invariants", "tests/api"),
     ),
     (
+        "relevance",
+        ("app/relevance/", "tests/relevance/"),
+        ("tests/relevance",),
+    ),
+    (
         "orchestration",
         (
             "app/orchestrator/",
