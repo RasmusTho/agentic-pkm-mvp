@@ -36,6 +36,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # INV-EF1 compares the PR head with main and therefore needs a
+          # merge base, not just the two shallow tip commits.
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
