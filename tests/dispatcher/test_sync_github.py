@@ -35,7 +35,7 @@ REPO = "RasmusTho/agentic-pkm-mvp"
 
 def _tid(number: int, repo: str = REPO) -> str:
     """The repo-qualified task_id normalize_github_issue produces for *number*."""
-    return f"github-{repo.replace('/', '-')}-issue-{number}"
+    return f"github-{repo.replace('/', '--')}-issue-{number}"
 
 
 VALID_READY_BODY = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
@@ -1116,8 +1116,8 @@ def test_same_issue_number_across_repos_yields_distinct_task_ids() -> None:
     task_b = normalize_github_issue(payload, REPO_B, now="2026-04-24T00:00:00+00:00")
 
     assert task_a.task_id != task_b.task_id
-    assert task_a.task_id == "github-RasmusTho-agentic-pkm-mvp-issue-21"
-    assert task_b.task_id == "github-RasmusTho-bifrost-issue-21"
+    assert task_a.task_id == "github-RasmusTho--agentic-pkm-mvp-issue-21"
+    assert task_b.task_id == "github-RasmusTho--bifrost-issue-21"
     assert task_a.repo == REPO_A
     assert task_b.repo == REPO_B
 
@@ -1137,8 +1137,8 @@ def test_same_issue_number_across_repos_both_stored_without_clobber(
         )
     )
 
-    stored_a = tmp_store.get_task("github-RasmusTho-agentic-pkm-mvp-issue-21")
-    stored_b = tmp_store.get_task("github-RasmusTho-bifrost-issue-21")
+    stored_a = tmp_store.get_task("github-RasmusTho--agentic-pkm-mvp-issue-21")
+    stored_b = tmp_store.get_task("github-RasmusTho--bifrost-issue-21")
     assert stored_a is not None and stored_b is not None
     assert stored_a.title == SAMPLE_ISSUE_HIGH["title"]
     assert stored_b.title == "Bifrost twenty-one"
@@ -1169,11 +1169,11 @@ def test_pull_of_repo_a_does_not_reconcile_same_issue_number_in_repo_b(
     adapter = PullSyncAdapter(store=tmp_store, source=source)
     adapter.pull(REPO_A)
 
-    stored_b = tmp_store.get_task("github-RasmusTho-bifrost-issue-101")
+    stored_b = tmp_store.get_task("github-RasmusTho--bifrost-issue-101")
     assert stored_b is not None
     assert stored_b.status == "blocked", "repo B task must be untouched by repo A pull"
     assert stored_b.blocked_reason == "bifrost upstream dependency"
     assert stored_b.repo == REPO_B
     # No reconcile events emitted against repo B's task.
-    events = tmp_store.list_events("github-RasmusTho-bifrost-issue-101")
+    events = tmp_store.list_events("github-RasmusTho--bifrost-issue-101")
     assert [e for e in events if e.event_type == "sync.reconciled"] == []

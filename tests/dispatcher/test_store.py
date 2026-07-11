@@ -159,3 +159,65 @@ def test_load_paths_defaults_under_state_dir(tmp_path: Path) -> None:
     paths = load_paths(env)
     assert paths.db_path == tmp_path / "rt" / "dispatcher.sqlite3"
     assert paths.events_path == tmp_path / "rt" / "events.jsonl"
+
+
+def test_legacy_v1_db_self_heals_without_reinitialize(tmp_path: Path) -> None:
+    """A pre-multi-repo DB whose ``dispatcher tasks`` never re-runs ``init``
+    (e.g. a long-lived shared instance) must still pick up the ``repo``
+    column and repo-qualified task_id the first time anything touches it —
+    not only when ``initialize()`` happens to run again.
+    """
+    import sqlite3
+
+    db_path = tmp_path / "legacy.sqlite3"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE dispatcher_tasks (
+            task_id TEXT PRIMARY KEY,
+            issue_number INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL,
+            priority TEXT NOT NULL,
+            source_anchor_refs TEXT NOT NULL,
+            claimed_by TEXT,
+            lease_id TEXT,
+            lease_expires_at TEXT,
+            linked_pr TEXT,
+            blocked_reason TEXT,
+            last_heartbeat_at TEXT,
+            sync_state TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE TABLE dispatcher_events (event_id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, "
+        "task_id TEXT NOT NULL, event_type TEXT NOT NULL, actor TEXT NOT NULL, "
+        "lease_id TEXT, payload TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO dispatcher_tasks (task_id, issue_number, title, status, priority, "
+        "source_anchor_refs, created_at, updated_at) VALUES "
+        "('github-issue-101', 101, 'Legacy task', 'ready', 'high', '[]', 'x', 'x')"
+    )
+    conn.execute(
+        "INSERT INTO dispatcher_events (event_id, timestamp, task_id, event_type, actor) "
+        "VALUES ('evt-legacy', 'x', 'github-issue-101', 'task.discovered', 'agent-a')"
+    )
+    conn.commit()
+    conn.close()
+
+    # No .initialize() call — mirrors a shared instance whose DB already
+    # existed before this migration shipped and is never re-init'ed.
+    store = SqliteStore(db_path, JsonlEventWriter(tmp_path / "events.jsonl"))
+    migrated = store.get_task("github-RasmusTho--agentic-pkm-mvp-issue-101")
+
+    assert migrated is not None
+    assert migrated.title == "Legacy task"
+    assert migrated.repo == "RasmusTho/agentic-pkm-mvp"
+    assert store.get_task("github-issue-101") is None
+
+    events = store.list_events("github-RasmusTho--agentic-pkm-mvp-issue-101")
+    assert [e.event_id for e in events] == ["evt-legacy"]

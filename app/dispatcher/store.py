@@ -57,6 +57,7 @@ class SqliteStore:
     ) -> None:
         self._db_path = Path(db_path)
         self._event_writer = event_writer
+        self._schema_ensured = False
 
     @property
     def db_path(self) -> Path:
@@ -67,24 +68,64 @@ class SqliteStore:
         conn = sqlite3.connect(self._db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        if not self._schema_ensured:
+            self._ensure_schema(conn)
+            self._schema_ensured = True
         return conn
+
+    def _ensure_schema(self, conn: sqlite3.Connection) -> None:
+        """Self-heal an on-disk DB created before the ``repo`` column (schema v1).
+
+        Runs on every connection, not just :meth:`initialize` — a long-lived
+        shared instance (e.g. the Demerzel dispatcher) is never re-``init``ed
+        once its DB file exists, so a migration reachable only from
+        ``initialize()`` would never execute against it. SQLite lacks a
+        portable ``ADD COLUMN IF NOT EXISTS``; the same try/except idiom used
+        for Postgres ``ADD COLUMN IF NOT EXISTS`` elsewhere (see
+        ``app/stores/pg.py``) applies here in SQLite form. Cached via
+        ``self._schema_ensured`` so a tight loop of many ``_connect()`` calls
+        (e.g. one dispatcher ``pull`` upserting hundreds of issues) pays the
+        check once per process, not once per row.
+        """
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='dispatcher_tasks'"
+        ).fetchone()
+        if exists is None:
+            # Fresh DB: initialize() will create the table via DDL_STATEMENTS,
+            # which already includes the repo column — nothing to migrate.
+            return
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(dispatcher_tasks)")}
+        if "repo" in columns:
+            return
+        conn.execute("ALTER TABLE dispatcher_tasks ADD COLUMN repo TEXT NOT NULL DEFAULT ''")
+        # The legacy task_id format (pre-multi-repo) had no repo qualifier and
+        # was only ever produced for RasmusTho/agentic-pkm-mvp pulls; backfill
+        # repo and re-key task_id to the current repo-qualified form so these
+        # rows don't linger as orphaned duplicates the moment a pull runs
+        # under the new scheme. Also re-key the matching event-log rows so
+        # historical events stay joinable to the renamed task.
+        conn.execute(
+            """
+            UPDATE dispatcher_tasks
+            SET repo = 'RasmusTho/agentic-pkm-mvp',
+                task_id = 'github-RasmusTho--agentic-pkm-mvp-issue-' || issue_number
+            WHERE task_id LIKE 'github-issue-%'
+            """
+        )
+        conn.execute(
+            """
+            UPDATE dispatcher_events
+            SET task_id = 'github-RasmusTho--agentic-pkm-mvp-issue-'
+                || substr(task_id, length('github-issue-') + 1)
+            WHERE task_id LIKE 'github-issue-%'
+            """
+        )
+        conn.commit()
 
     def initialize(self) -> None:
         with self._connect() as conn:
             for stmt in DDL_STATEMENTS:
                 conn.execute(stmt)
-            # Self-heal on-disk DBs created before the repo column (schema v1).
-            # SQLite lacks a portable ``ADD COLUMN IF NOT EXISTS``; the same
-            # try/except idiom used for Postgres ``ADD COLUMN IF NOT EXISTS``
-            # elsewhere (see app/stores/pg.py) applies here in SQLite form.
-            try:
-                conn.execute(
-                    "ALTER TABLE dispatcher_tasks "
-                    "ADD COLUMN repo TEXT NOT NULL DEFAULT ''"
-                )
-            except sqlite3.OperationalError:
-                # duplicate column name — column already present.
-                pass
             conn.execute(
                 "INSERT OR REPLACE INTO dispatcher_meta(key, value) VALUES (?, ?)",
                 ("schema_version", str(SCHEMA_VERSION)),

@@ -364,6 +364,10 @@ def _cmd_pull(args: argparse.Namespace, store: SqliteStore) -> int:
         return _emit_error(f"pull failed: {exc}", args.json)
 
     if failures:
+        # sync_note is the joined per-repo failure list, not last_sync_note:
+        # in a mixed-outcome pull the last-processed repo can be a successful
+        # one, which would leave sync_note blank while ok=False/error names a
+        # real failure — the per-repo detail already lives in "repos".
         _emit({
             "ok": False,
             "error": "pull failed: " + "; ".join(failures),
@@ -372,7 +376,7 @@ def _cmd_pull(args: argparse.Namespace, store: SqliteStore) -> int:
             "skipped": 0,
             "provider": "github",
             "sync_result": "error",
-            "sync_note": last_sync_note,
+            "sync_note": "; ".join(failures),
             "repos": per_repo,
         }, args.json)
         return 1

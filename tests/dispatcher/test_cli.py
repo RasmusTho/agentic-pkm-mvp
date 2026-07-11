@@ -719,8 +719,8 @@ def test_pull_command_multi_repo_aggregates_and_qualifies_ids(tmp_env):
     code, queue_data = _run(["queue", "--json"])
     assert code == 0
     task_ids = {t["task_id"] for t in queue_data["tasks"]}
-    assert "github-RasmusTho-agentic-pkm-mvp-issue-21" in task_ids
-    assert "github-RasmusTho-bifrost-issue-21" in task_ids
+    assert "github-RasmusTho--agentic-pkm-mvp-issue-21" in task_ids
+    assert "github-RasmusTho--bifrost-issue-21" in task_ids
 
 
 def test_pull_command_reports_sync_source_failure(tmp_env):

@@ -321,7 +321,13 @@ def normalize_github_issue(
 
     ``task_id`` is repo-qualified so that issue numbers colliding across repos
     (both repos can have an issue #21) map to distinct rows instead of silently
-    clobbering each other.
+    clobbering each other. The owner/name separator is doubled (``--``) rather
+    than reusing the single ``-`` GitHub repo names may themselves contain —
+    a single-hyphen encoding lets two different repos collapse to the same
+    string (``"org/foo-bar"`` and ``"org-foo/bar"`` both become
+    ``"org-foo-bar"``); doubling the separator keeps them distinct
+    (``"org--foo-bar"`` vs ``"org-foo--bar"``) for any repo name that doesn't
+    itself contain a literal ``--``.
 
     Priority defaults to ``med`` when no recognised priority label is present.
     Status defaults to ``ready`` when no recognised status label is present.
@@ -330,7 +336,7 @@ def normalize_github_issue(
         now = datetime.now(timezone.utc).isoformat()
 
     number = payload["number"]
-    task_id = f"github-{repo.replace('/', '-')}-issue-{number}"
+    task_id = f"github-{repo.replace('/', '--')}-issue-{number}"
 
     labels = _label_names(payload)
 
