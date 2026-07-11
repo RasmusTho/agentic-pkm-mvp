@@ -527,7 +527,8 @@ def transcribe(source: str, as_json: bool, trace_id: Optional[str]) -> None:
 @cli.command(
     name="acquire-replay",
     help="Replay a KA raw record's derived levels (normalize -> extract -> candidate) with "
-    "zero source egress (KA-06).\n\nExample:\n  python -m app.cli acquire-replay <raw_id> "
+    "zero source egress (KA-06). A fresh candidate materialization succeeds even though "
+    "it is not byte-comparable to a preserved replay.\n\nExample:\n  python -m app.cli acquire-replay <raw_id> "
     "--vault-root ./vault --assert-no-source-egress",
 )
 @click.argument("raw_record_id")
@@ -555,7 +556,8 @@ def acquire_replay(
     """Thin wrapper over `app.knowledge_acquisition.replay.run_replay` (the testable core).
 
     Prints the human-readable receipt lines, optionally the structured JSON receipt, and
-    exits nonzero when the replay is not equivalent.
+    exits nonzero for a replay failure or divergence. A successful fresh candidate
+    materialization remains non-equivalent (there are no prior bytes to compare) but exits zero.
     """
     from app.knowledge_acquisition.replay import ReplayError, run_replay
     from app.vault.manager import VaultContext
@@ -583,7 +585,7 @@ def acquire_replay(
         click.echo(line)
     if as_json:
         click.echo(json.dumps(receipt.as_dict(), ensure_ascii=False))
-    if not receipt.equivalent:
+    if not receipt.equivalent and not receipt.successful_fresh_materialization:
         raise SystemExit(1)
 
 

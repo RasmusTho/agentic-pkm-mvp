@@ -20,7 +20,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from click.testing import CliRunner
 
+from app.cli import cli
 from app.knowledge_acquisition import youtube_plugin
 from app.knowledge_acquisition.extraction_registry import clear_registry
 from app.knowledge_acquisition.extractors import summary_extractor
@@ -28,7 +30,9 @@ from app.knowledge_acquisition.normalize import normalize
 from app.knowledge_acquisition.raw_record import persist_raw_record
 from app.knowledge_acquisition.replay import (
     ReplayError,
+    ReplayReceipt,
     SourceEgressBlockedError,
+    StageReplayReceipt,
     run_replay,
 )
 from app.knowledge_acquisition.stage_events import (
@@ -179,7 +183,7 @@ def _persist_raw() -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_replay_from_raw_no_source_egress_equivalent_output(tmp_path: Path) -> None:
+def test_replay_fresh_write_not_equivalent_then_preserved(tmp_path: Path) -> None:
     conn = FakeOutboxConn()
     vault = _vault(tmp_path / "vault")
     raw_id = _persist_raw()
@@ -263,6 +267,68 @@ def test_fresh_candidate_write_does_not_claim_byte_identity(tmp_path: Path) -> N
     assert candidate.status == "written"
     assert candidate.equivalence == "fresh_write_not_byte_comparable"
     assert receipt.equivalent is False
+
+
+def test_acquire_replay_fresh_materialization_reports_successful_non_equivalence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The CLI succeeds when a fresh candidate write is non-byte-comparable."""
+    fresh_receipt = ReplayReceipt(
+        raw_record_id="raw-id",
+        content_identity="sha256:fresh",
+        source_egress=0,
+        stages=(
+            StageReplayReceipt(
+                stage="normalize", status="ok", equivalence="byte_identical"
+            ),
+            StageReplayReceipt(
+                stage="extracted",
+                status="ok",
+                equivalence="schema_and_lineage",
+                extractor_id="summary",
+                extractor_version=1,
+            ),
+            StageReplayReceipt(
+                stage="candidate",
+                status="written",
+                equivalence="fresh_write_not_byte_comparable",
+            ),
+        ),
+        equivalent=False,
+    )
+    import app.knowledge_acquisition.replay as replay_mod
+
+    monkeypatch.setattr(replay_mod, "run_replay", lambda *_args, **_kwargs: fresh_receipt)
+
+    result = CliRunner().invoke(
+        cli,
+        ["acquire-replay", "raw-id", "--vault-root", str(tmp_path / "vault")],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "fresh materialization succeeded" in result.output.lower()
+    assert "equivalent=false" in result.output
+
+    failed_receipt = ReplayReceipt(
+        raw_record_id="raw-id",
+        content_identity="sha256:blocked",
+        source_egress=0,
+        stages=(
+            StageReplayReceipt(
+                stage="normalize", status="ok", equivalence="byte_identical"
+            ),
+            StageReplayReceipt(stage="candidate", status="blocked", equivalence="none"),
+        ),
+        equivalent=False,
+    )
+    monkeypatch.setattr(replay_mod, "run_replay", lambda *_args, **_kwargs: failed_receipt)
+
+    failed = CliRunner().invoke(
+        cli,
+        ["acquire-replay", "raw-id", "--vault-root", str(tmp_path / "vault")],
+    )
+    assert failed.exit_code == 1
 
 
 def _candidate_stage_path(receipt) -> str:
