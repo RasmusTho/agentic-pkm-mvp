@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import asdict
+import errno
 import heapq
 import json
 import logging
@@ -991,6 +992,15 @@ def _resolve_browse_target(requested: str, base: Path) -> Path:
     raw = Path(text).expanduser()
     if not raw.is_absolute():
         raw = base / raw
+    try:
+        # Python 3.14's non-strict Path.resolve() no longer raises for a
+        # self-referential symlink. stat() still follows the link and reports
+        # ELOOP, giving this endpoint one version-independent loop signal
+        # before resolve() and the directory check could turn it into a 404.
+        raw.stat()
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise HTTPException(status_code=400, detail="invalid browse path") from exc
     try:
         resolved = raw.resolve()
     except (OSError, RuntimeError) as exc:
