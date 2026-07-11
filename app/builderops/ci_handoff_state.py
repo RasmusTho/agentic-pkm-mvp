@@ -74,12 +74,12 @@ def normalize_ci_handoff(handoff: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(handoff, Mapping):
         raise CiHandoffStateError("handoff must be an object")
     return build_ci_pending_handoff(
-        pr_number=handoff.get("pr_number"),
-        head_sha=handoff.get("head_sha"),
+        pr_number=_positive_int(handoff.get("pr_number"), "pr_number"),
+        head_sha=_required_string(handoff.get("head_sha"), "head_sha"),
         local_validation=handoff.get("local_validation", []),
-        review_state=handoff.get("review_state"),
+        review_state=_required_string(handoff.get("review_state"), "review_state"),
         pending_checks=handoff.get("pending_checks", []),
-        next_closure_action=handoff.get("next_closure_action"),
+        next_closure_action=_required_string(handoff.get("next_closure_action"), "next_closure_action"),
         issue_number=handoff.get("issue_number"),
         repo=handoff.get("repo"),
         recorded_at=handoff.get("recorded_at"),
@@ -200,12 +200,12 @@ def _normalize_check(check: Mapping[str, Any]) -> dict[str, Any]:
         conclusion = None
     else:
         conclusion = _required_string(conclusion, "check.conclusion").lower()
-    normalized = {
+    normalized: dict[str, Any] = {
         "name": name,
         "status": status,
         "conclusion": conclusion,
     }
-    check_id = check.get("id")
+    check_id: object = check.get("id")
     if isinstance(check_id, (int, str)) and not isinstance(check_id, bool):
         normalized["id"] = check_id
     started_at = check.get("started_at", check.get("startedAt"))

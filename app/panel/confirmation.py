@@ -871,6 +871,7 @@ class PanelConfirmationService:
 
         is_corrected = bool(request.correction and request.correction.enabled)
         correction_note = "corrected" if is_corrected else None
+        receipt_id: str | None
 
         if all_logged and not any_triggered:
             # Logged outcome: emit panel.action.logged if not already present

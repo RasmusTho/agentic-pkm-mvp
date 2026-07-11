@@ -76,7 +76,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from app.curation.findings import CurationFinding, FindingClass, LanguageVerdict, track_for_class
 from app.curation.proposal_writer import write_curation_proposals
@@ -201,7 +201,7 @@ class ContradictionPassReport:
     denials: tuple[str, ...] = ()  # content-free denial reasons only (KERNEL-10)
 
 
-def _claim_from_hit(hit, *, anchor_scope: str | None) -> ContradictionClaim:
+def _claim_from_hit(hit: Any, *, anchor_scope: str | None) -> ContradictionClaim:
     payload = hit.payload or {}
     rel_path = hit.source_ref or payload.get("path")
     rel_path = str(rel_path) if rel_path else None

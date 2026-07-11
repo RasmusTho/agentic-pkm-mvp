@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping, cast
 
 import click
 
@@ -922,6 +922,7 @@ def completeness_report_check(
     learning_log_file: Path | None,
     as_json: bool,
 ) -> None:
+    records: list[Any]
     candidates: list[Mapping[str, Any]] = []
     if records_file is not None:
         payload = _load_json_value_file(records_file, field="records-file")
@@ -929,7 +930,7 @@ def completeness_report_check(
             records = payload
             storage = {"available": True, "source": str(records_file), "record_count": len(records)}
         elif isinstance(payload, dict) and isinstance(payload.get("records"), list):
-            records = payload["records"]
+            records = cast(list[Any], payload["records"])
             candidates = _completeness_report_candidates(payload)
             storage = {"available": True, "source": str(records_file), "record_count": len(records)}
         else:
@@ -938,7 +939,8 @@ def completeness_report_check(
         db_path = ctx.obj.get("db_path") if ctx.obj else None
         if db_path is None:
             db_path = load_paths().db_path
-        records, storage = load_records_from_db(Path(db_path))
+        loaded_records, storage = load_records_from_db(Path(db_path))
+        records = list(loaded_records or [])
 
     learning_log_text = (
         learning_log_file.read_text(encoding="utf-8")
@@ -1064,6 +1066,7 @@ def ready_repair_batch_plan(
     apply_repairs: bool,
     as_json: bool,
 ) -> None:
+    issues: Any
     payload = _load_json_value_file(children_file, field="children-file")
     if isinstance(payload, list):
         issues = payload
@@ -1311,7 +1314,7 @@ def lifecycle_plan(
             transition=transition,
             issue=issue,
             pull_request=pull_request,
-            checks=checks,
+            checks=cast(Iterable[Mapping[str, Any]], checks or []),
             actor=actor,
             repo=repo,
         )
@@ -1468,7 +1471,7 @@ def record_ci_handoff(
             head_sha=_extract_pr_head_sha(pull_request),
             local_validation=validation_commands,
             review_state=review_state,
-            pending_checks=pending_check_summary(checks),
+            pending_checks=pending_check_summary(cast(Iterable[Mapping[str, Any]], checks or [])),
             next_closure_action=next_closure_action,
             issue_number=issue_number,
             repo=repo,
@@ -1560,7 +1563,7 @@ def resume_ci_handoff_plan(
         plan = plan_ci_handoff_resume(
             handoff=handoff,
             live_pr=pull_request,
-            checks=checks,
+            checks=cast(Iterable[Mapping[str, Any]], checks or []),
         )
     except (CiHandoffStateError, EpicRunStateError, FileNotFoundError) as exc:
         raise click.ClickException(str(exc)) from exc
