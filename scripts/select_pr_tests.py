@@ -178,6 +178,20 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/events", "tests/receipts", "tests/contracts"),
     ),
     (
+        "heimdal_mimer",
+        (
+            "app/heimdal/",
+            "app/knowledge_acquisition/",
+            "docs/HEIMDAL/",
+            "docs/KARAKEEP_MIMER_ACQUISITION/",
+            "docs/KNOWLEDGE_ACQUISITION/",
+            "docs/EVENTS.md",
+            "tests/heimdal/",
+            "tests/knowledge_acquisition/",
+        ),
+        ("tests/heimdal", "tests/knowledge_acquisition"),
+    ),
+    (
         "promotion_panel",
         (
             "app/agents/panel_agent/",
