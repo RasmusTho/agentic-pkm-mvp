@@ -249,6 +249,8 @@ class MemoryVectorIndex(VectorIndex):
                 "embedding": list(entry.embedding or []),
                 "model": entry.model,
                 "provider": entry.identity.provider if entry.identity else None,
+                "dim": entry.identity.dim if entry.identity else None,
+                "normalize": entry.identity.normalize if entry.identity else None,
             }
             for entry in sorted(self._entries.values(), key=lambda e: e.seq)
         ]

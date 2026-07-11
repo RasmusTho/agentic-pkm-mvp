@@ -61,6 +61,7 @@ def _snapshot_store(store) -> List[dict]:
             "language": doc.language,
             "source_ref": doc.source_ref,
             "payload": doc.payload,
+            "embedding": doc.embedding,
         }
         for doc in store.all()
     ]

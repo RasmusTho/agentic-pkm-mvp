@@ -691,7 +691,7 @@ class PgVectorIndex(VectorIndex):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT object_id, kind, source_ref, payload, embedding, model, provider
+                    SELECT object_id, kind, source_ref, payload, embedding, model, provider, dim, normalize
                     FROM store_vector_index
                     ORDER BY updated_at
                     """
@@ -706,6 +706,8 @@ class PgVectorIndex(VectorIndex):
                 "embedding": coerce_floats(row["embedding"] or []),
                 "model": row["model"],
                 "provider": row["provider"],
+                "dim": row["dim"],
+                "normalize": row["normalize"],
             }
             for row in rows
         ]
