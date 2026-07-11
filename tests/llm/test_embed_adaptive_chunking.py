@@ -17,6 +17,7 @@ import httpx
 import pytest
 
 from app.llm import embeddings as emb
+from app.llm import gemini_embeddings
 
 
 def _fake_5xx_response(status_code: int = 500) -> httpx.Response:
@@ -63,6 +64,34 @@ def test_transport_failures_do_not_bisect(error_factory) -> None:
         raise AssertionError("expected the original transport error to surface")
 
     assert calls == [2048]
+
+
+def test_gemini_wrapped_provider_5xx_bisects(monkeypatch) -> None:
+    """A Gemini HTTP 5xx retains enough response evidence to bisect."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    calls: list[int] = []
+
+    def fake_post(url, *, json, headers, timeout):
+        text = json["content"]["parts"][0]["text"]
+        calls.append(len(text))
+        request = httpx.Request("POST", url)
+        if len(text) > 900:
+            return httpx.Response(500, request=request, json={"error": {"status": "INTERNAL"}})
+        return httpx.Response(200, request=request, json={"embedding": {"values": [0.5] * 8}})
+
+    monkeypatch.setattr(gemini_embeddings.httpx, "post", fake_post)
+
+    vectors = emb._embed_chunk_with_bisect(
+        "x" * 1200,
+        gemini_embeddings.embed_gemini_text,
+        model="gemini-embedding-001",
+        dim=8,
+        timeout=1,
+        floor_chars=256,
+    )
+
+    assert len(vectors) == 2
+    assert calls == [1200, 600, 600]
 
 
 def test_provider_5xx_chunk_bisects_and_completes(monkeypatch) -> None:

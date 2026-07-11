@@ -263,16 +263,19 @@ def _is_provider_5xx_error(exc: BaseException) -> bool:
     """Return True for a provider 5xx response worth bisecting.
 
     Provider-agnostic by construction (no ollama-specific token counting): this
-    inspects only response status. Transport failures, timeouts, 408/429
-    responses, and app-local ``is_transient`` markers do not establish that the
-    content caused the failure, so they must surface to ``embed_with_retry``
-    without recursively multiplying adapter attempts.
+    inspects response status, including an adapter-preserved ``status_code`` on
+    a wrapped provider error. Transport failures, timeouts, 408/429 responses,
+    and app-local ``is_transient`` markers without response status do not
+    establish that the content caused the failure, so they must surface to
+    ``embed_with_retry`` without recursively multiplying adapter attempts.
     """
     for current in (exc, getattr(exc, "__cause__", None), getattr(exc, "__context__", None)):
         if current is None:
             continue
         response = getattr(current, "response", None)
         status_code = getattr(response, "status_code", None)
+        if status_code is None:
+            status_code = getattr(current, "status_code", None)
         if status_code is None:
             continue
         try:

@@ -66,10 +66,16 @@ class GeminiTransientError(RuntimeError):
 
     Carries the ``is_transient = True`` marker so the embedding queue's
     ``_is_transient_embed_error`` retries/backs-off these even though this is an
-    app-local class with no httpx response/chain (HTTP 429/5xx path).
+    app-local class with no httpx response/chain (HTTP 429/5xx path). Response
+    failures retain their status code so the adaptive chunk-bisect seam can
+    distinguish content-shaped provider 5xx errors from transport failures.
     """
 
     is_transient = True
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class GeminiAuthError(RuntimeError):
@@ -250,7 +256,7 @@ def embed_gemini_text(
         if status in (408, 429) or status >= 500:
             # 408 (request timeout) and 429 (rate limit) are retryable, matching the
             # shared transient classifier (app/workers/outbox_worker.py).
-            raise GeminiTransientError(summary)
+            raise GeminiTransientError(summary, status_code=status)
         # 401, 403, 400 (bad key), and any other 4xx → auth / config error
         raise GeminiAuthError(summary)
 
