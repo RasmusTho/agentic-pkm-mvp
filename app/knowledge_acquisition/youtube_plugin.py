@@ -421,7 +421,7 @@ def fetch(item_ref_or_url: str) -> FetchOutcome:
         caption_language = asr_transcript.get("language")
         caption_body = asr_transcript.get("text")
 
-    payload = {
+    payload: dict[str, Any] = {
         "source_kind": SOURCE_KIND,
         "item_ref": video_id,
         "url": item_ref_or_url,
@@ -443,7 +443,7 @@ def fetch(item_ref_or_url: str) -> FetchOutcome:
         # above (identical top-level schema); this additive field carries the
         # ASR quality note + timed segments the normalize stage (KA-03) reads
         # for the ASR path, per REFINEMENT_PIPELINE_CONTRACT.md § normalized.
-        payload["asr_segments"] = asr_transcript.get("segments") or []
+        payload["asr_segments"] = list(asr_transcript.get("segments") or [])
         payload["quality_note"] = (
             "asr: local faster-whisper transcription (fallback; no caption track available)"
         )

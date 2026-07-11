@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -117,6 +118,22 @@ def _assert_check_metadata(payload: dict) -> None:
     assert "providers" in checks["llm_providers"]
     assert "obsidian" in checks
     assert "required" in checks["obsidian"]
+
+
+def test_health_endpoint_does_not_block_event_loop(monkeypatch) -> None:
+    def slow_run_health() -> dict[str, object]:
+        time.sleep(0.2)
+        return {"ok": True}
+
+    monkeypatch.setattr(health_route, "run_health", slow_run_health)
+
+    async def assert_nonblocking() -> None:
+        health_task = asyncio.create_task(health_route.health())
+        await asyncio.sleep(0.01)
+        assert not health_task.done()
+        assert await health_task == {"ok": True}
+
+    asyncio.run(assert_nonblocking())
 
 
 def test_health_success(monkeypatch, tmp_path) -> None:

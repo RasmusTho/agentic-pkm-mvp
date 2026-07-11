@@ -112,7 +112,7 @@ def _resolve_proxy_host_addresses(name: str) -> tuple[str, ...]:
     except (socket.gaierror, OSError):
         addresses: tuple[str, ...] = ()
     else:
-        addresses = tuple({info[4][0] for info in infos})
+        addresses = tuple({str(info[4][0]) for info in infos})
     _proxy_dns_cache[name] = (now, addresses)
     return addresses
 

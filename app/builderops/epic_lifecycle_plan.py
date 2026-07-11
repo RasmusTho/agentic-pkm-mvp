@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 SCHEMA_VERSION = 1
 PROJECT_TITLE = "Agent Delivery Control Plane"
@@ -69,7 +69,7 @@ def _empty_plan(
     transition: str,
     issue: Mapping[str, Any],
     pull_request: Mapping[str, Any] | None,
-    checks: list[Mapping[str, Any]],
+    checks: Sequence[Mapping[str, Any]],
     actor: str | None,
     repo: str,
 ) -> dict[str, Any]:
@@ -278,7 +278,7 @@ def _plan_done(
     issue: Mapping[str, Any],
     pull_request: Mapping[str, Any] | None,
     *,
-    checks: list[Mapping[str, Any]],
+    checks: Sequence[Mapping[str, Any]],
     repo: str,
 ) -> None:
     issue_number = issue["number"]
@@ -305,7 +305,7 @@ def _plan_done(
     else:
         plan["authority_notes"].append("No PR supplied; done planning uses Issue state only.")
 
-    check_verdict = _check_verdict(checks)
+    check_verdict = _check_verdict(list(checks))
     issue_terminal = issue["state"] == "CLOSED"
     if check_verdict == "failed":
         plan["blocked_reasons"].append("ci-checks-not-green")

@@ -77,6 +77,7 @@ _MIGRATION_HINT = (
 # would introduce additional reason values when it lands -- declared, not
 # silently precluded.
 REASON_HARD_RETENTION_BOUND = "hard_retention_bound"
+REASON_SCREEN_FRAME_RETENTION_BUFFER = "screen_frame_retention_buffer"
 
 
 class RetentionWindowMissingError(RuntimeError):
@@ -182,6 +183,28 @@ def resolve_retention_window_days(
             "_heimdal/settings.md and cannot resolve a retention window without a bound vault."
         )
     return _resolve_retention_window_days(root, settings_dir=settings_dir)
+
+
+def resolve_screen_frame_retention_minutes(
+    vault_root: Optional[Path] = None, *, settings_dir: str = DEFAULT_SETTINGS_DIR
+) -> int:
+    """Resolve SCREEN-01's short raw-frame buffer without inventing a default."""
+    from app.config.paths import resolve_optional_vault_root
+
+    root = vault_root if vault_root is not None else resolve_optional_vault_root()
+    if root is None:
+        raise RetentionWindowMissingError("No vault root configured for screen_frame_retention_minutes")
+    note = read_settings_note(root, SETTINGS, settings_dir=settings_dir)
+    raw_value = note.values.get("screen_frame_retention_minutes") if note is not None else None
+    try:
+        minutes = int(str(raw_value))
+    except (TypeError, ValueError) as exc:
+        raise RetentionWindowMissingError(
+            "_heimdal/settings.md must set a positive screen_frame_retention_minutes; no default is safe"
+        ) from exc
+    if minutes <= 0:
+        raise RetentionWindowMissingError("screen_frame_retention_minutes must be a positive integer")
+    return minutes
 
 
 # ---------------------------------------------------------------------------
@@ -483,15 +506,46 @@ def enforce_hard_retention_bound(
     )
 
 
+def enforce_screen_frame_retention(
+    *, vault_root: Optional[Path] = None, settings_dir: str = DEFAULT_SETTINGS_DIR,
+    now: Optional[datetime] = None,
+) -> RetentionEnforcementReceipt:
+    """Hard-delete only aged screen-frame records through the shared raw store.
+
+    The existing receipt table's historical `retention_window_days` column is
+    retained for compatibility; the exact minute bound is recorded in the
+    receipt payload for this SCREEN-01-specific reason.
+    """
+    minutes = resolve_screen_frame_retention_minutes(vault_root, settings_dir=settings_dir)
+    reference_time = now if now is not None else datetime.now(timezone.utc)
+    cutoff = reference_time - timedelta(minutes=minutes)
+    deletions: List[DeletionReceipt] = []
+    for record in raw_store.all_raw_records():
+        if record.payload.get("modality") != "screen":
+            continue
+        ingested_at = record.ingested_at if record.ingested_at.tzinfo else record.ingested_at.replace(tzinfo=timezone.utc)
+        if ingested_at >= cutoff or not raw_store.hard_delete_raw_record(record.id):
+            continue
+        deletions.append(_backend().append(DeletionReceipt(
+            id=str(uuid4()), record_id=record.id, content_identity=record.content_identity,
+            reason=REASON_SCREEN_FRAME_RETENTION_BUFFER, retention_window_days=0,
+            deleted_at=reference_time, payload={"screen_frame_retention_minutes": minutes}, sequence=-1,
+        )))
+    return RetentionEnforcementReceipt(deleted_count=len(deletions), retention_window_days=0, deletions=tuple(deletions))
+
+
 __all__ = [
     "AppendOnlyViolationError",
     "DeletionReceipt",
     "DeletionReceiptSchemaMissingError",
     "REASON_HARD_RETENTION_BOUND",
+    "REASON_SCREEN_FRAME_RETENTION_BUFFER",
     "RetentionEnforcementReceipt",
     "RetentionWindowMissingError",
     "all_deletion_receipts",
     "enforce_hard_retention_bound",
     "reset_memory_deletion_receipts",
     "resolve_retention_window_days",
+    "resolve_screen_frame_retention_minutes",
+    "enforce_screen_frame_retention",
 ]

@@ -264,6 +264,28 @@ def test_browse_symlink_loop_does_not_500(client: TestClient, browse_base: Path)
     assert "loop" not in [entry["name"] for entry in parent.json()["entries"]]
 
 
+def test_browse_symlink_loop_is_rejected_when_resolve_does_not_raise(
+    client: TestClient, browse_base: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-strict resolve implementation must not turn a symlink loop into 404.
+
+    Python 3.14 can return the unresolved loop from ``Path.resolve()``.  Model
+    that behavior directly so this version-independent 400 contract remains
+    covered while the suite runs on older supported interpreters.
+    """
+    loop = browse_base / "loop"
+    try:
+        loop.symlink_to(loop, target_is_directory=True)
+    except (OSError, NotImplementedError):  # pragma: no cover - platform without symlinks
+        pytest.skip("symlinks not supported on this platform")
+
+    monkeypatch.setattr(Path, "resolve", lambda self: self)
+
+    response = client.get("/api/companion/vault/browse", params={"path": str(loop)})
+
+    assert response.status_code == 400, response.text
+
+
 def test_browse_base_symlink_loop_degrades_without_raising(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
