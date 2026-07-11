@@ -62,6 +62,25 @@ def test_watcher_change_selects_only_watcher_owned_e2e_files() -> None:
     assert "tests/e2e" not in selection.targets
 
 
+def test_runtime_health_change_has_a_ci_owner() -> None:
+    selection = select_tests(
+        [
+            "app/runtime/health_probe.py",
+            "app/cli/health.py",
+            "docker-compose.yaml",
+            "tests/invariants/test_health_probe.py",
+            "docs/OBSERVABILITY_STABILIZATION/CONTAINER_HEALTH_SIGNALS.md",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("runtime_health",)
+    assert selection.unowned_paths == ()
+    assert "tests/health" in selection.targets
+    assert "tests/invariants" in selection.targets
+    assert "tests/api" in selection.targets
+
+
 def test_shared_panel_watcher_e2e_file_selects_both_owning_subsystems() -> None:
     selection = select_tests(["tests/e2e/test_panel_watcher_e2e.py"])
 
@@ -292,6 +311,23 @@ def test_llm_runtime_configuration_change_selects_llm_coverage() -> None:
     assert selection.full_suite is False
     assert selection.subsystems == ("llm_eval",)
     assert "tests/llm" in selection.targets
+
+
+def test_voice_contract_and_runtime_change_selects_voice_coverage() -> None:
+    selection = select_tests(
+        [
+            "app/voice/transcription.py",
+            "tests/voice/test_transcription_sharing.py",
+            "docs/MIMER_VOICE_LOOP/SHARE_TRANSCRIPTION_CAPABILITY.md",
+            "docs/contracts/MIMER_CLIENT_CONTRACT.md",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("voice",)
+    assert selection.unowned_paths == ()
+    assert "tests/voice" in selection.targets
+    assert "tests/voice/test_transcription_sharing.py" in selection.targets
 
 
 def test_builder_system_change_selects_its_own_regression_tests() -> None:

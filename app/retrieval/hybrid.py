@@ -352,7 +352,8 @@ def rebuild_from_durable_index(*, force: bool = False) -> int:
     first time scores are computed (fail-safe, logged, never a crash).
 
     ADR-0059 step 3 (mixed-identity observability, #3406): each row's
-    recorded ``provider``/``model`` is compared against the active primary
+    recorded full embedding identity (``provider``, ``model``, ``dim``, and
+    ``normalize``) is compared against the active primary
     embedding identity (resolved the same way the write path resolves its
     default — ``get_embedding_identity()``, see ``app/stores/pg.py``). Rows
     that diverge are CTI-2 reconcilable fallback writes; they are counted
@@ -376,16 +377,23 @@ def rebuild_from_durable_index(*, force: bool = False) -> int:
     docs: list[dict] = []
     missing_embeddings = 0
     mixed_identity_count = 0
-    mixed_identity_tuples: set[tuple[Any, Any]] = set()
+    mixed_identity_tuples: set[tuple[Any, Any, Any, Any]] = set()
     for row in index.all_rows():
-        row_provider = row.get("provider")
-        row_model = row.get("model")
-        if (row_provider or row_model) and (row_provider, row_model) != (
+        row_identity = (
+            row.get("provider"),
+            row.get("model"),
+            row.get("dim"),
+            row.get("normalize"),
+        )
+        active_identity_tuple = (
             active_identity.provider,
             active_identity.model,
-        ):
+            active_identity.dim,
+            active_identity.normalize,
+        )
+        if any(value is not None for value in row_identity) and row_identity != active_identity_tuple:
             mixed_identity_count += 1
-            mixed_identity_tuples.add((row_provider, row_model))
+            mixed_identity_tuples.add(row_identity)
         payload = row.get("payload") or {}
         text = _row_text(payload)
         if not text:
@@ -613,13 +621,18 @@ def _weighted_rrf_combined(
     """
     weights = tuning.rrf_signal_weights
     rrf_k = tuning.rrf_k
-    bm25_rank = _rrf_ranks(bm25_raw)
-    emb_rank = _rrf_ranks(emb_raw)
-    overlap_rank = _rrf_ranks(overlap_bonus)
+    def _contribution(raw_scores: np.ndarray, weight: float) -> np.ndarray:
+        # An all-zero list is absence of signal, not a tied ranking. Assigning
+        # sequential ranks would inject store order into RRF and can outweigh
+        # actual dense evidence (#3432).
+        if not np.any(np.asarray(raw_scores, dtype=np.float32)):
+            return np.zeros(len(raw_scores), dtype=np.float32)
+        return weight / (rrf_k + _rrf_ranks(raw_scores))
+
     rrf_scores = (
-        weights.lexical / (rrf_k + bm25_rank)
-        + weights.dense / (rrf_k + emb_rank)
-        + _RRF_OVERLAP_WEIGHT / (rrf_k + overlap_rank)
+        _contribution(bm25_raw, weights.lexical)
+        + _contribution(emb_raw, weights.dense)
+        + _contribution(overlap_bonus, _RRF_OVERLAP_WEIGHT)
     ).astype(np.float32)
     return _normalize(rrf_scores)
 

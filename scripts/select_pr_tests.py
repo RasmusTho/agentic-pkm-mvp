@@ -130,6 +130,19 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/watcher", "tests/sync", *E2E_TARGETS["watcher_sync"]),
     ),
     (
+        "runtime_health",
+        (
+            "app/runtime/health_probe.py",
+            "app/cli/health.py",
+            "docker-compose.yaml",
+            "tests/health/",
+            "tests/invariants/test_health_probe.py",
+            "tests/invariants/test_health_heartbeat_visibility.py",
+            "docs/OBSERVABILITY_STABILIZATION/",
+        ),
+        ("tests/health", "tests/invariants", "tests/api"),
+    ),
+    (
         "orchestration",
         (
             "app/orchestrator/",
@@ -171,6 +184,16 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/e2e/test_panel_llm_e2e.py",
         ),
         ("tests/llm", "tests/eval", "tests/evals", *E2E_TARGETS["llm_eval"]),
+    ),
+    (
+        "voice",
+        (
+            "app/voice/",
+            "tests/voice/",
+            "docs/MIMER_VOICE_LOOP/",
+            "docs/contracts/MIMER_CLIENT_CONTRACT.md",
+        ),
+        ("tests/voice",),
     ),
     (
         "events_receipts",

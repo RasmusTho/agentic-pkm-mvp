@@ -1,6 +1,6 @@
-State: Draft (advisory groundwork, 2026-07-04). The owner-reserved decision list for Heimdal: what Fable may NOT decide, plus the owner decisions captured in the 2026-07-04 session. Advisory until enacted through CES/ADR; creates no runtime behavior and no GitHub work.
-Doc role: Owner-decision register (Draft)
-Authority: Authoritative for which Heimdal decisions are reserved to the owner and for the recorded state of each captured decision. Subordinate to the ADRs/contracts that later enact any of these. Claims no shipped reality.
+State: Active owner-decision register (opened 2026-07-04; reconciled 2026-07-11). Records the owner-reserved Heimdal calls and their durable decisions. Decisions enacted by ADR remain decision authority here only through their concise register entries; this document does not enact runtime behavior or create consent grants.
+Doc role: Owner-decision register
+Authority: Authoritative for which Heimdal decisions are reserved to the owner and for the concise recorded state of each captured decision. The cited ADRs remain the detailed decision records and current runtime docs remain authoritative for shipped behavior.
 Owner: Rasmus (owner) — CES stewardship records
 Temporal class: strategic
 Review cadence: event-driven
@@ -46,7 +46,7 @@ by this groundwork.
 | **D-NAME-WHOLE** | Yggdrasil = whole vs. constituent | **Yggdrasil = the whole (world-tree / SoS).** Knowledge/memory constituent = **Munin**; agent-runtime = **Hugin** (`Mimer`→`Munin` concept rename) | ADR-0043 |
 | **D-NAME-SENSOR** | Sensor name vs. `Heimdal`/observability collision | **Sensor keeps `Heimdal`;** observability alias reverts to boundary code `OEF` (one glossary edit, no shipped code) | ADR-0043 |
 | **D-ADR41-TIMING** | Bundle Heimdal naming with ADR-0041 enactment? | **No — separate.** Heimdal naming is ADR-0043; ADR-0041/0042 enactment (#2855/#2856) stays independent | ADR-0043 |
-| **D-CONSENT** | Consent / always-on posture | **Single-party consent; always-on capture OFF by default (opt-in per place/session); third parties marked/degraded** | Charter FIXED #4 |
+| **D-CONSENT** | Consent / capture posture | **B-full is the accepted target posture, but capture activation remains gated.** Consent stays opt-in per place/session; ungranted third parties are marked/degraded. Voiceprint consent is split: the operator's own voiceprint extends `self_record`; each third-party voiceprint requires its own consent-linked, per-person identity grant. | [ADR-0060](../adr/ADR-0060-capture-posture-b-full-voice-identity.md) §1–§4 |
 | **D-PRIVACY** | Raw-layer privacy seam | **Raw layer encrypted at rest + isolated; access policy-gated (CrossScopeFlow-grant) for trusted downstream agents (not human-only); only minimized, attributed events cross the seam by default** | Charter FIXED #5 |
 | **D-IDENTITY** | Entity/identity register topology | **Shared Layer-2 platform substrate** (no single constituent owns canonical identity) | SoS model §5; Charter FIXED #6 |
 | **D-RETENTION** | Retention / decay model | **Event-triggered relevance decay (primary) + bounded hard retention on the raw layer** | Charter FIXED #7 |

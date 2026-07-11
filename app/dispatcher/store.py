@@ -79,13 +79,23 @@ class SqliteStore:
         Runs on every connection, not just :meth:`initialize` — a long-lived
         shared instance (e.g. the Demerzel dispatcher) is never re-``init``ed
         once its DB file exists, so a migration reachable only from
-        ``initialize()`` would never execute against it. SQLite lacks a
-        portable ``ADD COLUMN IF NOT EXISTS``; the same try/except idiom used
-        for Postgres ``ADD COLUMN IF NOT EXISTS`` elsewhere (see
-        ``app/stores/pg.py``) applies here in SQLite form. Cached via
+        ``initialize()`` would never execute against it. Cached via
         ``self._schema_ensured`` so a tight loop of many ``_connect()`` calls
         (e.g. one dispatcher ``pull`` upserting hundreds of issues) pays the
-        check once per process, not once per row.
+        cheap outer check once per process, not once per row.
+
+        The migration itself (ADD COLUMN + two backfill UPDATEs) runs inside
+        one explicit ``BEGIN IMMEDIATE`` transaction, committed or rolled back
+        together: ``ALTER TABLE`` autocommits immediately outside an explicit
+        transaction in Python's sqlite3 driver, so without this a crash
+        between the ALTER and the backfill UPDATEs would permanently strand
+        legacy rows with ``repo=''`` (the column-exists check has nothing
+        left to detect). ``BEGIN IMMEDIATE`` also takes SQLite's write lock
+        up front, so a second process racing this same migration blocks
+        until the first finishes rather than hitting "duplicate column name"
+        on its own ``ALTER TABLE`` — the column check is re-run *after*
+        acquiring the lock (not just before) so the loser sees the column
+        already present and skips straight to committing a no-op.
         """
         exists = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='dispatcher_tasks'"
@@ -94,33 +104,44 @@ class SqliteStore:
             # Fresh DB: initialize() will create the table via DDL_STATEMENTS,
             # which already includes the repo column — nothing to migrate.
             return
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(dispatcher_tasks)")}
-        if "repo" in columns:
+        if "repo" in {row["name"] for row in conn.execute("PRAGMA table_info(dispatcher_tasks)")}:
             return
-        conn.execute("ALTER TABLE dispatcher_tasks ADD COLUMN repo TEXT NOT NULL DEFAULT ''")
-        # The legacy task_id format (pre-multi-repo) had no repo qualifier and
-        # was only ever produced for RasmusTho/agentic-pkm-mvp pulls; backfill
-        # repo and re-key task_id to the current repo-qualified form so these
-        # rows don't linger as orphaned duplicates the moment a pull runs
-        # under the new scheme. Also re-key the matching event-log rows so
-        # historical events stay joinable to the renamed task.
-        conn.execute(
-            """
-            UPDATE dispatcher_tasks
-            SET repo = 'RasmusTho/agentic-pkm-mvp',
-                task_id = 'github-RasmusTho--agentic-pkm-mvp-issue-' || issue_number
-            WHERE task_id LIKE 'github-issue-%'
-            """
-        )
-        conn.execute(
-            """
-            UPDATE dispatcher_events
-            SET task_id = 'github-RasmusTho--agentic-pkm-mvp-issue-'
-                || substr(task_id, length('github-issue-') + 1)
-            WHERE task_id LIKE 'github-issue-%'
-            """
-        )
-        conn.commit()
+
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # Re-check under the write lock: another process may have
+            # completed this same migration between our check above and
+            # acquiring the lock here.
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(dispatcher_tasks)")}
+            if "repo" not in columns:
+                conn.execute("ALTER TABLE dispatcher_tasks ADD COLUMN repo TEXT NOT NULL DEFAULT ''")
+                # The legacy task_id format (pre-multi-repo) had no repo
+                # qualifier and was only ever produced for
+                # RasmusTho/agentic-pkm-mvp pulls; backfill repo and re-key
+                # task_id to the current repo-qualified form so these rows
+                # don't linger as orphaned duplicates the moment a pull runs
+                # under the new scheme. Also re-key the matching event-log
+                # rows so historical events stay joinable to the renamed task.
+                conn.execute(
+                    """
+                    UPDATE dispatcher_tasks
+                    SET repo = 'RasmusTho/agentic-pkm-mvp',
+                        task_id = 'github-RasmusTho--agentic-pkm-mvp-issue-' || issue_number
+                    WHERE task_id LIKE 'github-issue-%'
+                    """
+                )
+                conn.execute(
+                    """
+                    UPDATE dispatcher_events
+                    SET task_id = 'github-RasmusTho--agentic-pkm-mvp-issue-'
+                        || substr(task_id, length('github-issue-') + 1)
+                    WHERE task_id LIKE 'github-issue-%'
+                    """
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
     def initialize(self) -> None:
         with self._connect() as conn:

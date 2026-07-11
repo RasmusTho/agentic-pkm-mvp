@@ -65,10 +65,10 @@ def reset_retrieval_tuning_cache() -> None:
 
 
 def _base_tuning() -> RetrievalTuning:
-    try:
-        return get_settings_bundle().retrieval_tuning
-    except Exception:
-        return RetrievalTuning()
+    # The runtime settings bundle is the authoritative typed configuration
+    # surface. Do not downgrade a malformed runtime file to defaults here:
+    # callers of the actual retrieval resolver must fail just as startup does.
+    return get_settings_bundle().retrieval_tuning
 
 
 def _parse_int(raw: str, *, env_key: str) -> int:
