@@ -151,3 +151,22 @@ def test_rrf_top1_in_every_signal_wins_by_construction() -> None:
 
     combined = hybrid._weighted_rrf_combined(bm25, emb, overlap, _Tuning())  # noqa: SLF001
     assert int(np.argmax(combined)) == 0
+
+
+def test_rrf_no_signal_lists_do_not_inject_store_order() -> None:
+    """All-zero lexical/overlap lists carry no rank evidence, so their tied
+    store order must not outweigh the dense signal."""
+    bm25 = np.zeros(2, dtype=np.float32)
+    overlap = np.zeros(2, dtype=np.float32)
+    emb = np.array([0.1, 0.9], dtype=np.float32)
+
+    class _Weights:
+        lexical = 1.0
+        dense = 0.8
+
+    class _Tuning:
+        rrf_signal_weights = _Weights()
+        rrf_k = 60
+
+    combined = hybrid._weighted_rrf_combined(bm25, emb, overlap, _Tuning())  # noqa: SLF001
+    assert int(np.argmax(combined)) == 1

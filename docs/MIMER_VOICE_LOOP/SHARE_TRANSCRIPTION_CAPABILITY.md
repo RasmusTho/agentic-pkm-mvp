@@ -51,6 +51,15 @@ If the voice path grows its own transcriber, the system pays for two whisper mod
   - **ADR-0056 (client contract + transport set): CONFORM.** The engine is not a client transport; it is internal. VOICE-01 adds the *endpoint* to the contract's HTTP-API transport; this task adds no transport and reopens nothing (ADR-0047 MCP deferral untouched).
 - **No reshape.** No boundary, charter, contract, or ADR is altered; the single design fact being formalized (one shared ASR engine) already ships and is already the recorded intent (`FABLE_COMPANION` §5.2/§9-j).
 
+### Implemented voice-side seam
+
+`app/voice/transcription.py::transcribe_voice_wav` is the Mimer-side adapter.
+It writes the request's WAV bytes only to a temporary `.wav`, calls
+`app.media.transcribe.run_asr` directly, then deletes the file in `finally`.
+It does not import or call the Heimdal raw-read gate, create a raw record, or
+own a Whisper model. Local-engine failure is surfaced as
+`LocalAsrUnavailableError`; there is no cloud fallback or language pin.
+
 ## Acceptance Criteria
 
 - [ ] AC1 (enforcement): the voice-ask path resolves its transcription to `app/media/transcribe.py::run_asr` — asserted at the voice path's production call site, not merely that `run_asr` exists. Verify: `tests/voice/test_transcription_sharing.py::test_voice_path_calls_shared_run_asr`

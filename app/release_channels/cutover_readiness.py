@@ -441,8 +441,9 @@ def _load_migrations(migrations_dir: Path) -> dict[str, MigrationInfo]:
         revision = _literal_assignment(text, "revision")
         if not revision:
             continue
-        migrations[revision] = MigrationInfo(
-            revision=revision,
+        revision_value = str(revision)
+        migrations[revision_value] = MigrationInfo(
+            revision=revision_value,
             down_revisions=_revision_tuple(_literal_assignment(text, "down_revision")),
             filename=path.name,
             path=path,

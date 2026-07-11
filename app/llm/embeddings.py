@@ -241,10 +241,6 @@ def _chunk_for_embedding(text: str, max_chars: int) -> List[str]:
 # failure into a smaller, still in-window request instead of giving up on the
 # object.
 
-_TRANSIENT_NETWORK_MODULE_PREFIXES = ("httpx", "requests", "urllib3")
-_TRANSIENT_HTTP_STATUS_CODES = {408, 429}
-
-
 def _embed_min_chunk_chars() -> int:
     """Floor below which a chunk is no longer bisected on provider 5xx.
 
@@ -264,40 +260,29 @@ def _embed_min_chunk_chars() -> int:
 
 
 def _is_provider_5xx_error(exc: BaseException) -> bool:
-    """Return True for a provider response/transport error shaped like an
-    oversize-content failure worth bisecting.
+    """Return True for a provider 5xx response worth bisecting.
 
     Provider-agnostic by construction (no ollama-specific token counting): this
-    inspects the generic ``httpx`` exception shape (network module + status code)
-    plus the same ``is_transient = True`` marker protocol app-local provider
-    errors already use (e.g. ``GeminiTransientError`` in
-    ``app/llm/gemini_embeddings.py``, and the worker's
-    ``_is_transient_dispatch_error`` classifier in
-    ``app/workers/outbox_worker.py``). The status/marker logic is intentionally
-    duplicated in miniature here (not imported) because
-    ``app.workers.outbox_worker`` transitively imports back into
-    ``app.llm.embeddings`` (via ``app.indexer.consumer`` /
-    ``app.services.indexer``); importing it from this module would be circular.
+    inspects response status, including an adapter-preserved ``status_code`` on
+    a wrapped provider error. Transport failures, timeouts, 408/429 responses,
+    and app-local ``is_transient`` markers without response status do not
+    establish that the content caused the failure, so they must surface to
+    ``embed_with_retry`` without recursively multiplying adapter attempts.
     """
     for current in (exc, getattr(exc, "__cause__", None), getattr(exc, "__context__", None)):
         if current is None:
             continue
-        if getattr(current, "is_transient", None) is True:
-            return True
-        if isinstance(current, (httpx.ConnectError, httpx.TimeoutException)):
-            return True
         response = getattr(current, "response", None)
         status_code = getattr(response, "status_code", None)
         if status_code is None:
-            continue
-        module_name = type(current).__module__
-        if not module_name.startswith(_TRANSIENT_NETWORK_MODULE_PREFIXES):
+            status_code = getattr(current, "status_code", None)
+        if status_code is None:
             continue
         try:
             status_code = int(status_code)
         except (TypeError, ValueError):
             continue
-        if status_code >= 500 or status_code in _TRANSIENT_HTTP_STATUS_CODES:
+        if status_code >= 500:
             return True
     return False
 

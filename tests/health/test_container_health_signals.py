@@ -50,14 +50,14 @@ def _write_stale_heartbeat(path: Path) -> None:
     path.write_text(json.dumps({"ts": stale_ts, "status": "running"}), encoding="utf-8")
 
 
-def _run_probe(probe_snippet: str, env_overrides: dict[str, str]) -> subprocess.CompletedProcess:
-    """Execute a probe Python snippet as a subprocess so we get the real exit code."""
+def _run_probe(probe_command: list[str], env_overrides: dict[str, str]) -> subprocess.CompletedProcess:
+    """Execute the real compose probe command so we get its actual exit code."""
     import os
 
     env = os.environ.copy()
     env.update(env_overrides)
     return subprocess.run(
-        [sys.executable, "-c", probe_snippet],
+        [sys.executable, *probe_command[1:]],
         env=env,
         capture_output=True,
     )
@@ -71,24 +71,11 @@ def _load_compose() -> dict:
     return yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
 
 
-def _probe_snippet(service: str, compose: dict) -> str:
-    """Return the Python snippet that the service healthcheck runs (strips CMD-SHELL prefix)."""
+def _probe_command(service: str, compose: dict) -> list[str]:
+    """Return the direct-exec probe arguments from the real compose healthcheck."""
     test_cmd = compose["services"][service]["healthcheck"]["test"]
-    # test_cmd is ["CMD-SHELL", "<snippet>"]
-    assert test_cmd[0] == "CMD-SHELL", f"Expected CMD-SHELL for {service}, got {test_cmd[0]}"
-    raw = test_cmd[1]
-    # The snippet is a python -c "..." command; extract the Python body.
-    # Format: python -c "..." or python3 -c "..."
-    # We execute the full shell command as a Python snippet through subprocess,
-    # but for the freshness probes the snippet IS Python, so we extract and run it directly.
-    assert raw.startswith("python ") or raw.startswith("python3 "), (
-        f"Expected probe to start with python[-c] for {service}; got: {raw[:60]}"
-    )
-    # Strip the `python -c "..."` wrapper to get the inner expression
-    for prefix in ('python -c "', 'python3 -c "'):
-        if raw.startswith(prefix):
-            return raw[len(prefix) : -1]  # strip leading prefix and trailing "
-    raise AssertionError(f"Could not parse probe snippet for {service}: {raw}")
+    assert test_cmd == ["CMD", "python", "-m", "app.runtime.health_probe", service], test_cmd
+    return test_cmd[1:]
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +90,7 @@ def test_worker_unhealthy_on_stale_heartbeat(tmp_path: pytest.TempPathFactory) -
     exact probe snippet extracted from docker-compose.yaml.
     """
     compose = _load_compose()
-    probe = _probe_snippet("worker", compose)
+    probe = _probe_command("worker", compose)
 
     heartbeat_path = tmp_path / "worker_heartbeat.json"
     _write_stale_heartbeat(heartbeat_path)
@@ -135,7 +122,7 @@ def test_watcher_unhealthy_on_stale_heartbeat(tmp_path: pytest.TempPathFactory) 
     Freshness is keyed on the JSON ``ts`` field — NOT file mtime.
     """
     compose = _load_compose()
-    probe = _probe_snippet("watcher", compose)
+    probe = _probe_command("watcher", compose)
 
     heartbeat_path = tmp_path / "watcher_heartbeat.json"
     _write_stale_heartbeat(heartbeat_path)

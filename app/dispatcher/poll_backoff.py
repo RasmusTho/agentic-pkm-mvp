@@ -9,7 +9,7 @@ import email.utils
 import json
 import subprocess
 import time
-from typing import Any, Callable, Mapping, Protocol, TypeVar
+from typing import Any, Callable, Mapping, Protocol, TypeVar, cast
 
 from app.dispatcher.github_call_logger import is_kill_switch_active, log_github_call
 
@@ -94,11 +94,12 @@ def poll_until(
     *,
     policy: PollPolicy | None = None,
     clock: Clock = time.time,
-    sleeper: Sleeper = time.sleep,
+    sleeper: Sleeper | None = None,
 ) -> Any:
     """Poll until ``is_done`` returns true, respecting caps and GitHub backoff headers."""
 
     policy = policy or PollPolicy()
+    sleep_fn: Sleeper = sleeper if sleeper is not None else cast(Sleeper, time.sleep)
     start = clock()
     delay = policy.interval_seconds
     last_value: Any = None
@@ -118,7 +119,7 @@ def poll_until(
         requested = retry_after_seconds(response.headers, now=clock())
         sleep_for = requested if requested is not None else delay
         remaining = max(0.0, policy.max_elapsed_seconds - elapsed)
-        sleeper(min(sleep_for, remaining))
+        sleep_fn(min(sleep_for, remaining))
         delay = min(policy.max_interval_seconds, delay * policy.backoff_multiplier)
 
     raise TimeoutError(f"poll timed out; last={last_value!r}")
@@ -345,7 +346,7 @@ def _fetch_complete_codex_payload(
     *,
     max_pages: int = 100,
 ) -> Mapping[str, Any]:
-    payload = deepcopy(client(CODEX_VERDICT_QUERY, variables))
+    payload: dict[str, Any] = deepcopy(dict(client(CODEX_VERDICT_QUERY, variables)))
     cursor_vars = {
         "reviews": "reviewsCursor",
         "reviewThreads": "threadsCursor",

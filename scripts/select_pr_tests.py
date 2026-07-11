@@ -116,6 +116,11 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/companion_ui", "tests/api", *E2E_TARGETS["companion_ui"]),
     ),
     (
+        "canvas_chat",
+        ("app/chat/", "tests/chat/"),
+        ("tests/chat",),
+    ),
+    (
         "watcher_sync",
         (
             "app/watcher/",
@@ -128,6 +133,24 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/e2e/test_panel_watcher_e2e.py",
         ),
         ("tests/watcher", "tests/sync", *E2E_TARGETS["watcher_sync"]),
+    ),
+    (
+        "runtime_health",
+        (
+            "app/runtime/health_probe.py",
+            "app/cli/health.py",
+            "docker-compose.yaml",
+            "tests/health/",
+            "tests/invariants/test_health_probe.py",
+            "tests/invariants/test_health_heartbeat_visibility.py",
+            "docs/OBSERVABILITY_STABILIZATION/",
+        ),
+        ("tests/health", "tests/invariants", "tests/api"),
+    ),
+    (
+        "relevance",
+        ("app/relevance/", "tests/relevance/"),
+        ("tests/relevance",),
     ),
     (
         "orchestration",
@@ -157,6 +180,23 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/agent_memory", "tests/retrieval", "tests/indexer", "tests/search", *E2E_TARGETS["memory_retrieval"]),
     ),
     (
+        "episodes",
+        (
+            "app/episodes/",
+            "app/jobs/episodes_projection.py",
+            "schemas/episode-note.schema.json",
+            # CI-selection owner only: the bundle schema is SIP surface; its
+            # enforcement probes live in tests/invariants. Full-suite routing
+            # for bundle-schema changes stays deferred until the pre-existing
+            # deprecated-store failure (from #3479) is repaired.
+            "schemas/metadata-bundle.schema.json",
+            "tests/episodes/",
+            "tests/invariants/test_episode_binding.py",
+            "tests/invariants/test_cross_scope_flow.py",
+        ),
+        ("tests/episodes", "tests/invariants"),
+    ),
+    (
         "llm_eval",
         (
             "app/llm/",
@@ -171,6 +211,16 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/e2e/test_panel_llm_e2e.py",
         ),
         ("tests/llm", "tests/eval", "tests/evals", *E2E_TARGETS["llm_eval"]),
+    ),
+    (
+        "voice",
+        (
+            "app/voice/",
+            "tests/voice/",
+            "docs/MIMER_VOICE_LOOP/",
+            "docs/contracts/MIMER_CLIENT_CONTRACT.md",
+        ),
+        ("tests/voice",),
     ),
     (
         "events_receipts",

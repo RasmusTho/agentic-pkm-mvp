@@ -36,6 +36,17 @@ def _bm25_dominance_margin(query: str, items: List[Dict[str, Any]]) -> float | N
     min_v = float(np.min(raw))
     max_v = float(np.max(raw))
     if math.isclose(max_v - min_v, 0.0):
+        # Rank-BM25's IDF can collapse to zero for a two-result window even
+        # when one result uniquely contains every query term. Preserve the
+        # same deterministic lexical intent with a bounded coverage fallback;
+        # absent a coverage gap this remains a genuine non-dominant tie.
+        if len(items) == 2:
+            query_terms = set(query_tokens)
+            coverage = np.asarray(
+                [len(query_terms & set(tokens)) / len(query_terms) for tokens in tokenized_docs],
+                dtype=np.float32,
+            )
+            return float(abs(coverage[0] - coverage[1]))
         # Every candidate scores identically -> no dominant top result.
         return 0.0
     norm = (raw - min_v) / (max_v - min_v)

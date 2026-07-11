@@ -86,7 +86,7 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 from app.curation.findings import CurationFinding, FindingClass, LanguageVerdict, track_for_class
 from app.curation.proposal_writer import write_curation_proposals
@@ -214,7 +214,7 @@ def _score_class(score: float) -> str:
     return "low"
 
 
-def _candidate_from_hit(hit, *, anchor_scope: str | None) -> _NoteCandidate:
+def _candidate_from_hit(hit: Any, *, anchor_scope: str | None) -> _NoteCandidate:
     payload = hit.payload or {}
     rel_path = hit.source_ref or payload.get("path")
     rel_path = str(rel_path) if rel_path else None

@@ -112,3 +112,24 @@ def test_containment_enforced_when_conditional_rerank_runs(monkeypatch: pytest.M
     )
     with pytest.raises(AssertionError, match="rerank introduced doc_ids"):
         scoped_hybrid_search("alpha beta gamma", k=5)
+
+
+def test_conditional_gate_two_result_unique_match_does_not_collapse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rank-BM25 has a zero-IDF degeneracy on a two-document candidate set;
+    the exact lexical result must still be protected from reranking."""
+    monkeypatch.setenv("RETRIEVAL_RERANK", "conditional")
+    reset_retrieval_tuning_cache()
+    calls: list[list[dict]] = []
+    monkeypatch.setattr(
+        "app.retrieval.hook_adapter.apply_optional_rerank",
+        lambda _query, items: calls.append(list(items)) or list(reversed(items)),
+    )
+    items = [
+        {"id": "exact", "text": "alpha beta exact document", "score": 0.9},
+        {"id": "other", "text": "unrelated gardening note", "score": 0.5},
+    ]
+
+    assert maybe_rerank("alpha beta", items) == items
+    assert calls == []

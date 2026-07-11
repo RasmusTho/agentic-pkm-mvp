@@ -140,3 +140,28 @@ def test_active_primary_identity_resolution_matches_write_path() -> None:
     identity = get_embedding_identity()
     assert identity.provider
     assert identity.model
+
+
+def test_mixed_identity_count_uses_full_identity_tuple(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Same provider/model but changed dimension or normalization is still
+    an identity drift and must be counted in rebuild observability."""
+    _seed_durable_index()
+    idx = get_vector_index()
+    real_all_rows = idx.all_rows
+    active = get_embedding_identity()
+
+    def _patched_all_rows():
+        rows = real_all_rows()
+        rows[0].update({"provider": active.provider, "model": active.model, "dim": active.dim + 1, "normalize": active.normalize})
+        rows[1].update({"provider": active.provider, "model": active.model, "dim": active.dim, "normalize": not active.normalize})
+        return rows
+
+    monkeypatch.setattr(idx, "all_rows", _patched_all_rows)
+    caplog.set_level(logging.INFO, logger="app.retrieval.hybrid")
+    hybrid.rebuild_from_durable_index(force=True)
+    message = next(r.getMessage() for r in caplog.records if "mixed_identity_count" in r.getMessage())
+    assert "mixed_identity_count=2" in message
+    assert str(active.dim + 1) in message
+    assert str(not active.normalize) in message

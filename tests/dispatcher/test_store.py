@@ -161,15 +161,10 @@ def test_load_paths_defaults_under_state_dir(tmp_path: Path) -> None:
     assert paths.events_path == tmp_path / "rt" / "events.jsonl"
 
 
-def test_legacy_v1_db_self_heals_without_reinitialize(tmp_path: Path) -> None:
-    """A pre-multi-repo DB whose ``dispatcher tasks`` never re-runs ``init``
-    (e.g. a long-lived shared instance) must still pick up the ``repo``
-    column and repo-qualified task_id the first time anything touches it —
-    not only when ``initialize()`` happens to run again.
-    """
+def _write_legacy_v1_db(db_path: Path) -> None:
+    """Create a pre-multi-repo (schema v1) dispatcher DB with one legacy row."""
     import sqlite3
 
-    db_path = tmp_path / "legacy.sqlite3"
     conn = sqlite3.connect(db_path)
     conn.execute(
         """
@@ -209,6 +204,16 @@ def test_legacy_v1_db_self_heals_without_reinitialize(tmp_path: Path) -> None:
     conn.commit()
     conn.close()
 
+
+def test_legacy_v1_db_self_heals_without_reinitialize(tmp_path: Path) -> None:
+    """A pre-multi-repo DB whose ``dispatcher tasks`` never re-runs ``init``
+    (e.g. a long-lived shared instance) must still pick up the ``repo``
+    column and repo-qualified task_id the first time anything touches it —
+    not only when ``initialize()`` happens to run again.
+    """
+    db_path = tmp_path / "legacy.sqlite3"
+    _write_legacy_v1_db(db_path)
+
     # No .initialize() call — mirrors a shared instance whose DB already
     # existed before this migration shipped and is never re-init'ed.
     store = SqliteStore(db_path, JsonlEventWriter(tmp_path / "events.jsonl"))
@@ -221,3 +226,42 @@ def test_legacy_v1_db_self_heals_without_reinitialize(tmp_path: Path) -> None:
 
     events = store.list_events("github-RasmusTho--agentic-pkm-mvp-issue-101")
     assert [e.event_id for e in events] == ["evt-legacy"]
+
+
+def test_concurrent_legacy_migration_does_not_raise_or_corrupt(tmp_path: Path) -> None:
+    """Two processes touching the same never-reinitialized legacy DB at once
+    must not crash on ``duplicate column name`` or leave the migration half
+    applied — the ``BEGIN IMMEDIATE`` + re-check-under-lock in
+    ``_ensure_schema`` must serialize them safely instead.
+    """
+    import threading
+
+    db_path = tmp_path / "legacy.sqlite3"
+    _write_legacy_v1_db(db_path)
+
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(4)
+
+    def touch() -> None:
+        try:
+            barrier.wait(timeout=5)
+            store = SqliteStore(db_path, JsonlEventWriter(tmp_path / "events.jsonl"))
+            store.get_task("github-RasmusTho--agentic-pkm-mvp-issue-101")
+        except BaseException as exc:  # noqa: BLE001 - captured for the assertion below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=touch) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert errors == [], f"concurrent migration raised: {errors!r}"
+
+    store = SqliteStore(db_path, JsonlEventWriter(tmp_path / "events.jsonl"))
+    migrated = store.get_task("github-RasmusTho--agentic-pkm-mvp-issue-101")
+    assert migrated is not None
+    assert migrated.repo == "RasmusTho/agentic-pkm-mvp"
+    assert store.get_task("github-issue-101") is None
+    # No duplicate rows from a half-serialized migration.
+    assert len(store.list_tasks(repo="RasmusTho/agentic-pkm-mvp")) == 1

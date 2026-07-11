@@ -21,6 +21,8 @@ import pytest
 
 from app.components.retrieval import embed_docs
 from app.retrieval import hybrid
+from app.eval import golden
+from app.fitness import metrics
 from app.stores import get_vector_index, reset_store_backends
 
 _SEED_TEXTS = [
@@ -200,3 +202,26 @@ def test_dim_mismatched_preloaded_vector_fails_loud() -> None:
     )
     with pytest.raises(ValueError, match="embedding dim mismatch"):
         store.bm25_scores(["alpha"])
+
+
+def test_snapshot_restore_preserves_cached_embeddings() -> None:
+    """Eval/fitness corpus swaps must not turn a warm stored-vector cache into
+    a lazy-embedding corpus when restoring it."""
+    store = hybrid.get_store()
+    docs = [
+        {
+            "doc_id": "stored-vector",
+            "text": "cached vector survives eval fixture replacement",
+            "embedding": [0.25, 0.5, 0.75],
+        }
+    ]
+    store.set_documents(docs)
+
+    golden_snapshot = golden._snapshot_store(store)  # noqa: SLF001 - regression seam
+    fitness_snapshot = metrics._snapshot_store(store)  # noqa: SLF001 - regression seam
+    store.set_documents([])
+    golden._restore_store(store, golden_snapshot)  # noqa: SLF001 - regression seam
+    assert store.all()[0].embedding == [0.25, 0.5, 0.75]
+    store.set_documents([])
+    metrics._restore_store(store, fitness_snapshot)  # noqa: SLF001 - regression seam
+    assert store.all()[0].embedding == [0.25, 0.5, 0.75]
