@@ -110,3 +110,51 @@ def test_health_contract_degrades_on_stale_outbox(tmp_path: Path, monkeypatch: p
     assert snapshot["state"] == "degraded"
     assert "outbox idle" in snapshot["reason"]
     assert any("events-doctor" in action for action in snapshot["suggested_actions"])
+
+
+@pytest.mark.asyncio
+async def test_readyz_status_do_not_block_event_loop(monkeypatch) -> None:
+    """`/readyz` and `/status` must run the blocking `evaluate()` off the loop.
+
+    Regression for #3461: the api container healthcheck polls `/readyz` on a short
+    interval, and `evaluate()` does blocking DB I/O. Running it inline in the async
+    handler blocks the single-process event loop. With `evaluate` patched to block
+    for 1s, a concurrent `/healthz` must still return promptly.
+    """
+    import asyncio
+    import time as _time
+
+    import httpx
+
+    import app.api.routes.health_contract as health_contract_route
+
+    def _slow_evaluate():
+        _time.sleep(1.0)
+        return {
+            "state": "running",
+            "reason": "ok",
+            "bootstrap_state": "active",
+            "bootstrap_reason": "ok",
+        }
+
+    monkeypatch.setattr(
+        health_contract_route.DEFAULT_CONTRACT, "evaluate", _slow_evaluate
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        for endpoint in ("/readyz", "/status"):
+            task = asyncio.create_task(client.get(endpoint))
+            await asyncio.sleep(0.1)
+
+            started = _time.perf_counter()
+            healthz_resp = await client.get("/healthz")
+            healthz_elapsed = _time.perf_counter() - started
+
+            assert healthz_resp.status_code == 200
+            assert healthz_elapsed < 0.5, (
+                f"/healthz blocked for {healthz_elapsed:.3f}s while {endpoint} in flight"
+            )
+
+            resp = await task
+            assert resp.status_code == 200

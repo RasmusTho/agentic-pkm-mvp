@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from fastapi import APIRouter
+from starlette.concurrency import run_in_threadpool
 
 from app.cli.health import run_health
 
@@ -35,7 +36,14 @@ def _sanitize_health_value(value: Any, *, parent_key: str | None = None) -> Any:
 
 @router.get("/health")
 async def health() -> dict[str, Any]:
-    return _sanitize_health_value(run_health())
+    # `run_health()` is synchronous and does blocking I/O (bounded provider
+    # probes, an obsidian subprocess, DB/index diagnostics). Running it inline
+    # in this async handler blocked the single-process uvicorn event loop; with
+    # companion-ui polling `/api/health` continuously, requests stacked and even
+    # `/healthz` timed out externally — an effective prod outage (#3461). Offload
+    # to a worker thread so a slow probe can never saturate the loop.
+    payload = await run_in_threadpool(run_health)
+    return _sanitize_health_value(payload)
 
 
 __all__ = ["router"]

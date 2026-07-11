@@ -425,3 +425,47 @@ def test_health_api_sanitizes_authority_spine_details(tmp_path, monkeypatch) -> 
     # No file paths, no secrets, no tokens, no tracebacks
     sensitive = re.compile(r"Traceback|File \"|/[^\"'\s]{5,}|secret|token|password|api[_-]?key", re.IGNORECASE)
     assert not sensitive.search(spine_text), f"authority_spine leaked sensitive details: {spine_text}"
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_does_not_block_event_loop(monkeypatch) -> None:
+    """`/api/health` must run the blocking `run_health()` off the event loop.
+
+    Regression for #3461: `run_health()` was called inline in the async handler,
+    so a slow provider probe saturated the single-process uvicorn event loop and
+    even the trivial `/healthz` timed out externally. Here `run_health` is patched
+    to block for 1s; while `/api/health` is in flight, a concurrent `/healthz` must
+    still return promptly — which is only possible if the blocking work is offloaded
+    to a worker thread.
+    """
+    import asyncio
+    import time as _time
+
+    import httpx
+
+    from app.api.routes import health as health_route
+
+    def _slow_run_health(*args, **kwargs):
+        _time.sleep(1.0)
+        return {"ok": True, "required_ok": True, "checks": {}, "runtime": {}}
+
+    monkeypatch.setattr(health_route, "run_health", _slow_run_health)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        health_task = asyncio.create_task(client.get("/api/health"))
+        # Let the /api/health request start and enter the threadpool offload.
+        await asyncio.sleep(0.1)
+
+        started = _time.perf_counter()
+        healthz_resp = await client.get("/healthz")
+        healthz_elapsed = _time.perf_counter() - started
+
+        assert healthz_resp.status_code == 200
+        # If run_health ran inline, the loop would be blocked ~1s and this would
+        # be far slower. The offload keeps the loop free.
+        assert healthz_elapsed < 0.5, f"/healthz blocked for {healthz_elapsed:.3f}s"
+
+        health_resp = await health_task
+        assert health_resp.status_code == 200
+        assert health_resp.json()["ok"] is True

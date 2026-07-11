@@ -57,6 +57,17 @@ def _env_float(name: str, fallback: float) -> float:
         return fallback
 
 
+def _health_probe_timeout() -> float:
+    """Bounded timeout for external health probes (seconds).
+
+    Health probes must fail fast, independently of `LLM_TIMEOUT` — that env is
+    provisioned for real LLM generation (60–120s elsewhere) and must never leak
+    into a liveness probe, or `/api/health` blocks for minutes (#3461). Override
+    with `HEALTH_PROBE_TIMEOUT` for a tighter/looser bound.
+    """
+    return _env_float("HEALTH_PROBE_TIMEOUT", 2.0)
+
+
 def _is_enabled(env_name: str, default: bool = True) -> bool:
     raw = os.getenv(env_name)
     if raw is None:
@@ -169,7 +180,7 @@ def _check_ollama() -> Dict[str, Any]:
             data={"provider": provider},
         )
     try:
-        resp = httpx.get(f"{base}/api/tags", timeout=float(os.environ.get("LLM_TIMEOUT", "5")))
+        resp = httpx.get(f"{base}/api/tags", timeout=_health_probe_timeout())
         resp.raise_for_status()
         data = resp.json()
         result = _result(
@@ -199,7 +210,9 @@ def _check_llm_router() -> Dict[str, Any]:
     }
 
 
-def _provider_env_check(provider: str, model: str) -> Dict[str, Any]:
+def _provider_env_check(
+    provider: str, model: str, *, ollama_check: Dict[str, Any] | None = None
+) -> Dict[str, Any]:
     normalized = (provider or "").strip().lower()
     resolved_model = (model or "").strip()
     if not resolved_model:
@@ -207,7 +220,11 @@ def _provider_env_check(provider: str, model: str) -> Dict[str, Any]:
     if normalized in {"", "mock", "deterministic"}:
         return {"ok": True, "detail": f"deterministic/local route ({resolved_model})", "status": "ok"}
     if normalized == "ollama":
-        result = _check_ollama()
+        # Reuse the single ollama probe computed once per `run_health()` rather
+        # than re-hitting the provider once per ollama task-route. Stacking these
+        # blocking probes is what turned one slow provider into a multi-minute
+        # `/api/health` hang (#3461).
+        result = ollama_check if ollama_check is not None else _check_ollama()
         return {
             "ok": bool(result.get("ok")),
             "detail": result.get("detail", ""),
@@ -229,7 +246,9 @@ def _provider_env_check(provider: str, model: str) -> Dict[str, Any]:
     return {"ok": False, "detail": f"Unsupported provider for route verification: {normalized}", "status": "fail"}
 
 
-def _check_llm_task_routes(router_check: Dict[str, Any]) -> Dict[str, Any]:
+def _check_llm_task_routes(
+    router_check: Dict[str, Any], *, ollama_check: Dict[str, Any] | None = None
+) -> Dict[str, Any]:
     policies = router_check.get("route_policies") or {}
     route_statuses: Dict[str, Any] = {}
     overall = True
@@ -248,7 +267,7 @@ def _check_llm_task_routes(router_check: Dict[str, Any]) -> Dict[str, Any]:
                 "model": model,
             }
             continue
-        probe = _provider_env_check(provider, model)
+        probe = _provider_env_check(provider, model, ollama_check=ollama_check)
         route_statuses[task_kind] = {
             "ok": bool(probe.get("ok")),
             "detail": probe.get("detail", ""),
@@ -686,7 +705,10 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
         "obsidian": _annotate_required(_check_obsidian_dependencies(), required=_obsidian_required()),
     }
     checks["llm_router"] = _annotate_required(_check_llm_router(), required=False)
-    checks["llm_task_routes"] = _annotate_required(_check_llm_task_routes(checks["llm_router"]), required=True)
+    checks["llm_task_routes"] = _annotate_required(
+        _check_llm_task_routes(checks["llm_router"], ollama_check=checks["ollama"]),
+        required=True,
+    )
     checks["llm_providers"] = _annotate_required(_check_llm_providers(checks["ollama"]), required=False)
     checks["embedding_index"] = _annotate_required(_check_embedding_index(), required=True)
     checks["companion_diagnostics"] = _annotate_required(_check_companion_diagnostics(), required=False)
