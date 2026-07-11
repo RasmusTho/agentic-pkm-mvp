@@ -28,7 +28,10 @@ def test_pr_ci_fetches_base_ref_before_diff_selection() -> None:
     workflow = _workflow_text()
 
     assert "fetch-depth: 0" in workflow
-    assert 'git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"' in workflow
+    # Full (non-shallow) base fetch: --depth=1 cuts the base tip's parents when
+    # the base branch advances mid-run, breaking merge-base for diff selection.
+    assert 'git fetch --no-tags origin "${{ github.base_ref }}"' in workflow
+    assert "--depth=1" not in workflow
 
 
 def test_panel_llm_e2e_is_path_scoped_and_does_not_install_when_unconfigured() -> None:

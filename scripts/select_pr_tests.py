@@ -175,6 +175,23 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/agent_memory", "tests/retrieval", "tests/indexer", "tests/search", *E2E_TARGETS["memory_retrieval"]),
     ),
     (
+        "episodes",
+        (
+            "app/episodes/",
+            "app/jobs/episodes_projection.py",
+            "schemas/episode-note.schema.json",
+            # CI-selection owner only: the bundle schema is SIP surface; its
+            # enforcement probes live in tests/invariants. Full-suite routing
+            # for bundle-schema changes stays deferred until the pre-existing
+            # deprecated-store failure (from #3479) is repaired.
+            "schemas/metadata-bundle.schema.json",
+            "tests/episodes/",
+            "tests/invariants/test_episode_binding.py",
+            "tests/invariants/test_cross_scope_flow.py",
+        ),
+        ("tests/episodes", "tests/invariants"),
+    ),
+    (
         "llm_eval",
         (
             "app/llm/",

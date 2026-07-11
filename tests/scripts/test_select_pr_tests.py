@@ -340,6 +340,40 @@ def test_voice_contract_and_runtime_change_selects_voice_coverage() -> None:
     assert "tests/voice/test_transcription_sharing.py" in selection.targets
 
 
+def test_episodes_runtime_change_selects_episodes_coverage() -> None:
+    selection = select_tests(
+        [
+            "app/episodes/stream_registry.py",
+            "app/jobs/episodes_projection.py",
+            "schemas/episode-note.schema.json",
+            "tests/episodes/test_stream_registry.py",
+            "docs/EPISODE_RESOLUTION_ENGINE/STREAM_REGISTRY_AND_SIGNAL_CONTRACT.md",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("episodes",)
+    assert selection.unowned_paths == ()
+    assert "tests/episodes" in selection.targets
+    assert "tests/invariants" in selection.targets
+    assert "tests/episodes/test_stream_registry.py" in selection.targets
+
+
+def test_bundle_schema_and_invariant_change_selects_episodes_coverage() -> None:
+    selection = select_tests(
+        [
+            "schemas/metadata-bundle.schema.json",
+            "tests/invariants/test_episode_binding.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("episodes",)
+    assert selection.unowned_paths == ()
+    assert "tests/invariants" in selection.targets
+    assert "tests/invariants/test_episode_binding.py" in selection.targets
+
+
 def test_builder_system_change_selects_its_own_regression_tests() -> None:
     selection = select_tests(["app/builderops/cli.py"])
 
