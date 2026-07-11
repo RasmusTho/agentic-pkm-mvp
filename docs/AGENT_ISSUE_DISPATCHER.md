@@ -170,7 +170,8 @@ expired current lease may instead make an explicit, claim-time recovery with
 `dispatcher claim <task_id> --takeover-stale`. The dispatcher performs the stale-lease release,
 new lease creation, task update, and `task.claimed` event insert in one SQLite transaction. It
 marks the displaced lease with `release_reason="stale_takeover"`; it never displaces an unexpired
-lease, even when the flag is supplied.
+lease, even when the flag is supplied. Takeover preserves normal ready-only claim eligibility, so a
+blocked task with an expired lease is rejected without changing its task or lease state.
 
 The new claim event remains the receipt. Its payload contains `ttl_minutes` and, for a takeover, a
 `takeover` object with `previous_holder`, `previous_lease_id`, and `previous_expires_at`. Without

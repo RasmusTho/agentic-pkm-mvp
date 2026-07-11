@@ -89,6 +89,11 @@ def claim(
                 raise ValueError(
                     f"Cannot claim task {task_id}: lease has expired; retry with --takeover-stale"
                 )
+            if task_row["status"] != "ready":
+                raise ValueError(
+                    f"Cannot claim task {task_id}: not in ready status "
+                    f"(current: {task_row['status']})"
+                )
 
             result = conn.execute(
                 """

@@ -157,6 +157,10 @@ def test_claim_verb_takeover_stale_flag(tmp_env, store):
     old_lease.expires_at = past_time
     old_lease.heartbeat_at = past_time
     store.upsert_lease(old_lease)
+    stale_task = store.get_task(ready.task_id)
+    assert stale_task is not None
+    stale_task.status = "ready"
+    store.upsert_task(stale_task)
 
     code, data = _run(
         [
