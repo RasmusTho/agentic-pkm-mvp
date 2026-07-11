@@ -404,6 +404,34 @@ def test_completed_promotion_retry_with_different_actor_returns_existing_issue(
     assert client.create_calls == 1
 
 
+def test_completed_promotion_retry_with_different_repository_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """A terminal receipt cannot be replayed through another repository target."""
+    service = _consensus_service(tmp_path)
+    source_client = FakeIssueClient()
+    source_gateway = ModelInquiryPromotionGateway(
+        service,
+        repository="example/repo",
+        client=source_client,
+    )
+    source_gateway.evaluate("inq_promotion_test")
+    source_gateway.promote("inq_promotion_test")
+
+    other_client = FakeIssueClient()
+    other_gateway = ModelInquiryPromotionGateway(
+        service,
+        repository="other/repo",
+        client=other_client,
+    )
+
+    with pytest.raises(ModelInquiryPromotionError, match="target does not match"):
+        other_gateway.promote("inq_promotion_test")
+
+    assert source_client.create_calls == 1
+    assert other_client.create_calls == 0
+
+
 def test_retry_reconciles_issue_after_receipt_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

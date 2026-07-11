@@ -252,6 +252,13 @@ class ModelInquiryPromotionGateway:
                     raise ModelInquiryPromotionError(
                         "terminal promotion receipt has no promotion intent"
                     )
+                if (
+                    existing_intent.get("target_repository") != self.repository
+                    or existing_intent.get("promotion_marker") != marker
+                ):
+                    raise ModelInquiryPromotionError(
+                        "completed promotion target does not match existing intent"
+                    )
                 return _promotion_result(existing_intent, existing_receipt, reconciled=True)
 
             intent = self.service.commit_promotion_intent(
