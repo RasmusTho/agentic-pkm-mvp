@@ -31,10 +31,11 @@ Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kern
   `tests/migrations/test_outbox_schema_parity.py`.
 - Alembic migrations under `app/alembic/versions/` define the legacy AMG-core
   (`objects`/`chunks`/`embeddings`/...) lineage; see "Historical migration lineage" below. Most of
-  these are historical-only, **but `objects` and `decisions` remain on the active runtime path**: vault
-  ingest writes `objects` via `app/stores/postgres.py` (`PgObjects.upsert`, reached through
-  `app/ingest/vault_root.py` → `get_stores()`), and `app/services/decisions.py` reads/writes
-  `decisions`. `chunks`/`embeddings`/`membership` are touched by the backfill job
+  these are historical-only. The temporary `PgObjects` compatibility adapter remains on the active
+  vault-root ingest path, but it preflights the migration-owned store schema and writes only
+  `store_objects`; it no longer writes `objects`. `app/services/decisions.py` still reads/writes
+  `decisions`, whose runtime DDL remains a separately tracked migration follow-up.
+  `chunks`/`embeddings`/`membership` are touched by the backfill job
   (`app/jobs/backfill.py`) and `app/store/membership_store.py` rather than purely historical.
 
 This document is a human-readable snapshot of what the code creates/uses in the v5.5 baseline. The
@@ -312,10 +313,11 @@ Interpretation:
 ## Explicit Deltas / Known Gaps
 - The primary runtime store is the `store_*` set, migration-owned since Alembic revision
   `c2766a04d001` (KERNEL-04; `_ensure_tables()` is assert-only outside tests). The AMG-core tables
-  under `app/alembic/versions/` are mostly legacy lineage,
-  **except `objects` and `decisions`, which are still on the active runtime path** (vault ingest →
-  `PgObjects.upsert` INSERTs into `objects`; `app/services/decisions.py` reads/writes `decisions`);
-  `chunks`/`embeddings`/`membership` are touched by the backfill job and `membership_store`. An earlier
+  under `app/alembic/versions/` are mostly legacy lineage. `PgObjects` remains only as a guarded
+  compatibility adapter for vault-root ingest and writes `store_objects` rather than `objects`;
+  `app/services/decisions.py` still reads/writes `decisions` while its runtime DDL is tracked
+  separately for Alembic migration. `chunks`/`embeddings`/`membership` are touched by the backfill job
+  and `membership_store`. An earlier
   revision of this doc mis-attributed the store tables to Alembic, listed a fabricated `search_vector`
   column, and over-broadly claimed none of the AMG-core tables were active — all corrected here.
 - This repo still contains historical migration lineage and merge history under `app/alembic/versions/`. If you hit unexpected columns or migration conflicts, inspect the migration set and record the intended baseline delta in the same change.
