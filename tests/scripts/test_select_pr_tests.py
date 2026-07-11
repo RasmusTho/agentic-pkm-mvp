@@ -25,6 +25,16 @@ def test_companion_ui_change_selects_companion_and_api_targets() -> None:
     assert "not panel_llm_e2e" in selection.pytest_args
 
 
+def test_canvas_chat_change_selects_chat_coverage() -> None:
+    selection = select_tests(["app/chat/session_log.py", "tests/chat/test_session_log_writer.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("canvas_chat",)
+    assert selection.unowned_paths == ()
+    assert "tests/chat" in selection.targets
+    assert "tests/chat/test_session_log_writer.py" in selection.targets
+
+
 def test_ci_workflow_change_selects_governance_contract_tests() -> None:
     selection = select_tests([".github/workflows/ci.yml"])
 
@@ -79,6 +89,16 @@ def test_runtime_health_change_has_a_ci_owner() -> None:
     assert "tests/health" in selection.targets
     assert "tests/invariants" in selection.targets
     assert "tests/api" in selection.targets
+
+
+def test_relevance_runtime_and_regression_changes_select_relevance_coverage() -> None:
+    selection = select_tests(["app/relevance/now_surface.py", "tests/relevance/test_attention_loop.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("relevance",)
+    assert "tests/relevance" in selection.targets
+    assert "tests/relevance/test_attention_loop.py" in selection.targets
+    assert not selection.unowned_paths
 
 
 def test_shared_panel_watcher_e2e_file_selects_both_owning_subsystems() -> None:
@@ -328,6 +348,40 @@ def test_voice_contract_and_runtime_change_selects_voice_coverage() -> None:
     assert selection.unowned_paths == ()
     assert "tests/voice" in selection.targets
     assert "tests/voice/test_transcription_sharing.py" in selection.targets
+
+
+def test_episodes_runtime_change_selects_episodes_coverage() -> None:
+    selection = select_tests(
+        [
+            "app/episodes/stream_registry.py",
+            "app/jobs/episodes_projection.py",
+            "schemas/episode-note.schema.json",
+            "tests/episodes/test_stream_registry.py",
+            "docs/EPISODE_RESOLUTION_ENGINE/STREAM_REGISTRY_AND_SIGNAL_CONTRACT.md",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("episodes",)
+    assert selection.unowned_paths == ()
+    assert "tests/episodes" in selection.targets
+    assert "tests/invariants" in selection.targets
+    assert "tests/episodes/test_stream_registry.py" in selection.targets
+
+
+def test_bundle_schema_and_invariant_change_selects_episodes_coverage() -> None:
+    selection = select_tests(
+        [
+            "schemas/metadata-bundle.schema.json",
+            "tests/invariants/test_episode_binding.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("episodes",)
+    assert selection.unowned_paths == ()
+    assert "tests/invariants" in selection.targets
+    assert "tests/invariants/test_episode_binding.py" in selection.targets
 
 
 def test_builder_system_change_selects_its_own_regression_tests() -> None:

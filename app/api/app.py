@@ -122,6 +122,11 @@ except ImportError:
     capture_router = None
 
 try:
+    from app.api.routes.heimdal_screen import router as heimdal_screen_router
+except ImportError:
+    heimdal_screen_router = None
+
+try:
     from app.api.routes.version import router as version_router
 except ImportError:
     version_router = None
@@ -256,6 +261,8 @@ def _create_app() -> FastAPI:
         application.include_router(source_understanding_router, prefix="/api")
     if capture_router is not None:
         application.include_router(capture_router, prefix="/api")
+    if heimdal_screen_router is not None:
+        application.include_router(heimdal_screen_router)
     if version_router is not None:
         application.include_router(version_router)
     if signboard_router is not None:
