@@ -28,7 +28,7 @@ The engine that fuses multiple information streams into episodes and assigns `ep
 2. **Fusion is cognition, not sensing.** Correlating sensor events with vault activity and calendar to construct a situation model is inference over the knowledge plane — Mimer's role, not Heimdal's.
 3. **The entity is already Mimer's.** ADR-0051 (OD-1) placed `Episode` as a Mimer Layer-3 Artifact; the organ that produces it belongs where it is canonicalized.
 
-> **Amendment (owner decision, 2026-07-10; #3420):** `episode_ref` assignment is a candidate-tier metadata write: low-trust, reversible, and conferring no authority. It is a Mimer write because the field lives on Mimer artifacts' metadata bundles, not because it rides the HKA authority path. This follows ADR-0051 §3.1 orthogonality and §5's opt-out posture; confirmed or human-ratified bindings may later use a governed path, which is outside this ADR amendment.
+> **Amendment (owner decision, 2026-07-10; #3420):** The preceding `metadata-bundle / HKA authority path` phrase is superseded for `episode_ref` assignment. Assignment is a candidate-tier metadata write: low-trust, reversible, and conferring no authority. It is a Mimer write because the field lives on Mimer artifacts' metadata bundles, not because it rides the HKA authority path. This follows ADR-0051 §3.1 orthogonality and §5's opt-out posture; confirmed or human-ratified bindings may later use a governed path, which is outside this ADR amendment.
 
 ### 2. Heimdal contributes single-stream boundary proposals only
 
