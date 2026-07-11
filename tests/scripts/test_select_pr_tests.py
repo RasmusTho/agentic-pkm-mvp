@@ -313,6 +313,23 @@ def test_llm_runtime_configuration_change_selects_llm_coverage() -> None:
     assert "tests/llm" in selection.targets
 
 
+def test_voice_contract_and_runtime_change_selects_voice_coverage() -> None:
+    selection = select_tests(
+        [
+            "app/voice/transcription.py",
+            "tests/voice/test_transcription_sharing.py",
+            "docs/MIMER_VOICE_LOOP/SHARE_TRANSCRIPTION_CAPABILITY.md",
+            "docs/contracts/MIMER_CLIENT_CONTRACT.md",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("voice",)
+    assert selection.unowned_paths == ()
+    assert "tests/voice" in selection.targets
+    assert "tests/voice/test_transcription_sharing.py" in selection.targets
+
+
 def test_builder_system_change_selects_its_own_regression_tests() -> None:
     selection = select_tests(["app/builderops/cli.py"])
 
