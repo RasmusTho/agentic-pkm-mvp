@@ -4,7 +4,7 @@
 
 - is ``object_type="segment"`` with a non-empty ``derived_from`` (lineage survives derivation);
 - **inherits** ``scope_id`` / ``source_role`` / ``authority_state`` / ``evidence_role`` /
-  ``sensitivity`` from the source artifact (not re-stamped fresh);
+  ``sensitivity`` / ``episode_ref`` from the source artifact (not re-stamped fresh);
 - preserves the source's provenance and adds a derivation event (``provenance_event_ids`` non-empty).
 
 Source resolution: a captured artifact (``capture.get_captured``) when present — the path the
@@ -79,6 +79,8 @@ def _unresolved_source_bundle(artifact_id: str) -> MetadataBundle:
         created_by="system:dri",
         created_at=_now_iso(),
         provenance_event_ids=[f"prov:source-unresolved:{artifact_id}:{uuid4().hex[:8]}"],
+        # An unresolved source has no known episode either; 'unbound' is the honest default.
+        episode_ref="unbound",
         vault_id=capture.DEFAULT_VAULT_ID,
     )
 
@@ -106,6 +108,10 @@ def derive_segment(artifact_id: str, *, text: str = "") -> Segment:
         # provenance preserved (source events) + the derivation event; always non-empty
         provenance_event_ids=[*source.provenance_event_ids, f"prov:derive:{uuid4().hex[:8]}"],
         derived_from=[artifact_id],              # lineage survives derivation
+        # episode_ref is propagated (not re-stamped), same as scope/role — the binding survives
+        # derivation (docs/architecture/semantic-dimensions.md :: episode_ref; ADR-0051 -- correctable
+        # by a later re-cut, never frozen here, but this call site must not drop it).
+        episode_ref=source.episode_ref,
         vault_id=source.vault_id,
         principal_id=source.principal_id,
         # preserve the receipt if the source carries accepted/canonical standing
