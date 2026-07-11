@@ -126,10 +126,18 @@ def claim(
             UPDATE dispatcher_tasks
             SET lease_id = ?, claimed_by = ?, lease_expires_at = ?, status = 'claimed', updated_at = ?
             WHERE task_id = ?
+              AND status = ?
               AND lease_id IS ?
-              AND (status = 'ready' OR lease_id IS NOT NULL)
             """,
-            (lease_id, agent_id, expires, now, task_id, existing_lease_id)
+            (
+                lease_id,
+                agent_id,
+                expires,
+                now,
+                task_id,
+                task_row["status"],
+                existing_lease_id,
+            )
         )
 
         if result.rowcount == 0:
