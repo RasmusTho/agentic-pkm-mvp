@@ -8,6 +8,7 @@ import pytest
 
 from app.domain.commitments import CommitmentRecord
 from app.journaling.day_context import assemble_day_context
+from app.knowledge_acquisition.candidate_writeback import DEFAULT_SOURCES_DIR
 from app.receipts.decision_receipt_log import append_decision_receipt
 from app.services.commitment_persistence import commitment_artifact_path, persist_commitment
 from app.vault.manager import VaultContext
@@ -45,7 +46,7 @@ def _seed_all(root: Path, context: VaultContext) -> None:
         vault_root=root,
         vault_uuid="uuid-1",
     )
-    sources = root / "sources"
+    sources = root / DEFAULT_SOURCES_DIR
     sources.mkdir()
     (sources / "capture-one.md").write_text(
         """---
