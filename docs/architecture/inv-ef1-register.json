@@ -1,0 +1,1881 @@
+{
+  "invariant": "INV-EF1",
+  "rows": [
+    {
+      "artifact": ".codex/skills/mimer-governed-boundary/SKILL.md",
+      "category": "iv",
+      "why_load_bearing": "Builder workflow instruction records the existing operator-bound vault or host convention.",
+      "disposition": "migrate-to-private-sibling",
+      "issue": "#2892"
+    },
+    {
+      "artifact": ".codex/skills/mimer-vault-workspace/SKILL.md",
+      "category": "iv",
+      "why_load_bearing": "Builder workflow instruction records the existing operator-bound vault or host convention.",
+      "disposition": "migrate-to-private-sibling",
+      "issue": "#2892"
+    },
+    {
+      "artifact": ".env.example",
+      "category": "iv",
+      "why_load_bearing": "Existing repository artifact retains an operator-bound reference pending its scoped migration review.",
+      "disposition": "migrate-to-private-sibling",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "CONTRIBUTING.md",
+      "category": "ii",
+      "why_load_bearing": "Existing repository artifact retains an operator-bound reference pending its scoped migration review.",
+      "disposition": "migrate-to-private-sibling",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "LICENSE.md",
+      "category": "ii",
+      "why_load_bearing": "Existing repository artifact retains an operator-bound reference pending its scoped migration review.",
+      "disposition": "migrate-to-private-sibling",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "Makefile",
+      "category": "iv",
+      "why_load_bearing": "Existing repository artifact retains an operator-bound reference pending its scoped migration review.",
+      "disposition": "migrate-to-private-sibling",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "THIRD_PARTY_NOTICES.md",
+      "category": "ii",
+      "why_load_bearing": "Existing repository artifact retains an operator-bound reference pending its scoped migration review.",
+      "disposition": "migrate-to-private-sibling",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "app/api/routes/companion.py",
+      "category": "iv",
+      "why_load_bearing": "Runtime compatibility path still carries an operator-bound binding that needs parameterization.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "app/dispatcher/store.py",
+      "category": "iii",
+      "why_load_bearing": "Runtime compatibility path still carries an operator-bound binding that needs parameterization.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "app/heimdal/capture_adapter.py",
+      "category": "ii",
+      "why_load_bearing": "Runtime compatibility path still carries an operator-bound binding that needs parameterization.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "app/ops/builderops_startup.py",
+      "category": "iv",
+      "why_load_bearing": "Runtime compatibility path still carries an operator-bound binding that needs parameterization.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "app/release_channels/prod_ref_fitness.py",
+      "category": "ii",
+      "why_load_bearing": "Runtime compatibility path still carries an operator-bound binding that needs parameterization.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/companion-app/companion_ui/renderer/vault_markdown_parser.py",
+      "category": "ii",
+      "why_load_bearing": "Existing repository artifact retains an operator-bound reference pending its scoped migration review.",
+      "disposition": "migrate-to-private-sibling",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/companion-app/companion_ui/workspace/real_note_workspace_dev_page.py",
+      "category": "iv",
+      "why_load_bearing": "Existing repository artifact retains an operator-bound reference pending its scoped migration review.",
+      "disposition": "migrate-to-private-sibling",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/companion-app/companion_ui/workspace/workspace_http_client.py",
+      "category": "iv",
+      "why_load_bearing": "Existing repository artifact retains an operator-bound reference pending its scoped migration review.",
+      "disposition": "migrate-to-private-sibling",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/companion-app/companion_ui/workspace/workspace_posture.py",
+      "category": "iv",
+      "why_load_bearing": "Existing repository artifact retains an operator-bound reference pending its scoped migration review.",
+      "disposition": "migrate-to-private-sibling",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/design_handoff/2026-05-24-vault-browser-foundation/VAULT_BROWSER_DESIGN_HANDOFF.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/design_handoff/2026-05-24-vault-browser-foundation/VAULT_BROWSER_DESIGN_HANDOFF.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/design_handoff/2026-05-26-companion-ui-design-review/COMPANION_UI_CURRENT_STATE.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/design_handoff/2026-05-26-companion-ui-design-review/HUMAN_UAT_RESULTS.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/design_handoff/2026-05-26-companion-ui-design-review/SCREENSHOT_PLAN.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/design_handoff/2026-05-26-companion-ui-design-review/design_review/Companion UI Design Review.html",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/design_handoff/2026-06-19-cold-start-threshold/prototype.html",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/design_handoff/2026-06-22-companion-ui-deep-review/REVIEW_RESPONSE.html",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/design_handoff/2026-06-22-companion-ui-deep-review/REVIEW_RESPONSE.txt",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/design_handoff/2026-06-22-companion-ui-deep-review/screens/entry_11_vault_picker.html",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/design_handoff/2026-07-07-uat-design-audit/DESIGN_AUDIT.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/design_handoff/2026-07-07-uat-design-audit/DESIGN_AUDIT.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/design_handoff/2026-07-07-uat-design-audit/redesigns.html",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/design_handoff/2026-07-07-uat-design-audit/redesigns.html",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/docs/COMPANION_UI_TARGET_ARCHITECTURE.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/docs/LOCAL_FIRST_TTS_CONTRACT.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/docs/REAL_NOTE_WORKSPACE_DEV_PAGE.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/docs/REAL_NOTE_WORKSPACE_DEV_PAGE.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "companion-ui/docs/VAULT_BROWSER_UI_REQUIREMENTS.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "data/context/projects.json",
+      "category": "ii",
+      "why_load_bearing": "Existing repository artifact retains an operator-bound reference pending its scoped migration review.",
+      "disposition": "migrate-to-private-sibling",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/AGENT_ISSUE_DISPATCHER.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/AGENT_ISSUE_DISPATCHER.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/BIFROST/APP_DEPLOYMENT_POSTURE.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/BIFROST/APP_DEPLOYMENT_POSTURE.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_HTML_PROJECTION.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/COMPANION_UI_DEEP_REVIEW_REMEDIATION/FRONT_DOOR_AND_COPY_HYGIENE.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/COMPANION_UI_DEEP_REVIEW_REMEDIATION/MIST_LADDER_SUBTRACTIVE.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/DAILY_BRIEFING/README.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/DOCS_INDEX.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/DOCS_INDEX.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/EMBEDDING_RELIABILITY/GOOGLE_GEMINI_ADAPTER.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/EMBEDDING_RELIABILITY/OPERATOR_EGRESS_DECISION.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/EMBEDDING_RELIABILITY/README.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/ENVIRONMENTS.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/EPISODE_DEBRIEF/PARENT_FEATURE_ISSUE.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/EPISODE_DEBRIEF/PARENT_FEATURE_ISSUE.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/EPISODE_DEBRIEF/README.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/EPISODE_RESOLUTION_ENGINE/CALENDAR_STREAM_ADAPTER.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/EPISODE_RESOLUTION_ENGINE/EPISODE_NOTE_STORE_AND_PROJECTION.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/EPISODE_RESOLUTION_ENGINE/LOCATION_STREAM_FUTURE_POSTURE.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/EPISODE_RESOLUTION_ENGINE/PARENT_FEATURE_ISSUE.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/EPISODE_RESOLUTION_ENGINE/PARENT_FEATURE_ISSUE.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/EPISODE_RESOLUTION_ENGINE/README.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/EPISODE_RESOLUTION_ENGINE/README.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/EPISODE_RESOLUTION_ENGINE/STREAM_REGISTRY_AND_SIGNAL_CONTRACT.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL/CAPABILITY_CHARTER.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL/CAPTURE_TRANSPORT_FEASIBILITY.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL/CAPTURE_TRANSPORT_FEASIBILITY.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL/CAPTURE_TRANSPORT_FEASIBILITY.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL/ECOSYSTEM_SOS_MODEL.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL/ENTITY_IDENTIFICATION_RESEARCH.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL/FABLE_COMPANION.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL/FABLE_WINDOW.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL/OWNER_DECISIONS.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL/README.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL/README.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL/README.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_CAPTURE_CLIENT/CAPTURE_TIME_METADATA_SIDECAR.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_CAPTURE_CLIENT/DELIVER_RECORDINGS_TO_WATCHED_FOLDER.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_CAPTURE_CLIENT/DEVICE_HEALTH_PANEL_WITH_GAP_LOG.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_CAPTURE_CLIENT/DEVICE_REGISTRATION_AND_CONSENT_SURFACE.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_CAPTURE_CLIENT/DISCRETE_RECORD_WITH_BACKGROUND_AUDIO.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_CAPTURE_CLIENT/HEIMDAL_CLIENT_SCAFFOLD_AND_CAPTURE_FOLDER_BINDING.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_CAPTURE_CLIENT/PROVE_CAPTURE_ROUND_TRIP_ON_TEST_CHANNEL.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_CAPTURE_CLIENT/PROVE_CAPTURE_UAT_JOURNEYS.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_CAPTURE_CLIENT/README.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_CAPTURE_CLIENT/README.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_CAPTURE_CLIENT/README.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_CAPTURE_CLIENT/RECONCILE_AND_CLOSE_B3_TRACKING.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_CAPTURE_CLIENT/WATCH_ONE_TAP_RECORD_WITH_HAPTIC_STATUS.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_SCREEN_STREAM/BUILD_MACOS_OBSERVER_CLIENT.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_SCREEN_STREAM/BUILD_MACOS_OBSERVER_CLIENT.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_SCREEN_STREAM/CONTROL_SURFACE_AND_EXCLUSIONS.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_SCREEN_STREAM/DEFINE_SCREEN_OBSERVATION_CONTRACT.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_SCREEN_STREAM/PARENT_FEATURE_ISSUE.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_SCREEN_STREAM/PARENT_FEATURE_ISSUE.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_SCREEN_STREAM/README.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HEIMDAL_SCREEN_STREAM/README.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HUMAN-FLOWS.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/HUMAN-FLOWS.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/KARAKEEP_MIMER_ACQUISITION/DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/KARAKEEP_MIMER_ACQUISITION/README.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_CAPABILITY_HARDENING/GRADUATED_CURATION.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_CAPABILITY_HARDENING/PROACTIVITY_TIERS_AND_QUIET_MODE.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_CAPABILITY_HARDENING/README.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_CAPABILITY_HARDENING/README.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_CAPABILITY_HARDENING/RETRIEVAL_EMBEDDINGS_AND_CONTEXT.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_CAPABILITY_HARDENING/RETRIEVAL_EMBEDDINGS_AND_CONTEXT.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_CAPABILITY_HARDENING/RUNTIME_MODEL_POSTURE.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_IPAD_THINKING_CANVAS/ADAPTIVE_THREE_COLUMN_SHELL_ON_IPAD.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_IPAD_THINKING_CANVAS/ANNOTATE_AND_PROMOTE_INTO_NOTES.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_IPAD_THINKING_CANVAS/PROVE_IPAD_UAT_JOURNEYS.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_IPAD_THINKING_CANVAS/README.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_IPAD_THINKING_CANVAS/README.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_IPAD_THINKING_CANVAS/RECONCILE_AND_CLOSE_B2_TRACKING.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_IPAD_THINKING_CANVAS/SIDE_BY_SIDE_ENTITY_CONFIRMATION_ON_IPAD.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_IPAD_THINKING_CANVAS/VAULT_BROWSE_COLUMNS_WITH_NOTE_INSPECTOR.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_VOICE_LOOP/DEFINE_VOICE_ASK_CONTRACT.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_VOICE_LOOP/PARENT_FEATURE_ISSUE.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_VOICE_LOOP/PARENT_FEATURE_ISSUE.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_VOICE_LOOP/README.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_VOICE_LOOP/README.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_VOICE_LOOP/SURFACE_PUSH_TO_TALK_COMPANION.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/MIMER_VOICE_LOOP/SURFACE_PUSH_TO_TALK_COMPANION.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/OPERATIONS.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/PANEL_AGENT.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/RELEASE_CHANNELS/README.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/RELEASE_CHANNELS/README.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/ROADMAP.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/SETTINGS_SPINE/CANONICALIZE_SETTINGS_LOCATION.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/SETTINGS_SPINE/REBIND_ON_VAULT_SELECTION.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/STANDING_QUESTIONS/PARENT_FEATURE_ISSUE.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/STANDING_QUESTIONS/PARENT_FEATURE_ISSUE.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/STANDING_QUESTIONS/README.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/STANDING_QUESTIONS/STORE_QUESTION_NOTES_AND_PROJECTION.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/STATUS.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/STATUS.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/YGGDRASIL_APP_SHELL_COMPLETION/ALIGN_VAULT_WRITES_TO_COORDINATED_FILE_ACCESS.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/YGGDRASIL_APP_SHELL_COMPLETION/FIX_FIRST_DELIVERY_REVIEW_FOLLOWUPS.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/YGGDRASIL_APP_SHELL_COMPLETION/PROVE_UAT_JOURNEYS_IN_SIMULATOR_AND_ON_DEVICE.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/YGGDRASIL_APP_SHELL_COMPLETION/README.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/YGGDRASIL_APP_SHELL_COMPLETION/README.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/YGGDRASIL_APP_SHELL_COMPLETION/RECONCILE_AND_CLOSE_B1_TRACKING.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/YGGDRASIL_APP_SHELL_COMPLETION/TAG_WRITER_PROVENANCE_AND_CITE_DECIDED_CONSISTENCY_MODEL.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/YGGDRASIL_APP_SHELL_COMPLETION/VERIFY_CONTROL_SURFACE_ROUND_TRIP_ON_TEST_CHANNEL.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0040-prod-promotion-ref-main-interim.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0043-heimdall-naming-and-norse-name-register.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0043-heimdall-naming-and-norse-name-register.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0044-research08-d1-conforms-to-acknowledged-sos.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0046-inv-ef1-public-private-seam.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0046-inv-ef1-public-private-seam.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0046-inv-ef1-public-private-seam.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0048-allowlisted-mechanical-hygiene-act-tier.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0050-cross-repo-governance-and-bifrost-client-repo.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0050-cross-repo-governance-and-bifrost-client-repo.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0051-episode-as-ontological-primitive.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0053-interim-vault-multiwriter-posture.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0053-interim-vault-multiwriter-posture.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0054-episode-resolution-engine-is-a-mimer-organ.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0055-vault-multiwriter-consistency-model.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0055-vault-multiwriter-consistency-model.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0056-mimer-client-contract-and-transports.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0056-mimer-client-contract-and-transports.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0057-capability-knowledge-model-kvasir.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0058-event-horizon-closure-decay.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0060-capture-posture-b-full-voice-identity.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/ADR-0060-capture-posture-b-full-voice-identity.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/adr/INDEX.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/architecture/ecosystem-federation.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/architecture/ecosystem-federation.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/architecture/ecosystem-federation.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/archive/INTEGRATED_RUNTIME_V1/FABLE_HANDOFF_PROMPT.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/audits/APP_MCP_CONNECTIVITY_2026-07-07.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/audits/MIMER_WHOLE_SYSTEM_INTEGRATION_2026-07-05.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/audits/MIMER_WHOLE_SYSTEM_INTEGRATION_2026-07-05.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/audits/MIMER_WHOLE_SYSTEM_INTEGRATION_2026-07-05.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/audits/SETTINGS_ARCHITECTURE_2026-07-07.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/audits/YGGDRASIL_ECOSYSTEM_2026-07-06.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/contracts/MIMER_CLIENT_CONTRACT.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/contracts/MIMER_CLIENT_CONTRACT.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/deployment/PINNED_IMAGE_CUTOVER/README.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/development/BUILDER_SYSTEM_PROCESS_MAP.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/ops/COLIMA_FULL_HOST_MOUNT.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/plans/PROTOCOL_SATELLITE_SYNC.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/research/DEVELOPMENT_KNOWLEDGE_MODEL.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/research/DEVELOPMENT_KNOWLEDGE_MODEL.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/research/DEVELOPMENT_KNOWLEDGE_MODEL.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/research/_captures/2026-06-08-cognitive-operating-model-v1-emergency-capture.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/research/yggdrasil-closed-loops-ideation.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/research/yggdrasil-fable5-audit.md",
+      "category": "ii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/research/yggdrasil-fable5-audit.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/runbooks/PROD_GO_LIVE_ACCEPTANCE.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/runbooks/RUNBOOK_STARTUP_FULL_SYSTEM.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/runbooks/RUNBOOK_TTS_PROVISIONING.md",
+      "category": "iii",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "docs/testing/invariant-tests.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "ops/host-setup/README.md",
+      "category": "iii",
+      "why_load_bearing": "Existing repository artifact retains an operator-bound reference pending its scoped migration review.",
+      "disposition": "migrate-to-private-sibling",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "ops/host-setup/mac-mini/AGENT_PLAYBOOK.md",
+      "category": "iii",
+      "why_load_bearing": "Existing repository artifact retains an operator-bound reference pending its scoped migration review.",
+      "disposition": "migrate-to-private-sibling",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "ops/host-setup/mac-mini/install.sh",
+      "category": "iii",
+      "why_load_bearing": "Existing repository artifact retains an operator-bound reference pending its scoped migration review.",
+      "disposition": "migrate-to-private-sibling",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "ops/host-setup/macbook-air/AGENT_PLAYBOOK.md",
+      "category": "iii",
+      "why_load_bearing": "Existing repository artifact retains an operator-bound reference pending its scoped migration review.",
+      "disposition": "migrate-to-private-sibling",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "scripts/dev/dev_ui_doctor.sh",
+      "category": "iv",
+      "why_load_bearing": "Builder or channel automation still refers to an operator-bound deployment value.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "scripts/dev/start_niflheim_ui.sh",
+      "category": "iv",
+      "why_load_bearing": "Builder or channel automation still refers to an operator-bound deployment value.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "scripts/fetch_tts_models.sh",
+      "category": "iii",
+      "why_load_bearing": "Builder or channel automation still refers to an operator-bound deployment value.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "scripts/lib/companion_ui_startup.sh",
+      "category": "iv",
+      "why_load_bearing": "Fail-loud production guard or startup path still identifies the operator-bound deployment.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "scripts/prod/prod_ui_doctor.sh",
+      "category": "iv",
+      "why_load_bearing": "Fail-loud production guard or startup path still identifies the operator-bound deployment.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "scripts/prod/start_midgard_stack.sh",
+      "category": "iv",
+      "why_load_bearing": "Fail-loud production guard or startup path still identifies the operator-bound deployment.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "scripts/prod/start_midgard_ui.sh",
+      "category": "iv",
+      "why_load_bearing": "Fail-loud production guard or startup path still identifies the operator-bound deployment.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "scripts/start_full_system.sh",
+      "category": "iv",
+      "why_load_bearing": "Builder or channel automation still refers to an operator-bound deployment value.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "scripts/start_full_system.sh",
+      "category": "iii",
+      "why_load_bearing": "Builder or channel automation still refers to an operator-bound deployment value.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "scripts/test/start_bifrost_ui.sh",
+      "category": "iv",
+      "why_load_bearing": "Builder or channel automation still refers to an operator-bound deployment value.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "scripts/test/test_ui_doctor.sh",
+      "category": "iv",
+      "why_load_bearing": "Builder or channel automation still refers to an operator-bound deployment value.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/api/test_companion_auth_loopback_behind_proxy.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/api/test_companion_no_vault_routing.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/api/test_companion_orientation_selection_gate.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/api/test_companion_vault_browse.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/api/test_companion_vault_notes_api.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/api/test_companion_vault_selection_reconnecting.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/api/test_companion_vault_settings.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/api/test_companion_workspace_vault_identity.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/builderops/test_epic_run_state.py",
+      "category": "iii",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/capture/test_capture_triage_contract.py",
+      "category": "ii",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/capture/test_capture_triage_contract.py",
+      "category": "iii",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/capture/test_capture_writer_layout.py",
+      "category": "iii",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/capture/test_capture_writer_layout.py",
+      "category": "ii",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_active_note_body_update.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_companion_state_coverage.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_entry_state_gallery.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_real_note_workspace_dev_page.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_real_note_workspace_dev_server.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_receipts_history_v2.py",
+      "category": "ii",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_receipts_history_v2.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_reentry_orientation_treatment.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_vault_browser.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_vault_browser_agent_memory_posture.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_vault_browser_inspector.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_vault_browser_left_pane.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_vault_browser_receipts.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_vault_browser_tree.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_vault_browser_vault_action.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_vault_browser_zone_signal.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_vault_link_index_seeding.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_vault_markdown_parser.py",
+      "category": "ii",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_vault_picker_docker_topology.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_vault_settings_panel.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_workspace_no_vault_picker.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_workspace_posture_single_source.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_workspace_shell_alignment.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/test_workspace_shell_alignment.py",
+      "category": "iii",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/companion_ui/vault_browser_test_helpers.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/dispatcher/test_cli.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/dispatcher/test_signboard.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/dispatcher/test_sync_github.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/eval/test_eval_draft_review_surface.py",
+      "category": "ii",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/eval/test_failure_capture_loop.py",
+      "category": "ii",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/ops/test_builderops_startup_bootstrap.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/ops/test_companion_ui_startup_targets.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/ops/test_promotion_plan_vault_settings_precheck.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/ops/test_release_channel_startup_targets.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/ops/test_startup_uninitialized_vault_message.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/ops/test_test_channel_bootstrap_idempotent.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/runtime/test_channel_env_loading.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/scripts/test_companion_ui_no_vault_idle.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/scripts/test_issue_pickup_claim.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/settings/test_instance_settings.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/vault/test_initialize_vault_idempotent.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "tests/watcher/test_cli_idle_vs_disabled.py",
+      "category": "iv",
+      "why_load_bearing": "Test fixture pins the existing operator-bound compatibility behavior.",
+      "disposition": "parameterize",
+      "issue": "#2892"
+    },
+    {
+      "artifact": "vault/_system/events/ingest.log.jsonl",
+      "category": "ii",
+      "why_load_bearing": "Existing repository artifact retains an operator-bound reference pending its scoped migration review.",
+      "disposition": "migrate-to-private-sibling",
+      "issue": "#2892"
+    }
+  ]
+}

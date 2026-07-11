@@ -94,6 +94,9 @@ jobs:
         run: |
           ruff check app tests companion-ui/companion-app
 
+      - name: INV-EF1 public seam gate
+        run: python3 scripts/public_seam_lint.py --mode gate
+
       - name: Validate settings
         run: |
           mkdir -p tmp
