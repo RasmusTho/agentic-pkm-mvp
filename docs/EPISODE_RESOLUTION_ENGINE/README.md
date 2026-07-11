@@ -13,7 +13,7 @@ Classification: **Product/Runtime System work** (new runtime subsystem). Primary
 
 ## Input-source inventory (canonical)
 
-The owner requires every input source identified and part of the architecture. This table is the canonical enumeration; the runtime stream registry (ERE-01) must match it 1:1. A source absent here is an omission to fix, never an implicit input.
+The owner requires every input source identified and part of the architecture. This table is the canonical enumeration; the runtime stream registry (ERE-01, **delivered**: `docs/EPISODE_RESOLUTION_ENGINE/stream_registry.md` is the markdown-first declaration surface, `app/episodes/stream_registry.py::load_registry()` the fail-loud code mirror) must match it 1:1. A source absent here is an omission to fix, never an implicit input.
 
 | stream_id | Status | Transport | Dimensions fed | Consent/scope class | Owner |
 | --- | --- | --- | --- | --- | --- |
@@ -28,7 +28,7 @@ The owner requires every input source identified and part of the architecture. T
 | `location` | **future** (ERE-10) | Heimdal v2 `modality: location` observations | space, time | Heimdal consent-gated (strict, opt-in per place/session) | Heimdal |
 | `screen`, `biometric`, `ambient_audio` | **future** | Heimdal v2 modality vocabulary | varies | Heimdal consent-gated (Posture B) | Heimdal |
 
-**Excluded (identified, deliberately out):** BuilderOps records / LearningSignals (dev-time builder telemetry, not lived situations); orchestrator/planner/MCP/agent-internal events (machinery — the chat *session* is the lived-situation representative); sync transports (iCloud/Git — Integration Fabric class 5, never semantic); egress surfaces (notifications, TTS playback). Exclusions live in the registry with `status: excluded` so they are ruled out, not merely absent.
+**Excluded (identified, deliberately out):** `builderops.records` — BuilderOps records / LearningSignals (dev-time builder telemetry, not lived situations); `orchestrator.internals` — orchestrator/planner/MCP/agent-internal events (machinery — the chat *session* is the lived-situation representative); `sync.transports` — sync transports (iCloud/Git — Integration Fabric class 5, never semantic); `egress.surfaces` — egress surfaces (notifications, TTS playback). Exclusions live in the registry with `status: excluded` so they are ruled out, not merely absent.
 
 ## Implementation tasks (execution order)
 
