@@ -24,6 +24,25 @@ ADR-0051 (OD-1/OD-2) fixed the Episode as a note-serialized, vault-canonical Art
    - **No human confirm gate**: a `segmentation: proposed` episode is a low-trust opt-out proposal per ADR-0051 §5 — no DecisionToken/AuthorityReceipt, standing by default. Canonical standing arrives via acceptance (silence) or human re-cut (ERE-07), not via a governed transition.
 4. **Projection**: a rebuildable PG `episodes` projection (Alembic migration, forward-only, following the `decisions` projection precedent at `app/jobs/decisions_projection.py`) — vault notes are the SoR; the projection exists for query (open episodes, bounds lookup for assignment, closure scans) and must fully rebuild from vault (DRI discipline).
 
+## Episode note shape (prose mirror of schema)
+
+Machine-readable contract: [`schemas/episode-note.schema.json`](../../schemas/episode-note.schema.json). This section is its prose mirror, in the style of the `docs/architecture/*` contract docs (e.g. `metadata-bundle.md`).
+
+| Family | Fields | Notes |
+| --- | --- | --- |
+| **identity** | `episode_id` | Fused id, `ep-<uuid>`. A disjoint identifier space from Heimdal's per-capture-session `episode_id` — `app/episodes/ids.py` rejects a fused `episode_id` that is not `ep-`-shaped, and rejects a fused id that echoes one of its own `derived_from` entries. |
+| **frame** | `scope`, `title` | The scope this episode is bound to, and a human-legible title. Both required. |
+| **temporal (situation-model dim.)** | `time.start`, `time.end`, `time.closed` | Minimal temporal commitment per ADR-0051 §3 item 6. `start` and `closed` are required; `end` is populated on closure. `closed` is load-bearing — it drives event-triggered relevance decay (Event Horizon Model), never a TTL. |
+| **space (situation-model dim.)** | `space[]` | Place dimension of the situation model. |
+| **protagonist (situation-model dim.)** | `protagonists[]` | Protagonist dimension of the situation model. |
+| **goal (situation-model dim.)** | `goal[]` | Goal dimension; binds the episode upward to projects/areas. |
+| **causation (situation-model dim.)** | `causation[]` | Causation dimension of the situation model. |
+| **nesting** | `parent_episode` | Fused `episode_id` of a nesting parent episode, or `null`. Grain is non-canonical and nested (ADR-0051 §3 item 3). |
+| **lifecycle** | `segmentation` | `proposed` \| `accepted` \| `re-cut`. `proposed` is a low-trust opt-out capture proposal carrying no DecisionToken/AuthorityReceipt (ADR-0051 §5); `accepted` is standing reached by silent acceptance; `re-cut` is a human correction (ERE-07). Every value writes through the same guarded seam — none of them passes through governed-write. |
+| **provenance** | `derived_from[]` | Source ids this episode fused from — Heimdal per-session `episode_id`s and/or other stream boundary hints. Never equal to this note's own `episode_id`. |
+
+Required top-level fields: `episode_id`, `scope`, `title`, `time`, `segmentation` (`time.start` and `time.closed` are required within `time`). `additionalProperties: false` at both levels — no undeclared field validates.
+
 ## Concretely
 
 ```

@@ -723,6 +723,14 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "own monotonic-status check is not a write gate, so port coverage is "
         "what guards this seam (#3035, Epic #3019 A15 capture note / J0)."
     ),
+    ("app/episodes/store.py", 115): (
+        "guarded_by_port: write_episode_note passes write_guard (and the "
+        "distinct episodes.write_note action) through to write_note_relative, "
+        "which asserts write_guard.assert_writes_allowed(action) at the port "
+        "itself before any I/O (#2910/#2953 precedent); no caller-side assert "
+        "exists in this module by design -- this IS the production seam ERE-02 "
+        "AC2 verifies (#3177)."
+    ),
 }
 
 
