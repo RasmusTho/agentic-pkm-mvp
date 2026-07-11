@@ -186,6 +186,16 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/llm", "tests/eval", "tests/evals", *E2E_TARGETS["llm_eval"]),
     ),
     (
+        "voice",
+        (
+            "app/voice/",
+            "tests/voice/",
+            "docs/MIMER_VOICE_LOOP/",
+            "docs/contracts/MIMER_CLIENT_CONTRACT.md",
+        ),
+        ("tests/voice",),
+    ),
+    (
         "events_receipts",
         ("app/events/", "app/receipts/", "docs/contracts/events/", "tests/events/", "tests/receipts/"),
         ("tests/events", "tests/receipts", "tests/contracts"),
