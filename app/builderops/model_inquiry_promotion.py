@@ -238,15 +238,6 @@ class ModelInquiryPromotionGateway:
                 body=proposal.body,
             )
             issue_body = f"{proposal.body.rstrip()}\n\n{marker}\n"
-            intent = self.service.commit_promotion_intent(
-                inquiry_id,
-                repository=self.repository,
-                marker=marker,
-                title=proposal.title,
-                issue_body=issue_body,
-                source_refs=list(trace["source_refs"]),
-                actor=actor,
-            )
             existing_receipt = next(
                 (
                     receipt
@@ -256,7 +247,29 @@ class ModelInquiryPromotionGateway:
                 None,
             )
             if existing_receipt is not None:
-                return _promotion_result(intent, existing_receipt, reconciled=True)
+                existing_intent = trace.get("promotion_intent")
+                if not isinstance(existing_intent, Mapping):
+                    raise ModelInquiryPromotionError(
+                        "terminal promotion receipt has no promotion intent"
+                    )
+                if (
+                    existing_intent.get("target_repository") != self.repository
+                    or existing_intent.get("promotion_marker") != marker
+                ):
+                    raise ModelInquiryPromotionError(
+                        "completed promotion target does not match existing intent"
+                    )
+                return _promotion_result(existing_intent, existing_receipt, reconciled=True)
+
+            intent = self.service.commit_promotion_intent(
+                inquiry_id,
+                repository=self.repository,
+                marker=marker,
+                title=proposal.title,
+                issue_body=issue_body,
+                source_refs=list(trace["source_refs"]),
+                actor=actor,
+            )
 
             issue = self.client.find_issue_by_marker(marker)
             reconciled = issue is not None
