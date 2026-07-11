@@ -10,6 +10,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from app.dispatcher.models import TaskRecord
 from app.dispatcher.store import SqliteStore
 from app.vault.manager import get_vault_manager
@@ -24,6 +26,7 @@ DEFAULT_SIGNBOARD_SUBPATH = Path("BuilderOpsVault") / "agent-delivery"
 
 _NOTES_HEADING = "## Notes"
 _RECEIPTS_HEADING = "## Receipts"
+_GENERATED_FILENAME_RE = re.compile(r".+--.+\.md$")
 
 
 class NoActiveVaultError(RuntimeError):
@@ -139,6 +142,120 @@ def export_signboard(store: SqliteStore, board_root: Path) -> dict[str, Any]:
         "columns": sorted(set(STATUS_COLUMNS.values())),
         "written": written,
     }
+
+
+def validate_signboard(store: SqliteStore, board_root: Path) -> dict[str, Any]:
+    """Return read-only findings for generated Signboard cards.
+
+    Signboard is a derived projection. This intentionally never repairs cards
+    or updates the dispatcher store; ``export-signboard`` remains the repair
+    operation after a failing validation run.
+    """
+    root = Path(board_root).expanduser()
+    tasks = {
+        task.task_id: task
+        for task in store.list_tasks()
+        if task.status != "_meta"
+    }
+    findings: list[dict[str, str]] = []
+    cards_by_task: dict[str, list[str]] = {}
+
+    for path in sorted(root.rglob("*.md")) if root.is_dir() else []:
+        relative_path = str(path.relative_to(root))
+        text = _read_card_text(path)
+        if text is None:
+            if _GENERATED_FILENAME_RE.fullmatch(path.name):
+                findings.append({
+                    "kind": "unreadable_generated_card_candidate",
+                    "path": relative_path,
+                    "detail": "generated filename candidate could not be read",
+                })
+            continue
+        if not _is_generated_card_text(text):
+            continue
+
+        frontmatter = _parse_generated_frontmatter(text)
+        if frontmatter is None:
+            findings.append({
+                "kind": "malformed_generated_card",
+                "path": relative_path,
+                "detail": "generated card frontmatter is missing or invalid",
+            })
+            continue
+
+        task_id = frontmatter["id"]
+        status = frontmatter["status"]
+        expected_column = column_for_status(status)
+        actual_column = path.parent.name
+        cards_by_task.setdefault(task_id, []).append(relative_path)
+        if actual_column != expected_column or frontmatter["column"] != expected_column:
+            findings.append({
+                "kind": "column_status_mismatch",
+                "path": relative_path,
+                "detail": (
+                    f"status {status!r} belongs in {expected_column!r}; "
+                    f"card column is {actual_column!r} and frontmatter column is "
+                    f"{frontmatter['column']!r}"
+                ),
+            })
+
+        task = tasks.get(task_id)
+        if task is None:
+            findings.append({
+                "kind": "stale_card",
+                "path": relative_path,
+                "detail": f"task {task_id!r} is absent from the dispatcher store",
+            })
+        elif actual_column != column_for_status(task.status):
+            findings.append({
+                "kind": "stale_card",
+                "path": relative_path,
+                "detail": (
+                    f"task {task_id!r} now belongs in "
+                    f"{column_for_status(task.status)!r}"
+                ),
+            })
+
+    for task_id, paths in cards_by_task.items():
+        if len(paths) > 1:
+            findings.append({
+                "kind": "duplicate_card",
+                "path": ", ".join(paths),
+                "detail": f"task {task_id!r} has {len(paths)} generated cards",
+            })
+
+    return {"root": str(root), "count": len(tasks), "findings": findings}
+
+
+def _parse_generated_frontmatter(text: str) -> dict[str, str] | None:
+    """Parse the minimal generated-card schema without accepting loose YAML."""
+    if not text.startswith("---\n"):
+        return None
+    try:
+        _, raw_frontmatter, _ = text.split("---\n", 2)
+        data = yaml.safe_load(raw_frontmatter)
+    except (ValueError, yaml.YAMLError):
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    task_id = data.get("id")
+    issue_number = data.get("issue_number")
+    status = data.get("status")
+    column = data.get("column")
+    if not isinstance(task_id, str) or not task_id.strip():
+        return None
+    if not isinstance(issue_number, int) or isinstance(issue_number, bool):
+        return None
+    if not isinstance(status, str) or not status.strip():
+        return None
+    if not isinstance(column, str) or not column.strip():
+        return None
+    try:
+        canonical = canonical_status(status)
+    except ValueError:
+        return None
+    return {"id": task_id, "status": canonical, "column": column}
 
 
 def _task_filename(task: TaskRecord) -> str:
