@@ -143,18 +143,25 @@ async def test_readyz_status_do_not_block_event_loop(monkeypatch) -> None:
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        # Completion-ordering assertion, not a wall-clock threshold (see the
+        # /api/health twin in tests/api/test_health_api.py for why order is the
+        # only reliable discriminator on a single-loop ASGI transport): race the
+        # slow endpoint against a trivial `/healthz` and require `/healthz` to
+        # finish first. Only the threadpool offload lets it overtake.
+        async def _hit(order: list[str], path: str) -> httpx.Response:
+            resp = await client.get(path)
+            order.append(path)
+            return resp
+
         for endpoint in ("/readyz", "/status"):
-            task = asyncio.create_task(client.get(endpoint))
-            await asyncio.sleep(0.1)
-
-            started = _time.perf_counter()
-            healthz_resp = await client.get("/healthz")
-            healthz_elapsed = _time.perf_counter() - started
-
-            assert healthz_resp.status_code == 200
-            assert healthz_elapsed < 0.5, (
-                f"/healthz blocked for {healthz_elapsed:.3f}s while {endpoint} in flight"
+            order: list[str] = []
+            slow_resp, healthz_resp = await asyncio.gather(
+                _hit(order, endpoint), _hit(order, "/healthz")
             )
 
-            resp = await task
-            assert resp.status_code == 200
+            assert healthz_resp.status_code == 200
+            assert slow_resp.status_code == 200
+            assert order[0] == "/healthz", (
+                f"completion order was {order}; /healthz did not overtake a "
+                f"blocked {endpoint}, so evaluate() is not offloaded off the loop"
+            )

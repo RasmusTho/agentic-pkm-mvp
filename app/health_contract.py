@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import timezone, datetime, timedelta
@@ -241,14 +242,20 @@ class HealthStateMachine:
     bad_counter: int = 0
     good_counter: int = 0
     transition_history: list[dict[str, str]] = field(default_factory=list)
+    # Serializes the non-atomic read-modify-write on the counters/state/history
+    # below. The /readyz and /status handlers now offload evaluate() to a
+    # threadpool (#3461), so two evaluate() calls can run update() truly in
+    # parallel; on the old inline-on-the-event-loop path they were serialized.
+    _lock: threading.Lock = field(default_factory=threading.Lock, compare=False, repr=False)
 
     def reset(self) -> None:
-        self.state = "boot"
-        self.reason = "initializing"
-        self.since = datetime.now(timezone.utc)  # noqa: UP017
-        self.bad_counter = 0
-        self.good_counter = 0
-        self.transition_history = []
+        with self._lock:
+            self.state = "boot"
+            self.reason = "initializing"
+            self.since = datetime.now(timezone.utc)  # noqa: UP017
+            self.bad_counter = 0
+            self.good_counter = 0
+            self.transition_history = []
 
     def update(
         self,
@@ -258,48 +265,51 @@ class HealthStateMachine:
         now: datetime | None = None,
     ) -> tuple[str, str, str]:
         now = now or datetime.now(timezone.utc)  # noqa: UP017
-        prev_state = self.state
-        next_state = self.state
-        reason = self.reason
-        degrade_limit = thresholds.outbox_degrade_oldest_age_s
-        recover_limit = thresholds.outbox_recover_oldest_age_s
-        degrade_samples = thresholds.degrade_samples
-        recover_samples = thresholds.recover_samples
+        # _record_transition() is called below while this lock is held; it must
+        # not re-acquire (threading.Lock is non-reentrant).
+        with self._lock:
+            prev_state = self.state
+            next_state = self.state
+            reason = self.reason
+            degrade_limit = thresholds.outbox_degrade_oldest_age_s
+            recover_limit = thresholds.outbox_recover_oldest_age_s
+            degrade_samples = thresholds.degrade_samples
+            recover_samples = thresholds.recover_samples
 
-        if age > degrade_limit:
-            self.bad_counter += 1
-            self.good_counter = 0
-            if self.bad_counter >= degrade_samples:
-                next_state = "degraded"
-                reason = f"outbox idle, last event {age:.1f}s ago"
-            else:
-                next_state = "catch_up"
-                reason = f"catching up (last event {age:.1f}s ago)"
-        elif age < recover_limit:
-            self.good_counter += 1
-            self.bad_counter = 0
-            if self.state in {"degraded", "recovery"}:
-                if self.good_counter >= recover_samples:
-                    next_state = "running"
-                    reason = "outbox activity recovered"
+            if age > degrade_limit:
+                self.bad_counter += 1
+                self.good_counter = 0
+                if self.bad_counter >= degrade_samples:
+                    next_state = "degraded"
+                    reason = f"outbox idle, last event {age:.1f}s ago"
                 else:
-                    next_state = "recovery"
-                    reason = "recovering (activity improving)"
+                    next_state = "catch_up"
+                    reason = f"catching up (last event {age:.1f}s ago)"
+            elif age < recover_limit:
+                self.good_counter += 1
+                self.bad_counter = 0
+                if self.state in {"degraded", "recovery"}:
+                    if self.good_counter >= recover_samples:
+                        next_state = "running"
+                        reason = "outbox activity recovered"
+                    else:
+                        next_state = "recovery"
+                        reason = "recovering (activity improving)"
+                else:
+                    next_state = "running"
+                    reason = "recent activity"
             else:
+                self.bad_counter = 0
+                self.good_counter = 0
                 next_state = "running"
                 reason = "recent activity"
-        else:
-            self.bad_counter = 0
-            self.good_counter = 0
-            next_state = "running"
-            reason = "recent activity"
 
-        if next_state != prev_state:
-            self.state = next_state
-            self.reason = reason
-            self.since = now
-            self._record_transition()
-        return self.state, self.reason, self.since.isoformat()
+            if next_state != prev_state:
+                self.state = next_state
+                self.reason = reason
+                self.since = now
+                self._record_transition()
+            return self.state, self.reason, self.since.isoformat()
 
     def _record_transition(self) -> None:
         entry = _transition_entry(self.state, self.reason, self.since)

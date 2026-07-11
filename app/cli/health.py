@@ -64,8 +64,14 @@ def _health_probe_timeout() -> float:
     provisioned for real LLM generation (60–120s elsewhere) and must never leak
     into a liveness probe, or `/api/health` blocks for minutes (#3461). Override
     with `HEALTH_PROBE_TIMEOUT` for a tighter/looser bound.
+
+    The default preserves the historical 5s health-probe bound (previously the
+    `LLM_TIMEOUT` fallback default), so a benign multi-second `/api/tags`
+    response — a cold model listing or a momentarily loaded host — does not
+    false-negative the required `llm_task_routes` check; the fix is decoupling
+    from a possibly-huge `LLM_TIMEOUT`, not tightening the bound.
     """
-    return _env_float("HEALTH_PROBE_TIMEOUT", 2.0)
+    return _env_float("HEALTH_PROBE_TIMEOUT", 5.0)
 
 
 def _is_enabled(env_name: str, default: bool = True) -> bool:

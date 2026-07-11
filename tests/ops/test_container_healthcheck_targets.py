@@ -18,6 +18,11 @@ yaml = pytest.importorskip("yaml")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILES = sorted(REPO_ROOT.glob("docker-compose*.y*ml"))
+# The base api healthcheck runs `urlopen(os.environ['API_HEALTHCHECK_URL'])`;
+# base/dev/app-bind stacks don't set that env inline, so its effective default
+# lives here. Scanning only inline compose env would miss a regression to this
+# canonical default (#3461 review finding).
+RUNTIME_DEFAULTS_ENV = REPO_ROOT / "config" / "runtime.defaults.env"
 
 
 class _ComposeLoader(yaml.SafeLoader):
@@ -77,8 +82,35 @@ def _api_healthcheck_urls(doc: object) -> Iterator[tuple[str, str]]:
                     yield name, item.split("=", 1)[1]
 
 
+def _default_api_healthcheck_url() -> str | None:
+    if not RUNTIME_DEFAULTS_ENV.exists():
+        return None
+    for raw in RUNTIME_DEFAULTS_ENV.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line.startswith("API_HEALTHCHECK_URL="):
+            return line.split("=", 1)[1].strip()
+    return None
+
+
 def test_compose_files_present() -> None:
     assert COMPOSE_FILES, "no docker-compose files found at repo root"
+
+
+def test_base_compose_parses_with_api_healthcheck() -> None:
+    """Coverage guard: a silent parse skip must not let the offender scan pass green.
+
+    `_load_compose` returns None on an empty/malformed doc and `_services`
+    swallows non-mappings, so the offender scan below would vacuously pass if the
+    base file stopped parsing. Assert the base file really yields an `api` service
+    with a healthcheck, so a parse regression fails loudly here instead.
+    """
+    base = REPO_ROOT / "docker-compose.yaml"
+    assert base in COMPOSE_FILES, "base docker-compose.yaml missing from scan set"
+    services = _services(_load_compose(base))
+    assert "api" in services, "base docker-compose.yaml has no `api` service"
+    assert isinstance(services["api"].get("healthcheck"), dict), (
+        "base api service lost its healthcheck definition"
+    )
 
 
 def test_no_container_healthcheck_targets_api_health() -> None:
@@ -95,4 +127,22 @@ def test_no_container_healthcheck_targets_api_health() -> None:
     assert not offenders, (
         "Container healthchecks must target /healthz or /readyz, never the heavy "
         f"/api/health diagnostic (#3461). Offenders: {offenders}"
+    )
+
+
+def test_default_api_healthcheck_url_does_not_target_api_health() -> None:
+    """The canonical `API_HEALTHCHECK_URL` default must not be the heavy diagnostic.
+
+    Base/dev/app-bind stacks inherit this default (they set no inline value), so a
+    regression here would silently point every such container's liveness probe at
+    `/api/health` while the inline-only compose scan stayed green (#3461).
+    """
+    default_url = _default_api_healthcheck_url()
+    assert default_url is not None, (
+        f"API_HEALTHCHECK_URL default missing from {RUNTIME_DEFAULTS_ENV}; the base "
+        "api healthcheck would probe an unset env"
+    )
+    assert "/api/health" not in default_url, (
+        f"Default API_HEALTHCHECK_URL must target /healthz or /readyz, not the heavy "
+        f"/api/health diagnostic (#3461). Got: {default_url}"
     )

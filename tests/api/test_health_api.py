@@ -452,20 +452,30 @@ async def test_health_endpoint_does_not_block_event_loop(monkeypatch) -> None:
     monkeypatch.setattr(health_route, "run_health", _slow_run_health)
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        health_task = asyncio.create_task(client.get("/api/health"))
-        # Let the /api/health request start and enter the threadpool offload.
-        await asyncio.sleep(0.1)
+    # Completion-ordering assertion, not a wall-clock threshold: race the slow
+    # `/api/health` against a trivial `/healthz` and require `/healthz` to finish
+    # FIRST. With the threadpool offload, `/api/health` yields the loop while it
+    # blocks in a worker thread, so `/healthz` overtakes it. If `run_health` ran
+    # inline (the #3461 bug), the handler would freeze the single event loop for
+    # ~1s and `/api/health` would complete first — a wall-clock "healthz < 0.5s"
+    # check would false-green here because the inline block drains before the
+    # measurement window, so order is the only reliable discriminator.
+    order: list[str] = []
 
-        started = _time.perf_counter()
-        healthz_resp = await client.get("/healthz")
-        healthz_elapsed = _time.perf_counter() - started
+    async def _hit(path: str) -> httpx.Response:
+        resp = await client.get(path)
+        order.append(path)
+        return resp
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        health_resp, healthz_resp = await asyncio.gather(
+            _hit("/api/health"), _hit("/healthz")
+        )
 
         assert healthz_resp.status_code == 200
-        # If run_health ran inline, the loop would be blocked ~1s and this would
-        # be far slower. The offload keeps the loop free.
-        assert healthz_elapsed < 0.5, f"/healthz blocked for {healthz_elapsed:.3f}s"
-
-        health_resp = await health_task
         assert health_resp.status_code == 200
         assert health_resp.json()["ok"] is True
+        assert order[0] == "/healthz", (
+            f"completion order was {order}; /healthz did not overtake a blocked "
+            "/api/health, so run_health is not offloaded off the event loop"
+        )

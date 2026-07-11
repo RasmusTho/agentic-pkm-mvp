@@ -91,7 +91,7 @@ The API runs single-process uvicorn (one event loop). `run_health()` and the hea
 
 Before #3461 these ran inline. Because companion-UI polls `/api/health` continuously (see the False-green register), a single slow provider probe saturated the loop and stacked requests until even `/healthz` timed out externally — a self-inflicted prod outage.
 
-**Bounded probe timeout.** External health probes use a dedicated `HEALTH_PROBE_TIMEOUT` (float seconds, default `2.0`), **not** `LLM_TIMEOUT`. `LLM_TIMEOUT` is provisioned for real generation (60–120s) and must never leak into a liveness probe. The ollama probe is also evaluated **at most once per `run_health()` call** and reused for every ollama task-route, instead of re-probing per route.
+**Bounded probe timeout.** External health probes use a dedicated `HEALTH_PROBE_TIMEOUT` (float seconds, default `5.0`), **not** `LLM_TIMEOUT`. `LLM_TIMEOUT` is provisioned for real generation (60–120s) and must never leak into a liveness probe. The default preserves the historical 5s bound (the old `LLM_TIMEOUT` fallback default), so a benign multi-second `/api/tags` response does not false-negative the required `llm_task_routes` check — the fix is decoupling from a possibly-huge `LLM_TIMEOUT`, not tightening the bound. The ollama probe is also evaluated **at most once per `run_health()` call** and reused for every ollama task-route, instead of re-probing per route.
 
 **Container-healthcheck invariant.** Container liveness healthchecks must target `/healthz` or `/readyz` (dependency-light), **never** the heavy `/api/health` diagnostic — provider slowness on `/api/health` must not flip container health or trigger restart loops. Enforced by `tests/ops/test_container_healthcheck_targets.py`.
 
