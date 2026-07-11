@@ -212,11 +212,24 @@ services:
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
+    # Run an init (tini) as PID 1 so signals are forwarded and exited
+    # healthcheck-probe processes are reaped. Without this the entrypoint shell
+    # is PID 1 and never wait()s on orphaned probes, which — combined with the
+    # old heavy shell-wrapped probe — leaked unbounded stuck processes (see the
+    # healthcheck note below and app/runtime/health_probe.py).
+    init: true
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import sys; from app.cli.health import _worker_runtime_status; r=_worker_runtime_status(); sys.exit(0 if r.get('ok') else 1)\""]
-      interval: 20s
-      timeout: 15s
+      # Direct exec form (not CMD-SHELL): no `sh -c` wrapper, so Docker's
+      # timeout kill targets the python process itself instead of leaving an
+      # orphaned import child reparented to PID 1. The lean probe module has a
+      # stdlib-only import graph and a self-imposed SIGALRM deadline, so it
+      # completes in well under the timeout and can never accumulate. `interval`
+      # is kept strictly greater than `timeout` so probes never overlap.
+      test: ["CMD", "python", "-m", "app.runtime.health_probe", "worker"]
+      interval: 30s
+      timeout: 12s
       retries: 3
+      start_period: 30s
 
   watcher:
     build:
@@ -265,11 +278,19 @@ services:
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
+    # See the worker service: init reaps exited probe processes, and the lean
+    # direct-exec probe cannot accumulate.
+    init: true
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import sys; from app.cli.health import _watcher_runtime_status; r=_watcher_runtime_status(); sys.exit(0 if r.get('ok') else 1)\""]
-      interval: 5s
-      timeout: 15s
-      retries: 10
+      # `interval` (20s) > `timeout` (12s) so probes never overlap — the old
+      # 5s interval against a 15s timeout guaranteed a thundering herd of
+      # overlapping heavy probes. retries*interval (~80s) still flips unhealthy
+      # comfortably past the 60s heartbeat-staleness threshold.
+      test: ["CMD", "python", "-m", "app.runtime.health_probe", "watcher"]
+      interval: 20s
+      timeout: 12s
+      retries: 4
+      start_period: 30s
 
   # Heimdal capture-watch (#3098, follow-up to #3094/#3025): drives the
   # voice-memo capture adapter against a real watched folder (an

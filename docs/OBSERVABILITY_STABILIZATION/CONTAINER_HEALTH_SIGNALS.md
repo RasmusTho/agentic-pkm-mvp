@@ -44,6 +44,29 @@ and `watcher` (`:158-159`) from plain service names to
 `condition: service_healthy` against `db`, which already defines a real
 `pg_isready` healthcheck (`:9-14`) that nothing currently consumes.
 
+### Hardening follow-up (2026-07-11)
+
+The freshness logic is unchanged, but the *probe delivery* was hardened after a
+real resource leak on the test channel: the original `CMD-SHELL`
+`python -c "... from app.cli.health import ..."` invocation cold-imported the
+entire `app.cli` package (click/httpx/watchfiles + the ingest/LLM/DB stack)
+every interval. Combined with containers that ran without an init/reaper and a
+watcher `interval` (5 s) *below* its `timeout` (15 s), timed-out probes were
+orphaned onto the non-reaping entrypoint PID 1 and accumulated unbounded — a
+thundering-herd feedback loop that drove load into the hundreds while the
+container reported `unhealthy` regardless of actual heartbeat freshness
+(defeating the AC below).
+
+The canonical status functions now live in the lean, stdlib-scale
+`app/runtime/health_probe.py` (re-exported from `app/cli/health.py` for the
+`/api/health` path and existing callers). The container healthcheck invokes
+`python -m app.runtime.health_probe worker|watcher` via the **direct `CMD` exec
+form** (no shell wrapper, so Docker's timeout kill targets the python process
+itself), the worker/watcher services set **`init: true`** (tini reaps exited
+probes and forwards signals), the probe arms a **`SIGALRM` self-timeout** so it
+can never hang or accumulate independent of Docker, and both healthchecks keep
+**`interval > timeout`**. Guarded by `tests/invariants/test_health_probe.py`.
+
 ## Concretely
 
 ```bash

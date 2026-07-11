@@ -9,8 +9,9 @@ Verifies:
 All four tests parse / execute the REAL artifacts (the actual probe command from
 docker-compose.yaml and the actual compose YAML) — no stubs of the thing under test.
 
-Docker is NOT required: the freshness tests invoke the probe as an in-process
-Python call, and the compose tests parse the YAML statically.
+Docker is NOT required: the freshness tests run the real probe command
+(``python -m app.runtime.health_probe worker|watcher``) as a subprocess, and the
+compose tests parse the YAML statically.
 
 Freshness is keyed on the heartbeat JSON ``ts`` field, NOT file mtime.
 A ``touch`` on the heartbeat file would NOT register as stale because the probe
@@ -50,15 +51,16 @@ def _write_stale_heartbeat(path: Path) -> None:
     path.write_text(json.dumps({"ts": stale_ts, "status": "running"}), encoding="utf-8")
 
 
-def _run_probe(probe_snippet: str, env_overrides: dict[str, str]) -> subprocess.CompletedProcess:
-    """Execute a probe Python snippet as a subprocess so we get the real exit code."""
+def _run_probe(probe_command: list[str], env_overrides: dict[str, str]) -> subprocess.CompletedProcess:
+    """Execute the real probe command as a subprocess so we get the real exit code."""
     import os
 
     env = os.environ.copy()
     env.update(env_overrides)
     return subprocess.run(
-        [sys.executable, "-c", probe_snippet],
+        probe_command,
         env=env,
+        cwd=str(REPO_ROOT),
         capture_output=True,
     )
 
@@ -71,24 +73,24 @@ def _load_compose() -> dict:
     return yaml.safe_load(COMPOSE_PATH.read_text(encoding="utf-8"))
 
 
-def _probe_snippet(service: str, compose: dict) -> str:
-    """Return the Python snippet that the service healthcheck runs (strips CMD-SHELL prefix)."""
+def _probe_command(service: str, compose: dict) -> list[str]:
+    """Return the real healthcheck command argv for a service, runnable directly.
+
+    The worker/watcher healthchecks use the direct ``CMD`` exec form
+    ``["CMD", "python", "-m", "app.runtime.health_probe", "<service>"]`` (no
+    shell wrapper — see docker-compose.yaml and the OBSSTAB hardening note). The
+    leading ``python`` is mapped to the test interpreter so the exact same
+    module runs under the current environment.
+    """
     test_cmd = compose["services"][service]["healthcheck"]["test"]
-    # test_cmd is ["CMD-SHELL", "<snippet>"]
-    assert test_cmd[0] == "CMD-SHELL", f"Expected CMD-SHELL for {service}, got {test_cmd[0]}"
-    raw = test_cmd[1]
-    # The snippet is a python -c "..." command; extract the Python body.
-    # Format: python -c "..." or python3 -c "..."
-    # We execute the full shell command as a Python snippet through subprocess,
-    # but for the freshness probes the snippet IS Python, so we extract and run it directly.
-    assert raw.startswith("python ") or raw.startswith("python3 "), (
-        f"Expected probe to start with python[-c] for {service}; got: {raw[:60]}"
+    assert test_cmd[0] == "CMD", (
+        f"Expected direct CMD exec form for {service} (no shell wrapper), got {test_cmd[0]!r}"
     )
-    # Strip the `python -c "..."` wrapper to get the inner expression
-    for prefix in ('python -c "', 'python3 -c "'):
-        if raw.startswith(prefix):
-            return raw[len(prefix) : -1]  # strip leading prefix and trailing "
-    raise AssertionError(f"Could not parse probe snippet for {service}: {raw}")
+    argv = list(test_cmd[1:])
+    assert argv[:1] in (["python"], ["python3"]), (
+        f"Expected probe to invoke python for {service}; got: {argv}"
+    )
+    return [sys.executable, *argv[1:]]
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +105,7 @@ def test_worker_unhealthy_on_stale_heartbeat(tmp_path: pytest.TempPathFactory) -
     exact probe snippet extracted from docker-compose.yaml.
     """
     compose = _load_compose()
-    probe = _probe_snippet("worker", compose)
+    probe = _probe_command("worker", compose)
 
     heartbeat_path = tmp_path / "worker_heartbeat.json"
     _write_stale_heartbeat(heartbeat_path)
@@ -135,7 +137,7 @@ def test_watcher_unhealthy_on_stale_heartbeat(tmp_path: pytest.TempPathFactory) 
     Freshness is keyed on the JSON ``ts`` field — NOT file mtime.
     """
     compose = _load_compose()
-    probe = _probe_snippet("watcher", compose)
+    probe = _probe_command("watcher", compose)
 
     heartbeat_path = tmp_path / "watcher_heartbeat.json"
     _write_stale_heartbeat(heartbeat_path)
