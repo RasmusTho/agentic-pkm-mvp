@@ -7,12 +7,19 @@ import subprocess
 import pytest
 
 
+def _docker_daemon_is_available() -> bool:
+    try:
+        return subprocess.run(
+            ["docker", "info"], capture_output=True, text=True, timeout=15
+        ).returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
+
+
 if not shutil.which("docker"):
     pytestmark = pytest.mark.skip(reason="docker is required for reset-zero-force tests")
-else:
-    docker_info = subprocess.run(["docker", "info"], capture_output=True, text=True)
-    if docker_info.returncode != 0:
-        pytestmark = pytest.mark.skip(reason="a running docker daemon is required for reset-zero-force tests")
+elif not _docker_daemon_is_available():
+    pytestmark = pytest.mark.skip(reason="a running docker daemon is required for reset-zero-force tests")
 
 def test_reset_zero_force_exits_zero():
     """Test that make reset-zero-force exits with code 0."""

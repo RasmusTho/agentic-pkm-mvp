@@ -31,6 +31,19 @@ ALLOW_FILES = (
     # for app/services/decisions.py and app/jobs/backfill.py above.
     'app/receipts/decision_receipt_log.py',
     'app/jobs/decisions_projection.py',
+    # Decision-outcome receipt log + its projection writer (issue #3502). Same
+    # bounded pattern as the decision-receipt log / decisions-projection pair
+    # above: the vault JSONL receipt is canonical, `decision_outcomes` is a
+    # rebuildable projection written only through conn_rw after the receipt is
+    # durable. Moved out of app.store (deprecated) into app/receipts/ so the
+    # caller no longer touches the deprecated store facade; the projection
+    # writer keeps its direct, bounded DB access here rather than routing
+    # through app.store.
+    'app/receipts/outcome_receipt_projection.py',
+    # Episode notes projection rebuild/doctor (ERE-02, #3177). Vault-canonical
+    # Episode notes are the SoR; the `episodes` table is a rebuildable projection.
+    # Same bounded pattern already allowed for app/jobs/decisions_projection.py above.
+    'app/jobs/episodes_projection.py',
     'app/store/relation_index.py',
     'app/memory_kv/store.py',
     'app/agent/repository.py',

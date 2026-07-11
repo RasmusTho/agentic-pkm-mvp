@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from app.knowledge import write_ops
 from app.knowledge.contracts import WriteReceipt
 from app.knowledge.settings import KnowledgeAdapter, KnowledgeSettings
+from app.write_guard import WriteGuard, WritesBlockedError
 
 
 def test_default_vault_root_for_path_uses_filesystem_anchor(tmp_path: Path) -> None:
@@ -132,6 +135,46 @@ def test_append_note_relative_uses_port_append(monkeypatch, tmp_path: Path) -> N
     assert captured["path"] == "Inbox/log.md"
     assert captured["vault"] == "Vault"
     assert captured["content"] == "line\n"
+
+
+def test_append_note_relative_rejects_unhealthy_write_guard(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        write_ops,
+        "resolve_knowledge_port",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("port should not resolve")),
+    )
+    guard = WriteGuard(lambda: {"state": "safe_mode", "reason": "test-induced block"})
+
+    with pytest.raises(WritesBlockedError):
+        write_ops.append_note_relative(
+            "Inbox/log.md",
+            "line\n",
+            vault_root=tmp_path,
+            write_guard=guard,
+        )
+
+
+def test_append_note_relative_allows_healthy_write_guard(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    class FakePort:
+        def append_note(self, locator, content):  # type: ignore[no-untyped-def]
+            captured["path"] = locator.path
+            captured["content"] = content
+            return WriteReceipt(operation="append_note", locator=locator, adapter="fake")
+
+    monkeypatch.setattr(write_ops, "resolve_knowledge_port", lambda **_kwargs: FakePort())
+    guard = WriteGuard(lambda: {"state": "healthy", "reason": None})
+
+    receipt = write_ops.append_note_relative(
+        "Inbox/log.md",
+        "line\n",
+        vault_root=tmp_path,
+        write_guard=guard,
+    )
+
+    assert receipt.operation == "append_note"
+    assert captured == {"path": "Inbox/log.md", "content": "line\n"}
 
 
 def test_advanced_uri_from_vault_path_inside_root(tmp_path: Path) -> None:

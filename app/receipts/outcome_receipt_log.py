@@ -16,7 +16,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.config.paths import resolve_optional_vault_root
-from app.store.outcome_receipt_projection import (
+from app.receipts.outcome_receipt_projection import (
     insert_outcome_receipt_projection as _insert_projection,
 )
 from app.vault.paths import NoVaultSelectedError, resolve_vault_system_dir_rel_or_default
