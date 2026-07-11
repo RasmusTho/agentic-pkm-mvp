@@ -41,19 +41,51 @@ def test_single_asr_engine_owner() -> None:
     for path in app_root.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         imports_whisper = any(
-            isinstance(node, ast.ImportFrom) and node.module == "faster_whisper"
+            (isinstance(node, ast.ImportFrom) and node.module == "faster_whisper")
+            or (
+                isinstance(node, ast.Import)
+                and any(alias.name == "faster_whisper" for alias in node.names)
+            )
             for node in ast.walk(tree)
         )
         constructs_whisper = any(
             isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "WhisperModel"
+            and (
+                (isinstance(node.func, ast.Name) and node.func.id == "WhisperModel")
+                or (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "WhisperModel"
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "faster_whisper"
+                )
+            )
             for node in ast.walk(tree)
         )
         if imports_whisper or constructs_whisper:
             owners.append(path.relative_to(app_root.parent))
 
     assert owners == [Path("app/media/transcribe.py")], f"unexpected ASR engine owner(s): {owners}"
+
+
+def test_asr_owner_scan_rejects_module_attribute_construction() -> None:
+    """The no-fork scan catches ``import faster_whisper`` ownership too."""
+
+    tree = ast.parse("import faster_whisper\nfaster_whisper.WhisperModel('base')\n")
+    imports_whisper = any(
+        isinstance(node, ast.Import)
+        and any(alias.name == "faster_whisper" for alias in node.names)
+        for node in ast.walk(tree)
+    )
+    constructs_whisper = any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "faster_whisper"
+        and node.func.attr == "WhisperModel"
+        for node in ast.walk(tree)
+    )
+
+    assert imports_whisper and constructs_whisper
 
 
 def test_voice_path_is_ephemeral_and_ungated(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -72,6 +104,38 @@ def test_voice_path_is_ephemeral_and_ungated(monkeypatch: pytest.MonkeyPatch) ->
 
     assert not observed["path"].exists()
     assert "read_raw_record(" not in inspect.getsource(transcription)
+
+
+def test_voice_path_unlinks_partial_wav_when_write_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A write failure cannot leave a partial voice query on disk."""
+
+    partial_wav = tmp_path / "partial.wav"
+    partial_wav.touch()
+
+    class FailingHandle:
+        name = str(partial_wav)
+
+        def __enter__(self) -> "FailingHandle":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def write(self, _: bytes) -> None:
+            raise OSError("disk full")
+
+    monkeypatch.setattr(
+        transcription.tempfile,
+        "NamedTemporaryFile",
+        lambda **_: FailingHandle(),
+    )
+
+    with pytest.raises(OSError, match="disk full"):
+        transcription.transcribe_voice_wav(b"partial wav")
+
+    assert not partial_wav.exists()
 
 
 def test_voice_path_posture_parity(monkeypatch: pytest.MonkeyPatch) -> None:

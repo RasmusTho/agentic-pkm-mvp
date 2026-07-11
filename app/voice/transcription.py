@@ -27,8 +27,8 @@ def transcribe_voice_wav(wav_bytes: bytes) -> dict[str, Any]:
     temp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
-            handle.write(wav_bytes)
             temp_path = Path(handle.name)
+            handle.write(wav_bytes)
         try:
             return run_asr(temp_path)
         except LocalAsrUnavailableError:
