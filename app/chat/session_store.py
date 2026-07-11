@@ -11,6 +11,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from app.chat.session_log import SessionLog
+from app.services.note_uuid import ensure_note_uuid
 
 
 class SessionStore:
@@ -26,12 +27,18 @@ class SessionStore:
         if not session_file.exists():
             return None
         data = json.loads(session_file.read_text(encoding="utf-8"))
+        note_path = Path(data["note_path"])
+        vault_root = Path(data.get("vault_root") or self._vault_root)
+        note_uuid = data.get("note_uuid")
+        if note_uuid is None:
+            note_uuid = ensure_note_uuid(note_path, vault_root=vault_root)
         return SessionLog(
             log_path=Path(data["log_path"]),
             session_id=data["session_id"],
-            note_path=Path(data["note_path"]),
+            note_path=note_path,
             label=data["label"],
-            vault_root=Path(data.get("vault_root") or self._vault_root),
+            vault_root=vault_root,
+            note_uuid=note_uuid,
         )
 
     def save(self, session: SessionLog) -> None:
