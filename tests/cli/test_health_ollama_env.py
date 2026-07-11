@@ -21,7 +21,7 @@ def test_health_ollama_check_accepts_openai_base_url(monkeypatch) -> None:
 
     def fake_get(url: str, timeout: float) -> DummyResponse:
         assert url == "http://ollama.local:11434/v1/api/tags"
-        assert timeout == 5.0
+        assert timeout == 2.0
         return DummyResponse()
 
     monkeypatch.setattr(health_module.httpx, "get", fake_get)
