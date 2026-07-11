@@ -374,6 +374,15 @@ def test_episodes_runtime_change_selects_episodes_coverage() -> None:
             "schemas/episode-note.schema.json",
             "tests/episodes/test_stream_registry.py",
             "docs/EPISODE_RESOLUTION_ENGINE/STREAM_REGISTRY_AND_SIGNAL_CONTRACT.md",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("episodes",)
+    assert selection.unowned_paths == ()
+    assert "tests/episodes" in selection.targets
+    assert "tests/invariants" in selection.targets
+    assert "tests/episodes/test_stream_registry.py" in selection.targets
 
 def test_standing_questions_store_and_migration_change_selects_owned_coverage() -> None:
     selection = select_tests(
@@ -387,11 +396,10 @@ def test_standing_questions_store_and_migration_change_selects_owned_coverage() 
     )
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("episodes",)
+    assert selection.subsystems == ("standing_questions",)
     assert selection.unowned_paths == ()
-    assert "tests/episodes" in selection.targets
-    assert "tests/invariants" in selection.targets
-    assert "tests/episodes/test_stream_registry.py" in selection.targets
+    assert "tests/standing_questions" in selection.targets
+    assert "tests/standing_questions/test_question_projection.py" in selection.targets
 
 
 def test_bundle_schema_and_invariant_change_selects_episodes_coverage() -> None:
@@ -407,13 +415,6 @@ def test_bundle_schema_and_invariant_change_selects_episodes_coverage() -> None:
     assert selection.unowned_paths == ()
     assert "tests/invariants" in selection.targets
     assert "tests/invariants/test_episode_binding.py" in selection.targets
-
-    
-    assert selection.subsystems == ("standing_questions",)
-    assert selection.unowned_paths == ()
-    assert "tests/standing_questions" in selection.targets
-    assert "tests/standing_questions/test_question_projection.py" in selection.targets
-
 
 def test_builder_system_change_selects_its_own_regression_tests() -> None:
     selection = select_tests(["app/builderops/cli.py"])
