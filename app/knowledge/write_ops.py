@@ -48,6 +48,8 @@ def write_note_from_absolute(
     vault_root: Path | str,
     action: str = KNOWLEDGE_WRITE_ACTION,
     write_guard: "WriteGuard | None" = None,
+    expected_version: str | None = None,
+    writer_identity: str | None = None,
 ) -> WriteReceipt:
     # Guard-at-seam (#2910): assert WriteGuard inside the port itself, before
     # any path resolution or filesystem mutation, so a blocked write is
@@ -75,7 +77,12 @@ def write_note_from_absolute(
     locator = make_note_locator_from_absolute(resolved_path, vault_root=resolved_root)
     # Absolute path writes target the local filesystem boundary directly.
     port = resolve_knowledge_port(vault_root=resolved_root, settings=_local_fs_settings())
-    return port.write_note(locator, content)
+    kwargs: dict[str, str] = {}
+    if expected_version is not None:
+        kwargs["expected_version"] = expected_version
+    if writer_identity is not None:
+        kwargs["writer_identity"] = writer_identity
+    return port.write_note(locator, content, **kwargs)
 
 
 def write_note_relative(
@@ -85,6 +92,8 @@ def write_note_relative(
     vault_root: Path | str,
     action: str = KNOWLEDGE_WRITE_ACTION,
     write_guard: "WriteGuard | None" = None,
+    expected_version: str | None = None,
+    writer_identity: str | None = None,
 ) -> WriteReceipt:
     # Guard-at-seam (#2953, extending #2910): assert WriteGuard inside this
     # port too, before any path resolution or filesystem mutation, mirroring
@@ -112,7 +121,12 @@ def write_note_relative(
     resolved_root = Path(vault_root).expanduser().resolve()
     locator = make_note_locator(note_rel_path)
     port = resolve_knowledge_port(vault_root=resolved_root, settings=_local_fs_settings())
-    return port.write_note(locator, content)
+    kwargs: dict[str, str] = {}
+    if expected_version is not None:
+        kwargs["expected_version"] = expected_version
+    if writer_identity is not None:
+        kwargs["writer_identity"] = writer_identity
+    return port.write_note(locator, content, **kwargs)
 
 
 def append_note_relative(

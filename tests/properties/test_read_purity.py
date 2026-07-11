@@ -29,6 +29,7 @@ exercised by this GET-only route-walk (see that module's P-3 section).
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -250,7 +251,12 @@ def test_unregistered_route_write_fails(monkeypatch: pytest.MonkeyPatch, tmp_pat
         # fixture the AC requires. Call through the MODULE reference (not a
         # name imported before the spy patches it) so the monkeypatch inside
         # spy_on_durable_writes actually intercepts this call.
-        write_ops_mod.write_note_from_absolute(note, "---\ntitle: X\n---\n\nBody\n", vault_root=vault_root)
+        write_ops_mod.write_note_from_absolute(
+            note,
+            "---\ntitle: X\n---\n\nBody\n",
+            vault_root=vault_root,
+            expected_version=hashlib.sha256(note.read_bytes()).hexdigest(),
+        )
         return {"ok": True}
 
     probe_client = TestClient(probe_app)

@@ -563,13 +563,13 @@ def spy_on_durable_writes(
         )
         return original_write_frontmatter(self, path, frontmatter, body=body)
 
-    def traced_write_note_from_absolute(path: Any, content: Any, *, vault_root: Any) -> Any:
+    def traced_write_note_from_absolute(path: Any, content: Any, *, vault_root: Any, **kwargs: Any) -> Any:
         spy.record(
             seam="app.knowledge.write_ops::write_note_from_absolute",
             caller=_immediate_caller_qualname(),
             args_repr=f"path={path!r}",
         )
-        return original_write_note_from_absolute(path, content, vault_root=vault_root)
+        return original_write_note_from_absolute(path, content, vault_root=vault_root, **kwargs)
 
     monkeypatch.setattr(
         markdown_settings_mod.MarkdownSettingsStore, "write_frontmatter", traced_write_frontmatter

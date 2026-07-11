@@ -29,10 +29,16 @@ class NoteUpdateResult(BaseModel):
     dispatch_count: int = 0
 
 
-def _write_note_via_knowledge_port(note_path: Path, content: str, *, vault_root: Path | None = None) -> None:
+def _write_note_via_knowledge_port(
+    note_path: Path,
+    content: str,
+    *,
+    vault_root: Path | None = None,
+    expected_version: str,
+) -> None:
     resolved = note_path.resolve()
     root = Path(vault_root).resolve() if vault_root is not None else default_vault_root_for_path(resolved)
-    write_note_from_absolute(resolved, content, vault_root=root)
+    write_note_from_absolute(resolved, content, vault_root=root, expected_version=expected_version)
 
 
 def apply_promotion_frontmatter(
@@ -85,7 +91,7 @@ def apply_promotion_frontmatter(
         current_version = _WRITE_GUARD.read_version(note_path)
         if current_version != expected_version:
             return False
-        _write_note_via_knowledge_port(note_path, updated)
+        _write_note_via_knowledge_port(note_path, updated, expected_version=expected_version)
     return True
 
 
@@ -147,7 +153,11 @@ def process_note_update(
                 events_count=len(panel_result.events),
                 dispatch_count=panel_result.dispatch_count,
             )
-        _write_note_via_knowledge_port(resolved_path, panel_result.panel.updated_markdown)
+        _write_note_via_knowledge_port(
+            resolved_path,
+            panel_result.panel.updated_markdown,
+            expected_version=expected_version,
+        )
         upsert_executed_ids(note_uuid, panel_result.panel.executed_action_ids)
 
     snapshot_path = _snapshot_path(snapshot_dir, note_uuid, ensure_parent=True)

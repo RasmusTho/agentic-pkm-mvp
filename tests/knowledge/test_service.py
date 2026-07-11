@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.knowledge.adapters import FsVaultAdapter, ObsidianCliAdapter
-from app.knowledge.contracts import NoteLocator
+from app.knowledge.contracts import NoteLocator, WriteReceipt
 from app.knowledge.errors import (
     KnowledgeCapabilityError,
     KnowledgeDependencyError,
@@ -102,6 +102,24 @@ def test_hybrid_port_falls_back_on_transport_error(monkeypatch: pytest.MonkeyPat
     assert receipt.fallback_used is True
     assert (tmp_path / "Inbox" / "test.md").read_text(encoding="utf-8") == "body"
     assert "Knowledge fallback used for write_note" in caplog.text
+
+
+def test_hybrid_port_forwards_rewritten_write_metadata() -> None:
+    locator = NoteLocator(vault="Vault", path="Notes/test.md")
+    captured: dict[str, object] = {}
+
+    class PrimaryPort:
+        def write_note(self, locator, content, **kwargs):  # type: ignore[no-untyped-def]
+            captured["locator"] = locator
+            captured["content"] = content
+            captured.update(kwargs)
+            return WriteReceipt(operation="write_note", locator=locator, adapter="primary")
+
+    port = HybridKnowledgePort(primary=PrimaryPort(), fallback=None, allow_fallback=False)
+    port.write_note(locator, "body", expected_version="abc", writer_identity="mac-runtime")
+
+    assert captured["expected_version"] == "abc"
+    assert captured["writer_identity"] == "mac-runtime"
 
 
 def test_hybrid_port_does_not_fallback_on_capability_error(tmp_path: Path) -> None:

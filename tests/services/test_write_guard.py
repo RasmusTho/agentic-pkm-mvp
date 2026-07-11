@@ -45,7 +45,9 @@ def test_apply_promotion_writes_via_knowledge_port(monkeypatch, tmp_path: Path) 
     path = _note_path(tmp_path)
     writes: list[str] = []
 
-    def _fake_write(note_path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
+    def _fake_write(
+        note_path: Path, content: str, *, vault_root: Path | None = None, expected_version: str | None = None
+    ):  # type: ignore[no-untyped-def]
         writes.append(Path(note_path).resolve().relative_to(Path(note_path).anchor).as_posix())
         path.write_text(content, encoding="utf-8")
         return None

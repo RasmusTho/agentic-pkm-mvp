@@ -86,7 +86,9 @@ def test_process_note_update_changed_writes_via_knowledge_port(
     _write_snapshot(snapshot_dir, note_uuid, _note_content(note_uuid, checked=False))
     writes: list[str] = []
 
-    def _fake_write(path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
+    def _fake_write(
+        path: Path, content: str, *, vault_root: Path | None = None, expected_version: str | None = None
+    ):  # type: ignore[no-untyped-def]
         writes.append(Path(path).resolve().relative_to(Path(path).anchor).as_posix())
         note_path.write_text(content, encoding="utf-8")
         return None

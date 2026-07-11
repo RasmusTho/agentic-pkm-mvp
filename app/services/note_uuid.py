@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import hashlib
 from pathlib import Path
 
 from app.knowledge.write_ops import write_note_from_absolute
@@ -23,7 +24,12 @@ def ensure_note_uuid(path: Path, *, vault_root: Path | str, preferred_uuid: str 
         candidate = str(uuid.uuid4())
     frontmatter["uuid"] = candidate
     DEFAULT_WRITE_GUARD.assert_writes_allowed("ensure uuid")
-    write_note_from_absolute(resolved, dump_frontmatter(frontmatter, body), vault_root=root)
+    write_note_from_absolute(
+        resolved,
+        dump_frontmatter(frontmatter, body),
+        vault_root=root,
+        expected_version=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+    )
     return candidate
 
 
