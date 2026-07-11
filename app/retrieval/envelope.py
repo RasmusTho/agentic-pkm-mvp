@@ -61,9 +61,35 @@ _AUTHORITY_STATE_ENUM = frozenset({
 })
 _SENSITIVITY_ENUM = frozenset({"public", "internal", "private", "secret"})
 
+# episode_ref string sentinels (schemas/_defs.schema.json :: episode_ref); mirrors
+# mimer_runtime.metadata.EPISODE_REF_SENTINELS (that package is test-slice-only, not imported here).
+_EPISODE_REF_SENTINELS = frozenset({"unbound", "pending"})
+
 
 def _enum_or_default(value: Any, allowed: frozenset[str], default: str) -> str:
     return value if isinstance(value, str) and value in allowed else default
+
+
+def _episode_ref_from_payload(value: Any) -> str | list[str]:
+    """Propagate a payload's episode binding, or fall back to the honest 'unbound' default.
+
+    The binding survives this derivation step like scope/provenance do (derivation-survival:
+    docs/testing/invariant-tests.md :: observation_episode_binding_survives) — once ERE-05/06 wire
+    real bindings into the index payload, this seam must not silently overwrite them with 'unbound'.
+    Only the schema-valid shapes cross: the 'unbound'/'pending' sentinels or a non-empty list of
+    non-empty episode_id strings; anything malformed falls back to 'unbound' (never fail the
+    envelope on a dirty payload, but never smuggle an out-of-shape value either — same posture as
+    _enum_or_default).
+    """
+    if isinstance(value, str) and value in _EPISODE_REF_SENTINELS:
+        return value
+    if (
+        isinstance(value, (list, tuple))
+        and len(value) > 0
+        and all(isinstance(x, str) and x for x in value)
+    ):
+        return list(value)
+    return "unbound"
 
 
 def _bundle_from_result(item: dict[str, Any]) -> dict[str, Any]:
@@ -99,10 +125,11 @@ def _bundle_from_result(item: dict[str, Any]) -> dict[str, Any]:
         "created_by": str(payload.get("created_by") or _DEFAULT_CREATED_BY),
         "created_at": str(payload.get("created_at") or _DEFAULT_CREATED_AT),
         "provenance_event_ids": [f"prov:retrieval:{object_id or uuid4().hex[:12]}"],
-        # The live index row carries no episode binding yet (assignment is ERE-05, out of scope for
-        # this seam); 'unbound' is the honest default (docs/architecture/semantic-dimensions.md
-        # :: episode_ref) -- mirrors mimer_runtime.capture/corpus/dri.
-        "episode_ref": "unbound",
+        # Propagate the payload's episode binding (derivation survival — mirrors
+        # mimer_runtime.dri.derive_segment); a payload without one (all live rows today, until
+        # ERE-05 assignment lands) gets the honest 'unbound' default
+        # (docs/architecture/semantic-dimensions.md :: episode_ref).
+        "episode_ref": _episode_ref_from_payload(payload.get("episode_ref")),
     }
     sphere = payload.get("sphere") or payload.get("domain")
     if isinstance(sphere, str) and sphere.strip():
