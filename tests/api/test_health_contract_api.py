@@ -1,7 +1,10 @@
+import asyncio
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -110,3 +113,40 @@ def test_health_contract_degrades_on_stale_outbox(tmp_path: Path, monkeypatch: p
     assert snapshot["state"] == "degraded"
     assert "outbox idle" in snapshot["reason"]
     assert any("events-doctor" in action for action in snapshot["suggested_actions"])
+
+
+@pytest.mark.asyncio
+async def test_slow_readyz_evaluate_does_not_block_healthz(monkeypatch) -> None:
+    """
+    /readyz MUST run DEFAULT_CONTRACT.evaluate() off the event loop.
+
+    /readyz is the actual container healthcheck target (API_HEALTHCHECK_URL
+    in docker-compose.prod.yml / docker-compose.test.yml), so a blocking
+    evaluate() call is at least as dangerous as the /api/health case: it can
+    starve /healthz the same way (2026-07-11 prod outage, same bug class).
+    """
+
+    def _slow_blocking_evaluate() -> dict:
+        time.sleep(1.0)
+        return _mock_snapshot("running", "ok")
+
+    monkeypatch.setattr(
+        "app.api.routes.health_contract.DEFAULT_CONTRACT.evaluate",
+        _slow_blocking_evaluate,
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        start = time.monotonic()
+        slow_task = asyncio.create_task(client.get("/readyz"))
+        healthz_resp = await client.get("/healthz")
+        healthz_elapsed = time.monotonic() - start
+
+        slow_resp = await slow_task
+
+    assert healthz_resp.status_code == 200
+    assert healthz_resp.json() == {"ok": True}
+    assert healthz_elapsed < 0.5, f"/healthz took {healthz_elapsed:.3f}s while /readyz was in flight"
+
+    assert slow_resp.status_code == 200
+    assert slow_resp.json()["state"] == "running"

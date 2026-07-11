@@ -81,3 +81,47 @@ def test_health_task_routes_fail_when_effective_model_missing(monkeypatch) -> No
     assert result["ok"] is False
     assert result["routes"]["qa"]["status"] == "fail"
     assert result["routes"]["qa"]["detail"] == "route model is missing"
+
+
+def test_check_llm_task_routes_reuses_precomputed_ollama_check(monkeypatch) -> None:
+    """
+    _check_llm_task_routes MUST reuse a precomputed ollama check instead of
+    re-probing per ollama task-route.
+
+    Regression for the 2026-07-11 prod outage: with N ollama-provider task
+    routes, run_health() made 1 (top-level) + N (per-route) blocking httpx
+    calls to Ollama, each up to HEALTH_PROBE_TIMEOUT seconds, serialized
+    inside a single request. Reusing the top-level result caps it at 1 call
+    regardless of how many task routes use ollama.
+    """
+    call_count = 0
+
+    def _fake_check_ollama() -> dict:
+        nonlocal call_count
+        call_count += 1
+        return {"ok": True, "detail": "Ollama nåddes (fake)", "provider": "ollama", "base_url": "http://fake"}
+
+    monkeypatch.setattr(health_module, "_check_ollama", _fake_check_ollama)
+
+    precomputed = health_module._check_ollama()  # the one call run_health() makes directly
+    assert call_count == 1
+
+    router_check = {
+        "route_policies": {
+            "embed": {"effective": {"provider": "ollama", "model": "nomic-embed-text:latest"}},
+            "decide": {"effective": {"provider": "ollama", "model": "llama3.1:8b"}},
+            "plan": {"effective": {"provider": "ollama", "model": "llama3.1:8b"}},
+            "eval": {"effective": {"provider": "ollama", "model": "llama3.1:8b"}},
+        }
+    }
+    monkeypatch.setenv("EVAL_LLM_MODE", "real")  # avoid the eval-skip branch
+
+    result = health_module._check_llm_task_routes(router_check, ollama_check=precomputed)
+
+    # No additional _check_ollama() calls beyond the one made before invoking
+    # _check_llm_task_routes — the 4 ollama task routes above must all reuse
+    # `precomputed` rather than re-probing.
+    assert call_count == 1
+    assert result["ok"] is True
+    for task_kind in ("embed", "decide", "plan", "eval"):
+        assert result["routes"][task_kind]["ok"] is True

@@ -146,6 +146,19 @@ def _check_outbox_path() -> Dict[str, Any]:
         return _result(False, f"Kan inte skriva till index-outbox path ({_exception_kind(exc)})")
 
 
+def _health_probe_timeout() -> float:
+    # Dedicated, tight timeout for the health-check ollama probe. Deliberately
+    # independent of LLM_TIMEOUT, which is provisioned for real LLM generation
+    # (60-120s elsewhere in the codebase) — reusing it here let a single
+    # unreachable-ollama probe block for up to LLM_TIMEOUT seconds, and that
+    # probe used to run once directly plus once per ollama task-route (see
+    # _check_llm_task_routes), amplifying a single slow probe into 20s+ of
+    # blocking work per /api/health call (2026-07-11 prod outage). Read live
+    # (not cached at import time) so it honors runtime env overrides same as
+    # every other env-driven check in this module.
+    return _env_float("HEALTH_PROBE_TIMEOUT", 2.0)
+
+
 def _check_ollama() -> Dict[str, Any]:
     provider = (os.environ.get("LLM_PROVIDER") or "").strip().lower()
     if provider == "llm":
@@ -169,7 +182,7 @@ def _check_ollama() -> Dict[str, Any]:
             data={"provider": provider},
         )
     try:
-        resp = httpx.get(f"{base}/api/tags", timeout=float(os.environ.get("LLM_TIMEOUT", "5")))
+        resp = httpx.get(f"{base}/api/tags", timeout=_health_probe_timeout())
         resp.raise_for_status()
         data = resp.json()
         result = _result(
@@ -199,7 +212,7 @@ def _check_llm_router() -> Dict[str, Any]:
     }
 
 
-def _provider_env_check(provider: str, model: str) -> Dict[str, Any]:
+def _provider_env_check(provider: str, model: str, *, ollama_check: Dict[str, Any] | None = None) -> Dict[str, Any]:
     normalized = (provider or "").strip().lower()
     resolved_model = (model or "").strip()
     if not resolved_model:
@@ -207,7 +220,11 @@ def _provider_env_check(provider: str, model: str) -> Dict[str, Any]:
     if normalized in {"", "mock", "deterministic"}:
         return {"ok": True, "detail": f"deterministic/local route ({resolved_model})", "status": "ok"}
     if normalized == "ollama":
-        result = _check_ollama()
+        # Reuse the single top-level ollama probe already computed by
+        # run_health() instead of re-probing per task-route: with 4+ ollama
+        # task-routes that was up to 5 serialized blocking httpx calls per
+        # /api/health request (2026-07-11 prod outage).
+        result = ollama_check if ollama_check is not None else _check_ollama()
         return {
             "ok": bool(result.get("ok")),
             "detail": result.get("detail", ""),
@@ -229,7 +246,7 @@ def _provider_env_check(provider: str, model: str) -> Dict[str, Any]:
     return {"ok": False, "detail": f"Unsupported provider for route verification: {normalized}", "status": "fail"}
 
 
-def _check_llm_task_routes(router_check: Dict[str, Any]) -> Dict[str, Any]:
+def _check_llm_task_routes(router_check: Dict[str, Any], *, ollama_check: Dict[str, Any] | None = None) -> Dict[str, Any]:
     policies = router_check.get("route_policies") or {}
     route_statuses: Dict[str, Any] = {}
     overall = True
@@ -248,7 +265,7 @@ def _check_llm_task_routes(router_check: Dict[str, Any]) -> Dict[str, Any]:
                 "model": model,
             }
             continue
-        probe = _provider_env_check(provider, model)
+        probe = _provider_env_check(provider, model, ollama_check=ollama_check)
         route_statuses[task_kind] = {
             "ok": bool(probe.get("ok")),
             "detail": probe.get("detail", ""),
@@ -686,7 +703,9 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
         "obsidian": _annotate_required(_check_obsidian_dependencies(), required=_obsidian_required()),
     }
     checks["llm_router"] = _annotate_required(_check_llm_router(), required=False)
-    checks["llm_task_routes"] = _annotate_required(_check_llm_task_routes(checks["llm_router"]), required=True)
+    checks["llm_task_routes"] = _annotate_required(
+        _check_llm_task_routes(checks["llm_router"], ollama_check=checks["ollama"]), required=True
+    )
     checks["llm_providers"] = _annotate_required(_check_llm_providers(checks["ollama"]), required=False)
     checks["embedding_index"] = _annotate_required(_check_embedding_index(), required=True)
     checks["companion_diagnostics"] = _annotate_required(_check_companion_diagnostics(), required=False)
