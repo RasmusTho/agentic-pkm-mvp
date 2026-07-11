@@ -381,9 +381,9 @@ intent, and the wording that now blocks it:
 - **Extends:** C-7's "enumerable mutation surface" makes the formal model's transition catalog a
   standing documentation obligation (a living artifact OEF probes against) — new, flagged to CES.
   C-11's registry-coverage check is a new OEF self-fitness rule — flagged to CES.
-- **Proposes reshaping:** none. The apex-model section adopts ADR-0043 (already owner-decided) and
-  routes the remaining glossary enactment through #2891; this document performs no rename and
-  changes no glossary entry.
+- **Proposes reshaping:** none. The apex-model section records the ADR-0043 lineage; the glossary
+  enactment completed under closed issue #2891. This document performs no rename and changes no
+  glossary entry.
 
 ## Ratification decision (owner)
 
