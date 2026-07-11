@@ -270,6 +270,14 @@ def test_panel_agent_regression_change_selects_its_owned_coverage() -> None:
     assert "tests/agents/panel_agent" in selection.targets
 
 
+def test_top_level_panel_agent_regression_change_selects_its_owned_coverage() -> None:
+    selection = select_tests(["tests/agents/test_panel_pipeline_integration.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("promotion_panel",)
+    assert "tests/agents/test_panel_pipeline_integration.py" in selection.targets
+
+
 def test_panel_agent_support_runtime_change_selects_promotion_panel_coverage() -> None:
     selection = select_tests(["app/agents/panel/runtime.py"])
 

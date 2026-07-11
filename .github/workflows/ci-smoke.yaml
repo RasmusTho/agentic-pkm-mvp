@@ -70,6 +70,7 @@ jobs:
               - 'app/config/llm.py'
               - 'tests/panel/**'
               - 'tests/agents/panel_agent/**'
+              - 'tests/agents/test_panel*.py'
               - 'tests/promotion/**'
               - 'tests/e2e/test_panel_llm_e2e.py'
               - '.github/workflows/ci-smoke.yaml'
