@@ -33,7 +33,7 @@ absence, never silent" discipline applied to this substrate).
 
 from __future__ import annotations
 
-import importlib.util
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +42,7 @@ from typing import Any, Mapping
 import yaml
 
 from app.context_dimensions import ContextDimensions
+from app.settings.loader import find_fenced_block
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -57,23 +58,56 @@ STATUS_FUTURE = "future"
 STATUS_EXCLUDED = "excluded"
 _VALID_STATUSES: frozenset[str] = frozenset({STATUS_LIVE, STATUS_PLANNED, STATUS_FUTURE, STATUS_EXCLUDED})
 
-# Mirrors the Heimdal confidence block's `calibration` enum
-# (schemas/events/heimdal.observation.published.v1.schema.json #/properties/confidence).
-CALIBRATION_VALUES: frozenset[str] = frozenset({"calibrated", "heuristic", "by_construction"})
+_REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 
-DEFAULT_REGISTRY_DOC: Path = (
-    Path(__file__).resolve().parents[2] / "docs" / "EPISODE_RESOLUTION_ENGINE" / "stream_registry.md"
+DEFAULT_REGISTRY_DOC: Path = _REPO_ROOT / "docs" / "EPISODE_RESOLUTION_ENGINE" / "stream_registry.md"
+
+# The fence tag of the registry declaration's ```yaml stream-registry block
+# (parsed via the shared `app.settings.loader.find_fenced_block` helper --
+# same fence grammar as `_heimdal/settings.md`, parameterized by tag).
+_FENCE_TAG = "stream-registry"
+
+_OBSERVATION_SCHEMA_PATH: Path = (
+    _REPO_ROOT / "schemas" / "events" / "heimdal.observation.published.v1.schema.json"
 )
 
-_FENCE = re.compile(r"(?s)```yaml stream-registry\s*(?P<body>.+?)```")
+
+def _load_calibration_values() -> frozenset[str]:
+    """Load the confidence `calibration` enum from the canonical Heimdal
+    observation schema -- the single source of truth -- instead of literal-
+    copying it here (which would drift silently). Fail-loud on any shape
+    change: a missing file/key is a hard import-time error, never a silently
+    empty enum."""
+    try:
+        schema = json.loads(_OBSERVATION_SCHEMA_PATH.read_text(encoding="utf-8"))
+        enum = schema["properties"]["confidence"]["patternProperties"]["^[a-z_]+$"]["properties"][
+            "calibration"
+        ]["enum"]
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"cannot load confidence calibration enum from {_OBSERVATION_SCHEMA_PATH}: {exc}"
+        ) from exc
+    values = frozenset(str(value) for value in enum)
+    if not values:
+        raise RuntimeError(
+            f"confidence calibration enum in {_OBSERVATION_SCHEMA_PATH} is empty -- refusing to continue"
+        )
+    return values
+
+
+# The Heimdal confidence block's `calibration` enum, loaded from the schema
+# (never a hand-copied literal that could drift).
+CALIBRATION_VALUES: frozenset[str] = _load_calibration_values()
 
 # Transport binding prefixes (AC3): a `live` entry's transport must resolve
 # through one of these two mechanisms -- a registered outbox topic constant
-# in `app.events.types`, or an importable runtime consumer module (the
+# in `app.events.types`, or a runtime consumer module present on disk (the
 # generalized shape of "observation-log consumer path": every live,
 # non-outbox stream in the canonical inventory -- heimdal.observations,
 # chat.sessions, decision.receipts, heimdal.attention -- is read through a
 # concrete runtime module exactly like `app.heimdal.observation_log`).
+# Module bindings are existence-checked on the filesystem only, never
+# imported -- see `_module_file_exists`.
 _TOPIC_PREFIX = "outbox:"
 _MODULE_PREFIX = "module:"
 
@@ -270,6 +304,28 @@ def _known_outbox_topics() -> frozenset[str]:
     )
 
 
+_MODULE_SEGMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _module_file_exists(module_path: str) -> bool:
+    """Pure filesystem existence check for a `module:` transport binding.
+
+    Deliberately NO importlib machinery of any kind: `find_spec` on a dotted
+    path imports the *parent packages* (e.g. resolving `app.chat.session_log`
+    executes `app.chat.__init__`), which would make every `load_registry()`
+    call execute interaction-layer code across the interaction-protected
+    boundary (importlinter.ini) at runtime -- invisible to the AST-based
+    linter. The registry verifies the consumer path exists on disk
+    (`<repo>/<dotted/path>.py` or a package dir with `__init__.py`) and
+    never imports it; importing is the consuming adapter's job (ERE-04+).
+    """
+    segments = module_path.split(".")
+    if not segments or not all(_MODULE_SEGMENT.match(segment) for segment in segments):
+        return False
+    base = _REPO_ROOT.joinpath(*segments)
+    return base.with_suffix(".py").is_file() or (base / "__init__.py").is_file()
+
+
 def _resolve_transport_binding(transport: str | None, *, stream_id: str) -> None:
     if not transport:
         raise UnknownTransportError(f"{stream_id}: status=live requires a resolvable transport binding")
@@ -282,19 +338,10 @@ def _resolve_transport_binding(transport: str | None, *, stream_id: str) -> None
         return
     if transport.startswith(_MODULE_PREFIX):
         module_path = transport[len(_MODULE_PREFIX) :]
-        # Existence check only (find_spec), deliberately NOT import_module:
-        # some consumer paths live in the interaction layer (app.chat), and
-        # the registry must verify the binding without executing/importing
-        # across the interaction-protected boundary (importlinter.ini).
-        try:
-            spec_found = importlib.util.find_spec(module_path)
-        except (ImportError, ValueError) as exc:
+        if not _module_file_exists(module_path):
             raise UnknownTransportError(
-                f"{stream_id}: transport {transport!r} names a runtime module that does not exist ({exc})"
-            ) from exc
-        if spec_found is None:
-            raise UnknownTransportError(
-                f"{stream_id}: transport {transport!r} names a runtime module that does not exist"
+                f"{stream_id}: transport {transport!r} names a runtime module that does not exist "
+                f"under {_REPO_ROOT}"
             )
         return
     raise UnknownTransportError(
@@ -356,14 +403,15 @@ def parse_registry_markdown(text: str, *, source: str = "<memory>") -> StreamReg
     block``) into a validated :class:`StreamRegistry`. Fail-loud on every
     malformed shape -- never returns a silently empty/partial registry.
     """
-    match = _FENCE.search(text)
-    if match is None:
+    body = find_fenced_block(text, _FENCE_TAG)
+    if body is None:
         raise StreamRegistryError(
-            f"{source}: no fenced 'yaml stream-registry' block found -- malformed declaration"
+            f"{source}: no fenced 'yaml {_FENCE_TAG}' block found -- malformed declaration"
         )
-    body = match.group("body").strip()
     if not body:
-        raise StreamRegistryError(f"{source}: fenced 'yaml stream-registry' block is empty -- malformed declaration")
+        raise StreamRegistryError(
+            f"{source}: fenced 'yaml {_FENCE_TAG}' block is empty -- malformed declaration"
+        )
     try:
         data = yaml.safe_load(body)
     except yaml.YAMLError as exc:
@@ -388,21 +436,44 @@ def parse_registry_markdown(text: str, *, source: str = "<memory>") -> StreamReg
     return registry
 
 
-def load_registry(path: Path | str | None = None) -> StreamRegistry:
+# Loaded-registry cache, keyed by resolved declaration path (mirrors the
+# `_LOADED` pattern in `app.events.topic_schema_registry`). Only successfully
+# validated registries are cached -- a malformed declaration raises before
+# caching and is re-read (and re-raises) on every attempt.
+_LOADED_REGISTRIES: dict[Path, StreamRegistry] = {}
+
+
+def reset_registry_cache() -> None:
+    """Clear the loaded-registry cache (test isolation / declaration reload)."""
+    _LOADED_REGISTRIES.clear()
+
+
+def load_registry(path: Path | str | None = None, *, use_cache: bool = True) -> StreamRegistry:
     """Load + validate the stream registry from its markdown-first
     declaration (default: ``docs/EPISODE_RESOLUTION_ENGINE/stream_registry.md``).
 
     Fail-loud: a missing file is a hard error, never a silent empty registry.
     This is the one production entrypoint every other caller (the segmenter
     entrypoint, `app.episodes.segmenter`, CLI, tests) goes through.
+
+    Validated results are cached per declaration path (the segmenter calls
+    this on every invocation); pass ``use_cache=False`` or call
+    :func:`reset_registry_cache` to force a re-read.
     """
-    doc_path = Path(path) if path is not None else DEFAULT_REGISTRY_DOC
+    doc_path = (Path(path) if path is not None else DEFAULT_REGISTRY_DOC).resolve()
+    if use_cache:
+        cached = _LOADED_REGISTRIES.get(doc_path)
+        if cached is not None:
+            return cached
     if not doc_path.exists():
         raise StreamRegistryError(
             f"stream registry declaration not found at {doc_path} -- fail-loud, no silent default streams"
         )
     text = doc_path.read_text(encoding="utf-8")
-    return parse_registry_markdown(text, source=str(doc_path))
+    registry = parse_registry_markdown(text, source=str(doc_path))
+    if use_cache:
+        _LOADED_REGISTRIES[doc_path] = registry
+    return registry
 
 
 __all__ = [
@@ -423,4 +494,5 @@ __all__ = [
     "UnregisteredStreamError",
     "load_registry",
     "parse_registry_markdown",
+    "reset_registry_cache",
 ]

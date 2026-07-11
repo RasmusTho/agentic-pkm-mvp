@@ -1,11 +1,26 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import List, Tuple
 
 SECTION_H2 = re.compile(r"(?m)^## +(?P<name>.+?)\s*$")
-FENCE = re.compile(r"(?s)```yaml settings\s*(?P<body>.+?)```")
+
+
+@lru_cache(maxsize=None)
+def _fence_pattern(tag: str) -> re.Pattern[str]:
+    """Compile the fenced ```yaml <tag>`` block pattern for one fence tag.
+
+    The closing fence is line-anchored (a ``` alone at the start of a line)
+    so an embedded triple-backtick inside the YAML body cannot silently
+    truncate the block -- a truncated match would otherwise load a partial
+    document without any error.
+    """
+    return re.compile(rf"(?ms)^```yaml {re.escape(tag)}[ \t]*\r?\n(?P<body>.*?)^```[ \t]*$")
+
+
+FENCE = _fence_pattern("settings")
 
 
 def split_sections(md: str) -> List[Tuple[str, str]]:
@@ -23,9 +38,19 @@ def split_sections(md: str) -> List[Tuple[str, str]]:
     return parts
 
 
-def find_fenced_settings(md: str) -> str | None:
-    found = FENCE.search(md)
+def find_fenced_block(md: str, tag: str) -> str | None:
+    """Find the body of a fenced ```yaml <tag>`` block, or None if absent.
+
+    Shared by the settings substrate (tag ``settings``) and the Episode
+    stream registry (tag ``stream-registry``, `app.episodes.stream_registry`)
+    -- one fence grammar, parameterized by tag, never per-caller regex forks.
+    """
+    found = _fence_pattern(tag).search(md)
     return found.group("body").strip() if found else None
+
+
+def find_fenced_settings(md: str) -> str | None:
+    return find_fenced_block(md, "settings")
 
 
 def read_text(path: Path) -> str:

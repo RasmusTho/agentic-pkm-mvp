@@ -27,6 +27,7 @@ No network, no Postgres, no real vault.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -264,51 +265,52 @@ def test_live_streams_bind_to_existing_transports() -> None:
 
 _BACKTICK_ID = re.compile(r"`([a-zA-Z0-9_.]+)`")
 _EXCLUDED_ID = re.compile(r"`([a-zA-Z0-9_.]+)`\s*—")
+_STATUS_BOLD = re.compile(r"\*\*(live|planned|future|excluded)\*\*")
 
 
-def _readme_inventory_ids() -> set[str]:
-    """Extract every stream_id named in backticks across the README's
-    Input-source inventory section: the table's first (`stream_id`) column
-    of every data row, plus the excluded paragraph's `id` — description
-    entries. Deliberately does not sweep every backtick in the section --
-    the Transport column also quotes outbox topic names (e.g.
+def _readme_inventory_statuses() -> dict[str, str]:
+    """Extract stream_id -> status for every entry in the README's
+    Input-source inventory section: from each table data row, the first
+    (`stream_id`) cell's backticked id(s) paired with the second (Status)
+    cell's bold status word; plus the excluded paragraph's `id` — entries
+    (all `excluded`). Deliberately does not sweep every backtick in the
+    section -- the Transport column also quotes outbox topic names (e.g.
     `ingest.vault.changed`), which are not stream_ids."""
     text = README_PATH.read_text(encoding="utf-8")
     start = text.index("## Input-source inventory")
     end = text.index("## Implementation tasks", start)
     section = text[start:end]
 
-    ids: set[str] = set()
+    statuses: dict[str, str] = {}
     for line in section.splitlines():
         stripped = line.strip()
         if stripped.startswith("| `"):
-            first_cell = stripped.split("|")[1]
-            ids.update(_BACKTICK_ID.findall(first_cell))
+            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            row_ids = _BACKTICK_ID.findall(cells[0])
+            status_match = _STATUS_BOLD.search(cells[1])
+            assert status_match is not None, f"README inventory row has no bold status: {stripped}"
+            for stream_id in row_ids:
+                statuses[stream_id] = status_match.group(1)
         elif stripped.startswith("**Excluded"):
-            ids.update(_EXCLUDED_ID.findall(stripped))
-    return ids
+            for stream_id in _EXCLUDED_ID.findall(stripped):
+                statuses[stream_id] = "excluded"
+    return statuses
 
 
 def test_registry_matches_readme_inventory() -> None:
     registry = sr.load_registry()
-    readme_ids = _readme_inventory_ids()
-    assert readme_ids, "expected to find backtick-quoted stream_ids in the README inventory section"
+    readme_statuses = _readme_inventory_statuses()
+    assert readme_statuses, "expected stream_id -> status entries in the README inventory section"
 
-    assert registry.stream_ids() == readme_ids
+    # 1:1 parity per id AND per status -- a per-id status drift between the
+    # README table and the registry declaration fails here, not only an
+    # id-set drift
+    registry_statuses = {entry.stream_id: entry.status for entry in registry.entries.values()}
+    assert registry_statuses == readme_statuses
 
     # all four declared status classes are represented, including excluded
     for status in (sr.STATUS_LIVE, sr.STATUS_PLANNED, sr.STATUS_FUTURE, sr.STATUS_EXCLUDED):
         assert registry.by_status(status), f"expected at least one {status!r} entry"
-
-    excluded_ids = {entry.stream_id for entry in registry.by_status(sr.STATUS_EXCLUDED)}
-    assert excluded_ids == {
-        "builderops.records",
-        "orchestrator.internals",
-        "sync.transports",
-        "egress.surfaces",
-    }
-    for entry in registry.by_status(sr.STATUS_EXCLUDED):
-        assert entry.status == "excluded"
 
 
 # ---------------------------------------------------------------------------
@@ -363,3 +365,77 @@ def test_engine_consumes_only_registered_streams() -> None:
 
     with pytest.raises(sr.UnregisteredStreamError):
         segmenter.run_segmenter_stub(stream_ids=["not.a.registered.stream"], registry=fixture_registry)
+
+
+# ---------------------------------------------------------------------------
+# Boundary regression: transport validation never imports across the
+# interaction-protected boundary
+# ---------------------------------------------------------------------------
+
+
+def test_load_registry_never_imports_interaction_modules() -> None:
+    """Validating a `module:` transport (e.g. `module:app.chat.session_log`)
+    must be a filesystem existence check, never an import: `find_spec` on a
+    dotted path imports the parent package, so resolving `app.chat.session_log`
+    would execute the interaction-layer `app.chat` package on every
+    `load_registry()` call -- invisible to the AST-based import-linter
+    (importlinter.ini interaction-protected contract)."""
+    removed = {
+        name: sys.modules.pop(name)
+        for name in list(sys.modules)
+        if name == "app.chat" or name.startswith("app.chat.")
+    }
+    try:
+        registry = sr.load_registry(use_cache=False)
+        # the chat.sessions live entry (transport module:app.chat.session_log)
+        # was validated during that load...
+        assert registry.get("chat.sessions") is not None
+        # ...without importing app.chat or any of its submodules
+        polluted = [name for name in sys.modules if name == "app.chat" or name.startswith("app.chat.")]
+        assert not polluted, f"load_registry() imported interaction-layer modules: {polluted}"
+    finally:
+        sys.modules.update(removed)
+
+
+# ---------------------------------------------------------------------------
+# Registry cache: production path loads once; tests can reset/bypass
+# ---------------------------------------------------------------------------
+
+
+def test_load_registry_caches_per_path(tmp_path: Path) -> None:
+    sr.reset_registry_cache()
+    try:
+        first = sr.load_registry()
+        second = sr.load_registry()
+        assert second is first, "expected the cached registry object on a repeat load"
+
+        # reset forces a fresh parse
+        sr.reset_registry_cache()
+        third = sr.load_registry()
+        assert third is not first
+        assert third.stream_ids() == first.stream_ids()
+
+        # use_cache=False bypasses (fresh object) and does not poison the cache
+        fourth = sr.load_registry(use_cache=False)
+        assert fourth is not third
+        assert sr.load_registry() is third
+
+        # a failed load is never cached: the same path parses fresh (and
+        # fails again) until the declaration is actually fixed
+        flaky = tmp_path / "flaky.md"
+        flaky.write_text("no fence here\n", encoding="utf-8")
+        with pytest.raises(sr.StreamRegistryError):
+            sr.load_registry(flaky)
+        flaky.write_text(
+            "```yaml stream-registry\n"
+            "streams:\n"
+            "  - stream_id: some.stream\n"
+            "    status: excluded\n"
+            "    owner_constituent: Mimer\n"
+            "```\n",
+            encoding="utf-8",
+        )
+        fixed = sr.load_registry(flaky)
+        assert fixed.stream_ids() == {"some.stream"}
+    finally:
+        sr.reset_registry_cache()
