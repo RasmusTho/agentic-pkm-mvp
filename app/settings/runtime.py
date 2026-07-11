@@ -74,12 +74,10 @@ def _build_bundle() -> SettingsBundle:
             embedding_profiles = EmbeddingProfiles(**embeddings_yaml)
         except Exception:
             embedding_profiles = EmbeddingProfiles()
-    retrieval_tuning = RetrievalTuning()
-    if retrieval_tuning_yaml:
-        try:
-            retrieval_tuning = RetrievalTuning(**retrieval_tuning_yaml)
-        except Exception:
-            retrieval_tuning = RetrievalTuning()
+    # Retrieval ranking configuration is typed runtime authority.  Unlike
+    # optional legacy settings, invalid values must stop startup rather than
+    # silently serving the default ranking strategy (#3432).
+    retrieval_tuning = RetrievalTuning(**retrieval_tuning_yaml)
     yggdrasil_paths = None
     if yggdrasil_yaml:
         try:

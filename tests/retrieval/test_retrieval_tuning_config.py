@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -30,6 +31,7 @@ from app.retrieval.tuning import (
     get_retrieval_tuning,
     reset_retrieval_tuning_cache,
 )
+from app.settings import runtime
 
 pytestmark = pytest.mark.not_pg
 
@@ -230,3 +232,21 @@ def test_reserved_strategies_resolve_and_stay_non_default(monkeypatch: pytest.Mo
     tuning = get_retrieval_tuning()
     assert tuning.fusion == "linear"
     assert tuning.rerank == "off"
+
+
+def test_invalid_runtime_tuning_yaml_fails_loud(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A typed runtime file is configuration authority, not an optional hint.
+
+    This proves the startup path itself rejects invalid YAML instead of quietly
+    constructing default retrieval tuning and serving an unintended strategy.
+    """
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    (runtime_root / "retrieval_tuning.yaml").write_text("fusion: not-a-strategy\n", encoding="utf-8")
+    monkeypatch.setattr(runtime, "RUNTIME", runtime_root)
+    monkeypatch.setattr(runtime, "_CURRENT", None)
+
+    with pytest.raises(Exception, match="fusion"):
+        runtime.get_settings_bundle()
