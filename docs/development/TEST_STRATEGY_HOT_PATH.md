@@ -65,7 +65,7 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
 
 - Run level 1.
 - Run level 2 if the change affects skills or agent entrypoints.
-- Run level 4 for the touched runtime surface. In PR CI, the touched System of Interest is selected from changed paths and mapped to focused pytest targets; cross-subsystem and unknown changes use the full not-pg fallback.
+- Run level 4 for the touched runtime surface. In PR CI, the touched System of Interest is selected from changed paths and mapped to focused pytest targets; cross-subsystem paths union their owners' targets, while unknown code and E2E paths fail selection until an owner is declared.
 - Run level 5 only when the touched runtime surface is the thing smoke is meant to prove.
 - Use level 6 for promotion or release validation.
 

@@ -262,6 +262,22 @@ def test_panel_agent_package_change_selects_promotion_panel_coverage() -> None:
     assert "tests/panel" in selection.targets
 
 
+def test_panel_agent_regression_change_selects_its_owned_coverage() -> None:
+    selection = select_tests(["tests/agents/panel_agent/test_runtime.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("promotion_panel",)
+    assert "tests/agents/panel_agent" in selection.targets
+
+
+def test_panel_agent_support_runtime_change_selects_promotion_panel_coverage() -> None:
+    selection = select_tests(["app/agents/panel/runtime.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("promotion_panel",)
+    assert "tests/agents/panel_agent" in selection.targets
+
+
 def test_llm_runtime_configuration_change_selects_llm_coverage() -> None:
     selection = select_tests(["app/config/llm.py"])
 

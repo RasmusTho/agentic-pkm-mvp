@@ -181,8 +181,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         "promotion_panel",
         (
             "app/agents/panel_agent/",
+            "app/agents/panel/",
             "app/promotion/",
             "app/panel/",
+            "tests/agents/panel_agent/",
             "tests/promotion/",
             "tests/panel/",
             "tests/e2e/test_panel_to_promotion_consume.py",
@@ -190,7 +192,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/e2e/test_promotion_intent_to_index.py",
             "tests/e2e/test_panel_llm_e2e.py",
         ),
-        ("tests/promotion", "tests/panel", *E2E_TARGETS["promotion_panel"]),
+        ("tests/agents/panel_agent", "tests/promotion", "tests/panel", *E2E_TARGETS["promotion_panel"]),
     ),
     (
         "ops_deploy",
