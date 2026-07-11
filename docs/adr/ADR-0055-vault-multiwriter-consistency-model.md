@@ -42,6 +42,8 @@ Two classes, not a uniform rule:
 
 Enactment (T2, downstream of this ADR) must produce the concrete classification table mapping existing note paths/patterns to one of these two classes.
 
+> **Amendment (owner decision, 2026-07-10; #3420):** Episode notes are rewritten notes: machine re-cut/re-time and human edits of `closed` rewrite them, so they are not append-only. The T2 note-classification table tracked by [#3131](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3131) must include Episode notes in the rewritten class.
+
 ### 7. Enforcement
 **GATE** — checked at every write seam via the existing `WriteGuard` assertion pattern (`app/knowledge/write_ops.py:71,111`), generalized to also cover `append_note_relative` (closes INV-VW2) and the new stale-check path for rewritten classes. Not MUST (no new CI-blocking test suite is commissioned by this ADR) and not DOCTOR-only (a periodic/manual check was rejected — it is exactly how the `append_note_relative` gap went unnoticed).
 
