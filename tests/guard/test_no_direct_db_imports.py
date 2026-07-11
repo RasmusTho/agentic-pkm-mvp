@@ -40,6 +40,10 @@ ALLOW_FILES = (
     # writer keeps its direct, bounded DB access here rather than routing
     # through app.store.
     'app/receipts/outcome_receipt_projection.py',
+    # Episode notes projection rebuild/doctor (ERE-02, #3177). Vault-canonical
+    # Episode notes are the SoR; the `episodes` table is a rebuildable projection.
+    # Same bounded pattern already allowed for app/jobs/decisions_projection.py above.
+    'app/jobs/episodes_projection.py',
     'app/store/relation_index.py',
     'app/memory_kv/store.py',
     'app/agent/repository.py',
