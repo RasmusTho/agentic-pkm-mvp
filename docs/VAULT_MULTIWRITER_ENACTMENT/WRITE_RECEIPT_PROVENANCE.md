@@ -6,7 +6,7 @@ source_anchor: docs/adr/ADR-0055-vault-multiwriter-consistency-model.md :: items
 parent_capability: VAULT_MULTIWRITER_ENACTMENT
 prerequisites: []
 depends_on: []
-can_parallelize_with: [ICLOUD_CONFLICT_QUARANTINE]
+can_parallelize_with: []
 ---
 
 # Write Receipt Provenance and Note Classification
