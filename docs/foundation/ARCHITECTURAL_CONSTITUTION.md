@@ -32,15 +32,14 @@ Two merged-or-in-flight framings collided on what "Yggdrasil" names:
 **This constitution adopts ADR-0043: Yggdrasil = the whole.** The owner resolved the clash on
 2026-07-04; the reconciliation landed as ADR-0044–0047 via PR #2920. PR #2888 was closed
 unmerged. The losing framing is flagged, not erased: `ecosystem-federation.md` is reconciled to
-ADR-0044 on `main`; #2890 (model reconciliation) is closed, while #2891 remains open for the
-GLOSSARY "federation"-usage follow-up.
+ADR-0044 on `main`; #2890 (model reconciliation) and #2891 (the GLOSSARY
+"federation"-usage follow-up) are closed.
 One nuance holds everything honest: the SoS *reshape itself* (ADR-0041's "modular single system" →
 acknowledged SoS) is owner-decided but not yet enacted through CES — until that enactment,
 `docs/ARCHITECTURE.md`/`docs/STATUS.md` describe shipped reality and this constitution's principles
 bind **the whole and every constituent equally**: nothing below is Munin-only law.
 
-Owner reconciliation queue (flagged, not performed here): #2890 is closed; #2891 remains open for
-the remaining glossary work.
+The earlier reconciliation queue is complete: #2890 and #2891 are closed.
 
 ---
 
