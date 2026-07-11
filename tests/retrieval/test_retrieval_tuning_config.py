@@ -248,5 +248,9 @@ def test_invalid_runtime_tuning_yaml_fails_loud(
     monkeypatch.setattr(runtime, "RUNTIME", runtime_root)
     monkeypatch.setattr(runtime, "_CURRENT", None)
 
+    # Exercise the retrieval hot-path resolver rather than only the bundle
+    # constructor: a resolver-level fallback would otherwise still serve
+    # defaults despite the invalid typed YAML.
+    reset_retrieval_tuning_cache()
     with pytest.raises(Exception, match="fusion"):
-        runtime.get_settings_bundle()
+        get_retrieval_tuning()
