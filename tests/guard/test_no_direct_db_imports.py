@@ -31,6 +31,11 @@ ALLOW_FILES = (
     # for app/services/decisions.py and app/jobs/backfill.py above.
     'app/receipts/decision_receipt_log.py',
     'app/jobs/decisions_projection.py',
+    # Slice 4 (#2973): one-time DB->log export of historical decision rows.
+    # Same bounded pattern as decisions_projection.py above: reads the
+    # `decisions` projection table directly through conn_rw to find rows not
+    # yet represented in the receipt log.
+    'app/jobs/decisions_export.py',
     'app/store/relation_index.py',
     'app/memory_kv/store.py',
     'app/agent/repository.py',

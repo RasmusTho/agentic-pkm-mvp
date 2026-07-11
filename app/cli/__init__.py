@@ -33,6 +33,7 @@ from app.cli.settings_explain import build_settings_explain_payload, emit_settin
 from app.cli.builderops import builderops as builderops_cli
 from app.cli.vault import vault as vault_cli
 from app.cli.ops import ops as ops_cli
+from app.cli.decisions import decisions as decisions_cli
 from app.cli.briefing import briefing_group
 
 
@@ -317,6 +318,7 @@ cli.add_command(smoke_cli, name="smoke")
 cli.add_command(builderops_cli, name="builderops")
 cli.add_command(vault_cli, name="vault")
 cli.add_command(ops_cli, name="ops")
+cli.add_command(decisions_cli, name="decisions")
 
 # ---------------------------------------------------------------------------
 # Canvas CLI group
