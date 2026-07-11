@@ -69,6 +69,18 @@ declarative-schema-impossible and therefore live here as the source of truth.
 
 ## Registry
 
+### inv_ef1_public_private_seam
+
+- **Purpose:** The public repository carries no secret-shaped values, and every retained personal binding has an owned, per-artifact INV-EF1 register row rather than an unreviewed baseline exception.
+- **Protected principle:** INV-EF1 public/private operator-invariance (`docs/architecture/ecosystem-federation.md` § Public/private invariant).
+- **Affected boundaries:** CES / Builder System public seam; GitHub Actions CI.
+- **Required fixture / data:** `scripts/public_seam_patterns.json` and `docs/architecture/inv-ef1-register.json`.
+- **Expected failure mode:** A PR adds a secret-shaped value, or adds an operator-bound identifier without an owned register row.
+- **Current enforcement:** `static_test` — GATE scans changed content in PR CI; DOCTOR reconciles stale register rows, uncovered drift, and pending migrations across the tracked tree.
+- **Eventual test path:** `tests/scripts/test_public_seam_lint.py`.
+- **Related docs / contracts / ADRs:** `docs/adr/ADR-0046-inv-ef1-public-private-seam.md`; `docs/architecture/SBS_TRANSITION_DEBT.md`.
+- **Related issues:** #2892.
+
 ### capture_stamps_scope
 
 - **Purpose:** Every captured object is stamped with a scope (and the rest of its metadata bundle) at
