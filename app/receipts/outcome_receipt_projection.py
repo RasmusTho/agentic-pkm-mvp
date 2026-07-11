@@ -1,6 +1,6 @@
 """Postgres projection writer for canonical decision outcome receipts.
 
-The vault JSONL receipt is canonical; this store owns only the rebuildable
+The vault JSONL receipt is canonical; this module owns only the rebuildable
 ``decision_outcomes`` projection boundary.
 """
 from __future__ import annotations
