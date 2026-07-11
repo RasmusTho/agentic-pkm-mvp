@@ -58,7 +58,7 @@ Clients operate only against loopback/LAN/tailnet Mimer hosts. Per-agent/per-dev
 ## Consequences
 
 - Epic B's B2/B3 and the Workstream B skill family now have a committed contract to verify against; the app-agent skills remain a later, separately gated step that sits on this artifact.
-- A fourth writer class is live over the shared vault ahead of ADR-0055's mechanism landing. The risk is the same one ADR-0055 is designed to close — silent LWW on same-note collision for rewritten classes — now with client discipline and provenance conventions that make collisions rarer, detectable, and attributable in the meantime. A data-loss incident during the gap is a signal to prioritize ADR-0055's T2/T3 enactment, not to revisit this ADR.
+- A fourth writer class is live over the shared vault ahead of ADR-0055's mechanism landing. The risk is the same one ADR-0055 is designed to close — silent LWW on same-note collision for rewritten classes — now with client discipline and provenance conventions that make collisions rarer, detectable, and attributable in the meantime. A data-loss incident during the gap forces the §3 stop condition (amended 2026-07-11): the B1 free pass ends and the write posture is re-decided immediately — alongside prioritizing ADR-0055's T2/T3 enactment.
 - The `mcp.vault.append_note`-as-client-transport assumption is retired; any doc or brief still carrying it should be read as superseded by this ADR.
 - Follow-on backlog extraction (contract §9 F1–F7) routes through `feature-breakdown`/`docs-to-issue`; this ADR files no issues itself.
 
