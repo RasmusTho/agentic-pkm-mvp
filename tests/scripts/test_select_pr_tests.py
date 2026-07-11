@@ -128,6 +128,17 @@ def test_journaling_change_has_a_ci_owner() -> None:
     assert "tests/journaling" in selection.targets
 
 
+def test_store_ingest_change_selects_its_owned_contract_tests() -> None:
+    selection = select_tests(["app/stores/postgres.py", "tests/ingest/test_vault_root_ingest_pg.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("store_ingest",)
+    assert selection.unowned_paths == ()
+    assert "tests/stores" in selection.targets
+    assert "tests/ingest" in selection.targets
+    assert "tests/architecture" in selection.targets
+
+
 def test_shared_panel_watcher_e2e_file_selects_both_owning_subsystems() -> None:
     selection = select_tests(["tests/e2e/test_panel_watcher_e2e.py"])
 

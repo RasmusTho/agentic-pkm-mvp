@@ -32,8 +32,10 @@ Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kern
 - Alembic migrations under `app/alembic/versions/` define the legacy AMG-core
   (`objects`/`chunks`/`embeddings`/...) lineage; see "Historical migration lineage" below. Most of
   these are historical-only. The temporary `PgObjects` compatibility adapter remains on the active
-  vault-root ingest path, but it preflights the migration-owned store schema and writes only
-  `store_objects`; it no longer writes `objects`. `app/services/decisions.py` still reads/writes
+  vault-root ingest path. It preflights the migration-owned store schema and delegates the durable
+  object write to `store_objects`; it retains only a minimal `objects` parent row while the live
+  `decisions.object_id` foreign key requires it. #3488 owns removal of that parent-row compatibility.
+  `app/services/decisions.py` still reads/writes
   `decisions`, whose runtime DDL remains a separately tracked migration follow-up.
   `chunks`/`embeddings`/`membership` are touched by the backfill job
   (`app/jobs/backfill.py`) and `app/store/membership_store.py` rather than purely historical.
@@ -314,7 +316,8 @@ Interpretation:
 - The primary runtime store is the `store_*` set, migration-owned since Alembic revision
   `c2766a04d001` (KERNEL-04; `_ensure_tables()` is assert-only outside tests). The AMG-core tables
   under `app/alembic/versions/` are mostly legacy lineage. `PgObjects` remains only as a guarded
-  compatibility adapter for vault-root ingest and writes `store_objects` rather than `objects`;
+  compatibility adapter for vault-root ingest: its direct `store_objects` writer is delegated to
+  `app/stores/pg.py`, while a minimal `objects` parent row persists until #3488 removes the live FK.
   `app/services/decisions.py` still reads/writes `decisions` while its runtime DDL is tracked
   separately for Alembic migration. `chunks`/`embeddings`/`membership` are touched by the backfill job
   and `membership_store`. An earlier

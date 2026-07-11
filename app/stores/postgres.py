@@ -80,7 +80,24 @@ class PgObjects:
         # ingest path.  Delegate to the canonical writer so its assert-only
         # migration preflight and migration hint remain the single contract.
         str_id = id or str(uuid4())
-        PgObjectStore().put(
+        canonical_store = PgObjectStore()
+
+        # ``decisions.object_id`` still has a live FK to the legacy ``objects``
+        # table.  Keep the smallest possible parent row until #3488 migrates
+        # that FK; ``store_objects`` remains exclusively canonical-owned.
+        conn = psycopg.connect(_dsn())
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO objects (id, kind, payload) VALUES (%s, %s, '{}'::jsonb) "
+                        "ON CONFLICT (id) DO NOTHING",
+                        (str_id, kind),
+                    )
+        finally:
+            conn.close()
+
+        canonical_store.put(
             object_id=UUID(str_id),
             kind=kind,
             source_ref=source_ref or path,
