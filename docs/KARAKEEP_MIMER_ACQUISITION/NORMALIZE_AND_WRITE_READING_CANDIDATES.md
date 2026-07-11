@@ -21,7 +21,9 @@ candidates while preserving the governed write choke point.
 Add a Mimer consumer for the contracted published evidence, resolve/refine meaning without re-fetching
 or re-attributing the source, generalize candidate assembly only as required for
 `reading_source_note`, and write through `candidate_writeback`/WriteGuard. Advance Mimer's consumer
-cursor only after materialization or an explicit item-scoped failure.
+cursor only across a contiguous durable prefix of materializations; a retryable, blocked, or
+item-scoped failure stops that prefix unless a durable failure disposition with replay/audit proof
+makes the failed row safely advanceable.
 
 ## Concretely
 

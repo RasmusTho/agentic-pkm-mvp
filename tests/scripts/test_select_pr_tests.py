@@ -59,6 +59,22 @@ def test_unknown_runtime_surface_fails_closed_until_it_has_an_owner() -> None:
     assert selection.unowned_paths == ("app/new_surface/example.py",)
 
 
+def test_heimdal_mimer_contract_change_selects_its_owned_tests() -> None:
+    selection = select_tests(
+        [
+            "docs/KARAKEEP_MIMER_ACQUISITION/DEFINE_READING_SOURCE_AND_CANDIDATE_CONTRACT.md",
+            "docs/EVENTS.md",
+            "tests/heimdal/test_karakeep_handoff_contract.py",
+            "tests/knowledge_acquisition/test_karakeep_handoff_consumer.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("heimdal_mimer",)
+    assert "tests/heimdal" in selection.targets
+    assert "tests/knowledge_acquisition" in selection.targets
+
+
 def test_watcher_change_selects_only_watcher_owned_e2e_files() -> None:
     selection = select_tests(["app/watcher/registry.py"])
 
