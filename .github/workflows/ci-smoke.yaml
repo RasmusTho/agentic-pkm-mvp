@@ -98,9 +98,8 @@ jobs:
         run: |
           ruff check app tests companion-ui/companion-app
 
-      # The public-seam gate compares the PR head with origin/main.  Checkout
-      # intentionally uses a shallow PR ref, so make that base explicit
-      # rather than relying on an incidental remote-tracking branch.
+      # The public-seam gate compares the PR head with origin/main.  Keep the
+      # remote-tracking ref explicit rather than relying on checkout defaults.
       - name: Fetch public-seam gate base
         run: git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main
 
