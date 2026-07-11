@@ -1,4 +1,6 @@
 import json
+import asyncio
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -6,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
+from app.api.routes import health_contract as health_contract_route
 from app.health_contract import HealthContract, HealthStateMachine
 
 
@@ -78,6 +81,23 @@ def test_readyz_unhealthy(monkeypatch) -> None:
     assert resp.status_code == 503
     assert resp.json()["detail"]["state"] == "boot"
     assert resp.json()["detail"]["class"] == "active"
+
+
+def test_readyz_status_do_not_block_event_loop(monkeypatch) -> None:
+    def slow_evaluate() -> dict[str, object]:
+        time.sleep(0.2)
+        return _mock_snapshot("running", "ok")
+
+    monkeypatch.setattr(health_contract_route.DEFAULT_CONTRACT, "evaluate", slow_evaluate)
+
+    async def assert_nonblocking(endpoint) -> None:
+        request_task = asyncio.create_task(endpoint())
+        await asyncio.sleep(0.01)
+        assert not request_task.done()
+        await request_task
+
+    asyncio.run(assert_nonblocking(health_contract_route.readyz))
+    asyncio.run(assert_nonblocking(health_contract_route.health_status))
 
 
 def test_health_contract_degrades_on_stale_outbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -3,11 +3,52 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+import importlib
 
 from fastapi.testclient import TestClient
 
 from app.api.app import app
 from app.vault.paths import get_vault_inbox_dir_rel
+
+health_module = importlib.import_module("app.cli.health")
+
+
+def test_ollama_probe_bounded_timeout_single_call(monkeypatch) -> None:
+    calls: list[float] = []
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, list[dict[str, str]]]:
+            return {"models": []}
+
+    def fake_get(url: str, *, timeout: float) -> Response:
+        calls.append(timeout)
+        return Response()
+
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama.invalid")
+    monkeypatch.setenv("LLM_TIMEOUT", "120")
+    monkeypatch.setenv("HEALTH_PROBE_TIMEOUT", "1.5")
+    monkeypatch.setattr(health_module.httpx, "get", fake_get)
+    monkeypatch.setattr(
+        health_module,
+        "_check_llm_router",
+        lambda: {
+            "route_policies": {
+                "qa": {"effective": {"provider": "ollama", "model": "q"}},
+                "embed": {"effective": {"provider": "ollama", "model": "e"}},
+            }
+        },
+    )
+    monkeypatch.setattr(health_module, "_check_llm_providers", lambda _: {"ok": True})
+    monkeypatch.setattr(health_module, "_check_embedding_index", lambda: {"ok": True})
+    monkeypatch.setattr(health_module, "_check_companion_diagnostics", lambda: {"ok": True})
+
+    health_module.run_health()
+
+    assert calls == [1.5]
 
 
 def _write_watcher_heartbeat(path: Path, *, ts: float, paused: bool = False) -> None:
