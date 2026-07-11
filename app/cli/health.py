@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import importlib
-import json
 import os
 import shutil
 import subprocess
-import time
 from pathlib import Path
 from typing import Any, Dict
 
@@ -22,13 +20,11 @@ from app.knowledge.settings import KnowledgeAdapter, load_knowledge_settings
 from app.cli.settings_explain import mask_dsn
 from app.observability.log import span, with_trace_id
 from app.version import get_runtime_version
-from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
+from app.runtime.health_probe import _watcher_runtime_status, _worker_runtime_status
 from app.settings.panel_actions import get_panel_actions_diagnostics
 from app.stores.db_health import ping_postgres, resolve_dsn
-from app.watcher.heartbeat import resolve_heartbeat_path
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
-
 
 def _result(ok: bool, detail: str, *, data: Dict[str, Any] | None = None) -> Dict[str, Any]:
     out: Dict[str, Any] = {"ok": ok, "detail": detail}
@@ -45,23 +41,6 @@ def _annotate_required(payload: Dict[str, Any], *, required: bool, severity: str
     payload["required"] = required
     payload["severity"] = severity or ("required" if required else "optional")
     return payload
-
-
-def _env_float(name: str, fallback: float) -> float:
-    raw = os.getenv(name)
-    if raw is None:
-        return fallback
-    try:
-        return float(raw)
-    except Exception:
-        return fallback
-
-
-def _is_enabled(env_name: str, default: bool = True) -> bool:
-    raw = os.getenv(env_name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in _TRUE_VALUES
 
 
 def _watcher_required() -> bool:
@@ -390,112 +369,6 @@ def _check_obsidian_dependencies() -> Dict[str, Any]:
     if status.ok:
         return _result(True, "Obsidian dependency checks passed", data=data)
     return _result(False, "Obsidian dependency checks failed", data=data)
-
-
-def _heartbeat_status(
-    *,
-    name: str,
-    path: Path,
-    stale_seconds: float,
-    now: float,
-    skip: bool = False,
-) -> Dict[str, Any]:
-    if skip:
-        return {"ok": True, "detail": "disabled (skipped)", "status": "disabled"}
-
-    if not path.exists():
-        return {
-            "ok": False,
-            "detail": f"{name} not running (no heartbeat)",
-            "path": str(path),
-            "status": "missing",
-        }
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        return {
-            "ok": False,
-            "detail": f"{name} heartbeat malformed ({_exception_kind(exc)})",
-            "path": str(path),
-            "status": "malformed",
-        }
-    ts_raw = raw.get("ts")
-    try:
-        ts_value = float(ts_raw)
-    except Exception:
-        return {
-            "ok": False,
-            "detail": f"{name} heartbeat missing timestamp",
-            "path": str(path),
-            "status": "invalid",
-        }
-    if ts_value > now:
-        return {
-            "ok": False,
-            "detail": f"{name} heartbeat timestamp is in the future",
-            "path": str(path),
-            "status": "future",
-        }
-    freshness = max(0.0, now - ts_value)
-    ok = freshness <= stale_seconds
-    paused_value = bool(raw.get("paused", False))
-    detail = (
-        f"{name} running (fresh {freshness:.1f}s, paused={paused_value})"
-        if ok
-        else f"{name} stale (last seen {freshness:.1f}s ago)"
-    )
-    payload: Dict[str, Any] = {
-        "ok": ok,
-        "detail": detail,
-        "path": str(path),
-        "freshness_seconds": freshness,
-        "paused": paused_value,
-        "status": "ok" if ok else "stale",
-    }
-    for key in (
-        "pid",
-        "scope_glob",
-        "ticks_total",
-        "errors_total",
-        "vault_path",
-        "outbox_path",
-        "processed_total",
-        "enqueue_failures_total",
-    ):
-        if key in raw:
-            payload[key] = raw[key]
-    watchers_raw = raw.get("watchers")
-    if isinstance(watchers_raw, dict):
-        payload["watchers"] = watchers_raw
-    return payload
-
-
-def _watcher_runtime_status(now: float | None = None) -> Dict[str, Any]:
-    now = now if now is not None else time.time()
-    heartbeat_path = resolve_heartbeat_path()
-    stale_seconds = _env_float("WATCHER_HEARTBEAT_STALE_SECONDS", 60.0)
-    return _heartbeat_status(
-        name="watcher",
-        path=heartbeat_path,
-        stale_seconds=stale_seconds,
-        now=now,
-    )
-
-
-def _worker_runtime_status(now: float | None = None) -> Dict[str, Any]:
-    backend = (os.getenv("STORE_BACKEND") or "memory").strip().lower()
-    enabled_default = backend != "memory"
-    skip = not _is_enabled("WORKER_ENABLE", default=enabled_default)
-    now = now if now is not None else time.time()
-    heartbeat_path = resolve_worker_heartbeat_path()
-    stale_seconds = _env_float("WORKER_HEARTBEAT_STALE_SECONDS", 60.0)
-    return _heartbeat_status(
-        name="worker",
-        path=heartbeat_path,
-        stale_seconds=stale_seconds,
-        now=now,
-        skip=skip,
-    )
 
 
 def _db_runtime_status() -> Dict[str, Any]:
