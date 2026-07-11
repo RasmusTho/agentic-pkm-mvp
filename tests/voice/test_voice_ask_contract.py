@@ -4,7 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api.routes import ask
-from tests.voice.conftest import voice_request, voice_upload
+from tests.voice.conftest import ask_state, voice_request, voice_upload
 
 
 @pytest.mark.anyio
@@ -24,3 +24,20 @@ async def test_audio_limits_rejected_legibly(monkeypatch: pytest.MonkeyPatch) ->
     assert undecodable.value.status_code == 415
     assert undecodable.value.detail["error"] == "audio_undecodable"
     assert not called
+
+
+@pytest.mark.anyio
+async def test_accepted_container_uses_content_type_not_generic_filename(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, str] = {}
+    monkeypatch.setattr(ask, "transcribe_voice_audio", lambda _, **kwargs: seen.update(kwargs) or {"text": "hello", "language": "en"})
+    monkeypatch.setattr(ask, "run_ask_graph", lambda *_, **__: ask_state())
+    monkeypatch.setattr(ask, "get_ask_settings", lambda: object())
+    monkeypatch.setattr(ask, "load_tts_config", lambda: type("Config", (), {"enabled": False})())
+    monkeypatch.setattr(ask, "build_tts_plan", lambda **_: {"audio_url": "/tts.wav"})
+    result = await ask.ask_voice(
+        voice_request(),
+        voice_upload(b"\x1aE\xdf\xa3webm", filename="blob", content_type="audio/webm"),
+        session_id=None,
+    )
+    assert result.answer == "Grounded answer"
+    assert seen["suffix"] == ".webm"

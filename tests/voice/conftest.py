@@ -20,8 +20,13 @@ def voice_request() -> Request:
     return Request({"type": "http", "method": "POST", "headers": []})
 
 
-def voice_upload(payload: bytes = WAV) -> UploadFile:
-    return UploadFile(filename="question.wav", file=io.BytesIO(payload), headers={"content-type": "audio/wav"})
+def voice_upload(
+    payload: bytes = WAV,
+    *,
+    filename: str = "question.wav",
+    content_type: str = "audio/wav",
+) -> UploadFile:
+    return UploadFile(filename=filename, file=io.BytesIO(payload), headers={"content-type": content_type})
 
 
 def ask_state(answer: str = "Grounded answer") -> SimpleNamespace:

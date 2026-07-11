@@ -27,6 +27,7 @@ async def test_ask_down_returns_transcript_and_error(monkeypatch: pytest.MonkeyP
     assert isinstance(result, JSONResponse)
     assert result.status_code == 503
     assert b"heard words" in result.body
+    assert b"ASK down" not in result.body
 
 
 @pytest.mark.anyio

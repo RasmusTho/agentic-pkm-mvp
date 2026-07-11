@@ -35,3 +35,11 @@ async def test_capture_intent_is_surfaced_not_written(monkeypatch: pytest.Monkey
     result = await ask.ask_voice(voice_request(), voice_upload(), session_id=None)
     assert result.reason == "capture_intent_surfaced"
     assert "capture" in result.answer.casefold()
+
+
+@pytest.mark.anyio
+async def test_retrieval_question_that_mentions_capture_wording_reaches_ask(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_success(monkeypatch, "Do you remember what I wrote about X?")
+    result = await ask.ask_voice(voice_request(), voice_upload(), session_id=None)
+    assert result.answer == "Grounded answer"
+    assert result.reason != "capture_intent_surfaced"

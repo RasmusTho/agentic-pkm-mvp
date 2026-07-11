@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import re
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
@@ -54,6 +55,16 @@ VOICE_ASK_MAX_AUDIO_BYTES = 5 * 1024 * 1024
 VOICE_ASK_ACCEPTED_CONTENT_TYPES = {
     "audio/wav", "audio/x-wav", "audio/wave", "audio/m4a", "audio/mp4",
     "audio/webm", "audio/ogg", "application/ogg",
+}
+VOICE_ASK_SUFFIX_BY_CONTENT_TYPE = {
+    "audio/wav": ".wav",
+    "audio/x-wav": ".wav",
+    "audio/wave": ".wav",
+    "audio/m4a": ".m4a",
+    "audio/mp4": ".mp4",
+    "audio/webm": ".webm",
+    "audio/ogg": ".ogg",
+    "application/ogg": ".ogg",
 }
 
 
@@ -128,9 +139,10 @@ def _capture_intent_suggestion(transcript: str) -> str | None:
     changing that deterministic authority boundary.
     """
 
-    normalized = transcript.casefold()
-    phrases = ("remember ", "add to my inbox", "save this", "spara det", "kom ihåg")
-    if any(phrase in normalized for phrase in phrases):
+    normalized = transcript.strip().casefold()
+    # Only an imperative at the start of the utterance is a capture request.
+    # Retrieval questions may legitimately quote or discuss capture wording.
+    if re.match(r"(?:remember|add|save|spara|kom ihåg)\b", normalized):
         return "That sounds like something to capture — use the capture surface to save it."
     return None
 
@@ -225,7 +237,8 @@ async def ask_voice(
     """
 
     trace_id = getattr(request.state, "trace_id", None) or request.headers.get("x-trace-id") or new_trace_id()
-    if audio.content_type and audio.content_type.casefold() not in VOICE_ASK_ACCEPTED_CONTENT_TYPES:
+    content_type = (audio.content_type or "").split(";", 1)[0].casefold()
+    if content_type and content_type not in VOICE_ASK_ACCEPTED_CONTENT_TYPES:
         raise HTTPException(status_code=415, detail={"error": "audio_undecodable", "trace_id": trace_id})
     audio_bytes = await audio.read()
     if len(audio_bytes) > VOICE_ASK_MAX_AUDIO_BYTES:
@@ -234,8 +247,9 @@ async def ask_voice(
         raise HTTPException(status_code=415, detail={"error": "audio_undecodable", "trace_id": trace_id})
 
     try:
-        filename = audio.filename or "voice.wav"
-        suffix = "." + filename.rsplit(".", 1)[-1].casefold() if "." in filename else ".wav"
+        # The validated MIME type, not an optional client filename, governs
+        # decoding. Browser FormData blobs commonly arrive as a generic name.
+        suffix = VOICE_ASK_SUFFIX_BY_CONTENT_TYPE.get(content_type, ".wav")
         transcription = transcribe_voice_audio(audio_bytes, suffix=suffix)
     except Exception as exc:
         # Do not invent an answer when the local-only engine is unavailable.
@@ -262,14 +276,16 @@ async def ask_voice(
         )
 
     try:
+        if not _HYBRID_WARMED:
+            _ensure_hybrid_store_loaded()
         state = run_ask_graph(transcript, trace_id=trace_id, ask_settings=get_ask_settings())
-    except Exception as exc:
+    except Exception:
         # The heard text is still useful, but no ungrounded substitute answer is.
         return JSONResponse(
             status_code=503,
             content={
                 "error": "ask_unavailable",
-                "message": str(exc),
+                "message": "Grounded ASK is temporarily unavailable.",
                 "transcript": transcript,
                 "detected_language": detected_language,
                 "session_id": session_id,
