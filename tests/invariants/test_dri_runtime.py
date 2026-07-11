@@ -99,5 +99,6 @@ def test_segment_requires_bundle() -> None:
             created_by="system:dri",
             created_at="2026-06-27T00:00:00+00:00",
             provenance_event_ids=["prov:1"],
+            episode_ref="unbound",
             # derived_from intentionally omitted -> must raise
         )

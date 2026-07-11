@@ -64,6 +64,7 @@ def _accepted_kwargs(**overrides: object) -> dict[str, object]:
         created_by="p-1",
         created_at="2026-06-27T00:00:00+00:00",
         provenance_event_ids=["prov:1"],
+        episode_ref="unbound",
         vault_id="vault:local",
     )
     base.update(overrides)

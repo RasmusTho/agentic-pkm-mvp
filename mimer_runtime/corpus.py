@@ -81,6 +81,9 @@ def _bundle_for(group: str, path: Path, meta: dict[str, str]) -> MetadataBundle:
         created_by="corpus:synthetic",
         created_at=_CORPUS_CREATED_AT,
         provenance_event_ids=[f"prov:corpus:{object_id}"],
+        # Corpus fixtures carry no episode information; 'unbound' is the honest default (mirrors
+        # mimer_runtime.capture -- see docs/architecture/semantic-dimensions.md :: episode_ref).
+        episode_ref="unbound",
         sphere=meta.get("sphere"),
         authority_receipt_ref=receipt,
     )

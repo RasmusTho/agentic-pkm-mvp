@@ -5,7 +5,7 @@ Owner: OEF — Observability, Evaluation & Fitness (registry); CES practice (rul
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: canonical (invariant → probe mapping); subordinate to the doctrine, ontology, semantic dimensions, contracts, and boundary charters it maps
-Last reviewed: 2026-06-27
+Last reviewed: 2026-07-11
 Last verified against: docs/architecture/traceability-matrix.md, docs/foundation/00-yggdrasil-doctrine.md, docs/architecture/semantic-dimensions.md, docs/architecture/cross-scope-flow.md, docs/architecture/metadata-bundle.md, docs/architecture/context-envelope.md, docs/architecture/memory-model.md, docs/architecture/authority-transition-flow.md, docs/architecture/retrieval-contract.md, docs/boundaries/README.md, schemas/README.md
 
 # Mimer Invariant Test Registry
@@ -779,16 +779,22 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 - **Protected principle:** matrix #3, #16 (provenance/context survives derivation); doctrine — an
   artifact's lived context is part of what it means.
 - **Affected boundaries:** SIP, DRI, RCA, HKA.
-- **Required fixture / data:** a future capture/Episode runtime; the `episode_ref` dimension
-  ([semantic-dimensions](../architecture/semantic-dimensions.md)); [ADR-0051](../adr/ADR-0051-episode-as-ontological-primitive.md).
+- **Required fixture / data:** the `episode_ref` dimension
+  ([semantic-dimensions](../architecture/semantic-dimensions.md)); the metadata bundle schema
+  (`schemas/metadata-bundle.schema.json`); [ADR-0051](../adr/ADR-0051-episode-as-ontological-primitive.md).
 - **Expected failure mode:** a segment/projection/retrieval result drops `episode_ref`, so an
   observation can no longer be traced to the situation that produced it and closure-driven decay
   cannot apply.
-- **Current enforcement:** `future_runtime` (Episode entity + dimension defined by ADR-0051; no
-  capture runtime or test skeleton yet — probe named for when the slice lands).
-- **Eventual test path:** `tests/invariants/test_episode_binding.py::test_observation_episode_binding_survives` (future).
-- **Related docs / contracts / ADRs:** [semantic-dimensions](../architecture/semantic-dimensions.md) (`episode_ref`), [functional-ontology](../architecture/functional-ontology.md) (`Episode`); ADR-0051, ADR-0029.
-- **Related issues:** none yet (downstream capture epic; grounded in [EPISODE_AS_ONTOLOGICAL_PRIMITIVE](../research/EPISODE_AS_ONTOLOGICAL_PRIMITIVE.md)).
+- **Current enforcement:** `schema_enforced` (`episode_ref` is a required bundle field; the
+  derived-types `allOf` conditional requires it alongside `derived_from`) + `runtime_test` (derivation
+  runtime, `mimer_runtime.dri.derive_segment` propagates the source's binding — unbound, pending, or
+  bound). Scope: the field-threading and derivation-survival half of this invariant is enforced now
+  (#3178 / ERE-03); real episode-id assignment (ERE-05) and Episode-closure-driven relevance decay
+  (the Event Horizon model, ADR-0058) remain `future_runtime` — retrieval consumption of `episode_ref`
+  lands in ERE-06.
+- **Runtime test path:** `tests/invariants/test_episode_binding.py::test_observation_episode_binding_survives` (runtime — passes).
+- **Related docs / contracts / ADRs:** [semantic-dimensions](../architecture/semantic-dimensions.md) (`episode_ref`), [functional-ontology](../architecture/functional-ontology.md) (`Episode`), [metadata-bundle](../architecture/metadata-bundle.md) §1/§3/§4; ADR-0051, ADR-0029, ADR-0058.
+- **Related issues:** #3178 (ERE-03, this slice); grounded in [EPISODE_AS_ONTOLOGICAL_PRIMITIVE](../research/EPISODE_AS_ONTOLOGICAL_PRIMITIVE.md).
 
 ## Vault multi-writer consistency invariants (ADR-0055)
 
@@ -872,7 +878,7 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 | authority_transition_state_is_consistent | #9 | GOV | schema + static | `tests/invariants/test_authority_transition.py` |
 | context_bundle_is_not_context_envelope | #7,#8 | RCA/CAO | schema + static | `tests/invariants/test_context_envelope.py` |
 | storage_write_is_not_authority_transition | #9,#12 | PDM/GOV | doc + xfail | `tests/invariants/test_authority_transition.py` (xfail) |
-| observation_episode_binding_survives | #3,#16 | SIP/DRI/RCA | future_runtime | `tests/invariants/test_episode_binding.py` (future) |
+| observation_episode_binding_survives | #3,#16 | SIP/DRI/RCA | schema + runtime | `tests/invariants/test_episode_binding.py` |
 | propose_when_uncertain | #17 | CAO/GOV/HIX | doc + xfail | `tests/invariants/test_context_envelope.py` (xfail) |
 | standards_are_adapters | #18 | EBF/SIP/CES | doc_only | `TBD` (CES review) |
 | connect_proposals_candidate_only | #9 | GOV/RCA | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/expansion/test_connect_findings.py` |

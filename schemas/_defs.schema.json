@@ -187,6 +187,18 @@
       "type": "string",
       "enum": ["candidate", "admitted", "redacted", "requires_confirmation"]
     },
+    "episode_ref": {
+      "description": "The bounded lived situation (Episode) an object originated in. SIP-owned; honored by RCA (retrieval, closure-driven relevance decay) and MEM. `unbound` when no episode is known (the honest default at capture); `pending` when a binding was proposed by capture (opt-out segmentation) but not yet accepted or re-cut (ADR-0051 section 5) -- a pending binding is NOT authority. Otherwise one or more episode_id references. Orthogonal to evidence_role, authority_state, and scope_binding: never inferred as admissibility, standing, or scope membership, and never upgrades evidence_role.",
+      "oneOf": [
+        { "const": "unbound" },
+        { "const": "pending" },
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/id_string" }
+        }
+      ]
+    },
     "scope_binding": {
       "description": "ADDITIONAL scope membership beyond the object's primary scope. WSP-owned (policy facet GOV). Membership only; it never grants cross-scope rights. The PRIMARY scope is the object's top-level scope_id (the single source of truth) and is intentionally NOT repeated here, so the policy/provenance scope cannot drift between two fields.",
       "type": "object",

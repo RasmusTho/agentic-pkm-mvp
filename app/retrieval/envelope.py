@@ -99,6 +99,10 @@ def _bundle_from_result(item: dict[str, Any]) -> dict[str, Any]:
         "created_by": str(payload.get("created_by") or _DEFAULT_CREATED_BY),
         "created_at": str(payload.get("created_at") or _DEFAULT_CREATED_AT),
         "provenance_event_ids": [f"prov:retrieval:{object_id or uuid4().hex[:12]}"],
+        # The live index row carries no episode binding yet (assignment is ERE-05, out of scope for
+        # this seam); 'unbound' is the honest default (docs/architecture/semantic-dimensions.md
+        # :: episode_ref) -- mirrors mimer_runtime.capture/corpus/dri.
+        "episode_ref": "unbound",
     }
     sphere = payload.get("sphere") or payload.get("domain")
     if isinstance(sphere, str) and sphere.strip():
