@@ -19,7 +19,16 @@ def test_ci_builds_sha_tagged_image() -> None:
     assert "  workflow_dispatch:" in workflow
     assert "  push:" in workflow
     assert "  pull_request:" in workflow
-    assert "    paths:" not in workflow
+    assert "    paths:" in workflow
+    for path in (
+        "'app/**'",
+        "'scripts/start_api.sh'",
+        "'Dockerfile'",
+        "'requirements.txt'",
+        "'requirements-tts.txt'",
+        "'.github/workflows/app-image-build.yml'",
+    ):
+        assert path in workflow
     assert "uses: docker/setup-qemu-action@v3" in workflow
     assert 'vcs_ref="${GITHUB_SHA}"' in workflow
     assert 'owner="${GITHUB_REPOSITORY_OWNER,,}"' in workflow
