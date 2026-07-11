@@ -5,7 +5,7 @@ Owner: Builder System governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: observed repo files and read-only GitHub command output cited inline
-Last reviewed: 2026-07-09
+Last reviewed: 2026-07-11
 
 # Builder System Process Map
 
@@ -54,6 +54,7 @@ Read-only GitHub evidence used:
 - `gh api repos/RasmusTho/agentic-pkm-mvp --jq '{allow_auto_merge,...}'` on 2026-07-08: `allow_auto_merge=false`, default branch `main`, merge/squash/rebase allowed, delete branch on merge disabled.
 - `find .claude -path '.claude/worktrees' -prune -o -type f -print`: repo-level `.claude` files are `.claude/hooks/README.md`; no repo-level `.claude/settings*.json` files were found.
 - `gh issue list --state open --search "builder OR BuilderOps OR Kvasir OR CKM OR dispatcher OR review repair OR governance" --limit 80` on 2026-07-09: open Builder System work included #3229 (dispatcher-backed epic runner), #3224 (autonomous review and repair gates), #3138/#3139-#3148 (CKM/Kvasir), #3226 (process-map reconciliation), #3257 (epic-runner lifecycle transition plans), #3260-#3266 (continuous improvement / reevaluation operationalization), and #3171/#3174 (cross-repo Builder System governance).
+- PR #3222 merged 2026-07-08: the artifact-only CI failure context collector is now implemented by `.github/workflows/pr-ci-failure-context.yml` and `scripts/collect_ci_failure_context.py`, with workflow and script tests. It observes failed PR-triggered workflow runs, produces a context artifact, and neither reruns nor repairs CI.
 
 ## 2. Component Inventory
 
@@ -78,7 +79,7 @@ Read-only GitHub evidence used:
 | implementation agent | implemented | `issue-to-code`, `slice_implementer` adapter | Execute bounded issue | Ready issue, owner docs | Diff, validation, PR | Local files/PR | [`.codex/skills/issue-to-code/SKILL.md`:236-260], [`.codex/agents/slice-implementer.toml`:1-20] |
 | validation runner | partially_implemented | Makefile, scripts, CI, `DEV_WORKFLOW` | Run local and CI checks | Changed files | Logs/status | Local/CI | [docs/development/DEV_WORKFLOW.md:60-83], [`.github/workflows/ci.yml`:9-65] |
 | CI workflows | implemented | `.github/workflows/**` | Automated checks and projections | PR/push/schedule/manual | Check runs/artifacts/comments | GitHub Actions | `gh workflow list`; [`.github/workflows/ci-smoke.yaml`:4-13], [`.github/workflows/import-linter.yaml`:14-33] |
-| CI failure context collector | partially_implemented | `PR_ESCALATION_PATHS`, `scripts/await_pr_checks.sh` | Classify failure and collect status | Failing check | Failure class | Agent/script | [docs/development/PR_ESCALATION_PATHS.md:12-20], [scripts/await_pr_checks.sh:100-151] |
+| CI failure context collector | implemented (artifact-only) | `.github/workflows/pr-ci-failure-context.yml`, `scripts/collect_ci_failure_context.py` | Build a bounded context pack for failed PR-triggered CI runs | Failed workflow-run metadata and downloaded logs | JSON/Markdown context artifact; no rerun or repair | GitHub Actions artifact upload only | [PR #3222](https://github.com/RasmusTho/agentic-pkm-mvp/pull/3222), [`.github/workflows/pr-ci-failure-context.yml`:1-61], [scripts/collect_ci_failure_context.py:1-537] |
 | CI repair orchestrator | implicit | `pr-integration`, escalation docs | Repair CI when triggered | CI failure | Fix or block | Agent PR commits | [`.codex/skills/pr-integration/SKILL.md`:50-67] |
 | PR publisher | implemented | `publish-pr` skill | Branch, commit, push, PR | Local validated diff | PR | Git/GitHub | [`.codex/skills/publish-pr/SKILL.md`:29-37], [`.codex/skills/publish-pr/SKILL.md`:53-159] |
 | PR contract validator | implemented | `issue-pr-governance.yml` | Check PR body lane/issue/paths/BuilderOps routing | PR body/files | Failed or passed check | GitHub Action | [`.github/workflows/issue-pr-governance.yml`:79-218] |
@@ -538,7 +539,7 @@ Forbidden or human-gated hooks: any hook that writes GitHub state, merges, pushe
 | pull_request opened/synchronize/reopened/ready_for_review | CI, PR governance, project PR workflows | Evidence pack builder, PR contract artifact, CI context collector | contents read, pull-requests read/write for comments | artifact-only/comment-only | merge or patch authority needed |
 | pull_request_review | none observed as trigger | Review finding classifier | pull-requests read | observe-only/comment-only | ambiguous blocking review |
 | issue_comment | none observed as trigger | Command parser for `/dispatch`, `/repair`, `/evidence` in observe-only | issues read | observe-only | mutation requested |
-| workflow_run completed/failure | none observed as trigger | CI failure context collector | actions read, contents read | artifact-only | patch/merge decision |
+| workflow_run completed/failure | `pr-ci-failure-context` | CI failure context collector (delivered by PR #3222) | actions read, contents read | artifact-only | patch/merge decision |
 | push to agent branches | CI workflows on PR/push | Branch drift/evidence update | contents read | artifact-only | force-push/branch rewrite |
 | schedule | harness-selfverify, integration-nightly, project reconcile | queue health, stale claim report | read mostly | artifact-only | stale claim override |
 | workflow_dispatch | many workflows | manual diagnostics | per workflow | observe-only/artifact-only | operator action |
@@ -622,7 +623,6 @@ Where to store/post:
 | skill router | Prevent wrong workflow | `AGENTS.md`, skills README | agent reads index | wrong lane | low-risk linter for skill entrypoint mentions |
 | context builder | Reduce repeated source loading | DOCS_INDEX, skills, `app/builderops/epic_dispatch.py` | dry-run helper plus agent review | token/time waste | helper builds runtime-neutral context pack from issue source anchors |
 | worktree/branch allocator | Avoid branch collision | branch gate, dispatcher docs | preflight detects, no central reservation | late collision | dispatcher branch/worktree reservation extension |
-| CI failure context collector | Needed before self-heal | workflows, PR escalation | agent reads checks/logs | blind repair | workflow_run artifact pack |
 | repair orchestrator | Bounded automated CI/review repair | pr-integration | agentic loop | endless or unsafe retries | patch-branch agent with retry ledger |
 | review gate runner | Make local review auditable in GitHub | verification skill | local subagent by agent | invisible review gaps | comment-only review Action or receipt artifact |
 | evidence pack builder | Single source for PR closure | PR hot path, verification | PR body/manual receipt | stale/incomplete evidence | artifact-only Action |
@@ -800,7 +800,7 @@ flowchart TD
 | --- | --- | --- | --- | --- | --- |
 | 1 | Land this process map | docs-only | Required before automating dispatch/routing | Revert doc PR | low |
 | 2 | Add deterministic readiness/`Verify:` checker that reports only | observe-only | No dispatcher automation before readiness is deterministic | Remove workflow/script | low |
-| 3 | Add CI failure context artifact builder on `workflow_run` | artifact-only | No CI self-heal before context collector | Disable workflow | low |
+| 3 | CI failure context artifact builder on `workflow_run` — delivered by PR #3222 | artifact-only | Context is now available before any future CI self-heal | Disable workflow | low |
 | 4 | Add evidence pack builder for PRs | artifact-only | Closure needs one auditable packet | Disable workflow | low |
 | 5 | Protect `main` with documented required checks | manual exception gate | No autonomous merge before branch protection | Remove rule | medium, platform authority |
 | 6 | Add post-merge docs classifier artifact | artifact-only | Watchdog currently nudges but does not classify | Disable workflow | low |
