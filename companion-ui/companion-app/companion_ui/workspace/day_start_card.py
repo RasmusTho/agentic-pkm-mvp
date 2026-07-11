@@ -119,7 +119,11 @@ def _render_ref(target: str) -> str:
     label = html.escape(target)
     if not safe:
         return f'<span data-blocked-ref="true">{label}</span>'
-    return f'<a href="{html.escape(quote(target, safe="/:#?=&%"), quote=True)}">{label}</a>'
+    if parsed is not None and parsed.scheme.lower() in {"http", "https"}:
+        href = quote(target, safe="/:#?=&%")
+    else:
+        href = "/?note_path=" + quote(target, safe="")
+    return f'<a href="{html.escape(href, quote=True)}">{label}</a>'
 
 
 def _speech_text(data: Mapping[str, Any]) -> str:

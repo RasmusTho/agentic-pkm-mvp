@@ -16047,6 +16047,7 @@ def make_handler(
             if parsed.path not in {"/", "/workspace"}:
                 self._send_unknown_document_route()
                 return
+            day_start_briefing = None
             try:
                 first_contact = self._client.post(
                     "/api/companion/briefing/first-contact",
@@ -16059,8 +16060,30 @@ def make_handler(
                     else None
                 )
             except Exception:
-                # Briefing is derived; a trigger failure must not block entry.
-                day_start_briefing = None
+                # Generation is additive; the read-only projection can remain healthy.
+                pass
+            if day_start_briefing is None:
+                try:
+                    fallback = self._client.get(
+                        "/api/companion/briefing/today", params={}
+                    )
+                    if isinstance(fallback, dict):
+                        day_start_briefing = fallback
+                except Exception:
+                    # Never collapse a failed trigger + failed read into a blank card.
+                    pass
+            if day_start_briefing is None:
+                day_start_briefing = {
+                    "state": "unreadable",
+                    "date": datetime.now().astimezone().date().isoformat(),
+                    "preview": "",
+                    "degraded_sections": [],
+                    "sections": [],
+                    "read_only": True,
+                    "reason": "briefing_projection_unavailable",
+                    "tts_available": False,
+                    "tts_unavailable_reason": "Local TTS is unavailable.",
+                }
             body = handle_get(
                 query_string=parsed.query,
                 client=self._client,
