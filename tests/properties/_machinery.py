@@ -458,7 +458,7 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "the port's own guard-at-seam assertion (#2910), not the "
         "MarkdownSettingsStore primitive this census is otherwise about."
     ),
-    ("app/vault/manager.py", 642): (
+    ("app/vault/manager.py", 669): (
         "guarded: _ensure_frontmatter_id asserts DEFAULT_WRITE_GUARD."
         "assert_writes_allowed('vault.identity_heal') immediately before this "
         "call (#2910 identity-heal fix); a denying/raising guard raises before "
