@@ -21,6 +21,7 @@ class TaskRecord:
     source_anchor_refs: list[str]
     created_at: str
     updated_at: str
+    repo: str = ""
     claimed_by: str | None = None
     lease_id: str | None = None
     lease_expires_at: str | None = None

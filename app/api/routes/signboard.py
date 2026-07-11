@@ -36,6 +36,7 @@ class ParsedCard:
     status: str
     column: str
     priority: str
+    repo: str | None
     labels: list[str]
     blocked_reason: str | None
     claimed_by: str | None
@@ -115,6 +116,7 @@ def parse_signboard_markdown(markdown: str, *, expected_column: str) -> ParsedCa
         status=canonical_status(status),
         column=column,
         priority=text("priority") or "unspecified",
+        repo=text("repo"),
         labels=strings("labels"),
         blocked_reason=text("blocked_reason"),
         claimed_by=text("claimed_by"),

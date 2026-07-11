@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 DDL_STATEMENTS: tuple[str, ...] = (
     """
@@ -12,6 +12,7 @@ DDL_STATEMENTS: tuple[str, ...] = (
         title TEXT NOT NULL,
         status TEXT NOT NULL,
         priority TEXT NOT NULL,
+        repo TEXT NOT NULL DEFAULT '',
         source_anchor_refs TEXT NOT NULL,
         claimed_by TEXT,
         lease_id TEXT,

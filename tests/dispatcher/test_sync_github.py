@@ -26,6 +26,18 @@ from app.dispatcher.store import SqliteStore
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_DIR = REPO_ROOT / "tests/fixtures/issue_readiness"
+
+# The owner/repo normalize_github_issue is told these sample issues came
+# from. Distinct from REPO_ROOT (a filesystem path), this is the GitHub
+# "owner/name" string that now qualifies every task_id.
+REPO = "RasmusTho/agentic-pkm-mvp"
+
+
+def _tid(number: int, repo: str = REPO) -> str:
+    """The repo-qualified task_id normalize_github_issue produces for *number*."""
+    return f"github-{repo.replace('/', '-')}-issue-{number}"
+
+
 VALID_READY_BODY = (FIXTURE_DIR / "valid_ready_candidate.md").read_text(encoding="utf-8")
 INVALID_READY_BODY = (FIXTURE_DIR / "missing_constraints.md").read_text(encoding="utf-8")
 
@@ -118,9 +130,9 @@ def test_pull_sync_adapter_interface() -> None:
 def test_normalize_github_issue_to_task() -> None:
     """normalize_github_issue converts sample GitHub payload to TaskRecord."""
     now = "2026-04-25T00:00:00+00:00"
-    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now=now)
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, REPO, now=now)
 
-    assert task.task_id == "github-issue-101"
+    assert task.task_id == _tid(101)
     assert task.issue_number == 101
     assert task.title == "Fix critical bug in queue selection"
     assert task.priority == "high"
@@ -135,22 +147,22 @@ def test_normalize_github_issue_to_task() -> None:
 
 def test_normalize_github_issue_default_priority() -> None:
     """Issues with no priority label default to priority 'med'."""
-    task = normalize_github_issue(SAMPLE_ISSUE_NO_LABELS)
+    task = normalize_github_issue(SAMPLE_ISSUE_NO_LABELS, REPO)
     assert task.priority == "med"
     assert task.status == "ready"
 
 
 def test_normalize_github_issue_blocked_status() -> None:
     """Issues labelled agent:blocked map to status 'blocked'."""
-    task = normalize_github_issue(SAMPLE_ISSUE_BLOCKED)
+    task = normalize_github_issue(SAMPLE_ISSUE_BLOCKED, REPO)
     assert task.status == "blocked"
     assert task.priority == "med"
 
 
 def test_normalize_github_issue_low_priority() -> None:
-    task = normalize_github_issue(SAMPLE_ISSUE_LOW)
+    task = normalize_github_issue(SAMPLE_ISSUE_LOW, REPO)
     assert task.priority == "low"
-    assert task.task_id == "github-issue-102"
+    assert task.task_id == _tid(102)
 
 
 def test_normalize_github_issue_string_labels() -> None:
@@ -163,7 +175,7 @@ def test_normalize_github_issue_string_labels() -> None:
         "updatedAt": "2026-04-01T01:00:00Z",
         "body": VALID_READY_BODY,
     }
-    task = normalize_github_issue(payload)
+    task = normalize_github_issue(payload, REPO)
     assert task.priority == "high"
     assert task.status == "ready"
 
@@ -186,7 +198,7 @@ def test_agent_ready_issue_pickable_without_project_status(tmp_store: SqliteStor
     upserted = adapter.pull("RasmusTho/agentic-pkm-mvp")
 
     assert [task.issue_number for task in upserted] == [201]
-    stored = tmp_store.get_task("github-issue-201")
+    stored = tmp_store.get_task(_tid(201))
     assert stored is not None
     assert stored.status == "ready"
     assert {call[0] for call in source.method_calls} == {
@@ -238,7 +250,7 @@ def test_sync_state_records_provider_identity(tmp_store: SqliteStore) -> None:
 def test_sync_failure_handling(tmp_store: SqliteStore) -> None:
     """record_sync_failure persists error state without corrupting task rows."""
     # Pre-populate a real task so we can verify it is untouched after failure
-    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, REPO, now="2026-04-24T00:00:00+00:00")
     tmp_store.upsert_task(task)
 
     pull_at = "2026-04-25T09:00:00+00:00"
@@ -250,14 +262,14 @@ def test_sync_failure_handling(tmp_store: SqliteStore) -> None:
     assert "rate limit exceeded" in meta["sync_note"]
 
     # Original task row must be untouched
-    stored = tmp_store.get_task("github-issue-101")
+    stored = tmp_store.get_task(_tid(101))
     assert stored is not None
     assert stored.title == SAMPLE_ISSUE_HIGH["title"]
 
 
 def test_pull_sync_source_error_does_not_corrupt(tmp_store: SqliteStore) -> None:
     """If the source raises, adapter records failure and returns empty list."""
-    task = normalize_github_issue(SAMPLE_ISSUE_LOW, now="2026-04-24T00:00:00+00:00")
+    task = normalize_github_issue(SAMPLE_ISSUE_LOW, REPO, now="2026-04-24T00:00:00+00:00")
     tmp_store.upsert_task(task)
 
     source = MagicMock(spec=GitHubIssueSource)
@@ -275,7 +287,7 @@ def test_pull_sync_source_error_does_not_corrupt(tmp_store: SqliteStore) -> None
     assert meta["sync_result"] == "error"
 
     # Existing task untouched
-    stored = tmp_store.get_task("github-issue-102")
+    stored = tmp_store.get_task(_tid(102))
     assert stored is not None
 
 
@@ -320,20 +332,20 @@ def test_github_source_protocol_has_no_projects_method() -> None:
 
 
 def test_pull_sync_removes_stale_ready_tasks(tmp_store: SqliteStore) -> None:
-    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, REPO, now="2026-04-24T00:00:00+00:00")
     tmp_store.upsert_task(task)
     source = _mock_source([], open_issues=[])
     adapter = PullSyncAdapter(store=tmp_store, source=source)
 
     adapter.pull("RasmusTho/agentic-pkm-mvp")
 
-    stored = tmp_store.get_task("github-issue-101")
+    stored = tmp_store.get_task(_tid(101))
     assert stored is not None
     assert stored.status == "completed"
 
 
 def test_pull_sync_demotes_label_stripped_tasks(tmp_store: SqliteStore) -> None:
-    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, REPO, now="2026-04-24T00:00:00+00:00")
     tmp_store.upsert_task(task)
     open_issue = dict(SAMPLE_ISSUE_HIGH)
     open_issue["labels"] = [{"name": "prio:high"}]
@@ -342,14 +354,14 @@ def test_pull_sync_demotes_label_stripped_tasks(tmp_store: SqliteStore) -> None:
 
     adapter.pull("RasmusTho/agentic-pkm-mvp")
 
-    stored = tmp_store.get_task("github-issue-101")
+    stored = tmp_store.get_task(_tid(101))
     assert stored is not None
     assert stored.status == "blocked"
 
 
 def test_pull_sync_emits_event_for_each_reconciled_task(tmp_store: SqliteStore) -> None:
     for issue in (SAMPLE_ISSUE_HIGH, SAMPLE_ISSUE_LOW):
-        tmp_store.upsert_task(normalize_github_issue(issue, now="2026-04-24T00:00:00+00:00"))
+        tmp_store.upsert_task(normalize_github_issue(issue, REPO, now="2026-04-24T00:00:00+00:00"))
     source = _mock_source([], open_issues=[])
     adapter = PullSyncAdapter(store=tmp_store, source=source)
 
@@ -360,7 +372,7 @@ def test_pull_sync_emits_event_for_each_reconciled_task(tmp_store: SqliteStore) 
 
 
 def test_pull_sync_json_output_includes_reconciled_count(tmp_store: SqliteStore) -> None:
-    tmp_store.upsert_task(normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00"))
+    tmp_store.upsert_task(normalize_github_issue(SAMPLE_ISSUE_HIGH, REPO, now="2026-04-24T00:00:00+00:00"))
     source = _mock_source([], open_issues=[])
     adapter = PullSyncAdapter(store=tmp_store, source=source)
 
@@ -383,7 +395,7 @@ def test_pull_skips_malformed_issue_without_aborting(tmp_store: SqliteStore) -> 
     upserted = adapter.pull("RasmusTho/agentic-pkm-mvp")
 
     assert len(upserted) == 1
-    assert upserted[0].task_id == "github-issue-101"
+    assert upserted[0].task_id == _tid(101)
 
     meta = get_sync_meta(tmp_store, PROVIDER_IDENTITY)
     assert meta is not None
@@ -406,7 +418,7 @@ def test_pull_skips_invalid_agent_ready_issue_without_queueing(
     upserted = adapter.pull("RasmusTho/agentic-pkm-mvp")
 
     assert upserted == []
-    assert tmp_store.get_task("github-issue-105") is None
+    assert tmp_store.get_task(_tid(105)) is None
     meta = get_sync_meta(tmp_store, PROVIDER_IDENTITY)
     assert meta is not None
     assert meta.get("skipped_count") == 1
@@ -424,6 +436,7 @@ def test_pull_demotes_existing_invalid_agent_ready_when_snapshot_unavailable(
     }
     existing = normalize_github_issue(
         {**invalid_ready, "body": VALID_READY_BODY},
+        REPO,
         now="2026-04-24T00:00:00+00:00",
     )
     tmp_store.upsert_task(existing)
@@ -437,13 +450,13 @@ def test_pull_demotes_existing_invalid_agent_ready_when_snapshot_unavailable(
 
     assert upserted == []
     source.list_open_issues.assert_not_called()
-    stored = tmp_store.get_task("github-issue-105")
+    stored = tmp_store.get_task(_tid(105))
     assert stored is not None
     assert stored.status == "blocked"
     assert stored.blocked_reason == "agent:ready strict readiness validation failed"
     events = [
         event
-        for event in tmp_store.list_events("github-issue-105")
+        for event in tmp_store.list_events(_tid(105))
         if event.payload.get("reason") == "agent-ready-readiness-invalid"
     ]
     assert len(events) == 1
@@ -452,14 +465,14 @@ def test_pull_demotes_existing_invalid_agent_ready_when_snapshot_unavailable(
 def test_pull_blocks_unvalidated_agent_ready_from_open_snapshot(
     tmp_store: SqliteStore,
 ) -> None:
-    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, REPO, now="2026-04-24T00:00:00+00:00")
     tmp_store.upsert_task(task)
     source = _mock_source([], open_issues=[SAMPLE_ISSUE_HIGH])
     adapter = PullSyncAdapter(store=tmp_store, source=source)
 
     adapter.pull("RasmusTho/agentic-pkm-mvp")
 
-    stored = tmp_store.get_task("github-issue-101")
+    stored = tmp_store.get_task(_tid(101))
     assert stored is not None
     assert stored.status == "blocked"
     assert (
@@ -468,7 +481,7 @@ def test_pull_blocks_unvalidated_agent_ready_from_open_snapshot(
     )
     events = [
         event
-        for event in tmp_store.list_events("github-issue-101")
+        for event in tmp_store.list_events(_tid(101))
         if event.payload.get("reason") == "agent-ready-readiness-unvalidated"
     ]
     assert len(events) == 1
@@ -483,9 +496,9 @@ def test_pull_upserts_tasks_into_store(tmp_store: SqliteStore) -> None:
     upserted = adapter.pull("RasmusTho/agentic-pkm-mvp")
 
     assert len(upserted) == 2
-    assert {t.task_id for t in upserted} == {"github-issue-101", "github-issue-102"}
+    assert {t.task_id for t in upserted} == {_tid(101), _tid(102)}
 
-    stored_101 = tmp_store.get_task("github-issue-101")
+    stored_101 = tmp_store.get_task(_tid(101))
     assert stored_101 is not None
     assert stored_101.priority == "high"
 
@@ -502,7 +515,7 @@ def test_pull_upserts_tasks_into_store(tmp_store: SqliteStore) -> None:
 def test_pull_reopens_blocked_task_when_github_ready(tmp_store: SqliteStore) -> None:
     """A locally-blocked task transitions to ready when GitHub shows agent:ready."""
     # Pre-seed task as blocked locally
-    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, REPO, now="2026-04-24T00:00:00+00:00")
     task.status = "blocked"
     task.blocked_reason = "dependency on #200"
     tmp_store.upsert_task(task)
@@ -512,7 +525,7 @@ def test_pull_reopens_blocked_task_when_github_ready(tmp_store: SqliteStore) -> 
     adapter = PullSyncAdapter(store=tmp_store, source=source)
     adapter.pull("RasmusTho/agentic-pkm-mvp")
 
-    stored = tmp_store.get_task("github-issue-101")
+    stored = tmp_store.get_task(_tid(101))
     assert stored is not None
     assert stored.status == "ready", "pull-sync must reopen blocked task when upstream is agent:ready"
     assert stored.blocked_reason is None
@@ -523,7 +536,7 @@ def test_pull_does_not_clobber_active_lease_status(tmp_store: SqliteStore) -> No
     now = "2026-04-24T00:00:00+00:00"
 
     # claimed task
-    claimed_task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now=now)
+    claimed_task = normalize_github_issue(SAMPLE_ISSUE_HIGH, REPO, now=now)
     claimed_task.status = "claimed"
     claimed_task.claimed_by = "agent-x"
     claimed_task.lease_id = "lease-abc"
@@ -531,7 +544,7 @@ def test_pull_does_not_clobber_active_lease_status(tmp_store: SqliteStore) -> No
 
     # in_progress task (use a different issue number)
     in_progress_issue = {**SAMPLE_ISSUE_LOW, "labels": [{"name": "agent:ready"}, {"name": "prio:low"}]}
-    in_progress_task = normalize_github_issue(in_progress_issue, now=now)
+    in_progress_task = normalize_github_issue(in_progress_issue, REPO, now=now)
     in_progress_task.status = "in_progress"
     tmp_store.upsert_task(in_progress_task)
 
@@ -539,13 +552,13 @@ def test_pull_does_not_clobber_active_lease_status(tmp_store: SqliteStore) -> No
     adapter = PullSyncAdapter(store=tmp_store, source=source)
     adapter.pull("RasmusTho/agentic-pkm-mvp")
 
-    stored_claimed = tmp_store.get_task("github-issue-101")
+    stored_claimed = tmp_store.get_task(_tid(101))
     assert stored_claimed is not None
     assert stored_claimed.status == "claimed", "pull-sync must not clobber claimed status"
     assert stored_claimed.claimed_by == "agent-x"
     assert stored_claimed.lease_id == "lease-abc"
 
-    stored_ip = tmp_store.get_task("github-issue-102")
+    stored_ip = tmp_store.get_task(_tid(102))
     assert stored_ip is not None
     assert stored_ip.status == "in_progress", "pull-sync must not clobber in_progress status"
 
@@ -556,7 +569,7 @@ def test_pull_creates_new_task_from_github(tmp_store: SqliteStore) -> None:
     adapter = PullSyncAdapter(store=tmp_store, source=source)
     adapter.pull("RasmusTho/agentic-pkm-mvp")
 
-    stored = tmp_store.get_task("github-issue-101")
+    stored = tmp_store.get_task(_tid(101))
     assert stored is not None
     assert stored.status == "ready"
     assert stored.priority == "high"
@@ -566,7 +579,7 @@ def test_pull_creates_new_task_from_github(tmp_store: SqliteStore) -> None:
 def test_pull_updates_metadata_for_blocked_task(tmp_store: SqliteStore) -> None:
     """Metadata is updated from GitHub when blocked task is reopened by agent:ready."""
     old_now = "2026-04-23T00:00:00+00:00"
-    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now=old_now)
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, REPO, now=old_now)
     task.status = "blocked"
     task.blocked_reason = "waiting on infra"
     tmp_store.upsert_task(task)
@@ -582,7 +595,7 @@ def test_pull_updates_metadata_for_blocked_task(tmp_store: SqliteStore) -> None:
     adapter = PullSyncAdapter(store=tmp_store, source=source)
     adapter.pull("RasmusTho/agentic-pkm-mvp")
 
-    stored = tmp_store.get_task("github-issue-101")
+    stored = tmp_store.get_task(_tid(101))
     assert stored is not None
     assert stored.status == "ready"
     assert stored.blocked_reason is None
@@ -594,7 +607,7 @@ def test_pull_updates_metadata_for_blocked_task(tmp_store: SqliteStore) -> None:
 
 def test_reconcile_blocked_task_closes_when_issue_closed(tmp_store: SqliteStore) -> None:
     """Blocked task transitions to completed when issue is closed/missing from open issues."""
-    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, REPO, now="2026-04-24T00:00:00+00:00")
     task.status = "blocked"
     task.blocked_reason = "waiting for upstream"
     tmp_store.upsert_task(task)
@@ -603,7 +616,7 @@ def test_reconcile_blocked_task_closes_when_issue_closed(tmp_store: SqliteStore)
     adapter = PullSyncAdapter(store=tmp_store, source=source)
     adapter.pull("RasmusTho/agentic-pkm-mvp")
 
-    stored = tmp_store.get_task("github-issue-101")
+    stored = tmp_store.get_task(_tid(101))
     assert stored is not None
     assert stored.status == "completed"
     assert stored.blocked_reason is None
@@ -611,7 +624,7 @@ def test_reconcile_blocked_task_closes_when_issue_closed(tmp_store: SqliteStore)
 
 def test_reconcile_keeps_blocked_when_open_issue_lookup_fails(tmp_store: SqliteStore) -> None:
     """Blocked tasks must not complete when open-issue snapshot is unavailable."""
-    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, REPO, now="2026-04-24T00:00:00+00:00")
     task.status = "blocked"
     task.blocked_reason = "waiting for upstream"
     tmp_store.upsert_task(task)
@@ -624,7 +637,7 @@ def test_reconcile_keeps_blocked_when_open_issue_lookup_fails(tmp_store: SqliteS
     adapter = PullSyncAdapter(store=tmp_store, source=source)
     adapter.pull("RasmusTho/agentic-pkm-mvp")
 
-    stored = tmp_store.get_task("github-issue-101")
+    stored = tmp_store.get_task(_tid(101))
     assert stored is not None
     assert stored.status == "blocked"
     assert stored.blocked_reason == "waiting for upstream"
@@ -637,7 +650,7 @@ def test_reconcile_keeps_ready_when_open_issue_lookup_fails(tmp_store: SqliteSto
     closed" (completed is correct) from "issue open but agent:ready label
     removed" (should stay/demote, not complete). Regression for #2760.
     """
-    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, REPO, now="2026-04-24T00:00:00+00:00")
     tmp_store.upsert_task(task)
 
     source = MagicMock(spec=GitHubIssueSource)
@@ -648,7 +661,7 @@ def test_reconcile_keeps_ready_when_open_issue_lookup_fails(tmp_store: SqliteSto
     adapter = PullSyncAdapter(store=tmp_store, source=source)
     adapter.pull("RasmusTho/agentic-pkm-mvp")
 
-    stored = tmp_store.get_task("github-issue-101")
+    stored = tmp_store.get_task(_tid(101))
     assert stored is not None
     assert stored.status == "ready"
 
@@ -661,7 +674,7 @@ def test_reconcile_keeps_ready_when_kill_switch_active(tmp_store: SqliteStore) -
 
     the open-issues scan. Regression for #2760.
     """
-    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, now="2026-04-24T00:00:00+00:00")
+    task = normalize_github_issue(SAMPLE_ISSUE_HIGH, REPO, now="2026-04-24T00:00:00+00:00")
     tmp_store.upsert_task(task)
 
     source = MagicMock(spec=GitHubIssueSource)
@@ -674,7 +687,7 @@ def test_reconcile_keeps_ready_when_kill_switch_active(tmp_store: SqliteStore) -
 
     source.list_open_issues.assert_not_called()
 
-    stored = tmp_store.get_task("github-issue-101")
+    stored = tmp_store.get_task(_tid(101))
     assert stored is not None
     assert stored.status == "ready"
 
@@ -1086,3 +1099,81 @@ def test_list_open_issues_pr_noise_does_not_exhaust_page_budget_early() -> None:
     assert expected_real_issues > 1000, "test should exercise beyond the old 1000-issue ceiling"
     assert len(issues) == expected_real_issues
     assert len(calls) == OPEN_ISSUES_MAX_PAGES + 1
+
+
+# ---------------------------------------------------------------------------
+# Repo-qualified task IDs: cross-repo issue-number collisions must not clobber
+# ---------------------------------------------------------------------------
+
+REPO_A = "RasmusTho/agentic-pkm-mvp"
+REPO_B = "RasmusTho/bifrost"
+
+
+def test_same_issue_number_across_repos_yields_distinct_task_ids() -> None:
+    """Both repos can have an issue #21; each must map to its own task_id."""
+    payload = {**SAMPLE_ISSUE_HIGH, "number": 21}
+    task_a = normalize_github_issue(payload, REPO_A, now="2026-04-24T00:00:00+00:00")
+    task_b = normalize_github_issue(payload, REPO_B, now="2026-04-24T00:00:00+00:00")
+
+    assert task_a.task_id != task_b.task_id
+    assert task_a.task_id == "github-RasmusTho-agentic-pkm-mvp-issue-21"
+    assert task_b.task_id == "github-RasmusTho-bifrost-issue-21"
+    assert task_a.repo == REPO_A
+    assert task_b.repo == REPO_B
+
+
+def test_same_issue_number_across_repos_both_stored_without_clobber(
+    tmp_store: SqliteStore,
+) -> None:
+    payload = {**SAMPLE_ISSUE_HIGH, "number": 21}
+    tmp_store.upsert_task(
+        normalize_github_issue(payload, REPO_A, now="2026-04-24T00:00:00+00:00")
+    )
+    tmp_store.upsert_task(
+        normalize_github_issue(
+            {**payload, "title": "Bifrost twenty-one"},
+            REPO_B,
+            now="2026-04-24T00:00:00+00:00",
+        )
+    )
+
+    stored_a = tmp_store.get_task("github-RasmusTho-agentic-pkm-mvp-issue-21")
+    stored_b = tmp_store.get_task("github-RasmusTho-bifrost-issue-21")
+    assert stored_a is not None and stored_b is not None
+    assert stored_a.title == SAMPLE_ISSUE_HIGH["title"]
+    assert stored_b.title == "Bifrost twenty-one"
+    assert stored_a.repo == REPO_A
+    assert stored_b.repo == REPO_B
+
+
+def test_pull_of_repo_a_does_not_reconcile_same_issue_number_in_repo_b(
+    tmp_store: SqliteStore,
+) -> None:
+    """A pull of repo A must not touch repo B's task that shares an issue number.
+
+    Repo B has a locally-blocked task #101. Pulling repo A (whose #101 is gone
+    from open issues) would, without repo-scoped reconciliation, wrongly mark
+    repo B's #101 as completed. It must stay blocked and repo-tagged.
+    """
+    # Pre-seed repo B's blocked task #101.
+    task_b = normalize_github_issue(
+        SAMPLE_ISSUE_HIGH, REPO_B, now="2026-04-24T00:00:00+00:00"
+    )
+    task_b.status = "blocked"
+    task_b.blocked_reason = "bifrost upstream dependency"
+    tmp_store.upsert_task(task_b)
+
+    # Repo A pull returns no ready issues and an empty open-issue snapshot, so
+    # repo A's #101 (if it existed) would reconcile to completed.
+    source = _mock_source([], open_issues=[])
+    adapter = PullSyncAdapter(store=tmp_store, source=source)
+    adapter.pull(REPO_A)
+
+    stored_b = tmp_store.get_task("github-RasmusTho-bifrost-issue-101")
+    assert stored_b is not None
+    assert stored_b.status == "blocked", "repo B task must be untouched by repo A pull"
+    assert stored_b.blocked_reason == "bifrost upstream dependency"
+    assert stored_b.repo == REPO_B
+    # No reconcile events emitted against repo B's task.
+    events = tmp_store.list_events("github-RasmusTho-bifrost-issue-101")
+    assert [e for e in events if e.event_type == "sync.reconciled"] == []

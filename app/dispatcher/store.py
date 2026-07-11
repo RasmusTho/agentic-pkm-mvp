@@ -25,7 +25,9 @@ class DispatcherStore(Protocol):
     def upsert_lease(self, lease: LeaseRecord) -> None: ...
     def get_lease(self, lease_id: str) -> LeaseRecord | None: ...
     def append_event(self, event: EventRecord) -> None: ...
-    def list_tasks(self, status: str | None = None) -> list[TaskRecord]: ...
+    def list_tasks(
+        self, status: str | None = None, repo: str | None = None
+    ) -> list[TaskRecord]: ...
     def list_events(self, task_id: str | None = None) -> list[EventRecord]: ...
 
 
@@ -71,6 +73,18 @@ class SqliteStore:
         with self._connect() as conn:
             for stmt in DDL_STATEMENTS:
                 conn.execute(stmt)
+            # Self-heal on-disk DBs created before the repo column (schema v1).
+            # SQLite lacks a portable ``ADD COLUMN IF NOT EXISTS``; the same
+            # try/except idiom used for Postgres ``ADD COLUMN IF NOT EXISTS``
+            # elsewhere (see app/stores/pg.py) applies here in SQLite form.
+            try:
+                conn.execute(
+                    "ALTER TABLE dispatcher_tasks "
+                    "ADD COLUMN repo TEXT NOT NULL DEFAULT ''"
+                )
+            except sqlite3.OperationalError:
+                # duplicate column name — column already present.
+                pass
             conn.execute(
                 "INSERT OR REPLACE INTO dispatcher_meta(key, value) VALUES (?, ?)",
                 ("schema_version", str(SCHEMA_VERSION)),
@@ -84,16 +98,17 @@ class SqliteStore:
             conn.execute(
                 """
                 INSERT INTO dispatcher_tasks (
-                    task_id, issue_number, title, status, priority,
+                    task_id, issue_number, title, status, priority, repo,
                     source_anchor_refs, claimed_by, lease_id, lease_expires_at,
                     linked_pr, blocked_reason, last_heartbeat_at, sync_state,
                     created_at, updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(task_id) DO UPDATE SET
                     issue_number=excluded.issue_number,
                     title=excluded.title,
                     status=excluded.status,
                     priority=excluded.priority,
+                    repo=excluded.repo,
                     source_anchor_refs=excluded.source_anchor_refs,
                     claimed_by=excluded.claimed_by,
                     lease_id=excluded.lease_id,
@@ -110,6 +125,7 @@ class SqliteStore:
                     task.title,
                     task.status,
                     task.priority,
+                    task.repo,
                     _dumps(list(task.source_anchor_refs)),
                     task.claimed_by,
                     task.lease_id,
@@ -137,6 +153,7 @@ class SqliteStore:
             title=row["title"],
             status=row["status"],
             priority=row["priority"],
+            repo=row["repo"],
             source_anchor_refs=list(_loads(row["source_anchor_refs"]) or []),
             claimed_by=row["claimed_by"],
             lease_id=row["lease_id"],
@@ -227,18 +244,24 @@ class SqliteStore:
         if self._event_writer is not None:
             self._event_writer.append(event)
 
-    def list_tasks(self, status: str | None = None) -> list[TaskRecord]:
+    def list_tasks(
+        self, status: str | None = None, repo: str | None = None
+    ) -> list[TaskRecord]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        if repo is not None:
+            clauses.append("repo = ?")
+            params.append(repo)
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
         with self._connect() as conn:
-            if status is None:
-                rows = conn.execute(
-                    "SELECT * FROM dispatcher_tasks ORDER BY updated_at DESC, created_at DESC"
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM dispatcher_tasks WHERE status = ? "
-                    "ORDER BY updated_at DESC, created_at DESC",
-                    (status,),
-                ).fetchall()
+            rows = conn.execute(
+                f"SELECT * FROM dispatcher_tasks {where}"
+                "ORDER BY updated_at DESC, created_at DESC",
+                tuple(params),
+            ).fetchall()
         return [
             TaskRecord(
                 task_id=r["task_id"],
@@ -246,6 +269,7 @@ class SqliteStore:
                 title=r["title"],
                 status=r["status"],
                 priority=r["priority"],
+                repo=r["repo"],
                 source_anchor_refs=list(_loads(r["source_anchor_refs"]) or []),
                 claimed_by=r["claimed_by"],
                 lease_id=r["lease_id"],

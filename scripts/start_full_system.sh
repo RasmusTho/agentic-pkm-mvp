@@ -850,10 +850,20 @@ if [ "${BUILDEROPS_BOOTSTRAP:-1}" = "1" ]; then
   case "${builderops_bootstrap_environment:-}" in
     dev|prod)
       set_phase "builderops_bootstrap"
-      if ! scripts/start_builderops_services.sh \
-        --repo "${BUILDEROPS_BOOTSTRAP_REPO:-RasmusTho/agentic-pkm-mvp}" \
-        --startup-status-path "$startup_status_path" \
-        --status-output "$ROOT/tmp/builderops_startup_status.json"; then
+      # BUILDEROPS_BOOTSTRAP_REPO, when set, is a space-separated owner/repo
+      # list (e.g. "RasmusTho/agentic-pkm-mvp RasmusTho/bifrost"). Left unset,
+      # builderops_startup.py falls back to its own multi-repo DEFAULT_REPOS
+      # — do not hardcode a single repo here, or that fallback never runs.
+      builderops_bootstrap_args=(
+        --startup-status-path "$startup_status_path"
+        --status-output "$ROOT/tmp/builderops_startup_status.json"
+      )
+      if [ -n "${BUILDEROPS_BOOTSTRAP_REPO:-}" ]; then
+        for builderops_bootstrap_repo in ${BUILDEROPS_BOOTSTRAP_REPO}; do
+          builderops_bootstrap_args=(--repo "$builderops_bootstrap_repo" "${builderops_bootstrap_args[@]}")
+        done
+      fi
+      if ! scripts/start_builderops_services.sh "${builderops_bootstrap_args[@]}"; then
         echo "WARNING: BuilderOps bootstrap failed unexpectedly; continuing runtime startup in degraded BuilderOps mode" >&2
       fi
       mark_phase_ok "builderops_bootstrap"

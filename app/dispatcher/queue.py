@@ -183,6 +183,7 @@ def _row_to_task(row: sqlite3.Row) -> TaskRecord:
         title=row["title"],
         status=row["status"],
         priority=row["priority"],
+        repo=row["repo"],
         source_anchor_refs=list(_loads(row["source_anchor_refs"]) or []),
         claimed_by=row["claimed_by"],
         lease_id=row["lease_id"],

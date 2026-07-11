@@ -14,7 +14,8 @@ from app.dispatcher.store import SqliteStore
 def _seed(store: SqliteStore, *, status: str = "ready") -> TaskRecord:
     task = TaskRecord(
         task_id="task-signboard-1", issue_number=42, title="Build a visible board",
-        status=status, priority="high", source_anchor_refs=["#42"],
+        status=status, priority="high", repo="RasmusTho/agentic-pkm-mvp",
+        source_anchor_refs=["#42"],
         created_at="2026-07-10T10:00:00Z", updated_at="2026-07-10T10:00:00Z",
         sync_state={"labels": ["ui", "kanban"], "url": "https://example.test/issues/42"},
     )
@@ -43,6 +44,7 @@ def test_signboard_refresh_parses_projection_and_hides_meta(tmp_path: Path, monk
     assert response.status_code == 200, response.text
     columns = {column["name"]: column["cards"] for column in response.json()["columns"]}
     assert columns["Ready"][0]["title"] == "Build a visible board"
+    assert columns["Ready"][0]["repo"] == "RasmusTho/agentic-pkm-mvp"
     assert columns["Ready"][0]["labels"] == ["ui", "kanban"]
     assert all(card["id"] != "_meta" for cards in columns.values() for card in cards)
 

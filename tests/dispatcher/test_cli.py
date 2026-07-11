@@ -670,6 +670,59 @@ def test_pull_command_upserts_issues(tmp_env):
     assert 102 in task_ids
 
 
+def test_pull_command_multi_repo_aggregates_and_qualifies_ids(tmp_env):
+    """pull --repo A --repo B pulls both repos and repo-qualifies task ids."""
+    from unittest.mock import MagicMock, patch
+    from app.dispatcher.sync_github import GitHubIssueSource
+
+    _run(["init", "--json"])
+
+    def _issue(number: int, title: str) -> dict:
+        return {
+            "number": number,
+            "title": title,
+            "state": "open",
+            "labels": [{"name": "prio:high"}, {"name": "agent:ready"}],
+            "createdAt": "2026-04-20T10:00:00Z",
+            "updatedAt": "2026-04-21T12:00:00Z",
+            "body": VALID_READY_BODY,
+        }
+
+    # Both repos expose an issue #21 — the collision case.
+    per_repo = {
+        "RasmusTho/agentic-pkm-mvp": [_issue(21, "apkm twenty-one")],
+        "RasmusTho/bifrost": [_issue(21, "bifrost twenty-one")],
+    }
+
+    mock_source = MagicMock(spec=GitHubIssueSource)
+    mock_source.list_issues.side_effect = lambda repo, **_k: per_repo[repo]
+    mock_source.list_open_issues.side_effect = lambda repo, **_k: per_repo[repo]
+    mock_source.get_rate_limit.return_value = {"remaining": 5000, "reset": None}
+
+    with patch("app.dispatcher.cli.GhCliIssueSource", return_value=mock_source):
+        code, data = _run([
+            "pull",
+            "--repo", "RasmusTho/agentic-pkm-mvp",
+            "--repo", "RasmusTho/bifrost",
+            "--json",
+        ])
+
+    assert code == 0, data
+    assert data["ok"] is True
+    assert data["upserted"] == 2
+    assert set(data["repos"].keys()) == {
+        "RasmusTho/agentic-pkm-mvp",
+        "RasmusTho/bifrost",
+    }
+
+    # Both #21 tasks stored distinctly, neither clobbered.
+    code, queue_data = _run(["queue", "--json"])
+    assert code == 0
+    task_ids = {t["task_id"] for t in queue_data["tasks"]}
+    assert "github-RasmusTho-agentic-pkm-mvp-issue-21" in task_ids
+    assert "github-RasmusTho-bifrost-issue-21" in task_ids
+
+
 def test_pull_command_reports_sync_source_failure(tmp_env):
     """pull command surfaces adapter-recorded source failures in its receipt."""
     from unittest.mock import MagicMock, patch
