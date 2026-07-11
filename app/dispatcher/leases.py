@@ -89,9 +89,9 @@ def claim(
                 raise ValueError(
                     f"Cannot claim task {task_id}: lease has expired; retry with --takeover-stale"
                 )
-            if task_row["status"] != "ready":
+            if task_row["status"] not in {"claimed", "ready"}:
                 raise ValueError(
-                    f"Cannot claim task {task_id}: not in ready status "
+                    f"Cannot claim task {task_id}: not eligible for stale takeover "
                     f"(current: {task_row['status']})"
                 )
 

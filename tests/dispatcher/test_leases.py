@@ -237,19 +237,11 @@ def _expire_lease(store: SqliteStore, lease_id: str) -> str:
     return past_time
 
 
-def _mark_task_ready(store: SqliteStore, task_id: str) -> None:
-    task = store.get_task(task_id)
-    assert task is not None
-    task.status = "ready"
-    store.upsert_task(task)
-
-
 def test_claim_takeover_stale_succeeds_with_attributed_receipt(store: SqliteStore) -> None:
     task = _task()
     store.upsert_task(task)
     _, old_lease = claim(store, "task-1", "departed-agent")
     previous_expires_at = _expire_lease(store, old_lease.lease_id)
-    _mark_task_ready(store, "task-1")
 
     claimed_task, lease = claim(
         store, "task-1", "replacement-agent", takeover_stale=True
@@ -271,7 +263,6 @@ def test_takeover_releases_expired_lease_with_stale_takeover_reason(store: Sqlit
     store.upsert_task(task)
     _, old_lease = claim(store, "task-1", "departed-agent")
     _expire_lease(store, old_lease.lease_id)
-    _mark_task_ready(store, "task-1")
 
     claim(store, "task-1", "replacement-agent", takeover_stale=True)
 
@@ -295,7 +286,6 @@ def test_expired_lease_rejection_names_takeover_path(store: SqliteStore) -> None
     store.upsert_task(task)
     _, old_lease = claim(store, "task-1", "departed-agent")
     _expire_lease(store, old_lease.lease_id)
-    _mark_task_ready(store, "task-1")
 
     with pytest.raises(ValueError, match="--takeover-stale"):
         claim(store, "task-1", "replacement-agent")
@@ -310,7 +300,7 @@ def test_takeover_rejects_expired_blocked_task_without_mutation(store: SqliteSto
     block(store, "task-1", "waiting for dependency", "dispatcher")
     _expire_lease(store, old_lease.lease_id)
 
-    with pytest.raises(ValueError, match="not in ready status"):
+    with pytest.raises(ValueError, match="not eligible for stale takeover"):
         claim(store, "task-1", "replacement-agent", takeover_stale=True)
 
     unchanged_task = store.get_task("task-1")
