@@ -223,6 +223,18 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/voice",),
     ),
     (
+        "standing_questions",
+        (
+            "app/standing_questions/",
+            "app/store/standing_questions_projection.py",
+            "app/alembic/versions/4d1e0c9a3329_",
+            "schemas/question-note.schema.json",
+            "tests/standing_questions/",
+            "docs/STANDING_QUESTIONS/",
+        ),
+        ("tests/standing_questions",),
+    ),
+    (
         "events_receipts",
         ("app/events/", "app/receipts/", "docs/contracts/events/", "tests/events/", "tests/receipts/"),
         ("tests/events", "tests/receipts", "tests/contracts"),
