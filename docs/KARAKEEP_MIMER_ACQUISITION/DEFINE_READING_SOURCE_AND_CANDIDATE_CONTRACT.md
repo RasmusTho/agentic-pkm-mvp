@@ -216,10 +216,13 @@ Mimer reads the same append-only observation log only through
 `read_observations_for_consumer` and advances only through
 `advance_cursor_for_consumer`. Its one consumer id remains `mimer.candidate_projector`. The current
 projector advances a whole non-empty batch after attempting its writes; KMA-04 must change that
-behavior before enabling Karakeep projection so only rows whose candidate materialization returns
-`written` or `already_exists` advance. A WriteGuard refusal or item-scoped failure must leave the
-affected row replayable, with a regression test at the production projector call site. Source and
-consumer cursors are independent and never participate in one transaction.
+behavior before enabling Karakeep projection so it advances only the contiguous durable prefix of
+rows whose candidate materialization returns `written` or `already_exists`. A WriteGuard refusal or
+item-scoped failure stops advancement at that row; later successful rows remain replayable rather
+than being allowed to skip it. A future durable per-item failure disposition may make a failed row
+safely advanceable only when its replay/audit evidence is persisted and tested. KMA-04's
+production-call-site regression must cover a blocked middle row followed by a successful row.
+Source and consumer cursors are independent and never participate in one transaction.
 
 ## Additive Mimer candidate mapping
 

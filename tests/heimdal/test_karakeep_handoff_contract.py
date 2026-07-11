@@ -110,4 +110,6 @@ def test_contract_reuses_canonical_log_and_cursor_seam() -> None:
 
     assert "source checkpoint advances only after published evidence is durable" in contract
     assert "KMA-04 must change that\nbehavior before enabling Karakeep projection" in contract
-    assert "affected row replayable, with a regression test at the production projector call site" in contract
+    assert "advances only the contiguous durable prefix of\nrows" in contract
+    assert "later successful rows remain replayable rather\nthan being allowed to skip it" in contract
+    assert "blocked middle row followed by a successful row" in contract

@@ -73,9 +73,11 @@ contract, not on the live service. Task 5 waits for both the managed service (2)
   page deduplicates before the cursor advances, preventing duplicate notes.
 - **KMA-INV-3 — two cursors, no distributed transaction.** Heimdal advances its source cursor only
   after the corresponding published evidence is durable; Mimer advances its consumer cursor only
-  after candidate materialization or an explicit item-scoped failure. If Mimer is down, Heimdal may
-  continue publishing. If Mimer writeback is blocked, only its consumer cursor stays put. Restart
-  replays each side idempotently without coupling the cursors.
+  across a contiguous durable prefix of candidate materializations. A retryable, blocked, or
+  item-scoped failure stops the prefix, so a later success cannot skip the failed evidence; only a
+  durably recorded failure disposition with replay/audit proof may be safely advanceable. If Mimer
+  is down, Heimdal may continue publishing. Restart replays each side idempotently without coupling
+  the cursors.
 - **KMA-INV-4 — only Heimdal talks to Karakeep.** Mimer normalization, candidate writeback, replay,
   and acceptance consume published evidence. If Karakeep is unavailable after publication, Mimer
   replay remains possible with zero source egress.
