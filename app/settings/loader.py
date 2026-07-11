@@ -15,9 +15,13 @@ def _fence_pattern(tag: str) -> re.Pattern[str]:
     The closing fence is line-anchored (a ``` alone at the start of a line)
     so an embedded triple-backtick inside the YAML body cannot silently
     truncate the block -- a truncated match would otherwise load a partial
-    document without any error.
+    document without any error. Both fence lines tolerate CRLF line
+    endings: in multiline mode `$` anchors *before* the `\n`, leaving a
+    stray `\r` unconsumed, so the closing fence must explicitly allow
+    `\r?` before end-of-line or a well-formed CRLF document silently
+    fails to match.
     """
-    return re.compile(rf"(?ms)^```yaml {re.escape(tag)}[ \t]*\r?\n(?P<body>.*?)^```[ \t]*$")
+    return re.compile(rf"(?ms)^```yaml {re.escape(tag)}[ \t]*\r?\n(?P<body>.*?)^```[ \t]*\r?$")
 
 
 FENCE = _fence_pattern("settings")

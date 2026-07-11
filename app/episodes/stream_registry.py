@@ -37,6 +37,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Mapping
 
 import yaml
@@ -274,9 +275,22 @@ class StreamRegistryEntry:
 
 @dataclass(frozen=True)
 class StreamRegistry:
-    """The full loaded registry: `stream_id` -> :class:`StreamRegistryEntry`."""
+    """The full loaded registry: `stream_id` -> :class:`StreamRegistryEntry`.
+
+    Immutable end to end: the dataclass is frozen, every entry is a frozen
+    dataclass, and `entries` is re-wrapped at construction as a
+    `MappingProxyType` over a private copy -- `load_registry()` returns the
+    same cached object to every caller, so caller-side mutation must raise
+    (`TypeError`) instead of silently corrupting the process-wide registry.
+    """
 
     entries: Mapping[str, StreamRegistryEntry]
+
+    def __post_init__(self) -> None:
+        # Defensive copy + read-only proxy: the proxy alone would still
+        # alias the caller's dict (mutable through the caller's reference),
+        # so copy first, then freeze.
+        object.__setattr__(self, "entries", MappingProxyType(dict(self.entries)))
 
     def get(self, stream_id: str) -> StreamRegistryEntry | None:
         return self.entries.get(stream_id)

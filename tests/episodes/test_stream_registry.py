@@ -439,3 +439,62 @@ def test_load_registry_caches_per_path(tmp_path: Path) -> None:
         assert fixed.stream_ids() == {"some.stream"}
     finally:
         sr.reset_registry_cache()
+
+
+def test_cached_registry_is_immutable() -> None:
+    """`load_registry()` hands the same cached object to every caller, so a
+    caller mutating `.entries` must raise instead of silently corrupting the
+    process-wide registry for every later consumer."""
+    sr.reset_registry_cache()
+    try:
+        first = sr.load_registry()
+        victim = next(iter(first.entries))
+
+        with pytest.raises(TypeError):
+            del first.entries[victim]  # type: ignore[attr-defined]
+        with pytest.raises(TypeError):
+            first.entries[victim] = None  # type: ignore[index]
+        with pytest.raises(AttributeError):
+            # mappingproxy exposes no mutating methods at all
+            first.entries.clear()  # type: ignore[attr-defined]
+
+        # the singleton is unharmed: the same cached object still carries
+        # the full inventory on the next load
+        second = sr.load_registry()
+        assert second is first
+        assert victim in second.entries
+
+        # directly constructed registries are equally frozen, and the
+        # caller's own dict reference cannot reach the internal mapping
+        source: dict[str, sr.StreamRegistryEntry] = {
+            "some.stream": sr.StreamRegistryEntry(
+                stream_id="some.stream", status="excluded", owner_constituent="Mimer"
+            )
+        }
+        registry = sr.StreamRegistry(entries=source)
+        source.clear()
+        assert registry.get("some.stream") is not None
+    finally:
+        sr.reset_registry_cache()
+
+
+def test_registry_declaration_parses_with_crlf_line_endings() -> None:
+    """A CRLF declaration text must parse identically -- in multiline mode
+    `$` anchors before the `\\n`, so the closing fence must explicitly
+    tolerate the stray `\\r` or a well-formed CRLF document fails to match.
+
+    Feeds the CRLF string straight to `parse_registry_markdown`: a
+    file-based test would not exercise the regex, because `Path.read_text`
+    universal-newline translation rewrites `\\r\\n` to `\\n` before the
+    pattern ever sees it. CRLF text reaches the parser through any caller
+    that reads bytes or uses `newline=''`."""
+    content = (
+        "```yaml stream-registry\n"
+        "streams:\n"
+        "  - stream_id: some.stream\n"
+        "    status: excluded\n"
+        "    owner_constituent: Mimer\n"
+        "```\n"
+    ).replace("\n", "\r\n")
+    registry = sr.parse_registry_markdown(content, source="<crlf-fixture>")
+    assert registry.stream_ids() == {"some.stream"}
