@@ -117,8 +117,8 @@ def _covered(hit: Hit, rows: list[dict[str, str]]) -> bool:
 def _report(mode: str, personal: list[Hit], secrets: list[Hit], rows: list[dict[str, str]]) -> dict[str, object]:
     uncovered = [hit for hit in personal if not _covered(hit, rows)]
     hit_pairs = {(hit.path, hit.category) for hit in personal}
-    stale = [row for row in rows if (row["artifact"], row["category"]) not in hit_pairs]
-    migration_pending = [row for row in rows if row["disposition"] != "stay" and (row["artifact"], row["category"]) in hit_pairs]
+    stale = [row for row in rows if (row["artifact"], row["category"]) not in hit_pairs] if mode == "doctor" else []
+    migration_pending = [row for row in rows if row["disposition"] != "stay" and (row["artifact"], row["category"]) in hit_pairs] if mode == "doctor" else []
     return {
         "mode": mode,
         "secret_hits": [hit.__dict__ for hit in secrets],
