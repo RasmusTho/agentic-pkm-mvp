@@ -117,6 +117,17 @@ def test_relevance_runtime_and_regression_changes_select_relevance_coverage() ->
     assert not selection.unowned_paths
 
 
+def test_journaling_change_has_a_ci_owner() -> None:
+    selection = select_tests(
+        ["app/journaling/day_context.py", "tests/journaling/test_assemble_day_context.py"]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("journaling",)
+    assert selection.unowned_paths == ()
+    assert "tests/journaling" in selection.targets
+
+
 def test_shared_panel_watcher_e2e_file_selects_both_owning_subsystems() -> None:
     selection = select_tests(["tests/e2e/test_panel_watcher_e2e.py"])
 
