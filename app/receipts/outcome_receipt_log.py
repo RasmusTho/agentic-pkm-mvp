@@ -15,7 +15,9 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from app.config.paths import resolve_optional_vault_root
-from app.db.db import conn_rw
+from app.store.outcome_receipt_projection import (
+    insert_outcome_receipt_projection as _insert_projection,
+)
 from app.vault.paths import NoVaultSelectedError, resolve_vault_system_dir_rel_or_default
 from app.write_guard import DEFAULT_WRITE_GUARD
 
@@ -119,28 +121,6 @@ def _existing_receipt(
         ),
         None,
     )
-
-
-def _insert_projection(receipt: dict[str, Any]) -> None:
-    """Insert the rebuildable projection; failures intentionally propagate."""
-    with conn_rw() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO decision_outcomes
-                    (decision_object_id, decision_uuid, rung_index, outcome, note, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (decision_uuid, rung_index) DO NOTHING
-                """,
-                (
-                    receipt["decision_object_id"],
-                    receipt["decision_uuid"],
-                    receipt["rung_index"],
-                    receipt["outcome"],
-                    receipt.get("note"),
-                    receipt["created_at"],
-                ),
-            )
 
 
 def append_outcome_receipt(
