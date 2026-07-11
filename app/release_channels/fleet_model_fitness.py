@@ -241,7 +241,7 @@ def check_fleet_model_fitness(
     services = tuple(
         _inspect_service(
             service,
-            spec["compose_project"],
+            str(spec["compose_project"]),
             docker_runner=docker_runner,
         )
         for service in ALL_SERVICES
