@@ -49,12 +49,32 @@ def _read_yaml(path: Path) -> Dict[str, Any]:
     return data
 
 
+def _read_typed_mapping_yaml(path: Path, *, setting_name: str) -> Dict[str, Any]:
+    """Load a mapping-backed typed settings file without shape fallback.
+
+    A present file with a list/scalar is malformed configuration, not an empty
+    override.  Retrieval tuning uses this stricter boundary because ranking
+    strategy defaults must never be selected by silently discarding operator
+    input (#3432).
+    """
+    if not path.exists():
+        return {}
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError(f"{setting_name} must be a YAML mapping")
+    return data
+
+
 def _build_bundle() -> SettingsBundle:
     global_yaml = _read_yaml(RUNTIME / "global.yaml")
     providers_yaml = _read_yaml(RUNTIME / "providers.yaml")
     llm_routing_yaml = _read_yaml(RUNTIME / "llm_routing.yaml")
     embeddings_yaml = _read_yaml(RUNTIME / "embeddings.yaml")
-    retrieval_tuning_yaml = _read_yaml(RUNTIME / "retrieval_tuning.yaml")
+    retrieval_tuning_yaml = _read_typed_mapping_yaml(
+        RUNTIME / "retrieval_tuning.yaml", setting_name="retrieval_tuning.yaml"
+    )
     instance_yaml = _read_yaml(RUNTIME / "instance.yaml")
     yggdrasil_yaml = _read_yaml(RUNTIME / "yggdrasil.yaml")
     agents_dir = RUNTIME / "agents"

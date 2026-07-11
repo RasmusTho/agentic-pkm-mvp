@@ -234,8 +234,15 @@ def test_reserved_strategies_resolve_and_stay_non_default(monkeypatch: pytest.Mo
     assert tuning.rerank == "off"
 
 
+@pytest.mark.parametrize(
+    "raw_yaml",
+    [
+        "fusion: not-a-strategy\n",
+        "- rrf\n",
+    ],
+)
 def test_invalid_runtime_tuning_yaml_fails_loud(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, raw_yaml: str
 ) -> None:
     """A typed runtime file is configuration authority, not an optional hint.
 
@@ -244,7 +251,7 @@ def test_invalid_runtime_tuning_yaml_fails_loud(
     """
     runtime_root = tmp_path / "runtime"
     runtime_root.mkdir()
-    (runtime_root / "retrieval_tuning.yaml").write_text("fusion: not-a-strategy\n", encoding="utf-8")
+    (runtime_root / "retrieval_tuning.yaml").write_text(raw_yaml, encoding="utf-8")
     monkeypatch.setattr(runtime, "RUNTIME", runtime_root)
     monkeypatch.setattr(runtime, "_CURRENT", None)
 
@@ -252,5 +259,5 @@ def test_invalid_runtime_tuning_yaml_fails_loud(
     # constructor: a resolver-level fallback would otherwise still serve
     # defaults despite the invalid typed YAML.
     reset_retrieval_tuning_cache()
-    with pytest.raises(Exception, match="fusion"):
+    with pytest.raises(Exception):
         get_retrieval_tuning()
