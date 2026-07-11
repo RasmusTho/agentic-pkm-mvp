@@ -84,3 +84,6 @@ def test_both_bundle_shapes_accepted():
     assert count_observations() == 1
     with pytest.raises(ValueError, match="derived_observation mapping"):
         ingest_screen_bundle(bundle("derived_observation"), key=_KEY)
+    derived["derived_observation"]["modality"] = "speech"
+    with pytest.raises(ValueError, match="modality must be screen"):
+        ingest_screen_bundle(derived, key=_KEY)

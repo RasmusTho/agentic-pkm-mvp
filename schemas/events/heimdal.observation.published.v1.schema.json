@@ -23,6 +23,7 @@
         "properties": {
           "observed_at_end": {"type": "string", "minLength": 1},
           "provenance": {
+            "required": ["sensor"],
             "properties": {
               "sensor": {
                 "type": "object",
