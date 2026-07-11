@@ -1,3 +1,5 @@
+State: Target-state contract; Heimdal screen ingress seam (#3485). Defines the capture-request shape, not a shipped client.
+
 # Heimdal Screen Client Contract
 
 The client posts `POST /api/heimdal/screen/capture`. It is a Heimdal ingress
