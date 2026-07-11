@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -8,6 +11,25 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def _read(relative: str) -> str:
     return (REPO_ROOT / relative).read_text(encoding="utf-8")
+
+
+def _signboard_imports(source: str, *, filename: str = "<source>") -> set[str]:
+    """Return every import form that reaches the Signboard projection module."""
+    tree = ast.parse(source, filename=filename)
+    imports: set[str] = set()
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module == "app.dispatcher.signboard":
+                imports.update(alias.name for alias in node.names)
+            elif node.module == "app.dispatcher":
+                imports.update(alias.name for alias in node.names if alias.name == "signboard")
+        elif isinstance(node, ast.Import):
+            imports.update(
+                alias.name for alias in node.names if alias.name == "app.dispatcher.signboard"
+            )
+
+    return imports
 
 
 def test_active_pickup_contract_is_label_only() -> None:
@@ -88,3 +110,70 @@ def test_external_vault_separates_authoritative_leases_from_advisory_claims() ->
     assert "local authoritative dispatcher leases" in contract
     assert "without creating SQLite files or provider credentials" in contract
     assert "exclusive distributed" in contract
+
+
+def test_pickup_paths_never_read_signboard_projection() -> None:
+    pickup_paths = (
+        "app/dispatcher/queue.py",
+        "app/dispatcher/sync_github.py",
+        "app/dispatcher/leases.py",
+    )
+
+    for path in pickup_paths:
+        source = _read(path)
+        assert "SIGNBOARD_ROOT" not in source
+        assert ".read_text(" not in source
+        assert ".read_bytes(" not in source
+        assert ".open(" not in source
+        # Pickup paths may share only pure dispatcher status/column helpers;
+        # board export and card-reading helpers remain projection-layer code.
+        assert _signboard_imports(source, filename=path) <= {
+            "canonical_status",
+            "column_for_status",
+        }
+
+
+def test_signboard_root_consumers_are_projection_layer_only() -> None:
+    signboard_root_consumers = {
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in (REPO_ROOT / "app").rglob("*.py")
+        if "SIGNBOARD_ROOT" in path.read_text(encoding="utf-8")
+    }
+
+    assert signboard_root_consumers == {
+        "app/api/routes/signboard.py",
+        "app/ops/builderops_startup.py",
+    }
+
+    # CLI may export the projection, but no command may consume the operator
+    # board-root setting as pickup input.
+    assert "SIGNBOARD_ROOT" not in _read("app/dispatcher/cli.py")
+    assert _signboard_imports(_read("app/dispatcher/cli.py"), filename="app/dispatcher/cli.py") == {
+        "NoActiveVaultError",
+        "default_signboard_root",
+        "export_signboard",
+    }
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "from app.dispatcher.signboard import export_signboard\n",
+        "import app.dispatcher.signboard\n",
+        "from app.dispatcher import signboard\n",
+        "async def pickup():\n    from app.dispatcher.signboard import export_signboard\n",
+    ),
+)
+def test_pickup_import_guard_rejects_every_projection_import_form(source: str) -> None:
+    imports = _signboard_imports(source, filename="app/dispatcher/queue.py")
+
+    assert imports
+    assert not imports <= {"canonical_status", "column_for_status"}
+
+
+def test_signboard_documented_as_projection_not_pickup_input() -> None:
+    dispatcher = _read("docs/AGENT_ISSUE_DISPATCHER.md")
+
+    assert "Signboard files are generated" in dispatcher
+    assert "should not be treated as authoritative input" in dispatcher
+    assert "projection state only" in dispatcher
