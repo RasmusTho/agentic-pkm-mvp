@@ -20,6 +20,9 @@ from app.vault.manager import VaultContext
 from app.vault.paths import get_vault_system_dir_rel
 
 
+_TERMINAL_LIFECYCLES = frozenset({"dismissed", "expired"})
+
+
 def collect_now_moments(
     vault_context: VaultContext,
     *,
@@ -39,6 +42,11 @@ def collect_now_moments(
     for path in sorted(moments_dir.glob("*.md")):
         moment = _load_moment(path)
         if moment is None:
+            continue
+        # Terminal artifacts stay in the vault for audit/learning, but the
+        # live now surface must not present a dismissed or expired proposal as
+        # current attention (#3425; Moment Artifact Contract §Lifecycle).
+        if moment.lifecycle in _TERMINAL_LIFECYCLES:
             continue
         views.append(_to_view(moment, in_app_nudge=nudges.get(moment.uuid)))
 

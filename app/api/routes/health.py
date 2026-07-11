@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from fastapi import APIRouter
+from starlette.concurrency import run_in_threadpool
 
 from app.cli.health import run_health
 
@@ -35,7 +36,7 @@ def _sanitize_health_value(value: Any, *, parent_key: str | None = None) -> Any:
 
 @router.get("/health")
 async def health() -> dict[str, Any]:
-    return _sanitize_health_value(run_health())
+    return _sanitize_health_value(await run_in_threadpool(run_health))
 
 
 __all__ = ["router"]

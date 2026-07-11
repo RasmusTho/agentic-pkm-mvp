@@ -815,14 +815,20 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
   asserts `WriteGuard` before writing.
 - **Protected principle:** a single write-health gate governs all vault mutation; no seam is exempt.
 - **Affected boundaries:** WSP.
-- **Required fixture / data:** `app/knowledge/write_ops.py:71,110-127`.
+- **Required fixture / data:** `app/knowledge/write_ops.py::write_note_relative`,
+  `app/knowledge/write_ops.py::append_note_relative`, and controlled healthy/safe-mode `WriteGuard`
+  states.
 - **Expected failure mode:** `append_note_relative` writes to the vault while the runtime is in an
   unhealthy/safe-mode state, because it is not asserted like its `write_note_relative` sibling.
-- **Current enforcement:** `gate`; violated today at `append_note_relative` (`write_ops.py:118-127`) —
-  enforceable now, independent of the stale-detection mechanism above. Fix tracked as T3.
-- **Eventual test path:** `tests/invariants/test_vault_multiwriter.py::test_write_guard_asserted_at_every_write_seam`.
+- **Current enforcement:** `gate` + `runtime_test` — both relative write seams assert `WriteGuard`
+  before resolving the knowledge port. `append_note_relative` rejects a safe-mode guard before any
+  port resolution and permits a healthy guarded append; this enforcement is independent of the
+  stale-detection mechanism above.
+- **Runtime test path:**
+  `tests/knowledge/test_write_ops.py::test_append_note_relative_rejects_unhealthy_write_guard`,
+  `tests/knowledge/test_write_ops.py::test_append_note_relative_allows_healthy_write_guard`.
 - **Related docs / contracts / ADRs:** ADR-0055; `docs/audits/YGGDRASIL_ECOSYSTEM_2026-07-06.md` §2/§7 (INV-VW2).
-- **Related issues:** #3114, #3020.
+- **Related issues:** #3129, #3114, #3020.
 
 ### icloud_conflict_artifacts_never_silently_ingested
 
@@ -883,7 +889,7 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 | expansion_requires_activation_record | #9 | GOV | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/activation/test_expansion_gate_records.py` |
 | curation_citations_resolve | #3,#9 | GOV/RCA | static + runtime | `tests/invariants/test_curation_invariants.py`, `tests/curation/test_contradiction_citations_resolve.py` |
 | stale_write_rejected_for_rewritten_notes (INV-VW1) | vault canonical + fail-loud | WSP/HKA | gate (target) | `tests/invariants/test_vault_multiwriter.py` (future) |
-| write_guard_asserted_at_every_write_seam (INV-VW2) | vault canonical + fail-loud | WSP | gate — violated today | `tests/invariants/test_vault_multiwriter.py` (future) |
+| write_guard_asserted_at_every_write_seam (INV-VW2) | vault canonical + fail-loud | WSP | gate + runtime | `tests/knowledge/test_write_ops.py::test_append_note_relative_rejects_unhealthy_write_guard`, `tests/knowledge/test_write_ops.py::test_append_note_relative_allows_healthy_write_guard` |
 | icloud_conflict_artifacts_never_silently_ingested (INV-VW3) | vault canonical + fail-loud | SIP/WSP | doctor (target) | `tests/invariants/test_vault_multiwriter.py` (future) |
 
 ## Heimdal invariants (HEIM-1..14) — sibling registry

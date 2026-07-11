@@ -260,3 +260,4 @@ No reshape: no existing boundary, charter, contract, or ADR is altered. The one 
 - `docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md`, ADR-0047 — why MCP is not a client transport today.
 - `docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md` — Bifrost topology design-of-record; Epic B #3020, B1 #3023/`bifrost#1`; ADR-0050.
 - `app/api/routes/{capture,search,ask,artifacts}.py`, `app/auth.py`, `app/knowledge/{adapters,write_ops}.py`, `app/components/concurrency.py`, `app/watcher/watcher.py` — implementation evidence (descriptive, not normative; `docs/ARCHITECTURE.md` owns runtime truth).
+- `docs/MIMER_VOICE_LOOP/SHARE_TRANSCRIPTION_CAPABILITY.md` — VOICE-02's internal shared-ASR seam: Heimdal capture and Mimer voice-ask reuse `app.media.transcribe.run_asr`; this is not a client transport.
