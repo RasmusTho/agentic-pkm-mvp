@@ -24,6 +24,10 @@ def _signboard_imports(source: str, *, filename: str = "<source>") -> set[str]:
                 imports.update(alias.name for alias in node.names)
             elif node.module == "app.dispatcher":
                 imports.update(alias.name for alias in node.names if alias.name == "signboard")
+            elif node.level and node.module == "signboard":
+                imports.update(alias.name for alias in node.names)
+            elif node.level and node.module is None:
+                imports.update(alias.name for alias in node.names if alias.name == "signboard")
         elif isinstance(node, ast.Import):
             imports.update(
                 alias.name for alias in node.names if alias.name == "app.dispatcher.signboard"
@@ -152,6 +156,7 @@ def test_signboard_root_consumers_are_projection_layer_only() -> None:
         "NoActiveVaultError",
         "default_signboard_root",
         "export_signboard",
+        "validate_signboard",
     }
 
 
@@ -162,6 +167,8 @@ def test_signboard_root_consumers_are_projection_layer_only() -> None:
         "import app.dispatcher.signboard\n",
         "from app.dispatcher import signboard\n",
         "async def pickup():\n    from app.dispatcher.signboard import export_signboard\n",
+        "from .signboard import export_signboard\n",
+        "from . import signboard\n",
     ),
 )
 def test_pickup_import_guard_rejects_every_projection_import_form(source: str) -> None:
