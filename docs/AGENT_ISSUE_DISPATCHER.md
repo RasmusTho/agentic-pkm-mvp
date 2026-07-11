@@ -427,6 +427,13 @@ python -m app.dispatcher export-signboard --json
 The generated Markdown frontmatter is projection state only. Do not patch generated Signboard cards
 as the source of a claim, heartbeat, or lifecycle transition.
 
+Run `python -m app.dispatcher signboard-validate [path] --json` to lint the generated board without
+changing either the board or dispatcher store. As with `export-signboard`, the path is optional and
+defaults to the active vault's `BuilderOpsVault/agent-delivery` root. Validation exits nonzero for
+malformed generated cards, duplicate generated cards, column/status drift, cards stale against the
+dispatcher store, and unreadable generated-filename candidates; run `export-signboard` to repair
+valid generated-card drift. Human-authored files are outside this lint's jurisdiction.
+
 Each generated card carries a `## Notes` section the human may hand-edit directly in the vault.
 Re-running `export-signboard` refreshes the generated frontmatter and body but splices any existing
 `## Notes` content back in unchanged — it never blind-overwrites human-authored notes. The exporter

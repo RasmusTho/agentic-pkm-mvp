@@ -36,7 +36,7 @@ from app.dispatcher.sync_github import (
 REQUIRED_COMMANDS = frozenset([
     "init", "queue", "next", "show", "claim",
     "heartbeat", "release", "update", "move", "block", "complete", "events", "pull",
-    "export-signboard",
+    "export-signboard", "signboard-validate",
 ])
 
 
@@ -413,6 +413,31 @@ def _cmd_export_signboard(args: argparse.Namespace, store: SqliteStore) -> int:
     return 0
 
 
+def _cmd_signboard_validate(args: argparse.Namespace, store: SqliteStore) -> int:
+    from pathlib import Path
+
+    from app.dispatcher.signboard import (
+        NoActiveVaultError,
+        default_signboard_root,
+        validate_signboard,
+    )
+
+    if args.path:
+        target_path = Path(args.path)
+    else:
+        try:
+            target_path = default_signboard_root()
+        except NoActiveVaultError as exc:
+            return _emit_error(str(exc), args.json)
+
+    result = validate_signboard(store, target_path)
+    if result["findings"]:
+        _emit_payload({"ok": False, **result}, args.json, 1)
+        return 1
+    _emit({"ok": True, **result}, args.json)
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Parser
 # ---------------------------------------------------------------------------
@@ -435,6 +460,7 @@ _COMMAND_MAP = {
     "status": _cmd_status,
     "pull": _cmd_pull,
     "export-signboard": _cmd_export_signboard,
+    "signboard-validate": _cmd_signboard_validate,
 }
 
 
@@ -540,6 +566,21 @@ def build_parser() -> argparse.ArgumentParser:
             "Directory to write kanban columns into. Optional: defaults to "
             "BuilderOpsVault/agent-delivery inside the active vault "
             "(active-vault-selection mechanism); no path needs to be typed."
+        ),
+    )
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser(
+        "signboard-validate",
+        help="Validate generated Signboard cards without changing the board or dispatcher store",
+    )
+    p.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help=(
+            "Directory containing Signboard columns. Optional: defaults to "
+            "BuilderOpsVault/agent-delivery inside the active vault."
         ),
     )
     p.add_argument("--json", action="store_true")
