@@ -72,11 +72,14 @@ Identity is deterministic and revision-aware:
   profile therefore republishes the same idempotency input and is a no-op.
 - A changed source snapshot creates a new `content_identity` and `observation_id`, sets
   `supersedes` to the immediately preceding source-snapshot observation, and leaves `revision_of`
-  null. It uses the adapter's monotone per-item revision ordinal as `sequence` and never edits the
-  earlier observation.
+  null.
 - Reprocessing the same canonical snapshot through a changed publication profile creates a new
   `observation_id` with the same `content_identity`, sets `revision_of` to the preceding
   publication of that same snapshot, and leaves `supersedes` null.
+- Every appended Karakeep publication—source update, same-snapshot reprocess, or tombstone—uses the
+  next strictly increasing per-item `sequence`; an idempotent re-fetch that appends nothing does not
+  allocate a sequence. This gives all publications sharing `episode_id = karakeep:<item-id>` a
+  deterministic total order.
 - A source deletion is a changed source snapshot with `content: null`,
   `content_structure.karakeep.tombstone: true`, and `supersedes` naming the preceding live
   observation. It is not a delete instruction.
@@ -190,17 +193,28 @@ snapshot. KMA-04 uses the immutable `observation_id` for its per-revision candid
 {
   "prior_observation_id": "karakeep:item-42:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "prior_content_identity": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "prior_sequence": 0,
   "source_update": {
     "observation_id": "karakeep:item-42:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "content_identity": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "sequence": 1,
     "revision_of": null,
     "supersedes": "karakeep:item-42:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   },
   "same_snapshot_reprocess": {
     "observation_id": "karakeep:item-42:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
     "content_identity": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "sequence": 2,
     "revision_of": "karakeep:item-42:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "supersedes": null
+  },
+  "tombstone": {
+    "observation_id": "karakeep:item-42:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "content_identity": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "sequence": 3,
+    "revision_of": null,
+    "supersedes": "karakeep:item-42:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "tombstone": true
   }
 }
 ```

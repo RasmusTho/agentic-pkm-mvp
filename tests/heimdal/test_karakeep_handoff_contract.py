@@ -75,12 +75,18 @@ def test_karakeep_mapping_conforms_to_canonical_published_v1_schema() -> None:
     lineage = _marked_json(contract, "karakeep-published-v1-lineage-example")
     update = lineage["source_update"]
     reprocess = lineage["same_snapshot_reprocess"]
+    tombstone = lineage["tombstone"]
     assert update["content_identity"] != lineage["prior_content_identity"]
     assert update["revision_of"] is None
     assert update["supersedes"] == lineage["prior_observation_id"]
     assert reprocess["content_identity"] == update["content_identity"]
     assert reprocess["revision_of"] == update["observation_id"]
     assert reprocess["supersedes"] is None
+    assert [lineage["prior_sequence"], update["sequence"], reprocess["sequence"], tombstone["sequence"]] == [0, 1, 2, 3]
+    assert tombstone["revision_of"] is None
+    assert tombstone["supersedes"] == update["observation_id"]
+    assert tombstone["tombstone"] is True
+    assert "next strictly increasing per-item `sequence`" in contract
 
 
 def test_contract_reuses_canonical_log_and_cursor_seam() -> None:
