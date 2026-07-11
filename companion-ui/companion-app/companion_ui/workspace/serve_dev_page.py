@@ -82,6 +82,7 @@ from companion_ui.workspace.calm_degraded import (
     humanise_token,
     lane_label,
 )
+from companion_ui.workspace.day_start_card import render_day_start_card_html
 from companion_ui.workspace.capture_modal import (
     capture_modal_markup,
     capture_modal_script,
@@ -2544,6 +2545,19 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
     Canvas/Panel integration.
     """
     title = _e(_plain_workspace_heading_text(str(fields.get("title", "") or "")))
+    day_start_payload = fields.get("day_start_briefing")
+    day_start_card_html = (
+        render_day_start_card_html(
+            day_start_payload,
+            tts_available=bool(day_start_payload.get("tts_available", False)),
+            tts_unavailable_reason=str(
+                day_start_payload.get("tts_unavailable_reason")
+                or "Local TTS is unavailable."
+            ),
+        )
+        if isinstance(day_start_payload, dict)
+        else ""
+    )
     raw_note_path = str(fields.get("note_path", "") or "")
     note_path_val = _e(raw_note_path)
     artifact_id = _e(fields.get("artifact_id", ""))
@@ -3170,6 +3184,7 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
     # affordances and always-relevant single-line notices, not part of the
     # four #3362 audit lanes — they render unconditionally.
     rail_cards_inner = f"""
+        {day_start_card_html}
         {canvas_lane_html}
         {active_note_body_update_html}
         {suggestion_flow_html}
@@ -8474,6 +8489,7 @@ def _render_orientation_index_html(
     entry_resolution: Optional[EntryStateResolution] = None,
     health: Optional[dict] = None,
     boot_overlay: str = "",
+    day_start_briefing: Optional[dict] = None,
 ) -> str:
     if entry_resolution is None:
         entry_resolution = resolve_entry_state(orientation=orientation)
@@ -8491,6 +8507,18 @@ def _render_orientation_index_html(
     as_of = _orientation_str(meta.get("as_of"))
     trace_id = _orientation_str(meta.get("trace_id"), "unknown")
     runtime_posture = _orientation_str(guards.get("runtime_posture"), "unknown")
+    day_start_card_html = (
+        render_day_start_card_html(
+            day_start_briefing,
+            tts_available=bool(day_start_briefing.get("tts_available", False)),
+            tts_unavailable_reason=str(
+                day_start_briefing.get("tts_unavailable_reason")
+                or "Local TTS is unavailable."
+            ),
+        )
+        if isinstance(day_start_briefing, dict)
+        else ""
+    )
     # C3 (CUIDR-01): humanise the runtime reason enum before it reaches the
     # chip; the raw enum must not appear in the HTML output. Classification
     # stays server-authoritative (the degraded posture / runtime_posture below
@@ -9535,6 +9563,7 @@ def _render_orientation_index_html(
     {whisper_html}
     {cold_start_threshold_html}
     {vault_unreachable_threshold_html}
+    {day_start_card_html}
     <div class="orientation-grid">
       {"" if (is_cold or is_no_vault or not panels_visible) else f'''<div class="orientation-column">
         {_render_orientation_leave_point(orientation.get("leave_point"), suppress_when_card=card_present)}
@@ -10691,6 +10720,7 @@ def render_index_html(
     vault_selection_required: Optional[dict] = None,
     health: Optional[dict] = None,
     boot_overlay: str = "",
+    day_start_briefing: Optional[dict] = None,
 ) -> str:
     """Render the workspace dev page as a Companion UI visual shell.
 
@@ -10746,6 +10776,7 @@ def render_index_html(
             entry_resolution=entry_resolution,
             health=health,
             boot_overlay=boot_overlay,
+            day_start_briefing=day_start_briefing,
         )
 
     content_section = ""
@@ -15465,6 +15496,7 @@ def handle_get(
     api_base_url: str,
     production_profile: bool = False,
     page_origin_host: str = "",
+    day_start_briefing: Optional[dict] = None,
 ) -> str:
     """Parse query string, optionally load a note, and return full page HTML.
 
@@ -15494,7 +15526,6 @@ def handle_get(
     error = ""
     vault_selection_required: Optional[dict] = None
     health: Optional[dict] = None
-
     if note_path:
         page = RealNoteWorkspaceDevPage(client)
         state = page.load(
@@ -15511,6 +15542,7 @@ def handle_get(
         elif state.is_loaded:
             fields = page.render_fields()
             if fields is not None:
+                fields["day_start_briefing"] = day_start_briefing
                 try:
                     live_orientation = client.get("/api/companion/orientation", params={})
                 except (WorkspaceClientError, AssertionError):
@@ -15582,6 +15614,7 @@ def handle_get(
         vault_selection_required=vault_selection_required,
         health=health,
         boot_overlay=boot_overlay,
+        day_start_briefing=day_start_briefing,
     )
 
 
@@ -16014,14 +16047,43 @@ def make_handler(
             if parsed.path not in {"/", "/workspace"}:
                 self._send_unknown_document_route()
                 return
+            day_start_briefing = None
             try:
-                self._client.post(
+                first_contact = self._client.post(
                     "/api/companion/briefing/first-contact",
                     json={},
                 )
+                day_start_briefing = (
+                    first_contact.get("briefing")
+                    if isinstance(first_contact, dict)
+                    and isinstance(first_contact.get("briefing"), dict)
+                    else None
+                )
             except Exception:
-                # Briefing is derived; a trigger failure must not block entry.
+                # Generation is additive; the read-only projection can remain healthy.
                 pass
+            if day_start_briefing is None:
+                try:
+                    fallback = self._client.get(
+                        "/api/companion/briefing/today", params={}
+                    )
+                    if isinstance(fallback, dict):
+                        day_start_briefing = fallback
+                except Exception:
+                    # Never collapse a failed trigger + failed read into a blank card.
+                    pass
+            if day_start_briefing is None:
+                day_start_briefing = {
+                    "state": "unreadable",
+                    "date": datetime.now().astimezone().date().isoformat(),
+                    "preview": "",
+                    "degraded_sections": [],
+                    "sections": [],
+                    "read_only": True,
+                    "reason": "briefing_projection_unavailable",
+                    "tts_available": False,
+                    "tts_unavailable_reason": "Local TTS is unavailable.",
+                }
             body = handle_get(
                 query_string=parsed.query,
                 client=self._client,
@@ -16031,6 +16093,7 @@ def make_handler(
                 # remote-vs-local disambiguation — a client/page fact, not a
                 # runtime signal.
                 page_origin_host=self.headers.get("Host", ""),
+                day_start_briefing=day_start_briefing,
             ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -16042,6 +16105,7 @@ def make_handler(
         _GET_PROXY_PATHS = frozenset(
             {
                 "/api/companion/orientation",
+                "/api/companion/briefing/today",
                 "/api/companion/workspace",
                 "/api/companion/vault/notes",
                 "/api/companion/vault/browse",

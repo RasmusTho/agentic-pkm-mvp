@@ -12,6 +12,7 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator, Literal
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import yaml
 
@@ -3903,13 +3904,64 @@ def trigger_first_contact_briefing() -> dict[str, object]:
 
     context = _companion_vault_context_with_lazy_last_active(get_vault_manager())
     if context.status != "selected" or not context.active_vault_path:
-        return {"triggered": False, "reason": "vault_not_selected"}
+        return {
+            "triggered": False,
+            "reason": "vault_not_selected",
+            "briefing": read_today_briefing(),
+        }
     result = first_contact_briefing(vault_context=context)
     return {
         "triggered": result.triggered,
         "reason": result.reason,
         "date": result.briefing_date.isoformat(),
+        "briefing": read_today_briefing(),
     }
+
+
+@router.get("/briefing/today")
+def read_today_briefing() -> dict[str, object]:
+    """Return the read-only day-start projection and honest listen availability."""
+
+    from app.briefing.config import BRIEFING_TIMEZONE
+    from app.briefing.surface import collect_day_start_briefing
+
+    today = datetime.datetime.now(ZoneInfo(BRIEFING_TIMEZONE)).date()
+    context = _companion_vault_context_with_lazy_last_active(get_vault_manager())
+    if context.status != "selected" or not context.active_vault_path:
+        projection: dict[str, object] = {
+            "state": "pending",
+            "date": today.isoformat(),
+            "preview": "",
+            "degraded_sections": [],
+            "sections": [],
+            "read_only": True,
+            "reason": "vault_not_selected",
+        }
+    else:
+        projection = dict(
+            collect_day_start_briefing(vault_context=context, for_date=today)
+        )
+
+    try:
+        config = load_tts_config()
+        status = tts_runtime_status(config)
+        providers = status.get("providers", {})
+        provider_available = any(
+            bool(provider.get("available"))
+            for provider in providers.values()
+            if isinstance(provider, dict)
+        )
+        tts_available = bool(config.enabled and provider_available)
+    except Exception:
+        # Audio is additive. A status-probe failure must leave the text card usable.
+        tts_available = False
+    projection["tts_available"] = tts_available
+    projection["tts_unavailable_reason"] = (
+        None
+        if projection["tts_available"]
+        else "Local TTS provider/model unavailable."
+    )
+    return projection
 
 
 @router.get(
