@@ -30,18 +30,16 @@ Two merged-or-in-flight framings collided on what "Yggdrasil" names:
   "Personal Agentic Ecosystem" as apex with Yggdrasil as one constituent.
 
 **This constitution adopts ADR-0043: Yggdrasil = the whole.** The owner resolved the clash on
-2026-07-04 (recorded in the reconciliation carried by the still-open PR #2888, whose branch
-renumbers its ADRs to 0044–0047 and rewrites its D1 as a conformance record — proposed content, not
-yet merged). The losing framing is flagged, not erased:
-`ecosystem-federation.md` still carries the superseded apex on `main` until PR #2888 merges;
-alignment work is queued as #2890 (model reconciliation) and #2891 (GLOSSARY "federation" usage).
+2026-07-04; the reconciliation landed as ADR-0044–0047 via PR #2920. PR #2888 was closed
+unmerged. The losing framing is flagged, not erased: `ecosystem-federation.md` is reconciled to
+ADR-0044 on `main`; #2890 (model reconciliation) and #2891 (the GLOSSARY
+"federation"-usage follow-up) are closed.
 One nuance holds everything honest: the SoS *reshape itself* (ADR-0041's "modular single system" →
 acknowledged SoS) is owner-decided but not yet enacted through CES — until that enactment,
 `docs/ARCHITECTURE.md`/`docs/STATUS.md` describe shipped reality and this constitution's principles
 bind **the whole and every constituent equally**: nothing below is Munin-only law.
 
-Owner reconciliation queue (flagged, not performed here): merge #2888; enact ADR-0043 §6 glossary
-changes; deliver #2890/#2891.
+The earlier reconciliation queue is complete: #2890 and #2891 are closed.
 
 ---
 
@@ -383,9 +381,9 @@ intent, and the wording that now blocks it:
 - **Extends:** C-7's "enumerable mutation surface" makes the formal model's transition catalog a
   standing documentation obligation (a living artifact OEF probes against) — new, flagged to CES.
   C-11's registry-coverage check is a new OEF self-fitness rule — flagged to CES.
-- **Proposes reshaping:** none. The apex-model section adopts ADR-0043 (already owner-decided) and
-  routes the remaining enactment through the existing queue (#2888/#2890/#2891); this document
-  performs no rename and changes no glossary entry.
+- **Proposes reshaping:** none. The apex-model section records the ADR-0043 lineage; the glossary
+  enactment completed under closed issue #2891. This document performs no rename and changes no
+  glossary entry.
 
 ## Ratification decision (owner)
 
