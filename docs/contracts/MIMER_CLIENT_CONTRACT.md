@@ -107,11 +107,35 @@ The owner has ruled that direct filesystem vault writes by external clients are 
 - **Human-directed edits to any vault note** are permitted when the human directs the edit in the live session (matching ADR-0055's writer set, which does not restrict which notes the human's own session may touch). The client discipline of §6 (read-fresh, ownership courtesy, atomic replace) applies with full force here, because this is exactly the surface where a collision destroys human-authored prose — and it is exactly the "rewritten note class" ADR-0055 targets for its stale-detection + conflict-staging mechanism once enacted.
 - **Bifrost shells** additionally read/write the `_heimdal/**` control surface (settings/interests/consent/attention) — that is their product surface. Its versioned client schema is [`schemas/heimdal-control-notes.schema.json`](../../schemas/heimdal-control-notes.schema.json), mechanically checked against the runtime registry in `app/heimdal/settings_notes.py`. The schema is a published contract view; the registry remains the runtime authority.
 
+### Sources zone — sensor/acquisition landing zone
+
+Sensor-captured material has its own vault zone, separate from the human's quick-capture inbox and
+from human-authored notes. The default relative root is `Sources/`, with user-relevant default
+subfolders `Sources/Voice memos/`, `Sources/Video & podcasts/`, and `Sources/Articles/`. These are
+**settings-resolved defaults**, not fixed paths: the setting key follows the existing
+`inbox_dir_rel` convention, and its concrete settings/UI enactment remains follow-on work. Clients
+and writers therefore must not hardcode the displayed names.
+
+Only Heimdal-side sensor/acquisition writers create material notes in this zone. App agents and the
+capture endpoint are excluded; human edits are allowed but never required. Sources notes are
+`create-once` / append-only material: a re-derivation creates a new note, or uses a governed update,
+never silently rewrites the original. A Sources note becomes durable knowledge only through the
+governed candidate → proposal → human-confirm path (`WriteGuard` → `DecisionToken` →
+`AuthorityReceipt`). Moving or renaming the note into the knowledge tree is not a promotion.
+
+The zone is attention-free by design: it is an archive, not an unread queue or processing
+obligation; material reaches the human only through governed Mimer proposals. The owner selected the
+default **Sources** on 2026-07-10 from the shortlist Observationer, Källor, Referenser, Corpus,
+Underlag, Captured, Records, and Sources. The choice favors intuitive, user-visible names; “Evidence”
+was deliberately excluded because it collides with the ontology's `evidence_role`.
+
 ### Exclusion list — never direct-write, either family
 
 | Surface | Why |
 | --- | --- |
 | The capture inbox note (`<inbox_dir_rel>/inbox.md` or `VAULT_CAPTURE_NOTE_REL` override) | It is the runtime's actively-appended governed target; a client rewrite races the governed append and LWW can silently drop a capture. Intake goes through `POST /api/companion/capture` only. |
+| The capture inbox — **sensor/acquisition writers** | Sensor material belongs only in the Sources zone; the inbox remains human quick-capture through the governed capture endpoint. |
+| The Sources zone (`<sources_dir_rel>/`, default `Sources/`) — **app agents and the capture endpoint** | This archive is reserved for Heimdal-side sensor/acquisition writers; it is not an alternative client workspace or capture target. |
 | Companion notes (`⚙️ System/companions/`, legacy `_system/companions/`) | KnowledgePort-only, system-owned (`docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`, `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`). |
 | System-plane settings/bootstrap notes and other system-owned paths | Runtime-owned via KnowledgePort; a direct edit forks runtime state. |
 | `_heimdal/**` — **app agents only** | It is Bifrost's/the runtime's control seam; app agents have no role there. (Bifrost writes it by design, above.) |
