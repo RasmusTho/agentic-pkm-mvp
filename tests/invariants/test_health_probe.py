@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from app.runtime import health_probe
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_PATH = REPO_ROOT / "docker-compose.yaml"
@@ -92,6 +93,30 @@ def test_probe_import_graph_is_lean() -> None:
         timeout=5,
     )
     assert result.returncode == 0, result.stderr.decode()
+
+
+@pytest.mark.parametrize(
+    ("env_name", "resolver_name"),
+    [
+        ("WATCHER_HEARTBEAT_PATH", "_resolve_watcher_heartbeat_path"),
+        ("WORKER_HEARTBEAT_PATH", "_resolve_worker_heartbeat_path"),
+    ],
+)
+def test_unset_probe_path_preserves_host_resolver(
+    monkeypatch: pytest.MonkeyPatch, env_name: str, resolver_name: str
+) -> None:
+    """An unset Compose env must retain the API's settings-backed host path."""
+    monkeypatch.delenv(env_name, raising=False)
+    resolver = getattr(health_probe, resolver_name)
+    resolved = resolver()
+    if env_name == "WATCHER_HEARTBEAT_PATH":
+        from app.watcher.heartbeat import resolve_heartbeat_path
+
+        assert resolved == resolve_heartbeat_path()
+    else:
+        from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
+
+        assert resolved == resolve_worker_heartbeat_path()
 
 
 def test_compose_healthcheck_is_safe() -> None:

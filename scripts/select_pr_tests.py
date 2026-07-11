@@ -130,6 +130,19 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/watcher", "tests/sync", *E2E_TARGETS["watcher_sync"]),
     ),
     (
+        "runtime_health",
+        (
+            "app/runtime/health_probe.py",
+            "app/cli/health.py",
+            "docker-compose.yaml",
+            "tests/health/",
+            "tests/invariants/test_health_probe.py",
+            "tests/invariants/test_health_heartbeat_visibility.py",
+            "docs/OBSERVABILITY_STABILIZATION/",
+        ),
+        ("tests/health", "tests/invariants", "tests/api"),
+    ),
+    (
         "orchestration",
         (
             "app/orchestrator/",

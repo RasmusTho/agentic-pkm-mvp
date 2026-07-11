@@ -105,7 +105,7 @@ def _heartbeat_status(
 def _watcher_runtime_status(now: float | None = None) -> dict[str, Any]:
     return _heartbeat_status(
         name="watcher",
-        path=Path(os.getenv("WATCHER_HEARTBEAT_PATH", "/app/tmp/watcher_heartbeat.json")).expanduser(),
+        path=_resolve_watcher_heartbeat_path(),
         stale_seconds=_env_float("WATCHER_HEARTBEAT_STALE_SECONDS", 60.0),
         now=time.time() if now is None else now,
     )
@@ -115,11 +115,37 @@ def _worker_runtime_status(now: float | None = None) -> dict[str, Any]:
     backend = (os.getenv("STORE_BACKEND") or "memory").strip().lower()
     return _heartbeat_status(
         name="worker",
-        path=Path(os.getenv("WORKER_HEARTBEAT_PATH", "/app/tmp/worker_heartbeat.json")).expanduser(),
+        path=_resolve_worker_heartbeat_path(),
         stale_seconds=_env_float("WORKER_HEARTBEAT_STALE_SECONDS", 60.0),
         now=time.time() if now is None else now,
         skip=not _is_enabled("WORKER_ENABLE", default=backend != "memory"),
     )
+
+
+def _resolve_watcher_heartbeat_path() -> Path:
+    """Use the configured host resolver when Compose has not set the path.
+
+    Containers provide ``WATCHER_HEARTBEAT_PATH`` explicitly.  Keeping the
+    settings-backed resolver as the unset fallback preserves the CLI/API
+    contract for host invocations without adding that import to the probe's
+    module-load graph.
+    """
+    raw = os.getenv("WATCHER_HEARTBEAT_PATH")
+    if raw and raw.strip():
+        return Path(raw.strip()).expanduser()
+    from app.watcher.heartbeat import resolve_heartbeat_path
+
+    return resolve_heartbeat_path()
+
+
+def _resolve_worker_heartbeat_path() -> Path:
+    """Use the configured host resolver when Compose has not set the path."""
+    raw = os.getenv("WORKER_HEARTBEAT_PATH")
+    if raw and raw.strip():
+        return Path(raw.strip()).expanduser()
+    from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
+
+    return resolve_worker_heartbeat_path()
 
 
 def _timeout_handler(_signum: int, _frame: object) -> None:
