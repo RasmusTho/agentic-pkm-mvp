@@ -117,3 +117,10 @@ docker inspect --format '{{.State.Health.Status}}' pkm-dev-worker-1
 This task is a child of the parent Observability Stabilization feature issue.
 It must be serialized after OBSSTAB-01 because both tasks edit `docker-compose.yaml`
 and concurrent edits to the same service blocks risk merge conflicts.
+
+## Hardening follow-up
+
+The worker and watcher probes now run as `CMD` exec-form invocations of the
+stdlib-only `app.runtime.health_probe` module.  The containers use `init: true`,
+the probe has a SIGALRM deadline, and the healthcheck interval exceeds its
+timeout so timed-out probes cannot overlap or accumulate.
