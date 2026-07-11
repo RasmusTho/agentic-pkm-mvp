@@ -39,6 +39,10 @@ def test_contract_extends_existing_mimer_projector_without_parallel_consumer() -
     assert "read_observations_for_consumer(consumer_id" in projector_source
     assert "write_candidate_note(" in projector_source
     assert "advance_cursor_for_consumer(consumer_id, rows)" in projector_source
+    # KMA-01 names the necessary KMA-04 repair rather than claiming the
+    # current whole-batch advance is already safe for blocked writes.
+    assert "KMA-04 must change that\nbehavior before enabling Karakeep projection" in contract
+    assert "WriteGuard refusal or item-scoped failure must leave the\naffected row replayable" in contract
 
     for forbidden in (
         "/api/capture",

@@ -62,12 +62,13 @@ def test_karakeep_mapping_conforms_to_canonical_published_v1_schema() -> None:
     }
     assert required <= payload.keys()
 
-    # Nullable/optional families stay optional in the Karakeep mapping.  The
-    # example intentionally omits mentions and uses null for the modality,
-    # rather than silently widening the canonical schema.
-    assert "entity_mentions" not in payload
+    # Nullable/optional families stay semantically optional in the Karakeep
+    # mapping. The sanctioned assembler represents a no-mention input as an
+    # empty list, so the fixture must not require a source-derived mention.
+    assert payload["entity_mentions"] == []
     assert payload["modality"] is None
     assert "Optional/nullable published-v1 families" in contract
+    assert "assembler represents the no-mention case as\n`entity_mentions: []`" in contract
     assert "Karakeep REST" in contract
     assert "Mimer does not contact Karakeep" in contract
 
@@ -98,4 +99,5 @@ def test_contract_reuses_canonical_log_and_cursor_seam() -> None:
         assert forbidden not in contract
 
     assert "source checkpoint advances only after published evidence is durable" in contract
-    assert "consumer cursor advances only after candidate materialization" in contract
+    assert "KMA-04 must change that\nbehavior before enabling Karakeep projection" in contract
+    assert "affected row replayable, with a regression test at the production projector call site" in contract

@@ -92,16 +92,19 @@ stamps `provenance.content_hash` and validates the result before the append.
 
 ### Optional/nullable published-v1 families
 
-`entity_mentions` is emitted only for Heimdal-attributed mentions supported by the source metadata or
-content; otherwise it is absent. `content` is the minimized saved note/highlight/excerpt and may be
-null for a link-only item or tombstone. `modality` remains null because published-v1 has no text/web
+`entity_mentions` is semantically optional: the adapter supplies mentions only when the source
+metadata or content supports them. The sanctioned assembler represents the no-mention case as
+`entity_mentions: []`, so Karakeep adapters use that empty array rather than bypassing the assembler.
+`content` is the minimized saved note/highlight/excerpt and may be null for a link-only item or
+tombstone. `modality` remains null because published-v1 has no text/web
 modality token; adding one requires a separately compatible schema revision. `observed_at_end`,
 `captured_at`, `clock_basis`, `content_structure`, `raw_ref`, `withheld`, and `scope_hint` are populated
 only when their canonical meanings apply. The adapter must not make an optional family required or
 smuggle an endpoint, credential, cursor, or private URL into one.
 
-The following fixture is the executable minimal link/note mapping used by the contract test. It
-deliberately omits `entity_mentions` and uses a null modality to prove those families remain optional.
+The following fixture is the executable minimal link/note mapping used by the contract test. It uses
+the assembler-compatible empty `entity_mentions` array and a null modality to prove that neither
+family requires source-derived values.
 
 <!-- karakeep-published-v1-example:start -->
 ```json
@@ -123,6 +126,7 @@ deliberately omits `entity_mentions` and uses a null modality to prove those fam
       "basis": "capture_context"
     }
   ],
+  "entity_mentions": [],
   "modality": null,
   "content": "A saved note about the linked article.",
   "content_structure": {
@@ -178,9 +182,11 @@ upstream page/cursor plus the last durable item revision and is Heimdal-owned.
 
 Mimer reads the same append-only observation log only through
 `read_observations_for_consumer` and advances only through
-`advance_cursor_for_consumer`. Its one consumer id remains `mimer.candidate_projector`. The
-consumer cursor advances only after candidate materialization returns `written` or
-`already_exists`; a WriteGuard refusal or item-scoped failure leaves it replayable. Source and
+`advance_cursor_for_consumer`. Its one consumer id remains `mimer.candidate_projector`. The current
+projector advances a whole non-empty batch after attempting its writes; KMA-04 must change that
+behavior before enabling Karakeep projection so only rows whose candidate materialization returns
+`written` or `already_exists` advance. A WriteGuard refusal or item-scoped failure must leave the
+affected row replayable, with a regression test at the production projector call site. Source and
 consumer cursors are independent and never participate in one transaction.
 
 ## Additive Mimer candidate mapping
