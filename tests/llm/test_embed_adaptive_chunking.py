@@ -14,6 +14,7 @@ bisection reaches the floor.
 from __future__ import annotations
 
 import httpx
+import pytest
 
 from app.llm import embeddings as emb
 
@@ -21,6 +22,47 @@ from app.llm import embeddings as emb
 def _fake_5xx_response(status_code: int = 500) -> httpx.Response:
     request = httpx.Request("POST", "http://ollama.local/api/embeddings")
     return httpx.Response(status_code, request=request, json={"error": "EOF"})
+
+
+class _TransientProviderError(RuntimeError):
+    is_transient = True
+
+
+@pytest.mark.parametrize(
+    "error_factory",
+    [
+        lambda: httpx.ConnectError(
+            "provider unavailable", request=httpx.Request("POST", "http://provider.invalid/embed")
+        ),
+        lambda: httpx.TimeoutException(
+            "provider timed out", request=httpx.Request("POST", "http://provider.invalid/embed")
+        ),
+        lambda: _TransientProviderError("provider temporarily unavailable"),
+    ],
+)
+def test_transport_failures_do_not_bisect(error_factory) -> None:
+    """A transport outage reaches the normal retry boundary after one call."""
+    calls: list[int] = []
+
+    def unavailable(text, **kwargs):
+        calls.append(len(text))
+        raise error_factory()
+
+    try:
+        emb._embed_chunk_with_bisect(
+            "x" * 2048,
+            unavailable,
+            model="test",
+            dim=8,
+            timeout=1,
+            floor_chars=256,
+        )
+    except Exception:
+        pass
+    else:
+        raise AssertionError("expected the original transport error to surface")
+
+    assert calls == [2048]
 
 
 def test_provider_5xx_chunk_bisects_and_completes(monkeypatch) -> None:
