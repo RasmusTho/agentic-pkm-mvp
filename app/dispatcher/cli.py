@@ -199,6 +199,7 @@ def _cmd_claim(args: argparse.Namespace, store: SqliteStore) -> int:
             task_id=args.task_id,
             agent_id=args.agent,
             ttl_minutes=args.ttl_minutes,
+            takeover_stale=args.takeover_stale,
         )
         _emit({
             "ok": True,
@@ -470,6 +471,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("task_id")
     p.add_argument("--agent", required=True)
     p.add_argument("--ttl-minutes", type=int, default=90, dest="ttl_minutes")
+    p.add_argument("--takeover-stale", action="store_true")
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("heartbeat", help="Update lease heartbeat")

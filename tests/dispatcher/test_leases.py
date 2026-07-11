@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -221,3 +222,70 @@ def test_expired_lease_reclaim(store: SqliteStore) -> None:
     assert refetched.lease_id is None
     assert refetched.claimed_by is None
     assert refetched.status == "ready"
+
+
+def _expire_lease(store: SqliteStore, lease_id: str) -> str:
+    lease = store.get_lease(lease_id)
+    assert lease is not None
+    past_time = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(
+        timespec="microseconds"
+    )
+    lease.acquired_at = past_time
+    lease.expires_at = past_time
+    lease.heartbeat_at = past_time
+    store.upsert_lease(lease)
+    return past_time
+
+
+def test_claim_takeover_stale_succeeds_with_attributed_receipt(store: SqliteStore) -> None:
+    task = _task()
+    store.upsert_task(task)
+    _, old_lease = claim(store, "task-1", "departed-agent")
+    previous_expires_at = _expire_lease(store, old_lease.lease_id)
+
+    claimed_task, lease = claim(
+        store, "task-1", "replacement-agent", takeover_stale=True
+    )
+
+    assert claimed_task.lease_id == lease.lease_id
+    assert claimed_task.claimed_by == "replacement-agent"
+    event = store.list_events("task-1")[-1]
+    assert event.event_type == "task.claimed"
+    assert event.payload["takeover"] == {
+        "previous_holder": "departed-agent",
+        "previous_lease_id": old_lease.lease_id,
+        "previous_expires_at": previous_expires_at,
+    }
+
+
+def test_takeover_releases_expired_lease_with_stale_takeover_reason(store: SqliteStore) -> None:
+    task = _task()
+    store.upsert_task(task)
+    _, old_lease = claim(store, "task-1", "departed-agent")
+    _expire_lease(store, old_lease.lease_id)
+
+    claim(store, "task-1", "replacement-agent", takeover_stale=True)
+
+    released_lease = store.get_lease(old_lease.lease_id)
+    assert released_lease is not None
+    assert released_lease.released_at is not None
+    assert released_lease.release_reason == "stale_takeover"
+
+
+def test_takeover_never_displaces_active_lease(store: SqliteStore) -> None:
+    task = _task()
+    store.upsert_task(task)
+    claim(store, "task-1", "active-agent")
+
+    with pytest.raises(ValueError, match="already has active lease"):
+        claim(store, "task-1", "replacement-agent", takeover_stale=True)
+
+
+def test_expired_lease_rejection_names_takeover_path(store: SqliteStore) -> None:
+    task = _task()
+    store.upsert_task(task)
+    _, old_lease = claim(store, "task-1", "departed-agent")
+    _expire_lease(store, old_lease.lease_id)
+
+    with pytest.raises(ValueError, match="--takeover-stale"):
+        claim(store, "task-1", "replacement-agent")
