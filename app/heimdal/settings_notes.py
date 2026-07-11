@@ -396,6 +396,13 @@ SETTINGS = SettingsNoteSpec(
                     "decay signals. Read markdown-first, not from hidden config.",
                 ),
                 FieldSpec(
+                    "screen_frame_retention_minutes",
+                    FIELD_HUMAN_EDITABLE,
+                    "SCREEN-01 bounded raw-frame reprocessing buffer in minutes. This is a "
+                    "separate, deliberately short bound from retention_window_days and is "
+                    "read markdown-first; screen capture refuses to assume a default.",
+                ),
+                FieldSpec(
                     "last_enforced_at",
                     FIELD_AGENT_AUTHORED,
                     "last time the hard-retention ops job ran (informational only; the "
