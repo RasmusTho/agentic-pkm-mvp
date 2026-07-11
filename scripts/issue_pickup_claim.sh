@@ -73,7 +73,6 @@ fi
 
 EXPECTED_BRANCH="$(git branch --show-current)"
 EXPECTED_WORKTREE="$(git rev-parse --show-toplevel)"
-TASK_ID="${TASK_ID:-github-issue-$ISSUE_NUMBER}"
 
 scripts/agent_workspace_preflight.sh \
   --expected-branch "$EXPECTED_BRANCH" \
@@ -101,6 +100,11 @@ if [[ "$REPO" != */* ]]; then
   echo "could not resolve GitHub owner/repo; pass --repo OWNER/REPO" >&2
   exit 2
 fi
+
+# Match app/dispatcher/sync_github.py::normalize_github_issue's repo-qualified
+# task_id scheme (doubled "--" separator, not a single "-", so that e.g.
+# "org/foo-bar" and "org-foo/bar" can't collapse to the same id).
+TASK_ID="${TASK_ID:-github-${REPO//\//--}-issue-$ISSUE_NUMBER}"
 
 detect_coordination_receipt() {
   local status_json

@@ -142,11 +142,12 @@ The dispatcher is the preferred coordination layer, but availability is not clai
 pickup wrapper for both dispatcher-backed and degraded label-only pickup:
 
 ```bash
-scripts/issue_pickup_claim.sh --issue <N> --agent <agent_id> --session <session_id>
+scripts/issue_pickup_claim.sh --issue <N> --repo <owner/repo> --agent <agent_id> --session <session_id>
 ```
 
-The wrapper runs workspace preflight and `dispatcher status`, derives the exact task id
-`github-issue-<N>`, and does not substitute a candidate returned by `dispatcher next`. When the
+The wrapper runs workspace preflight and `dispatcher status`, derives the exact repo-qualified task id
+`github-<owner>--<repo>-issue-<N>` (matching the id `dispatcher pull` assigns; pass `--task-id` to
+override), and does not substitute a candidate returned by `dispatcher next`. When the
 dispatcher is available, it executes `dispatcher claim` for that exact task and verifies the returned
 task id, issue number, status, owner, lease id, lease resource, holder, expiry, and unreleased state
 before removing `agent:ready`. Database or singleton existence alone never produces a

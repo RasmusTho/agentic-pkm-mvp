@@ -169,8 +169,9 @@ Design boundary:
 ## Agent Interaction Contract (MVP Loop)
 
 Canonical loop:
-0. Run `scripts/issue_pickup_claim.sh --issue <N> --agent <agent_id> --session <session_id>`.
-   The wrapper checks `status --json`, claims the exact `github-issue-<N>` task when dispatcher-backed,
+0. Run `scripts/issue_pickup_claim.sh --issue <N> --repo <owner/repo> --agent <agent_id> --session <session_id>`.
+   The wrapper checks `status --json`, claims the exact repo-qualified `github-<owner>--<repo>-issue-<N>`
+   task (matching the id `dispatcher pull` assigns; pass `--task-id` to override) when dispatcher-backed,
    verifies the active lease and holder, and only then removes `agent:ready`. Dispatcher database or
    singleton existence is availability evidence, not claim evidence. In degraded mode the wrapper
    posts a durable claimant-intent comment with identity and fallback reason before label removal.
