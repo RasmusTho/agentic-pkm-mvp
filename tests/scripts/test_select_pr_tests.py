@@ -254,6 +254,22 @@ def test_panel_live_e2e_is_owned_but_not_selected_by_generic_pr_pytest() -> None
     assert "not panel_llm_e2e" in selection.pytest_args
 
 
+def test_panel_agent_package_change_selects_promotion_panel_coverage() -> None:
+    selection = select_tests(["app/agents/panel_agent/runtime.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("promotion_panel",)
+    assert "tests/panel" in selection.targets
+
+
+def test_llm_runtime_configuration_change_selects_llm_coverage() -> None:
+    selection = select_tests(["app/config/llm.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("llm_eval",)
+    assert "tests/llm" in selection.targets
+
+
 def test_builder_system_change_selects_its_own_regression_tests() -> None:
     selection = select_tests(["app/builderops/cli.py"])
 

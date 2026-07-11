@@ -61,7 +61,7 @@ jobs:
               - 'docker-compose*.yaml'
               - 'docker-compose*.yml'
             panel_llm_e2e:
-              - 'app/agents/panel_agent.py'
+              - 'app/agents/panel_agent/**'
               - 'app/panel/**'
               - 'app/promotion/**'
               - 'app/llm/**'

@@ -160,6 +160,8 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         "llm_eval",
         (
             "app/llm/",
+            "app/services/llm.py",
+            "app/config/llm.py",
             "app/eval/",
             "docs/eval/",
             "tests/llm/",
@@ -178,6 +180,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
         "promotion_panel",
         (
+            "app/agents/panel_agent/",
             "app/promotion/",
             "app/panel/",
             "tests/promotion/",

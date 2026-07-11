@@ -36,6 +36,7 @@ def test_panel_llm_e2e_is_path_scoped_and_does_not_install_when_unconfigured() -
 
     assert "panel_llm_e2e:" in workflow
     assert "needs.smoke.outputs.panel_llm_e2e == 'true'" in workflow
+    assert "'app/agents/panel_agent/**'" in workflow
     assert "id: live-llm" in workflow
     assert "steps.live-llm.outputs.enabled == 'true'" in workflow
     assert "Guard: skip when LLM E2E not configured" not in workflow
