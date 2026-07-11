@@ -17,6 +17,7 @@ from app.relevance.materialization import materialize_moment
 from app.relevance.now_surface import collect_now_moments
 from app.relevance.schema import (
     Moment,
+    MomentLifecycle,
     MomentNeed,
     MomentProvenance,
     MomentTrigger,
@@ -27,7 +28,12 @@ from app.relevance.schema import (
 from app.vault.manager import VaultContext
 
 
-def _moment(band: UrgencyBand, *, ref: str = "Projects/Contextual Relevance Engine.md") -> Moment:
+def _moment(
+    band: UrgencyBand,
+    *,
+    ref: str = "Projects/Contextual Relevance Engine.md",
+    lifecycle: MomentLifecycle = "proposed",
+) -> Moment:
     return Moment(
         uuid=uuid4().hex,
         created="2026-06-13T07:00:00Z",
@@ -35,6 +41,7 @@ def _moment(band: UrgencyBand, *, ref: str = "Projects/Contextual Relevance Engi
         need=MomentNeed(basis="commitment-risk", summary=f"slipping deadline ({band})"),
         surfaced_refs=[SurfacedRef(ref=ref, why="deadline in 1 day")],
         urgency=MomentUrgency(band=band, basis="test", evaluator="test"),
+        lifecycle=lifecycle,
         provenance=MomentProvenance(produced_by="test", inputs_digest="sha256:test"),
     )
 
@@ -148,6 +155,40 @@ def test_defer_persists_deferred_lifecycle(tmp_path: Path) -> None:
     after = collect_now_moments(ctx)
     assert after and after[0]["moment_id"] == before[0]["moment_id"]
     assert after[0]["lifecycle"] == "deferred"
+
+
+def test_collect_now_moments_excludes_terminal_lifecycle(tmp_path: Path) -> None:
+    """Dismissed and expired artifacts remain durable but are not live "now" views."""
+    ctx = _ctx(tmp_path)
+    receipts = tmp_path / "moments.jsonl"
+
+    for lifecycle in ("dismissed", "expired"):
+        result = materialize_moment(
+            _moment("timely", lifecycle=lifecycle),
+            vault_context=ctx,
+            outbox_path=receipts,
+        )
+        assert result.status == "materialized"
+
+    assert collect_now_moments(ctx) == []
+
+
+def test_collect_now_moments_preserves_non_terminal_lifecycle(tmp_path: Path) -> None:
+    """Current proposal, engagement, and deferral artifacts remain in the live view."""
+    ctx = _ctx(tmp_path)
+    receipts = tmp_path / "moments.jsonl"
+    expected_ids: set[str] = set()
+
+    for lifecycle in ("proposed", "surfaced", "engaged", "deferred"):
+        result = materialize_moment(
+            _moment("timely", lifecycle=lifecycle),
+            vault_context=ctx,
+            outbox_path=receipts,
+        )
+        assert result.status == "materialized"
+        expected_ids.add(result.moment_uuid)
+
+    assert {view["moment_id"] for view in collect_now_moments(ctx)} == expected_ids
 
 
 def test_no_reachout_when_writes_blocked(tmp_path: Path) -> None:
