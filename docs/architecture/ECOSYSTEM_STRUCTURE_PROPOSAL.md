@@ -1,6 +1,6 @@
 State: Advisory design proposal (Fable-5 architecture pass, 2026-07-04). Design only — no code, no shipped schemas, no GitHub work. Every load-bearing claim carries an SBS reconciliation tag (`[conform]` / `[extend]` / `[reshape]`); every `reshape` is a routed proposal to the owner via CES/ADR, never enacted here. Where this proposal and an owner doc disagree, the owner doc wins until the owner decides otherwise.
 Doc role: Ecosystem structure proposal (advisory)
-Inputs: docs/SYSTEM_BREAKDOWN_STRUCTURE.md; docs/boundaries/** (14 charters + CES); docs/foundation/00-yggdrasil-doctrine.md; docs/architecture/system-context-overlay.md; docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md; docs/HEIMDAL/** (A1/A3/A4/A5) + ADR-0043 (Proposed, PR #2888 open — input, not settled truth); docs/architecture/ecosystem-federation.md (RESEARCH-08, merged); docs/KNOWLEDGE_ACQUISITION/README.md; docs/DESIGN_PRINCIPLES.md; docs/MODULAR_ARCHITECTURE.md; ADR-0041; docs/RUNTIME_CORRECTNESS_KERNEL/README.md; docs/testing/invariant-tests.md (referenced).
+Inputs: docs/SYSTEM_BREAKDOWN_STRUCTURE.md; docs/boundaries/** (14 charters + CES); docs/foundation/00-yggdrasil-doctrine.md; docs/architecture/system-context-overlay.md; docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md; docs/HEIMDAL/** (A1/A3/A4/A5) + ADR-0043 (historical proposed input; PR #2888 closed unmerged — the ADR-0044–0047 reconciliation is current); docs/architecture/ecosystem-federation.md (RESEARCH-08, merged); docs/KNOWLEDGE_ACQUISITION/README.md; docs/DESIGN_PRINCIPLES.md; docs/MODULAR_ARCHITECTURE.md; ADR-0041; docs/RUNTIME_CORRECTNESS_KERNEL/README.md; docs/testing/invariant-tests.md (referenced).
 
 # Ecosystem Structure Proposal — one breakdown, Heimdal placed
 
@@ -135,7 +135,7 @@ The brief frames a two-way tension; the evidence shows **three** models:
 
 - **Model A** (SBS + ADR-0041 + INCOSE audit): Yggdrasil = a modular *single system*; 14 control boundaries; the internal decomposition is explicitly **not** an SoS (audit §3, settled; the owner paid 27-doc churn to remove that vocabulary).
 - **Model B1** (RESEARCH-08, merged): apex = Personal Agentic Ecosystem (acknowledged SoS, target-state, activation-gated); **Yggdrasil = a constituent** (the public knowledge/reasoning system); *no internal boundary is a constituent*; siblings are private-side systems.
-- **Model B2** (Heimdal A1 + draft ADR-0043, PR #2888 open): **Yggdrasil = the whole**; constituents = Munin (knowledge/memory), Hugin (agent-runtime), Heimdal (sensor).
+- **Model B2** (historical Heimdal A1 + draft ADR-0043 / closed-unmerged PR #2888): **Yggdrasil = the whole**; constituents = Munin (knowledge/memory), Hugin (agent-runtime), Heimdal (sensor). The current reconciliation is ADR-0044–0047.
 
 B1 and B2 agree the ecosystem is an acknowledged SoS with Heimdal as a peer constituent and a public/private seam. They **disagree** on the apex name, on Yggdrasil's referent, and — critically — on whether the knowledge/agent split is a constituent split. This proposal resolves the triangle by taking: the SoS apex from B1/B2 `[reshape → CES/ADR]`, the constituent set from B1 (Yggdrasil undivided) `[conform to audit §3]`, Heimdal's peer status from B1/B2 `[reshape → CES/ADR]`, and Model A unchanged **inside** Yggdrasil `[conform]`.
 
@@ -390,7 +390,7 @@ Each is the owner's call; options + consequences; recommendations flagged, never
 
 **OD-7 — Adopt the naming scheme (§7) and amend the name register.** Options: adopt as proposed / adopt with Norse apex name minted now / keep ADR-0043's register unchanged (implies OD-1 option B). Consequence: whichever way, **one** superseding/amending ADR should carry OD-1 + OD-3 + OD-7 together — they are one naming coherence decision.
 
-**OD-8 — Sequencing against PR #2888 and RESEARCH-08 D1–D4.** #2888 (ratifying ADR-0043 + the A1 model) is open and partially conflicts with this proposal (Yggdrasil referent; Munin/Hugin constituents). *Option A (recommended):* hold #2888, reconcile it with this proposal, land one coherent ratification (this structure + amended naming + D1/D2/D3 adoptions referenced, D4 orthogonal). *Option B:* merge #2888 as-is, then supersede — double churn. Also note: this proposal *assumes* the substance of RESEARCH-08 D2 (tier rule → ECO-8) and D3 (INV-EF1 → ECO-2); those remain their own owner decisions.
+**OD-8 — Historical sequencing against PR #2888 and RESEARCH-08 D1–D4.** This record predates the current reconciliation: #2888 was closed unmerged, and ADR-0044–0047 landed the relevant decisions. At the time, #2888 (ratifying ADR-0043 + the A1 model) partially conflicted with this proposal (Yggdrasil referent; Munin/Hugin constituents). *Option A (recommended):* hold #2888, reconcile it with this proposal, land one coherent ratification (this structure + amended naming + D1/D2/D3 adoptions referenced, D4 orthogonal). *Option B:* merge #2888 as-is, then supersede — double churn. These options are historical, not active work. This proposal *assumes* the substance of RESEARCH-08 D2 (tier rule → ECO-8) and D3 (INV-EF1 → ECO-2); those remain their own owner decisions.
 
 ---
 
