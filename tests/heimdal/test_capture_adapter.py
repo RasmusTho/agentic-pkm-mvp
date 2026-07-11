@@ -21,6 +21,7 @@ both real production code paths, not a stub of either.
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 from pathlib import Path
@@ -79,6 +80,12 @@ def _write_memo(tmp_path: Path, name: str = "memo.m4a", content: bytes = b"fake 
     path = tmp_path / name
     path.write_bytes(content)
     return path
+
+
+def _write_sidecar(memo: Path, payload: object) -> Path:
+    sidecar = memo.with_name(f"{memo.name}.capture.json")
+    sidecar.write_text(json.dumps(payload), encoding="utf-8")
+    return sidecar
 
 
 # --- AC1: admitted only under an active grant -----------------------------
@@ -164,6 +171,81 @@ def test_source_retained_when_persistence_fails(tmp_path: Path, monkeypatch: pyt
     assert "simulated store outage" in str(excinfo.value)
     # Fail loud, fail safe: the memo is still on disk, still queued for retry.
     assert memo.exists()
+
+
+# --- HCAP-07: optional capture-time metadata sidecars --------------------
+
+
+def test_sidecar_consumed_into_raw_metadata(tmp_path: Path) -> None:
+    """A valid sidecar lands atomically with raw evidence and is then deleted."""
+    memo = _write_memo(tmp_path)
+    sidecar_metadata = {
+        "sidecar_version": 1,
+        "device_id": "iphone-rasmus",
+        "recorded_start_at": "2026-07-07T14:02:11+02:00",
+        "recorded_end_at": "2026-07-07T14:09:40+02:00",
+        "timezone": "Europe/Stockholm",
+        "interruptions": 1,
+        "source_surface": "watch-relay",
+        "location": {"lat": 59.3293, "lon": 18.0686, "precision_m": 100},
+        "producer_private_field": "ignored by the hub",
+    }
+    sidecar = _write_sidecar(memo, sidecar_metadata)
+
+    result = admit_capture_file(memo, key=_TEST_KEY)
+
+    assert result.record.payload["capture_time_metadata"] == {
+        key: value for key, value in sidecar_metadata.items() if key != "producer_private_field"
+    }
+    assert not memo.exists()
+    assert not sidecar.exists()
+
+
+def test_admission_unaffected_by_missing_or_malformed_sidecar(tmp_path: Path) -> None:
+    """Missing and malformed sidecars are ignored, never an audio-admission failure."""
+    missing = _write_memo(tmp_path, name="missing.m4a", content=b"missing sidecar")
+    malformed = _write_memo(tmp_path, name="malformed.m4a", content=b"malformed sidecar")
+    malformed_sidecar = malformed.with_name(f"{malformed.name}.capture.json")
+    malformed_sidecar.write_text('{"sidecar_version": 999}', encoding="utf-8")
+
+    missing_result = admit_capture_file(missing, key=_TEST_KEY)
+    malformed_result = admit_capture_file(malformed, key=_TEST_KEY)
+
+    assert missing_result.record.payload == {}
+    assert malformed_result.record.payload == {}
+    assert not missing.exists()
+    assert not malformed.exists()
+    # Invalid context is retained for diagnosis/recovery; it is never
+    # destructively consumed merely because its sibling audio was admitted.
+    assert malformed_sidecar.exists()
+
+
+def test_sidecar_extension_not_admissible(tmp_path: Path) -> None:
+    """The sidecar is metadata, not an independent audio capture candidate."""
+    memo = _write_memo(tmp_path)
+    sidecar = _write_sidecar(memo, {"sidecar_version": 1})
+
+    assert not is_admissible_capture_file(sidecar)
+    assert list_candidate_files(tmp_path) == [memo]
+
+
+def test_valid_sidecar_is_retained_when_raw_persistence_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sidecar deletion follows the same confirmed-write custody boundary as audio."""
+    memo = _write_memo(tmp_path)
+    sidecar = _write_sidecar(memo, {"sidecar_version": 1, "device_id": "iphone-rasmus"})
+
+    def _boom(**kwargs):
+        raise RuntimeError("simulated store outage")
+
+    monkeypatch.setattr(raw_store, "insert_raw_record", _boom)
+
+    with pytest.raises(CaptureAdmissionError):
+        admit_capture_file(memo, key=_TEST_KEY)
+
+    assert memo.exists()
+    assert sidecar.exists()
 
 
 def test_retry_after_transient_failure_still_deletes_once_persisted(
