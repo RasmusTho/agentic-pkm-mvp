@@ -81,6 +81,16 @@ def test_runtime_health_change_has_a_ci_owner() -> None:
     assert "tests/api" in selection.targets
 
 
+def test_relevance_runtime_and_regression_changes_select_relevance_coverage() -> None:
+    selection = select_tests(["app/relevance/now_surface.py", "tests/relevance/test_attention_loop.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("relevance",)
+    assert "tests/relevance" in selection.targets
+    assert "tests/relevance/test_attention_loop.py" in selection.targets
+    assert not selection.unowned_paths
+
+
 def test_shared_panel_watcher_e2e_file_selects_both_owning_subsystems() -> None:
     selection = select_tests(["tests/e2e/test_panel_watcher_e2e.py"])
 
