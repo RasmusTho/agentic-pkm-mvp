@@ -65,13 +65,21 @@ Identity is deterministic and revision-aware:
 - `content_identity = sha256:<canonical-source-snapshot>` hashes canonical JSON with sorted keys and
   includes the item id, all evidence-bearing fields, and the deletion flag. Credentials, endpoint
   values, fetch timestamps, and cursor values are excluded.
-- `observation_id = karakeep:<item-id>:<content-identity-hex>` identifies one immutable revision.
-  Re-fetching identical content therefore republishes the same idempotency input and is a no-op.
-- A changed snapshot creates a new `observation_id`, sets `revision_of` to the immediately preceding
-  observation for the same `source_item_identity`, and uses the adapter's monotone per-item revision
-  ordinal as `sequence`. It never edits the earlier observation.
-- A source deletion is another revision with `content: null`, `content_structure.karakeep.tombstone:
-  true`, and `supersedes` naming the preceding live revision. It is not a delete instruction.
+- `publication_profile_identity = sha256:<canonical-publication-stage-versions>` identifies the
+  adapter/attribution/publication-stage profile used to create published evidence from that snapshot.
+- `observation_id = karakeep:<item-id>:<content-identity-hex>:<publication-profile-identity-hex>`
+  identifies one immutable publication. Re-fetching identical content with the same publication
+  profile therefore republishes the same idempotency input and is a no-op.
+- A changed source snapshot creates a new `content_identity` and `observation_id`, sets
+  `supersedes` to the immediately preceding source-snapshot observation, and leaves `revision_of`
+  null. It uses the adapter's monotone per-item revision ordinal as `sequence` and never edits the
+  earlier observation.
+- Reprocessing the same canonical snapshot through a changed publication profile creates a new
+  `observation_id` with the same `content_identity`, sets `revision_of` to the preceding
+  publication of that same snapshot, and leaves `supersedes` null.
+- A source deletion is a changed source snapshot with `content: null`,
+  `content_structure.karakeep.tombstone: true`, and `supersedes` naming the preceding live
+  observation. It is not a delete instruction.
 
 ## Published-v1 field map
 
@@ -109,7 +117,7 @@ family requires source-derived values.
 <!-- karakeep-published-v1-example:start -->
 ```json
 {
-  "observation_id": "karakeep:item-42:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "observation_id": "karakeep:item-42:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "episode_id": "karakeep:item-42",
   "sequence": 0,
   "revision_of": null,
@@ -174,6 +182,30 @@ family requires source-derived values.
 ```
 <!-- karakeep-published-v1-example:end -->
 
+The following lineage fixture distinguishes an upstream source update from a reprocess of the same
+snapshot. KMA-04 uses the immutable `observation_id` for its per-revision candidate lineage.
+
+<!-- karakeep-published-v1-lineage-example:start -->
+```json
+{
+  "prior_observation_id": "karakeep:item-42:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "prior_content_identity": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "source_update": {
+    "observation_id": "karakeep:item-42:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "content_identity": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "revision_of": null,
+    "supersedes": "karakeep:item-42:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "same_snapshot_reprocess": {
+    "observation_id": "karakeep:item-42:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "content_identity": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "revision_of": "karakeep:item-42:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "supersedes": null
+  }
+}
+```
+<!-- karakeep-published-v1-lineage-example:end -->
+
 ## Canonical publication and cursor seam
 
 The adapter calls only `publish_full_observation`; it does not create a Karakeep topic or log. Its
@@ -193,17 +225,20 @@ consumer cursors are independent and never participate in one transaction.
 
 KMA-04 extends the shipped `app.heimdal.candidate_projection.project_pending_candidates` branch for
 events whose `provenance.sensor` is `karakeep_rest`; it does not add another consumer, projector, or
-read API. The existing consumer folds revisions, quarantines observed content, and materializes via
-the existing guarded `write_candidate_note`/WriteGuard call site.
+read API. Its Karakeep source-discriminated branch must preserve one candidate per immutable
+`observation_id` rather than applying the generic `episode_id` fold, because a Karakeep item shares
+an episode identity across source updates, reprocesses, and tombstones. It must cover two source
+revisions plus a tombstone in one production-call-site batch test. The branch quarantines observed
+content and materializes via the existing guarded `write_candidate_note`/WriteGuard call site.
 
 The additive projection is a `reading_source_note` with `requires_review: true`,
 `review_state: draft`, `source_authoritative: false`, and full Karakeep/Heimdal provenance. Its
 deterministic first-write-wins path is
-`Sources/Reading/Karakeep/<item-id>-<revision-prefix>.md`. Replay of the same revision returns
-`already_exists`; a changed revision creates new lineage at a new deterministic path and never
-deletes or overwrites a prior or human-reviewed note. A published source tombstone creates a
-review-required tombstone candidate linked to the prior revision; it never deletes or overwrites
-the prior candidate.
+`Sources/Reading/Karakeep/<item-id>-<revision-prefix>.md`, where `revision-prefix` derives from the
+immutable `observation_id`. Replay of the same revision returns `already_exists`; a source update
+or same-snapshot reprocess creates new lineage at a new deterministic path and never deletes or
+overwrites a prior or human-reviewed note. A published source tombstone creates a review-required
+tombstone candidate linked to the prior revision; it never deletes or overwrites the prior candidate.
 
 The boundary forbids `/api/capture`, forbids `companion capture`, and forbids `Karakeep MCP`. It
 also forbids embedded endpoint or credential values in code, fixtures, events, notes, or receipts.

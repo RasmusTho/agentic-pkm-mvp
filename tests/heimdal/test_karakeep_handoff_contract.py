@@ -72,6 +72,16 @@ def test_karakeep_mapping_conforms_to_canonical_published_v1_schema() -> None:
     assert "Karakeep REST" in contract
     assert "Mimer does not contact Karakeep" in contract
 
+    lineage = _marked_json(contract, "karakeep-published-v1-lineage-example")
+    update = lineage["source_update"]
+    reprocess = lineage["same_snapshot_reprocess"]
+    assert update["content_identity"] != lineage["prior_content_identity"]
+    assert update["revision_of"] is None
+    assert update["supersedes"] == lineage["prior_observation_id"]
+    assert reprocess["content_identity"] == update["content_identity"]
+    assert reprocess["revision_of"] == update["observation_id"]
+    assert reprocess["supersedes"] is None
+
 
 def test_contract_reuses_canonical_log_and_cursor_seam() -> None:
     contract = _contract()

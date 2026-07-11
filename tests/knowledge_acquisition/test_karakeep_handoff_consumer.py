@@ -43,6 +43,8 @@ def test_contract_extends_existing_mimer_projector_without_parallel_consumer() -
     # current whole-batch advance is already safe for blocked writes.
     assert "KMA-04 must change that\nbehavior before enabling Karakeep projection" in contract
     assert "WriteGuard refusal or item-scoped failure must leave the\naffected row replayable" in contract
+    assert "one candidate per immutable\n`observation_id` rather than applying the generic `episode_id` fold" in contract
+    assert "two source\nrevisions plus a tombstone in one production-call-site batch test" in contract
 
     for forbidden in (
         "/api/capture",
