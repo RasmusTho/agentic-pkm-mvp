@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/episode-note.schema.json",
+  "title": "EpisodeNote",
+  "description": "Note-serialized situation model for the Episode Artifact (ADR-0051 OD-1/OD-2). Vault-canonical -- the note is the source of record; any PG projection is a rebuildable query index only, never authoritative. Indexed on the five situation-model dimensions (time, space, causation, goal, protagonist) per ADR-0051 Decision §1. `episode_id` is a fused id (`ep-<uuid>`), a disjoint identifier space from Heimdal's per-capture-session `episode_id` (FABLE_COMPANION §1.3) -- a raw Heimdal session id may appear in `derived_from` but never as this note's own `episode_id` (app/episodes/ids.py enforces this at the write seam). `segmentation: proposed` is a low-trust opt-out proposal (ADR-0051 §5) -- it carries no DecisionToken/AuthorityReceipt; canonical standing arrives via silent acceptance or human re-cut (ERE-07), not a governed transition.",
+  "type": "object",
+  "properties": {
+    "episode_id": {
+      "type": "string",
+      "pattern": "^ep-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "description": "Fused episode id, ep-<uuid>. Disjoint from Heimdal's per-session episode_id space (ADR-0051; ERE-02 AC4)."
+    },
+    "scope": {
+      "$ref": "_defs.schema.json#/$defs/id_string",
+      "description": "Scope this episode is bound to."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "time": {
+      "type": "object",
+      "description": "Minimal temporal commitment per ADR-0051 §3 item 6: start / end / closed. Closure is the load-bearing property.",
+      "properties": {
+        "start": { "$ref": "_defs.schema.json#/$defs/iso_datetime" },
+        "end": { "$ref": "_defs.schema.json#/$defs/iso_datetime" },
+        "closed": {
+          "type": "boolean",
+          "description": "Whether the episode's boundary is closed. Closure drives event-triggered relevance decay (Event Horizon Model)."
+        }
+      },
+      "required": ["start", "closed"],
+      "additionalProperties": false
+    },
+    "space": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Space/place dimension of the situation model."
+    },
+    "protagonists": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Protagonist dimension of the situation model."
+    },
+    "goal": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Goal dimension; binds the episode upward to projects/areas."
+    },
+    "causation": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Causation dimension of the situation model."
+    },
+    "parent_episode": {
+      "type": ["string", "null"],
+      "description": "Fused episode_id of the nesting parent episode, if any (ADR-0051 §3 item 3: non-canonical, nested, goal-relative grain)."
+    },
+    "segmentation": {
+      "type": "string",
+      "enum": ["proposed", "accepted", "re-cut"],
+      "description": "Segmentation lifecycle state. proposed = opt-out capture proposal (no authority); accepted = standing reached by silent acceptance; re-cut = human-corrected boundary (ERE-07)."
+    },
+    "derived_from": {
+      "$ref": "_defs.schema.json#/$defs/id_list",
+      "description": "Source ids this episode was fused/derived from -- Heimdal per-session episode_ids and/or other stream boundary hints. Never a fused ep-<uuid> equal to this note's own episode_id."
+    }
+  },
+  "required": ["episode_id", "scope", "title", "time", "segmentation"],
+  "additionalProperties": false
+}
