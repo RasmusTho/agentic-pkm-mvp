@@ -116,6 +116,11 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/companion_ui", "tests/api", *E2E_TARGETS["companion_ui"]),
     ),
     (
+        "canvas_chat",
+        ("app/chat/", "tests/chat/"),
+        ("tests/chat",),
+    ),
+    (
         "watcher_sync",
         (
             "app/watcher/",

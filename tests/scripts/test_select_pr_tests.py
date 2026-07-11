@@ -25,6 +25,16 @@ def test_companion_ui_change_selects_companion_and_api_targets() -> None:
     assert "not panel_llm_e2e" in selection.pytest_args
 
 
+def test_canvas_chat_change_selects_chat_coverage() -> None:
+    selection = select_tests(["app/chat/session_log.py", "tests/chat/test_session_log_writer.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("canvas_chat",)
+    assert selection.unowned_paths == ()
+    assert "tests/chat" in selection.targets
+    assert "tests/chat/test_session_log_writer.py" in selection.targets
+
+
 def test_ci_workflow_change_selects_governance_contract_tests() -> None:
     selection = select_tests([".github/workflows/ci.yml"])
 
