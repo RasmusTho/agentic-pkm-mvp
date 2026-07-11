@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from app.heimdal.asr_stage import LocalAsrUnavailableError
+from app.media.transcribe import ffmpeg_to_wav
 from app.media.transcribe import run_asr
 
 
@@ -24,17 +25,31 @@ def transcribe_voice_wav(wav_bytes: bytes) -> dict[str, Any]:
     ``LocalAsrUnavailableError`` shape; there is no cloud fallback.
     """
 
-    temp_path: Path | None = None
+    return transcribe_voice_audio(wav_bytes, suffix=".wav")
+
+
+def transcribe_voice_audio(audio_bytes: bytes, *, suffix: str = ".wav") -> dict[str, Any]:
+    """Decode one supported client container then call the single ASR owner.
+
+    The source and decoded WAV are both temporary query material.  This is
+    intentionally separate from Heimdal's raw-read/capture lifecycle.
+    """
+
+    source_path: Path | None = None
+    wav_path: Path | None = None
     try:
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
-            temp_path = Path(handle.name)
-            handle.write(wav_bytes)
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as handle:
+            source_path = Path(handle.name)
+            handle.write(audio_bytes)
+        wav_path = source_path if suffix == ".wav" else ffmpeg_to_wav(source_path)
         try:
-            return run_asr(temp_path)
+            return run_asr(wav_path)
         except LocalAsrUnavailableError:
             raise
         except Exception as exc:
             raise LocalAsrUnavailableError("Shared local ASR engine is unavailable") from exc
     finally:
-        if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
+        if wav_path is not None and wav_path != source_path:
+            wav_path.unlink(missing_ok=True)
+        if source_path is not None:
+            source_path.unlink(missing_ok=True)

@@ -3,7 +3,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
 from pydantic import AliasChoices, BaseModel, Field
 
 from app.agents.ask.graph import run_ask_graph
@@ -13,6 +14,10 @@ from app.events.models import new_trace_id
 from app.observability.status_service import record_ask_error, record_ask_query
 from app.retrieval.hybrid import get_store as get_hybrid_store
 from app.retrieval.hybrid import rebuild_from_durable_index
+from app.tts.config import load_tts_config
+from app.tts.planning import build_tts_plan
+from app.tts.service import synthesize_tts
+from app.voice.transcription import transcribe_voice_audio
 
 _HYBRID_WARMED = False
 
@@ -42,6 +47,14 @@ def _ensure_hybrid_store_loaded() -> None:
         _HYBRID_WARMED = True
 
 router = APIRouter()
+
+# A voice turn is a query, not a recording. Keep the limit deliberately small
+# and reject it before handing bytes to the shared ASR engine.
+VOICE_ASK_MAX_AUDIO_BYTES = 5 * 1024 * 1024
+VOICE_ASK_ACCEPTED_CONTENT_TYPES = {
+    "audio/wav", "audio/x-wav", "audio/wave", "audio/m4a", "audio/mp4",
+    "audio/webm", "audio/ogg", "application/ogg",
+}
 
 
 class AskRequest(BaseModel):
@@ -81,6 +94,45 @@ class AskResponse(BaseModel):
     # when the gate blocked synthesis and the literal snippet was served.
     synthesis_receipt_id: str | None = None
     synthesis_source_ids: list[str] | None = None
+
+
+class VoiceAskResponse(BaseModel):
+    """One client-agnostic, read-only voice ASK turn (VOICE-01)."""
+
+    transcript: str
+    detected_language: str
+    answer: str
+    sources: list[AskSource]
+    speech_plan: dict[str, Any]
+    audio_url: str | None = None
+    degraded: bool = False
+    reason: str | None = None
+    session_id: str | None = None
+    trace_id: str
+
+
+def _looks_like_decodable_audio(audio: bytes) -> bool:
+    """Cheap container validation before ASR; the engine handles actual decode."""
+
+    return (
+        audio.startswith(b"RIFF") and audio[8:12] == b"WAVE"
+    ) or audio.startswith(b"OggS") or audio.startswith(b"\x1aE\xdf\xa3") or audio[4:8] == b"ftyp"
+
+
+def _capture_intent_suggestion(transcript: str) -> str | None:
+    """Surface obvious capture wording without granting this read route write power.
+
+    This is intentionally only a suggestion classifier.  It never imports a
+    capture/write adapter, so a classifier error or false positive cannot
+    mutate the vault.  A richer model classifier may replace it without
+    changing that deterministic authority boundary.
+    """
+
+    normalized = transcript.casefold()
+    phrases = ("remember ", "add to my inbox", "save this", "spara det", "kom ihåg")
+    if any(phrase in normalized for phrase in phrases):
+        return "That sounds like something to capture — use the capture surface to save it."
+    return None
 
 
 def _to_source(hit: Any) -> AskSource:
@@ -159,4 +211,111 @@ async def ask(req: AskRequest, request: Request) -> AskResponse:
     )
 
 
-__all__ = ["router", "AskRequest", "AskResponse", "RecallAttribution"]
+@router.post("/ask/voice", response_model=VoiceAskResponse)
+async def ask_voice(
+    request: Request,
+    audio: UploadFile = File(...),
+    session_id: str | None = Form(None),
+    zone_strategy: str | None = Form("default"),
+) -> VoiceAskResponse | JSONResponse:
+    """Turn transient client audio into a grounded, optionally spoken answer.
+
+    The route is deliberately composed only from read-only seams: shared ASR,
+    ASK, and the derived TTS cache.  It must never become a capture shortcut.
+    """
+
+    trace_id = getattr(request.state, "trace_id", None) or request.headers.get("x-trace-id") or new_trace_id()
+    if audio.content_type and audio.content_type.casefold() not in VOICE_ASK_ACCEPTED_CONTENT_TYPES:
+        raise HTTPException(status_code=415, detail={"error": "audio_undecodable", "trace_id": trace_id})
+    audio_bytes = await audio.read()
+    if len(audio_bytes) > VOICE_ASK_MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail={"error": "audio_too_large", "trace_id": trace_id})
+    if not _looks_like_decodable_audio(audio_bytes):
+        raise HTTPException(status_code=415, detail={"error": "audio_undecodable", "trace_id": trace_id})
+
+    try:
+        filename = audio.filename or "voice.wav"
+        suffix = "." + filename.rsplit(".", 1)[-1].casefold() if "." in filename else ".wav"
+        transcription = transcribe_voice_audio(audio_bytes, suffix=suffix)
+    except Exception as exc:
+        # Do not invent an answer when the local-only engine is unavailable.
+        raise HTTPException(status_code=503, detail={"error": "stt_unavailable", "trace_id": trace_id}) from exc
+
+    transcript = str(transcription.get("text") or "").strip()
+    detected_language = str(transcription.get("language") or "unknown")
+    if not transcript:
+        raise HTTPException(status_code=503, detail={"error": "stt_unavailable", "trace_id": trace_id})
+
+    suggestion = _capture_intent_suggestion(transcript)
+    if suggestion is not None:
+        plan = build_tts_plan(text=suggestion, config=load_tts_config(), language=detected_language)
+        return VoiceAskResponse(
+            transcript=transcript,
+            detected_language=detected_language,
+            answer=suggestion,
+            sources=[],
+            speech_plan=plan,
+            session_id=session_id,
+            trace_id=trace_id,
+            degraded=True,
+            reason="capture_intent_surfaced",
+        )
+
+    try:
+        state = run_ask_graph(transcript, trace_id=trace_id, ask_settings=get_ask_settings())
+    except Exception as exc:
+        # The heard text is still useful, but no ungrounded substitute answer is.
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "ask_unavailable",
+                "message": str(exc),
+                "transcript": transcript,
+                "detected_language": detected_language,
+                "session_id": session_id,
+                "trace_id": trace_id,
+            },
+        )
+
+    answer_text = state.answer or "No results found."
+    sources = [_to_source(hit) for hit in state.hits]
+    config = load_tts_config()
+    plan = build_tts_plan(text=answer_text, config=config, language=detected_language)
+    if not config.enabled:
+        return VoiceAskResponse(
+            transcript=transcript,
+            detected_language=detected_language,
+            answer=answer_text,
+            sources=sources,
+            speech_plan=plan,
+            session_id=session_id,
+            trace_id=trace_id,
+            degraded=True,
+            reason="tts_unavailable",
+        )
+    result = synthesize_tts(text=answer_text, config=config, language=detected_language)
+    if not bool(result.get("ok")):
+        return VoiceAskResponse(
+            transcript=transcript,
+            detected_language=detected_language,
+            answer=answer_text,
+            sources=sources,
+            speech_plan=plan,
+            session_id=session_id,
+            trace_id=trace_id,
+            degraded=True,
+            reason="tts_unavailable",
+        )
+    return VoiceAskResponse(
+        transcript=transcript,
+        detected_language=detected_language,
+        answer=answer_text,
+        sources=sources,
+        speech_plan=plan,
+        audio_url=str(result.get("audio_url") or plan["audio_url"]),
+        session_id=session_id,
+        trace_id=trace_id,
+    )
+
+
+__all__ = ["router", "AskRequest", "AskResponse", "RecallAttribution", "VoiceAskResponse"]
