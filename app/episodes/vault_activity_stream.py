@@ -1,0 +1,167 @@
+"""``vault.activity`` stream adapter (ERE-04, #3179).
+
+Spec: ``docs/EPISODE_RESOLUTION_ENGINE/TWO_STREAM_SEGMENTATION_CORE.md`` --
+"an outbox consumer on ``ingest.vault.changed`` / ``ingest.object.created`` /
+``ingest.object.deleted`` per the ``docs/EVENTS.md`` consumer contract,
+enriched with ``extract_context_dimensions_for_note`` frontmatter
+dimensions." Registered in the stream registry
+(``docs/EPISODE_RESOLUTION_ENGINE/stream_registry.md``) with transport
+``outbox:ingest.vault.changed``.
+
+The DB ``outbox`` table's ``delivered_at`` column is a single shared flag the
+worker dispatcher owns (docs/EVENTS.md :: Outbox consumer contract) -- a
+second logical consumer reading or marking it would race the worker's own
+dispatch (indexer/panel handlers already consume these exact topics). This
+module never reads or writes ``delivered_at``; it keeps its own independent,
+durable, per-consumer position via :mod:`app.episodes.engine_state`,
+generalizing the ``heimdal_observation_cursor`` per-consumer-cursor
+precedent (``app/heimdal/publish.py``) to the shared ``outbox`` table.
+"""
+
+from __future__ import annotations
+
+import json as _json
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+from app.db.db import conn_rw
+from app.episodes import engine_state
+from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_VAULT_CHANGED
+from app.watcher.vault_watcher import extract_context_dimensions_for_note
+from scripts.yaml_roundtrip import load_frontmatter
+
+VAULT_ACTIVITY_STREAM_ID = "vault.activity"
+
+# The three outbox topics the README/stream-registry declaration names for
+# this stream_id (a registry entry carries one `transport` string for AC3
+# binding-existence validation; the real multi-topic fan-in lives here).
+VAULT_ACTIVITY_TOPICS: tuple[str, ...] = (
+    INGEST_VAULT_CHANGED,
+    INGEST_OBJECT_CREATED,
+    INGEST_OBJECT_DELETED,
+)
+
+_CURSOR_KEY_PREFIX = "cursor:vault.activity:"
+
+
+@dataclass(frozen=True)
+class VaultActivityRow:
+    id: str
+    topic: str
+    created_at: datetime
+    payload: Mapping[str, Any]
+
+
+def _cursor_key(consumer_id: str) -> str:
+    return f"{_CURSOR_KEY_PREFIX}{consumer_id}"
+
+
+def get_vault_activity_cursor(consumer_id: str) -> tuple[datetime | None, str | None]:
+    """Read (never mutate) `consumer_id`'s durable position. Unseen -> (None, None) (read from event zero)."""
+    state = engine_state.get_state(_cursor_key(consumer_id))
+    if not state:
+        return None, None
+    created_at_raw = state.get("created_at")
+    created_at = datetime.fromisoformat(created_at_raw) if created_at_raw else None
+    return created_at, state.get("id")
+
+
+def advance_vault_activity_cursor(consumer_id: str, rows: Sequence[VaultActivityRow]) -> None:
+    """Advance `consumer_id`'s cursor past the given (already-durably-processed) rows.
+
+    A no-op on an empty batch. Moves to the max `(created_at, id)` among the
+    given rows only -- mirrors `app.heimdal.publish.advance_cursor_for_consumer`.
+    """
+    if not rows:
+        return
+    winner = max(rows, key=lambda r: (r.created_at, r.id))
+    engine_state.set_state(
+        _cursor_key(consumer_id),
+        {
+            "created_at": winner.created_at.astimezone(timezone.utc).isoformat(),
+            "id": winner.id,
+        },
+    )
+
+
+def read_vault_activity_for_consumer(consumer_id: str, *, limit: int | None = None) -> list[VaultActivityRow]:
+    """Read the next unread vault-activity outbox rows for `consumer_id`, without advancing its cursor.
+
+    Independent of the outbox worker's `delivered_at` -- reads every matching
+    row regardless of worker-delivery state, ordered `(created_at, id)`
+    ascending (docs/EVENTS.md FIFO-by-created_at ordering), strictly after
+    the consumer's own last-seen position. Call
+    :func:`advance_vault_activity_cursor` explicitly once the batch is
+    durably processed downstream (at-least-once delivery, mirrors the
+    Heimdal cursor contract).
+    """
+    created_at, row_id = get_vault_activity_cursor(consumer_id)
+    topic_placeholders = ", ".join(["%s"] * len(VAULT_ACTIVITY_TOPICS))
+    query = f"SELECT id, topic, payload, created_at FROM outbox WHERE topic IN ({topic_placeholders})"
+    params: list[Any] = list(VAULT_ACTIVITY_TOPICS)
+    if created_at is not None and row_id is not None:
+        query += " AND (created_at, id) > (%s, %s::uuid)"
+        params.extend([created_at, row_id])
+    query += " ORDER BY created_at ASC, id ASC"
+    if limit is not None:
+        query += " LIMIT %s"
+        params.append(limit)
+
+    rows: list[VaultActivityRow] = []
+    with conn_rw() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, tuple(params))
+            for r in cur.fetchall():
+                if isinstance(r, dict):
+                    rid, topic, payload, created = r["id"], r["topic"], r["payload"], r["created_at"]
+                else:
+                    rid, topic, payload, created = r[0], r[1], r[2], r[3]
+                if isinstance(payload, str):
+                    payload = _json.loads(payload)
+                rows.append(
+                    VaultActivityRow(
+                        id=str(rid), topic=str(topic), created_at=created, payload=dict(payload or {})
+                    )
+                )
+    return rows
+
+
+def _note_rel_path_from_payload(payload: Mapping[str, Any]) -> str | None:
+    for key in ("relative_path", "vault_path", "path"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def resolve_activity_dimensions(row: VaultActivityRow, *, vault_root: Path) -> dict[str, Any]:
+    """Best-effort frontmatter dimension enrichment via `extract_context_dimensions_for_note`.
+
+    Never raises: a note that is missing, unreadable, or already deleted
+    (e.g. the note behind an `ingest.object.deleted` row) yields empty
+    dimensions rather than failing the tick -- the row still contributes a
+    bare time-dimension signal.
+    """
+    rel_path = _note_rel_path_from_payload(row.payload)
+    if rel_path is None:
+        return {"scope": None, "sphere_memberships": [], "situated_identity": None}
+    try:
+        note_path = (Path(vault_root) / rel_path).resolve()
+        text = note_path.read_text(encoding="utf-8")
+        frontmatter, _body = load_frontmatter(text)
+    except Exception:
+        return {"scope": None, "sphere_memberships": [], "situated_identity": None}
+    return extract_context_dimensions_for_note(frontmatter)
+
+
+__all__ = [
+    "VAULT_ACTIVITY_STREAM_ID",
+    "VAULT_ACTIVITY_TOPICS",
+    "VaultActivityRow",
+    "advance_vault_activity_cursor",
+    "get_vault_activity_cursor",
+    "read_vault_activity_for_consumer",
+    "resolve_activity_dimensions",
+]
