@@ -321,40 +321,77 @@ def _cmd_status(args: argparse.Namespace, store: SqliteStore) -> int:
 
 
 def _cmd_pull(args: argparse.Namespace, store: SqliteStore) -> int:
-    repo = args.repo
-    if not repo:
+    # With ``action="append"`` args.repo is a list; a single --repo X still
+    # arrives as a one-element list.
+    repos = args.repo
+    if not repos:
         return _emit_error("--repo is required for pull command", args.json)
 
     source = GhCliIssueSource()
     adapter = PullSyncAdapter(store=store, source=source)
+
+    total_upserted = 0
+    total_reconciled = 0
+    per_repo: dict[str, dict[str, Any]] = {}
+    failures: list[str] = []
+    last_sync_result: str | None = None
+    last_sync_note: str | None = None
     try:
-        upserted = adapter.pull(repo)
-        sync_meta = get_sync_meta(store, PROVIDER_IDENTITY) or {}
-        if sync_meta.get("sync_result") == "error":
-            sync_note = sync_meta.get("sync_note") or "dispatcher pull source failed"
-            _emit({
-                "ok": False,
-                "error": f"pull failed: {sync_note}",
+        for repo in repos:
+            upserted = adapter.pull(repo)
+            # Sync-meta is provider-scoped (shared across repos for one gh
+            # identity), so inspect it immediately after each pull — before the
+            # next iteration overwrites it — to attribute failures per repo.
+            sync_meta = get_sync_meta(store, PROVIDER_IDENTITY) or {}
+            reconciled = getattr(adapter, "last_reconciled_count", 0)
+            result = sync_meta.get("sync_result")
+            note = sync_meta.get("sync_note")
+            last_sync_result = result
+            last_sync_note = note
+            repo_entry: dict[str, Any] = {
                 "upserted": len(upserted),
-                "reconciled": getattr(adapter, "last_reconciled_count", 0),
-                "skipped": 0,
-                "provider": "github",
-                "sync_result": "error",
-                "sync_note": sync_note,
-            }, args.json)
-            return 1
-        _emit({
-            "ok": True,
-            "upserted": len(upserted),
-            "reconciled": getattr(adapter, "last_reconciled_count", 0),
-            "skipped": 0,
-            "provider": "github",
-            "sync_result": sync_meta.get("sync_result"),
-            "sync_note": sync_meta.get("sync_note"),
-        }, args.json)
-        return 0
+                "reconciled": reconciled,
+                "sync_result": result,
+            }
+            if result == "error":
+                repo_entry["sync_note"] = note or "dispatcher pull source failed"
+                failures.append(f"{repo}: {repo_entry['sync_note']}")
+            else:
+                total_upserted += len(upserted)
+                total_reconciled += reconciled
+            per_repo[repo] = repo_entry
     except Exception as exc:
         return _emit_error(f"pull failed: {exc}", args.json)
+
+    if failures:
+        # sync_note is the joined per-repo failure list, not last_sync_note:
+        # in a mixed-outcome pull the last-processed repo can be a successful
+        # one, which would leave sync_note blank while ok=False/error names a
+        # real failure — the per-repo detail already lives in "repos".
+        _emit({
+            "ok": False,
+            "error": "pull failed: " + "; ".join(failures),
+            "upserted": total_upserted,
+            "reconciled": total_reconciled,
+            "skipped": 0,
+            "provider": "github",
+            "sync_result": "error",
+            "sync_note": "; ".join(failures),
+            "repos": per_repo,
+        }, args.json)
+        return 1
+
+    _emit({
+        "ok": True,
+        "upserted": total_upserted,
+        "reconciled": total_reconciled,
+        "skipped": 0,
+        "provider": "github",
+        "sync_result": last_sync_result,
+        "sync_note": last_sync_note,
+        "repos": per_repo,
+    }, args.json)
+    return 0
 
 
 def _cmd_export_signboard(args: argparse.Namespace, store: SqliteStore) -> int:
@@ -484,7 +521,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("pull", help="Pull open agent:ready issues from GitHub")
-    p.add_argument("--repo", required=True, help="GitHub repo (owner/repo)")
+    p.add_argument(
+        "--repo",
+        required=True,
+        action="append",
+        help="GitHub repo (owner/repo); may be repeated for multiple repos",
+    )
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("export-signboard", help="Export dispatcher queue as a Signboard Markdown board")

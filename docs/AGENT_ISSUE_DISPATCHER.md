@@ -169,8 +169,9 @@ Design boundary:
 ## Agent Interaction Contract (MVP Loop)
 
 Canonical loop:
-0. Run `scripts/issue_pickup_claim.sh --issue <N> --agent <agent_id> --session <session_id>`.
-   The wrapper checks `status --json`, claims the exact `github-issue-<N>` task when dispatcher-backed,
+0. Run `scripts/issue_pickup_claim.sh --issue <N> --repo <owner/repo> --agent <agent_id> --session <session_id>`.
+   The wrapper checks `status --json`, claims the exact repo-qualified `github-<owner>--<repo>-issue-<N>`
+   task (matching the id `dispatcher pull` assigns; pass `--task-id` to override) when dispatcher-backed,
    verifies the active lease and holder, and only then removes `agent:ready`. Dispatcher database or
    singleton existence is availability evidence, not claim evidence. In degraded mode the wrapper
    posts a durable claimant-intent comment with identity and fallback reason before label removal.
@@ -241,6 +242,14 @@ Implementation surface:
 - `GitHubIssueSource` is a mockable protocol; the adapter never imports `requests`, `httpx`, or a GitHub SDK.
 - `GhCliIssueSource` uses the `gh` CLI to list open issues with `agent:ready` label; requires `gh` authentication at runtime but is fully mockable in tests.
 - `python -m app.dispatcher pull --repo <owner/repo> --json` is the shipped CLI command for pull sync.
+  `--repo` may be repeated (`--repo owner/a --repo owner/b`) to pull multiple repos into the same
+  dispatcher store in one call; each repo's issues upsert independently and aggregate into one JSON
+  receipt under `repos`. Task IDs are repo-qualified (`github-<owner>--<repo>-issue-<n>`) so the same
+  issue number in two different repos never collides, and stale-ready reconciliation is scoped per
+  repo so pulling one repo cannot reconcile another repo's tasks. `make dispatcher-init` and
+  `make dispatcher-sync` pull both `RasmusTho/agentic-pkm-mvp` and `RasmusTho/bifrost` (the two live
+  Yggdrasil-ecosystem repos with an active `agent:ready` backlog today); `app.ops.builderops_startup`
+  defaults to the same pair (`DEFAULT_REPOS`) when the full-stack launcher doesn't override `--repo`.
 - Tests in `tests/dispatcher/test_sync_github.py` use only mocked data; no live GitHub API access is required.
 
 ## Sync Failure Behavior
@@ -293,7 +302,7 @@ python -m app.dispatcher status --json   # verify db_exists: true
 `make dispatcher-init` is the canonical first-time bootstrap: it initialises the schema and pulls open `agent:ready` issues from GitHub in one step. To re-sync issues without reinitialising:
 
 ```bash
-make dispatcher-sync          # runs: python -m app.dispatcher pull --repo <repo> only
+make dispatcher-sync          # runs: python -m app.dispatcher pull --repo RasmusTho/agentic-pkm-mvp --repo RasmusTho/bifrost
 ```
 
 ### Setup on each agent machine

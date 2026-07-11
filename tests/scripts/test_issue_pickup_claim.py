@@ -27,7 +27,7 @@ def _dispatcher_claim(
     payload: dict[str, object] = {
         "ok": True,
         "task": {
-            "task_id": "github-issue-3301",
+            "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-3301",
             "issue_number": 3301,
             "status": "claimed",
             "claimed_by": holder,
@@ -52,7 +52,7 @@ def _make_harness(
     claim_json: str = "",
     claim_rc: int = 0,
     label_delete_rc: int = 0,
-    release_json: str = '{"ok":true,"task":{"task_id":"github-issue-3301","status":"ready","claimed_by":null,"lease_id":null}}',
+    release_json: str = '{"ok":true,"task":{"task_id":"github-RasmusTho--agentic-pkm-mvp-issue-3301","status":"ready","claimed_by":null,"lease_id":null}}',
     release_rc: int = 0,
 ) -> tuple[Path, dict[str, str]]:
     bin_dir = tmp_path / "bin"
@@ -169,13 +169,76 @@ def test_dispatcher_backed_pickup_requires_verified_lease_before_label_removal(
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "coordination_mode=dispatcher-backed" in result.stdout
-    assert "task_id=github-issue-3301" in result.stdout
+    assert "task_id=github-RasmusTho--agentic-pkm-mvp-issue-3301" in result.stdout
     assert "lease_id=lease-3301" in result.stdout
     assert "holder=codex-3301" in result.stdout
     commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
     assert commands.index("dispatcher -m app.dispatcher claim") < commands.index(
         "gh api --method DELETE"
     )
+
+
+def test_default_task_id_is_repo_qualified_to_match_dispatcher_pull(tmp_path: Path) -> None:
+    """The default ``TASK_ID`` must match the repo-qualified id
+    ``app/dispatcher/sync_github.py::normalize_github_issue`` produces for tasks
+    synced via ``dispatcher pull --repo``, or a multi-repo-synced issue can never
+    be claimed through this wrapper without an explicit ``--task-id`` override.
+    """
+    worktree, env = _make_harness(
+        tmp_path,
+        status_json=json.dumps(
+            {
+                "ok": True,
+                "db_exists": True,
+                "coordination_mode": "dispatcher-backed",
+                "fallback_reason": None,
+            }
+        ),
+        claim_json=json.dumps(
+            {
+                "ok": True,
+                "task": {
+                    "task_id": "github-RasmusTho--bifrost-issue-21",
+                    "issue_number": 21,
+                    "status": "claimed",
+                    "claimed_by": "codex-21",
+                    "lease_id": "lease-21",
+                },
+                "lease": {
+                    "lease_id": "lease-21",
+                    "resource": "issue:21",
+                    "holder": "codex-21",
+                    "expires_at": "2099-07-10T01:00:00Z",
+                    "released_at": None,
+                },
+            }
+        ),
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "--issue",
+            "21",
+            "--repo",
+            "RasmusTho/bifrost",
+            "--agent",
+            "codex-21",
+            "--session",
+            "session-21",
+        ],
+        cwd=worktree,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "task_id=github-RasmusTho--bifrost-issue-21" in result.stdout
+    commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
+    assert "dispatcher -m app.dispatcher claim github-RasmusTho--bifrost-issue-21" in commands
 
 
 def test_dispatcher_availability_is_not_reported_as_acquired_claim(tmp_path: Path) -> None:
@@ -211,7 +274,7 @@ def test_dispatcher_availability_is_not_reported_as_acquired_claim(tmp_path: Pat
         commands = Path(env["COMMAND_LOG"]).read_text(encoding="utf-8")
         assert "gh api --method DELETE" not in commands
         if claim_rc == 0:
-            assert "dispatcher -m app.dispatcher release github-issue-3301" in commands
+            assert "dispatcher -m app.dispatcher release github-RasmusTho--agentic-pkm-mvp-issue-3301" in commands
 
 
 def test_label_only_fallback_emits_durable_claimant_receipt(tmp_path: Path) -> None:
@@ -271,7 +334,7 @@ def test_label_delete_failure_reports_verified_dispatcher_release(tmp_path: Path
     assert result.returncode != 0
     assert "cleanup=released" in result.stderr
     assert "evidence=verified-dispatcher-release" in result.stderr
-    assert "task_id=github-issue-3301" in result.stderr
+    assert "task_id=github-RasmusTho--agentic-pkm-mvp-issue-3301" in result.stderr
     assert "lease_id=lease-3301" in result.stderr
     assert "holder=codex-3301" in result.stderr
     assert "pickup-claim-complete" not in result.stdout
@@ -300,7 +363,7 @@ def test_label_delete_and_release_failure_reports_cleanup_failed_evidence(
 
     assert result.returncode != 0
     assert "cleanup-failed" in result.stderr
-    assert "task_id=github-issue-3301" in result.stderr
+    assert "task_id=github-RasmusTho--agentic-pkm-mvp-issue-3301" in result.stderr
     assert "lease_id=lease-3301" in result.stderr
     assert "holder=codex-3301" in result.stderr
     assert "cleanup=released" not in result.stderr

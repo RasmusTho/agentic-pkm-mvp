@@ -123,10 +123,12 @@ def export_signboard(store: SqliteStore, board_root: Path) -> dict[str, Any]:
                         preserved_notes = _extract_notes_section(candidate_text)
                     candidate.unlink()
 
-        for column in sorted(set(STATUS_COLUMNS.values())):
-            candidate = root / column / filename
-            if candidate.exists() and column != target_column:
-                candidate.unlink()
+        # No further cleanup pass here: the glob above already unlinks every
+        # stale *generated* card for this task_id (including one at this
+        # exact filename in another column). A second pass keyed on filename
+        # alone — without the _is_generated_card_text check — would delete a
+        # non-generated file that happens to share the filename by
+        # coincidence; that used to be a real bug, not defense in depth.
 
         target.write_text(_render_task(task, notes=preserved_notes), encoding="utf-8")
         written.append(str(target))
@@ -230,6 +232,7 @@ def _render_task(task: TaskRecord, *, notes: str | None = None) -> str:
         f"status: {_yaml_scalar(canonical_status(task.status))}",
         f"column: {_yaml_scalar(column_for_status(task.status))}",
         f"priority: {_yaml_scalar(task.priority)}",
+        f"repo: {_yaml_scalar(task.repo)}",
         f"claimed_by: {_yaml_scalar(task.claimed_by)}",
         f"linked_pr: {_yaml_scalar(task.linked_pr)}",
         f"blocked_reason: {_yaml_scalar(task.blocked_reason)}",
@@ -249,6 +252,8 @@ def _render_task(task: TaskRecord, *, notes: str | None = None) -> str:
         f"- Status: `{canonical_status(task.status)}`",
         f"- Priority: `{task.priority}`",
     ]
+    if task.repo:
+        body.append(f"- Repo: `{task.repo}`")
     if task.claimed_by:
         body.append(f"- Claimed by: `{task.claimed_by}`")
     if task.linked_pr:

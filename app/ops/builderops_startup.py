@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-DEFAULT_REPO = "RasmusTho/agentic-pkm-mvp"
+DEFAULT_REPOS = ("RasmusTho/agentic-pkm-mvp", "RasmusTho/bifrost")
 DEFAULT_RATE_LIMIT_MIN = 25
 
 
@@ -58,7 +58,7 @@ def _dispatcher_bootstrap(
     *,
     python_bin: str,
     root: Path,
-    repo: str,
+    repos: list[str],
     env: dict[str, str],
     gh_bin: str,
     rate_limit_min: int,
@@ -108,7 +108,7 @@ def _dispatcher_bootstrap(
     dispatcher["github_sync"] = _github_sync(
         python_bin=python_bin,
         root=root,
-        repo=repo,
+        repos=repos,
         env=env,
         gh_bin=gh_bin,
         rate_limit_min=rate_limit_min,
@@ -129,7 +129,7 @@ def _github_sync(
     *,
     python_bin: str,
     root: Path,
-    repo: str,
+    repos: list[str],
     env: dict[str, str],
     gh_bin: str,
     rate_limit_min: int,
@@ -183,8 +183,14 @@ def _github_sync(
             "required_minimum": rate_limit_min,
         }
 
+    # One pull subprocess for every repo, passing each as a repeated --repo
+    # flag; the CLI aggregates per-repo results. The shared gh auth + rate
+    # budget checks above run once for the whole identity.
+    repo_args: list[str] = []
+    for repo in repos:
+        repo_args.extend(["--repo", repo])
     pull = _run(
-        [python_bin, "-m", "app.dispatcher", "pull", "--repo", repo, "--json"],
+        [python_bin, "-m", "app.dispatcher", "pull", *repo_args, "--json"],
         cwd=root,
         env=env,
     )
@@ -195,6 +201,7 @@ def _github_sync(
             "status": "degraded",
             "reason": "dispatcher_pull_failed",
             "remaining": remaining,
+            "repos": payload.get("repos", {}),
             "detail": payload.get("error") or _snippet(pull.stderr or pull.stdout),
         }
     return {
@@ -202,6 +209,7 @@ def _github_sync(
         "remaining": remaining,
         "upserted": payload.get("upserted", 0),
         "reconciled": payload.get("reconciled", 0),
+        "repos": payload.get("repos", {}),
     }
 
 
@@ -313,18 +321,19 @@ def _merge_startup_status(path: Path, result: dict[str, Any]) -> None:
 def run_bootstrap(args: argparse.Namespace) -> dict[str, Any]:
     root = Path(args.root).resolve()
     env = dict(os.environ)
+    repos = list(args.repo) if args.repo else list(DEFAULT_REPOS)
     result: dict[str, Any] = {
         "ok": True,
         "status": "ok",
         "degraded": False,
         "reasons": [],
-        "repo": args.repo,
+        "repos": repos,
     }
 
     result["dispatcher"] = _dispatcher_bootstrap(
         python_bin=sys.executable,
         root=root,
-        repo=args.repo,
+        repos=repos,
         env=env,
         gh_bin=args.gh_bin,
         rate_limit_min=args.rate_limit_min,
@@ -356,7 +365,15 @@ def run_bootstrap(args: argparse.Namespace) -> dict[str, Any]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Bootstrap BuilderOps coordination for full-stack startup.")
-    parser.add_argument("--repo", default=DEFAULT_REPO)
+    parser.add_argument(
+        "--repo",
+        action="append",
+        default=None,
+        help=(
+            "GitHub repo (owner/repo); may be repeated. "
+            f"Defaults to: {', '.join(DEFAULT_REPOS)}"
+        ),
+    )
     parser.add_argument("--root", default=str(Path.cwd()))
     parser.add_argument("--startup-status-path", default="tmp/startup_status.json")
     parser.add_argument("--status-output", default="tmp/builderops_startup_status.json")

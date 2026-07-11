@@ -25,7 +25,9 @@ class DispatcherStore(Protocol):
     def upsert_lease(self, lease: LeaseRecord) -> None: ...
     def get_lease(self, lease_id: str) -> LeaseRecord | None: ...
     def append_event(self, event: EventRecord) -> None: ...
-    def list_tasks(self, status: str | None = None) -> list[TaskRecord]: ...
+    def list_tasks(
+        self, status: str | None = None, repo: str | None = None
+    ) -> list[TaskRecord]: ...
     def list_events(self, task_id: str | None = None) -> list[EventRecord]: ...
 
 
@@ -55,6 +57,7 @@ class SqliteStore:
     ) -> None:
         self._db_path = Path(db_path)
         self._event_writer = event_writer
+        self._schema_ensured = False
 
     @property
     def db_path(self) -> Path:
@@ -65,7 +68,59 @@ class SqliteStore:
         conn = sqlite3.connect(self._db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        if not self._schema_ensured:
+            self._ensure_schema(conn)
+            self._schema_ensured = True
         return conn
+
+    def _ensure_schema(self, conn: sqlite3.Connection) -> None:
+        """Self-heal an on-disk DB created before the ``repo`` column (schema v1).
+
+        Runs on every connection, not just :meth:`initialize` — a long-lived
+        shared instance (e.g. the Demerzel dispatcher) is never re-``init``ed
+        once its DB file exists, so a migration reachable only from
+        ``initialize()`` would never execute against it. SQLite lacks a
+        portable ``ADD COLUMN IF NOT EXISTS``; the same try/except idiom used
+        for Postgres ``ADD COLUMN IF NOT EXISTS`` elsewhere (see
+        ``app/stores/pg.py``) applies here in SQLite form. Cached via
+        ``self._schema_ensured`` so a tight loop of many ``_connect()`` calls
+        (e.g. one dispatcher ``pull`` upserting hundreds of issues) pays the
+        check once per process, not once per row.
+        """
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='dispatcher_tasks'"
+        ).fetchone()
+        if exists is None:
+            # Fresh DB: initialize() will create the table via DDL_STATEMENTS,
+            # which already includes the repo column — nothing to migrate.
+            return
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(dispatcher_tasks)")}
+        if "repo" in columns:
+            return
+        conn.execute("ALTER TABLE dispatcher_tasks ADD COLUMN repo TEXT NOT NULL DEFAULT ''")
+        # The legacy task_id format (pre-multi-repo) had no repo qualifier and
+        # was only ever produced for RasmusTho/agentic-pkm-mvp pulls; backfill
+        # repo and re-key task_id to the current repo-qualified form so these
+        # rows don't linger as orphaned duplicates the moment a pull runs
+        # under the new scheme. Also re-key the matching event-log rows so
+        # historical events stay joinable to the renamed task.
+        conn.execute(
+            """
+            UPDATE dispatcher_tasks
+            SET repo = 'RasmusTho/agentic-pkm-mvp',
+                task_id = 'github-RasmusTho--agentic-pkm-mvp-issue-' || issue_number
+            WHERE task_id LIKE 'github-issue-%'
+            """
+        )
+        conn.execute(
+            """
+            UPDATE dispatcher_events
+            SET task_id = 'github-RasmusTho--agentic-pkm-mvp-issue-'
+                || substr(task_id, length('github-issue-') + 1)
+            WHERE task_id LIKE 'github-issue-%'
+            """
+        )
+        conn.commit()
 
     def initialize(self) -> None:
         with self._connect() as conn:
@@ -84,16 +139,17 @@ class SqliteStore:
             conn.execute(
                 """
                 INSERT INTO dispatcher_tasks (
-                    task_id, issue_number, title, status, priority,
+                    task_id, issue_number, title, status, priority, repo,
                     source_anchor_refs, claimed_by, lease_id, lease_expires_at,
                     linked_pr, blocked_reason, last_heartbeat_at, sync_state,
                     created_at, updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(task_id) DO UPDATE SET
                     issue_number=excluded.issue_number,
                     title=excluded.title,
                     status=excluded.status,
                     priority=excluded.priority,
+                    repo=excluded.repo,
                     source_anchor_refs=excluded.source_anchor_refs,
                     claimed_by=excluded.claimed_by,
                     lease_id=excluded.lease_id,
@@ -110,6 +166,7 @@ class SqliteStore:
                     task.title,
                     task.status,
                     task.priority,
+                    task.repo,
                     _dumps(list(task.source_anchor_refs)),
                     task.claimed_by,
                     task.lease_id,
@@ -137,6 +194,7 @@ class SqliteStore:
             title=row["title"],
             status=row["status"],
             priority=row["priority"],
+            repo=row["repo"],
             source_anchor_refs=list(_loads(row["source_anchor_refs"]) or []),
             claimed_by=row["claimed_by"],
             lease_id=row["lease_id"],
@@ -227,18 +285,24 @@ class SqliteStore:
         if self._event_writer is not None:
             self._event_writer.append(event)
 
-    def list_tasks(self, status: str | None = None) -> list[TaskRecord]:
+    def list_tasks(
+        self, status: str | None = None, repo: str | None = None
+    ) -> list[TaskRecord]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        if repo is not None:
+            clauses.append("repo = ?")
+            params.append(repo)
+        where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
         with self._connect() as conn:
-            if status is None:
-                rows = conn.execute(
-                    "SELECT * FROM dispatcher_tasks ORDER BY updated_at DESC, created_at DESC"
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM dispatcher_tasks WHERE status = ? "
-                    "ORDER BY updated_at DESC, created_at DESC",
-                    (status,),
-                ).fetchall()
+            rows = conn.execute(
+                f"SELECT * FROM dispatcher_tasks {where}"
+                "ORDER BY updated_at DESC, created_at DESC",
+                tuple(params),
+            ).fetchall()
         return [
             TaskRecord(
                 task_id=r["task_id"],
@@ -246,6 +310,7 @@ class SqliteStore:
                 title=r["title"],
                 status=r["status"],
                 priority=r["priority"],
+                repo=r["repo"],
                 source_anchor_refs=list(_loads(r["source_anchor_refs"]) or []),
                 claimed_by=r["claimed_by"],
                 lease_id=r["lease_id"],

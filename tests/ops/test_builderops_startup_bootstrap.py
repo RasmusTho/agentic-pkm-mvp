@@ -10,6 +10,17 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_default_repos_include_agentic_and_bifrost() -> None:
+    from app.ops.builderops_startup import DEFAULT_REPOS, build_parser
+
+    assert "RasmusTho/agentic-pkm-mvp" in DEFAULT_REPOS
+    assert "RasmusTho/bifrost" in DEFAULT_REPOS
+    # No --repo provided: argparse default is None so run_bootstrap can fall
+    # back to DEFAULT_REPOS.
+    args = build_parser().parse_args([])
+    assert args.repo is None
+
+
 def test_dev_start_full_invokes_builderops_bootstrap() -> None:
     makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
     start_script = (REPO_ROOT / "scripts" / "start_full_system.sh").read_text(encoding="utf-8")
@@ -89,6 +100,7 @@ def test_builderops_bootstrap_degrades_without_github_access(tmp_path: Path) -> 
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload["status"] == "degraded"
+    assert payload["repos"] == ["RasmusTho/agentic-pkm-mvp"]
     assert "gh_not_found" in payload["reasons"]
     assert payload["dispatcher"]["db_exists"] is True
     assert payload["signboard"]["status"] == "ok"

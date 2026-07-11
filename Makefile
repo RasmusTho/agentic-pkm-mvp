@@ -355,10 +355,10 @@ alpha-e2e:
 
 dispatcher-init:
 	$(PYTHON) -m app.dispatcher init --json
-	@$(PYTHON) -m app.dispatcher pull --repo RasmusTho/agentic-pkm-mvp --json
+	@$(PYTHON) -m app.dispatcher pull --repo RasmusTho/agentic-pkm-mvp --repo RasmusTho/bifrost --json
 
 dispatcher-sync:
-	$(PYTHON) -m app.dispatcher pull --repo RasmusTho/agentic-pkm-mvp --json
+	$(PYTHON) -m app.dispatcher pull --repo RasmusTho/agentic-pkm-mvp --repo RasmusTho/bifrost --json
 
 # ── Dev/test DB snapshot & forensic dump ─────────────────────────────────────
 # These targets are dev-ergonomics and on-demand forensic tooling.

@@ -850,10 +850,32 @@ if [ "${BUILDEROPS_BOOTSTRAP:-1}" = "1" ]; then
   case "${builderops_bootstrap_environment:-}" in
     dev|prod)
       set_phase "builderops_bootstrap"
-      if ! scripts/start_builderops_services.sh \
-        --repo "${BUILDEROPS_BOOTSTRAP_REPO:-RasmusTho/agentic-pkm-mvp}" \
-        --startup-status-path "$startup_status_path" \
-        --status-output "$ROOT/tmp/builderops_startup_status.json"; then
+      # BUILDEROPS_BOOTSTRAP_REPO, when set, is a space-separated owner/repo
+      # list (e.g. "RasmusTho/agentic-pkm-mvp RasmusTho/bifrost"). Left unset,
+      # builderops_startup.py falls back to its own multi-repo DEFAULT_REPOS
+      # — do not hardcode a single repo here, or that fallback never runs.
+      builderops_bootstrap_repo_args=()
+      if [ -n "${BUILDEROPS_BOOTSTRAP_REPO:-}" ]; then
+        for builderops_bootstrap_repo in ${BUILDEROPS_BOOTSTRAP_REPO}; do
+          builderops_bootstrap_repo_args+=(--repo "$builderops_bootstrap_repo")
+        done
+      fi
+      # ${arr[@]} on a possibly-empty array throws "unbound variable" under
+      # this script's `set -u` on macOS's bash 3.2, so only splice it in when
+      # non-empty rather than expanding it unconditionally.
+      if [ "${#builderops_bootstrap_repo_args[@]}" -gt 0 ]; then
+        builderops_bootstrap_args=(
+          "${builderops_bootstrap_repo_args[@]}"
+          --startup-status-path "$startup_status_path"
+          --status-output "$ROOT/tmp/builderops_startup_status.json"
+        )
+      else
+        builderops_bootstrap_args=(
+          --startup-status-path "$startup_status_path"
+          --status-output "$ROOT/tmp/builderops_startup_status.json"
+        )
+      fi
+      if ! scripts/start_builderops_services.sh "${builderops_bootstrap_args[@]}"; then
         echo "WARNING: BuilderOps bootstrap failed unexpectedly; continuing runtime startup in degraded BuilderOps mode" >&2
       fi
       mark_phase_ok "builderops_bootstrap"

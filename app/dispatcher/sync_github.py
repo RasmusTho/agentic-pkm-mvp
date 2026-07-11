@@ -310,11 +310,24 @@ def _ready_validation_failure(payload: dict[str, Any]) -> str | None:
     )
 
 
-def normalize_github_issue(payload: dict[str, Any], now: str | None = None) -> TaskRecord:
+def normalize_github_issue(
+    payload: dict[str, Any], repo: str, now: str | None = None
+) -> TaskRecord:
     """Normalize a GitHub issue API payload into a local :class:`TaskRecord`.
 
     The function is deterministic and requires no network access; callers pass
-    raw GitHub issue dicts (real or mocked).
+    raw GitHub issue dicts (real or mocked) plus the ``owner/name`` *repo* the
+    issue came from.
+
+    ``task_id`` is repo-qualified so that issue numbers colliding across repos
+    (both repos can have an issue #21) map to distinct rows instead of silently
+    clobbering each other. The owner/name separator is doubled (``--``) rather
+    than reusing the single ``-`` GitHub repo names may themselves contain —
+    a single-hyphen encoding lets two different repos collapse to the same
+    string (``"org/foo-bar"`` and ``"org-foo/bar"`` both become
+    ``"org-foo-bar"``); doubling the separator keeps them distinct
+    (``"org--foo-bar"`` vs ``"org-foo--bar"``) for any repo name that doesn't
+    itself contain a literal ``--``.
 
     Priority defaults to ``med`` when no recognised priority label is present.
     Status defaults to ``ready`` when no recognised status label is present.
@@ -323,7 +336,7 @@ def normalize_github_issue(payload: dict[str, Any], now: str | None = None) -> T
         now = datetime.now(timezone.utc).isoformat()
 
     number = payload["number"]
-    task_id = f"github-issue-{number}"
+    task_id = f"github-{repo.replace('/', '--')}-issue-{number}"
 
     labels = _label_names(payload)
 
@@ -354,6 +367,7 @@ def normalize_github_issue(payload: dict[str, Any], now: str | None = None) -> T
         title=payload.get("title", ""),
         status=status,
         priority=priority,
+        repo=repo,
         source_anchor_refs=[f"github:issue:{number}"],
         created_at=payload.get("createdAt") or payload.get("created_at") or now,
         updated_at=updated_at,
@@ -790,7 +804,7 @@ class PullSyncAdapter:
                         invalid_ready_issue_numbers.add(number)
                     skipped.append(f"issue={number or '?'}: {validation_failure}")
                     continue
-                task = normalize_github_issue(issue, now=pull_at)
+                task = normalize_github_issue(issue, repo, now=pull_at)
                 existing = self._store.get_task(task.task_id)
                 if existing is not None and existing.status in {"claimed", "in_progress"}:
                     task.status = existing.status
@@ -807,6 +821,7 @@ class PullSyncAdapter:
                 skipped.append(f"issue={issue.get('number', '?')}: {exc}")
 
         reconciled = self._reconcile_stale_ready(
+            repo=repo,
             pull_at=pull_at,
             ready_issue_numbers=ready_issue_numbers,
             invalid_ready_issue_numbers=invalid_ready_issue_numbers,
@@ -834,6 +849,7 @@ class PullSyncAdapter:
 
     def _reconcile_stale_ready(
         self,
+        repo: str,
         pull_at: str,
         ready_issue_numbers: set[int],
         invalid_ready_issue_numbers: set[int],
@@ -854,7 +870,7 @@ class PullSyncAdapter:
         reconciled = 0
         reconciled_task_ids: set[str] = set()
         for status in ("ready", "blocked"):
-            for task in self._store.list_tasks(status=status):
+            for task in self._store.list_tasks(status=status, repo=repo):
                 if task.task_id in reconciled_task_ids:
                     continue
                 if task.issue_number in invalid_ready_issue_numbers:
