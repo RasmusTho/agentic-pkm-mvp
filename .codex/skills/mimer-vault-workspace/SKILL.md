@@ -21,9 +21,11 @@ write, distinct from the governed API path `mimer-capture` uses.
 ## Where this skill may write
 
 - **Declared workspace roots** (AGENT-FLOWS §7: knowledge-base root, synthesis/index root,
-  source/evidence root, draft/workspace root) are the default write surface. Output here lands at
-  draft-zone standing — observed, classified, never auto-canonical, regardless of content quality.
-- **Human-directed edits to any vault note**, when the human directs the edit in the live session.
+  draft/workspace root) are the default write surface. The Sources zone is excluded even where it
+  would otherwise resemble a source/evidence root. Output here lands at draft-zone standing —
+  observed, classified, never auto-canonical, regardless of content quality.
+- **Human-directed edits to any vault note outside the Sources zone**, when the human directs the
+  edit in the live session.
   This is exactly the surface where a collision destroys human-authored prose — apply the full
   write discipline below without exception.
 
@@ -32,10 +34,11 @@ becomes human-canonical only when the human promotes it through their own review
 
 ## Exclusions
 
-Never direct-write the capture inbox, companion notes, system-plane files, or the `_heimdal`
-control tree — see `.codex/skills/mimer-governed-boundary/SKILL.md`'s exclusion list. If the human
-asks to write into one of these, decline and redirect: inbox content goes through `mimer-capture`;
-the rest are runtime- or Bifrost-owned.
+Never direct-write the capture inbox, Sources zone, companion notes, system-plane files, or the
+`_heimdal` control tree — see `.codex/skills/mimer-governed-boundary/SKILL.md`'s exclusion list.
+If the human asks to write into one of these, decline and redirect: inbox content goes through
+`mimer-capture`; Sources is Heimdal-side sensor/acquisition-only; the rest are runtime- or
+Bifrost-owned.
 
 ## Write discipline (contract §6)
 
@@ -87,8 +90,8 @@ one-transport-per-note rule above.
 
 - No lifecycle/frontmatter mutation of a human note beyond what the human directed.
 - No promotion of workspace drafts to canonical standing — that is the human's act.
-- No writes to the `_heimdal` tree, companion notes, system-plane files, or the capture inbox,
-  ever.
+- No writes to the `_heimdal` tree, companion notes, system-plane files, the capture inbox, or the
+  Sources zone, ever.
 
 ## References
 

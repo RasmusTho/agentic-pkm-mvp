@@ -46,6 +46,7 @@ to "get the capture done anyway."
 | Companion notes (the vault's `⚙️ System/companions/` tree, and its legacy location) | KnowledgePort-only, system-owned. |
 | System-plane settings/bootstrap notes and other system-owned paths | Runtime-owned; a direct edit forks runtime state. |
 | The `_heimdal` control tree | Bifrost's/the runtime's control seam; app agents have no role there. |
+| The Sources zone (the settings-resolved default is `Sources/`) | Reserved for Heimdal-side sensor/acquisition writers. It is not an app-agent workspace or a capture-endpoint target. |
 | iCloud "conflicted copy" artifacts | Never create, never silently resolve; surface to the human. |
 
 ## Provenance frontmatter (contract §5)
