@@ -120,7 +120,18 @@ def append_note_relative(
     content: str,
     *,
     vault_root: Path | str,
+    action: str = KNOWLEDGE_WRITE_ACTION,
+    write_guard: "WriteGuard | None" = None,
 ) -> WriteReceipt:
+    # Guard-at-seam (#3129): append-only writes share the same production
+    # boundary as relative overwrites. Assert before resolving the port so an
+    # unhealthy/safe-mode runtime cannot mutate the vault through append.
+    # The lazy import preserves the circular-import avoidance used by the
+    # sibling write seams above.
+    from app.write_guard import DEFAULT_WRITE_GUARD
+
+    guard = write_guard or DEFAULT_WRITE_GUARD
+    guard.assert_writes_allowed(action)
     resolved_root = Path(vault_root).expanduser().resolve()
     locator = make_note_locator(note_rel_path)
     port = resolve_knowledge_port(vault_root=resolved_root, settings=_local_fs_settings())
