@@ -245,3 +245,32 @@ def test_healthz_still_liveness_only(monkeypatch: pytest.MonkeyPatch) -> None:
     resp = client.get("/healthz")
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
+
+
+def test_evaluate_serializes_on_the_contract_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """evaluate() must run under the contract lock (#3461 review finding).
+
+    /readyz and /status offload evaluate() to a threadpool, so two calls can run
+    it in parallel. evaluate() reads prev-state OUTSIDE the state-machine lock to
+    decide whether to append an incident-log entry; without serializing evaluate()
+    two overlapping calls both attribute one transition to themselves and
+    double-write the incident audit log. Deterministic guard: proxy the lock and
+    assert evaluate() enters it — a concurrency stress test can't catch a dropped
+    `with self._eval_lock:` under CPython's GIL.
+    """
+    contract = _contract_with_ping(monkeypatch, (True, "ok"))
+    real_lock = contract._eval_lock
+    events: list[str] = []
+
+    class _TrackingLock:
+        def __enter__(self):
+            events.append("enter")
+            return real_lock.__enter__()
+
+        def __exit__(self, *exc):
+            events.append("exit")
+            return real_lock.__exit__(*exc)
+
+    contract._eval_lock = _TrackingLock()
+    contract.evaluate()
+    assert events == ["enter", "exit"], "evaluate() did not run under self._eval_lock"

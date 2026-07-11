@@ -336,8 +336,22 @@ class HealthContract:
         # readiness short-circuit without a real Postgres. Bounded by the caller's
         # connect_timeout so the health probe never hangs.
         self.db_ping_fn = db_ping_fn or ping_postgres
+        # Serializes evaluate() across callers. The /readyz and /status handlers
+        # now offload evaluate() to a threadpool (#3461), so two calls can run it
+        # truly in parallel; before the offload they were serialized on the single
+        # event loop. Without this, concurrent calls interleave the out-of-lock
+        # prev-state read that gates incident-log writes and both attribute one
+        # transition to themselves -> duplicate incident-audit entries. RLock so
+        # any accidental re-entrancy inside evaluate() does not self-deadlock.
+        self._eval_lock = threading.RLock()
 
     def evaluate(self) -> dict[str, Any]:
+        # Restores the pre-offload one-at-a-time semantics without blocking the
+        # event loop (the lock lives in the threadpool worker threads).
+        with self._eval_lock:
+            return self._evaluate_locked()
+
+    def _evaluate_locked(self) -> dict[str, Any]:
         now = self.now_fn()
         try:
             vault_root = self.vault_root_fn()
