@@ -141,6 +141,35 @@ def test_claim_conflict_returns_error(tmp_env, store):
     assert "error" in data
 
 
+def test_claim_verb_takeover_stale_flag(tmp_env, store):
+    from datetime import datetime, timedelta, timezone
+
+    from app.dispatcher.leases import claim
+    from tests.dispatcher.helpers import seed_tasks
+
+    tasks = seed_tasks(store)
+    ready = next(t for t in tasks if t.status == "ready")
+    _, lease = claim(store, ready.task_id, "departed-agent")
+    old_lease = store.get_lease(lease.lease_id)
+    assert old_lease is not None
+    past_time = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    old_lease.acquired_at = past_time
+    old_lease.expires_at = past_time
+    old_lease.heartbeat_at = past_time
+    store.upsert_lease(old_lease)
+
+    code, data = _run(
+        [
+            "claim", ready.task_id, "--agent", "replacement-agent",
+            "--takeover-stale", "--json",
+        ],
+    )
+
+    assert code == 0
+    assert data["ok"] is True
+    assert data["lease"]["holder"] == "replacement-agent"
+
+
 # ---------------------------------------------------------------------------
 # AC: heartbeat --json returns updated lease state or explicit no-active-lease error
 # Verify: test_heartbeat_json_output

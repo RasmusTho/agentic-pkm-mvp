@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -41,11 +42,12 @@ def claim(
     task_id: str,
     agent_id: str,
     ttl_minutes: int = 90,
+    takeover_stale: bool = False,
 ) -> tuple[TaskRecord, LeaseRecord]:
     """Claim a task by creating a lease and updating task state.
 
     Atomically within a single transaction:
-    1. Check if task is ready and unleased
+    1. Check if task is ready and unleased, or explicitly take over an expired lease
     2. Create lease
     3. Update task with lease reference and claimed_by
     4. Emit task.claimed event
@@ -56,8 +58,10 @@ def claim(
     ttl_seconds = ttl_minutes * 60
     now = _utc_now()
     expires = _expires_at(ttl_seconds)
+    event_payload: dict[str, object] = {"ttl_minutes": ttl_minutes}
 
     with store._connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         task_row = conn.execute(
             "SELECT * FROM dispatcher_tasks WHERE task_id = ?",
             (task_id,)
@@ -66,10 +70,49 @@ def claim(
         if task_row is None:
             raise ValueError(f"Task {task_id} not found")
 
-        if task_row["lease_id"] is not None:
-            raise ValueError(f"Cannot claim task {task_id}: already has active lease")
+        existing_lease_id = task_row["lease_id"]
+        if existing_lease_id is not None:
+            existing_lease = conn.execute(
+                "SELECT * FROM dispatcher_leases WHERE lease_id = ?",
+                (existing_lease_id,),
+            ).fetchone()
+            if existing_lease is None:
+                raise ValueError(f"Cannot claim task {task_id}: already has active lease")
 
-        if task_row["status"] != "ready":
+            is_expired = (
+                existing_lease["released_at"] is None
+                and _parse_rfc3339(existing_lease["expires_at"]) <= _parse_rfc3339(now)
+            )
+            if not is_expired:
+                raise ValueError(f"Cannot claim task {task_id}: already has active lease")
+            if not takeover_stale:
+                raise ValueError(
+                    f"Cannot claim task {task_id}: lease has expired; retry with --takeover-stale"
+                )
+            if task_row["status"] not in {"claimed", "ready"}:
+                raise ValueError(
+                    f"Cannot claim task {task_id}: not eligible for stale takeover "
+                    f"(current: {task_row['status']})"
+                )
+
+            result = conn.execute(
+                """
+                UPDATE dispatcher_leases
+                SET released_at = ?, release_reason = 'stale_takeover'
+                WHERE lease_id = ? AND released_at IS NULL
+                """,
+                (now, existing_lease_id),
+            )
+            if result.rowcount == 0:
+                raise ValueError(
+                    f"Cannot claim task {task_id}: preconditions changed (concurrent lease update)"
+                )
+            event_payload["takeover"] = {
+                "previous_holder": existing_lease["holder"],
+                "previous_lease_id": existing_lease_id,
+                "previous_expires_at": existing_lease["expires_at"],
+            }
+        elif task_row["status"] != "ready":
             raise ValueError(
                 f"Cannot claim task {task_id}: not in ready status (current: {task_row['status']})"
             )
@@ -86,15 +129,50 @@ def claim(
         result = conn.execute(
             """
             UPDATE dispatcher_tasks
-            SET lease_id = ?, claimed_by = ?, status = 'claimed', updated_at = ?
-            WHERE task_id = ? AND status = 'ready' AND lease_id IS NULL
+            SET lease_id = ?, claimed_by = ?, lease_expires_at = ?, status = 'claimed', updated_at = ?
+            WHERE task_id = ?
+              AND status = ?
+              AND lease_id IS ?
             """,
-            (lease_id, agent_id, now, task_id)
+            (
+                lease_id,
+                agent_id,
+                expires,
+                now,
+                task_id,
+                task_row["status"],
+                existing_lease_id,
+            )
         )
 
         if result.rowcount == 0:
             raise ValueError(f"Cannot claim task {task_id}: preconditions changed (concurrent claim or status change)")
 
+        event = EventRecord(
+            event_id=_make_event_id(),
+            timestamp=now,
+            task_id=task_id,
+            event_type="task.claimed",
+            actor=agent_id,
+            lease_id=lease_id,
+            payload=event_payload,
+        )
+        conn.execute(
+            """
+            INSERT INTO dispatcher_events (
+                event_id, timestamp, task_id, event_type, actor, lease_id, payload
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.event_id,
+                event.timestamp,
+                event.task_id,
+                event.event_type,
+                event.actor,
+                event.lease_id,
+                json.dumps(event.payload, sort_keys=True, ensure_ascii=False),
+            ),
+        )
         conn.commit()
 
     lease = LeaseRecord(
@@ -110,16 +188,8 @@ def claim(
     task = store.get_task(task_id)
     assert task is not None, f"task {task_id} missing after successful claim"
 
-    event = EventRecord(
-        event_id=_make_event_id(),
-        timestamp=now,
-        task_id=task_id,
-        event_type="task.claimed",
-        actor=agent_id,
-        lease_id=lease_id,
-        payload={"ttl_minutes": ttl_minutes},
-    )
-    store.append_event(event)
+    if store._event_writer is not None:
+        store._event_writer.append(event)
 
     return task, lease
 

@@ -163,6 +163,22 @@ Normative behavior:
 - Release requires holder identity (or explicit operator override path in future work).
 - Dispatcher must provide deterministic conflict response for double-claim attempts.
 
+### Lease recovery
+
+Batch recovery through `reclaim_expired_leases` remains available. An agent that discovers an
+expired current lease may instead make an explicit, claim-time recovery with
+`dispatcher claim <task_id> --takeover-stale`. The dispatcher performs the stale-lease release,
+new lease creation, task update, and `task.claimed` event insert in one SQLite transaction. It
+marks the displaced lease with `release_reason="stale_takeover"`; it never displaces an unexpired
+lease, even when the flag is supplied. A normal stale claim remains eligible in its `claimed`
+status; legacy/reclaimed `ready` rows remain eligible too. A blocked task with an expired lease is
+rejected without changing its task or lease state.
+
+The new claim event remains the receipt. Its payload contains `ttl_minutes` and, for a takeover, a
+`takeover` object with `previous_holder`, `previous_lease_id`, and `previous_expires_at`. Without
+the opt-in flag, an expired lease remains a claim rejection and the error directs the agent to
+`--takeover-stale`.
+
 Design boundary:
 - This extends the minimal shared lease boundary from #561 and `docs/development/GITHUB_GOVERNANCE_SETUP.md` but does not absorb #561's git-hygiene scope.
 
