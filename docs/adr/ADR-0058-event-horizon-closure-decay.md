@@ -53,7 +53,8 @@ decay_factor ∈ [η_min, 1.0],  η_min > 0 strictly
 | Binding state | decay_factor |
 | --- | --- |
 | `unbound` (no episode_ref — evergreen) | 1.0, structurally immune |
-| ≥ 1 referenced episode open | 1.0 |
+| ≥ 1 referenced episode open via a **credible** binding (accepted or matured candidate — see the credible-binding rule below; amended 2026-07-11) | 1.0 |
+| Open bindings exist but none is credible (lone fresh/speculative hypotheses), all credible bindings closed | curve value — speculative refs do not veto dampening |
 | All referenced episodes closed | curve value (η → η_min) |
 | Referenced episode id no longer resolves (post-recut orphan) | 1.0 + advisory flag — **fail open to visibility**, never fail closed to suppression |
 
@@ -64,7 +65,7 @@ decay_factor ∈ [η_min, 1.0],  η_min > 0 strictly
 
 ### 4. Reversibility: the factor is derived, never stored
 
-The decay factor is **recomputed** — at query/cache-revalidation time — from exactly two canonical inputs: the artifact's `episode_ref` set and the referenced Episode notes' `closed` fields. No dampened score, no "decayed" stamp, no derived state is ever persisted on the artifact or in canonical metadata. Consequently:
+The decay factor is **recomputed** — at query/cache-revalidation time — from exactly three inputs, each reproducible from vault + contract state alone (amended 2026-07-11: the §2 class gate added the third): the artifact's `episode_ref` set, the referenced Episode notes' `closed` fields (resolved through the ancestor chain, §1), and the artifact's note-class per the ADR-0055/T2 classification contract (#3131) — exempt classes short-circuit to 1.0 before any binding math. No dampened score, no "decayed" stamp, no derived state is ever persisted on the artifact or in canonical metadata. Consequently:
 
 - **Re-open** (`closed` flips back false — the trip resumed, the project un-ended): the factor returns to 1.0 on the next read. Nothing to undo, because nothing was written. Engine policy (amended 2026-07-11): re-open is reserved for closures that were *wrong*; a situation that genuinely continued later gets a **new episode linked `resumes`** to the old — history is extended, not rewritten. The model supports both; the default is the link.
 - **Re-cut** (split/merge/re-time — RQ2's identity question): the engine re-assigns `episode_ref` bindings; decay follows the *current* binding graph automatically. Under Kim fine-grained identity a re-cut mints new episode identities, so the engine must migrate bindings (or leave a supersession link); until it does, orphaned refs hit the fail-open row above. **Dampening never survives its justification** — if a closed episode is re-cut such that an artifact now belongs to an open one, it re-heats with no ceremony.
