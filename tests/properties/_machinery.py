@@ -701,13 +701,15 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "related repair the first time this census machinery is touched again "
         "after later Heimdal slices shifted the file."
     ),
-    ("app/heimdal/settings_notes.py", 644): (
+    ("app/heimdal/settings_notes.py", 651): (
         "guarded_by_caller: write_settings_note passes write_guard through to "
         "write_note_relative, which asserts write_guard.assert_writes_allowed"
         "(action) at the port itself before any I/O (#2953); callers such as "
         "apply_agent_update never bypass this seam (#3034, Epic #3019 A14). "
-        "Line drifted 531 -> 644 (site unchanged); re-pinned alongside the "
-        "entity_register drift above."
+        "Line drifted 531 -> 644 -> 651 (site unchanged; the 644 -> 651 shift "
+        "came from an upstream Heimdal change that landed without re-pinning); "
+        "re-pinned per this census's own convention as a directly-related "
+        "repair the next time the machinery was touched (#3177)."
     ),
     ("app/heimdal/candidate_projection.py", 382): (
         "guarded_by_caller: write_candidate_note asserts write_guard."

@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -124,6 +125,64 @@ def rebuild_episodes_projection(vault_root: Path) -> RebuildSummary:
     return summary
 
 
+def _norm_ts(value: Any) -> str | None:
+    """Canonical UTC ISO string for a timestamp coming from either side of the
+    comparison: a ``datetime`` (DB side) or an ISO-8601/RFC-3339 string (vault side --
+    the note schema's ``format: date-time`` permits a ``Z`` suffix, which must compare
+    equal to its ``+00:00`` spelling). Instant-based, never a raw string comparison.
+    An unparseable string is returned verbatim so genuine garbage surfaces as drift
+    instead of being masked."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        try:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return str(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat()
+
+
+def _norm_json_list(value: Any) -> str:
+    """Canonical JSON text for a list field. Accepts a Python list (vault-native, or
+    psycopg's decoded jsonb) or -- only for a value known to come from a jsonb column --
+    its JSON text. Never applied to scalar fields, so a title like '[Retro] Sprint 12'
+    can never be mistaken for JSON."""
+    if isinstance(value, str):
+        value = json.loads(value)
+    return json.dumps(value or [], sort_keys=True)
+
+
+def _comparison_row(fields: dict[str, Any], note_path: str) -> tuple[Any, ...]:
+    """Normalized comparison tuple built directly from the Python-native note fields.
+
+    Purpose-made for the doctor: lists are serialized once (they are still lists
+    here -- no dump/load round-trip through ``_row_tuple``), scalar fields like
+    ``title`` are carried verbatim with no format sniffing, and timestamps are
+    normalized instant-wise via ``_norm_ts`` so a ``Z``-suffixed note compares equal
+    to the DB's ``+00:00`` rendering."""
+    time_fields = fields.get("time") or {}
+    return (
+        fields["episode_id"],
+        fields["scope"],
+        fields["title"],
+        _norm_ts(time_fields.get("start")),
+        _norm_ts(time_fields.get("end")),
+        bool(time_fields.get("closed", False)),
+        fields["segmentation"],
+        fields.get("parent_episode"),
+        _norm_json_list(fields.get("space")),
+        _norm_json_list(fields.get("protagonists")),
+        _norm_json_list(fields.get("goal")),
+        _norm_json_list(fields.get("causation")),
+        _norm_json_list(fields.get("derived_from")),
+        note_path,
+    )
+
+
 def _db_projection_rows() -> list[tuple[Any, ...]]:
     rows: list[tuple[Any, ...]] = []
     with conn_rw() as conn:
@@ -146,19 +205,28 @@ def _db_projection_rows() -> list[tuple[Any, ...]]:
                     )
                 else:
                     values = tuple(r)
-                rows.append(_normalize_row(values))
+                # Same normalized shape as _comparison_row, per-column by known type --
+                # timestamps instant-normalized, jsonb list columns canonicalized,
+                # scalar columns carried verbatim (no sniffing).
+                rows.append(
+                    (
+                        values[0],
+                        values[1],
+                        values[2],
+                        _norm_ts(values[3]),
+                        _norm_ts(values[4]),
+                        bool(values[5]),
+                        values[6],
+                        values[7],
+                        _norm_json_list(values[8]),
+                        _norm_json_list(values[9]),
+                        _norm_json_list(values[10]),
+                        _norm_json_list(values[11]),
+                        _norm_json_list(values[12]),
+                        values[13],
+                    )
+                )
     return sorted(rows, key=lambda row: row[0])
-
-
-def _normalize_row(values: tuple[Any, ...]) -> tuple[Any, ...]:
-    def _norm(v: Any) -> Any:
-        if isinstance(v, (list, dict)):
-            return json.dumps(v, sort_keys=True)
-        if hasattr(v, "isoformat"):
-            return v.isoformat()
-        return v
-
-    return tuple(_norm(v) for v in values)
 
 
 def _vault_projection_rows(vault_root: Path) -> list[tuple[Any, ...]]:
@@ -168,15 +236,13 @@ def _vault_projection_rows(vault_root: Path) -> list[tuple[Any, ...]]:
             validate_episode_note_fields(fields)
         except EpisodeSchemaValidationError:
             continue
-        raw = _row_tuple(fields, note_path)
-        # _row_tuple pre-serializes list fields to JSON text already; leave scalars as-is.
-        rows.append(tuple(json.loads(v) if isinstance(v, str) and v.startswith(("[", "{")) else v for v in raw))
+        rows.append(_comparison_row(fields, note_path))
     return sorted(rows, key=lambda row: row[0])
 
 
 def doctor_episodes_projection(vault_root: Path) -> DoctorReport:
     """Assert the DB projection matches the vault notes row-for-row."""
-    vault_rows = [_normalize_row(r) for r in _vault_projection_rows(vault_root)]
+    vault_rows = _vault_projection_rows(vault_root)
     db_rows = _db_projection_rows()
 
     vault_counter = Counter(vault_rows)

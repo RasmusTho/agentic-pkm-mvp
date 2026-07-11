@@ -54,7 +54,9 @@ def upgrade() -> None:
             derived_from JSONB NOT NULL DEFAULT '[]'::jsonb,
             note_path TEXT NOT NULL,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-            CONSTRAINT episodes_id_shape_chk CHECK (episode_id ~ '^ep-[0-9a-fA-F-]{36}$'),
+            CONSTRAINT episodes_id_shape_chk CHECK (
+                episode_id ~ '^ep-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+            ),
             CONSTRAINT episodes_segmentation_chk
                 CHECK (segmentation IN ('proposed', 'accepted', 're-cut'))
         )

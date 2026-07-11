@@ -14,11 +14,69 @@ runs them for real, per house practice).
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+# ---------------------------------------------------------------------------
+# not-pg: the doctor's comparison-row builder is pure -- regression-pin the two
+# review findings without needing a database.
+# ---------------------------------------------------------------------------
+
+
+def _fields(**overrides):
+    base = {
+        "episode_id": "ep-11111111-2222-4333-8444-555555555555",
+        "scope": "work",
+        "title": "Debugging session",
+        "time": {"start": "2026-07-11T10:00:00+00:00", "closed": False},
+        "space": [],
+        "protagonists": [],
+        "goal": [],
+        "causation": [],
+        "parent_episode": None,
+        "segmentation": "proposed",
+        "derived_from": [],
+    }
+    base.update(overrides)
+    return base
+
+
+def test_comparison_row_title_starting_with_bracket_is_not_parsed_as_json() -> None:
+    """Review regression (PR #3492 finding 1): a scalar field whose text happens to
+    start with '[' or '{' (title is user-supplied) must be carried verbatim, never
+    sniffed as pre-serialized JSON -- the old heuristic raised JSONDecodeError here."""
+    from app.jobs.episodes_projection import _comparison_row
+
+    for title in ("[Retro] Sprint 12", "{urgent} prod incident"):
+        row = _comparison_row(_fields(title=title), "episodes/x.md")
+        assert row[2] == title
+
+
+def test_comparison_row_normalizes_z_suffixed_timestamps_instant_wise() -> None:
+    """Review regression (PR #3492 finding 4): the schema's ``format: date-time``
+    permits 'Z'-suffixed RFC 3339, and the DB side renders '+00:00' -- the doctor
+    must compare instants, not raw strings, or the same row reports as drift on
+    both sides."""
+    from app.jobs.episodes_projection import _comparison_row
+
+    z_row = _comparison_row(
+        _fields(time={"start": "2026-07-11T10:00:00Z", "closed": False}),
+        "episodes/x.md",
+    )
+    offset_row = _comparison_row(
+        _fields(time={"start": "2026-07-11T10:00:00+00:00", "closed": False}),
+        "episodes/x.md",
+    )
+    assert z_row == offset_row
+    # And both equal the DB side's rendering of the same instant (a datetime).
+    from app.jobs.episodes_projection import _norm_ts
+
+    assert _norm_ts(datetime(2026, 7, 11, 10, 0, 0, tzinfo=timezone.utc)) == z_row[3]
 
 
 @pytest.fixture
@@ -93,6 +151,18 @@ def test_episodes_projection_migration_applies(scratch_db: str) -> None:
     }
     assert expected <= cols
 
+    # Review regression (PR #3492 finding 3): the DB CHECK enforces the same strict
+    # 8-4-4-4-12 UUID grouping as the app-level fused-id validator -- an ungrouped
+    # 36-hex-char id (which the app rejects) must fail at the DB too.
+    with psycopg.connect(scratch_db, autocommit=True) as conn:
+        with pytest.raises(psycopg.errors.CheckViolation):
+            conn.execute(
+                "INSERT INTO episodes (episode_id, scope, title, time_start, closed, "
+                "segmentation, note_path) VALUES "
+                f"('ep-{'a' * 36}', 'work', 'bad-id', now(), false, 'proposed', "
+                "'episodes/bad.md')"
+            )
+
     # Forward-only: the migration module declares no usable downgrade.
     import importlib
 
@@ -141,16 +211,29 @@ def test_projection_rebuilds_from_vault(
         vault_root=vault,
         write_guard=_allow_guard(),
     )
+    # Review regressions (PR #3492 findings 1 + 4) through the REAL doctor path:
+    # a user-supplied title starting with '[' (must not be sniffed as JSON) and a
+    # 'Z'-suffixed RFC 3339 start (must compare instant-wise against the DB's
+    # '+00:00' rendering, not as a raw string).
+    r3 = write_episode_note(
+        title="[Retro] Sprint 12",
+        scope="work",
+        start="2026-07-11T14:00:00Z",
+        closed=False,
+        segmentation="proposed",
+        vault_root=vault,
+        write_guard=_allow_guard(),
+    )
 
     summary = rebuild_episodes_projection(vault)
-    assert summary.total_notes == 2
-    assert summary.inserted == 2
+    assert summary.total_notes == 3
+    assert summary.inserted == 3
     assert summary.skipped_invalid == []
 
     report = doctor_episodes_projection(vault)
     assert report.ok, (report.missing_in_db, report.extra_in_db)
-    assert report.db_rows == 2
-    assert report.vault_rows == 2
+    assert report.db_rows == 3
+    assert report.vault_rows == 3
 
     with psycopg.connect(scratch_db, autocommit=True) as conn:
         rows = {
@@ -161,6 +244,7 @@ def test_projection_rebuilds_from_vault(
         }
     assert rows[r1.episode_id] == "accepted"
     assert rows[r2.episode_id] == "proposed"
+    assert rows[r3.episode_id] == "proposed"
 
     # Drop -> rebuild reproduces the projection identically (AC5).
     with psycopg.connect(scratch_db, autocommit=True) as conn:
@@ -168,7 +252,7 @@ def test_projection_rebuilds_from_vault(
         assert conn.execute("SELECT count(*) FROM episodes").fetchone()[0] == 0
 
     summary2 = rebuild_episodes_projection(vault)
-    assert summary2.inserted == 2
+    assert summary2.inserted == 3
     report2 = doctor_episodes_projection(vault)
     assert report2.ok, (report2.missing_in_db, report2.extra_in_db)
 
