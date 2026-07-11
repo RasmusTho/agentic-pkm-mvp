@@ -45,6 +45,9 @@ def ingest_screen_bundle(bundle: Mapping[str, Any], *, key: bytes | None = None)
     shape = bundle.get("bundle_shape")
     if shape not in {RAW_CAPTURE_BUNDLE, DERIVED_OBSERVATION}:
         raise ValueError("bundle_shape must be raw_capture_bundle or derived_observation")
+    derived_payload = bundle.get("derived_observation")
+    if shape == DERIVED_OBSERVATION and not isinstance(derived_payload, Mapping):
+        raise ValueError("derived_observation bundles require a derived_observation mapping")
     sensor_data = bundle.get("sensor")
     if not isinstance(sensor_data, Mapping):
         raise ValueError("screen bundle requires sensor {adapter, version, machine}")
@@ -82,14 +85,20 @@ def ingest_screen_bundle(bundle: Mapping[str, Any], *, key: bytes | None = None)
         payload={"modality": "screen", "bundle_shape": shape},
     )
     published = False
-    if shape == DERIVED_OBSERVATION and isinstance(bundle.get("derived_observation"), Mapping):
-        payload = dict(bundle["derived_observation"])
+    if shape == DERIVED_OBSERVATION:
+        # The declared on-device path is still admitted through the same
+        # guards, then handed directly to the canonical validated publish
+        # seam.  It is not a second raw-store or observation writer.
+        payload = dict(derived_payload)
         provenance = dict(payload.get("provenance") or {})
         provenance.setdefault("content_identity", identity)
         provenance.setdefault("capture_chain", list(bundle.get("capture_chain") or ["screen_capture_post"]))
         provenance.setdefault("sensor", {"adapter": sensor.adapter, "version": sensor.version, "machine": sensor.device})
         payload["provenance"] = provenance
         payload.setdefault("raw_ref", record.id)
+        # The published observation carries the admission that this endpoint
+        # actually obtained, never a client-supplied claim about consent.
+        payload["consent"] = admitted.consent.as_dict()
         publish_full_observation(topic="heimdal.observation.published", payload=payload, source="heimdal.screen_capture")
         published = True
     return ScreenCaptureAck(record.id, identity, created, shape, published)
