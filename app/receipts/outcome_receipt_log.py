@@ -6,6 +6,7 @@ This module never reads or rewrites the owner's ``decision_record`` note.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,7 @@ from app.write_guard import DEFAULT_WRITE_GUARD
 SCHEMA_VERSION = 1
 OUTCOME_RECEIPT_WRITE_ACTION = "decision.outcome_receipt"
 _RECEIPTS_SUBDIR = Path("receipts") / "decision_outcomes"
+_APPEND_LOCK_NAME = ".append.lock"
 OutcomeValue = Literal["held", "partly_held", "did_not_hold", "unknown_yet"]
 
 
@@ -153,18 +155,23 @@ def append_outcome_receipt(
     )
     try:
         target_dir = outcome_receipts_dir(vault_root)
-        existing = _existing_receipt(
-            iter_outcome_receipts(vault_root), receipt["decision_uuid"], receipt["rung_index"]
-        )
-        if existing is None:
-            target_dir.mkdir(parents=True, exist_ok=True)
-            shard = target_dir / _shard_name(
-                datetime.fromisoformat(receipt["created_at"])
+        target_dir.mkdir(parents=True, exist_ok=True)
+        # The canonical idempotency key spans all monthly shards.  Serialize
+        # check-and-append under one vault-local advisory lock so concurrent
+        # retries cannot both observe an absent receipt and append duplicates.
+        with (target_dir / _APPEND_LOCK_NAME).open("a+", encoding="utf-8") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            existing = _existing_receipt(
+                iter_outcome_receipts(vault_root), receipt["decision_uuid"], receipt["rung_index"]
             )
-            with shard.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n")
-        else:
-            receipt = existing
+            if existing is not None:
+                receipt = existing
+            else:
+                shard = target_dir / _shard_name(
+                    datetime.fromisoformat(receipt["created_at"])
+                )
+                with shard.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(receipt, ensure_ascii=False, sort_keys=True) + "\n")
     except OSError as exc:
         raise OutcomeReceiptWriteError(
             "decision outcome receipt append failed for "

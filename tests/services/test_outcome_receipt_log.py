@@ -1,6 +1,7 @@
 """CAL-01 contract tests for append-only decision outcome receipts."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -99,6 +100,29 @@ def test_append_idempotent_per_decision_and_rung(
     assert first == second
     assert len(_records(tmp_path / "vault")) == 1
     assert len(projections) == 2  # retry repairs a prior failed/missing projection
+
+
+def test_concurrent_append_is_idempotent_per_decision_and_rung(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Concurrent submits share one canonical receipt, not duplicate JSONL rows."""
+
+    object_id, decision_uuid = _ids()
+    monkeypatch.setattr(outcome_log.DEFAULT_WRITE_GUARD, "assert_writes_allowed", lambda _: None)
+    monkeypatch.setattr(outcome_log, "_insert_projection", lambda _: None)
+    kwargs = dict(
+        decision_object_id=object_id,
+        decision_uuid=decision_uuid,
+        rung_index=2,
+        outcome="unknown_yet",
+        vault_root=tmp_path / "vault",
+    )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(lambda _: outcome_log.append_outcome_receipt(**kwargs), range(8)))
+
+    assert len(_records(tmp_path / "vault")) == 1
+    assert all(result == results[0] for result in results)
 
 
 def test_existing_receipts_never_rewritten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
