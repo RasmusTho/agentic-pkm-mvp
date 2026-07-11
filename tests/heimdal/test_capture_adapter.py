@@ -181,7 +181,7 @@ def test_sidecar_consumed_into_raw_metadata(tmp_path: Path) -> None:
     memo = _write_memo(tmp_path)
     sidecar_metadata = {
         "sidecar_version": 1,
-        "device_id": "iphone-rasmus",
+        "device_id": "fixture-device-001",
         "recorded_start_at": "2026-07-07T14:02:11+02:00",
         "recorded_end_at": "2026-07-07T14:09:40+02:00",
         "timezone": "Europe/Stockholm",
@@ -234,7 +234,7 @@ def test_valid_sidecar_is_retained_when_raw_persistence_fails(
 ) -> None:
     """Sidecar deletion follows the same confirmed-write custody boundary as audio."""
     memo = _write_memo(tmp_path)
-    sidecar = _write_sidecar(memo, {"sidecar_version": 1, "device_id": "iphone-rasmus"})
+    sidecar = _write_sidecar(memo, {"sidecar_version": 1, "device_id": "fixture-device-001"})
 
     def _boom(**kwargs):
         raise RuntimeError("simulated store outage")
