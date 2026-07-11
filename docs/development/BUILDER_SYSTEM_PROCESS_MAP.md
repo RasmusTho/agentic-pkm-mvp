@@ -539,7 +539,7 @@ Forbidden or human-gated hooks: any hook that writes GitHub state, merges, pushe
 | pull_request opened/synchronize/reopened/ready_for_review | CI, PR governance, project PR workflows | Evidence pack builder, PR contract artifact, CI context collector | contents read, pull-requests read/write for comments | artifact-only/comment-only | merge or patch authority needed |
 | pull_request_review | none observed as trigger | Review finding classifier | pull-requests read | observe-only/comment-only | ambiguous blocking review |
 | issue_comment | none observed as trigger | Command parser for `/dispatch`, `/repair`, `/evidence` in observe-only | issues read | observe-only | mutation requested |
-| workflow_run completed/failure | `pr-ci-failure-context` | CI failure context collector (delivered by PR #3222) | actions read, contents read | artifact-only | patch/merge decision |
+| workflow_run completed/failure | `pr-ci-failure-context` | CI failure context collector (delivered by PR #3222) | actions read, contents read, pull-requests read | artifact-only | patch/merge decision |
 | push to agent branches | CI workflows on PR/push | Branch drift/evidence update | contents read | artifact-only | force-push/branch rewrite |
 | schedule | harness-selfverify, integration-nightly, project reconcile | queue health, stale claim report | read mostly | artifact-only | stale claim override |
 | workflow_dispatch | many workflows | manual diagnostics | per workflow | observe-only/artifact-only | operator action |
