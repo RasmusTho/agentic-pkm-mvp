@@ -10,12 +10,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-import yaml
 from jsonschema import Draft202012Validator
 
 from app.knowledge.contracts import WriteReceipt
 from app.knowledge.write_ops import write_note_relative
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
+from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 WRITE_ACTION = "standing_questions.write_note"
 QUESTION_DIRECTORY = "questions"
@@ -58,7 +58,11 @@ def _utc_now() -> str:
 
 
 def _schema_validator() -> Draft202012Validator:
-    return Draft202012Validator(json.loads(_SCHEMA_PATH.read_text(encoding="utf-8")))
+    schema = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+    # format_checker enforces "format": "date-time" (created_at/matched_at/...) at write
+    # time. Without it a bad timestamp string passes schema validation silently and only
+    # explodes later at projection INSERT (TIMESTAMPTZ), aborting the whole rebuild.
+    return Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER)
 
 
 def validate_question_note(note: Mapping[str, Any]) -> dict[str, Any]:
@@ -70,19 +74,13 @@ def validate_question_note(note: Mapping[str, Any]) -> dict[str, Any]:
 
 def serialize_question_note(note: Mapping[str, Any]) -> str:
     payload = validate_question_note(note)
-    frontmatter = yaml.safe_dump(payload, allow_unicode=True, sort_keys=False).strip()
-    return f"---\n{frontmatter}\n---\n\n{payload['text']}\n"
+    # Shared round-trip helper (app.episodes.notes and 30+ other modules), not a
+    # hand-rolled YAML split/dump -- keeps frontmatter parsing/rendering in one place.
+    return dump_frontmatter(payload, payload["text"])
 
 
 def parse_question_note(content: str) -> dict[str, Any]:
-    if not content.startswith("---\n"):
-        raise ValueError("Question note must start with YAML frontmatter")
-    frontmatter, separator, _ = content[4:].partition("\n---\n")
-    if not separator:
-        raise ValueError("Question note frontmatter is not terminated")
-    metadata = yaml.safe_load(frontmatter)
-    if not isinstance(metadata, dict):
-        raise ValueError("Question note frontmatter must be an object")
+    metadata, _body = load_frontmatter(content)
     return validate_question_note(metadata)
 
 
