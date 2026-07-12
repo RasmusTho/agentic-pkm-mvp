@@ -242,6 +242,11 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/heimdal", "tests/knowledge_acquisition"),
     ),
     (
+        "journaling",
+        ("app/journaling/", "tests/journaling/", "docs/CONVERSATIONAL_JOURNALING/"),
+        ("tests/journaling",),
+    ),
+    (
         "promotion_panel",
         (
             "app/agents/panel_agent/",
