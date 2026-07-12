@@ -56,6 +56,17 @@ ADR-0051 commitment 2, ADR-0054 §3):
   ``episode_id`` per closed segment (a retried emission never double-writes
   a note, AC2 / INV-ERE-F), even when only ONE of the two cursors advanced
   before the crash.
+- **Projection sync on creation** (#3532, ERE-02 follow-up, mirrors
+  ``app.episodes.closure._sync_projection_closed`` / ``app.episodes.recut._sync_projection_row``
+  for this same projection family): until this fix, NO production path ever inserted a row into
+  the ``episodes`` PG projection for a newly-proposed episode -- only the full
+  ``rebuild_episodes_projection`` TRUNCATE+replay did, and no production caller schedules that
+  rebuild. :func:`_emit_proposal` and :func:`_emit_fused_note` (the two production seams that
+  mint a brand-new episode note via ``app.episodes.store.write_episode_note``) now each call
+  :func:`_sync_new_episode_row` immediately after a successful note write, so
+  ``app.episodes.assignment.read_candidate_episodes_for_scopes`` (ERE-05) and
+  ``app.episodes.closure.find_closable_episodes`` (ERE-06) actually see the episode without
+  waiting for an operator-triggered rebuild.
 """
 
 from __future__ import annotations
@@ -67,6 +78,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Final, Mapping, Sequence
 
+from app.db.db import conn_rw
 from app.episodes import cross_scope_fusion, engine_state
 from app.episodes.assignment import (
     ArtifactCandidate,
@@ -96,6 +108,7 @@ from app.episodes.calendar_stream import (
 from app.episodes.ids import EPISODE_ID_PREFIX
 from app.episodes.notes import episode_note_rel_path
 from app.episodes.store import write_episode_note
+from app.jobs.episodes_projection import EPISODES_TABLE, row_tuple
 from app.knowledge.write_ops import write_note_relative
 from app.episodes.stream_registry import (
     STATUS_LIVE,
@@ -737,6 +750,60 @@ def _deterministic_episode_id(closed: ClosedSegment) -> str:
     return f"{EPISODE_ID_PREFIX}{uuid.uuid5(_EPISODE_ID_NAMESPACE, basis)}"
 
 
+def _sync_new_episode_row(fields: Mapping[str, Any], note_path: str) -> None:
+    """Incrementally INSERT a newly-proposed episode's row into the ``episodes`` projection
+    (#3532, ERE-02 follow-up). Mirrors ``app.episodes.closure._sync_projection_closed`` /
+    ``app.episodes.recut._sync_projection_row``'s incremental-update-over-rebuild discipline for
+    this same projection family, extended to the one write class those two never had to cover:
+    inserting a row that does not exist yet at all. Until this fix, NO production path ever wrote
+    a projection row for a newly-proposed episode -- only ``rebuild_episodes_projection``'s full
+    TRUNCATE+replay does, and no production caller schedules that rebuild -- so
+    ``read_candidate_episodes_for_scopes`` (ERE-05) and ``find_closable_episodes`` (ERE-06) were
+    silently no-op for every episode proposed after the last manual rebuild.
+
+    Uses the SAME row shape ``rebuild_episodes_projection`` inserts
+    (:func:`app.jobs.episodes_projection.row_tuple`), single-sourced so this incremental path can
+    never drift from the rebuild path's column order. ``ON CONFLICT (episode_id) DO NOTHING``
+    makes the insert idempotent under redelivery (a retried tick re-proposing the same
+    deterministic ``episode_id``, or -- pathologically -- a concurrent rebuild racing this insert)
+    without a read-before-write.
+
+    Deliberately broader error handling than the closure/recut precedent: this projection sync is
+    a pure enhancement over the vault-note write that already landed (the note, not this row, is
+    the SoR -- module docstring), never a second write class the note write depends on. The issue
+    constraint is explicit: this must never become a new hard dependency that can block episode
+    note writes. So ANY exception here -- missing schema, connection failure, anything -- is
+    logged and swallowed, never raised: a blocked/unavailable PG must never turn an already-
+    successful note write into a failed tick, and the next ``rebuild_episodes_projection()`` run
+    re-derives this row from the vault regardless.
+    """
+    try:
+        with conn_rw() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    INSERT INTO {EPISODES_TABLE} (
+                        episode_id, scope, title, time_start, time_end, closed,
+                        segmentation, parent_episode, space, protagonists, goal,
+                        causation, derived_from, note_path
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, %s
+                    )
+                    ON CONFLICT (episode_id) DO NOTHING
+                    """,
+                    row_tuple(dict(fields), note_path),
+                )
+    except Exception:
+        logger.warning(
+            "segmenter: could not sync new episode row into the episodes projection for "
+            "episode_id=%s -- the vault note (SoR) already landed regardless; the next "
+            "rebuild_episodes_projection() run will re-derive this row",
+            fields.get("episode_id"),
+            exc_info=True,
+        )
+
+
 def _emit_proposal(
     closed: ClosedSegment,
     *,
@@ -773,6 +840,9 @@ def _emit_proposal(
         vault_root=vault_root,
         write_guard=write_guard,
     )
+    # #3532: keep the `episodes` projection current from the write path itself -- see
+    # _sync_new_episode_row's docstring for why this must never block the note write above.
+    _sync_new_episode_row(result.fields, rel_path)
     return result.episode_id
 
 
@@ -860,6 +930,9 @@ def _emit_fused_note(
         vault_root=vault_root,
         write_guard=write_guard,
     )
+    # #3532: a fused note is ALSO a brand-new episode row (same bug class as the split-proposal
+    # path above) -- see _sync_new_episode_row's docstring.
+    _sync_new_episode_row(result.fields, rel_path)
     return result.episode_id
 
 

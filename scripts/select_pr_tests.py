@@ -262,6 +262,11 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/standing_questions",),
     ),
     (
+        "media",
+        ("app/media/",),
+        ("tests/test_transcribe_smoke.py",),
+    ),
+    (
         "events_receipts",
         ("app/events/", "app/receipts/", "docs/contracts/events/", "tests/events/", "tests/receipts/"),
         ("tests/events", "tests/receipts", "tests/contracts"),

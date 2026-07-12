@@ -26,6 +26,7 @@ dependencies = [
     "zstandard>=0.25",
     # Web / API layer
     "fastapi>=0.115,<1",
+    "python-multipart>=0.0.20",
     "uvicorn>=0.30",
     "starlette>=1.0",
     "slowapi>=0.1.9",

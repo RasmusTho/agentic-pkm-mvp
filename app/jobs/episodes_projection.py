@@ -65,7 +65,10 @@ def _iter_episode_notes(vault_root: Path) -> list[tuple[str, dict[str, Any]]]:
     return out
 
 
-def _row_tuple(fields: dict[str, Any], note_path: str) -> tuple[Any, ...]:
+def row_tuple(fields: dict[str, Any], note_path: str) -> tuple[Any, ...]:
+    """The row shape both the full rebuild INSERT and the incremental new-row INSERT
+    (``app.episodes.segmenter._sync_new_episode_row``, #3532) use -- single-sourced so the
+    two paths can never drift apart in column order."""
     time_fields = fields.get("time") or {}
     return (
         fields["episode_id"],
@@ -118,7 +121,7 @@ def rebuild_episodes_projection(vault_root: Path) -> RebuildSummary:
                         %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, %s
                     )
                     """,
-                    _row_tuple(fields, note_path),
+                    row_tuple(fields, note_path),
                 )
                 summary.inserted += 1
 
@@ -160,7 +163,7 @@ def _comparison_row(fields: dict[str, Any], note_path: str) -> tuple[Any, ...]:
     """Normalized comparison tuple built directly from the Python-native note fields.
 
     Purpose-made for the doctor: lists are serialized once (they are still lists
-    here -- no dump/load round-trip through ``_row_tuple``), scalar fields like
+    here -- no dump/load round-trip through ``row_tuple``), scalar fields like
     ``title`` are carried verbatim with no format sniffing, and timestamps are
     normalized instant-wise via ``_norm_ts`` so a ``Z``-suffixed note compares equal
     to the DB's ``+00:00`` rendering."""
@@ -269,4 +272,5 @@ __all__ = [
     "RebuildSummary",
     "doctor_episodes_projection",
     "rebuild_episodes_projection",
+    "row_tuple",
 ]
