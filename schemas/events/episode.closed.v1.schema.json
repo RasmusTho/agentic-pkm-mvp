@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/episode.closed.v1.schema.json",
+  "title": "episode.closed payload (v1)",
+  "description": "Payload of the episode.closed outbox event (ERE-06, #3181, docs/EPISODE_RESOLUTION_ENGINE/EMIT_CLOSURE_AND_DERIVE_DECAY.md). Producer: app.episodes.closure.close_episode, emitted after the Episode note's own time.closed flip (the SoR) is durably written through the guarded seam. This event is plumbing only -- a consumer that misses it self-heals from the episodes projection; nothing in the salience/decay derivation path (app/episodes/closure_decay.py) depends on delivery. context_dimensions (top-level envelope field, SSI-01) is populated from the closed episode note's own frontmatter.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["episode_id", "closed_at", "scope"],
+  "properties": {
+    "episode_id": { "type": "string", "minLength": 1 },
+    "closed_at": { "type": "string", "minLength": 1 },
+    "scope": { "type": "string", "minLength": 1 },
+    "bound_artifact_count": { "type": "integer", "minimum": 0 }
+  }
+}

@@ -21,6 +21,7 @@ from app.builderops.model_inquiry_contract import (
     initial_context_packet,
     model_turn_request_hash,
 )
+from app.builderops.model_inquiry_report import render_markdown_report
 from app.builderops.models import (
     BuilderOpsConflictError,
     BuilderOpsValidationError,
@@ -784,6 +785,19 @@ class ModelInquiryService:
             result["promotion_intent"] = promotion_intent
         return result
 
+    def write_human_readable_report(self, inquiry_id: str) -> Path:
+        """Write the mutable Markdown projection after a terminal inquiry run."""
+        inquiry_id = _safe_id(inquiry_id, "inquiry_id")
+        trace = self.trace(inquiry_id)
+        directory = self._require_inquiry(inquiry_id)
+        path = directory / "report.md"
+        self._write_derived_text(
+            path,
+            render_markdown_report(trace),
+            label="human-readable inquiry report",
+        )
+        return path
+
     def _validate_promotion_intent(
         self,
         intent: dict[str, Any],
@@ -1440,6 +1454,23 @@ class ModelInquiryService:
     ) -> dict[str, Any]:
         result, _ = self._write_immutable_status(path, payload, label=label)
         return result
+
+    def _write_derived_text(self, path: Path, content: str, *, label: str) -> None:
+        self._validate_artifact_parent(path)
+        if path.is_symlink():
+            raise BuilderOpsValidationError(f"{label} path must not be a symlink: {path}")
+        temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        try:
+            with temporary.open("x", encoding="utf-8") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+            _fsync_directory(path.parent)
+        except OSError as exc:
+            raise BuilderOpsValidationError(f"unable to persist {label}: {path}") from exc
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def _write_immutable_status(
         self,

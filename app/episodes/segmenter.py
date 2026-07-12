@@ -67,7 +67,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Final, Mapping, Sequence
 
-from app.episodes import engine_state
+from app.episodes import cross_scope_fusion, engine_state
 from app.episodes.assignment import (
     ArtifactCandidate,
     artifact_candidates_from_signals,
@@ -96,6 +96,7 @@ from app.episodes.calendar_stream import (
 from app.episodes.ids import EPISODE_ID_PREFIX
 from app.episodes.notes import episode_note_rel_path
 from app.episodes.store import write_episode_note
+from app.knowledge.write_ops import write_note_relative
 from app.episodes.stream_registry import (
     STATUS_LIVE,
     StreamRegistry,
@@ -741,6 +742,7 @@ def _emit_proposal(
     *,
     vault_root: Path,
     write_guard: WriteGuard,
+    causation: list[str] | None = None,
 ) -> str | None:
     episode_id = _deterministic_episode_id(closed)
     rel_path = episode_note_rel_path(episode_id)
@@ -761,6 +763,10 @@ def _emit_proposal(
         closed=False,
         protagonists=list(closed.protagonists),
         goal=list(closed.goal),
+        # ERE-08 (#3183): a content-free cross-scope sibling marker
+        # (`cross_scope_fusion.CROSS_SCOPE_SIBLING_MARKER`) is the ONLY thing
+        # ever passed here; it names no other scope, id, or content (AC2).
+        causation=list(causation or []),
         derived_from=list(closed.derived_from),
         segmentation="proposed",
         episode_id=episode_id,
@@ -768,6 +774,159 @@ def _emit_proposal(
         write_guard=write_guard,
     )
     return result.episode_id
+
+
+#: Distinct guarded-write action for the cross-scope fusion receipt seam (ERE-08). A fusion receipt
+#: is written BEFORE the fused note (receipt-before-note); both go through the same guarded vault
+#: write seam (``app.knowledge.write_ops.write_note_relative``) so a blocked guard means neither is
+#: written.
+FUSION_RECEIPT_WRITE_ACTION: Final[str] = "episodes.cross_scope_fusion_receipt"
+
+#: Vault-relative directory the cross-scope fusion receipts live under.
+_FUSION_RECEIPT_DIR: Final[str] = "episodes/receipts"
+
+
+def _fusion_receipt_rel_path(fused_episode_id: str) -> str:
+    return f"{_FUSION_RECEIPT_DIR}/{fused_episode_id}.md"
+
+
+def _write_fusion_receipt(
+    fuse: "cross_scope_fusion.AllowedFusion",
+    *,
+    vault_root: Path,
+    write_guard: WriteGuard,
+) -> None:
+    """Write the durable fusion receipt for an allowed fuse THROUGH the guarded seam, BEFORE the
+    fused note (receipt-before-note; ADR-0054 §5 "gated and receipted, never silently constructed").
+
+    The receipt is the audit/provenance record the governed crossing produced -- it references the
+    admitting flow and the constituent per-scope episodes. Written first so a fused note can never
+    exist without its receipt: a guard-blocked or failed receipt write raises here, before the note
+    seam is reached.
+    """
+    from scripts.yaml_roundtrip import dump_frontmatter
+
+    # Idempotent under redelivery (Finding 3): the fused id is deterministic, so a crash/retry
+    # re-resolves the SAME receipt path -- never a duplicate receipt (mirrors _emit_fused_note's
+    # existence check on the note itself).
+    if (Path(vault_root) / _fusion_receipt_rel_path(fuse.fused_episode_id)).exists():
+        return
+
+    fields = cross_scope_fusion.fusion_receipt_fields(
+        fuse, recorded_at=datetime.now(timezone.utc).isoformat()
+    )
+    body = (
+        "# Cross-scope fusion receipt\n\n"
+        f"Flow: `{fuse.flow_ref}`  \n"
+        f"Operation: `{cross_scope_fusion.EPISODE_FUSE_OPERATION}`  \n"
+        f"Fused episode: `{fuse.fused_episode_id}` (scope `{fuse.target_scope}`)\n\n"
+        "This receipt records a governed CrossScopeFlow crossing (ADR-0054 §5). It is written "
+        "before the fused episode note; a fused cross-scope episode never exists without it.\n"
+    )
+    content = dump_frontmatter(fields, body)
+    write_note_relative(
+        _fusion_receipt_rel_path(fuse.fused_episode_id),
+        content,
+        vault_root=vault_root,
+        action=FUSION_RECEIPT_WRITE_ACTION,
+        write_guard=write_guard,
+    )
+
+
+def _emit_fused_note(
+    fuse: "cross_scope_fusion.AllowedFusion",
+    *,
+    vault_root: Path,
+    write_guard: WriteGuard,
+) -> str | None:
+    """Emit the single fused cross-scope episode note for an allowed fuse. The note lives in the
+    flow's ``target_scope`` and carries the flow reference in ``causation``
+    (:func:`cross_scope_fusion.fused_note_causation`) -- never a split-sibling marker. Idempotent by
+    the fused id (a re-emitted receipt+note pair skips an already-written note)."""
+    rel_path = episode_note_rel_path(fuse.fused_episode_id)
+    if (Path(vault_root) / rel_path).exists():
+        return None
+    title = f"Fused episode -- {fuse.target_scope} -- {_iso(fuse.start)}"
+    result = write_episode_note(
+        title=title,
+        scope=fuse.target_scope,
+        start=_iso(fuse.start),
+        end=_iso(fuse.end),
+        closed=False,
+        causation=cross_scope_fusion.fused_note_causation(fuse),
+        derived_from=list(fuse.derived_from),
+        segmentation="proposed",
+        episode_id=fuse.fused_episode_id,
+        vault_root=vault_root,
+        write_guard=write_guard,
+    )
+    return result.episode_id
+
+
+def _emit_proposals_with_fusion_gate(
+    closed_segments: Sequence[ClosedSegment],
+    *,
+    vault_root: Path,
+    write_guard: WriteGuard,
+    flow_provider: "cross_scope_fusion.FlowProvider | None" = None,
+) -> dict[str, Any]:
+    """THE production fusion seam (ERE-08 AC1). Replaces the plain per-segment emit loop with the
+    cross-scope fusion gate: split-per-scope by default, a fused episode only via an explicit
+    ``CrossScopeFlow`` admitting ``episode_fuse``, content-free sibling links on denied co-occurring
+    pairs, receipt-before-note on allowed fuses, and silent-but-audited denials.
+
+    Production passes ``flow_provider=None`` -- authoring flow grants is out of scope (operator/GOV)
+    -- so every cross-scope decision denies at ``mimer_runtime.cross_scope.evaluate`` and the split
+    default holds unconditionally. Tests inject a provider to exercise the allowed path.
+
+    Returns ``{"proposed": [...], "fused": [...], "fusions_denied": n}``.
+    """
+    segments = [
+        cross_scope_fusion.FuseSegment(
+            episode_id=_deterministic_episode_id(closed),
+            scope=closed.scope,
+            start=closed.start,
+            end=closed.end,
+            derived_from=tuple(closed.derived_from),
+        )
+        for closed in closed_segments
+    ]
+    plan = cross_scope_fusion.plan_fusions(segments, flow_provider=flow_provider)
+
+    fused_ids: list[str] = []
+    for fuse in plan.allowed:
+        # Receipt-before-note (ADR-0054 §5): the receipt is written first; only then the fused note.
+        _write_fusion_receipt(fuse, vault_root=vault_root, write_guard=write_guard)
+        fused_id = _emit_fused_note(fuse, vault_root=vault_root, write_guard=write_guard)
+        if fused_id is not None:
+            fused_ids.append(fused_id)
+
+    # Silent-but-audited denials (issue Constraint): a log line per denied fuse, never a
+    # user-facing notification. The audit names only the scopes + reason (governance metadata),
+    # never the split episodes' content.
+    for denied in plan.denied:
+        logger.info(
+            "cross_scope_fusion: episode_fuse DENIED (audited, not notified) -- source_scope=%s "
+            "target_scope=%s reason=%s (scopes stay split; content-free sibling link only)",
+            denied.source_scope,
+            denied.target_scope,
+            denied.reason,
+        )
+
+    proposed_ids: list[str] = []
+    for closed in closed_segments:
+        episode_id = _deterministic_episode_id(closed)
+        if episode_id in plan.fused_member_ids:
+            # Consumed by an allowed fuse -- emitted as the single fused note above, never split.
+            continue
+        causation = list(plan.sibling_markers.get(episode_id, ()))
+        proposed = _emit_proposal(
+            closed, vault_root=vault_root, write_guard=write_guard, causation=causation
+        )
+        if proposed is not None:
+            proposed_ids.append(proposed)
+
+    return {"proposed": proposed_ids, "fused": fused_ids, "fusions_denied": len(plan.denied)}
 
 
 def run_segmentation_tick(
@@ -791,8 +950,9 @@ def run_segmentation_tick(
     carried-over segment stays open and is deferred to ERE-06 (closure
     detection is out of scope for ERE-04).
 
-    Crash-safe ordering (INV-ERE-F): emit -> assign -> persist open state ->
-    advance cursors -> delete closed-segment state LAST. A crash between the
+    Crash-safe ordering (INV-ERE-F): emit -> assign -> close quiesced
+    episodes (ERE-06) -> persist open state -> advance cursors -> delete
+    closed-segment state LAST. A crash between the
     two cursor advances replays only one stream, but the closed segment's
     retained ``signal_ids`` ledger dedups the replayed rows and the
     deterministic, start-independent episode id skips the already-written
@@ -930,11 +1090,18 @@ def run_segmentation_tick(
         signals, open_segments=open_segments, frontiers=scope_frontiers
     )
 
-    proposed_ids: list[str] = []
-    for closed in closed_segments:
-        episode_id = _emit_proposal(closed, vault_root=root, write_guard=write_guard)
-        if episode_id is not None:
-            proposed_ids.append(episode_id)
+    # ERE-08 (#3183) cross-scope fusion gate: split-per-scope by default (ERE-04 already
+    # partitioned signals per-scope), a fused cross-scope episode ONLY via an explicit
+    # CrossScopeFlow admitting `episode_fuse`, content-free sibling links on denied co-occurring
+    # cross-scope pairs, receipt-before-note on allowed fuses, and silent-but-audited denials.
+    # Production passes NO flow_provider (authoring flow grants is out of scope -- operator/GOV), so
+    # every cross-scope decision denies at `mimer_runtime.cross_scope.evaluate` and the split
+    # default holds. With no cross-scope co-occurrence this tick, this is identical to the prior
+    # per-segment emit loop.
+    fusion_summary = _emit_proposals_with_fusion_gate(
+        closed_segments, vault_root=root, write_guard=write_guard, flow_provider=None
+    )
+    proposed_ids = fusion_summary["proposed"]
 
     # ERE-05 assignment: same delta-window signals, run strictly after segmentation/emission.
     # A tick with no signals at all has nothing to assign (never touches the ledger or the DB);
@@ -995,6 +1162,17 @@ def run_segmentation_tick(
             to_insert, to_correct, write_guard=write_guard, vault_root=root
         )
 
+    # ERE-06 (#3181) closure: extends the tick after assignment, UNCONDITIONALLY (unlike
+    # assignment above, closure candidates come from every already-persisted open episode in the
+    # `episodes` projection -- not this tick's delta signals -- so a tick with zero new signals
+    # must still be able to close a scope that has gone quiet forever; see
+    # `app.episodes.closure`'s module docstring for why this uses wall-clock time rather than a
+    # per-scope observed-signal frontier). Imported lazily to avoid a circular import (closure.py
+    # imports this module's own TIME_GAP_MINUTES as its single-sourced quiescence constant).
+    from app.episodes.closure import run_closure_tick
+
+    closure_summary = run_closure_tick(vault_root=root, write_guard=write_guard)
+
     for scope, segment in updated_open.items():
         engine_state.set_state(f"{_OPEN_SEGMENT_KEY_PREFIX}{scope}", segment.to_state())
 
@@ -1025,8 +1203,16 @@ def run_segmentation_tick(
         "consumed": consumed,
         "skipped_no_observation_time": skipped_no_observation_time,
         "proposed": proposed_ids,
+        # ERE-08 (#3183): fused cross-scope episodes (empty in production -- no flow grants) and the
+        # count of denied cross-scope fusions this tick (spec "Concretely": `fusions_denied`).
+        "fused": fusion_summary["fused"],
+        "fusions_denied": fusion_summary["fusions_denied"],
         "open_segments": len(updated_open),
         "assigned": assignment_summary,
+        # ERE-06 (#3181): {"closed": [episode_id, ...], "events_emitted": n} -- spec's
+        # "Concretely" shape, extended onto the existing tick summary.
+        "closed": closure_summary["closed"],
+        "events_emitted": closure_summary["events_emitted"],
         # AC5 (ERE-09, #3184): calendar_ids (or other future streams) that
         # degraded softly this tick -- never raised out of this function,
         # never stalls segmentation on the remaining streams.

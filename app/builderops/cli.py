@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, cast
 
@@ -23,6 +24,9 @@ from app.builderops.ckm_reevaluation import (
     CkmReevaluationError,
     build_ckm_reevaluation_report,
 )
+from app.builderops.ckm.models import CkmValidationError
+from app.builderops.ckm.seed import SeedManifestError, seed_capabilities
+from app.builderops.ckm.store import CkmStore
 from app.builderops.config import BuilderOpsPaths, load_paths
 from app.builderops.evidence_bridge import (
     EvidenceBridgeError,
@@ -221,6 +225,10 @@ def _store(ctx: click.Context) -> SqliteBuilderOpsStore:
     return store
 
 
+def _ckm_store(ctx: click.Context) -> CkmStore:
+    return CkmStore.open_default(_effective_paths(ctx))
+
+
 def _gateway(ctx: click.Context) -> BuilderOpsPromotionGateway:
     return BuilderOpsPromotionGateway(_store(ctx))
 
@@ -256,8 +264,14 @@ def builderops(ctx: click.Context, db_path: Path | None) -> None:
 
 
 def _effective_paths(ctx: click.Context) -> BuilderOpsPaths:
+    # ``ckm`` is reachable both nested under the ``builderops`` group (whose
+    # callback populates ``ctx.obj["db_path"]`` via ``--db-path``) and
+    # mounted directly at the standalone CLI root (which has no such
+    # callback, so ``ctx.obj`` is None). Tolerate the missing dict rather
+    # than raising an AttributeError.
+    obj = ctx.obj or {}
     try:
-        return load_paths(db_path_override=ctx.obj.get("db_path"))
+        return load_paths(db_path_override=obj.get("db_path"))
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -323,6 +337,49 @@ def vault_release(root: Path, ticket_ref: str, agent: str, as_json: bool) -> Non
     except VaultQueueError as exc:
         raise click.ClickException(str(exc)) from exc
     _emit(payload, as_json)
+
+
+@builderops.group("ckm", help="Operate the projection-only Capability Knowledge Model.")
+@click.pass_context
+def ckm(ctx: click.Context) -> None:
+    """CKM commands operate only on additive BuilderOps state.
+
+    ``ckm`` is mounted both under ``builderops`` (whose callback already
+    populates ``ctx.obj`` with a dict) and directly at the standalone CLI
+    root (which does not). ``ensure_object`` is a no-op when ``ctx.obj`` is
+    already a truthy dict inherited from the ``builderops`` parent, and
+    creates an empty dict when reached from the root, so every current and
+    future ``ckm`` subcommand can safely assume ``ctx.obj`` is a dict rather
+    than needing to know which mount point it was reached through.
+    """
+
+    ctx.ensure_object(dict)
+
+
+@ckm.command("seed", help="Seed reviewed SBS and capability-contract taxonomy into the CEG.")
+@click.pass_context
+def ckm_seed(ctx: click.Context) -> None:
+    store = _ckm_store(ctx)
+    try:
+        store.ensure_schema()
+        result = seed_capabilities(store)
+    except SeedManifestError as exc:
+        # Manifest validation runs entirely before any write, so this never
+        # leaves partial store state.
+        raise click.ClickException(str(exc)) from exc
+    except (sqlite3.Error, CkmValidationError) as exc:
+        # A write-path failure (e.g. a concurrent writer holding the
+        # BuilderOps sqlite file) can leave the CEG partially seeded, since
+        # each manifest entry upserts in its own transaction rather than one
+        # transaction spanning the whole run. Surface a clear operator
+        # message instead of a raw traceback; re-running `ckm seed` is safe
+        # because seeding is idempotent (INV-CKM-7) and will pick up
+        # wherever it left off.
+        raise click.ClickException(
+            f"ckm seed failed while writing to the store: {exc}. "
+            "Seeding is idempotent; re-run `ckm seed` to resume from where it stopped."
+        ) from exc
+    click.echo(f"seeded {result['seeded']} capabilities, {result['changed']} changed")
 
 
 @builderops.group("inquiry", help="Persist and inspect pre-ticket model inquiry artifacts.")
@@ -396,6 +453,9 @@ def inquiry_evaluate(
         service = ModelInquiryService.from_env()
         gateway = ModelInquiryPromotionGateway(service)
         payload = gateway.evaluate(inquiry_id, actor=_parse_actor(created_by))
+        payload["human_readable_report"] = str(
+            service.write_human_readable_report(inquiry_id)
+        )
     except BuilderOpsValidationError as exc:
         raise click.ClickException(str(exc)) from exc
     _emit(payload, as_json)
