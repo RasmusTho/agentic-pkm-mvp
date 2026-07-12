@@ -96,7 +96,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/dispatcher/",
             "tests/builderops/",
             "tests/dispatcher/",
+            "tests/governance/",
             "docs/builderops/",
+            "importlinter.ini",
         ),
         ("tests/builderops", "tests/dispatcher", "tests/governance"),
     ),
@@ -148,9 +150,26 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/health", "tests/invariants", "tests/api"),
     ),
     (
+        "store_ingest",
+        (
+            "app/stores/",
+            "app/ingest/",
+            "tests/stores/",
+            "tests/ingest/",
+            "docs/DB_SCHEMA.md",
+            "docs/RUNTIME_CORRECTNESS_KERNEL/",
+        ),
+        ("tests/stores", "tests/ingest", "tests/architecture"),
+    ),
+    (
         "relevance",
         ("app/relevance/", "tests/relevance/"),
         ("tests/relevance",),
+    ),
+    (
+        "heimdal",
+        ("app/heimdal/", "tests/heimdal/", "docs/HEIMDAL/", "docs/HEIMDAL_CAPTURE_CLIENT/"),
+        ("tests/heimdal",),
     ),
     (
         "orchestration",
@@ -231,6 +250,25 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         "events_receipts",
         ("app/events/", "app/receipts/", "docs/contracts/events/", "tests/events/", "tests/receipts/"),
         ("tests/events", "tests/receipts", "tests/contracts"),
+    ),
+    (
+        "heimdal_mimer",
+        (
+            "app/heimdal/",
+            "app/knowledge_acquisition/",
+            "docs/HEIMDAL/",
+            "docs/KARAKEEP_MIMER_ACQUISITION/",
+            "docs/KNOWLEDGE_ACQUISITION/",
+            "docs/EVENTS.md",
+            "tests/heimdal/",
+            "tests/knowledge_acquisition/",
+        ),
+        ("tests/heimdal", "tests/knowledge_acquisition"),
+    ),
+    (
+        "journaling",
+        ("app/journaling/", "tests/journaling/", "docs/CONVERSATIONAL_JOURNALING/"),
+        ("tests/journaling",),
     ),
     (
         "promotion_panel",

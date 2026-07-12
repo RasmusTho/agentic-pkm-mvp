@@ -2,7 +2,8 @@
 
 ``capture(text, principal_id)`` returns an in-memory artifact whose ``.metadata_bundle`` carries
 identity, the active scope binding, the three orthogonal role dimensions, sensitivity, suppression
-state, and provenance. Every downstream runtime object inherits from this foundation.
+state, provenance, and ``episode_ref`` (stamped ``"unbound"`` — real episode-id assignment is ERE-05,
+out of scope here). Every downstream runtime object inherits from this foundation.
 
 Scope-vs-vault: ``scope_id`` is the cognitive/policy/provenance frame (stamped from the active scope
 binding, WSP); ``vault_id`` is storage topology. They are never equal — collapsing them would let
@@ -70,6 +71,10 @@ def capture(
         created_by=principal_id,
         created_at=_now_iso(),
         provenance_event_ids=[f"prov:capture:{uuid4().hex[:8]}"],
+        # No episode is known at raw capture time (real assignment is ERE-05); 'unbound' is the
+        # honest default, mirroring how scope is always stamped (docs/architecture/semantic-dimensions.md
+        # :: episode_ref).
+        episode_ref="unbound",
         vault_id=vault_id,
         principal_id=principal_id,
         content_hash=content_hash,

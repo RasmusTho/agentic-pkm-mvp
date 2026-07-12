@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.ingest.lifecycle import REFLECT_DIR
 from app.search.service import ingest_object
 
@@ -25,6 +26,13 @@ def consume_reflection_queue() -> list[UUID]:
         text = payload.pop("__text__", "")
         kind = payload.get("object_type", "note")
         source_ref = payload.get("source_ref") or f"reflect:{payload.get('source_object_id', '')}"
+
+        # Carry episode_ref through the reflection re-ingest (ERE-03/ERE-05, invariant->producers):
+        # a reflection artifact is a derived object; its episode binding survives derivation like
+        # scope/provenance. Normalize whatever the queued entry carries (a real binding is kept and
+        # validated) to the honest 'unbound' default when absent -- never leave the key off the
+        # projected payload (round-3 store-payload census).
+        payload = {**payload, "episode_ref": episode_ref_from_frontmatter(payload)}
 
         new_id, _ = ingest_object(
             object_id=None,

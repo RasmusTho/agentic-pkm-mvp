@@ -28,6 +28,8 @@ This task produces the migration-reversibility contract as a docs artifact under
 
 ## Concretely
 
+This is a **target-state, unshipped** contract for the planned per-channel DB split. Until that split lands, current production uses the single `app` DB under compose project `pkm-prod`.
+
 - **Reversible migration**: the migration has an authored reverse step that restores the prior schema/data shape when executed. The reverse step is versioned alongside the forward step and runs as part of `rollback-promotion` if invoked.
 - **Forward-only migration**: the migration does not have a reverse step, either because reversal is impossible (e.g. dropped data) or because reversal is not worth authoring. Forward-only migrations are allowed but must be flagged.
 - **Declaration surface**: the reversibility marker lives in the migration file itself (frontmatter, comment, or tool-native metadata, as the migration tool allows). It is mandatory; a migration with no marker fails a pre-promotion check.

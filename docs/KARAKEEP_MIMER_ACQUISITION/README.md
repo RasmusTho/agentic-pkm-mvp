@@ -1,6 +1,7 @@
-State: FILED specification directory (parent #3367; children #3372–#3377). D1 is settled. All
-children remain `agent:blocked` until this specification merges; no Karakeep service or ingestion
-support is claimed as shipped.
+State: ACTIVE specification directory (parent #3367; children #3372–#3377). D1 is settled. The
+specification is merged; child pickup follows live GitHub dependency/label truth. No Karakeep
+service or ingestion support is claimed as shipped until the implementation and acceptance slices
+land.
 Doc role: Capability specification (feature-breakdown lane)
 Authority: Product/Runtime target-state specification subordinate first to accepted `docs/adr/ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md`, then `docs/HEIMDAL/FABLE_COMPANION.md`, `docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md`, and `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md`.
 Owner: Architecture / Product
@@ -24,6 +25,13 @@ This is **not companion capture** and does not call Mimer's `/api/capture` endpo
 bundled MCP server is also outside this capability: connecting an interactive assistant to that
 server is Direction A operator configuration. Private endpoint selection, credential values, DNS,
 and firewall policy remain operator-owned deployment inputs and are deliberately not specified here.
+
+The source contract is fixed in
+[`DEFINE_READING_SOURCE_AND_CANDIDATE_CONTRACT.md`](DEFINE_READING_SOURCE_AND_CANDIDATE_CONTRACT.md):
+one immutable `heimdal.observation.published.v1` revision per canonical Karakeep snapshot, the
+existing append-only log and sanctioned publish/read/advance APIs, and the existing
+`mimer.candidate_projector` consumer. Mimer's planned additive `reading_source_note` mapping remains
+review-required and first-write-wins; a tombstone is evidence for review, never a delete command.
 
 ## Product/Runtime SBS classification
 
@@ -65,9 +73,11 @@ contract, not on the live service. Task 5 waits for both the managed service (2)
   page deduplicates before the cursor advances, preventing duplicate notes.
 - **KMA-INV-3 — two cursors, no distributed transaction.** Heimdal advances its source cursor only
   after the corresponding published evidence is durable; Mimer advances its consumer cursor only
-  after candidate materialization or an explicit item-scoped failure. If Mimer is down, Heimdal may
-  continue publishing. If Mimer writeback is blocked, only its consumer cursor stays put. Restart
-  replays each side idempotently without coupling the cursors.
+  across a contiguous durable prefix of candidate materializations. A retryable, blocked, or
+  item-scoped failure stops the prefix, so a later success cannot skip the failed evidence; only a
+  durably recorded failure disposition with replay/audit proof may be safely advanceable. If Mimer
+  is down, Heimdal may continue publishing. Restart replays each side idempotently without coupling
+  the cursors.
 - **KMA-INV-4 — only Heimdal talks to Karakeep.** Mimer normalization, candidate writeback, replay,
   and acceptance consume published evidence. If Karakeep is unavailable after publication, Mimer
   replay remains possible with zero source egress.

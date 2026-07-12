@@ -16,6 +16,10 @@ Design rules enforced here:
   vector/chunk cannot exist.
 - ``derived_from`` is required for derived/rebuildable object types (``segment``, ``projection``,
   ``retrieval_result``, ``context_item``); the DRI stage (#2581) is the call site that supplies it.
+- ``episode_ref`` (docs/architecture/semantic-dimensions.md :: episode_ref) is always present:
+  ``"unbound"``, ``"pending"``, or a non-empty list of episode ids. It survives derivation the same
+  way ``derived_from``/scope/role do, and is orthogonal to ``evidence_role`` — never an admissibility
+  upgrade, and a ``"pending"`` binding is never authority (ADR-0051, ADR-0029).
 """
 
 from __future__ import annotations
@@ -28,6 +32,10 @@ from typing import Any
 DERIVED_OBJECT_TYPES = frozenset(
     {"segment", "projection", "retrieval_result", "context_item"}
 )
+
+# episode_ref string sentinels (schemas/_defs.schema.json :: episode_ref). Any other string value is
+# invalid; a non-sentinel binding must be a non-empty list/tuple of episode_id strings.
+EPISODE_REF_SENTINELS = frozenset({"unbound", "pending"})
 
 # Authority states that denote durable accepted standing; reaching one requires a governed
 # AuthorityTransition + AuthorityReceipt (schema: canonical_authority_state). The schema
@@ -47,6 +55,7 @@ _REQUIRED_FIELDS = (
     "created_by",
     "created_at",
     "provenance_event_ids",
+    "episode_ref",
 )
 
 
@@ -72,6 +81,7 @@ class MetadataBundle:
     created_by: str
     created_at: str
     provenance_event_ids: Sequence[str]
+    episode_ref: str | Sequence[str]
 
     # --- common optionals (omitted from to_dict when unset) ---
     vault_id: str | None = None
@@ -110,6 +120,27 @@ class MetadataBundle:
                 "a projection may hold evidence_role='evidence' only via a provenance-backed "
                 "promotion receipt (authority_receipt_ref); projection is not evidence by default"
             )
+        # episode_ref (docs/architecture/semantic-dimensions.md :: episode_ref) is either the sentinel
+        # 'unbound'/'pending', or a non-empty list/tuple of episode_id strings — never inferred from,
+        # and never feeding, authority_state/evidence_role/scope_binding.
+        if isinstance(self.episode_ref, str):
+            if self.episode_ref not in EPISODE_REF_SENTINELS:
+                raise ValueError(
+                    f"episode_ref={self.episode_ref!r} must be one of {sorted(EPISODE_REF_SENTINELS)} "
+                    "or a non-empty list of episode_id strings"
+                )
+        elif isinstance(self.episode_ref, (list, tuple)):
+            if not self.episode_ref:
+                raise ValueError(
+                    "episode_ref array must be non-empty (use 'unbound' when no episode is known)"
+                )
+            if any((not isinstance(x, str)) or (x == "") for x in self.episode_ref):
+                raise ValueError("episode_ref array must contain only non-empty episode_id strings")
+        else:
+            raise TypeError(
+                "episode_ref must be 'unbound', 'pending', or a non-empty list/tuple of episode_id "
+                f"strings, not {type(self.episode_ref).__name__}"
+            )
         # Validate lineage inputs strictly before coercion. tuple() over a str would split it into
         # characters, and over a mapping would keep only its keys — both silently corrupt
         # lineage/provenance and still pass the schema's id_string items. Require an explicit
@@ -127,6 +158,8 @@ class MetadataBundle:
         # (frozen=True only blocks reassignment). object.__setattr__ is the frozen-dataclass idiom.
         object.__setattr__(self, "provenance_event_ids", tuple(self.provenance_event_ids))
         object.__setattr__(self, "derived_from", tuple(self.derived_from))
+        if isinstance(self.episode_ref, list):
+            object.__setattr__(self, "episode_ref", tuple(self.episode_ref))
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable dict for schema validation; prunes unset optionals.

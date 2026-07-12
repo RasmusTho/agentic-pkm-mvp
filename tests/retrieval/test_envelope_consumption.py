@@ -250,6 +250,56 @@ def test_ask_seam_envelope_carries_real_denials_end_to_end(tmp_path, monkeypatch
     assert state.denials and state.denials[0]["denial_class"] == "cross_scope_no_flow"
 
 
+def test_envelope_propagates_payload_episode_ref() -> None:
+    """Derivation survival at the live ASK seam (invariant registry ::
+    observation_episode_binding_survives): a payload that already carries an episode binding —
+    'pending' or real episode ids (as ERE-05/06 will supply) — must survive through
+    ``_bundle_from_result`` into the envelope bundle, not be overwritten with 'unbound'. A payload
+    with no binding (all live rows today) still gets the honest 'unbound' default, and a malformed
+    value falls back to 'unbound' rather than smuggling an out-of-shape value into the closed
+    schema."""
+
+    def _result(doc_id: str, payload: dict) -> dict:
+        return {
+            "id": doc_id,
+            "doc_id": doc_id,
+            "text": "body",
+            "score": 0.5,
+            "snippet": "body",
+            "source_ref": "vault/a.md",
+            "payload": {"domain": "work", **payload},
+            "evidence_role_in_context": "background",
+        }
+
+    scoped = ScopedRetrieval(
+        results=[
+            _result("doc-pending", {"episode_ref": "pending"}),
+            _result("doc-bound", {"episode_ref": ["ep-standup-1", "ep-followup-2"]}),
+            _result("doc-default", {}),
+            _result("doc-malformed", {"episode_ref": ["", 42]}),
+        ],
+        denials=(),
+        active_scope="work",
+    )
+    envelope = assemble_and_validate_ask_envelope(
+        scoped,
+        active_workspace_id="workspace:ask",
+        active_scope_id="scope:work",
+        principal_id="principal:ask",
+        user_intent="orient",
+    )
+    refs = {
+        item["metadata_bundle"]["object_id"]: item["metadata_bundle"]["episode_ref"]
+        for item in envelope["retrieved_items"]
+    }
+    assert refs["doc-pending"] == "pending", "a pending binding must survive, not reset to unbound"
+    assert refs["doc-bound"] == ["ep-standup-1", "ep-followup-2"], (
+        "a real episode binding must survive derivation through the ASK seam"
+    )
+    assert refs["doc-default"] == "unbound", "no binding in the payload -> honest unbound default"
+    assert refs["doc-malformed"] == "unbound", "a malformed binding must fall back to unbound"
+
+
 def test_envelope_honors_proposed_role_downgrade() -> None:
     """Review F2: a legitimate proposed DOWNGRADE of the in-context role is honored (not silently
     reset to intrinsic); a proposed upgrade is still clamped to intrinsic."""

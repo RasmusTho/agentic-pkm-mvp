@@ -152,6 +152,20 @@ Current consumer expectations:
   fails before exhaustion, the worker logs the failure and leaves the condition observable through
   worker logs, status/heartbeat signals, and the undelivered DB outbox row.
 
+### Secondary per-consumer cursor readers (topic-scoped, `delivered_at`-independent)
+
+`delivered_at` is the single shared flag the worker dispatcher owns; a second logical consumer that
+also needs to read specific outbox topics (without competing for, or being gated on, the worker's own
+delivery state) keeps its own independent, durable, per-consumer position instead. Introduced by the
+Episode Resolution Engine's `vault.activity` stream (ERE-04, #3179):
+`app/episodes/vault_activity_stream.py` reads `ingest.vault.changed` / `ingest.object.created` /
+`ingest.object.deleted` rows ordered `(created_at, id)` ascending, strictly after its own last-seen
+position (`episode_engine_state` table, `cursor:vault.activity:<consumer_id>` key,
+`app/episodes/engine_state.py`), and never reads or writes `delivered_at`. This generalizes the
+`heimdal_observation_cursor` per-consumer-cursor precedent (`app/heimdal/publish.py`) to the shared
+`outbox` table for a topic-scoped subset. A future secondary reader of other outbox topics should
+follow the same pattern rather than inventing a new one.
+
 ## Embeddings and Outbox
 
 Outbox events MUST NOT carry embedding vectors.
@@ -236,6 +250,18 @@ document and §1.3 are now consistent prose/schema mirrors of each other).
 - **Out of scope for this slice:** the consent ledger runtime (A5); the corrected/revision fold logic
   (§11#12/§11#14); the entity register runtime (A1, already landed, #3038); the observation log /
   cursor mechanics (A2, already landed, #3039); capture, ASR, projector.
+
+### Karakeep published-evidence profile (contract only)
+
+Issue #3372 defines the target adapter profile at
+`docs/KARAKEEP_MIMER_ACQUISITION/DEFINE_READING_SOURCE_AND_CANDIDATE_CONTRACT.md :: Published-v1 field map`.
+Each Karakeep link, note, or highlight revision conforms to the existing
+`heimdal.observation.published.v1` schema and the append-only log above; no Karakeep-specific topic,
+log, read API, or cursor is introduced. Heimdal alone owns REST fetch, source identity/revision,
+attribution, provenance, and publication. Mimer begins at the durable event and keeps the existing
+`mimer.candidate_projector` cursor. This paragraph records the contract selected by KMA-01; the
+Karakeep adapter and additive candidate behavior are not shipped by this docs/test slice.
+
 ## Heimdal consent ledger v0 + capture-time check (HEIM-3)
 
 `app/heimdal/consent_ledger.py` (#3042, Epic #3019 slice A5; ratified by
