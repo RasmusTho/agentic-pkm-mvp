@@ -111,6 +111,22 @@ class RetrievalResponse:
     denials: tuple[ScopeDenial, ...] = ()
 
 
+def _artifact_scope_of(payload: dict[str, Any]) -> str:
+    """The artifact's scope from a retrieval hit payload, for the ERE-08 cross-scope decay gate.
+
+    Mirrors the scope resolution in ``app.retrieval.envelope`` exactly: ``domain`` then ``scope_id``
+    are the string-valued scope carriers on the retrieval payload. ``scope_binding`` is deliberately
+    NOT consulted -- it is schema-typed as an OBJECT, never a plain scope string (Finding 4: the
+    old ``scope_binding`` branch was dead under ``isinstance(value, str)``). Empty string when the
+    payload carries no scope -- the decay gate then fails CLOSED for any confirmed-scope closed
+    episode (:func:`app.episodes.closure_decay.admit_closed_ids_for_scope`, Finding 2)."""
+    for key in ("domain", "scope_id"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
 def _apply_closure_decay(hits: list["RetrievalHit"]) -> list["RetrievalHit"]:
     """ERE-06 (#3181): derive (never persist) the closure-based salience drop for every hit, then
     re-sort the RETURNED set by the dampened score (ranking-only, AC4 -- this never changes
@@ -122,9 +138,11 @@ def _apply_closure_decay(hits: list["RetrievalHit"]) -> list["RetrievalHit"]:
     (the common case today) short-circuits to zero DB round-trips.
     """
     from app.episodes.closure_decay import (
+        admit_closed_ids_for_scope,
         derive_closure_salience,
         is_exempt_note_class,
         read_closed_episode_ids,
+        read_closed_episode_scopes,
         resolve_episode_ids,
     )
 
@@ -144,10 +162,26 @@ def _apply_closure_decay(hits: list["RetrievalHit"]) -> list["RetrievalHit"]:
     if not closed_ids:
         return hits
 
+    # ERE-08 (#3183) cross-scope decay gate: a closed episode in scope A must never dampen an
+    # artifact in scope B without an explicit flow (deny-by-default; denial class
+    # cross_scope_no_flow). Only engage when at least one hit carries a resolvable scope -- absent
+    # scope falls back to the same-scope-by-construction assignment guarantee (fail-open, no extra
+    # read), which also keeps this off the hot path for the common unscoped-payload case.
+    hit_scopes = [_artifact_scope_of(hit.payload) for hit in hits]
+    closed_scopes = read_closed_episode_scopes(closed_ids) if any(hit_scopes) else {}
+
+    # Finding 6: memoize the admitted-closed-id set per DISTINCT artifact scope -- the gate result
+    # depends only on the scope, so compute it once per unique scope instead of once per hit.
+    admitted_by_scope: dict[str, set[str]] = {}
+
     dampened: list[RetrievalHit] = []
-    for hit, is_exempt in zip(hits, exempt):
+    for hit, is_exempt, artifact_scope in zip(hits, exempt, hit_scopes):
+        admitted = admitted_by_scope.get(artifact_scope)
+        if admitted is None:
+            admitted = admit_closed_ids_for_scope(closed_ids, closed_scopes, artifact_scope)
+            admitted_by_scope[artifact_scope] = admitted
         factor, salience = derive_closure_salience(
-            hit.payload.get("episode_ref"), closed_ids, exempt_note_class=is_exempt
+            hit.payload.get("episode_ref"), admitted, exempt_note_class=is_exempt
         )
         if salience:
             hit = replace(

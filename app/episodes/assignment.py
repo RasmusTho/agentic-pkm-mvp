@@ -111,6 +111,12 @@ from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
 logger = logging.getLogger(__name__)
 
+#: A cross-scope flow provider resolves the explicit typed ``CrossScopeFlow`` (a plain mapping, the
+#: shape ``mimer_runtime.cross_scope.evaluate`` reads) for a directional crossing, or ``None`` when
+#: none grants it. Production passes no provider (authoring flow grants is out of scope), so every
+#: cross-scope binding is denied (ERE-08 AC4). Mirrors ``cross_scope_fusion.FlowProvider``.
+CrossScopeFlowProvider = Callable[[str, str], "Mapping[str, Any] | None"]
+
 # Distinct action string for the assignment write seam (mirrors
 # app.episodes.store.EPISODE_WRITE_ACTION's per-seam-action pattern), asserted inside
 # commit_assignment_diff itself -- not a caller-side helper (AC4: enforcement at the production
@@ -239,15 +245,39 @@ class AssignmentDecision:
 # ---------------------------------------------------------------------------
 
 
+def _cross_scope_binding_allowed(
+    artifact_scope: str,
+    episode_scope: str,
+    flow_provider: "CrossScopeFlowProvider | None",
+) -> bool:
+    """ERE-08 (#3183) assignment seam gate: may an artifact in ``artifact_scope`` bind to an episode
+    in ``episode_scope``? Deny-by-default -- routed through ``mimer_runtime.cross_scope.evaluate``
+    (via :func:`app.episodes.cross_scope_fusion.evaluate_episode_fuse`, the single ``episode_fuse``
+    operation, no new authority model). Binding an artifact into a different-scope episode admits it
+    into that episode's cross-scope situation, so the crossing is source=``artifact_scope`` ->
+    target=``episode_scope``. Absence of an explicit flow denies ("similarity is not permission").
+
+    Production passes NO ``flow_provider`` (authoring flow grants is out of scope), so a cross-scope
+    binding is ALWAYS denied -- assignment never crosses scopes unflowed (AC4). Imported lazily to
+    keep this pure module free of an import-time ``mimer_runtime`` dependency."""
+    from app.episodes.cross_scope_fusion import evaluate_episode_fuse
+
+    flow = flow_provider(artifact_scope, episode_scope) if flow_provider else None
+    return bool(evaluate_episode_fuse(artifact_scope, episode_scope, flow=flow).allowed)
+
+
 def compute_assignments(
     artifacts: Sequence[ArtifactCandidate],
     episodes: Sequence[EpisodeBoundsRecord],
+    *,
+    flow_provider: "CrossScopeFlowProvider | None" = None,
 ) -> list[AssignmentDecision]:
     """The pure assignment rule: which artifacts bind to which episodes, and on what basis.
 
-    For every (artifact, episode) pair sharing the SAME ``scope`` (deny-by-default cross-scope --
-    an artifact never binds to a different-scope episode regardless of provenance or time overlap,
-    ERE-08's posture honored here):
+    For every (artifact, episode) pair sharing the SAME ``scope`` (and, for a DIFFERENT-scope pair,
+    only when an explicit ``CrossScopeFlow`` admits it via :func:`_cross_scope_binding_allowed` --
+    deny-by-default, ERE-08's posture enforced here through ``mimer_runtime.cross_scope.evaluate``;
+    production passes no ``flow_provider`` so a cross-scope binding is always denied, AC4):
 
     - provenance-anchored (AC2): ``artifact.artifact_ref in episode.derived_from`` -> binds at
       :data:`BASIS_PROVENANCE`, even when the artifact's ``observed_at`` sits outside
@@ -269,7 +299,9 @@ def compute_assignments(
     seen: set[tuple[str, str]] = set()
     for artifact in artifacts:
         for episode in episodes:
-            if artifact.scope != episode.scope:
+            if artifact.scope != episode.scope and not _cross_scope_binding_allowed(
+                artifact.scope, episode.scope, flow_provider
+            ):
                 continue
             key = (artifact.artifact_ref, episode.episode_id)
             if key in seen:
@@ -887,6 +919,34 @@ def _resolve_artifact_observed_at(artifact_ref: str, *, vault_root: Path | str |
         return None
 
 
+def _resolve_artifact_scope(artifact_ref: str, *, vault_root: Path | str | None) -> str | None:
+    """Best-effort recovery of an artifact's TRUE scope for the ERE-08 (#3183) cross-scope gate
+    (Finding 1). Returns ``None`` -- meaning "scope not cheaply determinable" -- whenever it cannot
+    be resolved.
+
+    Only ``vault.activity:<outbox_row_id>`` refs resolve today: they own a durable bundle (the note
+    behind the never-purged outbox row) whose frontmatter scope IS the artifact's real scope
+    (:func:`app.episodes.vault_activity_stream.resolve_scope_for_outbox_row_id`, the SAME scope
+    segmentation assigns). This is the ref shape whose bundle a cross-scope binding would actually
+    write ``episode_ref`` into -- so resolving it is what lets the gate deny a genuinely foreign-
+    scope provenance rebinding. A ``heimdal.observations:<id>`` ref returns ``None``: its scope is
+    not cheaply resolvable (the append-only log is keyed by sequence, not observation_id) AND it has
+    no downstream bundle (:func:`_resolve_bundle_object_id_and_note_path` returns ``(None, None)``
+    for it), so it can never carry a cross-scope ``episode_ref`` bundle write -- there is nothing to
+    leak. ``vault_root=None`` short-circuits to ``None`` (ledger-only callers)."""
+    if not vault_root or not artifact_ref.startswith(_VAULT_ACTIVITY_PREFIX):
+        return None
+    row_id = artifact_ref[len(_VAULT_ACTIVITY_PREFIX) :]
+    if not row_id:
+        return None
+    from app.episodes.vault_activity_stream import resolve_scope_for_outbox_row_id
+
+    try:
+        return resolve_scope_for_outbox_row_id(row_id, vault_root=Path(vault_root))
+    except Exception:
+        return None
+
+
 def reconcile_episode_bindings(
     episode_id: str,
     *,
@@ -896,6 +956,7 @@ def reconcile_episode_bindings(
     derived_from: Iterable[str],
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     vault_root: Path | str | None = None,
+    flow_provider: "CrossScopeFlowProvider | None" = None,
 ) -> dict[str, int]:
     """ERE-07 binding reconciliation for a re-cut or newly-adopted episode note.
 
@@ -935,8 +996,27 @@ def reconcile_episode_bindings(
         episode_id=episode_id, scope=scope, start=start, end=end, derived_from=tuple(sorted(derived_from_set))
     )
 
+    # ERE-08 (#3183) Finding 1 -- CRITICAL cross-scope gate bypass, fixed: do NOT force each
+    # provenance candidate's scope to the EPISODE's scope. A ``derived_from`` ref read back from a
+    # (human- or sync-edited) note's frontmatter could be a FOREIGN-scope artifact_ref; forcing it
+    # to the episode scope made ``compute_assignments``' cross-scope check structurally always-False,
+    # so a foreign ref bound BASIS_PROVENANCE with no gate and ``commit_assignment_diff`` wrote the
+    # (foreign-scope) ``episode_ref`` into that artifact's OWN bundle -- a real cross-scope write.
+    # Now each ref carries its TRUE, resolved scope (:func:`_resolve_artifact_scope`); a ref whose
+    # true scope differs from the episode's is routed through the same cross-scope gate as every
+    # other binding (deny-by-default via ``compute_assignments(..., flow_provider=...)`` below), so
+    # an unflowed foreign provenance ref produces NO decision and ``diff_assignments`` corrects any
+    # previously-leaked binding. An unresolvable scope (``None`` -- a heimdal ref with no bundle to
+    # leak into, or a purged row) falls back to the episode scope: it preserves legitimate same-scope
+    # provenance across a re-cut (never destroy a valid binding, ERE-07 round-1 Finding 1) and can
+    # carry no cross-scope bundle write regardless.
     candidates: list[ArtifactCandidate] = [
-        ArtifactCandidate(artifact_ref=ref, scope=scope, observed_at=start) for ref in sorted(derived_from_set)
+        ArtifactCandidate(
+            artifact_ref=ref,
+            scope=_resolve_artifact_scope(ref, vault_root=vault_root) or scope,
+            observed_at=start,
+        )
+        for ref in sorted(derived_from_set)
     ]
     preserved: list[AssignmentDecision] = []
     for (artifact_ref, ep_id), row in existing.items():
@@ -973,7 +1053,7 @@ def reconcile_episode_bindings(
                 ArtifactCandidate(artifact_ref=artifact_ref, scope=row_scope, observed_at=observed_at)
             )
 
-    decisions = compute_assignments(candidates, [episode]) + preserved
+    decisions = compute_assignments(candidates, [episode], flow_provider=flow_provider) + preserved
     to_insert, to_correct = diff_assignments(existing, decisions)
     return commit_assignment_diff(to_insert, to_correct, write_guard=write_guard, vault_root=vault_root)
 
