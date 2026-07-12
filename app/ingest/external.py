@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Iterable, List
 from uuid import uuid4
 
+from app.ingest.episode_ref import UNBOUND
 from app.observability.ingest_meta import record_ingest_run
 from app.search.service import ingest_object as index_ingest_object
 from app.stores import get_object_store
@@ -55,6 +56,12 @@ def ingest_external_folder(root: Path, *, limit: int | None = None) -> ExternalI
                 "source_ref": str(path),
                 "text": text,
                 "content": text,
+                # External raw sources carry no frontmatter and are never ERE-05 assignment
+                # targets (a fresh object_id each ingest, no vault-activity provenance), so the
+                # honest vault-canonical value is the 'unbound' sentinel -- carried explicitly so
+                # this producer satisfies the invariant->producers store-payload census rather than
+                # leaving the key absent (ERE-05, #3180 round-3 audit).
+                "episode_ref": UNBOUND,
             }
             store.put(object_id, kind="external", source_ref=str(path), payload=payload)
             index_ingest_object(object_id=object_id, kind="external", source_ref=str(path), payload=payload, text=text)

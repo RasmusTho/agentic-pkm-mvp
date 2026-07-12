@@ -97,6 +97,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/builderops/",
             "tests/dispatcher/",
             "docs/builderops/",
+            "importlinter.ini",
         ),
         ("tests/builderops", "tests/dispatcher", "tests/governance"),
     ),
@@ -148,9 +149,26 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/health", "tests/invariants", "tests/api"),
     ),
     (
+        "store_ingest",
+        (
+            "app/stores/",
+            "app/ingest/",
+            "tests/stores/",
+            "tests/ingest/",
+            "docs/DB_SCHEMA.md",
+            "docs/RUNTIME_CORRECTNESS_KERNEL/",
+        ),
+        ("tests/stores", "tests/ingest", "tests/architecture"),
+    ),
+    (
         "relevance",
         ("app/relevance/", "tests/relevance/"),
         ("tests/relevance",),
+    ),
+    (
+        "heimdal",
+        ("app/heimdal/", "tests/heimdal/", "docs/HEIMDAL/", "docs/HEIMDAL_CAPTURE_CLIENT/"),
+        ("tests/heimdal",),
     ),
     (
         "orchestration",
@@ -252,6 +270,11 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/knowledge_acquisition/",
         ),
         ("tests/heimdal", "tests/knowledge_acquisition"),
+    ),
+    (
+        "journaling",
+        ("app/journaling/", "tests/journaling/", "docs/CONVERSATIONAL_JOURNALING/"),
+        ("tests/journaling",),
     ),
     (
         "promotion_panel",

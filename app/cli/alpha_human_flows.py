@@ -12,6 +12,7 @@ from app.agents.normalizer.agent import run as normalize_run
 from app.agents.qa.agent import answer as qa_answer
 from app.agents.panel.filters import strip_ai_panels
 from app.ingest.config import DEFAULT_VAULT_ROOT
+from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.index.outbox import append_jsonl
 from app.knowledge.write_ops import write_note_from_absolute
 from app.observability.log import with_trace_id
@@ -79,6 +80,7 @@ def _select_sample_files(vault_root: Path, sample_size: int) -> List[Path]:
 def _ingest_note(path: Path) -> Tuple[str, dict | None]:
     trace_id = with_trace_id(None)
     text = path.read_text(encoding="utf-8")
+    frontmatter, _body = load_frontmatter(text)
     stripped_text = strip_ai_panels(text)
     normalize_res = normalize_run(str(path), trace_id=trace_id)
     sanitize_normalize = dict(normalize_res)
@@ -104,7 +106,16 @@ def _ingest_note(path: Path) -> Tuple[str, dict | None]:
     except Exception:
         object_uuid = uuid.uuid4()
     title = (normalize_res.get("core6") or {}).get("title")
-    payload = {"title": title, "origin": "vault", "source": str(path)}
+    # Carry the note's vault-canonical episode_ref into the DB projection (ERE-03/ERE-05,
+    # invariant->producers): index_ingest_object + store.put below full-overwrite the payload
+    # column, so an absent episode_ref would blind-drop a stamped binding on a flow D/E reingest
+    # (round-3 audit: this producer was missed in round 2).
+    payload = {
+        "title": title,
+        "origin": "vault",
+        "source": str(path),
+        "episode_ref": episode_ref_from_frontmatter(frontmatter),
+    }
     try:
         index_ingest_object(
             object_id=object_uuid,
