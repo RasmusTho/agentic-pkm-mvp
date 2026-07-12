@@ -62,6 +62,7 @@ scope-isolation mechanism is needed here, only correct tagging.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -171,8 +172,6 @@ def resolve_calendar_bindings(env: Mapping[str, str] | None = None) -> tuple[Cal
     source = env if env is not None else os.environ
     raw_json = (source.get(_ENV_CALENDARS_JSON) or "").strip()
     if raw_json:
-        import json
-
         try:
             parsed = json.loads(raw_json)
         except (TypeError, ValueError) as exc:
@@ -221,23 +220,27 @@ class CalendarRawItem:
     text for JUST this occurrence (never the whole multi-occurrence
     response -- ``parse_vevent`` always parses exactly one VEVENT).
 
-    ``occurrence_key`` is ``None`` for a non-recurring event -- the original
-    ``uid:etag`` identity is untouched. For a recurring occurrence it is a
-    deterministic UTC timestamp (RECURRENCE-ID, falling back to DTSTART)
-    distinguishing this occurrence from its siblings, so each occurrence
-    gets its own signal_id instead of all of them colliding on the shared
-    master uid:etag (finding 2: without this, a recurring master "is
-    returned once ... and contributes exactly once ever").
+    ``occurrence_key`` is ``None`` for a non-recurring event (or any block
+    without a RECURRENCE-ID) -- the original ``uid:etag`` identity is
+    untouched. For a recurring occurrence it is a deterministic UTC
+    timestamp derived from THIS occurrence's own RECURRENCE-ID, so each
+    occurrence gets its own signal_id instead of all of them colliding on
+    the shared master uid:etag (finding 2: without this, a recurring master
+    "is returned once ... and contributes exactly once ever").
 
-    Review gate round 2 (PR #3519, findings 1+2): ``occurrence_key`` is now
-    derived from THIS occurrence's own RECURRENCE-ID (or DTSTART) alone --
-    NEVER from how many sibling occurrences of the same master happened to
-    also fall inside this tick's expand/time-range window. The prior
-    ``is_expanded = len(event_blocks) > 1`` gate meant the SAME real
-    occurrence got a bare ``uid:etag`` identity when it was alone in-window
-    but ``uid:etag:occurrence_key`` when a sibling was also in-window --
-    two identities for one instance, breaking same-occurrence idempotency
-    (finding 1, confirmed regression)."""
+    Review gate rounds 2+3 (PR #3519, finding 1): ``occurrence_key`` is
+    derived from THIS occurrence's own RECURRENCE-ID ALONE -- NEVER from how
+    many sibling occurrences happened to also fall inside this tick's
+    expand/time-range window. The round-1 ``is_expanded = len(event_blocks)
+    > 1`` gate (and the round-2 DTSTART fallback that kept the same
+    block-count gate) meant the SAME real occurrence flipped between a bare
+    ``uid:etag`` identity (alone in-window) and a keyed one (a sibling also
+    in-window) -- two identities for one instance, breaking same-occurrence
+    idempotency. Round 3 removed the last block-count-gated branch: absent a
+    RECURRENCE-ID the block is treated as a single event (``occurrence_key``
+    stays ``None``). See :func:`_parse_multistatus` for the documented
+    residual (a non-compliant no-RECURRENCE-ID expansion under-counts rather
+    than flips identity)."""
 
     uid: str
     etag: str
@@ -333,22 +336,35 @@ def _parse_multistatus(xml_text: str) -> list[CalendarRawItem]:
     ``occurrence_key`` so distinct occurrences fold as distinct signals
     instead of colliding on the shared resource uid:etag.
 
-    Review gate round 2 (finding 1, confirmed): ``occurrence_key`` is
-    derived from THIS occurrence's own RECURRENCE-ID whenever the parsed
-    event carries one -- REGARDLESS of ``len(event_blocks)``. Production
-    always sends ``<C:expand>`` (see :func:`_calendar_query_body`), so a
-    RFC-4791-compliant server stamps every expanded instance -- including
-    the lone instance a narrow tick window happens to return -- with its own
-    RECURRENCE-ID; gating that on "did >1 block come back in THIS
-    multistatus response" made the key depend on which siblings happened to
-    also fall inside this tick's window, so the SAME occurrence flipped
-    between a bare ``uid:etag`` identity (alone in-window) and
-    ``uid:etag:occurrence_key`` (a sibling also in-window). The
-    ``len(event_blocks) > 1`` check is now used ONLY as a defensive
-    DTSTART-based fallback for a non-compliant server that expands a
-    recurring master (proven by multiple VEVENT blocks sharing one
-    href/etag in a SINGLE response) yet omits RECURRENCE-ID on some
-    instance -- a narrower, hypothetical residual, not the confirmed bug."""
+    ``occurrence_key`` is derived SOLELY from THIS occurrence's own
+    ``RECURRENCE-ID`` -- never from ``len(event_blocks)`` or any other
+    property of the response as a whole. It is therefore FULLY
+    WINDOW-INDEPENDENT (Review gate rounds 2+3, finding 1): the same real
+    occurrence resolves to the same identity regardless of how many sibling
+    occurrences happen to fall inside this tick's expand/time-range window.
+    Production always sends ``<C:expand>`` (see :func:`_calendar_query_body`),
+    so an RFC-4791-compliant server stamps every expanded instance --
+    including the lone one a narrow tick window returns -- with its own
+    RECURRENCE-ID, which is the only sibling-independent recurring-instance
+    discriminator.
+
+    Round 3 (finding 1, confirmed): the earlier DTSTART fallback gated on
+    ``multiple_blocks_this_response`` is REMOVED. That branch re-introduced
+    the exact window-dependence it was meant to avoid -- a no-RECURRENCE-ID
+    instance got a DTSTART-based key ONLY when a sibling was also in-window,
+    so the same occurrence flipped identity between ticks. Chosen rule (a),
+    conservative and idempotent: when RECURRENCE-ID is absent, the block is
+    treated as a single (non-recurring) event -- ``occurrence_key`` is
+    ``None`` and its identity is the plain ``uid:etag``. **Documented
+    residual:** a non-compliant server that expands a recurring master into
+    multiple VEVENT blocks WITHOUT stamping RECURRENCE-ID would collapse
+    those blocks onto one ``uid:etag`` signal (an under-count of that one
+    series' occurrences). This is deliberately preferred over a
+    sibling-dependent identity: it is stable and idempotent (the same input
+    always folds the same way, never a duplicate under at-least-once
+    redelivery), whereas a block-count-gated key is not. No such server is
+    known; iCloud (the sole configured backend) stamps RECURRENCE-ID on
+    every expanded instance."""
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as exc:
@@ -373,25 +389,18 @@ def _parse_multistatus(xml_text: str) -> list[CalendarRawItem]:
         if not ics_text:
             continue
         event_blocks = _split_vevent_blocks(ics_text) or [ics_text]
-        multiple_blocks_this_response = len(event_blocks) > 1
         for block in event_blocks:
             event = parse_vevent(block)
             uid = event.uid if event is not None else href
             if not uid:
                 continue
+            # Window-independent identity (finding 1, rounds 2+3): keyed
+            # ONLY on this occurrence's own RECURRENCE-ID. Absent one, it is
+            # treated as a single event (occurrence_key stays None ->
+            # `uid:etag`); never gated on sibling/block count.
             occurrence_key: str | None = None
-            if event is not None:
-                if event.recurrence_id is not None:
-                    # Window-independent (finding 1): this occurrence's OWN
-                    # RECURRENCE-ID, never gated on sibling count.
-                    occurrence_key = _ics_utc_stamp(event.recurrence_id)
-                elif multiple_blocks_this_response and event.dtstart is not None:
-                    # Defensive fallback ONLY (see docstring): this
-                    # resource's response already proves it is a recurring
-                    # master (>1 VEVENT under one href/etag) but this
-                    # instance lacks RECURRENCE-ID -- discriminate by its
-                    # own DTSTART rather than collide on the shared etag.
-                    occurrence_key = _ics_utc_stamp(event.dtstart)
+            if event is not None and event.recurrence_id is not None:
+                occurrence_key = _ics_utc_stamp(event.recurrence_id)
             items.append(
                 CalendarRawItem(uid=uid, etag=etag or uid, ics_text=block, occurrence_key=occurrence_key)
             )
@@ -885,17 +894,31 @@ def _occurrence_content_token(event: ParsedCalendarEvent) -> str:
     tick too, and the segmenter (which treats any new signal_id as fresh
     evidence) would wrongly re-emit them all as "new". This hash only
     changes when THIS occurrence's own fields change, so editing occurrence
-    N never re-emits sibling occurrence M."""
-    parts = [
-        _iso(event.dtstart) if event.dtstart is not None else "",
-        _iso(event.dtend) if event.dtend is not None else "",
-        event.summary or "",
-    ]
-    if event.sequence is not None:
-        parts.append(f"seq={event.sequence}")
-    if event.last_modified is not None:
-        parts.append(f"lm={_iso(event.last_modified)}")
-    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:16]
+    N never re-emits sibling occurrence M.
+
+    Review gate round 3 (finding 2): the fields are hashed as a STRUCTURED,
+    unambiguous JSON encoding (``json.dumps`` of an ordered field map with
+    ``sort_keys`` and stable separators), NOT a delimiter-joined string. A
+    naive ``"|".join(...)`` let free text shift field boundaries -- a
+    SUMMARY containing ``|`` (or a value equal to another field's
+    ``seq=``/``lm=`` prefix) could produce a joined string identical to a
+    differently-structured occurrence, so a real content change would hash
+    the same and be MISSED (false-negative change detection). JSON string
+    escaping makes every field self-delimiting, so no free-text value can
+    ever be mistaken for a field boundary."""
+    payload = json.dumps(
+        {
+            "dtstart": _iso(event.dtstart) if event.dtstart is not None else None,
+            "dtend": _iso(event.dtend) if event.dtend is not None else None,
+            "summary": event.summary,
+            "sequence": event.sequence,
+            "last_modified": _iso(event.last_modified) if event.last_modified is not None else None,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
 
 
 def calendar_signal_id(
@@ -904,22 +927,26 @@ def calendar_signal_id(
     occurrence_key: str | None = None,
     event: ParsedCalendarEvent | None = None,
 ) -> str:
-    """The per-signal IDENTITY + CHANGE-token (Review gate round 2,
+    """The per-signal IDENTITY + CHANGE-token (Review gate rounds 2+3,
     findings 1+2 -- the canonical scheme both ``calendar_event_to_signal_contract``
     and ``segmenter._signal_from_calendar_row`` build on):
 
-    - Non-recurring (or unexpanded) event: unchanged from v1/round-1 --
-      ``uid:etag``. One CalDAV resource, one occurrence: the resource's own
-      ETag correctly IS this occurrence's change signal.
+    - Non-recurring event (or any block without a RECURRENCE-ID, i.e.
+      ``occurrence_key is None``): unchanged from v1/round-1 -- ``uid:etag``.
+      One CalDAV resource, one occurrence: the resource's own ETag correctly
+      IS this occurrence's change signal.
     - One occurrence of a recurring series: ``uid:occurrence_key:content_token``.
-      IDENTITY is ``uid:occurrence_key`` -- canonical and WINDOW-INDEPENDENT
-      (finding 1: ``occurrence_key`` is this occurrence's own RECURRENCE-ID
-      or DTSTART, never gated on how many siblings shared this tick's
-      expand/time-range window, so the same real occurrence always resolves
-      to the same identity). CHANGE detection is ``content_token``
-      (:func:`_occurrence_content_token`, finding 2) -- this occurrence's
-      OWN content hash, never the shared resource ETag, so editing one
-      occurrence never re-emits its unmodified siblings."""
+      IDENTITY is ``uid:occurrence_key`` -- canonical and FULLY
+      WINDOW-INDEPENDENT (finding 1, rounds 2+3: ``occurrence_key`` is this
+      occurrence's own RECURRENCE-ID, set in :func:`_parse_multistatus`
+      solely from that field and never gated on how many siblings shared
+      this tick's expand/time-range window, so the same real occurrence
+      always resolves to the same identity). CHANGE detection is
+      ``content_token`` (:func:`_occurrence_content_token`, finding 2) --
+      this occurrence's OWN content hashed as a structured JSON encoding,
+      never the shared resource ETag and never a delimiter-joined string, so
+      editing one occurrence never re-emits its unmodified siblings and a
+      free-text field can never forge an unchanged token."""
     if occurrence_key:
         token = _occurrence_content_token(event) if event is not None else etag
         return f"{uid}:{occurrence_key}:{token}"

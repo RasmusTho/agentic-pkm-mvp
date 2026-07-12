@@ -60,7 +60,7 @@ from app.episodes.calendar_stream import (
     resolve_attendee_readonly,
     resolve_calendar_bindings,
 )
-from app.episodes.calendar_stream import _calendar_query_body, _parse_multistatus
+from app.episodes.calendar_stream import _calendar_query_body, _occurrence_content_token, _parse_multistatus
 from app.episodes.segmenter import _signal_from_calendar_row, fold_signals_into_segments, run_segmentation_tick
 from app.episodes.stream_registry import ConfidenceScore
 from app.write_guard import WriteGuard
@@ -899,3 +899,124 @@ def test_sibling_edit_bumps_shared_etag_but_not_unedited_occurrence_signal_id() 
     # identity (finding 1) and change-detection (finding 2) are properly
     # decoupled.
     assert signal_b_v1.signal_id.rsplit(":", 1)[0] == signal_b_v2.signal_id.rsplit(":", 1)[0]
+
+
+# ---------------------------------------------------------------------------
+# Review gate round 3 (PR #3519, inline comments 3565668923 / 3565668944):
+# the round-2 window-independence fix survived only on the RECURRENCE-ID
+# path (the DTSTART fallback still gated identity on in-window block count),
+# and the change-token hashed a '|'-joined string that free text could
+# forge. Both are now closed.
+# ---------------------------------------------------------------------------
+
+
+def test_no_recurrence_id_occurrence_signal_id_stable_single_vs_multiple_in_window() -> None:
+    """Finding 1 round 3 (confirmed, inline comment 3565668923): a recurring
+    instance WITHOUT a RECURRENCE-ID must resolve to the SAME signal_id
+    whether or not a sibling block shares this tick's response. The round-2
+    DTSTART fallback was gated on `multiple_blocks_this_response`, so such
+    an instance got a bare `uid:etag` identity when alone in-window but a
+    DTSTART-keyed identity when a sibling was also in-window -- the exact
+    window-dependent identity flip round 2 was meant to kill, surviving on
+    the fallback path. The chosen rule (a): absent a RECURRENCE-ID, treat
+    the block as a single event -> `occurrence_key` is None -> `uid:etag`,
+    identically in both cases (the documented conservative residual: a
+    non-compliant multi-block no-RECURRENCE-ID expansion under-counts, but
+    never flips identity)."""
+    href = "/calendars/work/no-recurrence-id.ics"
+    # No RECURRENCE-ID on either block -- only DTSTART distinguishes them.
+    block_a = (
+        "BEGIN:VEVENT\r\n"
+        "UID:no-rid-series\r\n"
+        "DTSTART:20260706T090000Z\r\n"
+        "DTEND:20260706T091500Z\r\n"
+        "SUMMARY:Daily Standup\r\n"
+        "END:VEVENT\r\n"
+    )
+    block_b_sibling = (
+        "BEGIN:VEVENT\r\n"
+        "UID:no-rid-series\r\n"
+        "DTSTART:20260707T090000Z\r\n"
+        "DTEND:20260707T091500Z\r\n"
+        "SUMMARY:Daily Standup\r\n"
+        "END:VEVENT\r\n"
+    )
+
+    # Tick 1: block A is the only block in the response.
+    alone_items = _parse_multistatus(_multistatus_response(href, "etag-master", block_a))
+    assert len(alone_items) == 1
+    # No RECURRENCE-ID -> treated as a single event, window-independently.
+    assert alone_items[0].occurrence_key is None
+
+    # Tick 2: block A AND sibling block B share the SAME response (one
+    # href/etag). Block-count is now 2 -- but that must NOT change A's
+    # identity the way the removed round-2 fallback did.
+    paired_items = _parse_multistatus(_multistatus_response(href, "etag-master", block_a + block_b_sibling))
+    assert len(paired_items) == 2
+    paired_a = next(i for i in paired_items if "20260706" in i.ics_text)
+    assert paired_a.occurrence_key is None  # still None, regardless of sibling count
+
+    binding = _binding(calendar_id="work-cal", scope="work")
+    alone_signal = _signal_from_calendar_row(binding, alone_items[0], register_snapshot=())
+    paired_signal_a = _signal_from_calendar_row(binding, paired_a, register_snapshot=())
+    assert alone_signal is not None and paired_signal_a is not None
+    # The identity-flip bug is dead on the fallback path too: same block,
+    # same signal_id, whether alone or paired in-window.
+    assert alone_signal.signal_id == paired_signal_a.signal_id
+    assert alone_signal.signal_id == "no-rid-series:etag-master"
+
+
+def test_content_token_summary_with_pipe_does_not_collide() -> None:
+    """Finding 2 round 3 (plausible, inline comment 3565668944): the
+    change-token must hash a structured encoding, not a `|`-joined string.
+    The old token was ``"|".join([dtstart, dtend, summary, f"seq={seq}",
+    f"lm={lm}"])``; free text in SUMMARY could impersonate a trailing field
+    and shift the boundary, so two genuinely-different occurrences hashed
+    identically -> a real content change MISSED (false-negative change
+    detection, suppressing re-emission of an edited event).
+
+    Concrete forgery, chosen to collide under the OLD join specifically:
+      - event 1: SUMMARY=`Team Sync`, SEQUENCE=3
+        -> old join `<dt>|<dt>|Team Sync|seq=3`
+      - event 2: SUMMARY=`Team Sync|seq=3`, no SEQUENCE
+        -> old join `<dt>|<dt>|Team Sync|seq=3`   (IDENTICAL)
+    Same DTSTART/DTEND on both. The structured JSON hash (distinct
+    `summary` and `sequence` fields, each self-delimited by JSON escaping)
+    must keep them apart."""
+    shared_times = "DTSTART:20260706T090000Z\r\nDTEND:20260706T091500Z\r\n"
+    ics_1 = (
+        "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\n"
+        "UID:pipe-event\r\nRECURRENCE-ID:20260706T090000Z\r\n"
+        f"{shared_times}"
+        "SUMMARY:Team Sync\r\n"
+        "SEQUENCE:3\r\n"
+        "END:VEVENT\r\nEND:VCALENDAR\r\n"
+    )
+    ics_2 = (
+        "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\n"
+        "UID:pipe-event\r\nRECURRENCE-ID:20260706T090000Z\r\n"
+        f"{shared_times}"
+        "SUMMARY:Team Sync|seq=3\r\n"
+        "END:VEVENT\r\nEND:VCALENDAR\r\n"
+    )
+    event_1 = parse_vevent(ics_1)
+    event_2 = parse_vevent(ics_2)
+    assert event_1 is not None and event_2 is not None
+    # Genuinely different occurrences: different summary AND different
+    # sequence -- yet their OLD '|'-joined encodings were byte-identical.
+    assert (event_1.summary, event_1.sequence) != (event_2.summary, event_2.sequence)
+    assert event_1.summary == "Team Sync" and event_1.sequence == 3
+    assert event_2.summary == "Team Sync|seq=3" and event_2.sequence is None
+
+    token_1 = _occurrence_content_token(event_1)
+    token_2 = _occurrence_content_token(event_2)
+    assert token_1 != token_2  # structured hash keeps them distinct
+
+    # End-to-end: full signal_ids differ, so a real edit that happens to
+    # involve a '|'-containing SUMMARY is never silently dropped as
+    # unchanged; the shared identity portion still marks them as the SAME
+    # occurrence (same uid + occurrence_key).
+    id_1 = calendar_signal_id("pipe-event", "etag-x", "20260706T090000Z", event_1)
+    id_2 = calendar_signal_id("pipe-event", "etag-x", "20260706T090000Z", event_2)
+    assert id_1 != id_2
+    assert id_1.rsplit(":", 1)[0] == id_2.rsplit(":", 1)[0] == "pipe-event:20260706T090000Z"

@@ -654,12 +654,14 @@ def _signal_from_calendar_row(
     occurrence key every occurrence after the first would collide on the
     same signal_id and never fold as separate evidence.
 
-    Review gate round 2 (findings 1+2): ``signal_id`` is built via
+    Review gate rounds 2+3 (findings 1+2): ``signal_id`` is built via
     :func:`app.episodes.calendar_stream.calendar_signal_id`, the single
-    canonical scheme -- identity (``uid`` + occurrence_key, window-
-    independent, finding 1) is now separate from the per-occurrence
-    CHANGE-token (a hash of THIS occurrence's own content, never the shared
-    resource etag, finding 2).
+    canonical scheme -- identity (``uid`` + occurrence_key, where
+    occurrence_key is this occurrence's own RECURRENCE-ID alone and thus
+    FULLY window-independent, finding 1) is separate from the per-occurrence
+    CHANGE-token (a structured-JSON hash of THIS occurrence's own content,
+    never the shared resource etag and never a delimiter-joined string,
+    finding 2).
     """
     event = parse_vevent(item.ics_text)
     if event is None or event.dtstart is None:
@@ -838,19 +840,21 @@ def run_segmentation_tick(
         # at-least-once idempotency (an unchanged event redelivers the same
         # signal_id -> no-op fold; an edited event gets a new signal ->
         # itself append-only evidence of the change) -- the same INV-ERE-F
-        # guarantee, a different mechanism. Review gate round 2 (findings
-        # 1+2, PR #3519): for a non-recurring event this is still plain
-        # `uid:etag`; for one occurrence of a server-expanded recurring
-        # series (review round 1 finding 2) it is
-        # `uid:occurrence_key:content_token` -- IDENTITY (`occurrence_key`)
-        # is this occurrence's own RECURRENCE-ID/DTSTART, window-independent
-        # (finding 1: never gated on how many sibling occurrences shared
-        # this tick's expand/time-range window, so the same real occurrence
-        # never gets two identities); the CHANGE-token is a hash of this
-        # occurrence's OWN content, never the shared resource etag (finding
-        # 2: a recurring series is one CalDAV resource with one etag, so
-        # editing any single occurrence must not bump every unmodified
-        # sibling's signal_id too).
+        # guarantee, a different mechanism. Review gate rounds 2+3 (findings
+        # 1+2, PR #3519): for a non-recurring event (or any block without a
+        # RECURRENCE-ID) this is still plain `uid:etag`; for one occurrence
+        # of a server-expanded recurring series (review round 1 finding 2)
+        # it is `uid:occurrence_key:content_token` -- IDENTITY
+        # (`occurrence_key`) is this occurrence's own RECURRENCE-ID ALONE,
+        # fully window-independent (finding 1: never gated on how many
+        # sibling occurrences shared this tick's expand/time-range window,
+        # nor on block count -- round 3 removed the last block-count-gated
+        # DTSTART fallback, so the same real occurrence never gets two
+        # identities); the CHANGE-token is a structured-JSON hash of this
+        # occurrence's OWN content, never the shared resource etag and never
+        # a delimiter-joined string (finding 2: a recurring series is one
+        # CalDAV resource with one etag, so editing any single occurrence
+        # must not bump every unmodified sibling's signal_id too).
         calendar_items, calendar_degraded = read_calendar_raw_items_for_tick()
         consumed[CALENDAR_STREAM_ID] = len(calendar_items)
         degraded.extend(calendar_degraded)
