@@ -153,6 +153,11 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/relevance",),
     ),
     (
+        "heimdal",
+        ("app/heimdal/", "tests/heimdal/", "docs/HEIMDAL/", "docs/HEIMDAL_CAPTURE_CLIENT/"),
+        ("tests/heimdal",),
+    ),
+    (
         "orchestration",
         (
             "app/orchestrator/",
@@ -240,6 +245,11 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/knowledge_acquisition/",
         ),
         ("tests/heimdal", "tests/knowledge_acquisition"),
+    ),
+    (
+        "journaling",
+        ("app/journaling/", "tests/journaling/", "docs/CONVERSATIONAL_JOURNALING/"),
+        ("tests/journaling",),
     ),
     (
         "promotion_panel",

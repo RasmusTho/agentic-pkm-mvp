@@ -57,12 +57,13 @@ device->host transfer (all v2); a second modality.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from app.heimdal import raw_store
 from app.heimdal.consent_ledger import (
@@ -91,6 +92,23 @@ DEFAULT_CAPTURE_SCOPE = SELF_RECORD_SCOPE
 # (iOS Voice Memos exports as .m4a via the Shortcut; a small allowlist keeps
 # stray non-audio files -- e.g. .DS_Store -- from being treated as memos).
 _ADMISSIBLE_EXTENSIONS = {".m4a", ".wav", ".caf", ".aac"}
+
+# HCAP-07: capture clients may place an optional, versioned context sidecar
+# next to an admitted audio file.  The suffix deliberately leaves the audio
+# suffix intact (``memo.m4a.capture.json``), so a sidecar never qualifies for
+# the audio extension allowlist above.
+_CAPTURE_SIDECAR_SUFFIX = ".capture.json"
+_CAPTURE_SIDECAR_VERSION = 1
+_CAPTURE_SIDECAR_FIELDS = {
+    "sidecar_version",
+    "device_id",
+    "recorded_start_at",
+    "recorded_end_at",
+    "timezone",
+    "interruptions",
+    "source_surface",
+    "location",
+}
 
 # How long to wait between the two size reads in the still-downloading guard
 # (#3112). iCloud sync of a voice memo (seconds, not minutes) makes a short
@@ -243,6 +261,54 @@ def list_candidate_files(watch_dir: Path) -> List[Path]:
     return sorted(p for p in watch_dir.iterdir() if is_admissible_capture_file(p))
 
 
+def _capture_sidecar_path(audio_path: Path) -> Path:
+    """Return the optional HCAP-07 sidecar path for an admitted audio file."""
+    return audio_path.with_name(f"{audio_path.name}{_CAPTURE_SIDECAR_SUFFIX}")
+
+
+def _load_capture_sidecar(audio_path: Path) -> Optional[Dict[str, Any]]:
+    """Load a valid capture-time sidecar, retaining invalid input for operator repair.
+
+    Sidecars are additive context, never an admission prerequisite.  A
+    missing, unreadable, malformed, or unsupported sidecar is therefore
+    logged and ignored; audio admission continues exactly as it did before.
+    We only delete a sidecar once the raw-record write has confirmed it was
+    consumed, preserving the same custody rule as the audio source.
+    """
+    sidecar_path = _capture_sidecar_path(audio_path)
+    if not sidecar_path.exists():
+        logger.info("Heimdal capture adapter: sidecar absent for %s.", audio_path)
+        return None
+
+    try:
+        parsed = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "Heimdal capture adapter: malformed sidecar %s ignored; audio admission continues: %s",
+            sidecar_path,
+            exc,
+        )
+        return None
+
+    if not isinstance(parsed, dict):
+        logger.warning(
+            "Heimdal capture adapter: malformed sidecar %s ignored; expected an object.", sidecar_path
+        )
+        return None
+
+    version = parsed.get("sidecar_version")
+    if isinstance(version, bool) or version != _CAPTURE_SIDECAR_VERSION:
+        logger.warning(
+            "Heimdal capture adapter: unsupported sidecar_version in %s ignored; audio admission continues.",
+            sidecar_path,
+        )
+        return None
+
+    metadata = {key: value for key, value in parsed.items() if key in _CAPTURE_SIDECAR_FIELDS}
+    logger.info("Heimdal capture adapter: sidecar loaded for %s.", audio_path)
+    return metadata
+
+
 @dataclass(frozen=True)
 class CaptureResult:
     """The outcome of admitting one candidate file."""
@@ -316,6 +382,11 @@ def admit_capture_file(
 
     content_identity = compute_content_identity(raw_bytes)
 
+    # The sidecar is loaded only after the audio bytes are safely available,
+    # but before the one durable raw-record write.  Its fields therefore land
+    # atomically with the admitted evidence, rather than being stamped later.
+    capture_sidecar = _load_capture_sidecar(path)
+
     encryption_key = key if key is not None else raw_store.resolve_raw_store_key()
     ciphertext, nonce = raw_store.encrypt_raw_bytes(raw_bytes, key=encryption_key)
 
@@ -329,6 +400,7 @@ def admit_capture_file(
             nonce=nonce,
             key_ref="v1-process-key",
             source_path=str(path),
+            payload={"capture_time_metadata": capture_sidecar} if capture_sidecar is not None else None,
         )
     except Exception as exc:
         # Fail loud: the durable write did not confirm, so the source file
@@ -351,6 +423,10 @@ def admit_capture_file(
     # a prior crash-retry of the SAME evidence) -- the durable write is
     # confirmed either way, so the source copy is now redundant.
     source_deleted = _delete_source_file(path)
+    if capture_sidecar is not None:
+        sidecar_path = _capture_sidecar_path(path)
+        if _delete_source_file(sidecar_path):
+            logger.info("Heimdal capture adapter: sidecar consumed for %s.", path)
 
     return CaptureResult(record=record, created=created, source_deleted=source_deleted)
 
