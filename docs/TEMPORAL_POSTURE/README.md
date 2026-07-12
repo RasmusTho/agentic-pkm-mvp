@@ -1,4 +1,4 @@
-State: Specification directory — proposed experiment; no new runtime behavior is claimed.
+State: Specification directory (implementation issue #3549; no shipped behavior is claimed).
 Doc role: Feature specification
 Authority: Defines a narrow read-only temporal-posture experiment. Subordinate to `docs/CONCEPTS/TEMPORAL_VALIDITY_AND_STALENESS_CONTRACT.md` for semantic boundaries.
 Owner: Product / cognitive support
@@ -33,7 +33,7 @@ After a real allowlisted-corpus run, record whether the wording and policy produ
 
 ## Relationship to GitHub issues
 
-One bounded implementation issue will be created after this specification is merged. No parent feature is needed until experiment evidence justifies a broader capability.
+Implementation issue: [#3549](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3549). No parent feature is needed until experiment evidence justifies a broader capability.
 
 ## Related docs
 

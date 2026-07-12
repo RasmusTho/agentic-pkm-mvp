@@ -112,7 +112,6 @@ _QUALITY_NOTES: dict[str, str] = {
     "punctuation/segmentation may still be imprecise",
     "asr": "local faster-whisper transcription; used only when no caption track was available",
 }
-_DEFAULT_QUALITY_NOTE = "acquisition method not recognized; quality unknown"
 
 
 def normalize(raw_record: dict[str, Any]) -> NormalizedTranscript:
@@ -154,14 +153,22 @@ def normalize(raw_record: dict[str, Any]) -> NormalizedTranscript:
             )
     elif acquisition_method == _ASR_METHOD:
         asr_segments = raw_record.get("asr_segments") or []
-        segments = tuple(
-            NormalizedSegment(
-                start=float(seg["start"]),
-                end=float(seg["end"]),
-                text=_normalize_whitespace(str(seg["text"])),
+        try:
+            segments = tuple(
+                NormalizedSegment(
+                    start=float(seg["start"]),
+                    end=float(seg["end"]),
+                    text=_normalize_whitespace(str(seg["text"])),
+                )
+                for seg in asr_segments
             )
-            for seg in asr_segments
-        )
+        except (KeyError, TypeError, ValueError) as exc:
+            # A malformed asr_segments entry (missing start/end/text key, or a non-numeric
+            # start/end) must surface the stage's own uniform error type, not a raw stdlib
+            # exception — KA-06 (#2801) stage dead-lettering needs one consistent catch target.
+            raise NormalizeError(
+                f"asr record has a malformed asr_segments entry: {exc!r}"
+            ) from exc
         segments = tuple(seg for seg in segments if seg.text)
         if not segments and body_has_content:
             raise NormalizeError(
@@ -180,7 +187,9 @@ def normalize(raw_record: dict[str, Any]) -> NormalizedTranscript:
     chapters = tuple(dict(ch) for ch in (metadata.get("chapters") or ()) if ch)
 
     language = raw_record.get("caption_language") or raw_record.get("language")
-    quality_note = _QUALITY_NOTES.get(acquisition_method, _DEFAULT_QUALITY_NOTE)
+    # Every branch above either raises NormalizeError or is a _CAPTION_METHODS / _ASR_METHOD
+    # token, so acquisition_method is always a valid key here — no default fallback needed.
+    quality_note = _QUALITY_NOTES[acquisition_method]
 
     return NormalizedTranscript(
         segments=segments,
