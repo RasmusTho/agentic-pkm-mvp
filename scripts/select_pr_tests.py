@@ -197,6 +197,15 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/episodes", "tests/invariants"),
     ),
     (
+        "knowledge_acquisition",
+        (
+            "app/knowledge_acquisition/",
+            "app/cli/__init__.py",
+            "tests/knowledge_acquisition/",
+        ),
+        ("tests/knowledge_acquisition",),
+    ),
+    (
         "llm_eval",
         (
             "app/llm/",
