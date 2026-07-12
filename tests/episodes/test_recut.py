@@ -549,7 +549,7 @@ def test_recut_reconciles_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         assignment_module, "conn_rw", lambda *a, **k: _FakeConn(_bindings_fixture(episode_id), executed)
     )
-    result_rescoped = reconcile_episode_bindings(
+    reconcile_episode_bindings(
         episode_id, scope="personal", start=_dt(10, 0), end=None,  # end=None => the preserve branch
         derived_from=[], write_guard=_allow_guard(),
     )
