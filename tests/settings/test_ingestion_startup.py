@@ -54,14 +54,24 @@ _INVALID_SOURCE_MD = (
 )
 
 
+def _select_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Bind a selected vault via VAULT_ROOT and return its @Settings source dir."""
+    vault_root = tmp_path / "vault"
+    source_dir = vault_root / "@Settings"
+    source_dir.mkdir(parents=True)
+    monkeypatch.setenv("VAULT_ROOT", str(vault_root))
+    monkeypatch.delenv("VAULT_ROOT_DEV", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
+    return source_dir
+
+
 @pytest.fixture
-def sandbox_sources(tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch):
-    """Redirect the compiler source dir + runtime projection at a tmp sandbox and
-    reset the in-memory bundle + ingestion state so each test starts clean."""
-    source_dir = tmp_path / "@Settings"
-    source_dir.mkdir()
+def sandbox_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Select a tmp vault, redirect the runtime projection at a tmp sandbox, and
+    reset the in-memory bundle + ingestion state so each test starts clean. Ingestion
+    resolves the source dir from the selected vault (VAULT_ROOT), not compiler.VAULT."""
+    source_dir = _select_vault(tmp_path, monkeypatch)
     runtime_dir = tmp_path / "runtime" / "settings"
-    monkeypatch.setattr(compiler, "VAULT", source_dir)
     monkeypatch.setattr(compiler, "RUNTIME", runtime_dir)
     monkeypatch.setattr(runtime, "RUNTIME", runtime_dir)
     monkeypatch.setattr(runtime, "_CURRENT", None)
@@ -90,15 +100,17 @@ def test_service_startup_loads_vault_settings(sandbox_sources: Path) -> None:
 def test_no_vault_boot_loads_defaults_without_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With no settings sources, ingestion reports no_vault on defaults — no error,
+    """With no vault selected, ingestion reports no_vault on defaults — no error,
     no ./vault fallback, bundle builds from typed defaults (no-vault boot preserved)."""
-    empty_sources = tmp_path / "@Settings"  # does not exist
+    monkeypatch.delenv("VAULT_ROOT", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_DEV", raising=False)
+    monkeypatch.delenv("VAULT_ROOT_TEST", raising=False)
     runtime_dir = tmp_path / "runtime" / "settings"
-    monkeypatch.setattr(compiler, "VAULT", empty_sources)
     monkeypatch.setattr(compiler, "RUNTIME", runtime_dir)
     monkeypatch.setattr(runtime, "RUNTIME", runtime_dir)
     monkeypatch.setattr(runtime, "_CURRENT", None)
     monkeypatch.setattr(runtime, "_SUBSCRIBERS", [])
+    monkeypatch.chdir(tmp_path)
     reset_settings_ingestion_state()
 
     state = ingest_settings(reason="test_no_vault")
@@ -107,7 +119,7 @@ def test_no_vault_boot_loads_defaults_without_fallback(
     assert state.source == "defaults"
     assert state.error is None
     assert runtime.get_settings_bundle().global_.log_level == "INFO"  # typed default
-    assert not empty_sources.exists()
+    assert not (tmp_path / "vault").exists()
     reset_settings_ingestion_state()
 
 

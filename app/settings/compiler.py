@@ -307,19 +307,25 @@ def _update_reference(path: Path, title: str, model: Any, auto_heal: bool, *, va
         write_markdown_via_knowledge_port(path, updated, vault_root=vault_root)
 
 
-def compile_all(*, auto_heal: bool | None = None) -> SettingsBundle:
+def compile_all(
+    *, auto_heal: bool | None = None, vault_dir: Path | None = None
+) -> SettingsBundle:
+    # ``vault_dir`` overrides the settings-source location so ingestion can compile
+    # the *selected* vault's ``@Settings`` (SETTINGS-01) rather than the packaged
+    # ``vault/@Settings`` convention; callers that omit it keep the existing default.
+    settings_dir = vault_dir if vault_dir is not None else VAULT
     auto_heal_enabled = _auto_heal_enabled(auto_heal)
     RUNTIME.mkdir(parents=True, exist_ok=True)
-    vault_root = VAULT.parent
+    vault_root = settings_dir.parent
     file_sections: Dict[str, Dict[str, Any]] = {}
     file_paths: Dict[str, Path] = {}
-    for path in sorted(VAULT.glob("*.md")):
+    for path in sorted(settings_dir.glob("*.md")):
         file_sections[path.stem] = compile_file(path)
         file_paths[path.stem] = path
 
     agent_sections: Dict[str, Dict[str, Any]] = {}
     agent_paths: Dict[str, Path] = {}
-    agents_dir = VAULT / "agents"
+    agents_dir = settings_dir / "agents"
     if agents_dir.exists():
         for path in sorted(agents_dir.glob("*.md")):
             agent_sections[path.stem] = compile_file(path)
