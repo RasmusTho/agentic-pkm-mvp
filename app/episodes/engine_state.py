@@ -15,9 +15,11 @@ segments"):
 - ``open_segment:<scope>`` -- the accumulated situation-model state of one
   scope's currently-open (not yet proposed) segment
   (:mod:`app.episodes.segmenter`).
-- ``stream_watermark:<stream_id>`` -- the max ``observed_at`` this engine has
-  ever consumed from one stream (the observed-time frontier quiescence
-  closure is measured against; never wall-clock).
+
+Quiescence-closure frontiers are NOT persisted here: the segmenter computes a
+per-scope observed frontier fresh from each tick's own consumed signals
+(:func:`app.episodes.segmenter.run_segmentation_tick`), so there is no
+durable ``stream_watermark`` row family.
 
 ``heimdal.observations`` reuses the EXISTING ``heimdal_observation_cursor``
 table via ``app.heimdal.publish`` (``read_observations_for_consumer`` /

@@ -20,8 +20,10 @@ segments"):
 - `open_segment:<scope>` -- the accumulated situation-model state of one
   scope's currently-open (not yet proposed) segment, so a restart re-derives
   in-flight segmentation instead of losing it.
-- `stream_watermark:<stream_id>` -- the max observed instant consumed per
-  stream (the observed-time frontier quiescence closure is measured against).
+
+Quiescence-closure frontiers are computed per-scope from each tick's own
+consumed signals (not carried across ticks), so there is no durable
+`stream_watermark` row family in this table.
 
 Never authoritative: this table is pure tick-runtime bookkeeping, fully
 replayable from the underlying streams (Heimdal observation log; DB outbox).

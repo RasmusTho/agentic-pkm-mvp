@@ -16,24 +16,35 @@ ADR-0051 commitment 2, ADR-0054 §3):
   scope (AC7: partitioned per-scope, never cross-scope fused), it walks each
   scope's signals in ``observed_at`` order and closes a segment whenever
   :func:`detect_shift` fires a boundary. Quiescence (the >45min-silence rule)
-  is measured against OBSERVED-time stream frontiers, never wall-clock: a
-  segment closes only when the streams that could still extend it have
-  observedly moved more than the gap past its last signal
-  (:func:`_closure_frontier` -- a session-bound segment requires the
-  *Heimdal* frontier specifically, so delivery/tick lag can never split one
-  session across two proposals, AC3). No I/O, no vault, no DB -- fully
-  unit-testable and deterministic, so it is also the module's idempotency
-  guarantee under at-least-once redelivery (AC2): re-folding a signal whose
-  ``signal_id`` an open segment already recorded is a no-op.
+  is measured against a PER-SCOPE OBSERVED-time frontier, never wall-clock
+  and never a cross-scope/cross-stream frontier: a segment in scope X closes
+  on quiescence only when scope X's OWN observed head has moved more than the
+  gap past that segment's last signal (``frontiers``: scope -> max observed
+  instant consumed for that scope this tick). A sibling scope's later signal
+  in the same batch can therefore never close another scope's just-created
+  segment (the AC7 per-scope-isolation principle applied to closure). This
+  also keeps one Heimdal session from ever spanning two proposals (AC3): a
+  session continuing always *extends* via :func:`detect_shift`'s session-hint
+  branch, and only a genuinely later observation in that session's own scope
+  advances its frontier -- and by then that observation has already folded in
+  and moved ``last_signal_at`` forward with it. No I/O, no vault, no DB --
+  fully unit-testable and deterministic, so it is also the module's
+  idempotency guarantee under at-least-once redelivery (AC2): re-folding a
+  signal whose ``signal_id`` an open segment already recorded is a no-op.
+  Closure is deliberately conservative: a scope with no signal this tick has
+  no frontier entry and its carried-over segment simply stays open, deferred
+  to ERE-06 (which owns real closure detection, explicitly out of scope for
+  ERE-04) -- keeping a segment open too long is the safe side.
 - :func:`run_segmentation_tick` is the production, I/O-performing entrypoint
   (``python -m app.cli episodes tick``): reads new signals from each *live*
-  registered stream since its own durable cursor, calls the pure fold, emits
-  a ``segmentation: proposed`` Episode note per closed segment (AC5, via
+  registered stream since its own durable cursor, builds this tick's
+  per-scope observed frontier from the consumed signals, calls the pure fold,
+  emits a ``segmentation: proposed`` Episode note per closed segment (AC5, via
   ``app.episodes.store.write_episode_note`` -- the ERE-02 guarded seam),
-  persists updated open-segment state + stream watermarks, advances each
-  stream's cursor, and ONLY THEN deletes closed-segment state -- a crash at
-  any point means the next tick reprocesses/reconverges, deduped by
-  fold-by-key (retained ``signal_ids`` ledgers) plus a deterministic
+  persists updated open-segment state, advances each stream's cursor, and
+  ONLY THEN deletes closed-segment state -- a crash at any point means the
+  next tick reprocesses/reconverges, deduped by fold-by-key (retained
+  ``signal_ids`` ledgers) plus a deterministic, START-INDEPENDENT
   ``episode_id`` per closed segment (a retried emission never double-writes
   a note, AC2 / INV-ERE-F), even when only ONE of the two cursors advanced
   before the crash.
@@ -176,8 +187,6 @@ PLACE_SHIFT_DETECTION_ENABLED: Final[bool] = False
 _EPISODE_ID_NAMESPACE: Final[uuid.UUID] = uuid.UUID("6f1d9a3a-8c3e-4f7a-9b1a-8f9d2e6c4a11")
 
 _OPEN_SEGMENT_KEY_PREFIX: Final[str] = "open_segment:"
-
-_STREAM_WATERMARK_KEY_PREFIX: Final[str] = "stream_watermark:"
 
 _DEFAULT_SCOPE: Final[str] = "default"
 
@@ -383,27 +392,6 @@ def _close(open_segment: OpenSegment) -> ClosedSegment:
     )
 
 
-def _closure_frontier(segment: OpenSegment, frontiers: Mapping[str, datetime]) -> datetime | None:
-    """The observed-time frontier a segment's quiescence is measured against.
-
-    Session-bound segments (AC3): only the HEIMDAL stream's own frontier
-    counts. The observation log is sequence-ordered and cursor-consumed in
-    order, so a Heimdal frontier more than the gap past `last_signal_at`
-    means the stream itself has observedly moved on -- whereas another
-    stream's frontier (or wall-clock) advancing says nothing about whether
-    this session's later observations are merely still in flight. Delivery
-    or tick lag therefore can never split one session across two proposals.
-
-    Unbound segments: the max frontier across all consumed streams -- any
-    stream having observedly moved past the gap evidences quiescence.
-
-    ``None`` (no frontier evidence yet) means: do not close.
-    """
-    if segment.heimdal_session_id is not None:
-        return frontiers.get(HEIMDAL_STREAM_ID)
-    return max(frontiers.values(), default=None)
-
-
 def fold_signals_into_segments(
     signals: Sequence[SegmentationSignal],
     *,
@@ -420,12 +408,16 @@ def fold_signals_into_segments(
     :func:`detect_shift` fires.
 
     After the signal walk, also closes any open segment (touched this tick
-    or not) that has gone quiescent: its `last_signal_at` lies more than
-    `TIME_GAP_MINUTES` behind the relevant OBSERVED-time stream frontier
-    (`frontiers`: stream_id -> max observed instant consumed to date; see
-    :func:`_closure_frontier` for which frontier governs which segment).
-    Wall-clock never closes a segment -- if no frontier evidence exists,
-    everything stays open (conservative; ERE-06 owns real closure).
+    or not) that has gone quiescent AGAINST ITS OWN SCOPE'S FRONTIER: its
+    `last_signal_at` lies more than `TIME_GAP_MINUTES` behind the observed
+    head of its own scope (`frontiers`: scope -> max observed instant
+    consumed for that scope). The frontier is per-SCOPE, never per-stream and
+    never cross-scope: a sibling scope's progress can never close another
+    scope's segment (AC7 per-scope isolation applied to closure), and one
+    Heimdal session -- always within a single scope -- can never be split
+    across two proposals by a sibling's frontier (AC3). Wall-clock never
+    closes a segment, and a scope with no frontier entry (no signal this
+    tick) stays open -- conservative; ERE-06 owns real closure detection.
 
     No I/O; deterministic; idempotent under a redelivered/overlapping
     `signals` batch (duplicate `signal_id`s are no-ops, see
@@ -455,7 +447,10 @@ def fold_signals_into_segments(
             working[scope] = current
 
     for scope, current in list(working.items()):
-        frontier = _closure_frontier(current, frontier_map)
+        # Quiescence is judged ONLY against this segment's own scope frontier
+        # (per-scope isolation): a sibling scope moving on says nothing about
+        # whether this scope's own later signals are still in flight.
+        frontier = frontier_map.get(scope)
         if frontier is not None and frontier - current.last_signal_at > _TIME_GAP:
             closed.append(_close(current))
             del working[scope]
@@ -475,24 +470,42 @@ def _observation_id_of(row: ObservationRow, payload: Mapping[str, Any]) -> str:
     return row.id
 
 
+def _epoch_seconds_to_dt(seconds: float) -> datetime | None:
+    """Convert epoch seconds to a UTC datetime, ``None`` if not a usable
+    instant. An epoch <= 0 (e.g. an ``mtime=0`` sentinel) is treated as
+    ABSENT, not dated to 1970 -- a 1970 instant would drag a segment's
+    `start` backward through the out-of-order min()-widening. NaN/inf/
+    out-of-range values raise inside ``fromtimestamp`` and are caught here so
+    a malformed mtime skips fail-loud instead of crashing the whole tick."""
+    if seconds <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(seconds, tz=timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
 def _parse_observation_time(value: Any) -> datetime | None:
     """Parse a payload observation-time value: epoch seconds (the watcher's
-    `mtime` float) or an ISO-8601 string. ``None`` when absent/unparseable --
+    `mtime` float) or an ISO-8601 string. A purely-numeric string is treated
+    as epoch seconds by design (the watcher may serialize `mtime` as a
+    string), NOT as a bare year. ``None`` when absent/unparseable/invalid --
     the caller skips the signal fail-loud (count + log), never substitutes
-    emission time."""
+    emission time, and a malformed numeric value never crashes the tick."""
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        return _epoch_seconds_to_dt(float(value))
     if isinstance(value, str) and value.strip():
         text = value.strip()
         try:
-            return datetime.fromtimestamp(float(text), tz=timezone.utc)
+            seconds = float(text)
         except ValueError:
             try:
                 return _parse_dt(text)
             except ValueError:
                 return None
+        return _epoch_seconds_to_dt(seconds)
     return None
 
 
@@ -597,14 +610,23 @@ def _signal_from_vault_activity_row(row: VaultActivityRow, *, vault_root: Path) 
 
 
 def _deterministic_episode_id(closed: ClosedSegment) -> str:
-    """A stable `episode_id` derived from the closed segment's own identity.
+    """A stable `episode_id` derived from the closed segment's STABLE identity.
 
-    A retried emission (crash between note-write and cursor-advance, INV-
-    ERE-F) always mints the SAME id for the SAME segment, so the
-    existence-check in :func:`_emit_proposal` makes the write path
-    idempotent under redelivery independent of cursor-advance timing (AC2).
+    Keyed on ``scope | derived_from[0]`` -- the scope plus the provenance_ref
+    of the FIRST signal ever folded into the segment. That first ref is
+    append-only-stable: out-of-order widening only ever moves `start`
+    downward and appends to `derived_from`, so it never mutates
+    ``derived_from[0]``. The id is therefore START-INDEPENDENT: a resurrected
+    stale segment (the documented crash-residual) whose `start` later widens
+    still mints the SAME id, so the existence-check in :func:`_emit_proposal`
+    keeps the write path idempotent under redelivery independent of both
+    cursor-advance timing AND start-widening (AC2 / INV-ERE-F). Two distinct
+    same-scope segments always differ in their first-folded provenance_ref, so
+    they can never collide. `derived_from` is non-empty in practice (a segment
+    is always created from a signal carrying a non-empty provenance_ref); the
+    empty fallback is defensive only.
     """
-    basis = "|".join((closed.scope, _iso(closed.start), closed.derived_from[0] if closed.derived_from else ""))
+    basis = "|".join((closed.scope, closed.derived_from[0] if closed.derived_from else ""))
     return f"{EPISODE_ID_PREFIX}{uuid.uuid5(_EPISODE_ID_NAMESPACE, basis)}"
 
 
@@ -642,15 +664,6 @@ def _emit_proposal(
     return result.episode_id
 
 
-def _load_stream_watermarks() -> dict[str, datetime]:
-    out: dict[str, datetime] = {}
-    for key, value in engine_state.all_state_with_prefix(_STREAM_WATERMARK_KEY_PREFIX).items():
-        raw = value.get("observed_until")
-        if raw:
-            out[key[len(_STREAM_WATERMARK_KEY_PREFIX) :]] = _parse_dt(raw)
-    return out
-
-
 def run_segmentation_tick(
     *,
     vault_root: Path | str,
@@ -665,15 +678,18 @@ def run_segmentation_tick(
     :func:`enumerate_consumable_streams` -- never a hardcoded source list),
     reads new signals since each live stream's own durable cursor, folds
     them per-scope into open segments (:func:`fold_signals_into_segments`,
-    quiescence measured against durable observed-time stream watermarks --
-    never wall-clock), and emits a proposal per closed segment.
+    quiescence measured against this tick's PER-SCOPE observed frontier --
+    never wall-clock, never cross-scope), and emits a proposal per closed
+    segment. A scope with no signal this tick has no frontier entry, so its
+    carried-over segment stays open and is deferred to ERE-06 (closure
+    detection is out of scope for ERE-04).
 
-    Crash-safe ordering (INV-ERE-F): emit -> persist open state + watermarks
-    -> advance cursors -> delete closed-segment state LAST. A crash between
-    the two cursor advances replays only one stream, but the closed
-    segment's retained ``signal_ids`` ledger dedups the replayed rows and
-    the deterministic episode id skips the already-written note -- the tick
-    reconverges instead of double-proposing.
+    Crash-safe ordering (INV-ERE-F): emit -> persist open state -> advance
+    cursors -> delete closed-segment state LAST. A crash between the two
+    cursor advances replays only one stream, but the closed segment's
+    retained ``signal_ids`` ledger dedups the replayed rows and the
+    deterministic, start-independent episode id skips the already-written
+    note -- the tick reconverges instead of double-proposing.
     """
     root = Path(vault_root)
     live_streams = {entry.stream_id for entry in enumerate_consumable_streams(registry=registry)}
@@ -713,17 +729,23 @@ def run_segmentation_tick(
         key[len(_OPEN_SEGMENT_KEY_PREFIX) :]: OpenSegment.from_state(value) for key, value in open_state.items()
     }
 
-    # Observed-time stream frontiers: durable high-water marks, advanced by
-    # this batch's own observed instants (never wall-clock, never enqueue
-    # time). Quiescence closure is measured against these.
-    watermarks = _load_stream_watermarks()
+    # Per-scope observed frontier for THIS tick: scope -> max observed instant
+    # among the signals consumed for that scope (never wall-clock, never
+    # enqueue time, never cross-scope). Quiescence closure is measured against
+    # each segment's own scope frontier -- a sibling scope's later signal can
+    # never close another scope's segment (AC7 isolation applied to closure),
+    # and a scope with no signal this tick has no entry, so its carried-over
+    # segment stays open (deferred to ERE-06). This is computed fresh per tick,
+    # not carried durably: per-scope-from-this-batch is sufficient and correct,
+    # so there is no stream-watermark row family to persist.
+    scope_frontiers: dict[str, datetime] = {}
     for signal in signals:
-        current = watermarks.get(signal.stream_id)
+        current = scope_frontiers.get(signal.scope)
         if current is None or signal.observed_until > current:
-            watermarks[signal.stream_id] = signal.observed_until
+            scope_frontiers[signal.scope] = signal.observed_until
 
     updated_open, closed_segments = fold_signals_into_segments(
-        signals, open_segments=open_segments, frontiers=watermarks
+        signals, open_segments=open_segments, frontiers=scope_frontiers
     )
 
     proposed_ids: list[str] = []
@@ -734,16 +756,14 @@ def run_segmentation_tick(
 
     for scope, segment in updated_open.items():
         engine_state.set_state(f"{_OPEN_SEGMENT_KEY_PREFIX}{scope}", segment.to_state())
-    for stream_id, watermark in watermarks.items():
-        engine_state.set_state(
-            f"{_STREAM_WATERMARK_KEY_PREFIX}{stream_id}", {"observed_until": _iso(watermark)}
-        )
 
     # Advance cursors only after proposals and open state are durable; delete
     # closed-segment state LAST. A crash between the two advances leaves the
     # closed segment's signal_ids ledger in place, so the one-stream replay
-    # on the next tick folds to no-ops and the deterministic episode id
-    # skips the existing note (never a second partial proposal).
+    # on the next tick folds to no-ops and the deterministic, start-independent
+    # episode id skips the existing note (never a second partial proposal --
+    # widening the resurrected segment's start on replay does not change its
+    # id, so the "never a duplicate" guarantee holds).
     # Known residual (documented, accepted): a crash in the narrow window
     # between the final cursor advance and the closed-state delete leaves an
     # already-emitted segment's state loadable for one more tick; a genuinely

@@ -19,9 +19,14 @@ the ``not pg`` lane; emission tests use a `tmp_path` vault the same way
 - ``test_heimdal_session_hint_respected`` (AC3): a Heimdal per-session id
   keeps its observations in one segment even across a shift that would
   otherwise split them -- including under cross-stream delivery lag (PR
-  #3508 review round 1: quiescence closure is measured against observed-time
-  stream frontiers, session-bound segments against the Heimdal frontier
-  specifically, never wall-clock).
+  #3508 review: quiescence closure is measured against a PER-SCOPE
+  observed-time frontier, never wall-clock and never a cross-scope frontier,
+  so a sibling scope's progress can never close another scope's segment and
+  one session -- always within a single scope -- is never split).
+- ``test_sibling_scope_progress_never_closes_segment`` (PR #3508 review
+  round 2): a single batch carrying two DIFFERENT scopes must not let one
+  scope's later observed instant close the other scope's just-created
+  segment; only a scope's OWN frontier advancing past the gap closes it.
 - ``test_segments_keyed_per_scope_by_default`` (AC7): signals partition
   strictly per-scope, including the unscoped ("default") bucket, never
   cross-scope fused.
@@ -38,6 +43,7 @@ No network, no Postgres, no real vault beyond ``tmp_path``.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -48,9 +54,11 @@ from app.episodes.engine_state import EngineStateSchemaMissingError, _assert_sch
 from app.episodes.notes import episode_note_rel_path, parse_episode_note
 from app.episodes.schema import validate_episode_note_fields
 from app.episodes.segmenter import (
-    HEIMDAL_STREAM_ID,
+    ClosedSegment,
     SegmentationSignal,
+    _deterministic_episode_id,
     _emit_proposal,
+    _parse_observation_time,
     _signal_from_heimdal_row,
     _signal_from_vault_activity_row,
     fold_signals_into_segments,
@@ -94,8 +102,11 @@ def _signal(
     )
 
 
-def _heimdal_frontier(dt: datetime) -> dict[str, datetime]:
-    return {HEIMDAL_STREAM_ID: dt}
+def _scope_frontier(dt: datetime, scope: str = "work") -> dict[str, datetime]:
+    """The per-scope observed frontier the pure fold now closes against: a
+    segment in ``scope`` goes quiescent only when ``scope``'s OWN observed
+    head has moved more than the gap past its last signal."""
+    return {scope: dt}
 
 
 # ---------------------------------------------------------------------------
@@ -121,10 +132,10 @@ def test_two_stream_fixture_segments_into_expected_episodes() -> None:
     ]
     signals = session_a + vault_a + session_b + vault_b
 
-    # Heimdal frontier (both segments are session-bound) observedly well past
+    # All signals are scope 'work'; the scope's observed frontier is well past
     # the last signal, so both segments are quiescent and close in one fold.
     updated_open, closed = fold_signals_into_segments(
-        signals, open_segments=None, frontiers=_heimdal_frontier(_dt(11, 0))
+        signals, open_segments=None, frontiers=_scope_frontier(_dt(11, 0))
     )
 
     assert updated_open == {}
@@ -177,9 +188,9 @@ def test_segmentation_idempotent_under_redelivery() -> None:
     assert replay_state.start == first_state.start
     assert replay_state.last_signal_at == first_state.last_signal_at
 
-    # Quiescence: with the Heimdal frontier observedly >45min past the last
+    # Quiescence: with scope 'work's frontier observedly >45min past the last
     # signal, the segment closes -- exactly once.
-    _, closed = fold_signals_into_segments(signals, open_segments=None, frontiers=_heimdal_frontier(_dt(10, 0)))
+    _, closed = fold_signals_into_segments(signals, open_segments=None, frontiers=_scope_frontier(_dt(10, 0)))
     assert len(closed) == 1
 
 
@@ -191,7 +202,7 @@ def test_emission_idempotent_under_redelivery(tmp_path: Path) -> None:
     vault_root = tmp_path / "vault"
     guard = _allow_guard()
 
-    frontiers = _heimdal_frontier(_dt(10, 0))
+    frontiers = _scope_frontier(_dt(10, 0))
     _, closed_first = fold_signals_into_segments(signals, open_segments=None, frontiers=frontiers)
     assert len(closed_first) == 1
     first_id = _emit_proposal(closed_first[0], vault_root=vault_root, write_guard=guard)
@@ -253,23 +264,24 @@ def test_heimdal_session_hint_respected() -> None:
 
 
 def test_session_never_split_by_delivery_lag() -> None:
-    """PR #3508 review round 1 (comment 3565218954): quiescence closure is
-    measured against OBSERVED-time stream frontiers, and a session-bound
-    segment closes only against the HEIMDAL frontier -- another stream's
-    frontier racing ahead (or wall-clock ticks passing) while the session's
-    later observations are still in flight must never split the session."""
+    """PR #3508 review: quiescence closure is measured against a PER-SCOPE
+    observed-time frontier -- a session-bound segment in scope 'work' closes
+    only when scope 'work's OWN observed head moves past the gap. Another
+    scope's frontier racing ahead (or wall-clock ticks passing) while the
+    session's later observations are still in flight must never split the
+    session. The mechanism is now 'scope work's own frontier has not
+    advanced', not 'the Heimdal stream frontier lagged'."""
     # Tick 1: session sess-a starts at 09:00.
     tick1 = [
         _signal(signal_id="s1", observed_at=_dt(9, 0), heimdal_session_id="sess-a"),
     ]
-    open_1, closed_1 = fold_signals_into_segments(tick1, open_segments=None, frontiers=_heimdal_frontier(_dt(9, 0)))
+    open_1, closed_1 = fold_signals_into_segments(tick1, open_segments=None, frontiers=_scope_frontier(_dt(9, 0)))
     assert closed_1 == []
 
-    # Tick 2: NO Heimdal delivery (lag), but vault activity in another scope
-    # has observedly moved to 10:30 -- >45min past the session's last signal.
-    # The session-bound segment must NOT close: the Heimdal frontier is
-    # still 09:00.
-    lagged_frontiers = {HEIMDAL_STREAM_ID: _dt(9, 0), "vault.activity": _dt(10, 30)}
+    # Tick 2: NO scope-'work' delivery (lag), but vault activity in ANOTHER
+    # scope has observedly moved to 10:30 -- >45min past the session's last
+    # signal. The session-bound segment must NOT close: scope 'work' has no
+    # frontier entry this tick, so its own head has not advanced.
     other_scope = [
         _signal(
             stream_id="vault.activity",
@@ -278,9 +290,11 @@ def test_session_never_split_by_delivery_lag() -> None:
             scope="personal",
         ),
     ]
-    open_2, closed_2 = fold_signals_into_segments(other_scope, open_segments=open_1, frontiers=lagged_frontiers)
+    open_2, closed_2 = fold_signals_into_segments(
+        other_scope, open_segments=open_1, frontiers={"personal": _dt(10, 30)}
+    )
     assert closed_2 == []
-    assert "work" in open_2  # sess-a segment survived the lag
+    assert "work" in open_2  # sess-a segment survived the sibling scope's lag
 
     # Tick 3: the delayed sess-a observations (observed 10:00, >45min after
     # 09:00) finally arrive. Same session -> extends, never a new segment.
@@ -290,17 +304,17 @@ def test_session_never_split_by_delivery_lag() -> None:
     open_3, closed_3 = fold_signals_into_segments(
         late_same_session,
         open_segments=open_2,
-        frontiers={HEIMDAL_STREAM_ID: _dt(10, 0), "vault.activity": _dt(10, 30)},
+        frontiers={"work": _dt(10, 0), "personal": _dt(10, 30)},
     )
     assert closed_3 == []
     assert open_3["work"].signal_ids == frozenset({"s1", "s2"})
 
-    # Tick 4: Heimdal frontier finally moves observedly past the session ->
-    # ONE closed segment carrying the whole session.
+    # Tick 4: scope 'work's own frontier finally moves observedly past the
+    # session -> ONE closed segment carrying the whole session.
     open_4, closed_4 = fold_signals_into_segments(
         [],
         open_segments=open_3,
-        frontiers={HEIMDAL_STREAM_ID: _dt(11, 0), "vault.activity": _dt(10, 30)},
+        frontiers={"work": _dt(11, 0), "personal": _dt(10, 30)},
     )
     assert "work" not in open_4
     session_closed = [c for c in closed_4 if c.scope == "work"]
@@ -309,6 +323,147 @@ def test_session_never_split_by_delivery_lag() -> None:
         "heimdal.observations:s1",
         "heimdal.observations:s2",
     }
+
+
+# ---------------------------------------------------------------------------
+# PR #3508 review round 2: per-scope closure frontier isolation
+# ---------------------------------------------------------------------------
+
+
+def test_sibling_scope_progress_never_closes_segment() -> None:
+    """PR #3508 review round 2 (comment 3565317992): the quiescence frontier
+    is PER-SCOPE, not the tick-wide max across scopes. A single batch on the
+    SAME Heimdal stream carrying two DIFFERENT scopes must not let the later
+    scope's observed instant close the other scope's just-created segment --
+    otherwise a sibling scope's progress closes scope 'work's segment in the
+    same tick, and because sess-a's own session can continue in a LATER tick
+    the closed session reopens as a second proposal (AC3 violation)."""
+    # One batch: scope 'work'/sess-a at 09:00 and scope 'other'/sess-b at
+    # 09:50 -- 09:50-09:00 = 50min > the 45min gap. Under a tick-wide (max
+    # across scopes) frontier this WOULD close 'work'; under per-scope it
+    # must not.
+    batch = [
+        _signal(signal_id="s1", observed_at=_dt(9, 0), scope="work", heimdal_session_id="sess-a"),
+        _signal(signal_id="s2", observed_at=_dt(9, 50), scope="other", heimdal_session_id="sess-b"),
+    ]
+    # The per-scope frontier the production tick builds from this batch.
+    frontiers = {"work": _dt(9, 0), "other": _dt(9, 50)}
+    open_1, closed_1 = fold_signals_into_segments(batch, open_segments=None, frontiers=frontiers)
+
+    assert closed_1 == []  # neither scope's OWN head has moved past the gap
+    assert set(open_1) == {"work", "other"}
+    assert open_1["work"].signal_ids == frozenset({"s1"})
+    assert open_1["other"].signal_ids == frozenset({"s2"})
+
+    # Follow-up tick where scope 'work's OWN frontier advances past the gap
+    # (no new 'work' signal, e.g. a later Heimdal delivery in another scope
+    # advanced the wall while 'work's observed head reached 10:00) -> 'work'
+    # closes, exactly once, carrying its single original signal.
+    open_2, closed_2 = fold_signals_into_segments([], open_segments=open_1, frontiers={"work": _dt(10, 0)})
+    work_closed = [c for c in closed_2 if c.scope == "work"]
+    assert len(work_closed) == 1
+    assert work_closed[0].derived_from == ("heimdal.observations:s1",)
+    assert "work" not in open_2
+    assert "other" in open_2  # 'other' had no frontier entry this tick -> stays open
+
+    # Contrast: the SAME session continuing in a later tick extends rather
+    # than closing -- one session never spans two proposals even after the gap.
+    open_3, closed_3 = fold_signals_into_segments(
+        [_signal(signal_id="s3", observed_at=_dt(11, 0), scope="other", heimdal_session_id="sess-b")],
+        open_segments=open_1,
+        frontiers={"other": _dt(11, 0)},
+    )
+    assert [c for c in closed_3 if c.scope == "other"] == []
+    assert open_3["other"].signal_ids == frozenset({"s2", "s3"})
+
+
+# ---------------------------------------------------------------------------
+# PR #3508 review round 2: observation-time parse guards (finding 2/4)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_observation_time_guards_malformed_numeric() -> None:
+    """PR #3508 review round 2 (comment 3565318043): the numeric branch of
+    _parse_observation_time must not crash the tick on NaN/inf/out-of-range,
+    and an epoch <= 0 (e.g. an mtime=0 sentinel) is treated as ABSENT so it
+    never dates a signal to 1970 and drags `start` backward. A purely-numeric
+    string is epoch seconds by design (finding 4)."""
+    # Malformed / sentinel numeric mtimes -> None (skip fail-loud), never raise.
+    assert _parse_observation_time(float("nan")) is None
+    assert _parse_observation_time(float("inf")) is None
+    assert _parse_observation_time(float("-inf")) is None
+    assert _parse_observation_time(0) is None
+    assert _parse_observation_time(0.0) is None
+    assert _parse_observation_time(-5) is None
+    assert _parse_observation_time(10**20) is None  # out of datetime range
+
+    # Same guards through the string branch (watcher may serialize mtime as str).
+    assert _parse_observation_time("0") is None
+    assert _parse_observation_time("nan") is None
+    assert _parse_observation_time("inf") is None
+    assert _parse_observation_time("") is None
+    assert _parse_observation_time("   ") is None
+
+    # A positive numeric string is epoch seconds by design, not a bare year.
+    epoch = _dt(9, 0).timestamp()
+    assert _parse_observation_time(str(epoch)) == _dt(9, 0)
+    assert _parse_observation_time(epoch) == _dt(9, 0)
+    # ISO strings still parse.
+    assert _parse_observation_time("2026-07-11T09:00:00+00:00") == _dt(9, 0)
+
+
+def test_malformed_mtime_skips_row_but_batch_still_folds(tmp_path: Path) -> None:
+    """A row with mtime=0 or mtime=NaN is skipped fail-loud (None), while the
+    other rows in the same batch still normalize -- one poison row never
+    crashes the tick nor drops the good signals."""
+    good = _vault_row(
+        {"relative_path": "note.md", "mtime": _dt(9, 0).timestamp()}, created_at=_dt(12, 0)
+    )
+    zero = _vault_row(
+        {"relative_path": "note.md", "mtime": 0}, created_at=_dt(12, 0)
+    )
+    nan = _vault_row(
+        {"relative_path": "note.md", "mtime": float("nan")}, created_at=_dt(12, 0)
+    )
+    assert _signal_from_vault_activity_row(zero, vault_root=tmp_path) is None
+    assert _signal_from_vault_activity_row(nan, vault_root=tmp_path) is None
+    good_signal = _signal_from_vault_activity_row(good, vault_root=tmp_path)
+    assert good_signal is not None
+    assert good_signal.observed_at == _dt(9, 0)
+
+
+# ---------------------------------------------------------------------------
+# PR #3508 review round 2: deterministic episode id is start-independent
+# ---------------------------------------------------------------------------
+
+
+def test_episode_id_stable_across_start_widening() -> None:
+    """PR #3508 review round 2 (comment 3565318059): a resurrected stale
+    segment (the documented crash-residual) whose `start` widens downward on
+    replay must still mint the SAME episode_id, else the existence-check
+    misses the original note and a duplicate proposal is written. The id is
+    keyed on stable identity (scope | first-folded provenance_ref), not
+    `start`."""
+    base = ClosedSegment(
+        scope="work",
+        start=_dt(9, 0),
+        end=_dt(9, 30),
+        heimdal_session_id="sess-a",
+        protagonists=(),
+        goal=(),
+        derived_from=("heimdal.observations:obs-1", "vault.activity:v1"),
+    )
+    # `start` widened downward (out-of-order fold on replay) -> SAME id.
+    widened = replace(base, start=_dt(8, 0))
+    assert _deterministic_episode_id(base) == _deterministic_episode_id(widened)
+    # `end` moving (later signal folded) likewise does not change the id.
+    extended_end = replace(base, end=_dt(10, 0))
+    assert _deterministic_episode_id(base) == _deterministic_episode_id(extended_end)
+
+    # Two distinct same-scope segments differ in their first-folded ref, so
+    # their ids can never collide.
+    other = replace(base, derived_from=("heimdal.observations:obs-2",))
+    assert _deterministic_episode_id(base) != _deterministic_episode_id(other)
 
 
 # ---------------------------------------------------------------------------
@@ -338,7 +493,7 @@ def test_out_of_order_signal_widens_segment_start() -> None:
     assert "vault.activity:earlier" in open_2["work"].derived_from
 
     # And the closed segment's bounds reflect the widened window.
-    _, closed = fold_signals_into_segments([], open_segments=open_2, frontiers=_heimdal_frontier(_dt(10, 30)))
+    _, closed = fold_signals_into_segments([], open_segments=open_2, frontiers=_scope_frontier(_dt(10, 30)))
     assert len(closed) == 1
     assert closed[0].start == _dt(9, 0)
     assert closed[0].end == _dt(9, 10)
@@ -359,7 +514,7 @@ def test_observed_at_end_extends_segment_bounds() -> None:
     open_1, _ = fold_signals_into_segments([spanning], open_segments=None, frontiers={})
     assert open_1["work"].last_signal_at == _dt(9, 30)
 
-    _, closed = fold_signals_into_segments([], open_segments=open_1, frontiers=_heimdal_frontier(_dt(10, 30)))
+    _, closed = fold_signals_into_segments([], open_segments=open_1, frontiers=_scope_frontier(_dt(10, 30)))
     assert len(closed) == 1
     assert closed[0].end == _dt(9, 30)
 
@@ -407,7 +562,7 @@ def test_proposals_are_schema_valid_proposal_class(tmp_path: Path) -> None:
         _signal(signal_id="obs-2", observed_at=_dt(9, 5), protagonists=("alice",), goal=("proj-x",)),
     ]
     vault_root = tmp_path / "vault"
-    _, closed = fold_signals_into_segments(signals, open_segments=None, frontiers=_heimdal_frontier(_dt(10, 0)))
+    _, closed = fold_signals_into_segments(signals, open_segments=None, frontiers=_scope_frontier(_dt(10, 0)))
     assert len(closed) == 1
 
     episode_id = _emit_proposal(closed[0], vault_root=vault_root, write_guard=_allow_guard())
