@@ -777,7 +777,7 @@ def test_non_atomic_lifecycle_write_does_not_manufacture_false_recut(
 def test_split_and_merge_flows_consistent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     vault_root = tmp_path / "vault"
     calls = _stub_bindings(monkeypatch)
-    _stub_projection_sync(monkeypatch)
+    sync_calls = _stub_projection_sync(monkeypatch)
     fake_state = _install_fake_engine_state(monkeypatch)
 
     episode_a = "ep-77777777-1111-4111-8111-111111111111"
@@ -843,6 +843,15 @@ def test_split_and_merge_flows_consistent(tmp_path: Path, monkeypatch: pytest.Mo
 
     reconcile_calls = {args["episode_id"]: args["derived_from"] for kind, args in calls if kind == "reconcile"}
     assert reconcile_calls[episode_a] == ["heimdal.observations:ref1", "heimdal.observations:ref2"]
+
+    # #3182 review fix (Codex round-1 finding): episode_a was ALREADY `re-cut` (from the split
+    # step above) before this merge-widen edit, so `run_recut_tick` never calls _write_relabeled
+    # for it here (segmentation is already correct) -- the projection sync must still fire from
+    # the "further edit to an already re-cut episode" branch directly, carrying the widened
+    # derived_from/bounds into the projection.
+    merge_sync_calls = [(eid, f) for eid, f in sync_calls if eid == episode_a]
+    assert merge_sync_calls, "a further edit to an already re-cut episode must still sync the projection"
+    assert merge_sync_calls[-1][1]["derived_from"] == ["heimdal.observations:ref1", "heimdal.observations:ref2"]
 
     # B is no longer tracked at all -- no dangling baseline left behind for a deleted note.
     tracked_after = fake_state.all_state_with_prefix("episode_recut_state:")
@@ -958,3 +967,49 @@ def test_write_relabeled_syncs_full_echoed_cut_not_just_segmentation(
     assert params[3] == "2026-07-11T11:30:00+00:00"  # time_end carries the operator's edit
     assert json.loads(params[8]) == []  # protagonists carries the operator's edit
     assert params[5] == "re-cut"  # segmentation carries the forced relabel
+
+
+def test_further_edit_to_already_recut_episode_still_syncs_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex round-1 finding on #3538: `run_recut_tick` never calls `_write_relabeled` for a
+    FURTHER edit to an episode that is ALREADY `segmentation: re-cut` (the merge-widen follow-up
+    correction flow) -- `segmentation` is already correct, so only `_record_baseline` and
+    `_reconcile` run. Without an explicit sync on that branch, the projection would silently stay
+    stale for every subsequent edit to an already re-cut episode. Exercises `run_recut_tick`
+    end-to-end (not just `_write_relabeled` directly) with a REAL fake `conn_rw`, proving the
+    incremental UPDATE actually reaches the DB layer from this specific branch."""
+    vault_root = tmp_path / "vault"
+    _stub_bindings(monkeypatch)
+    _install_fake_engine_state(monkeypatch)
+
+    episode_id = "ep-bbbbbbbb-2222-4333-8444-555555555555"
+    _write_initial(vault_root, episode_id=episode_id, segmentation="proposed")
+    conn = _ProjectionSyncConn({episode_id})
+    monkeypatch.setattr(recut_module, "conn_rw", lambda *a, **k: conn)
+
+    # Tick 1: first sight, adopts baseline (no relabel, no sync -- proposed stays proposed).
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 5))
+    assert not conn.calls
+
+    # Tick 2: operator edit -> re-cut detected, segmentation != re-cut yet -> _write_relabeled
+    # fires -> exactly one sync.
+    _edit_note_directly(vault_root, episode_id, protagonists=[])
+    result_2 = run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 10))
+    assert result_2["recut_detected"] == [episode_id]
+    first_sync_count = len([c for c in conn.calls if c[0].strip().upper().startswith("UPDATE")])
+    assert first_sync_count == 1
+
+    # Tick 3: a FURTHER edit while ALREADY `re-cut` (the merge-widen follow-up flow) -- widens
+    # the bounds again. segmentation is already "re-cut", so _write_relabeled is never called.
+    _edit_note_directly(vault_root, episode_id, **{"time.end": "2026-07-11T12:00:00+00:00"})
+    result_3 = run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 15))
+    assert result_3["recut_detected"] == [episode_id]
+
+    update_calls = [c for c in conn.calls if c[0].strip().upper().startswith("UPDATE")]
+    assert len(update_calls) == first_sync_count + 1, (
+        "the further-edit-to-already-re-cut branch must issue its own projection sync"
+    )
+    _sql, params = update_calls[-1]
+    assert params[3] == "2026-07-11T12:00:00+00:00"  # the SECOND edit's widened bound synced too
+    assert params[-1] == episode_id

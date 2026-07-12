@@ -62,7 +62,11 @@ path-typing). This module is the production tick (:func:`run_recut_tick`, wired 
    ``rebuild_episodes_projection``, is a full TRUNCATE+replay no production caller schedules. So
    :func:`_write_relabeled` issues its own targeted incremental ``UPDATE`` (:func:`_sync_projection_row`)
    for every note-sourced column right after each relabel write -- never partial, since a partial
-   sync would leave exactly this bug class alive for whichever column it omitted.
+   sync would leave exactly this bug class alive for whichever column it omitted. A FURTHER edit to
+   an ALREADY ``re-cut`` episode (round-1 Codex finding: the merge-widen follow-up correction flow)
+   never reaches :func:`_write_relabeled` at all -- ``segmentation`` is already correct, so
+   :func:`run_recut_tick` calls :func:`_sync_projection_row` directly from that branch instead, so
+   this stays a re-cut-detection-wide invariant, not merely a `_write_relabeled`-scoped one.
 """
 
 from __future__ import annotations
@@ -445,6 +449,14 @@ def run_recut_tick(
                 )
                 logger.info("recut: operator edit detected for episode %s -- segmentation=re-cut", episode_id)
             else:
+                # #3182 review fix (Codex round-1 finding): a FURTHER edit to an ALREADY re-cut
+                # episode (e.g. the merge-widen follow-up correction flow) never calls
+                # _write_relabeled -- segmentation is already correct, so no relabel write is
+                # needed -- but the cut itself still changed on disk (that's what current_hash !=
+                # state.content_hash just proved), so the projection must still be synced here,
+                # explicitly, from the current on-disk fields (no note rewrite occurs on this
+                # branch; _sync_projection_row is otherwise only reachable via _write_relabeled).
+                _sync_projection_row(episode_id, fields)
                 logger.info(
                     "recut: further operator edit detected for already-re-cut episode %s", episode_id
                 )
