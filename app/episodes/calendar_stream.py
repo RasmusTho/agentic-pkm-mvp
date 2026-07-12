@@ -221,14 +221,23 @@ class CalendarRawItem:
     text for JUST this occurrence (never the whole multi-occurrence
     response -- ``parse_vevent`` always parses exactly one VEVENT).
 
-    ``occurrence_key`` is ``None`` for a non-recurring (or non-expanded)
-    resource -- the original ``uid:etag`` identity is untouched. For an
-    expanded recurring occurrence it is a deterministic UTC timestamp
-    (RECURRENCE-ID, falling back to DTSTART) distinguishing this occurrence
-    from its siblings, so each occurrence gets its own signal_id instead of
-    all of them colliding on the shared master uid:etag (finding 2: without
-    this, a recurring master "is returned once ... and contributes exactly
-    once ever")."""
+    ``occurrence_key`` is ``None`` for a non-recurring event -- the original
+    ``uid:etag`` identity is untouched. For a recurring occurrence it is a
+    deterministic UTC timestamp (RECURRENCE-ID, falling back to DTSTART)
+    distinguishing this occurrence from its siblings, so each occurrence
+    gets its own signal_id instead of all of them colliding on the shared
+    master uid:etag (finding 2: without this, a recurring master "is
+    returned once ... and contributes exactly once ever").
+
+    Review gate round 2 (PR #3519, findings 1+2): ``occurrence_key`` is now
+    derived from THIS occurrence's own RECURRENCE-ID (or DTSTART) alone --
+    NEVER from how many sibling occurrences of the same master happened to
+    also fall inside this tick's expand/time-range window. The prior
+    ``is_expanded = len(event_blocks) > 1`` gate meant the SAME real
+    occurrence got a bare ``uid:etag`` identity when it was alone in-window
+    but ``uid:etag:occurrence_key`` when a sibling was also in-window --
+    two identities for one instance, breaking same-occurrence idempotency
+    (finding 1, confirmed regression)."""
 
     uid: str
     etag: str
@@ -322,7 +331,24 @@ def _parse_multistatus(xml_text: str) -> list[CalendarRawItem]:
     out into one standalone single-VEVENT ICS block per occurrence, each
     becoming its own :class:`CalendarRawItem` with a distinguishing
     ``occurrence_key`` so distinct occurrences fold as distinct signals
-    instead of colliding on the shared resource uid:etag."""
+    instead of colliding on the shared resource uid:etag.
+
+    Review gate round 2 (finding 1, confirmed): ``occurrence_key`` is
+    derived from THIS occurrence's own RECURRENCE-ID whenever the parsed
+    event carries one -- REGARDLESS of ``len(event_blocks)``. Production
+    always sends ``<C:expand>`` (see :func:`_calendar_query_body`), so a
+    RFC-4791-compliant server stamps every expanded instance -- including
+    the lone instance a narrow tick window happens to return -- with its own
+    RECURRENCE-ID; gating that on "did >1 block come back in THIS
+    multistatus response" made the key depend on which siblings happened to
+    also fall inside this tick's window, so the SAME occurrence flipped
+    between a bare ``uid:etag`` identity (alone in-window) and
+    ``uid:etag:occurrence_key`` (a sibling also in-window). The
+    ``len(event_blocks) > 1`` check is now used ONLY as a defensive
+    DTSTART-based fallback for a non-compliant server that expands a
+    recurring master (proven by multiple VEVENT blocks sharing one
+    href/etag in a SINGLE response) yet omits RECURRENCE-ID on some
+    instance -- a narrower, hypothetical residual, not the confirmed bug."""
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as exc:
@@ -347,16 +373,25 @@ def _parse_multistatus(xml_text: str) -> list[CalendarRawItem]:
         if not ics_text:
             continue
         event_blocks = _split_vevent_blocks(ics_text) or [ics_text]
-        is_expanded = len(event_blocks) > 1
+        multiple_blocks_this_response = len(event_blocks) > 1
         for block in event_blocks:
             event = parse_vevent(block)
             uid = event.uid if event is not None else href
             if not uid:
                 continue
             occurrence_key: str | None = None
-            if is_expanded and event is not None:
-                anchor = event.recurrence_id or event.dtstart
-                occurrence_key = _ics_utc_stamp(anchor) if anchor is not None else None
+            if event is not None:
+                if event.recurrence_id is not None:
+                    # Window-independent (finding 1): this occurrence's OWN
+                    # RECURRENCE-ID, never gated on sibling count.
+                    occurrence_key = _ics_utc_stamp(event.recurrence_id)
+                elif multiple_blocks_this_response and event.dtstart is not None:
+                    # Defensive fallback ONLY (see docstring): this
+                    # resource's response already proves it is a recurring
+                    # master (>1 VEVENT under one href/etag) but this
+                    # instance lacks RECURRENCE-ID -- discriminate by its
+                    # own DTSTART rather than collide on the shared etag.
+                    occurrence_key = _ics_utc_stamp(event.dtstart)
             items.append(
                 CalendarRawItem(uid=uid, etag=etag or uid, ics_text=block, occurrence_key=occurrence_key)
             )
@@ -465,6 +500,14 @@ class ParsedCalendarEvent:
     #: caller (``calendar_event_to_signal_contract``) degrades the `time`
     #: dimension's confidence rather than silently asserting UTC.
     time_is_floating: bool = False
+    #: This occurrence's own ``SEQUENCE`` (RFC 5545 3.8.7.4, monotonic
+    #: revision counter) and ``LAST-MODIFIED`` (3.8.7.3, always UTC), when
+    #: the server provides them -- Review gate round 2, finding 2: the
+    #: per-occurrence CHANGE-detection token prefers these authoritative
+    #: per-occurrence markers over a content hash when present. ``None``
+    #: when the property is absent from this VEVENT.
+    sequence: int | None = None
+    last_modified: datetime | None = None
 
 
 _DT_UTC_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$")
@@ -601,6 +644,8 @@ def parse_vevent(ics_text: str) -> ParsedCalendarEvent | None:
     attendees: list[CalendarAttendee] = []
     dtstart_floating = False
     dtend_floating = False
+    sequence: int | None = None
+    last_modified: datetime | None = None
 
     for line in lines:
         if not line:
@@ -628,6 +673,13 @@ def parse_vevent(ics_text: str) -> ParsedCalendarEvent | None:
             recurrence_id, _ = _parse_ics_datetime(value, params)
         elif name == "LOCATION":
             location = value.strip() or None
+        elif name == "SEQUENCE":
+            try:
+                sequence = int(value.strip())
+            except ValueError:
+                sequence = None
+        elif name == "LAST-MODIFIED":
+            last_modified, _ = _parse_ics_datetime(value, params)
         elif name == "ATTENDEE":
             cn_match = _ATTENDEE_CN_RE.search(params)
             surface = _strip_cn_quotes(cn_match.group(1)) if cn_match else value.strip()
@@ -645,6 +697,8 @@ def parse_vevent(ics_text: str) -> ParsedCalendarEvent | None:
         attendees=tuple(attendees),
         recurrence_id=recurrence_id,
         time_is_floating=dtstart_floating or dtend_floating,
+        sequence=sequence,
+        last_modified=last_modified,
     )
 
 
@@ -818,15 +872,58 @@ def _iso(value: datetime) -> str:
     return dt.astimezone(timezone.utc).isoformat()
 
 
-def _calendar_signal_id(uid: str, etag: str, occurrence_key: str | None = None) -> str:
-    """The per-signal identity: ``uid:etag`` for a non-recurring (or
-    unexpanded) event, unchanged from v1 -- or ``uid:etag:occurrence_key``
-    for one occurrence of a server-expanded recurring series (Review gate
-    round 1, finding 2), so distinct occurrences fold as distinct signals
-    instead of colliding on the shared master resource's constant
-    uid:etag."""
-    base = f"{uid}:{etag}"
-    return f"{base}:{occurrence_key}" if occurrence_key else base
+def _occurrence_content_token(event: ParsedCalendarEvent) -> str:
+    """Stable per-occurrence CHANGE-detection token (Review gate round 2,
+    finding 2, plausible-confirmed): derived from THIS occurrence's OWN
+    content -- DTSTART/DTEND/SUMMARY, plus SEQUENCE/LAST-MODIFIED when the
+    server provides them -- NEVER the shared resource ETag.
+
+    A CalDAV recurring series is ONE resource with ONE ETag: editing any
+    single occurrence bumps that shared ETag for every sibling occurrence.
+    Keying the per-occurrence signal_id's change-token on ETag would
+    therefore give every UNMODIFIED sibling occurrence a new signal_id next
+    tick too, and the segmenter (which treats any new signal_id as fresh
+    evidence) would wrongly re-emit them all as "new". This hash only
+    changes when THIS occurrence's own fields change, so editing occurrence
+    N never re-emits sibling occurrence M."""
+    parts = [
+        _iso(event.dtstart) if event.dtstart is not None else "",
+        _iso(event.dtend) if event.dtend is not None else "",
+        event.summary or "",
+    ]
+    if event.sequence is not None:
+        parts.append(f"seq={event.sequence}")
+    if event.last_modified is not None:
+        parts.append(f"lm={_iso(event.last_modified)}")
+    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+def calendar_signal_id(
+    uid: str,
+    etag: str,
+    occurrence_key: str | None = None,
+    event: ParsedCalendarEvent | None = None,
+) -> str:
+    """The per-signal IDENTITY + CHANGE-token (Review gate round 2,
+    findings 1+2 -- the canonical scheme both ``calendar_event_to_signal_contract``
+    and ``segmenter._signal_from_calendar_row`` build on):
+
+    - Non-recurring (or unexpanded) event: unchanged from v1/round-1 --
+      ``uid:etag``. One CalDAV resource, one occurrence: the resource's own
+      ETag correctly IS this occurrence's change signal.
+    - One occurrence of a recurring series: ``uid:occurrence_key:content_token``.
+      IDENTITY is ``uid:occurrence_key`` -- canonical and WINDOW-INDEPENDENT
+      (finding 1: ``occurrence_key`` is this occurrence's own RECURRENCE-ID
+      or DTSTART, never gated on how many siblings shared this tick's
+      expand/time-range window, so the same real occurrence always resolves
+      to the same identity). CHANGE detection is ``content_token``
+      (:func:`_occurrence_content_token`, finding 2) -- this occurrence's
+      OWN content hash, never the shared resource ETag, so editing one
+      occurrence never re-emits its unmodified siblings."""
+    if occurrence_key:
+        token = _occurrence_content_token(event) if event is not None else etag
+        return f"{uid}:{occurrence_key}:{token}"
+    return f"{uid}:{etag}"
 
 
 def calendar_event_to_signal_contract(
@@ -847,7 +944,7 @@ def calendar_event_to_signal_contract(
     carrier" split already established by ERE-01/ERE-04).
 
     ``occurrence_key`` distinguishes one occurrence of a server-expanded
-    recurring series (see :func:`_calendar_signal_id`); omitted, the
+    recurring series (see :func:`calendar_signal_id`); omitted, the
     signal_id/provenance_ref are exactly the v1 ``uid:etag`` shape."""
     if event.dtstart is None:
         raise ValueError(f"calendar event {uid!r} has no usable DTSTART -- cannot build a SignalContract")
@@ -866,7 +963,7 @@ def calendar_event_to_signal_contract(
         score, calibration = _DIMENSION_CONFIDENCE["goal"]
         dimensions["goal"] = ConfidenceScore(score=score, calibration=calibration)
 
-    signal_id = _calendar_signal_id(uid, etag, occurrence_key)
+    signal_id = calendar_signal_id(uid, etag, occurrence_key, event)
     return SignalContract(
         stream_id=CALENDAR_STREAM_ID,
         signal_id=signal_id,
@@ -894,6 +991,7 @@ __all__ = [
     "ParsedCalendarEvent",
     "RegisterEntrySnapshot",
     "calendar_event_to_signal_contract",
+    "calendar_signal_id",
     "parse_vevent",
     "read_calendar_raw_items_for_tick",
     "read_register_snapshot",

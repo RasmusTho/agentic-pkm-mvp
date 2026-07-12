@@ -75,6 +75,7 @@ from app.episodes.calendar_stream import (
     CalendarBinding,
     CalendarRawItem,
     RegisterEntrySnapshot,
+    calendar_signal_id,
     parse_vevent,
     read_calendar_raw_items_for_tick,
     read_register_snapshot,
@@ -652,6 +653,13 @@ def _signal_from_calendar_row(
     series' occurrences share one resource uid:etag, so without the
     occurrence key every occurrence after the first would collide on the
     same signal_id and never fold as separate evidence.
+
+    Review gate round 2 (findings 1+2): ``signal_id`` is built via
+    :func:`app.episodes.calendar_stream.calendar_signal_id`, the single
+    canonical scheme -- identity (``uid`` + occurrence_key, window-
+    independent, finding 1) is now separate from the per-occurrence
+    CHANGE-token (a hash of THIS occurrence's own content, never the shared
+    resource etag, finding 2).
     """
     event = parse_vevent(item.ics_text)
     if event is None or event.dtstart is None:
@@ -673,9 +681,7 @@ def _signal_from_calendar_row(
 
     goal = (slugify_summary(event.summary),) if event.summary else ()
 
-    signal_id = f"{item.uid}:{item.etag}"
-    if item.occurrence_key:
-        signal_id = f"{signal_id}:{item.occurrence_key}"
+    signal_id = calendar_signal_id(item.uid, item.etag, item.occurrence_key, event)
 
     return SegmentationSignal(
         stream_id=CALENDAR_STREAM_ID,
@@ -828,15 +834,23 @@ def run_segmentation_tick(
         # calendar's current item set each tick (bounded to a fixed past/
         # future window -- `_CALDAV_TIME_RANGE_PAST`/`_CALDAV_TIME_RANGE_FUTURE`
         # in calendar_stream.py, ERE-09 review round 1 finding 3) and relies
-        # on the uid+etag-keyed `signal_id` for at-least-once idempotency (an
-        # unchanged event redelivers the same signal_id -> no-op fold; an
-        # edited event gets a new etag -> a new signal, itself append-only
-        # evidence of the change) -- the same INV-ERE-F guarantee, a
-        # different mechanism. A server-expanded recurring occurrence
-        # (review round 1 finding 2) additionally carries an
-        # `item.occurrence_key` folded into `signal_id` in
-        # `_signal_from_calendar_row` below, since every occurrence of one
-        # recurring master otherwise shares the same resource uid:etag.
+        # on `calendar_signal_id` (`app.episodes.calendar_stream`) for
+        # at-least-once idempotency (an unchanged event redelivers the same
+        # signal_id -> no-op fold; an edited event gets a new signal ->
+        # itself append-only evidence of the change) -- the same INV-ERE-F
+        # guarantee, a different mechanism. Review gate round 2 (findings
+        # 1+2, PR #3519): for a non-recurring event this is still plain
+        # `uid:etag`; for one occurrence of a server-expanded recurring
+        # series (review round 1 finding 2) it is
+        # `uid:occurrence_key:content_token` -- IDENTITY (`occurrence_key`)
+        # is this occurrence's own RECURRENCE-ID/DTSTART, window-independent
+        # (finding 1: never gated on how many sibling occurrences shared
+        # this tick's expand/time-range window, so the same real occurrence
+        # never gets two identities); the CHANGE-token is a hash of this
+        # occurrence's OWN content, never the shared resource etag (finding
+        # 2: a recurring series is one CalDAV resource with one etag, so
+        # editing any single occurrence must not bump every unmodified
+        # sibling's signal_id too).
         calendar_items, calendar_degraded = read_calendar_raw_items_for_tick()
         consumed[CALENDAR_STREAM_ID] = len(calendar_items)
         degraded.extend(calendar_degraded)

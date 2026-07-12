@@ -54,6 +54,7 @@ from app.episodes.calendar_stream import (
     CalendarUnreachableError,
     RegisterEntrySnapshot,
     calendar_event_to_signal_contract,
+    calendar_signal_id,
     parse_vevent,
     read_calendar_raw_items_for_tick,
     resolve_attendee_readonly,
@@ -676,9 +677,21 @@ def test_expanded_recurring_occurrences_each_emit_a_distinct_signal() -> None:
     signals = [_signal_from_calendar_row(binding, item, register_snapshot=()) for item in items]
     assert all(signal is not None for signal in signals)
     signal_ids = {signal.signal_id for signal in signals if signal is not None}
-    assert signal_ids == {
-        "recurring-standup:etag-master:20260706T090000Z",
-        "recurring-standup:etag-master:20260707T090000Z",
+    # Review gate round 2 (finding 1): IDENTITY is `uid:occurrence_key`,
+    # window-independent -- the shared master etag no longer participates
+    # at all (finding 2: it must not, since it is one shared resource-level
+    # value, not a per-occurrence one). Each id is the exact canonical
+    # `calendar_signal_id` output for that occurrence's own parsed content.
+    expected_ids = {
+        calendar_signal_id(item.uid, item.etag, item.occurrence_key, parse_vevent(item.ics_text))
+        for item in items
+    }
+    assert signal_ids == expected_ids
+    # The IDENTITY portion (everything but the trailing change-token) is
+    # exactly `uid:occurrence_key` -- no etag anywhere in it.
+    assert {sid.rsplit(":", 1)[0] for sid in signal_ids} == {
+        "recurring-standup:20260706T090000Z",
+        "recurring-standup:20260707T090000Z",
     }
 
     # Both occurrences fold as SEPARATE evidence (a day apart, well past
@@ -690,8 +703,7 @@ def test_expanded_recurring_occurrences_each_emit_a_distinct_signal() -> None:
     all_derived: set[str] = set()
     for seg in list(updated_open.values()) + closed:
         all_derived |= set(seg.derived_from)
-    assert "calendar:recurring-standup:etag-master:20260706T090000Z" in all_derived
-    assert "calendar:recurring-standup:etag-master:20260707T090000Z" in all_derived
+    assert {f"calendar:{sid}" for sid in signal_ids} <= all_derived
 
 
 def test_quoted_cn_attendee_strips_quotes_and_resolves() -> None:
@@ -720,3 +732,170 @@ def test_quoted_cn_attendee_strips_quotes_and_resolves() -> None:
     resolved = resolve_attendee_readonly(event.attendees[0].surface_form, known_entries=known)
     assert isinstance(resolved, AttendeeResolved)
     assert resolved.entity_id == "ent:doe-john"
+
+
+# ---------------------------------------------------------------------------
+# Review gate round 2 (PR #3519, inline comments 3565621365 / 3565621498):
+# recurring-occurrence signal_id STABILITY. Round 1 fixed "a recurring
+# occurrence gets its own signal_id at all" (finding 2, round 1); round 2
+# fixes "that signal_id must be the SAME id for the SAME occurrence no
+# matter which tick observes it" -- both across a change in the tick's
+# expand/time-range window population (finding 1) and across an unrelated
+# sibling occurrence's edit bumping the shared resource etag (finding 2).
+# ---------------------------------------------------------------------------
+
+
+def _multistatus_response(href: str, etag: str, calendar_data: str) -> str:
+    return (
+        '<?xml version="1.0"?>\n'
+        '<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">\n'
+        "  <D:response>\n"
+        f"    <D:href>{href}</D:href>\n"
+        "    <D:propstat>\n"
+        "      <D:prop>\n"
+        f'        <D:getetag>"{etag}"</D:getetag>\n'
+        f"        <C:calendar-data>{calendar_data}</C:calendar-data>\n"
+        "      </D:prop>\n"
+        "      <D:status>HTTP/1.1 200 OK</D:status>\n"
+        "    </D:propstat>\n"
+        "  </D:response>\n"
+        "</D:multistatus>\n"
+    )
+
+
+def test_occurrence_signal_id_stable_single_vs_multiple_in_window() -> None:
+    """Finding 1 (confirmed regression, inline comment 3565621365): the SAME
+    real occurrence of a recurring series must resolve to the SAME
+    signal_id whether it is the ONLY occurrence this tick's expand/
+    time-range window returns, or a sibling occurrence also falls
+    in-window this tick. The pre-fix code gated `occurrence_key` on
+    `is_expanded = len(event_blocks) > 1` -- purely an artifact of how many
+    siblings happened to share THIS tick's window, not a property of the
+    occurrence itself -- so the same occurrence flipped between a bare
+    `uid:etag` identity (alone in-window) and `uid:etag:occurrence_key`
+    (paired with a sibling in-window), breaking same-occurrence idempotency
+    and causing the segmenter to fold the SAME calendar instance twice
+    under two different identities."""
+    href = "/calendars/work/recurring-standup.ics"
+    occurrence_a = (
+        "BEGIN:VEVENT\r\n"
+        "UID:recurring-standup\r\n"
+        "RECURRENCE-ID:20260706T090000Z\r\n"
+        "DTSTART:20260706T090000Z\r\n"
+        "DTEND:20260706T091500Z\r\n"
+        "SUMMARY:Daily Standup\r\n"
+        "END:VEVENT\r\n"
+    )
+    occurrence_b_sibling = (
+        "BEGIN:VEVENT\r\n"
+        "UID:recurring-standup\r\n"
+        "RECURRENCE-ID:20260707T090000Z\r\n"
+        "DTSTART:20260707T090000Z\r\n"
+        "DTEND:20260707T091500Z\r\n"
+        "SUMMARY:Daily Standup\r\n"
+        "END:VEVENT\r\n"
+    )
+
+    # Tick 1, a narrow window: occurrence A is the ONLY occurrence returned.
+    alone_items = _parse_multistatus(_multistatus_response(href, "etag-master", occurrence_a))
+    assert len(alone_items) == 1
+    # Never None just because this occurrence happened to be alone --
+    # RECURRENCE-ID is this occurrence's own field, independent of siblings.
+    assert alone_items[0].occurrence_key == "20260706T090000Z"
+
+    # Tick 2, a wider window: occurrence A AND sibling occurrence B both
+    # fall in-window this time, in the SAME multistatus response (one
+    # recurring master, one href/etag).
+    paired_items = _parse_multistatus(
+        _multistatus_response(href, "etag-master", occurrence_a + occurrence_b_sibling)
+    )
+    assert len(paired_items) == 2
+
+    binding = _binding(calendar_id="work-cal", scope="work")
+    alone_signal = _signal_from_calendar_row(binding, alone_items[0], register_snapshot=())
+    paired_signal_a = next(
+        signal
+        for item in paired_items
+        if item.occurrence_key == "20260706T090000Z"
+        for signal in (_signal_from_calendar_row(binding, item, register_snapshot=()),)
+    )
+    assert alone_signal is not None and paired_signal_a is not None
+    # THE SAME occurrence (A) resolves to the SAME identity+signal_id
+    # whether it was alone in-window (tick 1) or paired with a sibling
+    # in-window (tick 2) -- the confirmed idempotency regression, fixed.
+    assert alone_signal.signal_id == paired_signal_a.signal_id
+    assert alone_signal.provenance_ref == paired_signal_a.provenance_ref
+
+
+def test_sibling_edit_bumps_shared_etag_but_not_unedited_occurrence_signal_id() -> None:
+    """Finding 2 (plausible, inline comment 3565621498): a CalDAV recurring
+    series is ONE resource with ONE etag. Editing any single occurrence
+    bumps the WHOLE resource's shared etag on the next poll -- so every
+    UNMODIFIED sibling occurrence must NOT get a new signal_id (that would
+    wrongly re-emit it as "new" evidence, edit-noise on every unrelated
+    sibling). Change detection must key on the occurrence's OWN content
+    (DTSTART/DTEND/SUMMARY/SEQUENCE/LAST-MODIFIED), never the shared
+    resource etag. The identity (finding 1: uid + recurrence-id) stays
+    stable either way; only the edited occurrence's own change-token
+    differs."""
+    href = "/calendars/work/recurring-standup.ics"
+
+    def _occurrence(recurrence_id: str, dtstart: str, dtend: str, summary: str) -> str:
+        return (
+            "BEGIN:VEVENT\r\n"
+            "UID:recurring-standup\r\n"
+            f"RECURRENCE-ID:{recurrence_id}\r\n"
+            f"DTSTART:{dtstart}\r\n"
+            f"DTEND:{dtend}\r\n"
+            f"SUMMARY:{summary}\r\n"
+            "END:VEVENT\r\n"
+        )
+
+    occurrence_a = _occurrence("20260706T090000Z", "20260706T090000Z", "20260706T091500Z", "Daily Standup")
+    occurrence_b_v1 = _occurrence("20260707T090000Z", "20260707T090000Z", "20260707T091500Z", "Daily Standup")
+    # Occurrence B is edited (its SUMMARY changes); occurrence A's ICS text
+    # is byte-for-byte identical across both ticks.
+    occurrence_b_v2 = _occurrence(
+        "20260707T090000Z", "20260707T090000Z", "20260707T091500Z", "Daily Standup (moved to Room B)"
+    )
+
+    # Tick 1: both occurrences, shared etag v1.
+    items_v1 = _parse_multistatus(
+        _multistatus_response(href, "etag-v1", occurrence_a + occurrence_b_v1)
+    )
+    # Tick 2: occurrence B edited -> the ONE shared CalDAV resource's etag
+    # bumps for the WHOLE series, even though occurrence A never changed.
+    items_v2 = _parse_multistatus(
+        _multistatus_response(href, "etag-v2", occurrence_a + occurrence_b_v2)
+    )
+    assert {item.etag for item in items_v1} == {"etag-v1"}
+    assert {item.etag for item in items_v2} == {"etag-v2"}  # the shared etag DID bump
+
+    binding = _binding(calendar_id="work-cal", scope="work")
+
+    def _signal_for(items: list[CalendarRawItem], occurrence_key: str):
+        item = next(i for i in items if i.occurrence_key == occurrence_key)
+        return _signal_from_calendar_row(binding, item, register_snapshot=())
+
+    signal_a_v1 = _signal_for(items_v1, "20260706T090000Z")
+    signal_a_v2 = _signal_for(items_v2, "20260706T090000Z")
+    signal_b_v1 = _signal_for(items_v1, "20260707T090000Z")
+    signal_b_v2 = _signal_for(items_v2, "20260707T090000Z")
+    assert all(s is not None for s in (signal_a_v1, signal_a_v2, signal_b_v1, signal_b_v2))
+
+    # Occurrence A never changed -- despite the shared resource etag
+    # bumping (v1 -> v2), its signal_id (identity AND change-token) must be
+    # UNCHANGED. This is the confirmed edit-noise bug, fixed: the old
+    # etag-keyed scheme would have re-emitted A as "new" here.
+    assert signal_a_v1.signal_id == signal_a_v2.signal_id
+
+    # Occurrence B WAS edited -- its own content changed, so its signal_id
+    # must differ (the documented invariant "an edited event gets a new
+    # signal_id", preserved at the occurrence level).
+    assert signal_b_v1.signal_id != signal_b_v2.signal_id
+
+    # The identity portion (uid:occurrence_key) of B is unchanged across
+    # the edit -- only the trailing change-token differs -- proving
+    # identity (finding 1) and change-detection (finding 2) are properly
+    # decoupled.
+    assert signal_b_v1.signal_id.rsplit(":", 1)[0] == signal_b_v2.signal_id.rsplit(":", 1)[0]
