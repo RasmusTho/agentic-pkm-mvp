@@ -3,15 +3,21 @@ from __future__ import annotations
 import json
 import multiprocessing
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty
 from threading import Event
+from typing import Any, Mapping
 
 import pytest
 from click.testing import CliRunner
 
 from app.builderops.__main__ import _root as builderops_root
 from app.builderops.model_inquiry import ModelInquiryService
+from app.builderops.model_inquiry_adapters import AdapterResult
+from app.builderops.model_inquiry_contract import RESPONSE_SCHEMA_VERSION
+from app.builderops.model_inquiry_promotion import ModelInquiryPromotionGateway
+from app.builderops.model_inquiry_runner import ModelInquiryRunner
 from app.builderops.models import BuilderOpsConflictError, BuilderOpsValidationError
 
 
@@ -37,6 +43,111 @@ def _env(tmp_path: Path) -> dict[str, str]:
         "BUILDEROPS_VAULT_ROOT": str(vault),
         "BUILDEROPS_DB_PATH": str(tmp_path / "local" / "builderops.sqlite3"),
     }
+
+
+def _response(
+    stance: str,
+    *,
+    reviewed: list[str] | None = None,
+    accepted_hash: str | None = None,
+) -> str:
+    return json.dumps(
+        {
+            "schema_version": RESPONSE_SCHEMA_VERSION,
+            "stance": stance,
+            "content": f"{stance} answer",
+            "claims": [f"{stance} claim"],
+            "risks": [f"{stance} risk"],
+            "blocking_questions": [],
+            "reviewed_artifact_refs": reviewed or [],
+            "accepted_artifact_hash": accepted_hash,
+        }
+    )
+
+
+@dataclass
+class _ConsensusAdapter:
+    adapter_id: str
+    provider: str
+    model: str
+
+    def execute(self, request: Mapping[str, Any]) -> AdapterResult:
+        if request["phase"] == "draft":
+            return AdapterResult(_response("draft"))
+        return AdapterResult(
+            _response(
+                "accept",
+                reviewed=list(request["reviewed_artifact_refs"]),
+                accepted_hash=request["input_artifacts"][0]["artifact_hash"],
+            )
+        )
+
+
+def test_terminal_run_writes_human_readable_markdown_report(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    service = ModelInquiryService.from_env(env)
+    service.start(
+        question="Which boundary should own durable human knowledge?",
+        workflow="fable-gpt-architecture",
+        inquiry_id="inq_test_markdown_report",
+        source_refs=[{"ref_type": "github_issue", "ref": "#3540"}],
+    )
+    adapters = {
+        role: _ConsensusAdapter(f"{role}-adapter", role, f"{role}-model")
+        for role in ("fable", "gpt_codex")
+    }
+
+    result = ModelInquiryRunner(service, adapters).run("inq_test_markdown_report", max_rounds=1)
+
+    report = Path(result["human_readable_report"])
+    assert report.is_file()
+    rendered = report.read_text(encoding="utf-8")
+    assert "# Model inquiry — inq_test_markdown_report" in rendered
+    assert "Which boundary should own durable human knowledge?" in rendered
+    assert "### 0. fable — draft" in rendered
+    assert "### 3. gpt_codex — review" in rendered
+    assert "## Shared synthesis" in rendered
+    assert "## Run result" in rendered
+    assert "Outcome: **consensus**" in rendered
+
+    ModelInquiryPromotionGateway(service).evaluate("inq_test_markdown_report")
+    service.write_human_readable_report("inq_test_markdown_report")
+    rendered = report.read_text(encoding="utf-8")
+    assert "## Readiness" in rendered
+    assert "Outcome: **needs_input**" in rendered
+
+
+def test_markdown_report_is_deterministic_and_derived(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    service = ModelInquiryService.from_env(env)
+    service.start(
+        question="Render this safely.",
+        workflow="fable-gpt-architecture",
+        inquiry_id="inq_test_markdown_deterministic",
+        source_refs=[{"ref_type": "github_issue", "ref": "#3540"}],
+    )
+    adapters = {
+        role: _ConsensusAdapter(f"{role}-adapter", role, f"{role}-model")
+        for role in ("fable", "gpt_codex")
+    }
+    result = ModelInquiryRunner(service, adapters).run(
+        "inq_test_markdown_deterministic", max_rounds=1
+    )
+    report = Path(result["human_readable_report"])
+    json_before = {
+        path.relative_to(report.parent): path.read_bytes()
+        for path in report.parent.rglob("*.json")
+    }
+
+    service.write_human_readable_report("inq_test_markdown_deterministic")
+
+    assert report.read_text(encoding="utf-8") == service.write_human_readable_report(
+        "inq_test_markdown_deterministic"
+    ).read_text(encoding="utf-8")
+    assert {
+        path.relative_to(report.parent): path.read_bytes()
+        for path in report.parent.rglob("*.json")
+    } == json_before
 
 
 def test_start_persists_question_before_provider_call(tmp_path: Path) -> None:
