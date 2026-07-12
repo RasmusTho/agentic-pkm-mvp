@@ -52,4 +52,4 @@ No LLM packet, option comparison, risk ontology, scheduler, decision-note writeb
 
 ## Related GitHub Issues
 
-Create one bounded implementation issue after this specification is merged. TCD hint: Sol / high reasoning because identity, human knowledge, scope, and receipt semantics meet at this seam.
+Implementation issue: [#3548](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3548). TCD hint: Sol / high reasoning because identity, human knowledge, scope, and receipt semantics meet at this seam.

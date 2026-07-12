@@ -52,4 +52,4 @@ No new graphical surface, parallel confirmation model, durable dismissal, triage
 
 ## Related GitHub Issues
 
-Create one bounded implementation issue after this specification is merged. TCD hint: Terra / high reasoning; the slice touches curation, retrieval admission, and a no-write invariant.
+Implementation issue: [#3544](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3544). TCD hint: Terra / high reasoning; the slice touches curation, retrieval admission, and a no-write invariant.
