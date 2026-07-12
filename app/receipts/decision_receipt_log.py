@@ -153,6 +153,34 @@ def build_receipt(
     }
 
 
+def _write_receipt_line(
+    record: dict[str, Any], created_at: datetime, vault_root: Path | None = None
+) -> None:
+    """Append one already-built receipt record to the correct dated shard.
+
+    Shared low-level write primitive: :func:`append_decision_receipt` builds its
+    record via :func:`build_receipt` (which folds ``trace_id`` into the value
+    envelope) and calls this. The slice-4 historical export
+    (``app/jobs/decisions_export.py``) calls this directly with a record whose
+    ``value`` must pass through unmodified — folding a ``trace_id`` into a
+    historical row that never had one would misrepresent the record and break
+    the export's idempotency check. Callers are responsible for the WriteGuard
+    assertion (``assert_writes_allowed(RECEIPT_WRITE_ACTION)``) before calling.
+    """
+    try:
+        target_dir = decisions_receipts_dir(vault_root)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        shard = target_dir / _shard_name(created_at)
+        line = json.dumps(record, ensure_ascii=False, sort_keys=True)
+        with shard.open("a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except OSError as exc:
+        raise DecisionReceiptWriteError(
+            f"decision receipt append failed for object_id={record.get('object_id')} "
+            f"key={record.get('key')}: {exc}"
+        ) from exc
+
+
 def append_decision_receipt(
     *,
     object_id: str,
@@ -192,17 +220,7 @@ def append_decision_receipt(
         vault_uuid=resolved_uuid,
     )
 
-    try:
-        target_dir = decisions_receipts_dir(vault_root)
-        target_dir.mkdir(parents=True, exist_ok=True)
-        shard = target_dir / _shard_name(created)
-        line = json.dumps(record, ensure_ascii=False, sort_keys=True)
-        with shard.open("a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
-    except OSError as exc:
-        raise DecisionReceiptWriteError(
-            f"decision receipt append failed for object_id={object_id} key={key}: {exc}"
-        ) from exc
+    _write_receipt_line(record, created, vault_root)
     return record
 
 
