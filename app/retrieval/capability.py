@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 from app.retrieval.hybrid import ScopeDenial, scoped_hybrid_search
@@ -65,6 +65,11 @@ class RetrievalHit:
     snippet: str | None
     source_ref: str | None
     payload: dict[str, Any]
+    # ERE-06 (#3181): the closure-derived decay signal for THIS hit, computed fresh at retrieve()
+    # time -- never persisted, never written back into `payload` (which stays whatever the durable
+    # store actually holds; see app/episodes/closure_decay.py). Empty (default) when the hit
+    # carries no episode binding or an open one.
+    signal_payload: "RetrievalSignalPayload" = field(default_factory=lambda: RetrievalSignalPayload())
 
     @classmethod
     def from_hybrid(cls, hit: dict[str, Any]) -> "RetrievalHit":
@@ -104,6 +109,46 @@ class RetrievalResponse:
     # excluded. Carried alongside hits so consumers (the ASK envelope seam) can surface them —
     # denials are scope-level, not per-hit, so downstream hit truncation must never drop them.
     denials: tuple[ScopeDenial, ...] = ()
+
+
+def _apply_closure_decay(hits: list["RetrievalHit"]) -> list["RetrievalHit"]:
+    """ERE-06 (#3181): derive (never persist) the closure-based salience drop for every hit, then
+    re-sort the RETURNED set by the dampened score (ranking-only, AC4 -- this never changes
+    `evidence_role_in_context`, `authority_state`, or scope).
+
+    Lazily imported (avoids a retrieval -> episodes import at module load for callers that never
+    touch episode-bound content) and batched: every hit's episode ids are collected into ONE
+    closed-episode-id read instead of one query per hit. A hit set with no episode bindings at all
+    (the common case today) short-circuits to zero DB round-trips.
+    """
+    from app.episodes.closure_decay import derive_closure_salience, read_closed_episode_ids, resolve_episode_ids
+
+    all_ids: set[str] = set()
+    for hit in hits:
+        all_ids.update(resolve_episode_ids(hit.payload.get("episode_ref")))
+    if not all_ids:
+        return hits
+
+    closed_ids = read_closed_episode_ids(all_ids)
+    if not closed_ids:
+        return hits
+
+    dampened: list[RetrievalHit] = []
+    for hit in hits:
+        factor, salience = derive_closure_salience(hit.payload.get("episode_ref"), closed_ids)
+        if salience:
+            hit = replace(
+                hit,
+                score=hit.score * factor,
+                signal_payload=RetrievalSignalPayload(salience=salience),
+            )
+        dampened.append(hit)
+    # Stable, descending re-sort of the already-retrieved set only -- dampening can never pull in
+    # a candidate excluded earlier by hybrid.py's own (undamped) top-k cut; it only reorders WITHIN
+    # what was already returned (a documented v1 scope limit of enacting the decay at this call
+    # site rather than inside hybrid.py's own fusion step).
+    dampened.sort(key=lambda h: h.score, reverse=True)
+    return dampened
 
 
 def retrieve(request: RetrievalRequest) -> RetrievalResponse:
@@ -149,9 +194,10 @@ def retrieve(request: RetrievalRequest) -> RetrievalResponse:
     }
     if request.provenance_metadata:
         metadata["provenance"]["hints"] = dict(request.provenance_metadata)
+    hits = _apply_closure_decay([RetrievalHit.from_hybrid(hit) for hit in raw_hits])
     return RetrievalResponse(
         query=request.query,
-        hits=[RetrievalHit.from_hybrid(hit) for hit in raw_hits],
+        hits=hits,
         trace_id=request.trace_id,
         metadata=metadata,
         diagnostics=diagnostics,

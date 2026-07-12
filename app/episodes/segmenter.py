@@ -791,8 +791,9 @@ def run_segmentation_tick(
     carried-over segment stays open and is deferred to ERE-06 (closure
     detection is out of scope for ERE-04).
 
-    Crash-safe ordering (INV-ERE-F): emit -> assign -> persist open state ->
-    advance cursors -> delete closed-segment state LAST. A crash between the
+    Crash-safe ordering (INV-ERE-F): emit -> assign -> close quiesced
+    episodes (ERE-06) -> persist open state -> advance cursors -> delete
+    closed-segment state LAST. A crash between the
     two cursor advances replays only one stream, but the closed segment's
     retained ``signal_ids`` ledger dedups the replayed rows and the
     deterministic, start-independent episode id skips the already-written
@@ -995,6 +996,17 @@ def run_segmentation_tick(
             to_insert, to_correct, write_guard=write_guard, vault_root=root
         )
 
+    # ERE-06 (#3181) closure: extends the tick after assignment, UNCONDITIONALLY (unlike
+    # assignment above, closure candidates come from every already-persisted open episode in the
+    # `episodes` projection -- not this tick's delta signals -- so a tick with zero new signals
+    # must still be able to close a scope that has gone quiet forever; see
+    # `app.episodes.closure`'s module docstring for why this uses wall-clock time rather than a
+    # per-scope observed-signal frontier). Imported lazily to avoid a circular import (closure.py
+    # imports this module's own TIME_GAP_MINUTES as its single-sourced quiescence constant).
+    from app.episodes.closure import run_closure_tick
+
+    closure_summary = run_closure_tick(vault_root=root, write_guard=write_guard)
+
     for scope, segment in updated_open.items():
         engine_state.set_state(f"{_OPEN_SEGMENT_KEY_PREFIX}{scope}", segment.to_state())
 
@@ -1027,6 +1039,10 @@ def run_segmentation_tick(
         "proposed": proposed_ids,
         "open_segments": len(updated_open),
         "assigned": assignment_summary,
+        # ERE-06 (#3181): {"closed": [episode_id, ...], "events_emitted": n} -- spec's
+        # "Concretely" shape, extended onto the existing tick summary.
+        "closed": closure_summary["closed"],
+        "events_emitted": closure_summary["events_emitted"],
         # AC5 (ERE-09, #3184): calendar_ids (or other future streams) that
         # degraded softly this tick -- never raised out of this function,
         # never stalls segmentation on the remaining streams.

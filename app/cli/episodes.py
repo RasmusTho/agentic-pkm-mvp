@@ -1,9 +1,12 @@
-"""CLI entrypoint for the Episode Resolution Engine segmentation tick (ERE-04, #3179).
+"""CLI entrypoint for the Episode Resolution Engine tick (ERE-04, #3179; ERE-05, #3180; ERE-06,
+#3181).
 
 ``python -m app.cli episodes tick`` runs one deterministic tick of
 :func:`app.episodes.segmenter.run_segmentation_tick` -- consumes deltas from
-every live registered stream, folds them into per-scope open segments, and
-emits any newly-closed segment as a ``segmentation: proposed`` Episode note.
+every live registered stream, folds them into per-scope open segments,
+emits any newly-closed segment as a ``segmentation: proposed`` Episode note,
+assigns pending episode_ref bindings to in-bounds artifacts, and closes any
+quiesced open episode (flips ``time.closed`` + emits ``episode.closed``).
 Not a daemon (spec: "runs as a deterministic tick ... not a daemon"); a
 caller schedules repeated invocations the same way other watcher-tick-style
 commands are scheduled.
@@ -52,6 +55,7 @@ def tick(vault_root: str | None, as_json: bool) -> None:
         click.echo(
             "episodes tick: consumed="
             f"{summary['consumed']} proposed={len(summary['proposed'])} open_segments={summary['open_segments']} "
+            f"closed={summary.get('closed', [])} events_emitted={summary.get('events_emitted', 0)} "
             f"degraded={summary.get('degraded', [])}"
         )
 
