@@ -175,6 +175,10 @@ class Plan:
         payload = {
             "frontmatter": frontmatter,
             "plan": plan_payload,
+            # A Plan is a machine artifact that never originates in a lived Episode, but it is
+            # written to store_objects via save_object, so it carries the honest 'unbound' sentinel
+            # to satisfy the invariant->producers store-payload census (ERE-03/ERE-05, #3180).
+            "episode_ref": "unbound",
         }
         return DomainObject(
             uuid=self.uuid,

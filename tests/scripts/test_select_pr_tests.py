@@ -70,7 +70,9 @@ def test_heimdal_mimer_contract_change_selects_its_owned_tests() -> None:
     )
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("heimdal_mimer",)
+    # Heimdal-local ownership and the Heimdal↔Mimer handoff both apply to
+    # shared capture/contract surfaces; selection must retain both suites.
+    assert selection.subsystems == ("heimdal", "heimdal_mimer")
     assert "tests/heimdal" in selection.targets
     assert "tests/knowledge_acquisition" in selection.targets
 
@@ -126,6 +128,29 @@ def test_journaling_change_has_a_ci_owner() -> None:
     assert selection.subsystems == ("journaling",)
     assert selection.unowned_paths == ()
     assert "tests/journaling" in selection.targets
+
+
+def test_store_ingest_change_selects_its_owned_contract_tests() -> None:
+    selection = select_tests(["app/stores/postgres.py", "tests/ingest/test_vault_root_ingest_pg.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("store_ingest",)
+    assert selection.unowned_paths == ()
+    assert "tests/stores" in selection.targets
+    assert "tests/ingest" in selection.targets
+    assert "tests/architecture" in selection.targets
+
+
+def test_heimdal_capture_adapter_change_has_a_ci_owner() -> None:
+    selection = select_tests(["app/heimdal/capture_adapter.py", "tests/heimdal/test_capture_adapter.py"])
+
+    assert selection.full_suite is False
+    # Capture adapter changes also exercise the cross-constituent handoff
+    # contract, so the narrower Heimdal owner coexists with heimdal_mimer.
+    assert selection.subsystems == ("heimdal", "heimdal_mimer")
+    assert selection.unowned_paths == ()
+    assert "tests/heimdal" in selection.targets
+    assert "tests/heimdal/test_capture_adapter.py" in selection.targets
 
 
 def test_shared_panel_watcher_e2e_file_selects_both_owning_subsystems() -> None:
@@ -416,6 +441,17 @@ def test_builder_system_change_selects_its_own_regression_tests() -> None:
 
     assert selection.full_suite is False
     assert selection.subsystems == ("builder_system",)
+    assert "tests/builderops" in selection.targets
+    assert "tests/governance" in selection.targets
+
+
+def test_import_linter_config_change_selects_builder_system_regressions() -> None:
+    """The architecture-fitness config must not fail selector ownership first."""
+    selection = select_tests(["importlinter.ini"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("builder_system",)
+    assert selection.unowned_paths == ()
     assert "tests/builderops" in selection.targets
     assert "tests/governance" in selection.targets
 

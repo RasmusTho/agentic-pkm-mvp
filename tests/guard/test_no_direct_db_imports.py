@@ -44,6 +44,23 @@ ALLOW_FILES = (
     # Episode notes are the SoR; the `episodes` table is a rebuildable projection.
     # Same bounded pattern already allowed for app/jobs/decisions_projection.py above.
     'app/jobs/episodes_projection.py',
+    # Episode Resolution Engine tick-runtime state (ERE-04, #3179). Same bounded
+    # pattern as app/heimdal/cursor_store.py below: a dedicated key/value state
+    # table (`episode_engine_state`: durable vault-activity cursor + open-segment
+    # state, rebuildable from the underlying streams), direct connection, no ORM
+    # layer to route through.
+    'app/episodes/engine_state.py',
+    # vault.activity outbox cursor reader (ERE-04, #3179). Bounded topic-scoped
+    # SELECT over the `outbox` table strictly after this consumer's own durable
+    # position; never touches `delivered_at` (the worker dispatcher's flag).
+    # Same bounded read pattern as app/services/outbox.py above.
+    'app/episodes/vault_activity_stream.py',
+    # episode_ref assignment ledger (ERE-05, #3180). Bounded reads over the
+    # rebuildable `episodes` projection + idempotent ON CONFLICT upserts to the
+    # `episode_artifact_binding` ledger (migration b7c8d9e0f1a2); same bounded
+    # conn_rw pattern as app/episodes/engine_state.py above. episode_ref never
+    # touches evidence_role/authority_state (pending is not authority).
+    'app/episodes/assignment.py',
     'app/store/relation_index.py',
     'app/memory_kv/store.py',
     'app/agent/repository.py',

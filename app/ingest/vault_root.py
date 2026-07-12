@@ -9,6 +9,7 @@ from typing import Iterable
 from app.agents.classifier.agent import run as classify_run
 from app.agents.normalizer.agent import run as normalize_run
 from app.agents.panel.filters import strip_ai_panels
+from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.index.outbox import append_jsonl
 from app.observability.ingest_meta import record_ingest_failure, record_ingest_success
 from app.observability.log import with_trace_id
@@ -38,7 +39,10 @@ def iter_vault_root_markdown(root: Path, limit: int | None = None) -> Iterable[P
 
 
 def _ingest_file(path: Path, *, trace_id: str) -> str:
+    from scripts.yaml_roundtrip import load_frontmatter
+
     text = path.read_text(encoding="utf-8")
+    frontmatter, _body = load_frontmatter(text)
     stripped_text = strip_ai_panels(text)
     normalize_res = normalize_run(str(path), trace_id=trace_id)
     sanitize_normalize = dict(normalize_res)
@@ -59,8 +63,28 @@ def _ingest_file(path: Path, *, trace_id: str) -> str:
         object_uuid = uuid.uuid4()
 
     title = (normalize_res.get("core6") or {}).get("title")
-    payload = {"title": title, "origin": "vault", "source": str(path)}
-    canonical_payload = {**payload_copy, "core6": normalize_res.get("core6") or {}}
+    # Carry the note's vault-canonical episode_ref into the DB projection (ERE-03/ERE-05,
+    # invariant->producers): index_ingest_object + store.put below full-overwrite the payload
+    # column, so an absent episode_ref would blind-drop a stamped binding on reingest (round-3
+    # audit: this producer was missed in round 2).
+    ep_ref = episode_ref_from_frontmatter(frontmatter)
+    payload = {
+        "title": title,
+        "origin": "vault",
+        "source": str(path),
+        "episode_ref": ep_ref,
+    }
+    # canonical_payload also lands in the canonical store_objects table: objects_store.upsert ->
+    # PgObjects.upsert -> PgObjectStore.put, a full-overwrite of the store_objects payload column
+    # (not just the legacy `objects` table). It MUST carry episode_ref too (round-5 finding): the
+    # store.put below that carries it is in a try/except-log-continue, so if that throws, the
+    # canonical_payload row is the surviving store_objects row -- an absent episode_ref there is
+    # blind-dropped to 'unbound' on the next cold rebuild (index_rebuild reads store_objects payload).
+    canonical_payload = {
+        **payload_copy,
+        "core6": normalize_res.get("core6") or {},
+        "episode_ref": ep_ref,
+    }
     objects_store, _ = get_stores()
     upsert_kwargs = dict(kind="note", payload=canonical_payload, source_ref=str(path), path=str(path))
     try:
