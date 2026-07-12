@@ -7,6 +7,7 @@ GitHub Issue [#3553](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3553) i
 ## Child specifications
 
 - `GKES-01` — `DEFINE_EFFECT_SPINE_CONTRACTS.md` — GitHub Issue #3554
+- `GKES-02` — `MAKE_HEIMDAL_INTAKE_DURABLE.md` — GitHub Issue #3555
 - `GKES-02` — `MAKE_HEIMDAL_INTAKE_DURABLE.md`
 - `GKES-03` — `PERSIST_CANDIDATE_EVIDENCE_POSTURE.md`
 - `GKES-04` — `CONSOLIDATE_SEMANTIC_IDENTITY_AUTHORITY.md`
