@@ -67,13 +67,24 @@ def _ingest_file(path: Path, *, trace_id: str) -> str:
     # invariant->producers): index_ingest_object + store.put below full-overwrite the payload
     # column, so an absent episode_ref would blind-drop a stamped binding on reingest (round-3
     # audit: this producer was missed in round 2).
+    ep_ref = episode_ref_from_frontmatter(frontmatter)
     payload = {
         "title": title,
         "origin": "vault",
         "source": str(path),
-        "episode_ref": episode_ref_from_frontmatter(frontmatter),
+        "episode_ref": ep_ref,
     }
-    canonical_payload = {**payload_copy, "core6": normalize_res.get("core6") or {}}
+    # canonical_payload also lands in the canonical store_objects table: objects_store.upsert ->
+    # PgObjects.upsert -> PgObjectStore.put, a full-overwrite of the store_objects payload column
+    # (not just the legacy `objects` table). It MUST carry episode_ref too (round-5 finding): the
+    # store.put below that carries it is in a try/except-log-continue, so if that throws, the
+    # canonical_payload row is the surviving store_objects row -- an absent episode_ref there is
+    # blind-dropped to 'unbound' on the next cold rebuild (index_rebuild reads store_objects payload).
+    canonical_payload = {
+        **payload_copy,
+        "core6": normalize_res.get("core6") or {},
+        "episode_ref": ep_ref,
+    }
     objects_store, _ = get_stores()
     upsert_kwargs = dict(kind="note", payload=canonical_payload, source_ref=str(path), path=str(path))
     try:

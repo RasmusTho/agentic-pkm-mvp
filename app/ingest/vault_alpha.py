@@ -545,6 +545,12 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         "maturity": maturity,
         "domain": domain,
         "ingest_fingerprint": ingest_fingerprint,
+        # This obj is written to the store_objects table via ObjectStore().save_object -> (pg)
+        # store.put (a full-overwrite of the payload column). Carry episode_ref (round-5 finding):
+        # the carrying get_object_store().put(store_payload) below is in a try/except:pass, so if it
+        # throws this is the surviving store_objects row -- an absent episode_ref is blind-dropped to
+        # 'unbound' on the next cold rebuild.
+        "episode_ref": episode_ref_from_frontmatter(frontmatter),
     }
 
     obj = DomainObject(

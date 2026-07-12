@@ -36,6 +36,7 @@ it passes. The gate bites for put/upsert/save_object/ingest_object/index_ingest_
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 from app.index.artifact_metadata import build_indexed_unit_payload
 from tests.properties._machinery import (
@@ -106,6 +107,10 @@ def test_every_store_payload_producer_carries_episode_ref() -> None:
     - ``preserves_existing_payload``: the payload is built from an existing row's ``.payload`` (a
       stamped episode_ref survives the update).
 
+    ``carries_at_construction`` producers build the payload in a separate function (opaque at the
+    call site) and are verified by a named RUNTIME test (``test_normalizer_run_carries_episode_ref_
+    to_store_objects``, ``test_plan_to_object_carries_episode_ref``) rather than the static resolver.
+
     A producer that drops episode_ref -- via ANY sink method -- fails here even if it is registered.
     """
     offenders: list[tuple[str, int, str]] = []
@@ -125,11 +130,61 @@ def test_every_store_payload_producer_carries_episode_ref() -> None:
             blob = payload_source_blob(rel, line) or ""
             if ".payload" not in blob:
                 offenders.append((rel, line, "payload is not built from an existing row's .payload"))
+        elif prefix == "carries_at_construction":
+            # opaque at the call site; verified by the named runtime tests below. Assert only that
+            # the classification points at a runtime test (so the escape hatch is not free-form).
+            if "Verified by" not in classification and "verified by" not in classification:
+                offenders.append((rel, line, "carries_at_construction must name a runtime test"))
     assert not offenders, (
         "store-payload producer(s) missing an episode_ref carry -- every producer must carry "
         "episode_ref by the mechanism its classification names (ERE-03/ERE-05 invariant->producers)"
         f": {offenders}"
     )
+
+
+def test_no_non_producer_escape_hatches() -> None:
+    """Round-5 structural hardening: the ONLY non-producer classifications are
+    ``transport_passthrough`` (forwards a verified caller payload) and ``harness_excluded``. The
+    round-4 ``not_store_object_payload`` / ``superseded_by_store_put`` labels are GONE -- they hid a
+    real store_objects producer (vault_root's objects_store.upsert). So every sink that is not a
+    verified forward/harness MUST be a producer that carries/preserves/builds episode_ref; there is
+    no 'this isn't really a payload' hand-wave left to hide behind."""
+    allowed_non_producer = {"transport_passthrough", "harness_excluded"}
+    for (rel, line), classification in STORE_PAYLOAD_SINK_CLASSIFICATION.items():
+        prefix = _prefix(classification)
+        assert prefix in STORE_PAYLOAD_PRODUCER_PREFIXES or prefix in allowed_non_producer, (
+            f"{rel}:{line} classified {prefix!r} -- must be a producer or one of {allowed_non_producer}; "
+            "no not_store_object_payload/superseded escape hatch (round-5)"
+        )
+
+
+def test_normalizer_run_carries_episode_ref_to_store_objects(tmp_path: Path) -> None:
+    """carries_at_construction verification: the normalizer's payload (built cross-function in
+    normalize_file) carries the note's vault-canonical episode_ref, so its save_object -> store_objects
+    write never blind-drops a stamped binding (round-5)."""
+    from app.agents.normalizer.agent import normalize_file
+
+    bound = tmp_path / "bound.md"
+    bound.write_text(
+        "---\nuuid: 11111111-1111-4111-8111-111111111111\ntitle: t\nepisode_ref:\n  - ep-x\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    dom = normalize_file(str(bound), trace_id="t")
+    assert dom["payload"]["episode_ref"] == ["ep-x"]
+
+    unbound = tmp_path / "unbound.md"
+    unbound.write_text("---\nuuid: 22222222-2222-4222-8222-222222222222\ntitle: t\n---\n\nbody\n", encoding="utf-8")
+    dom2 = normalize_file(str(unbound), trace_id="t")
+    assert dom2["payload"]["episode_ref"] == "unbound"
+
+
+def test_plan_to_object_carries_episode_ref() -> None:
+    """carries_at_construction verification: a Plan's store_objects payload carries the honest
+    'unbound' sentinel (a Plan never originates in an episode)."""
+    from app.domain.plan import Plan
+
+    plan = Plan(uuid="plan-1", parent_plan=None, depth=0, goal="g", status="planned")
+    assert plan.to_object().payload["episode_ref"] == "unbound"
 
 
 def test_build_indexed_unit_payload_always_sets_episode_ref() -> None:
