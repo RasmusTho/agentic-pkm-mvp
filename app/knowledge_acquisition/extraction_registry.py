@@ -4,15 +4,16 @@ Implements `docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md` § Extra
 and `docs/KNOWLEDGE_ACQUISITION/EXTRACTION_REGISTRY_AND_SUMMARY_EXTRACTOR.md`: an extractor is a
 registered unit — `(extractor_id, version, input content type, output schema, model identity)` —
 and the registry is **open by design**: adding an extractor touches nothing else. This module owns
-the registration mechanism and the pipeline call site; `app/knowledge_acquisition/extractors/`
-holds the extractors themselves (one, `summary`, in this slice).
+the registration mechanism and the call site the pipeline will use once wired
+(KA-05 #2800 / KA-06 #2801); `app/knowledge_acquisition/extractors/` holds the extractors
+themselves (one, `summary`, in this slice).
 
 Contract points this module is responsible for:
 
 - **Registration without pipeline edits.** `register_extractor()` adds an `ExtractorSpec` to a
   process-local registry; `run_extractor()` / `run_registered_extractor()` is the one production
-  call site the pipeline uses to invoke *any* registered extractor by id — the pipeline never
-  imports a specific extractor module.
+  call site the pipeline will use, once wired, to invoke *any* registered extractor by id — the
+  pipeline will never need to import a specific extractor module.
 - **Lineage.** Every successful run returns an `ExtractionResult` stamping
   `extractor_id`, `extractor_version`, `model_identity` (`{provider, model}` from the resolved
   `LLMRoute` — the fabric's existing model-identity shape, `app/components/llm/router.py`), the
@@ -91,8 +92,14 @@ class ExtractorSpec:
     `app.components.llm.constrained.register_schema` by the extractor module itself — this
     registry does not own schema validation, the extractor's own `run()` does, consistent with
     `constrained_completion`'s existing typed-LLM-boundary seam). `input_content_type` documents
-    which normalized content type the extractor consumes (e.g. `"transcript"`); the registry does
-    not currently enforce it against the normalized payload beyond the extractor's own run.
+    which normalized content type the extractor consumes (e.g. `"transcript"`). It is
+    **advisory-only by design**
+    (`docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md` § Extraction registry): the
+    registry does not validate it against the normalized payload, because the current
+    `normalized` shape (`NormalizedTranscript.as_dict()`) carries no content-type discriminator
+    to check it against — one normalized shape (transcripts) exists today, so there is nothing to
+    mismatch. Each extractor's own `run()` remains the fail-loud boundary for a payload it cannot
+    use.
     """
 
     extractor_id: str
@@ -148,7 +155,8 @@ _RESULTS: dict[tuple[str, str], tuple[int, ExtractionResult]] = {}
 def register_extractor(spec: ExtractorSpec) -> None:
     """Register `spec` under its `extractor_id`. Registering the same id again replaces the spec
     (e.g. a version bump for the same extractor) — this is the only place a new extractor id is
-    introduced; the pipeline call site (`run_extractor`) never changes.
+    introduced; the call site the pipeline will use once wired (`run_extractor`) will not need to
+    change.
     """
     _REGISTRY[spec.extractor_id] = spec
 
@@ -189,10 +197,11 @@ def clear_extraction_results() -> None:
 def run_extractor(extractor_id: str, normalized: Mapping[str, Any]) -> ExtractionResult:
     """Run the extractor registered under `extractor_id` against a `normalized` artifact.
 
-    This is the **one production call site** the pipeline uses to run any registered extractor —
-    adding extractor #2 means one `register_extractor()` call in a new module, never a change
-    here (`REFINEMENT_PIPELINE_CONTRACT.md` § Extraction registry: "Adding one MUST NOT require
-    touching this contract, other extractors, or any source plugin").
+    This is the **one production call site** the pipeline will use, once wired, to run any
+    registered extractor — adding extractor #2 means one `register_extractor()` call in a new
+    module, never a change here (`REFINEMENT_PIPELINE_CONTRACT.md` § Extraction registry:
+    "Adding one MUST NOT require touching this contract, other extractors, or any source
+    plugin").
 
     Idempotent no-op: if the same `(source_content_identity, extractor_id)` pair already has a
     cached result at the *same* `spec.version`, that cached result is returned unchanged

@@ -114,8 +114,13 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     ),
     (
         "companion_ui",
-        ("companion-ui/", "app/api/", "tests/companion_ui/", "tests/api/"),
-        ("tests/companion_ui", "tests/api", *E2E_TARGETS["companion_ui"]),
+        ("companion-ui/", "app/api/", "api/", "tests/companion_ui/", "tests/api/"),
+        (
+            "tests/companion_ui",
+            "tests/api",
+            "tests/architecture/test_openapi_sync.py",
+            *E2E_TARGETS["companion_ui"],
+        ),
     ),
     (
         "canvas_chat",
@@ -313,6 +318,19 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         "ops_deploy",
         ("scripts/", "ops/", "tests/ops/", "tests/scripts/", "tests/deploy/"),
         ("tests/ops", "tests/scripts", "tests/deploy"),
+    ),
+    (
+        # Skill-contract and cross-subsystem docs-contract surfaces: owned so
+        # they resolve via the subsystem loop instead of falling to
+        # unowned_paths when mixed with a path that already matches another
+        # subsystem (e.g. the docs/contracts + docs/HEIMDAL + api/openapi.yaml
+        # + .codex/skills mix reproduced by #3476 / PR #3475). Narrower
+        # docs/contracts/** files with a more specific subsystem owner (e.g.
+        # voice's docs/contracts/MIMER_CLIENT_CONTRACT.md) keep matching that
+        # owner too; subsystems dedupe and union their targets.
+        "docs_authoring",
+        (".codex/skills/", "docs/contracts/"),
+        GOVERNANCE_TARGETS,
     ),
 )
 
