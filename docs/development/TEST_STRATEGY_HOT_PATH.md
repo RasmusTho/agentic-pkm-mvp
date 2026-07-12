@@ -21,6 +21,11 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
 - Governance PR contract checks live in `.github/workflows/issue-pr-governance.yml`.
 - The hot-path and direct-repair invariants are covered by `tests/architecture/test_pr_hot_path_governance.py`.
 - PR unit CI uses `scripts/select_pr_tests.py` to map changed files to subsystem-scoped pytest targets. Shared CI/test configuration, migrations, dependencies, and shared fixtures run the deterministic broad suite; an unmapped code or E2E path fails selection until it is assigned to a subsystem.
+- Store and vault-ingest changes are owned by the `store_ingest` selection and run its focused
+  `tests/stores`, `tests/ingest`, and architecture contracts in the ordinary `not pg` job. That job
+  intentionally excludes live-Postgres tests; a PR that changes a Postgres store or vault ingest
+  path must record its explicit `pg`/integrated-runtime validation separately rather than treating
+  the selected CI result as database-path evidence.
 - E2E tests under `tests/e2e/` are selected by owned file targets, not by the whole directory, for subsystem-scoped PR CI. Opt-in classes (live LLM, browser, human UAT, eval) are excluded from generic PR pytest and run only in their dedicated subsystem lane.
 
 ## Check Levels
