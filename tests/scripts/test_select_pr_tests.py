@@ -59,6 +59,59 @@ def test_unknown_runtime_surface_fails_closed_until_it_has_an_owner() -> None:
     assert selection.unowned_paths == ("app/new_surface/example.py",)
 
 
+def test_docs_authoring_and_skill_paths_are_owned() -> None:
+    # Reproduces the #3476 / PR #3475 failure: a docs-authoring PR touching
+    # docs/contracts/**, docs/HEIMDAL/**, api/openapi.yaml, and .codex/skills/**
+    # together must resolve to defined docs/governance test targets instead of
+    # unowned_paths, even though none of these four paths individually
+    # disqualifies the PR from the docs-only or governance-only fast paths.
+    selection = select_tests(
+        [
+            "docs/contracts/SOME_OTHER_CONTRACT.md",
+            "docs/HEIMDAL/SOME_NEW_DOC.md",
+            "api/openapi.yaml",
+            ".codex/skills/some-skill/SKILL.md",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.unowned_paths == ()
+    assert "unowned" not in selection.subsystems
+    assert "docs_authoring" in selection.subsystems
+    assert "companion_ui" in selection.subsystems
+    assert "tests/governance" in selection.targets
+    assert "tests/scripts" in selection.targets
+    assert "tests/companion_ui" in selection.targets
+    assert "tests/api" in selection.targets
+    assert "tests/architecture/test_openapi_sync.py" in selection.targets
+
+
+def test_unknown_path_is_reported_as_unowned() -> None:
+    # A genuinely unknown product/runtime path must still fail closed with
+    # unowned_paths and exit 2 — the docs-authoring/skill-contract ownership
+    # fix above must not weaken this guarantee.
+    selection = select_tests(["app/brand_new_surface/whatever.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("unowned",)
+    assert selection.unowned_paths == ("app/brand_new_surface/whatever.py",)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/select_pr_tests.py",
+            "--changed-file",
+            "app/brand_new_surface/whatever.py",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "unowned_paths=app/brand_new_surface/whatever.py" in result.stdout
+
+
 def test_heimdal_mimer_contract_change_selects_its_owned_tests() -> None:
     selection = select_tests(
         [
@@ -237,21 +290,45 @@ def test_docs_file_with_unmapped_test_fails_closed_until_it_has_an_owner() -> No
 def test_governance_file_with_foreign_subsystem_test_still_gets_full_subsystem_coverage() -> None:
     # Governance-only analog of the docs-only case above: _is_governance_only
     # shares the same _non_test_signal/_within_target_dirs tolerance logic,
-    # parameterized on GOVERNANCE_TARGETS instead of DOCS_TARGETS.
+    # parameterized on GOVERNANCE_TARGETS instead of DOCS_TARGETS. Since #3476,
+    # .codex/skills/** is also an owned docs_authoring path in its own right,
+    # so this mixed changeset now retains both the foreign subsystem's
+    # coverage (watcher_sync) and the skill-contract owner's own governance
+    # coverage (docs_authoring) instead of silently absorbing the skill path.
     selection = select_tests([".codex/skills/x/SKILL.md", "tests/watcher/test_x.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("watcher_sync",)
+    assert selection.subsystems == ("watcher_sync", "docs_authoring")
     assert "tests/watcher" in selection.targets
     assert "tests/e2e/test_watcher_registry_e2e.py" in selection.targets
+    assert "tests/governance" in selection.targets
 
 
 def test_governance_file_with_unmapped_test_fails_closed_until_it_has_an_owner() -> None:
-    selection = select_tests([".codex/skills/x/SKILL.md", "tests/brandnew_subsystem/test_a.py"])
+    # Uses .codex/agents/ (governance-only eligible, but not a docs_authoring
+    # prefix) rather than .codex/skills/, which is now an owned docs_authoring
+    # surface in its own right (see test_docs_authoring_and_skill_paths_are_owned)
+    # and would no longer reproduce a genuinely unowned combination.
+    selection = select_tests([".codex/agents/x.toml", "tests/brandnew_subsystem/test_a.py"])
 
     assert selection.full_suite is False
     assert selection.subsystems == ("unowned",)
     assert "no subsystem owner" in selection.reason
+
+
+def test_skill_contract_file_with_unmapped_test_still_gets_docs_authoring_coverage() -> None:
+    # .codex/skills/** is an owned docs_authoring surface since #3476, so
+    # mixing it with an unmapped tests/** subsystem no longer forces the
+    # whole changeset to unowned_paths: the skill path resolves via
+    # docs_authoring and the unmapped test file still runs as an explicit
+    # pytest target (changed test files are always selected directly).
+    selection = select_tests([".codex/skills/x/SKILL.md", "tests/brandnew_subsystem/test_a.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("docs_authoring",)
+    assert selection.unowned_paths == ()
+    assert "tests/governance" in selection.targets
+    assert "tests/brandnew_subsystem/test_a.py" in selection.targets
 
 
 def test_governance_target_exact_file_entry_is_tolerated() -> None:
@@ -396,10 +473,14 @@ def test_voice_contract_and_runtime_change_selects_voice_coverage() -> None:
     )
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("voice",)
+    # docs/contracts/MIMER_CLIENT_CONTRACT.md is both voice's specific owner
+    # and, since #3476, the generic docs_authoring docs/contracts/** owner;
+    # both matches are retained and their targets union.
+    assert selection.subsystems == ("voice", "docs_authoring")
     assert selection.unowned_paths == ()
     assert "tests/voice" in selection.targets
     assert "tests/voice/test_transcription_sharing.py" in selection.targets
+    assert "tests/governance" in selection.targets
 
 
 def test_episodes_runtime_change_selects_episodes_coverage() -> None:
