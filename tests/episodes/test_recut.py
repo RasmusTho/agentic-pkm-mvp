@@ -142,7 +142,7 @@ def _write_initial(
 
 
 def _edit_note_directly(vault_root: Path, episode_id: str, **field_overrides: Any) -> None:
-    """Simulate a raw operator edit (Obsidian/Bifrost/hand-edit) that bypasses
+    """Simulate a raw operator edit (Obsidian/external-sync/hand-edit) that bypasses
     ``app.episodes.store.write_episode_note`` entirely -- writes straight to the filesystem, the
     same as a human saving the note in their editor."""
     from app.episodes.notes import render_episode_note

@@ -15,7 +15,8 @@ path-typing). This module is the production tick (:func:`run_recut_tick`, wired 
    ``app.episodes.engine_state``). On each tick, a note's CURRENT on-disk fields are compared
    against that tracked baseline: identical -> nothing external touched it since the engine's own
    last write; different -> BY CONSTRUCTION some writer other than the engine touched the file
-   (Obsidian, Bifrost, a human editing directly) -- writer identity resolved by elimination, never
+   (Obsidian, an external sync client, a human editing directly) -- writer identity resolved by
+   elimination, never
    by asking "does this diff look like an intentional edit." A note the tracked baseline has never
    seen (no engine_state entry) is, by the same logic, entirely human-authored (e.g. a split
    sibling created by hand) -- adopted as a fresh baseline, not flagged as a "re-cut" of something
