@@ -434,6 +434,17 @@ def test_builder_system_change_selects_its_own_regression_tests() -> None:
     assert "tests/governance" in selection.targets
 
 
+def test_import_linter_config_change_selects_builder_system_regressions() -> None:
+    """The architecture-fitness config must not fail selector ownership first."""
+    selection = select_tests(["importlinter.ini"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("builder_system",)
+    assert selection.unowned_paths == ()
+    assert "tests/builderops" in selection.targets
+    assert "tests/governance" in selection.targets
+
+
 def test_cli_rejects_an_unowned_path() -> None:
     result = subprocess.run(
         [sys.executable, "scripts/select_pr_tests.py", "--changed-file", "app/new_surface/example.py"],
