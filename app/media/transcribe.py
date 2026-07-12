@@ -83,8 +83,6 @@ def _get_model() -> WhisperModel:
 
 
 def run_asr(path_wav: Path, *, model_env: str = "ASR_MODEL") -> Dict[str, Any]:
-    if WhisperModel is None:
-        raise RuntimeError("faster-whisper saknas; installera dependency eller använd LLM_PROVIDER=mock.")
     model = _get_model()
     segments_iter, info = model.transcribe(str(path_wav), beam_size=5)
     segments: List[Dict[str, Any]] = []
