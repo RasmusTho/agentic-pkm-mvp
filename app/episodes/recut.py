@@ -284,7 +284,10 @@ def _sync_projection_row(episode_id: str, fields: Mapping[str, Any]) -> None:
     Unlike closure's single ``closed`` column, :func:`_write_relabeled` echoes the note's FULL
     on-disk cut back through ``write_episode_note`` (see module docstring point 7), so this syncs
     every note-sourced column -- ``episode_id`` (the key) and ``note_path`` (never changes for the
-    same episode_id) are the only two omitted.
+    same episode_id) are the only two omitted. Also advances the row's own ``updated_at`` (round-3
+    review finding: the migration-owned column exists but neither this UPDATE nor the closure.py
+    precedent it mirrors was refreshing it, silently freezing it at the row's original
+    ``rebuild_episodes_projection`` insert time even as every other column kept moving).
 
     Idempotent by construction (writing the same on-disk values twice is the same as once), so
     this is safe to call on every relabel, retried tick included. A zero-rowcount result (the
@@ -302,7 +305,7 @@ def _sync_projection_row(episode_id: str, fields: Mapping[str, Any]) -> None:
                     scope = %s, title = %s, time_start = %s, time_end = %s, closed = %s,
                     segmentation = %s, parent_episode = %s, space = %s::jsonb,
                     protagonists = %s::jsonb, goal = %s::jsonb, causation = %s::jsonb,
-                    derived_from = %s::jsonb
+                    derived_from = %s::jsonb, updated_at = now()
                 WHERE episode_id = %s
                 """,
                 (

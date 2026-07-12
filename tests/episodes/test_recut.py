@@ -910,6 +910,9 @@ def test_sync_projection_row_issues_incremental_update_with_full_cut(
         "parent_episode", "space", "protagonists", "goal", "causation", "derived_from",
     ):
         assert column in sql
+    # Round-3 review finding: updated_at must advance too -- as a SQL-side now(), never a %s
+    # param (a Python-computed timestamp would defeat retry idempotency across ticks).
+    assert "updated_at = now()" in sql
     assert params == (
         "work",
         "Debugging session",
