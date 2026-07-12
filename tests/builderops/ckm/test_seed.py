@@ -149,3 +149,27 @@ def test_cli_ckm_seed_wraps_write_path_errors(
     assert result.exit_code != 0
     assert "database is locked" in result.output
     assert "idempotent" in result.output
+
+
+def test_cli_ckm_seed_wraps_ensure_schema_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ensure_schema() runs before seed_capabilities() and can itself hit a
+    # write-path sqlite error (e.g. lock contention creating the ckm_* DDL);
+    # it must be covered by the same handling, not left to raise a raw
+    # traceback outside the try block.
+    db_path = tmp_path / "builderops.sqlite3"
+    monkeypatch.setenv("BUILDEROPS_DB_PATH", str(db_path))
+    monkeypatch.delenv("BUILDEROPS_VAULT_ROOT", raising=False)
+
+    def _boom(self: CkmStore) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(CkmStore, "ensure_schema", _boom)
+
+    result = CliRunner().invoke(
+        builderops_standalone_root, ["ckm", "seed"], catch_exceptions=False
+    )
+    assert result.exit_code != 0
+    assert "database is locked" in result.output
+    assert "idempotent" in result.output

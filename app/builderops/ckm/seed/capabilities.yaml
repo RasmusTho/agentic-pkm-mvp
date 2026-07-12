@@ -31,7 +31,7 @@ capabilities:
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 1 macro-domains"
   - id: cognitive-augmentation
     name: Cognitive Augmentation
-    definition: Finds, remembers, and acts on a human's behalf — search, recall, learning, and agent workflows built on the substrate. See seed_source for the canonical scope.
+    definition: Finds, remembers, and reasons on a human's behalf — search, recall, learning, and agent workflows that propose without themselves executing a side effect. See seed_source for the canonical scope.
     parent: null
     boundary_ref: null
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 1 macro-domains"

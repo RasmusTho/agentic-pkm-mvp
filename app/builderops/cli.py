@@ -340,16 +340,28 @@ def vault_release(root: Path, ticket_ref: str, agent: str, as_json: bool) -> Non
 
 
 @builderops.group("ckm", help="Operate the projection-only Capability Knowledge Model.")
-def ckm() -> None:
-    """CKM commands operate only on additive BuilderOps state."""
+@click.pass_context
+def ckm(ctx: click.Context) -> None:
+    """CKM commands operate only on additive BuilderOps state.
+
+    ``ckm`` is mounted both under ``builderops`` (whose callback already
+    populates ``ctx.obj`` with a dict) and directly at the standalone CLI
+    root (which does not). ``ensure_object`` is a no-op when ``ctx.obj`` is
+    already a truthy dict inherited from the ``builderops`` parent, and
+    creates an empty dict when reached from the root, so every current and
+    future ``ckm`` subcommand can safely assume ``ctx.obj`` is a dict rather
+    than needing to know which mount point it was reached through.
+    """
+
+    ctx.ensure_object(dict)
 
 
 @ckm.command("seed", help="Seed reviewed SBS and capability-contract taxonomy into the CEG.")
 @click.pass_context
 def ckm_seed(ctx: click.Context) -> None:
     store = _ckm_store(ctx)
-    store.ensure_schema()
     try:
+        store.ensure_schema()
         result = seed_capabilities(store)
     except SeedManifestError as exc:
         # Manifest validation runs entirely before any write, so this never
