@@ -61,6 +61,7 @@ Base URL: the Mimer runtime API (`app/api/app.py`). All routes below exist on `m
 | Capture (write) | `POST /api/companion/capture` | Friction-free intake into the vault inbox note | `x-trace-id`; actor currently fixed (§9 F1) | Full governed chain (§4.1) |
 | Retrieve | `GET /search?q=` | Hybrid retrieval over the durable index (KERNEL-05) | `x-trace-id` | Read-only |
 | Ask | `POST /api/ask` | Grounded Q&A with per-source citations | `x-trace-id` | Read-only |
+| Voice ask | `POST /api/ask/voice` | One turn from transient audio to a grounded ASK answer and optional local speech | `x-trace-id` / response `trace_id` | **Read-only**; no transcript, capture intent, or audio is written |
 | Read note | `GET /api/artifacts/note?note_path=` | Fetch one note's title/body/hash by vault-relative path | `x-trace-id` | Read-only; traversal-guarded |
 | Health | `GET /healthz`, `GET /readyz`, `GET /api/status`, `GET /version` | Liveness/readiness/status/build discovery | — | Read-only |
 
@@ -96,6 +97,22 @@ Error contract (a client must handle each named state; never retry blindly):
 **The gap, stated honestly:** search returns *uuid*; note-fetch keys by *path*; no endpoint resolves uuid→path. **v1 posture: thin read + filesystem enrichment.** A client that needs the body behind a search hit either (a) uses `/api/ask`, whose sources include `path`, or (b) resolves the uuid itself against its filesystem view of the vault (frontmatter `uuid` field). A uuid-resolving fetch or enriched search payload is follow-on work (§9 F3), not something a client may emulate by inventing a hidden uuid→path store it treats as authoritative (invariant 3: any such cache is rebuildable and disposable).
 
 **Index-lag honesty:** the retrieval index is a rebuildable projection that trails the vault (watcher → ingest → index). A client MUST NOT present a retrieval miss as absence-of-knowledge without saying the index may lag, and MUST NOT assume read-your-write through `/search` after any write (§6 W6). The vault note outranks any projection of it (AGENT-FLOWS §10).
+
+### 4.3 `POST /api/ask/voice` (read-only voice ASK turn)
+
+Implementation: `app/api/routes/ask.py`. Send a multipart request with one required `audio` part and optional `session_id` and `zone_strategy` form fields. v1 accepts WAV, M4A/MP4, WebM, and Ogg containers (`audio/wav`, `audio/m4a` or `audio/mp4`, `audio/webm`, `audio/ogg`); it is turn-based, not streaming. Audio is capped at 5 MiB before STT work. Oversize input returns `413 {error: "audio_too_large", trace_id}` and an unsupported or undecodable container returns `415 {error: "audio_undecodable", trace_id}`.
+
+On a successful grounded turn, the response is `{transcript, detected_language, answer, sources, speech_plan, audio_url?, degraded, reason?, session_id?, trace_id}`. `answer` and `sources` retain the `POST /api/ask` `AskResponse` meaning and source attribution; `speech_plan` is the local TTS plan; `audio_url` is present only when local TTS synthesis produced a cached audio result. `detected_language` is STT-detected rather than client-pinned, and drives the local speech plan.
+
+This endpoint has no vault-content write path. A capture-intent utterance is returned as a suggestion with `degraded: true` and `reason: "capture_intent_surfaced"`; the client must call the governed capture endpoint (§4.1) only after explicit user intent to save it.
+
+Clients must handle the three named voice-leg degradation states without inventing an answer from client or model memory:
+
+| Condition | Response | Client behavior |
+| --- | --- | --- |
+| STT unavailable or yields no transcript | `503 {error: "stt_unavailable", trace_id}` | Surface the failure; do not substitute an empty or guessed answer. |
+| Grounded ASK unavailable after transcription | `503 {error: "ask_unavailable", transcript, detected_language, session_id?, trace_id}` | Preserve and show the heard transcript; do not answer from client/model memory. |
+| Local TTS unavailable or disabled | `200` grounded text response with `degraded: true`, `reason: "tts_unavailable"`, and no `audio_url` | Show the grounded answer and sources as text; do not fail the turn solely because speech is unavailable. |
 
 ## 5. Direct-filesystem write transport (owner-permitted, 2026-07-07)
 
