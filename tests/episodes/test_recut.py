@@ -28,6 +28,7 @@ no live Postgres needed.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -121,6 +122,71 @@ def _stub_bindings(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str,
     return calls
 
 
+def _stub_projection_sync(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, Any]]]:
+    """Replace app.episodes.recut's ``_sync_projection_row`` with a capture-only stub, isolating
+    AC1/AC5/AC6 wiring tests from Postgres -- mirrors :func:`_stub_bindings`'s isolation for the
+    ERE-05 reconciliation functions. ``_sync_projection_row`` itself is exercised directly by the
+    dedicated ``test_sync_projection_row_*`` / ``test_write_relabeled_*`` tests below."""
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def _fake_sync(episode_id: str, fields: Any) -> None:
+        calls.append((episode_id, dict(fields)))
+
+    monkeypatch.setattr(recut_module, "_sync_projection_row", _fake_sync)
+    return calls
+
+
+class _ProjectionSyncCursor:
+    """Fake cursor for ``_sync_projection_row`` (#3182 review fix, mirrors
+    ``tests/episodes/test_closure.py::_SyncCursor``): answers the ``to_regclass`` schema
+    preflight, then records + simulates the incremental multi-column ``UPDATE`` -- ``rowcount``
+    is 1 when the trailing ``episode_id`` param is a member of ``existing_ids`` (projection has a
+    row for it), 0 otherwise (simulates a truncated/missing projection row)."""
+
+    def __init__(self, existing_ids: set[str], calls: list[tuple[str, tuple[Any, ...]]]) -> None:
+        self._existing_ids = existing_ids
+        self._calls = calls
+        self.rowcount = 0
+        self._result: Any = None
+
+    def __enter__(self) -> "_ProjectionSyncCursor":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        return None
+
+    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
+        self._calls.append((sql, params))
+        if "to_regclass" in sql:
+            self._result = ("episodes",)
+        elif sql.strip().upper().startswith("UPDATE"):
+            episode_id = params[-1]
+            self.rowcount = 1 if episode_id in self._existing_ids else 0
+        else:  # pragma: no cover -- defensive
+            raise AssertionError(f"unexpected SQL in fake projection-sync cursor: {sql}")
+
+    def fetchone(self) -> Any:
+        return self._result
+
+
+class _ProjectionSyncConn:
+    """Fake ``conn_rw()`` context manager backing :class:`_ProjectionSyncCursor`. Records every
+    executed statement on ``.calls`` so tests can assert the incremental-UPDATE shape directly."""
+
+    def __init__(self, existing_ids: set[str]) -> None:
+        self._existing_ids = existing_ids
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    def __enter__(self) -> "_ProjectionSyncConn":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        return None
+
+    def cursor(self) -> _ProjectionSyncCursor:
+        return _ProjectionSyncCursor(self._existing_ids, self.calls)
+
+
 def _write_initial(
     vault_root: Path, *, episode_id: str, segmentation: str = "proposed", **overrides: Any
 ):
@@ -168,6 +234,7 @@ def _edit_note_directly(vault_root: Path, episode_id: str, **field_overrides: An
 def test_operator_edit_detected_as_recut(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     vault_root = tmp_path / "vault"
     calls = _stub_bindings(monkeypatch)
+    _stub_projection_sync(monkeypatch)
     _install_fake_engine_state(monkeypatch)
 
     episode_id = "ep-11111111-1111-4111-8111-111111111111"
@@ -582,6 +649,7 @@ def test_recut_tick_wires_reconciliation_on_detected_recut(
     POST-recut scope/derived_from, not stale pre-edit values."""
     vault_root = tmp_path / "vault"
     calls = _stub_bindings(monkeypatch)
+    _stub_projection_sync(monkeypatch)
     _install_fake_engine_state(monkeypatch)
 
     episode_id = "ep-55555555-1111-4111-8111-111111111111"
@@ -603,6 +671,7 @@ def test_recut_tick_wires_reconciliation_on_detected_recut(
 def test_silence_is_acceptance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     vault_root = tmp_path / "vault"
     _stub_bindings(monkeypatch)
+    _stub_projection_sync(monkeypatch)
     _install_fake_engine_state(monkeypatch)
 
     episode_id = "ep-66666666-1111-4111-8111-111111111111"
@@ -673,6 +742,7 @@ def test_non_atomic_lifecycle_write_does_not_manufacture_false_recut(
     report a re-cut and must NOT relabel accepted->re-cut -- and must self-heal the stale baseline."""
     vault_root = tmp_path / "vault"
     _stub_bindings(monkeypatch)
+    sync_calls = _stub_projection_sync(monkeypatch)
     fake_state = _install_fake_engine_state(monkeypatch)
 
     episode_id = "ep-fa11ed00-1111-4111-8111-111111111111"
@@ -699,6 +769,14 @@ def test_non_atomic_lifecycle_write_does_not_manufacture_false_recut(
     # Self-heal: the stale baseline label was refreshed to the on-disk truth.
     assert fake_state.all_state_with_prefix("episode_recut_state:")[baseline_key]["segmentation"] == "accepted"
 
+    # Code-review round-1 finding (#3538): the self-heal branch must ALSO (re)sync the
+    # projection -- this exact signature (cut hash matches, tracked label lags on-disk) is
+    # indistinguishable from "the earlier _write_relabeled call's own projection sync failed
+    # transiently and was never retried," so self-heal must not silently skip it.
+    self_heal_syncs = [f for eid, f in sync_calls if eid == episode_id]
+    assert self_heal_syncs, "self-heal must (re)sync the projection, not just the in-memory baseline"
+    assert self_heal_syncs[-1]["segmentation"] == "accepted"
+
 
 # ---------------------------------------------------------------------------
 # AC6 -- split and merge flows land in consistent state
@@ -708,6 +786,7 @@ def test_non_atomic_lifecycle_write_does_not_manufacture_false_recut(
 def test_split_and_merge_flows_consistent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     vault_root = tmp_path / "vault"
     calls = _stub_bindings(monkeypatch)
+    sync_calls = _stub_projection_sync(monkeypatch)
     fake_state = _install_fake_engine_state(monkeypatch)
 
     episode_a = "ep-77777777-1111-4111-8111-111111111111"
@@ -774,7 +853,245 @@ def test_split_and_merge_flows_consistent(tmp_path: Path, monkeypatch: pytest.Mo
     reconcile_calls = {args["episode_id"]: args["derived_from"] for kind, args in calls if kind == "reconcile"}
     assert reconcile_calls[episode_a] == ["heimdal.observations:ref1", "heimdal.observations:ref2"]
 
+    # #3182 review fix (Codex round-1 finding): episode_a was ALREADY `re-cut` (from the split
+    # step above) before this merge-widen edit, so `run_recut_tick` never calls _write_relabeled
+    # for it here (segmentation is already correct) -- the projection sync must still fire from
+    # the "further edit to an already re-cut episode" branch directly, carrying the widened
+    # derived_from/bounds into the projection.
+    merge_sync_calls = [(eid, f) for eid, f in sync_calls if eid == episode_a]
+    assert merge_sync_calls, "a further edit to an already re-cut episode must still sync the projection"
+    assert merge_sync_calls[-1][1]["derived_from"] == ["heimdal.observations:ref1", "heimdal.observations:ref2"]
+
     # B is no longer tracked at all -- no dangling baseline left behind for a deleted note.
     tracked_after = fake_state.all_state_with_prefix("episode_recut_state:")
     assert f"episode_recut_state:{episode_b}" not in tracked_after
     assert f"episode_recut_state:{episode_a}" in tracked_after
+
+
+# ---------------------------------------------------------------------------
+# #3182 review fix (mirrors #3181 P1-1, ``app.episodes.closure._sync_projection_closed``):
+# _sync_projection_row issues a targeted incremental UPDATE from the relabel write path itself.
+# ---------------------------------------------------------------------------
+
+
+def test_sync_projection_row_issues_incremental_update_with_full_cut(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    episode_id = "ep-99999999-2222-4333-8444-555555555555"
+    conn = _ProjectionSyncConn({episode_id})
+    monkeypatch.setattr(recut_module, "conn_rw", lambda *a, **k: conn)
+
+    fields = {
+        "episode_id": episode_id,
+        "scope": "work",
+        "title": "Debugging session",
+        "time": {
+            "start": "2026-07-11T10:00:00+00:00",
+            "end": "2026-07-11T11:30:00+00:00",
+            "closed": False,
+        },
+        "segmentation": "re-cut",
+        "parent_episode": None,
+        "space": [],
+        "protagonists": [],
+        "goal": ["g-1"],
+        "causation": [],
+        "derived_from": ["heimdal.observations:seed"],
+    }
+    recut_module._sync_projection_row(episode_id, fields)
+
+    update_calls = [c for c in conn.calls if c[0].strip().upper().startswith("UPDATE")]
+    assert len(update_calls) == 1
+    sql, params = update_calls[0]
+    # Every note-sourced column recut.py's relabel writes can echo back is covered -- a partial
+    # sync would leave exactly this bug class alive for whichever column it omitted.
+    for column in (
+        "scope", "title", "time_start", "time_end", "closed", "segmentation",
+        "parent_episode", "space", "protagonists", "goal", "causation", "derived_from",
+    ):
+        assert column in sql
+    # Round-3 review finding: updated_at must advance too -- as a SQL-side now(), never a %s
+    # param (a Python-computed timestamp would defeat retry idempotency across ticks).
+    assert "updated_at = now()" in sql
+    assert params == (
+        "work",
+        "Debugging session",
+        "2026-07-11T10:00:00+00:00",
+        "2026-07-11T11:30:00+00:00",
+        False,
+        "re-cut",
+        None,
+        "[]",
+        "[]",
+        json.dumps(["g-1"]),
+        "[]",
+        json.dumps(["heimdal.observations:seed"]),
+        episode_id,
+    )
+    # Never a TRUNCATE+replay -- this must stay a targeted single-row update, not a rebuild.
+    assert not any("TRUNCATE" in c[0].upper() for c in conn.calls)
+
+
+def test_sync_projection_row_logs_but_does_not_raise_on_missing_row(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    conn = _ProjectionSyncConn(set())  # no matching row -- e.g. a concurrent rebuild truncated it
+    monkeypatch.setattr(recut_module, "conn_rw", lambda *a, **k: conn)
+
+    with caplog.at_level("WARNING"):
+        recut_module._sync_projection_row(
+            "ep-missing-from-projection",
+            {"segmentation": "re-cut", "time": {}},
+        )
+
+    assert any("no row for" in record.message for record in caplog.records)
+
+
+def test_write_relabeled_syncs_full_echoed_cut_not_just_segmentation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Headline regression test for the review finding: a relabel write that echoes an operator's
+    edit to a non-segmentation column (here: `protagonists` and `time.end`) must carry THAT edit
+    into the `episodes` projection too, not just the forced `segmentation` label -- otherwise the
+    projection silently disagrees with the vault-canonical note (SoR) on the very fields a human
+    re-cut most commonly changes."""
+    vault_root = tmp_path / "vault"
+    episode_id = "ep-aaaaaaaa-2222-4333-8444-555555555555"
+    _write_initial(vault_root, episode_id=episode_id, segmentation="proposed", protagonists=["p-1"])
+
+    conn = _ProjectionSyncConn({episode_id})
+    monkeypatch.setattr(recut_module, "conn_rw", lambda *a, **k: conn)
+
+    on_disk = parse_episode_note(
+        (vault_root / episode_note_rel_path(episode_id)).read_text(encoding="utf-8")
+    )
+    edited = dict(on_disk, protagonists=[])
+    edited["time"] = {**on_disk["time"], "end": "2026-07-11T11:30:00+00:00"}
+
+    recut_module._write_relabeled(
+        episode_id, edited, segmentation="re-cut", vault_root=vault_root, write_guard=_allow_guard(),
+    )
+
+    update_calls = [c for c in conn.calls if c[0].strip().upper().startswith("UPDATE")]
+    assert len(update_calls) == 1
+    _sql, params = update_calls[0]
+    assert params[-1] == episode_id
+    assert params[3] == "2026-07-11T11:30:00+00:00"  # time_end carries the operator's edit
+    assert json.loads(params[8]) == []  # protagonists carries the operator's edit
+    assert params[5] == "re-cut"  # segmentation carries the forced relabel
+
+
+def test_further_edit_to_already_recut_episode_still_syncs_projection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex round-1 finding on #3538: `run_recut_tick` never calls `_write_relabeled` for a
+    FURTHER edit to an episode that is ALREADY `segmentation: re-cut` (the merge-widen follow-up
+    correction flow) -- `segmentation` is already correct, so only `_record_baseline` and
+    `_reconcile` run. Without an explicit sync on that branch, the projection would silently stay
+    stale for every subsequent edit to an already re-cut episode. Exercises `run_recut_tick`
+    end-to-end (not just `_write_relabeled` directly) with a REAL fake `conn_rw`, proving the
+    incremental UPDATE actually reaches the DB layer from this specific branch."""
+    vault_root = tmp_path / "vault"
+    _stub_bindings(monkeypatch)
+    _install_fake_engine_state(monkeypatch)
+
+    episode_id = "ep-bbbbbbbb-2222-4333-8444-555555555555"
+    _write_initial(vault_root, episode_id=episode_id, segmentation="proposed")
+    conn = _ProjectionSyncConn({episode_id})
+    monkeypatch.setattr(recut_module, "conn_rw", lambda *a, **k: conn)
+
+    # Tick 1: first sight, adopts baseline (no relabel, no sync -- proposed stays proposed).
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 5))
+    assert not conn.calls
+
+    # Tick 2: operator edit -> re-cut detected, segmentation != re-cut yet -> _write_relabeled
+    # fires -> exactly one sync.
+    _edit_note_directly(vault_root, episode_id, protagonists=[])
+    result_2 = run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 10))
+    assert result_2["recut_detected"] == [episode_id]
+    first_sync_count = len([c for c in conn.calls if c[0].strip().upper().startswith("UPDATE")])
+    assert first_sync_count == 1
+
+    # Tick 3: a FURTHER edit while ALREADY `re-cut` (the merge-widen follow-up flow) -- widens
+    # the bounds again. segmentation is already "re-cut", so _write_relabeled is never called.
+    _edit_note_directly(vault_root, episode_id, **{"time.end": "2026-07-11T12:00:00+00:00"})
+    result_3 = run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 15))
+    assert result_3["recut_detected"] == [episode_id]
+
+    update_calls = [c for c in conn.calls if c[0].strip().upper().startswith("UPDATE")]
+    assert len(update_calls) == first_sync_count + 1, (
+        "the further-edit-to-already-re-cut branch must issue its own projection sync"
+    )
+    _sql, params = update_calls[-1]
+    assert params[3] == "2026-07-11T12:00:00+00:00"  # the SECOND edit's widened bound synced too
+    assert params[-1] == episode_id
+
+
+# ---------------------------------------------------------------------------
+# Code-review round-1 fix on #3538: the two branches that call _sync_projection_row without
+# going through write_episode_note (already-re-cut further edit; self-heal) must assert the
+# guard themselves, mirroring app.episodes.closure.close_episode's identical "already closed"
+# branch fix.
+# ---------------------------------------------------------------------------
+
+
+def _blocked_guard() -> WriteGuard:
+    return WriteGuard(lambda: {"state": "safe_mode", "reason": "review-fix test"})
+
+
+def test_further_edit_to_already_recut_episode_honors_blocked_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A blocked WriteGuard must prevent the already-re-cut "further edit" branch's own DB write
+    (there is no `write_episode_note` call on this branch to provide an implicit guard check)."""
+    vault_root = tmp_path / "vault"
+    _stub_bindings(monkeypatch)
+    _install_fake_engine_state(monkeypatch)
+
+    episode_id = "ep-cccccccc-2222-4333-8444-555555555555"
+    _write_initial(vault_root, episode_id=episode_id, segmentation="proposed")
+
+    conn = _ProjectionSyncConn({episode_id})
+    monkeypatch.setattr(recut_module, "conn_rw", lambda *a, **k: conn)
+
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 5))
+    _edit_note_directly(vault_root, episode_id, protagonists=[])
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 10))  # -> re-cut
+
+    _edit_note_directly(vault_root, episode_id, **{"time.end": "2026-07-11T12:00:00+00:00"})
+    update_count_before = len([c for c in conn.calls if c[0].strip().upper().startswith("UPDATE")])
+
+    from app.write_guard import WritesBlockedError
+
+    with pytest.raises(WritesBlockedError):
+        run_recut_tick(vault_root=vault_root, write_guard=_blocked_guard(), now=_dt(10, 15))
+
+    update_count_after = len([c for c in conn.calls if c[0].strip().upper().startswith("UPDATE")])
+    assert update_count_after == update_count_before, "a blocked guard must prevent the projection UPDATE"
+
+
+def test_self_heal_honors_blocked_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A blocked WriteGuard must prevent the self-heal branch's own (re)sync DB write."""
+    vault_root = tmp_path / "vault"
+    _stub_bindings(monkeypatch)
+    _install_fake_engine_state(monkeypatch)
+
+    episode_id = "ep-dddddddd-2222-4333-8444-555555555555"
+    _write_initial(vault_root, episode_id=episode_id, segmentation="proposed")
+
+    conn = _ProjectionSyncConn({episode_id})
+    monkeypatch.setattr(recut_module, "conn_rw", lambda *a, **k: conn)
+
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 0))
+    # Model the torn state directly (bypasses recut's own bookkeeping): cut unchanged, only the
+    # on-disk segmentation moves ahead of the tracked baseline -- self-heal's exact trigger.
+    _edit_note_directly(vault_root, episode_id, segmentation="accepted")
+    update_count_before = len([c for c in conn.calls if c[0].strip().upper().startswith("UPDATE")])
+
+    from app.write_guard import WritesBlockedError
+
+    with pytest.raises(WritesBlockedError):
+        run_recut_tick(vault_root=vault_root, write_guard=_blocked_guard(), now=_dt(10, 5))
+
+    update_count_after = len([c for c in conn.calls if c[0].strip().upper().startswith("UPDATE")])
+    assert update_count_after == update_count_before, "a blocked guard must prevent the projection UPDATE"

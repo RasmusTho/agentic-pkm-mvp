@@ -72,6 +72,12 @@ ALLOW_FILES = (
     # retrieve() call site; never a write, same bounded pattern as the entries above. The salience
     # contract's hard law (derived, never persisted) means this module has no write path at all.
     'app/episodes/closure_decay.py',
+    # Human re-cut / silence-is-acceptance projection sync (ERE-07, #3182 review fix, mirrors
+    # #3181's app/episodes/closure.py entry above). A targeted incremental UPDATE over the
+    # rebuildable `episodes` projection issued from the relabel write path itself
+    # (_sync_projection_row), keeping it current with an operator's re-cut edits; same bounded
+    # conn_rw pattern as app/episodes/closure.py.
+    'app/episodes/recut.py',
     'app/store/relation_index.py',
     'app/memory_kv/store.py',
     'app/agent/repository.py',
