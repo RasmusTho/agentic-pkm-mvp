@@ -129,32 +129,52 @@ def test_observation_episode_binding_survives(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_observation_episode_binding_survives__ere05_end_to_end(
+    tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # AC5 (ERE-05, #3180): the end-to-end case added to the observation_episode_binding_survives
-    # probe -- assign (the REAL production assignment rule) -> chunk/derive -> binding present on
-    # the derived bundle. Unlike the block above (fabricated bindings, ERE-03's original scope),
-    # this decision is computed by app.episodes.assignment.compute_assignments itself: a real
-    # in-bounds artifact, a real episode's bounds/derived_from, a real basis+confidence. The result
-    # is then carried into a MetadataBundle the same way a real capture/assignment pipeline would
-    # (episode_ref stamped from the computed decision, not hand-typed), and pushed through
-    # mimer_runtime.dri.derive_segment -- proving the ERE-05 output specifically survives
-    # derivation, not just a hand-fabricated stand-in for it.
+    # probe -- assign (the REAL production assignment rule AND the REAL guarded bundle-write seam,
+    # Finding 1 / review round 2) -> chunk/derive -> binding present on the derived bundle.
+    #
+    # Finding 1 (CRITICAL, review round 2): the PRIOR version of this test computed a real decision
+    # via app.episodes.assignment.compute_assignments but then hand-stamped it onto a
+    # mimer_runtime bundle via dataclasses.replace -- exercising no real write path at all (the
+    # ledger-only commit never touched the artifact's own bundle, so retrieval would have kept
+    # returning 'unbound' forever). This version adds a first block that runs the REAL
+    # app.episodes.assignment.commit_assignment_diff -- the artifact's persisted bundle (a real
+    # vault note's frontmatter, read back from disk, plus the DB-side store_objects/
+    # store_vector_index payload rows, captured here since a live Postgres isn't available in this
+    # lane) actually shows episode_ref upgraded to `[episode_id]` (the concrete, "pending" -- not
+    # yet ERE-07-accepted -- binding; docs/architecture/semantic-dimensions.md :: episode_ref).
+    # Only THEN, in the second block (unchanged in spirit from before), does that SAME real
+    # episode_id get carried into a MetadataBundle the same way a real capture/assignment pipeline
+    # would and pushed through mimer_runtime.dri.derive_segment -- mimer_runtime is a
+    # corpus-backed, in-memory-only test slice (docs/MIMER_RUNTIME_SLICE_1/README.md) disjoint from
+    # the real app/episodes runtime, so it cannot itself be the target of the real write; it is
+    # still the only available derivation-survival probe in this codebase, so it remains the proof
+    # that the REAL write's output specifically survives derivation.
+    from app.episodes import assignment as assignment_module
     from app.episodes.assignment import (
         ArtifactCandidate,
+        BASIS_PROVENANCE,
+        BINDING_TABLE,
         EpisodeBoundsRecord,
+        PROVENANCE_CONFIDENCE,
+        commit_assignment_diff,
         compute_assignments,
     )
+    from app.write_guard import WriteGuard
+    from scripts.yaml_roundtrip import load_frontmatter
 
     episode = EpisodeBoundsRecord(
         episode_id="ep-aaaaaaaa-2222-4333-8444-555555555555",
         scope="work",
         start=datetime(2026, 7, 11, 9, 0, tzinfo=timezone.utc),
         end=datetime(2026, 7, 11, 10, 0, tzinfo=timezone.utc),
-        derived_from=("heimdal.observations:anchor-e2e",),
+        derived_from=("vault.activity:anchor-e2e",),
     )
     artifact = ArtifactCandidate(
-        artifact_ref="heimdal.observations:anchor-e2e",
+        artifact_ref="vault.activity:anchor-e2e",
         scope="work",
         observed_at=datetime(2026, 7, 11, 9, 15, tzinfo=timezone.utc),
     )
@@ -162,7 +182,83 @@ def test_observation_episode_binding_survives__ere05_end_to_end(
     decisions = compute_assignments([artifact], [episode])
     assert len(decisions) == 1
     decision = decisions[0]
+    assert decision.basis == BASIS_PROVENANCE
+    assert decision.confidence == PROVENANCE_CONFIDENCE
 
+    # --- Block 1: the REAL production bundle-write path (Finding 1) --------------------------
+    vault_root = tmp_path / "vault"
+    note_path = vault_root / "notes" / "anchor-e2e.md"
+    note_path.parent.mkdir(parents=True)
+    object_id = "33333333-3333-4333-8333-333333333333"
+    note_path.write_text(f"---\nuuid: {object_id}\ntitle: t\n---\n\nbody text\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        assignment_module,
+        "_resolve_bundle_object_id_and_note_path",
+        lambda artifact_ref, *, vault_root: (object_id, note_path),
+    )
+
+    store_rows: dict[tuple[str, str], dict] = {
+        ("store_objects", object_id): {"kind": "note"},
+        ("store_vector_index", object_id): {"kind": "note"},
+    }
+
+    class _FakeCursor:
+        def __init__(self) -> None:
+            self._result = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql, params=()):
+            stripped = sql.strip()
+            if "to_regclass" in stripped:
+                self._result = (BINDING_TABLE,)
+            elif stripped.startswith("SELECT payload FROM store_"):
+                table = "store_objects" if "store_objects" in stripped else "store_vector_index"
+                row = store_rows.get((table, params[0]))
+                self._result = (json.dumps(row),) if row is not None else None
+            elif stripped.startswith("UPDATE store_"):
+                table = "store_objects" if "store_objects" in stripped else "store_vector_index"
+                payload_json, obj_id = params
+                store_rows[(table, obj_id)] = json.loads(payload_json)
+                self._result = None
+            else:
+                self._result = None
+
+        def fetchone(self):
+            return self._result
+
+    class _FakeConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def cursor(self):
+            return _FakeCursor()
+
+    monkeypatch.setattr(assignment_module, "conn_rw", lambda *a, **k: _FakeConn())
+    allow_guard = WriteGuard(lambda: {"state": "healthy", "reason": None})
+
+    result = commit_assignment_diff(
+        [decision], [], write_guard=allow_guard, vault_root=vault_root
+    )
+    assert result == {"pending": 1, "corrected": 0}
+
+    # DB-side bundle rows: both actually upgraded from nothing to the real pending id.
+    assert store_rows[("store_objects", object_id)]["episode_ref"] == [decision.episode_id]
+    assert store_rows[("store_vector_index", object_id)]["episode_ref"] == [decision.episode_id]
+
+    # Vault-serialized bundle: the note's OWN frontmatter, read back from disk.
+    frontmatter, _body = load_frontmatter(note_path.read_text(encoding="utf-8"))
+    assert frontmatter["episode_ref"] == [decision.episode_id]
+
+    # --- Block 2: derivation-survival proof for that SAME real decision (mimer_runtime probe) ---
     src = capture.capture(text="a real assignment decision", principal_id="p-episode-ere05")
     assigned_bundle = dataclasses.replace(
         src.metadata_bundle,

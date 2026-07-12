@@ -471,10 +471,11 @@ def test_tick_long_observed_window_never_closes_nested_session_segment(
     # Postgres; no prior persisted episodes and no prior ledger rows in this fixture.
     monkeypatch.setattr(segmenter, "read_candidate_episodes_for_scopes", lambda scopes: [])
     monkeypatch.setattr(segmenter, "read_existing_bindings", lambda refs: {})
+    monkeypatch.setattr(segmenter, "read_existing_bindings_for_episodes", lambda episode_ids: {})
     monkeypatch.setattr(
         segmenter,
         "commit_assignment_diff",
-        lambda to_insert, to_correct, write_guard=None: {
+        lambda to_insert, to_correct, write_guard=None, vault_root=None: {
             "pending": len(to_insert),
             "corrected": len(to_correct),
         },

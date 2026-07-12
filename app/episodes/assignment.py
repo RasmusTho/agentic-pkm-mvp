@@ -14,8 +14,48 @@ class, no governance import anywhere in this module):
   deterministic.
 - The commit path (:func:`commit_assignment_diff`) asserts ``WriteGuard.assert_writes_allowed``
   *inside the seam itself*, before any DB mutation (guard-at-seam, #2910/#2953 precedent), and
-  persists to the ``episode_artifact_binding`` ledger (migration ``b7c8d9e0f1a2``) -- the DB-side
-  "bundle row" this slice's Constraints call for. A blocked guard means zero rows touched.
+  persists to the ``episode_artifact_binding`` ledger (migration ``b7c8d9e0f1a2``) -- the audit
+  PROVENANCE record (which episode, which rule, basis, confidence, when). A blocked guard means
+  zero rows touched.
+
+Bundle mutation (review-round-2 fix, Finding 1 -- the ledger alone left retrieval returning
+``unbound`` forever): the ledger row is NOT the artifact's own bundle. The artifact's own bundle
+lives in two places, and BOTH are upgraded, when resolvable, in the SAME guarded commit:
+
+- **DB-side bundle rows**: ``store_objects``/``store_vector_index`` (``app/stores/pg.py``,
+  KERNEL-04) each carry a ``payload`` JSONB column; retrieval (``app/retrieval/envelope.py`` via
+  ``app/retrieval/hybrid.py::_load_all_docs`` -> ``get_vector_index().all_rows()``) reads
+  ``payload['episode_ref']`` off ``store_vector_index`` specifically. Both rows are updated in the
+  SAME transaction as the ledger writes (this function already holds ``conn_rw()`` open), a plain
+  read-merge-write of the ``episode_ref`` key ONLY -- ``kind``/``source_ref``/``embedding``/every
+  other payload key is left untouched, and the union-not-overwrite merge means a multi-episode
+  (nested) artifact accumulates every binding across ticks (spec point 1's "zero or more").
+- **Vault-serialized bundle** (spec point 3): for a ``vault.activity``-sourced artifact, the
+  underlying note's OWN frontmatter ``episode_ref`` field is stamped through the SAME guarded
+  write seam ERE-02 uses (``app.knowledge.write_ops.write_note_from_absolute``, ADR-0055
+  multi-writer rules) -- health-gate asserted, no human confirm, proposal class.
+
+Resolution (:func:`_resolve_bundle_object_id_and_note_path`, ``app.episodes.vault_activity_stream
+.resolve_bundle_target_for_outbox_row_id``): an ``artifact_ref`` is the SAME provenance-ref shape
+segmentation signals carry (`heimdal.observations:<observation_id>` / `vault.activity:<outbox_row_
+id>`). A ``vault.activity:<id>`` ref resolves back to the outbox event that earned it (outbox rows
+are never purged) and from there to the object's ``uuid`` (the ``store_objects``/
+``store_vector_index`` primary key) plus the note's own path. A ``heimdal.observations:<id>`` ref
+does NOT resolve to a bundle today: raw Heimdal observations are never themselves indexed into
+``store_objects``/``store_vector_index`` (HEIM-2 -- Heimdal is forbidden to do assignment, and this
+codebase has no "Heimdal observation's downstream candidate" bundle-minting path yet; that is
+future work, not invented here). For those refs this function still records the ledger row
+(unchanged provenance-tracking behavior) but bundle mutation is a documented no-op, never a
+fabricated write. ``vault_root=None`` (the default) skips bundle mutation entirely -- callers that
+only care about the ledger (most of this module's own unit tests) keep working unchanged; the
+production entrypoint (``app.episodes.segmenter.run_segmentation_tick``) always passes the real
+vault root.
+
+Fail-loud schema preflight (invariant -> producers rule, mirroring
+``app.episodes.engine_state._assert_schema`` / ``EngineStateSchemaMissingError``): every function
+that queries ``episodes`` or ``episode_artifact_binding`` asserts the table exists first, raising
+:class:`EpisodeAssignmentSchemaMissingError` with a migration hint instead of a raw
+``UndefinedTable`` traceback from inside a query.
 
 Confidence floor (HEIM-6-honest, issue Scope): a ``derived_from``-anchored artifact (its signal's
 ``provenance_ref`` appears in the episode's own ``derived_from``) is binding-strength
@@ -54,11 +94,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
-from typing import Any, Iterable, Mapping, Sequence
+import logging
+from pathlib import Path
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from app.db.db import conn_rw
 from app.jobs.episodes_projection import EPISODES_TABLE
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
+
+logger = logging.getLogger(__name__)
 
 # Distinct action string for the assignment write seam (mirrors
 # app.episodes.store.EPISODE_WRITE_ACTION's per-seam-action pattern), asserted inside
@@ -84,9 +128,39 @@ BINDING_STATE_CORRECTED = "corrected"
 
 BINDING_TABLE = "episode_artifact_binding"
 
+_SCHEMA_MIGRATION_HINTS: dict[str, str] = {
+    BINDING_TABLE: (
+        "episode_artifact_binding schema is migration-owned: run 'alembic upgrade head' against "
+        "this database. See app/alembic/versions/b7c8d9e0f1a2_ere05_episode_artifact_binding.py."
+    ),
+    EPISODES_TABLE: (
+        "episodes schema is migration-owned: run 'alembic upgrade head' against this database. "
+        "See app/jobs/episodes_projection.py."
+    ),
+}
+
 
 class EpisodeAssignmentError(RuntimeError):
     """Raised for malformed assignment inputs."""
+
+
+class EpisodeAssignmentSchemaMissingError(RuntimeError):
+    """Raised when ``episodes`` or ``episode_artifact_binding`` is absent (pre-migration
+    database) -- fail-loud schema preflight (invariant -> producers rule, mirrors
+    ``app.episodes.engine_state.EngineStateSchemaMissingError`` / ``_assert_schema``), asserted
+    before any query touches either table so a pre-migration database raises an actionable,
+    migration-hinting error instead of a raw ``UndefinedTable`` traceback from inside a query."""
+
+
+def _assert_table_schema(conn: Any, table: str) -> None:
+    """Fail-loud preflight: ``table`` must exist before any query touches it."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass(%s)", (table,))
+        row = cur.fetchone()
+    oid = (row.get("to_regclass") if isinstance(row, dict) else row[0]) if row else None
+    if not oid:
+        hint = _SCHEMA_MIGRATION_HINTS.get(table, f"Run 'alembic upgrade head' for '{table}'.")
+        raise EpisodeAssignmentSchemaMissingError(f"Missing table '{table}'. {hint}")
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +400,7 @@ def read_candidate_episodes_for_scopes(scopes: Iterable[str]) -> list[EpisodeBou
     )
     rows: list[EpisodeBoundsRecord] = []
     with conn_rw() as conn:
+        _assert_table_schema(conn, EPISODES_TABLE)
         with conn.cursor() as cur:
             cur.execute(query, tuple(scope_list))
             for r in cur.fetchall():
@@ -369,8 +444,54 @@ def read_existing_bindings(artifact_refs: Iterable[str]) -> dict[tuple[str, str]
     )
     out: dict[tuple[str, str], dict[str, Any]] = {}
     with conn_rw() as conn:
+        _assert_table_schema(conn, BINDING_TABLE)
         with conn.cursor() as cur:
             cur.execute(query, tuple(ref_list))
+            for r in cur.fetchall():
+                row = dict(r) if isinstance(r, dict) else {
+                    "artifact_ref": r[0],
+                    "episode_id": r[1],
+                    "scope": r[2],
+                    "basis": r[3],
+                    "confidence": r[4],
+                    "binding_state": r[5],
+                    "rule": r[6],
+                    "assigned_at": r[7],
+                    "corrected_at": r[8],
+                }
+                out[(str(row["artifact_ref"]), str(row["episode_id"]))] = row
+    return out
+
+
+def read_existing_bindings_for_episodes(
+    episode_ids: Iterable[str],
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Read every ``active``/``corrected`` ledger row for the given ``episode_id``s, keyed
+    ``(artifact_ref, episode_id)`` -- the SAME shape :func:`read_existing_bindings` returns.
+
+    Finding 3 (AC6 correction reachability): :func:`read_existing_bindings` alone only ever sees
+    THIS tick's signal ``artifact_ref``s, so a binding recorded on a PRIOR tick for an artifact
+    that does not re-appear as a signal this tick (the common case -- a re-cut invalidates a
+    binding without re-delivering the original signal) is invisible to :func:`diff_assignments`,
+    and its ``to_correct`` detection (an ``active`` row no longer supported by any current
+    decision) can never fire. Callers merge this function's result into the map fed to
+    :func:`diff_assignments` for every episode touched this tick (fresh closures + persisted
+    candidates for the touched scopes) so a stale binding is reconciled even when its artifact
+    never resurfaces as a signal.
+    """
+    episode_list = sorted({e for e in episode_ids if e})
+    if not episode_list:
+        return {}
+    placeholders = ", ".join(["%s"] * len(episode_list))
+    query = (
+        "SELECT artifact_ref, episode_id, scope, basis, confidence, binding_state, rule, "
+        f"assigned_at, corrected_at FROM {BINDING_TABLE} WHERE episode_id IN ({placeholders})"
+    )
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    with conn_rw() as conn:
+        _assert_table_schema(conn, BINDING_TABLE)
+        with conn.cursor() as cur:
+            cur.execute(query, tuple(episode_list))
             for r in cur.fetchall():
                 row = dict(r) if isinstance(r, dict) else {
                     "artifact_ref": r[0],
@@ -391,13 +512,197 @@ def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
+# ---------------------------------------------------------------------------
+# Bundle-mutation targets (Finding 1): artifact_ref -> the real bundle to mutate
+# ---------------------------------------------------------------------------
+
+_VAULT_ACTIVITY_PREFIX = "vault.activity:"
+
+
+def _resolve_bundle_object_id_and_note_path(
+    artifact_ref: str, *, vault_root: Path | str | None
+) -> tuple[str | None, Path | None]:
+    """Resolve ``artifact_ref`` to its bundle-mutation target, or ``(None, None)`` when none
+    exists (see module docstring's Bundle mutation / Resolution sections).
+
+    ``vault_root=None`` short-circuits to ``(None, None)`` unconditionally -- callers that pass no
+    vault root get ledger-only behavior (backward compatible with every pre-Finding-1 caller).
+    Only ``vault.activity:<outbox_row_id>`` refs resolve today; ``heimdal.observations:<id>`` (and
+    any future, unrecognized prefix) intentionally returns ``(None, None)`` -- no fabricated
+    bundle target.
+    """
+    if not vault_root or not artifact_ref.startswith(_VAULT_ACTIVITY_PREFIX):
+        return None, None
+    row_id = artifact_ref[len(_VAULT_ACTIVITY_PREFIX) :]
+    if not row_id:
+        return None, None
+    from app.episodes.vault_activity_stream import resolve_bundle_target_for_outbox_row_id
+
+    try:
+        return resolve_bundle_target_for_outbox_row_id(row_id, vault_root=Path(vault_root))
+    except Exception:
+        # Best-effort (mirrors resolve_activity_dimensions): a purged/malformed outbox row must
+        # never fail the whole tick's ledger commit -- bundle mutation is skipped for this ref.
+        logger.warning(
+            "assignment: bundle target resolution failed for artifact_ref=%s -- skipping bundle "
+            "mutation (ledger row still recorded)",
+            artifact_ref,
+            exc_info=True,
+        )
+        return None, None
+
+
+def _merged_episode_ref(existing: Any, episode_ids: Iterable[str]) -> list[str]:
+    """Union (never overwrite) the bundle's current ``episode_ref`` with ``episode_ids``.
+
+    ``existing`` is whatever the payload's ``episode_ref`` key currently holds -- a non-empty list
+    of ids contributes its members; ``'unbound'``/``'pending'``/missing/anything else contributes
+    nothing (the honest starting point is empty, never a fabricated id). Sorted for a
+    deterministic, diff-friendly payload.
+    """
+    current: set[str] = set()
+    if isinstance(existing, (list, tuple)):
+        current = {str(x) for x in existing if isinstance(x, str) and x}
+    current.update(str(e) for e in episode_ids if e)
+    return sorted(current)
+
+
+def _read_bundle_payload(cur: Any, table: str, object_id: str) -> dict[str, Any] | None:
+    cur.execute(f"SELECT payload FROM {table} WHERE object_id = %s::uuid", (object_id,))
+    row = cur.fetchone()
+    if row is None:
+        return None
+    payload = row["payload"] if isinstance(row, dict) else row[0]
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    return dict(payload or {})
+
+
+def _write_bundle_payload(cur: Any, table: str, object_id: str, payload: Mapping[str, Any]) -> None:
+    cur.execute(
+        f"UPDATE {table} SET payload = %s::jsonb, updated_at = now() WHERE object_id = %s::uuid",
+        (json.dumps(dict(payload)), object_id),
+    )
+
+
+def _apply_bundle_episode_ref_insert(cur: Any, object_id: str, episode_ids: Sequence[str]) -> None:
+    """Upgrade ``object_id``'s DB-side bundle rows' ``episode_ref`` (union, never overwrite).
+
+    Touches ONLY the ``episode_ref`` payload key on ``store_objects`` AND ``store_vector_index``
+    -- every other payload key (``evidence_role``, ``authority_state``, ``scope_binding``,
+    ``kind``, embeddings, ...) is read back unchanged and re-written verbatim. A row absent from
+    one or both tables (e.g. not yet embedded) is silently skipped for that table -- never an
+    error, since not every object_id necessarily has a vector-index row yet.
+    """
+    for table in ("store_objects", "store_vector_index"):
+        payload = _read_bundle_payload(cur, table, object_id)
+        if payload is None:
+            continue
+        payload["episode_ref"] = _merged_episode_ref(payload.get("episode_ref"), episode_ids)
+        _write_bundle_payload(cur, table, object_id, payload)
+
+
+def _apply_bundle_episode_ref_correction(cur: Any, object_id: str, episode_id: str) -> None:
+    """Remove ``episode_id`` from ``object_id``'s DB-side bundle rows' ``episode_ref`` (Finding 3:
+    a correction is an ordinary bundle update too, not just a ledger-row flip).
+
+    An empty result reverts to the honest ``'unbound'`` sentinel (never an empty array -- the
+    schema requires ``episode_ref`` arrays to be non-empty, ``schemas/_defs.schema.json``).
+    """
+    for table in ("store_objects", "store_vector_index"):
+        payload = _read_bundle_payload(cur, table, object_id)
+        if payload is None:
+            continue
+        remaining = [
+            e for e in _merged_episode_ref(payload.get("episode_ref"), ()) if e != episode_id
+        ]
+        payload["episode_ref"] = remaining if remaining else "unbound"
+        _write_bundle_payload(cur, table, object_id, payload)
+
+
+def _transform_note_frontmatter_episode_ref(
+    note_path: Path,
+    transform: "Callable[[Any], str | list[str]]",
+    *,
+    vault_root: Path,
+    write_guard: WriteGuard,
+) -> None:
+    """Read-modify-write the vault note's OWN frontmatter ``episode_ref`` through the guarded
+    write seam (spec point 3's "vault-serialized artifacts" half of bundle mutation).
+
+    ``transform(existing_episode_ref) -> new_episode_ref`` computes the new value; shared by the
+    insert (union-merge) and correction (removal) call sites, mirroring the DB-side
+    :func:`_apply_bundle_episode_ref_insert` / :func:`_apply_bundle_episode_ref_correction` pair.
+    Read failures (deleted/unreadable note) are best-effort skipped -- never fail the whole tick's
+    commit over one missing file; a guard-blocked WRITE, by contrast, is NOT swallowed here
+    (:func:`app.knowledge.write_ops.write_note_from_absolute` raises ``WritesBlockedError``, which
+    must propagate -- AC4's guard-at-seam enforcement).
+    """
+    from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
+
+    try:
+        text = note_path.read_text(encoding="utf-8")
+    except OSError:
+        logger.warning(
+            "assignment: could not read vault note %s for episode_ref stamping -- skipping "
+            "(ledger row still recorded)",
+            note_path,
+        )
+        return
+    frontmatter, body = load_frontmatter(text)
+    frontmatter["episode_ref"] = transform(frontmatter.get("episode_ref"))
+    new_text = dump_frontmatter(frontmatter, body)
+
+    from app.knowledge.write_ops import write_note_from_absolute
+
+    write_note_from_absolute(
+        note_path,
+        new_text,
+        vault_root=vault_root,
+        action=EPISODE_ASSIGNMENT_WRITE_ACTION,
+        write_guard=write_guard,
+    )
+
+
+def _stamp_note_frontmatter_episode_ref_insert(
+    note_path: Path, episode_ids: Sequence[str], *, vault_root: Path, write_guard: WriteGuard
+) -> None:
+    """Union-merge ``episode_ids`` into the note's frontmatter ``episode_ref`` (never overwrite)."""
+    _transform_note_frontmatter_episode_ref(
+        note_path,
+        lambda existing: _merged_episode_ref(existing, episode_ids),
+        vault_root=vault_root,
+        write_guard=write_guard,
+    )
+
+
+def _stamp_note_frontmatter_episode_ref_correction(
+    note_path: Path, episode_id: str, *, vault_root: Path, write_guard: WriteGuard
+) -> None:
+    """Remove ``episode_id`` from the note's frontmatter ``episode_ref`` (Finding 3: a correction
+    is an ordinary bundle update on the vault-serialized bundle too, not just the ledger row)."""
+
+    def _remove(existing: Any) -> str | list[str]:
+        remaining = [e for e in _merged_episode_ref(existing, ()) if e != episode_id]
+        return remaining if remaining else "unbound"
+
+    _transform_note_frontmatter_episode_ref(
+        note_path, _remove, vault_root=vault_root, write_guard=write_guard
+    )
+
+
 def commit_assignment_diff(
     to_insert: Sequence[AssignmentDecision],
     to_correct: Sequence[tuple[str, str]],
     *,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+    vault_root: Path | str | None = None,
 ) -> dict[str, int]:
-    """Guarded commit of an assignment diff to the ``episode_artifact_binding`` ledger.
+    """Guarded commit of an assignment diff: the ``episode_artifact_binding`` ledger row AND (when
+    ``vault_root`` is given and the artifact resolves to one) the artifact's REAL bundle -- the
+    DB-side ``store_objects``/``store_vector_index`` payload rows and, for a vault-serialized
+    artifact, the note's own frontmatter (Finding 1; see module docstring's Bundle mutation
+    section).
 
     Guard-at-seam (AC4): ``write_guard.assert_writes_allowed`` is asserted FIRST, before any DB
     statement executes -- a blocked guard means zero rows touched, mirroring
@@ -408,17 +713,34 @@ def commit_assignment_diff(
     Each insert is an UPSERT (``ON CONFLICT (artifact_ref, episode_id) DO UPDATE``) so a
     reinstated/upgraded decision (:func:`diff_assignments`) overwrites its own prior row rather
     than colliding; each correction flips ``binding_state`` to ``corrected`` and stamps
-    ``corrected_at`` without deleting the row (provenance survives the correction). Both loops run
-    inside ONE transaction (commit-or-nothing for this tick's whole diff).
+    ``corrected_at`` without deleting the row (provenance survives the correction). The ledger rows
+    and both DB-side bundle-payload updates run inside ONE Postgres transaction (commit-or-nothing
+    for this tick's whole diff); the vault-note frontmatter write is a separate filesystem write
+    through the guarded seam (never atomic with the DB transaction across failure domains, same
+    posture as every other vault-write producer in this codebase).
+
+    ``vault_root=None`` (the default) skips ALL bundle mutation -- ledger-only, backward compatible
+    with every pre-Finding-1 caller/test that only cares about the ledger.
     """
     write_guard.assert_writes_allowed(EPISODE_ASSIGNMENT_WRITE_ACTION)
 
     if not to_insert and not to_correct:
         return {"pending": 0, "corrected": 0}
 
+    note_targets: list[tuple[Path, list[str]]] = []
+    note_removals: list[tuple[Path, str]] = []
+
     with conn_rw() as conn:
+        _assert_table_schema(conn, BINDING_TABLE)
         with conn.cursor() as cur:
             for decision in to_insert:
+                object_id, note_path = _resolve_bundle_object_id_and_note_path(
+                    decision.artifact_ref, vault_root=vault_root
+                )
+                if object_id is not None:
+                    _apply_bundle_episode_ref_insert(cur, object_id, [decision.episode_id])
+                if note_path is not None:
+                    note_targets.append((note_path, [decision.episode_id]))
                 cur.execute(
                     f"""
                     INSERT INTO {BINDING_TABLE} (
@@ -446,6 +768,13 @@ def commit_assignment_diff(
                     ),
                 )
             for artifact_ref, episode_id in to_correct:
+                object_id, note_path = _resolve_bundle_object_id_and_note_path(
+                    artifact_ref, vault_root=vault_root
+                )
+                if object_id is not None:
+                    _apply_bundle_episode_ref_correction(cur, object_id, episode_id)
+                if note_path is not None:
+                    note_removals.append((note_path, episode_id))
                 cur.execute(
                     f"""
                     UPDATE {BINDING_TABLE}
@@ -454,6 +783,20 @@ def commit_assignment_diff(
                     """,
                     (BINDING_STATE_CORRECTED, artifact_ref, episode_id),
                 )
+
+    # Vault-note frontmatter writes happen AFTER the DB transaction commits (a separate failure
+    # domain -- filesystem vs Postgres -- never mixed into the same transaction boundary). A
+    # guard-blocked write here still raises WritesBlockedError; that would only happen if the
+    # guard flipped to blocking mid-commit, since the same guard already passed at the top of this
+    # function moments ago.
+    for note_path, episode_ids in note_targets:
+        _stamp_note_frontmatter_episode_ref_insert(
+            note_path, episode_ids, vault_root=Path(vault_root), write_guard=write_guard  # type: ignore[arg-type]
+        )
+    for note_path, episode_id in note_removals:
+        _stamp_note_frontmatter_episode_ref_correction(
+            note_path, episode_id, vault_root=Path(vault_root), write_guard=write_guard  # type: ignore[arg-type]
+        )
 
     return {"pending": len(to_insert), "corrected": len(to_correct)}
 
@@ -471,6 +814,7 @@ __all__ = [
     "ArtifactCandidate",
     "AssignmentDecision",
     "EpisodeAssignmentError",
+    "EpisodeAssignmentSchemaMissingError",
     "EpisodeBoundsRecord",
     "artifact_candidates_from_signals",
     "commit_assignment_diff",
@@ -479,4 +823,5 @@ __all__ = [
     "episode_bounds_from_closed_segments",
     "read_candidate_episodes_for_scopes",
     "read_existing_bindings",
+    "read_existing_bindings_for_episodes",
 ]
