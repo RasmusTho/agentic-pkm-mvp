@@ -74,6 +74,12 @@ Delivered (ERE-04, #3179), all single-sourced in `app/episodes/segmenter.py` —
 
 The Heimdal per-session `episode_id` boundary hint (ADR-0054 §3) is checked BEFORE all five dimensions: a signal continuing the open segment's own bound session always extends, overriding every other dimension (one session never spans two proposed episodes).
 
+Delivered (ERE-07, #3182), single-sourced in `app/episodes/recut.py`:
+
+| Constant | Value | Meaning |
+| --- | --- | --- |
+| `ACCEPTANCE_QUIET_WINDOW_MINUTES` | `1440` (24h) | How long a `proposed` episode's tracked baseline must go unchanged before silence-is-acceptance transitions it to `accepted`, with no notification/approval surface. |
+
 ## Capability acceptance criteria
 
 - [ ] All live streams in the inventory are registered and consumed only via the registry (ERE-01/04). Verify: `tests/episodes/test_stream_registry.py::test_engine_consumes_only_registered_streams`

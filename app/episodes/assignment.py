@@ -831,6 +831,69 @@ def commit_assignment_diff(
     return {"pending": len(to_insert), "corrected": len(to_correct)}
 
 
+# ---------------------------------------------------------------------------
+# ERE-07 (#3182) binding reconciliation: reused verbatim by app.episodes.recut, never
+# reimplemented -- "binding reconciliation via the ERE-05 correction path" (issue Scope).
+# ---------------------------------------------------------------------------
+
+
+def reconcile_episode_bindings(
+    episode_id: str,
+    *,
+    scope: str,
+    derived_from: Iterable[str],
+    write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+    vault_root: Path | str | None = None,
+) -> dict[str, int]:
+    """ERE-07 binding reconciliation for a re-cut or newly-adopted episode note.
+
+    Recomputes exactly the PROVENANCE-anchored bindings ``derived_from`` (the episode's
+    CURRENT, post-edit set) supports, and lets :func:`diff_assignments` correct (unbind) every
+    other existing active binding for ``episode_id`` -- the ERE-05 correction path
+    (:func:`diff_assignments` / :func:`commit_assignment_diff`), reused verbatim.
+
+    Deliberately provenance-only: this function is handed only the episode's current fields, not
+    the original artifact ``observed_at`` instants the weaker :data:`BASIS_TIME_OVERLAP` basis
+    would need to re-verify honestly (HEIM-6 -- never fabricate a claim from data not actually
+    available here). A time-overlap binding invalidated by a re-cut is therefore corrected
+    (unbound) rather than re-derived; a still-genuinely-in-bounds artifact is re-bound on a future
+    normal tick from live signals, same as any other artifact. Provenance-anchored bindings (the
+    strong, ``derived_from``-literal claim) are the only ones this function can and does
+    re-affirm with integrity.
+    """
+    existing = read_existing_bindings_for_episodes([episode_id])
+    derived_from_set = {ref for ref in derived_from if ref}
+    decisions = [
+        AssignmentDecision(
+            artifact_ref=artifact_ref,
+            episode_id=episode_id,
+            scope=scope,
+            basis=BASIS_PROVENANCE,
+            confidence=PROVENANCE_CONFIDENCE,
+        )
+        for artifact_ref in sorted(derived_from_set)
+    ]
+    to_insert, to_correct = diff_assignments(existing, decisions)
+    return commit_assignment_diff(to_insert, to_correct, write_guard=write_guard, vault_root=vault_root)
+
+
+def withdraw_episode_bindings(
+    episode_id: str,
+    *,
+    write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+    vault_root: Path | str | None = None,
+) -> dict[str, int]:
+    """ERE-07 merge-deletion reconciliation: an episode note that no longer exists on disk (the
+    human deleted it as half of a merge) can no longer support ANY binding -- correct every one
+    of its currently-active ledger rows (never silently dropped; provenance survives the
+    correction, mirroring every other :func:`commit_assignment_diff` correction in this module)."""
+    existing = read_existing_bindings_for_episodes([episode_id])
+    to_correct = [
+        key for key, row in existing.items() if row.get("binding_state") == BINDING_STATE_ACTIVE
+    ]
+    return commit_assignment_diff([], to_correct, write_guard=write_guard, vault_root=vault_root)
+
+
 __all__ = [
     "ASSIGNMENT_RULE",
     "BASIS_PROVENANCE",
@@ -854,4 +917,6 @@ __all__ = [
     "read_candidate_episodes_for_scopes",
     "read_existing_bindings",
     "read_existing_bindings_for_episodes",
+    "reconcile_episode_bindings",
+    "withdraw_episode_bindings",
 ]
