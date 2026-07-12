@@ -154,6 +154,24 @@ class ReplayReceipt:
     equivalent: bool
     dead_lettered: tuple[str, ...] = field(default_factory=tuple)
 
+    @property
+    def successful_fresh_materialization(self) -> bool:
+        """Whether replay completed with a new, deliberately non-comparable candidate.
+
+        A first candidate write cannot truthfully claim byte equivalence because
+        there is no preserved artifact to compare. It is still a successful
+        replay outcome when every upstream stage completed and no item was
+        dead-lettered.
+        """
+        candidate_stages = [stage for stage in self.stages if stage.stage == CANDIDATE_STAGE]
+        return (
+            not self.dead_lettered
+            and len(candidate_stages) == 1
+            and candidate_stages[0].status == "written"
+            and candidate_stages[0].equivalence == "fresh_write_not_byte_comparable"
+            and all(stage.status == "ok" for stage in self.stages if stage.stage != CANDIDATE_STAGE)
+        )
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "raw_record_id": self.raw_record_id,
@@ -184,6 +202,10 @@ class ReplayReceipt:
             f"replay receipt: equivalent={str(self.equivalent).lower()} "
             f"source_egress={self.source_egress}"
         )
+        if self.successful_fresh_materialization:
+            lines.append(
+                "replay result: fresh materialization succeeded; byte equivalence is not applicable"
+            )
         return lines
 
 

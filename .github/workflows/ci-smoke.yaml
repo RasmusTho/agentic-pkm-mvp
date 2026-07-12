@@ -36,6 +36,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # INV-EF1 compares the PR head with main and therefore needs a
+          # merge base, not just the two shallow tip commits.
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -93,6 +97,26 @@ jobs:
       - name: Lint (ruff)
         run: |
           ruff check app tests companion-ui/companion-app
+
+      # The public-seam gate compares the PR head with origin/main via a
+      # three-dot diff (`origin/main...HEAD`), which needs the MERGE BASE
+      # between the two — not just their tips. The `fetch-depth: 0` Checkout
+      # above populates refs/remotes/origin/main with full history, but main
+      # can advance between that checkout and this step, so we refresh the ref.
+      # --force: a non-forced fetch of the newer tip is rejected as
+      # "non-fast-forward" against the existing full-depth ref (observed on
+      # PR #3514, CI Smoke run 29197410199). Do NOT pass --depth=1: that
+      # re-shallows origin/main to a single commit, and once main has advanced
+      # past this branch's merge point the merge base is no longer in the
+      # shallow history, so `git diff origin/main...HEAD` fails with exit 128
+      # ("no merge base"). Keep the fetch full-depth so the merge base is
+      # always reachable. This only moves the local remote-tracking ref
+      # forward — it fetches, never pushes, so it cannot lose remote data.
+      - name: Fetch public-seam gate base
+        run: git fetch --no-tags --force origin main:refs/remotes/origin/main
+
+      - name: INV-EF1 public seam gate
+        run: python3 scripts/public_seam_lint.py --mode gate
 
       - name: Validate settings
         run: |

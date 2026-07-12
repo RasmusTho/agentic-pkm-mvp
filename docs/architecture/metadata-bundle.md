@@ -5,7 +5,7 @@ Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: canonical (metadata bundle contract); subordinate to doctrine, ontology, semantic dimensions
-Last reviewed: 2026-07-01
+Last reviewed: 2026-07-11
 Last verified against: docs/architecture/functional-ontology.md, docs/architecture/semantic-dimensions.md, docs/architecture/cross-scope-flow.md, docs/foundation/00-yggdrasil-doctrine.md, schemas/metadata-bundle.schema.json
 
 # Mimer Metadata Bundle
@@ -33,7 +33,7 @@ this batch — [context-envelope](context-envelope.md), [memory-model](memory-mo
 | Family | Fields | Notes |
 | --- | --- | --- |
 | **identity** | `object_id`, `object_type` | What this object is. `object_type` ∈ artifact, segment, claim, concept, relation, source, memory_item, proposal, projection, retrieval_result, context_item, authority_transition, execution_effect. |
-| **location / context** | `vault_id`, `workspace_id`, `scope_id`, `sphere`, `principal_id`, `scope_binding` | Where and in what frame it lives. `vault_id` is storage topology; **it is not equivalent to `scope_id`** (a scope is a cognitive/audience/policy/provenance frame). |
+| **location / context** | `vault_id`, `workspace_id`, `scope_id`, `sphere`, `principal_id`, `scope_binding`, `episode_ref` | Where and in what frame it lives. `vault_id` is storage topology; **it is not equivalent to `scope_id`** (a scope is a cognitive/audience/policy/provenance frame). `episode_ref` is the bounded lived situation (`Episode`, see [semantic dimensions](semantic-dimensions.md)) the object originated in — `unbound`, `pending`, or one or more `episode_id`s; structurally parallel to `scope_binding` and, like it, always present and orthogonal to `evidence_role`/`authority_state`. |
 | **semantics** | `source_role`, `authority_state`, `evidence_role`, `sensitivity`, `suppression_state` | The orthogonal [semantic dimensions](semantic-dimensions.md). The three role dimensions answer different questions and are never collapsed. |
 | **provenance** | `created_by`, `created_at`, `derived_from`, `content_hash`, `provenance_event_ids` | Where it came from and **why it has the standing it has**. Provenance survives derivation. |
 | **lifecycle** | `valid_at`, `invalid_at`, `indexed_at`, `suppression_state`, `sync_state`, `memory_state`, `execution_state`, `authority_receipt_ref` | Validity, indexing, suppression, replication, and (per type) memory/execution state. |
@@ -59,7 +59,7 @@ usable per the functional ontology while being absent from this enum.
 These are encoded in the schema where possible and are load-bearing everywhere:
 
 1. **No usable object without the core set.** Every object requires `object_id`, `object_type`,
-   `scope_id`, `source_role`, `authority_state`, `evidence_role`, and provenance
+   `scope_id`, `source_role`, `authority_state`, `evidence_role`, `episode_ref`, and provenance
    (`provenance_event_ids`, with `created_by`/`created_at`). `sensitivity` and `suppression_state`
    are also required.
 2. **`vault_id` is not `scope_id`.** They are separate fields. Two objects in one vault may be in
@@ -74,6 +74,15 @@ These are encoded in the schema where possible and are load-bearing everywhere:
    standing. Authority changes only through a governed [authority transition](authority-transition-flow.md).
 7. **Authority state does not imply evidence role.** Accepted material is not automatically
    admissible as evidence for every task; admissibility is its own field.
+8. **`episode_ref` survives derivation and never upgrades standing.** Like `scope_binding` and
+   provenance, an object's episode binding must be preserved through segment/projection/retrieval
+   derivation (`observation_episode_binding_survives`, see
+   [invariant registry](../testing/invariant-tests.md)) — a derived representation that drops it
+   breaks closure-driven relevance decay for everything downstream. `episode_ref` is orthogonal to
+   `evidence_role`/`authority_state`/`scope_binding`: belonging to an Episode is context, not
+   standing, and a `pending` (unconfirmed, opt-out-segmentation) binding is never authority
+   ([ADR-0051](../adr/ADR-0051-episode-as-ontological-primitive.md),
+   [ADR-0029](../adr/ADR-0029-source-authority-evidence-roles-are-orthogonal.md)).
 
 ## 4. Schema requirements
 
@@ -85,13 +94,17 @@ These are encoded in the schema where possible and are load-bearing everywhere:
   — they structurally cannot be collapsed into one;
 - enumerates value families for `object_type`, `source_role`, `authority_state`, `evidence_role`,
   `sensitivity`, and `suppression_state`;
-- applies conditional requirements: `derived_from` for derived types; `authority_receipt_ref` for
-  canonical authority; `memory_state` plus a non-authoritative `evidence_role` (never real-world
-  `evidence`), `source_role` fixed to `agent_memory`, and `authority_state` fixed to `noncanonical`
-  for memory items — so a memory item carried only as a bundle cannot claim evidence, pass as
-  human/shared source material, or hold any draft/proposed/canonical standing;
-  `execution_state` + `authority_receipt_ref` for execution effects; `authority_receipt_ref` for a
-  projection claiming evidence role;
+- applies conditional requirements: `derived_from` **and** `episode_ref` for derived types (the same
+  `allOf` conditional now requires both, so an episode binding cannot silently vanish exactly where
+  provenance lineage is required to survive); `authority_receipt_ref` for canonical authority;
+  `memory_state` plus a non-authoritative `evidence_role` (never real-world `evidence`), `source_role`
+  fixed to `agent_memory`, and `authority_state` fixed to `noncanonical` for memory items — so a
+  memory item carried only as a bundle cannot claim evidence, pass as human/shared source material, or
+  hold any draft/proposed/canonical standing; `execution_state` + `authority_receipt_ref` for
+  execution effects; `authority_receipt_ref` for a projection claiming evidence role;
+- `episode_ref` is required on every bundle and is either the sentinel `"unbound"`/`"pending"` or a
+  non-empty array of `episode_id`s (`schemas/_defs.schema.json :: episode_ref`); an empty array is
+  rejected — `"unbound"` is the honest way to say no episode is known;
 - closes the object (`additionalProperties: false`) but provides an explicit `extensions` object for
   runtime evolution.
 

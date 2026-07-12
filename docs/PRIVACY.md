@@ -22,6 +22,13 @@ The pipeline processes personal material (notes, audio), so logs and storage mus
 - `tmp/index-outbox.jsonl` is a working file. Rotate per `docs/OPERATIONS.md` and delete copies older than 30 days unless policy states otherwise.
 - `tmp/audio/*.wav` is removed automatically when the file sits inside the OS temp dir (see `_is_temporary` in `app/media/transcribe.py:113-135`).
 
+## Public source-repository exposure
+This repository is public. The tracked tree follows the two-scope **INV-EF1** rule: product artifacts
+remain operator-invariant, while builder/ops material remains secret-free and records any permitted
+personal-environment token in its owned register. The authoritative definition and enforcement path
+are the [public/private invariant](architecture/ecosystem-federation.md#publicprivate-invariant) and
+its register, ratified by `ADR-0046`; this section does not duplicate that invariant.
+
 ## GDPR / compliance note
-- Everything runs locally, so no cloud record exists. If a cloud deployment is ever introduced, execute a data processing agreement and scrub logs of PII before upload.
+- Runtime data flows run locally by default, so no cloud processing record exists unless an outbound provider is explicitly enabled. The public-repository exposure above is a present, separate seam. If a cloud deployment is introduced, execute a data processing agreement and scrub logs of PII before upload.
 <!-- SECTION:PRIVACY:END -->

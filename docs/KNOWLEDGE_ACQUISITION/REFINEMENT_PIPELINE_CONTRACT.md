@@ -59,6 +59,16 @@ policy §3 mandates for AI-generated content, with full provenance, written back
 existing companion-note / vault mechanics named in the source spec. From this point the
 ingestion/triage policy governs; the pipeline is done.
 
+**Karakeep handoff extension (contract selected, runtime pending).** KMA-01 / issue #3372 fixes the
+Mimer-side extension point as the shipped
+`app.heimdal.candidate_projection.project_pending_candidates` path with its existing
+`mimer.candidate_projector` cursor. A later implementation slice adds a source-discriminated
+`reading_source_note` mapping with draft/review-required posture, deterministic first-write-wins
+pathing, provenance survival, and WriteGuard materialization. It consumes only durable
+`heimdal.observation.published.v1` evidence; it does not contact Karakeep, use companion capture, or
+create another projector/cursor. See
+`docs/KARAKEEP_MIMER_ACQUISITION/DEFINE_READING_SOURCE_AND_CANDIDATE_CONTRACT.md :: Additive Mimer candidate mapping`.
+
 ## Stage execution model
 
 - Stages form a small DAG, not a strict line: `normalize` depends on `raw`; each extractor depends
@@ -92,6 +102,15 @@ An extractor is a registered unit: `(extractor_id, version, input: normalized co
 output schema, model identity)`. The registry is **open by design** — the platform's value grows
 by adding extractors, not by changing the pipeline. Adding one MUST NOT require touching this
 contract, other extractors, or any source plugin.
+
+The declared input content type is **advisory-only by design**: `ExtractorSpec.input_content_type`
+documents which normalized content type an extractor consumes, but the registry does not validate
+it against the normalized payload. The current `normalized` shape (`NormalizedTranscript`) carries
+no content-type discriminator to check it against, and only one normalized shape (transcripts)
+exists today, so there is nothing to mismatch. Each extractor's own `run()` remains the fail-loud
+boundary for a payload it cannot use. Enforcement is deferred, not accidental: revisit this once a
+second normalized content type exists or pipeline wiring (KA-05 #2800 / KA-06 #2801) needs a
+registry-level check.
 
 Initial worked examples (chosen to prove the contract across output shapes — **examples, not a
 definitive list**):

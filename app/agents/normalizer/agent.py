@@ -9,6 +9,7 @@ from typing import Any
 import yaml
 
 from app.events.types import INGEST_NORMALIZE_DONE
+from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.objects import ObjectStore
 from app.services.audit import audit_event
 
@@ -107,6 +108,11 @@ def normalize_file(path: str, *, trace_id: str, artifact_kind: str | None = None
         "artifact_kind": normalized_artifact_kind,
         "policy_profile_kind": normalized_artifact_kind,
         "ingest_diagnostics": diagnostics,
+        # Carry the note's vault-canonical episode_ref (ERE-03/ERE-05, invariant->producers): the
+        # normalize shim is written to store_objects via save_object; carrying it here keeps a
+        # stamped binding across a standalone normalize (the vault-ingest producers overwrite this
+        # row anyway, but that carrying put can fail -- this row must not blind-drop the binding).
+        "episode_ref": episode_ref_from_frontmatter(frontmatter),
     }
 
     domain_object = {

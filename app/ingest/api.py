@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Tuple
 from uuid import UUID, uuid4
 
 from app.embedding_config import get_embed_dim
+from app.ingest.episode_ref import episode_ref_from_frontmatter
 
 try:
     from app.config.agent import settings as _agent_settings  # type: ignore
@@ -104,6 +105,11 @@ def ingest_object(
     payload_out.setdefault("object_type", kind or "note")
     payload_out.setdefault("system_intent", "learn")
     payload_out.setdefault("emergent_tags", [])
+    # Carry episode_ref (ERE-03/ERE-05, invariant->producers): this programmatic ingest helper
+    # builds a fresh store_objects payload with no frontmatter, so normalize whatever the caller
+    # supplied to a schema-valid binding, honest 'unbound' default -- never absent. The {**...}
+    # rebuild keeps this an explicit dict literal so the store-payload census can see the key.
+    payload_out = {**payload_out, "episode_ref": episode_ref_from_frontmatter(payload_out)}
 
     # Persist object so the indexer stage can load text by object_id.
     from app.objects import DomainObject, ObjectStore

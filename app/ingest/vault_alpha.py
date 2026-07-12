@@ -17,6 +17,7 @@ from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.filters import strip_ai_panels
 from app.agents.panel.writeback import strip_ai_status_block
 from app.ingest.config import resolve_ingest_config
+from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.index.outbox import append_jsonl
 from app.observability.ingest_meta import record_ingest_run
 from app.observability.log import with_trace_id
@@ -259,6 +260,8 @@ def _frontmatter_title(frontmatter: dict) -> str | None:
     if value is None:
         return None
     return _normalize_title(value)
+
+
 
 
 def _derive_title(body: str, path: Path) -> str:
@@ -542,6 +545,12 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         "maturity": maturity,
         "domain": domain,
         "ingest_fingerprint": ingest_fingerprint,
+        # This obj is written to the store_objects table via ObjectStore().save_object -> (pg)
+        # store.put (a full-overwrite of the payload column). Carry episode_ref (round-5 finding):
+        # the carrying get_object_store().put(store_payload) below is in a try/except:pass, so if it
+        # throws this is the surviving store_objects row -- an absent episode_ref is blind-dropped to
+        # 'unbound' on the next cold rebuild.
+        "episode_ref": episode_ref_from_frontmatter(frontmatter),
     }
 
     obj = DomainObject(
@@ -579,6 +588,9 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         "review_state": review_state,
         "text": stripped_text,
         "ingest_fingerprint": ingest_fingerprint,
+        # Vault-canonical episode binding (ERE-03/ERE-05): carry the frontmatter's episode_ref into
+        # the DB projection so a reingest never blind-drops a stamped binding (round-2 Finding 1).
+        "episode_ref": episode_ref_from_frontmatter(frontmatter),
     }
 
     try:
