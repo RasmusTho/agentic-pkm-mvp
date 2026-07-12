@@ -646,6 +646,12 @@ def _signal_from_calendar_row(
     ERE-08 per-calendar discipline) -- never inferred from event content, so
     cross-scope isolation is inherited for free from the already-shipped
     per-scope partitioning in :func:`fold_signals_into_segments`.
+
+    ``signal_id``/``provenance_ref`` incorporate ``item.occurrence_key`` when
+    present (ERE-09 review round 1, finding 2): a server-expanded recurring
+    series' occurrences share one resource uid:etag, so without the
+    occurrence key every occurrence after the first would collide on the
+    same signal_id and never fold as separate evidence.
     """
     event = parse_vevent(item.ics_text)
     if event is None or event.dtstart is None:
@@ -667,13 +673,17 @@ def _signal_from_calendar_row(
 
     goal = (slugify_summary(event.summary),) if event.summary else ()
 
+    signal_id = f"{item.uid}:{item.etag}"
+    if item.occurrence_key:
+        signal_id = f"{signal_id}:{item.occurrence_key}"
+
     return SegmentationSignal(
         stream_id=CALENDAR_STREAM_ID,
-        signal_id=f"{item.uid}:{item.etag}",
+        signal_id=signal_id,
         observed_at=event.dtstart,
         observed_at_end=event.dtend,
         scope=binding.scope,
-        provenance_ref=f"calendar:{item.uid}:{item.etag}",
+        provenance_ref=f"calendar:{signal_id}",
         protagonists=tuple(sorted(set(protagonists))),
         goal=goal,
         heimdal_session_id=None,
@@ -815,12 +825,18 @@ def run_segmentation_tick(
         # fetch, which the helper already folds into `calendar_degraded`
         # (AC5) instead of raising. No durable read-position cursor: unlike
         # the append-only heimdal/outbox logs, a CalDAV poll re-reads the
-        # calendar's current item set each tick and relies on the
-        # uid+etag-keyed `signal_id` for at-least-once idempotency (an
+        # calendar's current item set each tick (bounded to a fixed past/
+        # future window -- `_CALDAV_TIME_RANGE_PAST`/`_CALDAV_TIME_RANGE_FUTURE`
+        # in calendar_stream.py, ERE-09 review round 1 finding 3) and relies
+        # on the uid+etag-keyed `signal_id` for at-least-once idempotency (an
         # unchanged event redelivers the same signal_id -> no-op fold; an
         # edited event gets a new etag -> a new signal, itself append-only
         # evidence of the change) -- the same INV-ERE-F guarantee, a
-        # different mechanism.
+        # different mechanism. A server-expanded recurring occurrence
+        # (review round 1 finding 2) additionally carries an
+        # `item.occurrence_key` folded into `signal_id` in
+        # `_signal_from_calendar_row` below, since every occurrence of one
+        # recurring master otherwise shares the same resource uid:etag.
         calendar_items, calendar_degraded = read_calendar_raw_items_for_tick()
         consumed[CALENDAR_STREAM_ID] = len(calendar_items)
         degraded.extend(calendar_degraded)

@@ -59,6 +59,7 @@ from app.episodes.calendar_stream import (
     resolve_attendee_readonly,
     resolve_calendar_bindings,
 )
+from app.episodes.calendar_stream import _calendar_query_body, _parse_multistatus
 from app.episodes.segmenter import _signal_from_calendar_row, fold_signals_into_segments, run_segmentation_tick
 from app.episodes.stream_registry import ConfidenceScore
 from app.write_guard import WriteGuard
@@ -529,3 +530,193 @@ def test_calendar_scope_mapping_respected() -> None:
     # includes the work calendar's ref, and vice versa.
     assert "calendar:personal-event:e1" not in updated_open["work"].derived_from
     assert "calendar:work-event:e1" not in updated_open["private"].derived_from
+
+
+# ---------------------------------------------------------------------------
+# Review gate round 1 (PR #3519, calendar-parsing robustness gaps the
+# ICS-fixture tests above did not exercise -- would have surfaced only on
+# the deferred mac-mini live-CalDAV channel, against real iCloud data).
+# ---------------------------------------------------------------------------
+
+
+def test_tzid_qualified_dtstart_resolves_to_correct_utc_instant() -> None:
+    """Finding 1 (confirmed): iCloud writes TZID-qualified local times
+    (`DTSTART;TZID=Europe/Stockholm:...`), never a bare local without a
+    zone. A 09:00 Europe/Stockholm meeting in July (CEST, UTC+2) must
+    resolve to 07:00 UTC -- the pre-fix code silently treated any non-'Z'
+    value as already-UTC, a multi-hour skew on the `time` dimension the
+    confidence table scores highest (0.95/by_construction)."""
+    ics_text = (
+        "BEGIN:VCALENDAR\r\n"
+        "BEGIN:VEVENT\r\n"
+        "UID:tzid-event\r\n"
+        "DTSTART;TZID=Europe/Stockholm:20260711T090000\r\n"
+        "DTEND;TZID=Europe/Stockholm:20260711T093000\r\n"
+        "SUMMARY:Stockholm Meeting\r\n"
+        "END:VEVENT\r\n"
+        "END:VCALENDAR\r\n"
+    )
+    event = parse_vevent(ics_text)
+    assert event is not None
+    assert event.dtstart == datetime(2026, 7, 11, 7, 0, tzinfo=timezone.utc)
+    assert event.dtend == datetime(2026, 7, 11, 7, 30, tzinfo=timezone.utc)
+    assert event.time_is_floating is False
+
+    contract = calendar_event_to_signal_contract(uid="tzid-event", etag="etag-1", event=event, scope="work")
+    assert contract.observed_at_start == "2026-07-11T07:00:00+00:00"
+    assert contract.dimensions_fed["time"].calibration == "by_construction"
+    assert contract.dimensions_fed["time"].score == 0.95
+
+
+def test_floating_local_dtstart_degrades_time_confidence() -> None:
+    """Finding 1 (confirmed): a genuinely floating local time (no 'Z' AND
+    no TZID param) has no fixed UTC instant -- it must never be silently
+    asserted as `by_construction` UTC. The best-effort UTC-naive rendering
+    is still produced (never a crash) but the `time` dimension degrades to
+    a heuristic confidence, matching every other inferred dimension."""
+    ics_text = (
+        "BEGIN:VCALENDAR\r\n"
+        "BEGIN:VEVENT\r\n"
+        "UID:floating-event\r\n"
+        "DTSTART:20260711T090000\r\n"
+        "SUMMARY:Floating Time Event\r\n"
+        "END:VEVENT\r\n"
+        "END:VCALENDAR\r\n"
+    )
+    event = parse_vevent(ics_text)
+    assert event is not None
+    assert event.time_is_floating is True
+    assert event.dtstart == datetime(2026, 7, 11, 9, 0, tzinfo=timezone.utc)  # best-effort, never a crash
+
+    contract = calendar_event_to_signal_contract(uid="floating-event", etag="etag-1", event=event, scope="work")
+    assert contract.dimensions_fed["time"].calibration == "heuristic"
+    assert contract.dimensions_fed["time"].score < 0.95
+
+
+def test_unresolvable_tzid_degrades_rather_than_raises() -> None:
+    """An unknown/garbage TZID (malformed feed, or a zone name this host's
+    tz database doesn't have) never crashes the parse -- it degrades to
+    floating exactly like a bare local time, never guessing an offset."""
+    ics_text = (
+        "BEGIN:VCALENDAR\r\n"
+        "BEGIN:VEVENT\r\n"
+        "UID:bad-tzid-event\r\n"
+        "DTSTART;TZID=Not/A_Real_Zone:20260711T090000\r\n"
+        "END:VEVENT\r\n"
+        "END:VCALENDAR\r\n"
+    )
+    event = parse_vevent(ics_text)
+    assert event is not None
+    assert event.time_is_floating is True
+    assert event.dtstart == datetime(2026, 7, 11, 9, 0, tzinfo=timezone.utc)
+
+
+def test_calendar_query_body_bounds_and_expands() -> None:
+    """Findings 2 + 3 (confirmed / plausible): the production REPORT body
+    must request a bounded `<C:time-range>` AND server-side `<C:expand>`
+    over the SAME window -- without `<C:time-range>`, every tick refetches
+    the whole calendar history (finding 3); without `<C:expand>`, a
+    recurring master VEVENT comes back unexpanded and its later occurrences
+    never emit (finding 2). RFC 4791 9.6.5 requires expand's start/end to
+    match the query's bound, so the two fixes share one named window."""
+    reference = datetime(2026, 7, 11, 12, 0, tzinfo=timezone.utc)
+    body = _calendar_query_body(now=reference)
+    expected_start = "20260704T120000Z"  # 7 days back
+    expected_end = "20260909T120000Z"  # 60 days forward
+    assert f'<C:time-range start="{expected_start}" end="{expected_end}"/>' in body
+    assert f'<C:expand start="{expected_start}" end="{expected_end}"/>' in body
+
+
+def test_expanded_recurring_occurrences_each_emit_a_distinct_signal() -> None:
+    """Finding 2 (confirmed): a server-side `<C:expand>` response returns
+    MULTIPLE VEVENT components for one recurring master under ONE
+    href/etag (each carrying its own RECURRENCE-ID/DTSTART) -- each
+    occurrence must fold as ITS OWN signal (distinct signal_id/
+    provenance_ref), never collide because signal_id was keyed on the
+    constant uid:etag alone."""
+    expanded_ics = (
+        "BEGIN:VCALENDAR\r\n"
+        "BEGIN:VEVENT\r\n"
+        "UID:recurring-standup\r\n"
+        "RECURRENCE-ID:20260706T090000Z\r\n"
+        "DTSTART:20260706T090000Z\r\n"
+        "DTEND:20260706T091500Z\r\n"
+        "SUMMARY:Daily Standup\r\n"
+        "END:VEVENT\r\n"
+        "BEGIN:VEVENT\r\n"
+        "UID:recurring-standup\r\n"
+        "RECURRENCE-ID:20260707T090000Z\r\n"
+        "DTSTART:20260707T090000Z\r\n"
+        "DTEND:20260707T091500Z\r\n"
+        "SUMMARY:Daily Standup\r\n"
+        "END:VEVENT\r\n"
+        "END:VCALENDAR\r\n"
+    )
+    multistatus = (
+        '<?xml version="1.0"?>\n'
+        '<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">\n'
+        "  <D:response>\n"
+        "    <D:href>/calendars/work/recurring-standup.ics</D:href>\n"
+        "    <D:propstat>\n"
+        "      <D:prop>\n"
+        '        <D:getetag>"etag-master"</D:getetag>\n'
+        f"        <C:calendar-data>{expanded_ics}</C:calendar-data>\n"
+        "      </D:prop>\n"
+        "      <D:status>HTTP/1.1 200 OK</D:status>\n"
+        "    </D:propstat>\n"
+        "  </D:response>\n"
+        "</D:multistatus>\n"
+    )
+    items = _parse_multistatus(multistatus)
+    assert len(items) == 2
+    assert {item.occurrence_key for item in items} == {"20260706T090000Z", "20260707T090000Z"}
+    assert all(item.uid == "recurring-standup" and item.etag == "etag-master" for item in items)
+
+    binding = _binding(calendar_id="work-cal", scope="work")
+    signals = [_signal_from_calendar_row(binding, item, register_snapshot=()) for item in items]
+    assert all(signal is not None for signal in signals)
+    signal_ids = {signal.signal_id for signal in signals if signal is not None}
+    assert signal_ids == {
+        "recurring-standup:etag-master:20260706T090000Z",
+        "recurring-standup:etag-master:20260707T090000Z",
+    }
+
+    # Both occurrences fold as SEPARATE evidence (a day apart, well past
+    # TIME_GAP_MINUTES=45 -- one closes before the other opens), proving
+    # neither collided into a single ever-emitted-once signal.
+    updated_open, closed = fold_signals_into_segments(
+        [signal for signal in signals if signal is not None], open_segments=None, frontiers={}
+    )
+    all_derived: set[str] = set()
+    for seg in list(updated_open.values()) + closed:
+        all_derived |= set(seg.derived_from)
+    assert "calendar:recurring-standup:etag-master:20260706T090000Z" in all_derived
+    assert "calendar:recurring-standup:etag-master:20260707T090000Z" in all_derived
+
+
+def test_quoted_cn_attendee_strips_quotes_and_resolves() -> None:
+    """Finding 4 (plausible): `CN="Doe, John"` (RFC 5545 requires quoting
+    when the display name contains a comma) must resolve to the surface
+    form `Doe, John` -- the pre-fix regex captured the literal quotes,
+    so an exact-match against a register label always missed, misclassifying
+    a known attendee as `AttendeeUnresolved` every tick."""
+    ics_text = (
+        "BEGIN:VCALENDAR\r\n"
+        "BEGIN:VEVENT\r\n"
+        "UID:quoted-cn-event\r\n"
+        "DTSTART:20260711T090000Z\r\n"
+        'ATTENDEE;CN="Doe, John":mailto:doe@example.com\r\n'
+        "END:VEVENT\r\n"
+        "END:VCALENDAR\r\n"
+    )
+    event = parse_vevent(ics_text)
+    assert event is not None
+    assert len(event.attendees) == 1
+    assert event.attendees[0].surface_form == "Doe, John"  # no literal quotes
+
+    known = (
+        RegisterEntrySnapshot(entity_id="ent:doe-john", label="Doe, John", aliases=(), lifecycle="canonical"),
+    )
+    resolved = resolve_attendee_readonly(event.attendees[0].surface_form, known_entries=known)
+    assert isinstance(resolved, AttendeeResolved)
+    assert resolved.entity_id == "ent:doe-john"

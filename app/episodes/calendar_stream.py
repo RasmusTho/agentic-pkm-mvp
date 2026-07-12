@@ -67,9 +67,10 @@ import os
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Final, Mapping, Sequence
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 
@@ -212,12 +213,27 @@ def resolve_calendar_bindings(env: Mapping[str, str] | None = None) -> tuple[Cal
 
 @dataclass(frozen=True)
 class CalendarRawItem:
-    """One raw CalDAV resource: a single event's UID, per-resource ETag
-    (provenance: AC1 "provenance UID+etag"), and its raw VEVENT ICS text."""
+    """One raw CalDAV resource -- or, for a server-expanded recurring
+    series (Review gate round 1, finding 2), ONE OCCURRENCE of it: the
+    event's UID, the underlying resource's ETag (provenance: AC1
+    "provenance UID+etag"; shared across every occurrence of one recurring
+    master, since it is one CalDAV resource), and the raw single-VEVENT ICS
+    text for JUST this occurrence (never the whole multi-occurrence
+    response -- ``parse_vevent`` always parses exactly one VEVENT).
+
+    ``occurrence_key`` is ``None`` for a non-recurring (or non-expanded)
+    resource -- the original ``uid:etag`` identity is untouched. For an
+    expanded recurring occurrence it is a deterministic UTC timestamp
+    (RECURRENCE-ID, falling back to DTSTART) distinguishing this occurrence
+    from its siblings, so each occurrence gets its own signal_id instead of
+    all of them colliding on the shared master uid:etag (finding 2: without
+    this, a recurring master "is returned once ... and contributes exactly
+    once ever")."""
 
     uid: str
     etag: str
     ics_text: str
+    occurrence_key: str | None = None
 
 
 #: A transport is any callable resolving one binding's current raw items.
@@ -230,20 +246,66 @@ _DAV_NS: Final[str] = "DAV:"
 _CALDAV_NS: Final[str] = "urn:ietf:params:xml:ns:caldav"
 _CALDAV_TIMEOUT_SECONDS: Final[float] = 15.0
 
-_CALENDAR_QUERY_BODY: Final[str] = (
-    '<?xml version="1.0" encoding="utf-8" ?>\n'
-    f'<C:calendar-query xmlns:D="{_DAV_NS}" xmlns:C="{_CALDAV_NS}">\n'
-    "  <D:prop>\n"
-    "    <D:getetag/>\n"
-    "    <C:calendar-data/>\n"
-    "  </D:prop>\n"
-    "  <C:filter>\n"
-    '    <C:comp-filter name="VCALENDAR">\n'
-    '      <C:comp-filter name="VEVENT"/>\n'
-    "    </C:comp-filter>\n"
-    "  </C:filter>\n"
-    "</C:calendar-query>\n"
-)
+#: Bounded fetch/expand window (Review gate round 1, finding 3): an
+#: unbounded ``calendar-query`` refetches the entire calendar history every
+#: tick (this adapter has no durable read-position cursor -- see the
+#: ingestion-block comment in ``segmenter.run_segmentation_tick`` -- so it
+#: re-fetches the "current item set" on every poll). A named, single-sourced
+#: window caps that cost AND is what RFC 4791 9.6.5's ``<C:expand>`` requires
+#: (finding 2): recent past covers events segmentation may still be closing
+#: a boundary around; near future covers a normal look-ahead planning
+#: horizon. Documented alongside in
+#: ``docs/EPISODE_RESOLUTION_ENGINE/CALENDAR_STREAM_ADAPTER.md``.
+_CALDAV_TIME_RANGE_PAST: Final[timedelta] = timedelta(days=7)
+_CALDAV_TIME_RANGE_FUTURE: Final[timedelta] = timedelta(days=60)
+
+
+def _ics_utc_stamp(value: datetime) -> str:
+    """Render a datetime as an RFC 5545 UTC ``DATE-TIME`` value
+    (``YYYYMMDDTHHMMSSZ``) -- the form CalDAV ``<C:time-range>``/``<C:expand>``
+    ``start``/``end`` attributes require."""
+    dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _calendar_query_body(*, now: datetime | None = None) -> str:
+    """Build one tick's CalDAV ``calendar-query`` REPORT body.
+
+    Two review-gate findings fixed together here (they share the same
+    bounded window and are inseparable per RFC 4791 9.6.5):
+
+    - finding 3: ``<C:time-range>`` in the filter bounds which VEVENT
+      resources match, so the fetch is capped to
+      ``_CALDAV_TIME_RANGE_PAST``/``_CALDAV_TIME_RANGE_FUTURE`` around
+      ``now`` instead of the whole calendar history.
+    - finding 2: ``<C:expand start end/>`` inside ``<C:calendar-data>``
+      requests server-side recurrence expansion -- WITHOUT it, a recurring
+      master VEVENT is returned once (unexpanded) and, because its
+      signal_id was keyed on the constant uid:etag, never contributes its
+      later occurrences. RFC 4791 requires ``<C:expand>``'s start/end to
+      match the query's bound, hence the shared window.
+    """
+    reference = now if now is not None else datetime.now(timezone.utc)
+    start = _ics_utc_stamp(reference - _CALDAV_TIME_RANGE_PAST)
+    end = _ics_utc_stamp(reference + _CALDAV_TIME_RANGE_FUTURE)
+    return (
+        '<?xml version="1.0" encoding="utf-8" ?>\n'
+        f'<C:calendar-query xmlns:D="{_DAV_NS}" xmlns:C="{_CALDAV_NS}">\n'
+        "  <D:prop>\n"
+        "    <D:getetag/>\n"
+        "    <C:calendar-data>\n"
+        f'      <C:expand start="{start}" end="{end}"/>\n'
+        "    </C:calendar-data>\n"
+        "  </D:prop>\n"
+        "  <C:filter>\n"
+        '    <C:comp-filter name="VCALENDAR">\n'
+        '      <C:comp-filter name="VEVENT">\n'
+        f'        <C:time-range start="{start}" end="{end}"/>\n'
+        "      </C:comp-filter>\n"
+        "    </C:comp-filter>\n"
+        "  </C:filter>\n"
+        "</C:calendar-query>\n"
+    )
 
 
 def _parse_multistatus(xml_text: str) -> list[CalendarRawItem]:
@@ -252,7 +314,15 @@ def _parse_multistatus(xml_text: str) -> list[CalendarRawItem]:
     Never raises on a per-response oddity (a response without calendar-data
     is skipped); raises :class:`CalendarUnreachableError` only when the
     envelope itself is not parseable XML (a malformed response is a
-    reachability failure, not a per-event data problem)."""
+    reachability failure, not a per-event data problem).
+
+    A single ``<C:calendar-data>`` response can carry MULTIPLE VEVENT
+    components when ``<C:expand>`` server-expanded a recurring master
+    (Review gate round 1, finding 2) -- ``_split_vevent_blocks`` fans that
+    out into one standalone single-VEVENT ICS block per occurrence, each
+    becoming its own :class:`CalendarRawItem` with a distinguishing
+    ``occurrence_key`` so distinct occurrences fold as distinct signals
+    instead of colliding on the shared resource uid:etag."""
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as exc:
@@ -276,20 +346,30 @@ def _parse_multistatus(xml_text: str) -> list[CalendarRawItem]:
                 ics_text = data_el.text
         if not ics_text:
             continue
-        event = parse_vevent(ics_text)
-        uid = event.uid if event is not None else href
-        if not uid:
-            continue
-        items.append(CalendarRawItem(uid=uid, etag=etag or uid, ics_text=ics_text))
+        event_blocks = _split_vevent_blocks(ics_text) or [ics_text]
+        is_expanded = len(event_blocks) > 1
+        for block in event_blocks:
+            event = parse_vevent(block)
+            uid = event.uid if event is not None else href
+            if not uid:
+                continue
+            occurrence_key: str | None = None
+            if is_expanded and event is not None:
+                anchor = event.recurrence_id or event.dtstart
+                occurrence_key = _ics_utc_stamp(anchor) if anchor is not None else None
+            items.append(
+                CalendarRawItem(uid=uid, etag=etag or uid, ics_text=block, occurrence_key=occurrence_key)
+            )
     return items
 
 
 def _default_transport(binding: CalendarBinding) -> Sequence[CalendarRawItem]:
     """Production CalDAV REPORT transport: read-only, basic-auth via the
-    app-specific password, bounded 15s timeout. Never logs or echoes
-    ``binding.app_password``. Exercised only via the mac-mini test channel
-    (deferred receipt); this repo's test suite always injects a fake
-    ``transport``."""
+    app-specific password, bounded 15s timeout, bounded time-range +
+    server-side expand (findings 2/3, see :func:`_calendar_query_body`).
+    Never logs or echoes ``binding.app_password``. Exercised only via the
+    mac-mini test channel (deferred receipt); this repo's test suite always
+    injects a fake ``transport``."""
     import httpx
 
     url = binding.base_url.rstrip("/") + "/" + binding.calendar_path.lstrip("/")
@@ -299,7 +379,7 @@ def _default_transport(binding: CalendarBinding) -> Sequence[CalendarRawItem]:
             url,
             auth=(binding.username, binding.app_password),
             headers={"Content-Type": "application/xml; charset=utf-8", "Depth": "1"},
-            content=_CALENDAR_QUERY_BODY.encode("utf-8"),
+            content=_calendar_query_body().encode("utf-8"),
             timeout=_CALDAV_TIMEOUT_SECONDS,
         )
     except httpx.HTTPError as exc:
@@ -374,12 +454,31 @@ class ParsedCalendarEvent:
     dtend: datetime | None
     location: str | None
     attendees: tuple[CalendarAttendee, ...]
+    #: This occurrence's ``RECURRENCE-ID`` (present on every occurrence a
+    #: server-side ``<C:expand>`` emits for a recurring master, per
+    #: occurrence -- Review gate round 1, finding 2). ``None`` for a
+    #: non-recurring event or an unexpanded master.
+    recurrence_id: datetime | None = None
+    #: True when DTSTART or DTEND was an RFC 5545 "floating" local time --
+    #: no ``Z`` suffix AND no resolvable ``TZID`` param, so no fixed UTC
+    #: instant is actually knowable (Review gate round 1, finding 1). The
+    #: caller (``calendar_event_to_signal_contract``) degrades the `time`
+    #: dimension's confidence rather than silently asserting UTC.
+    time_is_floating: bool = False
 
 
 _DT_UTC_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$")
 _DT_LOCAL_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$")
 _DATE_ONLY_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})$")
-_ATTENDEE_CN_RE = re.compile(r"CN=([^;:]+)", re.IGNORECASE)
+_TZID_RE = re.compile(r"TZID=([^;:]+)", re.IGNORECASE)
+#: RFC 5545 CN param: either a DQUOTE-wrapped quoted-string (required when
+#: the name contains a comma/semicolon/colon, e.g. ``CN="Doe, John"``) or a
+#: bare unquoted token. The quoted alternative is tried FIRST and is
+#: non-greedy up to the closing quote, so quoted content is captured whole
+#: (Review gate round 1, finding 4) instead of falling through to the bare
+#: ``[^;:]+`` branch, which would stop at the first embedded ``;``/``:`` and
+#: leave the literal surrounding quotes in the surface form.
+_ATTENDEE_CN_RE = re.compile(r'CN=("[^"]*"|[^;:]+)', re.IGNORECASE)
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -396,26 +495,94 @@ def _unfold_ics_lines(text: str) -> list[str]:
     return lines
 
 
-def _parse_ics_datetime(value: str) -> datetime | None:
-    """Parse an ICS ``DTSTART``/``DTEND`` value: UTC (``Z`` suffix), a bare
-    local datetime, or an all-day ``VALUE=DATE``. No TZID offset table in v1
-    (a local/TZID datetime is treated as UTC-naive-to-UTC, a documented
-    best-effort posture, never a crash) -- ``None`` on anything unparseable,
-    the caller skips the item fail-loud rather than guessing a time."""
+def _split_vevent_blocks(ics_text: str) -> list[str]:
+    """Split a possibly-multi-occurrence ``calendar-data`` payload into one
+    standalone single-VEVENT ICS block per ``BEGIN:VEVENT``/``END:VEVENT``
+    span (Review gate round 1, finding 2: a server-side ``<C:expand>``
+    response for a recurring master carries MULTIPLE VEVENT components in
+    ONE ``calendar-data`` payload, each one occurrence). Each returned block
+    is independently parseable by :func:`parse_vevent`. A response with
+    exactly one VEVENT yields exactly one block, so the non-recurring path
+    is unchanged."""
+    lines = _unfold_ics_lines(ics_text)
+    blocks: list[list[str]] = []
+    current: list[str] | None = None
+    for line in lines:
+        stripped_upper = line.strip().upper()
+        if stripped_upper == "BEGIN:VEVENT":
+            current = [line]
+            continue
+        if current is not None:
+            current.append(line)
+            if stripped_upper == "END:VEVENT":
+                blocks.append(current)
+                current = None
+    return ["BEGIN:VCALENDAR\r\n" + "\r\n".join(block) + "\r\nEND:VCALENDAR\r\n" for block in blocks]
+
+
+def _parse_ics_datetime(value: str, params: str = "") -> tuple[datetime | None, bool]:
+    """Parse an ICS ``DTSTART``/``DTEND``/``RECURRENCE-ID`` value: UTC
+    (``Z`` suffix), a ``TZID=``-qualified local datetime resolved to a real
+    UTC instant via :mod:`zoneinfo`, a genuinely floating (no ``Z``, no
+    resolvable ``TZID``) local datetime, or an all-day ``VALUE=DATE``.
+
+    Returns ``(parsed_value, is_floating)``. ``is_floating`` is True ONLY
+    for the floating-local case (including an unresolvable/unknown TZID,
+    which degrades to floating rather than raising) -- Review gate round 1,
+    finding 1: iCloud writes ``TZID=``-qualified local times
+    (``DTSTART;TZID=Europe/Stockholm:20260711T090000``), not bare UTC-naive
+    locals, for real timed events; treating every non-``Z`` value as UTC
+    silently skewed the `time` dimension by the zone offset. A floating
+    value's UTC-naive-to-UTC rendering is still returned (best-effort,
+    never a crash) but flagged so the caller degrades confidence instead of
+    claiming ``by_construction``.
+
+    ``None`` on anything unparseable -- the caller skips the item fail-loud
+    rather than guessing a time."""
     value = value.strip()
     match = _DT_UTC_RE.match(value)
     if match:
         y, mo, d, h, mi, s = (int(g) for g in match.groups())
-        return datetime(y, mo, d, h, mi, s, tzinfo=timezone.utc)
+        return datetime(y, mo, d, h, mi, s, tzinfo=timezone.utc), False
+
     match = _DT_LOCAL_RE.match(value)
     if match:
         y, mo, d, h, mi, s = (int(g) for g in match.groups())
-        return datetime(y, mo, d, h, mi, s, tzinfo=timezone.utc)
+        tzid_match = _TZID_RE.search(params)
+        if tzid_match:
+            tzid = tzid_match.group(1).strip().strip('"')
+            try:
+                zone = ZoneInfo(tzid)
+            except (ZoneInfoNotFoundError, ValueError, OSError):
+                logger.warning(
+                    "calendar: unresolvable TZID %r on a DTSTART/DTEND/RECURRENCE-ID "
+                    "value -- treating as floating rather than guessing UTC",
+                    tzid,
+                )
+            else:
+                local_dt = datetime(y, mo, d, h, mi, s, tzinfo=zone)
+                return local_dt.astimezone(timezone.utc), False
+        # No TZID (or an unresolvable one): a genuine RFC 5545 "floating"
+        # local time -- no fixed UTC instant is actually knowable.
+        return datetime(y, mo, d, h, mi, s, tzinfo=timezone.utc), True
+
     match = _DATE_ONLY_RE.match(value)
     if match:
         y, mo, d = (int(g) for g in match.groups())
-        return datetime(y, mo, d, tzinfo=timezone.utc)
-    return None
+        return datetime(y, mo, d, tzinfo=timezone.utc), False
+    return None, False
+
+
+def _strip_cn_quotes(surface: str) -> str:
+    """Strip RFC 5545 quoted-string DQUOTEs from a captured ``CN=`` value
+    (Review gate round 1, finding 4): ``CN="Doe, John"`` must resolve to the
+    surface form ``Doe, John``, not the literal ``"Doe, John"`` (which would
+    never exact-match a register label/alias, misclassifying a known
+    attendee as :class:`AttendeeUnresolved`)."""
+    stripped = surface.strip()
+    if len(stripped) >= 2 and stripped.startswith('"') and stripped.endswith('"'):
+        return stripped[1:-1]
+    return stripped
 
 
 def parse_vevent(ics_text: str) -> ParsedCalendarEvent | None:
@@ -429,8 +596,11 @@ def parse_vevent(ics_text: str) -> ParsedCalendarEvent | None:
     summary: str | None = None
     dtstart: datetime | None = None
     dtend: datetime | None = None
+    recurrence_id: datetime | None = None
     location: str | None = None
     attendees: list[CalendarAttendee] = []
+    dtstart_floating = False
+    dtend_floating = False
 
     for line in lines:
         if not line:
@@ -451,14 +621,16 @@ def parse_vevent(ics_text: str) -> ParsedCalendarEvent | None:
         elif name == "SUMMARY":
             summary = value.strip() or None
         elif name == "DTSTART":
-            dtstart = _parse_ics_datetime(value)
+            dtstart, dtstart_floating = _parse_ics_datetime(value, params)
         elif name == "DTEND":
-            dtend = _parse_ics_datetime(value)
+            dtend, dtend_floating = _parse_ics_datetime(value, params)
+        elif name == "RECURRENCE-ID":
+            recurrence_id, _ = _parse_ics_datetime(value, params)
         elif name == "LOCATION":
             location = value.strip() or None
         elif name == "ATTENDEE":
             cn_match = _ATTENDEE_CN_RE.search(params)
-            surface = cn_match.group(1).strip() if cn_match else value.strip()
+            surface = _strip_cn_quotes(cn_match.group(1)) if cn_match else value.strip()
             if surface:
                 attendees.append(CalendarAttendee(surface_form=surface, raw=value.strip()))
 
@@ -471,6 +643,8 @@ def parse_vevent(ics_text: str) -> ParsedCalendarEvent | None:
         dtend=dtend,
         location=location,
         attendees=tuple(attendees),
+        recurrence_id=recurrence_id,
+        time_is_floating=dtstart_floating or dtend_floating,
     )
 
 
@@ -626,9 +800,13 @@ def resolve_attendee_readonly(
 #: medium, goal: medium}"). ``time`` is `by_construction` (DTSTART/DTEND are
 #: exact fields on the event, not inferred); the rest are `heuristic`
 #: (three-state attendee matching, freeform LOCATION text, title-derived
-#: goal proxy).
+#: goal proxy). ``time_floating`` is the degraded confidence used instead of
+#: ``time`` when :attr:`ParsedCalendarEvent.time_is_floating` is set (Review
+#: gate round 1, finding 1): a floating local time has no fixed UTC instant,
+#: so it can never honestly claim ``by_construction``.
 _DIMENSION_CONFIDENCE: Final[dict[str, tuple[float, str]]] = {
     "time": (0.95, "by_construction"),
+    "time_floating": (0.6, "heuristic"),
     "protagonist": (0.6, "heuristic"),
     "space": (0.6, "heuristic"),
     "goal": (0.5, "heuristic"),
@@ -640,6 +818,17 @@ def _iso(value: datetime) -> str:
     return dt.astimezone(timezone.utc).isoformat()
 
 
+def _calendar_signal_id(uid: str, etag: str, occurrence_key: str | None = None) -> str:
+    """The per-signal identity: ``uid:etag`` for a non-recurring (or
+    unexpanded) event, unchanged from v1 -- or ``uid:etag:occurrence_key``
+    for one occurrence of a server-expanded recurring series (Review gate
+    round 1, finding 2), so distinct occurrences fold as distinct signals
+    instead of colliding on the shared master resource's constant
+    uid:etag."""
+    base = f"{uid}:{etag}"
+    return f"{base}:{occurrence_key}" if occurrence_key else base
+
+
 def calendar_event_to_signal_contract(
     *,
     uid: str,
@@ -647,6 +836,7 @@ def calendar_event_to_signal_contract(
     event: ParsedCalendarEvent,
     scope: str,
     emitted_at: datetime | None = None,
+    occurrence_key: str | None = None,
 ) -> SignalContract:
     """Normalize one parsed calendar event into the ERE-01
     :class:`~app.episodes.stream_registry.SignalContract` -- the declared,
@@ -654,12 +844,17 @@ def calendar_event_to_signal_contract(
     the segmentation-internal ``SegmentationSignal`` the tick actually folds
     (that normalization lives in ``segmenter._signal_from_calendar_row``,
     matching the module's docstring "SignalContract ... not a content
-    carrier" split already established by ERE-01/ERE-04)."""
+    carrier" split already established by ERE-01/ERE-04).
+
+    ``occurrence_key`` distinguishes one occurrence of a server-expanded
+    recurring series (see :func:`_calendar_signal_id`); omitted, the
+    signal_id/provenance_ref are exactly the v1 ``uid:etag`` shape."""
     if event.dtstart is None:
         raise ValueError(f"calendar event {uid!r} has no usable DTSTART -- cannot build a SignalContract")
 
     dimensions: dict[str, ConfidenceScore] = {}
-    score, calibration = _DIMENSION_CONFIDENCE["time"]
+    time_key = "time_floating" if event.time_is_floating else "time"
+    score, calibration = _DIMENSION_CONFIDENCE[time_key]
     dimensions["time"] = ConfidenceScore(score=score, calibration=calibration)
     if event.attendees:
         score, calibration = _DIMENSION_CONFIDENCE["protagonist"]
@@ -671,14 +866,15 @@ def calendar_event_to_signal_contract(
         score, calibration = _DIMENSION_CONFIDENCE["goal"]
         dimensions["goal"] = ConfidenceScore(score=score, calibration=calibration)
 
+    signal_id = _calendar_signal_id(uid, etag, occurrence_key)
     return SignalContract(
         stream_id=CALENDAR_STREAM_ID,
-        signal_id=f"{uid}:{etag}",
+        signal_id=signal_id,
         observed_at_start=_iso(event.dtstart),
         observed_at_end=_iso(event.dtend) if event.dtend is not None else None,
         emitted_at=_iso(emitted_at if emitted_at is not None else datetime.now(timezone.utc)),
         dimensions_fed=dimensions,
-        provenance_ref=f"calendar:{uid}:{etag}",
+        provenance_ref=f"calendar:{signal_id}",
         scope_binding=ContextDimensions(scope=scope) if scope else None,
     )
 
