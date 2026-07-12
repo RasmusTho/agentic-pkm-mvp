@@ -71,10 +71,15 @@ class EpisodeCutTerminalError(EpisodeStoreError):
     human's cut, ERE-07 AC3)."""
 
 
-def _cut_snapshot(fields: Mapping[str, Any]) -> dict[str, Any]:
+def cut_snapshot(fields: Mapping[str, Any]) -> dict[str, Any]:
     """The subset of ``fields`` considered "the cut" -- everything a terminal episode's write
-    seam freezes. ``segmentation`` and ``time.closed`` are deliberately excluded (see module
-    docstring)."""
+    seam freezes, and the SINGLE SOURCE OF TRUTH for "what a human owns" (ERE-07). The
+    terminality guard below freezes exactly these fields against machine mutation, and
+    ``app.episodes.recut.compute_fields_hash`` fingerprints exactly these fields for
+    writer-identity detection -- so an engine-only lifecycle relabel (``segmentation``) or an
+    ERE-06 closure flip (``time.closed``), both deliberately EXCLUDED here, can never trip a
+    false re-cut detection (round-1 review Finding 2). Keep the two in lockstep by importing this
+    function, never by re-listing the fields."""
     time_fields = fields.get("time") or {}
     return {
         "title": fields.get("title"),
@@ -174,7 +179,7 @@ def write_episode_note(
     # mutation is rejected here and the note is left byte-for-byte untouched.
     existing_fields = _read_existing_episode_fields(rel_path, vault_root)
     if existing_fields is not None and existing_fields.get("segmentation") in TERMINAL_SEGMENTATIONS:
-        if _cut_snapshot(existing_fields) != _cut_snapshot(fields):
+        if cut_snapshot(existing_fields) != cut_snapshot(fields):
             logger.warning(
                 "episodes.store: rejected machine mutation of terminal cut for episode_id=%s "
                 "(existing segmentation=%s) -- note left untouched; new evidence must become a "
@@ -211,5 +216,6 @@ __all__ = [
     "EpisodeCutTerminalError",
     "EpisodeStoreError",
     "EpisodeWriteResult",
+    "cut_snapshot",
     "write_episode_note",
 ]

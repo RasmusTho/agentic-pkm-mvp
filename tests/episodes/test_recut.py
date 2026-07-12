@@ -97,8 +97,19 @@ def _stub_bindings(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str,
     ``[("reconcile", {...}), ("withdraw", {...}), ...]``."""
     calls: list[tuple[str, dict[str, Any]]] = []
 
-    def _fake_reconcile(episode_id: str, *, scope: str, derived_from, write_guard=None, vault_root=None):
-        calls.append(("reconcile", {"episode_id": episode_id, "scope": scope, "derived_from": list(derived_from)}))
+    def _fake_reconcile(episode_id: str, *, scope: str, start=None, end=None, derived_from, write_guard=None, vault_root=None):
+        calls.append(
+            (
+                "reconcile",
+                {
+                    "episode_id": episode_id,
+                    "scope": scope,
+                    "start": start,
+                    "end": end,
+                    "derived_from": list(derived_from),
+                },
+            )
+        )
         return {"pending": 0, "corrected": 0}
 
     def _fake_withdraw(episode_id: str, *, write_guard=None, vault_root=None):
@@ -165,7 +176,10 @@ def test_operator_edit_detected_as_recut(tmp_path: Path, monkeypatch: pytest.Mon
     # Tick 1: first sight -- adopts the baseline, no re-cut (nothing to diff against yet).
     result_1 = run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 5))
     assert result_1["recut_detected"] == []
-    assert ("reconcile", {"episode_id": episode_id, "scope": "work", "derived_from": ["heimdal.observations:seed"]}) in calls
+    tick1_reconcile = [args for kind, args in calls if kind == "reconcile" and args["episode_id"] == episode_id]
+    assert tick1_reconcile and tick1_reconcile[0]["scope"] == "work"
+    assert tick1_reconcile[0]["derived_from"] == ["heimdal.observations:seed"]
+    assert tick1_reconcile[0]["start"] == _dt(10, 0) and tick1_reconcile[0]["end"] == _dt(11, 0)
 
     # A raw operator edit -- bypasses write_episode_note entirely, exactly like an Obsidian save.
     # Removes a protagonist and widens the end time (spec's own "Concretely" example).
@@ -452,51 +466,89 @@ class _FakeConn:
         return _FakeCursor(self._rows_by_episode, self._executed)
 
 
+def _bindings_fixture(episode_id: str) -> dict[str, list[dict[str, Any]]]:
+    """Active bindings BEFORE a re-cut: a provenance ref (in derived_from), a time-overlap ref
+    whose observed_at is resolvable, and a time-overlap ref whose observed_at is NOT resolvable
+    (a heimdal ref, per `_resolve_artifact_observed_at`'s HEIM-6 limitation)."""
+    return {
+        episode_id: [
+            {"artifact_ref": "heimdal.observations:prov", "episode_id": episode_id, "scope": "work",
+             "basis": BASIS_PROVENANCE, "binding_state": BINDING_STATE_ACTIVE},
+            {"artifact_ref": "vault.activity:overlap", "episode_id": episode_id, "scope": "work",
+             "basis": "time_overlap", "binding_state": BINDING_STATE_ACTIVE},
+            {"artifact_ref": "heimdal.observations:unresolvable", "episode_id": episode_id, "scope": "work",
+             "basis": "time_overlap", "binding_state": BINDING_STATE_ACTIVE},
+        ]
+    }
+
+
 def test_recut_reconciles_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Finding 1 (CRITICAL): reconcile PRESERVES valid time-overlap bindings and corrects ONLY the
+    ones a re-cut genuinely invalidated -- it must never unbind a binding merely because it is not
+    provenance-based."""
     from app.episodes.assignment import reconcile_episode_bindings, withdraw_episode_bindings
 
     episode_id = "ep-44444444-1111-4111-8111-111111111111"
-    # Existing active bindings BEFORE the re-cut: one still supported by the new (narrowed)
-    # derived_from, one no longer supported (must be corrected/unbound).
-    rows_by_episode = {
-        episode_id: [
-            {
-                "artifact_ref": "heimdal.observations:kept",
-                "episode_id": episode_id,
-                "scope": "work",
-                "basis": BASIS_PROVENANCE,
-                "binding_state": BINDING_STATE_ACTIVE,
-            },
-            {
-                "artifact_ref": "heimdal.observations:dropped",
-                "episode_id": episode_id,
-                "scope": "work",
-                "basis": BASIS_PROVENANCE,
-                "binding_state": BINDING_STATE_ACTIVE,
-            },
-        ]
-    }
+
+    # `vault.activity:overlap` observed at 10:30; the heimdal ref is deliberately unresolvable.
+    def _fake_resolver(artifact_ref, *, vault_root=None):
+        return _dt(10, 30) if artifact_ref == "vault.activity:overlap" else None
+
+    monkeypatch.setattr(assignment_module, "_resolve_artifact_observed_at", _fake_resolver)
+
+    # --- Case A: a re-cut that does NOT change bounds must leave the valid time-overlap binding
+    #     intact (and the unresolvable one preserved) -- zero corrections. ---
     executed: list[tuple[str, tuple[Any, ...]]] = []
-    monkeypatch.setattr(assignment_module, "conn_rw", lambda *a, **k: _FakeConn(rows_by_episode, executed))
-
-    result = reconcile_episode_bindings(
-        episode_id,
-        scope="work",
-        derived_from=["heimdal.observations:kept"],  # "dropped" is no longer in the re-cut note
-        write_guard=_allow_guard(),
+    monkeypatch.setattr(
+        assignment_module, "conn_rw", lambda *a, **k: _FakeConn(_bindings_fixture(episode_id), executed)
     )
-    assert result["corrected"] == 1
+    result_same = reconcile_episode_bindings(
+        episode_id, scope="work", start=_dt(10, 0), end=_dt(11, 0),
+        derived_from=["heimdal.observations:prov"], write_guard=_allow_guard(),
+    )
+    assert result_same["corrected"] == 0, "an unchanged-bounds re-cut must not destroy a valid time-overlap binding"
+    assert not [sql for sql, _ in executed if sql.strip().startswith("UPDATE")]
 
+    # --- Case B: a re-cut that SHRINKS bounds so `vault.activity:overlap` (10:30) falls outside
+    #     [10:00, 10:15] DOES correct that binding -- but the provenance and the unresolvable
+    #     time-overlap bindings survive. ---
+    executed.clear()
+    monkeypatch.setattr(
+        assignment_module, "conn_rw", lambda *a, **k: _FakeConn(_bindings_fixture(episode_id), executed)
+    )
+    result_shrunk = reconcile_episode_bindings(
+        episode_id, scope="work", start=_dt(10, 0), end=_dt(10, 15),
+        derived_from=["heimdal.observations:prov"], write_guard=_allow_guard(),
+    )
+    assert result_shrunk["corrected"] == 1
     update_calls = [(sql, params) for sql, params in executed if sql.strip().startswith("UPDATE")]
     assert len(update_calls) == 1
     _sql, params = update_calls[0]
-    assert "heimdal.observations:dropped" in params
-    assert episode_id in params
+    assert "vault.activity:overlap" in params and episode_id in params
+    # The unresolvable heimdal time-overlap ref was NOT corrected (preserved, HEIM-6 honest).
+    assert "heimdal.observations:unresolvable" not in params
 
-    # Merge-deletion side: the note is gone entirely -- every active binding withdrawn.
+    # --- Case C: a re-cut that drops a ref from derived_from corrects that provenance binding. ---
     executed.clear()
-    result_2 = withdraw_episode_bindings(episode_id, write_guard=_allow_guard())
-    assert result_2["corrected"] == 2
+    monkeypatch.setattr(
+        assignment_module, "conn_rw", lambda *a, **k: _FakeConn(_bindings_fixture(episode_id), executed)
+    )
+    result_dropped = reconcile_episode_bindings(
+        episode_id, scope="work", start=_dt(10, 0), end=_dt(11, 0),
+        derived_from=[],  # "prov" removed
+        write_guard=_allow_guard(),
+    )
+    assert result_dropped["corrected"] == 1
+    dropped_update = [(sql, params) for sql, params in executed if sql.strip().startswith("UPDATE")][0]
+    assert "heimdal.observations:prov" in dropped_update[1]
+
+    # --- Merge-deletion side: the note is gone entirely -- every active binding withdrawn. ---
+    executed.clear()
+    monkeypatch.setattr(
+        assignment_module, "conn_rw", lambda *a, **k: _FakeConn(_bindings_fixture(episode_id), executed)
+    )
+    result_withdraw = withdraw_episode_bindings(episode_id, write_guard=_allow_guard())
+    assert result_withdraw["corrected"] == 3
 
 
 def test_recut_tick_wires_reconciliation_on_detected_recut(
@@ -562,12 +614,66 @@ def test_silence_is_acceptance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_silence_acceptance_content_hash_helper_is_stable(tmp_path: Path) -> None:
-    """Sanity check on the writer-identity primitive both AC1 and AC5 depend on: identical
-    fields hash identically; a changed field hashes differently."""
+    """Sanity check on the writer-identity primitive both AC1 and AC5 depend on: identical CUT
+    fields hash identically; a changed CUT field hashes differently."""
     fields = {"segmentation": "proposed", "title": "x", "time": {"start": "t", "closed": False}}
     assert compute_fields_hash(fields) == compute_fields_hash(dict(fields))
     changed = dict(fields, title="y")
     assert compute_fields_hash(fields) != compute_fields_hash(changed)
+
+
+def test_content_hash_excludes_engine_lifecycle_fields(tmp_path: Path) -> None:
+    """Finding 2: the writer-identity hash must cover ONLY the human-owned cut. An engine-only
+    lifecycle write -- a `segmentation` relabel or an ERE-06 `time.closed` flip -- must NOT change
+    the fingerprint, otherwise a non-atomic write+set_state could manufacture a false re-cut."""
+    base = {
+        "segmentation": "proposed", "title": "x", "scope": "work",
+        "time": {"start": "2026-07-11T10:00:00+00:00", "end": "2026-07-11T11:00:00+00:00", "closed": False},
+        "protagonists": ["p-1"], "goal": ["g-1"], "derived_from": ["heimdal.observations:seed"],
+    }
+    relabeled = dict(base, segmentation="accepted")
+    closed_flip = dict(base, time={**base["time"], "closed": True})
+    assert compute_fields_hash(base) == compute_fields_hash(relabeled)
+    assert compute_fields_hash(base) == compute_fields_hash(closed_flip)
+    # A real cut edit (protagonist removed) still changes the fingerprint.
+    cut_edit = dict(base, protagonists=[])
+    assert compute_fields_hash(base) != compute_fields_hash(cut_edit)
+
+
+def test_non_atomic_lifecycle_write_does_not_manufacture_false_recut(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 2 (CONFIRMED): the accept-by-silence write and its baseline `set_state` are
+    non-atomic. Simulate the note reaching disk as `accepted` while the tracked baseline still
+    records the PRE-accept `proposed` state (set_state having failed). The next tick must NOT
+    report a re-cut and must NOT relabel accepted->re-cut -- and must self-heal the stale baseline."""
+    vault_root = tmp_path / "vault"
+    _stub_bindings(monkeypatch)
+    fake_state = _install_fake_engine_state(monkeypatch)
+
+    episode_id = "ep-fa11ed00-1111-4111-8111-111111111111"
+    # Baseline recorded while the note was still `proposed` (this is what set_state persisted
+    # BEFORE the accept write).
+    _write_initial(vault_root, episode_id=episode_id, segmentation="proposed")
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 0))
+    baseline_key = f"episode_recut_state:{episode_id}"
+    assert fake_state.all_state_with_prefix("episode_recut_state:")[baseline_key]["segmentation"] == "proposed"
+
+    # The engine's accept write reaches disk, but its set_state baseline update is LOST: mutate the
+    # note to `accepted` directly (bypassing recut's own bookkeeping) to model that exact torn state.
+    _edit_note_directly(vault_root, episode_id, segmentation="accepted")
+
+    # Next tick: the CUT is unchanged (accept touched only `segmentation`, excluded from the hash),
+    # so this must NOT be detected as a re-cut, and the note must stay `accepted`.
+    result = run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 5))
+    assert result["recut_detected"] == []
+    assert result["accepted"] == []
+
+    fields = parse_episode_note((vault_root / episode_note_rel_path(episode_id)).read_text(encoding="utf-8"))
+    assert fields["segmentation"] == "accepted", "the engine must never relabel an accepted note back to re-cut"
+
+    # Self-heal: the stale baseline label was refreshed to the on-disk truth.
+    assert fake_state.all_state_with_prefix("episode_recut_state:")[baseline_key]["segmentation"] == "accepted"
 
 
 # ---------------------------------------------------------------------------

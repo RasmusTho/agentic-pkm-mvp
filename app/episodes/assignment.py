@@ -837,42 +837,136 @@ def commit_assignment_diff(
 # ---------------------------------------------------------------------------
 
 
+def _resolve_artifact_observed_at(artifact_ref: str, *, vault_root: Path | str | None) -> datetime | None:
+    """Best-effort recovery of an artifact's ``observed_at`` for a time-overlap RE-VERIFICATION
+    (ERE-07 reconciliation). Returns ``None`` -- meaning "cannot re-verify, so PRESERVE the
+    binding, never destroy it" -- whenever the instant is not cheaply recoverable.
+
+    Only ``vault.activity:<outbox_row_id>`` refs resolve today: the outbox row's payload carries
+    the watcher-observed ``mtime`` (the SAME observation time
+    ``app.episodes.segmenter._signal_from_vault_activity_row`` folds). A ``heimdal.observations:<id>``
+    ref is NOT cheaply resolvable by id (the append-only observation log is keyed by sequence, not
+    observation_id) -- so it returns ``None`` and its time-overlap binding is preserved here and
+    left to the normal segmentation/assignment tick's own bounds-correction over live signals
+    (HEIM-6 honest: never fabricate an instant this function does not actually have). ``vault_root``
+    ``None`` short-circuits to ``None`` (ledger-only callers)."""
+    if not vault_root or not artifact_ref.startswith(_VAULT_ACTIVITY_PREFIX):
+        return None
+    row_id = artifact_ref[len(_VAULT_ACTIVITY_PREFIX) :]
+    if not row_id:
+        return None
+    try:
+        with conn_rw() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT payload FROM outbox WHERE id = %s::uuid", (row_id,))
+                row = cur.fetchone()
+    except Exception:
+        return None
+    if row is None:
+        return None
+    payload = row["payload"] if isinstance(row, dict) else row[0]
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    mtime = (payload or {}).get("mtime")
+    if isinstance(mtime, bool) or mtime is None:
+        return None
+    try:
+        if isinstance(mtime, (int, float)):
+            seconds = float(mtime)
+        else:
+            text = str(mtime).strip()
+            try:
+                seconds = float(text)
+            except ValueError:
+                dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+                return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        if seconds <= 0:
+            return None
+        return datetime.fromtimestamp(seconds, tz=timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
 def reconcile_episode_bindings(
     episode_id: str,
     *,
     scope: str,
+    start: datetime,
+    end: datetime | None,
     derived_from: Iterable[str],
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     vault_root: Path | str | None = None,
 ) -> dict[str, int]:
     """ERE-07 binding reconciliation for a re-cut or newly-adopted episode note.
 
-    Recomputes exactly the PROVENANCE-anchored bindings ``derived_from`` (the episode's
-    CURRENT, post-edit set) supports, and lets :func:`diff_assignments` correct (unbind) every
-    other existing active binding for ``episode_id`` -- the ERE-05 correction path
-    (:func:`diff_assignments` / :func:`commit_assignment_diff`), reused verbatim.
+    PRESERVES every still-valid binding and corrects ONLY the ones the re-cut genuinely
+    invalidated -- the ERE-05 correction path (:func:`diff_assignments` /
+    :func:`commit_assignment_diff`), reused verbatim. It recomputes the CURRENT correct binding
+    set for the episode against its (post-edit) bounds+scope via :func:`compute_assignments`, so
+    BOTH provenance AND still-in-bounds time-overlap bindings are re-supplied to
+    :func:`diff_assignments` and therefore survive (a re-tick of an unchanged, still-valid binding
+    is a no-op). Only a binding whose artifact is now out-of-bounds / wrong-scope produces no
+    current decision and is corrected.
 
-    Deliberately provenance-only: this function is handed only the episode's current fields, not
-    the original artifact ``observed_at`` instants the weaker :data:`BASIS_TIME_OVERLAP` basis
-    would need to re-verify honestly (HEIM-6 -- never fabricate a claim from data not actually
-    available here). A time-overlap binding invalidated by a re-cut is therefore corrected
-    (unbound) rather than re-derived; a still-genuinely-in-bounds artifact is re-bound on a future
-    normal tick from live signals, same as any other artifact. Provenance-anchored bindings (the
-    strong, ``derived_from``-literal claim) are the only ones this function can and does
-    re-affirm with integrity.
+    Round-1 review Finding 1 (CRITICAL): the prior implementation re-supplied ONLY
+    provenance decisions, so every existing time-overlap binding looked unsupported to
+    :func:`diff_assignments` and was destroyed on every reconcile -- and because
+    ``app.episodes.recut.run_recut_tick`` runs immediately after segmentation in the same
+    ``episodes tick``, a freshly-proposed episode's brand-new time-overlap bindings were wiped in
+    the SAME tick. This version never unbinds a binding merely because it is not provenance-based.
+
+    Reconstruction of the candidate set:
+
+    - Every current ``derived_from`` ref becomes a PROVENANCE candidate (``compute_assignments``
+      matches provenance by plain membership, independent of ``observed_at`` -- the stand-in
+      instant is irrelevant on that branch).
+    - Every existing ACTIVE time-overlap binding (not already covered by ``derived_from``) is
+      re-verified against the current bounds: its artifact's ``observed_at`` is recovered
+      best-effort (:func:`_resolve_artifact_observed_at`). Resolvable + concrete ``end`` present ->
+      fed through ``compute_assignments`` (kept iff still in ``[start, end]`` and same scope,
+      corrected otherwise). Unresolvable, or a note without a concrete ``end`` -> PRESERVED
+      (re-supplied unchanged) rather than destroyed; those fall back to the normal tick's own
+      bounds-correction over live signals (HEIM-6 honest -- never destroy a binding this function
+      cannot prove invalid).
     """
     existing = read_existing_bindings_for_episodes([episode_id])
     derived_from_set = {ref for ref in derived_from if ref}
-    decisions = [
-        AssignmentDecision(
-            artifact_ref=artifact_ref,
-            episode_id=episode_id,
-            scope=scope,
-            basis=BASIS_PROVENANCE,
-            confidence=PROVENANCE_CONFIDENCE,
-        )
-        for artifact_ref in sorted(derived_from_set)
+    episode = EpisodeBoundsRecord(
+        episode_id=episode_id, scope=scope, start=start, end=end, derived_from=tuple(sorted(derived_from_set))
+    )
+
+    candidates: list[ArtifactCandidate] = [
+        ArtifactCandidate(artifact_ref=ref, scope=scope, observed_at=start) for ref in sorted(derived_from_set)
     ]
+    preserved: list[AssignmentDecision] = []
+    for (artifact_ref, ep_id), row in existing.items():
+        if ep_id != episode_id or row.get("binding_state") != BINDING_STATE_ACTIVE:
+            continue
+        if artifact_ref in derived_from_set:
+            # Covered by the provenance candidate above -- never also preserve/re-verify it as
+            # time-overlap (avoids two conflicting decisions for one (artifact, episode) key).
+            continue
+        if row.get("basis") != BASIS_TIME_OVERLAP:
+            continue
+        row_scope = str(row.get("scope") or scope)
+        observed_at = _resolve_artifact_observed_at(artifact_ref, vault_root=vault_root)
+        if end is None or observed_at is None:
+            # Cannot re-verify bounds -> preserve the binding rather than destroy it.
+            preserved.append(
+                AssignmentDecision(
+                    artifact_ref=artifact_ref,
+                    episode_id=episode_id,
+                    scope=row_scope,
+                    basis=BASIS_TIME_OVERLAP,
+                    confidence=TIME_OVERLAP_CONFIDENCE,
+                )
+            )
+        else:
+            candidates.append(
+                ArtifactCandidate(artifact_ref=artifact_ref, scope=row_scope, observed_at=observed_at)
+            )
+
+    decisions = compute_assignments(candidates, [episode]) + preserved
     to_insert, to_correct = diff_assignments(existing, decisions)
     return commit_assignment_diff(to_insert, to_correct, write_guard=write_guard, vault_root=vault_root)
 

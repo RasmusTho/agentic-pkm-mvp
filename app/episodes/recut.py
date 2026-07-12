@@ -66,7 +66,7 @@ from app.episodes import engine_state
 from app.episodes.assignment import reconcile_episode_bindings, withdraw_episode_bindings
 from app.episodes.notes import EPISODE_NOTES_DIR, parse_episode_note
 from app.episodes.schema import EpisodeSchemaValidationError, validate_episode_note_fields
-from app.episodes.store import write_episode_note
+from app.episodes.store import cut_snapshot, write_episode_note
 from app.vault.manager import iter_vault_markdown_files
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
@@ -112,22 +112,36 @@ def _parse_dt(value: Any) -> datetime:
 
 
 def compute_fields_hash(fields: Mapping[str, Any]) -> str:
-    """Canonical content fingerprint of an episode note's parsed fields.
+    """Writer-identity fingerprint of an episode note: the hash of ONLY its CUT fields
+    (:func:`app.episodes.store.cut_snapshot` -- title/time.start/time.end/space/protagonists/goal/
+    causation/parent_episode/derived_from), the exact set store.py's terminality guard freezes.
 
-    Hashes the FULL parsed fields dict (not just the cut) -- the note as a whole is the re-cut
-    surface (spec point 1), so any external change to it (including a hand-edited ``time.closed``,
-    which the write-seam terminality guard itself still permits for ERE-06) is a real divergence
-    from the engine's own last-recorded write worth tracking, even though this module only ever
-    RELABELS ``segmentation`` in response. Canonicalized via ``sort_keys`` so key-order alone
-    (a round-trip artifact of YAML dump/load) can never produce a false-positive divergence.
+    Round-1 review Finding 2 (CONFIRMED): the engine's own lifecycle writes -- an accept-by-silence
+    or re-cut relabel (``segmentation``) and an ERE-06 closure flip (``time.closed``) -- are
+    DELIBERATELY EXCLUDED. Were they hashed, a non-atomic write+``set_state`` (note written, baseline
+    record fails) would leave the on-disk ``segmentation`` ahead of the tracked baseline, and the
+    next tick would mis-read that engine-authored label change as a human re-cut and relabel
+    ``accepted -> re-cut`` with no human involved. Hashing only the human-owned cut means an
+    engine relabel never changes the fingerprint, so a missed baseline write can never manufacture a
+    false re-cut. Canonicalized via ``sort_keys`` so key-order alone (a YAML round-trip artifact)
+    never produces a false-positive divergence.
     """
-    return hashlib.sha256(json.dumps(fields, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        json.dumps(cut_snapshot(fields), sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
 
 
 @dataclass(frozen=True)
 class _RecutState:
     """This module's own record of the last state it either wrote or observed for one
-    episode_id -- the writer-identity baseline AC1 diffs against (see module docstring)."""
+    episode_id -- the writer-identity baseline AC1 diffs against (see module docstring).
+
+    ``content_hash`` is the CUT-only fingerprint (:func:`compute_fields_hash`). ``segmentation``
+    is the lifecycle label as of that baseline; it is READ back by the self-heal in
+    :func:`run_recut_tick` (round-1 review Finding 2/3): when the cut hash matches but this
+    recorded label lags the on-disk one -- the signature of an engine lifecycle write whose
+    ``set_state`` baseline record failed -- the baseline is refreshed to disk WITHOUT reporting a
+    re-cut. ``first_seen_at`` is the acceptance-by-silence aging clock."""
 
     content_hash: str
     segmentation: str
@@ -174,6 +188,17 @@ def _forget_baseline(episode_id: str) -> None:
 # ---------------------------------------------------------------------------
 # Vault scan
 # ---------------------------------------------------------------------------
+
+
+def _episode_bounds(fields: Mapping[str, Any]) -> tuple[datetime, datetime | None]:
+    """Parse a note's ``time.start`` / ``time.end`` into instants for binding reconciliation.
+    A schema-valid episode note always carries ``time.start``; ``time.end`` may be absent (an
+    open episode) -> ``None``, which reconciliation treats as "cannot bounds-check, preserve"."""
+    time_fields = fields.get("time") or {}
+    start = _parse_dt(time_fields["start"])
+    end_raw = time_fields.get("end")
+    end = _parse_dt(end_raw) if end_raw else None
+    return start, end
 
 
 def _scan_episode_notes(vault_root: Path) -> dict[str, dict[str, Any]]:
@@ -273,35 +298,46 @@ def run_recut_tick(
         state = tracked.get(episode_id)
         segmentation = str(fields.get("segmentation"))
 
+        def _reconcile(current_fields: Mapping[str, Any]) -> None:
+            nonlocal bindings_pending, bindings_corrected
+            start, end = _episode_bounds(current_fields)
+            result = reconcile_episode_bindings(
+                episode_id,
+                scope=current_fields["scope"],
+                start=start,
+                end=end,
+                derived_from=current_fields.get("derived_from") or [],
+                write_guard=write_guard,
+                vault_root=root,
+            )
+            bindings_pending += result.get("pending", 0)
+            bindings_corrected += result.get("corrected", 0)
+
         if state is None:
             # First sight: either a note the engine itself just wrote earlier this same tick
             # invocation (no prior baseline recorded yet) or an entirely human-authored note
             # (e.g. a split sibling). No prior engine-recorded state exists to diff against, so
             # there is nothing to judge as a re-cut here -- adopt it as the new baseline (AC1
             # writer-identity: a note never seen before has no engine writer identity to
-            # contradict) and reconcile whatever bindings its own derived_from supports (AC4,
-            # also the split/merge "re-bound to the sibling" case, AC6).
+            # contradict; and an on-disk TERMINAL note with an absent baseline is likewise NOT a
+            # re-cut -- the terminality guard already froze its cut, round-1 Finding 2 self-heal)
+            # and reconcile whatever bindings its own derived_from + bounds support (AC4, also the
+            # split/merge "re-bound to the sibling" case, AC6).
             _record_baseline(episode_id, fields, first_seen_at=moment)
-            result = reconcile_episode_bindings(
-                episode_id,
-                scope=fields["scope"],
-                derived_from=fields.get("derived_from") or [],
-                write_guard=write_guard,
-                vault_root=root,
-            )
-            bindings_pending += result.get("pending", 0)
-            bindings_corrected += result.get("corrected", 0)
+            _reconcile(fields)
             continue
 
         current_hash = compute_fields_hash(fields)
         if current_hash != state.content_hash:
             # Writer-identity by elimination (AC1, see module docstring point 1): the engine is
             # the sole known machine writer of episode notes and always re-baselines on its own
-            # successful writes, so a divergence from the tracked baseline is, by construction,
-            # not engine-authored. Reported as detected regardless of whether the segmentation
-            # LABEL itself still needs to change -- a further hand-edit of an already-`re-cut`
-            # note (e.g. a merge widening bounds after an earlier split) is still a real re-cut
-            # event worth reconciling bindings for, even though the label was already terminal.
+            # successful writes, and the fingerprint covers ONLY the human-owned CUT (never the
+            # engine's own segmentation/closed lifecycle writes, Finding 2) -- so a divergence is,
+            # by construction, a human edit of the cut. Reported as detected regardless of whether
+            # the segmentation LABEL itself still needs to change -- a further hand-edit of an
+            # already-`re-cut` note (e.g. a merge widening bounds after an earlier split) is still
+            # a real re-cut event worth reconciling bindings for, even though the label was already
+            # terminal.
             recut_detected.append(episode_id)
             if segmentation != SEGMENTATION_RECUT:
                 fields = _write_relabeled(
@@ -317,19 +353,29 @@ def run_recut_tick(
                     "recut: further operator edit detected for already-re-cut episode %s", episode_id
                 )
             _record_baseline(episode_id, fields, first_seen_at=moment)
-            result = reconcile_episode_bindings(
-                episode_id,
-                scope=fields["scope"],
-                derived_from=fields.get("derived_from") or [],
-                write_guard=write_guard,
-                vault_root=root,
-            )
-            bindings_pending += result.get("pending", 0)
-            bindings_corrected += result.get("corrected", 0)
+            _reconcile(fields)
             continue
 
-        # Unchanged since the engine's own last write: acceptance-by-silence (AC5) applies only
-        # to a still-`proposed` episode whose baseline has aged past the quiet window.
+        # Cut unchanged since the engine's own last recorded write.
+        if state.segmentation != segmentation:
+            # Self-heal (round-1 review Finding 2/3): the tracked baseline's lifecycle label lags
+            # the on-disk one while the CUT hash matches -- the exact signature of a non-atomic
+            # engine lifecycle write (note written, then `set_state` failed), NOT a human re-cut.
+            # Refresh the baseline to the on-disk truth without relabeling or reporting a re-cut,
+            # preserving the acceptance-by-silence aging clock. This makes writer-identity
+            # detection self-correcting: a missed baseline write can never manufacture a false
+            # re-cut on a later tick.
+            _record_baseline(episode_id, fields, first_seen_at=state.first_seen_at)
+            logger.info(
+                "recut: self-healed stale baseline label for episode %s (baseline=%s, on-disk=%s)",
+                episode_id,
+                state.segmentation,
+                segmentation,
+            )
+            continue
+
+        # Acceptance-by-silence (AC5) applies only to a still-`proposed` episode whose baseline
+        # has aged past the quiet window.
         if segmentation == SEGMENTATION_PROPOSED and (moment - state.first_seen_at) >= _QUIET_WINDOW:
             new_fields = _write_relabeled(
                 episode_id,
