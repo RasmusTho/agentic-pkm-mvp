@@ -1,4 +1,4 @@
-State: Specification directory — proposed capability; no new runtime behavior is claimed.
+State: Specification directory (parent feature issue #3547; first child #3548; no shipped behavior is claimed).
 Doc role: Feature specification
 Authority: Defines a future, read-only personal-decision reflection capability. Subordinate to `docs/DECISION_CALIBRATION/README.md` for outcome-receipt truth and to context-admission contracts for retrieval authority.
 Owner: Product / decision support
@@ -35,7 +35,7 @@ The capability needs a later packet-surface task and adversarial evaluation befo
 
 ## Relationship to GitHub issues
 
-The parent feature and first child issue will be filed after this specification is merged. The parent remains a validation hub while later packet work is gated.
+Parent feature issue [#3547](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3547) is the validation hub and remains `agent:blocked` while child [#3548](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3548) proves the admission seam. See [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md).
 
 ## Related docs
 

@@ -103,6 +103,15 @@ output schema, model identity)`. The registry is **open by design** — the plat
 by adding extractors, not by changing the pipeline. Adding one MUST NOT require touching this
 contract, other extractors, or any source plugin.
 
+The declared input content type is **advisory-only by design**: `ExtractorSpec.input_content_type`
+documents which normalized content type an extractor consumes, but the registry does not validate
+it against the normalized payload. The current `normalized` shape (`NormalizedTranscript`) carries
+no content-type discriminator to check it against, and only one normalized shape (transcripts)
+exists today, so there is nothing to mismatch. Each extractor's own `run()` remains the fail-loud
+boundary for a payload it cannot use. Enforcement is deferred, not accidental: revisit this once a
+second normalized content type exists or pipeline wiring (KA-05 #2800 / KA-06 #2801) needs a
+registry-level check.
+
 Initial worked examples (chosen to prove the contract across output shapes — **examples, not a
 definitive list**):
 

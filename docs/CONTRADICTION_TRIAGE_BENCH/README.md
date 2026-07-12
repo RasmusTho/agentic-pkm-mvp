@@ -1,4 +1,4 @@
-State: Specification directory — proposed capability; no new runtime behavior is claimed.
+State: Specification directory (parent feature issue #3543; first child #3544; no shipped behavior is claimed).
 Doc role: Feature specification
 Authority: Defines the future read-only contradiction-triage surface. Subordinate to `docs/MIMER_CAPABILITY_HARDENING/GRADUATED_CURATION.md` for the shipped contradiction-pass harness and to `docs/CONCEPTS/CONTEXT_ADMISSIBILITY_CONTRACT.md` for scope admission.
 Owner: Product / architecture
@@ -37,7 +37,7 @@ The capability can be promoted only after the adapter proves: current-scope cita
 
 ## Relationship to GitHub issues
 
-The parent feature issue and the first implementation issue will be created after this specification is merged. The parent issue is the validation hub; the first task is the only immediate pickup candidate.
+Parent feature issue [#3543](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3543) is the validation hub and remains `agent:blocked` while child [#3544](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3544) delivers the first task. See [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md).
 
 ## Related docs
 
