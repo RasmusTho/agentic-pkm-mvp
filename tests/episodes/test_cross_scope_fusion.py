@@ -31,12 +31,14 @@ from pathlib import Path
 
 import pytest
 
+from app.episodes import assignment as assignment_mod
 from app.episodes import segmenter
 from app.episodes.assignment import (
     ArtifactCandidate,
     BASIS_PROVENANCE,
     EpisodeBoundsRecord,
     compute_assignments,
+    reconcile_episode_bindings,
 )
 from app.episodes.closure_decay import (
     CLOSURE_DECAY_STEP_DOWN_FACTOR,
@@ -285,6 +287,99 @@ def test_assignment_never_crosses_scope_unflowed() -> None:
         derived_from=("vault.activity:x1",),
     )
     assert len(compute_assignments([artifact], [same_scope_episode])) == 1
+
+
+# ---------------------------------------------------------------------------
+# AC4 (Finding 1, CRITICAL): the ERE-07 recut reconcile path never rebinds a foreign-scope
+# provenance derived_from ref without a flow -- the gate is consulted with the ref's TRUE scope.
+# ---------------------------------------------------------------------------
+
+
+def _capture_reconcile(monkeypatch: pytest.MonkeyPatch, *, foreign_scope: str):
+    """Drive reconcile_episode_bindings without Postgres: stub the ledger read/commit and force the
+    derived_from ref to resolve to a FOREIGN scope, capturing what would be committed."""
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        assignment_mod, "read_existing_bindings_for_episodes", lambda ids: {}
+    )
+    # The ref resolves to a foreign scope (as a tampered/foreign vault.activity ref would).
+    monkeypatch.setattr(
+        assignment_mod, "_resolve_artifact_scope", lambda ref, *, vault_root: foreign_scope
+    )
+
+    def _fake_commit(to_insert, to_correct, *, write_guard=None, vault_root=None):
+        captured["to_insert"] = list(to_insert)
+        captured["to_correct"] = list(to_correct)
+        return {"pending": len(to_insert), "corrected": len(to_correct)}
+
+    monkeypatch.setattr(assignment_mod, "commit_assignment_diff", _fake_commit)
+    return captured
+
+
+def test_reconcile_provenance_never_crosses_scope_unflowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A foreign-scope artifact_ref injected into a work episode's derived_from (human/sync edit).
+    foreign_ref = "vault.activity:private-row-1"
+    captured = _capture_reconcile(monkeypatch, foreign_scope=_PRIVATE)
+
+    reconcile_episode_bindings(
+        "ep-00000000-0000-4000-8000-0000000000aa",
+        scope=_WORK,
+        start=_dt(0),
+        end=_dt(30),
+        derived_from=[foreign_ref],
+        vault_root="/vault",  # non-None so the scope resolver path is taken
+        flow_provider=None,  # production: deny-by-default
+    )
+    # DENIED: the foreign provenance ref earns NO binding -- no episode_ref would be written into the
+    # foreign artifact's bundle (the exact leak Finding 1 identified).
+    assert captured["to_insert"] == []
+    assert captured["to_correct"] == []
+
+    # WITH an explicit flow admitting episode_fuse (foreign -> episode scope), the binding is allowed.
+    captured2 = _capture_reconcile(monkeypatch, foreign_scope=_PRIVATE)
+    reconcile_episode_bindings(
+        "ep-00000000-0000-4000-8000-0000000000aa",
+        scope=_WORK,
+        start=_dt(0),
+        end=_dt(30),
+        derived_from=[foreign_ref],
+        vault_root="/vault",
+        flow_provider=_flow_for(_PRIVATE, _WORK),
+    )
+    inserted = captured2["to_insert"]
+    assert len(inserted) == 1
+    assert inserted[0].artifact_ref == foreign_ref
+    assert inserted[0].basis == BASIS_PROVENANCE
+
+
+# ---------------------------------------------------------------------------
+# Finding 3: the fused episode id is DETERMINISTIC -- a retry writes no duplicate note/receipt.
+# ---------------------------------------------------------------------------
+
+
+def test_fused_emission_is_idempotent_on_retry(tmp_path: Path) -> None:
+    work = _segment(scope=_WORK, start_min=0, end_min=30, provenance="vault.activity:w1")
+    private = _segment(scope=_PRIVATE, start_min=10, end_min=40, provenance="heimdal.observations:p1")
+    provider = _flow_for(_WORK, _PRIVATE)
+
+    first = segmenter._emit_proposals_with_fusion_gate(
+        [work, private], vault_root=tmp_path, write_guard=_allow_guard(), flow_provider=provider
+    )
+    assert len(first["fused"]) == 1
+    fused_id = first["fused"][0]
+
+    # Simulate a crash/retry: the SAME segments re-run. Deterministic id -> both the note and the
+    # receipt are recognized as already written -> no duplicate.
+    second = segmenter._emit_proposals_with_fusion_gate(
+        [work, private], vault_root=tmp_path, write_guard=_allow_guard(), flow_provider=provider
+    )
+    assert second["fused"] == []  # nothing re-emitted
+
+    notes = list((tmp_path / "episodes").glob("ep-*.md"))
+    receipts = list((tmp_path / "episodes" / "receipts").glob("*.md"))
+    assert len(notes) == 1 and notes[0].name == f"{fused_id}.md"
+    assert len(receipts) == 1 and receipts[0].name == f"{fused_id}.md"
 
 
 # ---------------------------------------------------------------------------

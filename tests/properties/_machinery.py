@@ -743,7 +743,7 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "this census's own directly-related-repair convention the next time the "
         "machinery was touched (#3183, ERE-08)."
     ),
-    ("app/episodes/segmenter.py", 821): (
+    ("app/episodes/segmenter.py", 827): (
         "guarded_by_port: _write_fusion_receipt passes write_guard (and the "
         "distinct episodes.cross_scope_fusion_receipt action) through to "
         "write_note_relative, which asserts write_guard.assert_writes_allowed"

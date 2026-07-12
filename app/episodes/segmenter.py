@@ -806,6 +806,12 @@ def _write_fusion_receipt(
     """
     from scripts.yaml_roundtrip import dump_frontmatter
 
+    # Idempotent under redelivery (Finding 3): the fused id is deterministic, so a crash/retry
+    # re-resolves the SAME receipt path -- never a duplicate receipt (mirrors _emit_fused_note's
+    # existence check on the note itself).
+    if (Path(vault_root) / _fusion_receipt_rel_path(fuse.fused_episode_id)).exists():
+        return
+
     fields = cross_scope_fusion.fusion_receipt_fields(
         fuse, recorded_at=datetime.now(timezone.utc).isoformat()
     )

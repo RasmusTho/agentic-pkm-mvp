@@ -294,3 +294,86 @@ def test_reopen_restores_salience_no_residue(monkeypatch: pytest.MonkeyPatch) ->
     assert reopened_hit.signal_payload.salience == {}
     assert reopened_hit.score == pytest.approx(baseline_score)
     assert stored_payload == original_payload
+
+
+# ---------------------------------------------------------------------------
+# ERE-08 (#3183) AC5 end-to-end (Finding 5): the WIRED decay gate DENIES a genuinely cross-scope
+# closed episode at the production retrieve() seam -- a closed scope-A episode never dampens a
+# scope-B hit without a flow. Plus Finding 2: an unconfirmable-scope hit fails CLOSED.
+# ---------------------------------------------------------------------------
+
+
+def test_closure_decay_denies_cross_scope_at_retrieve(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_embeddings(monkeypatch)
+    get_store().set_documents(
+        [
+            {
+                "doc_id": "doc-private",  # a PRIVATE-scope artifact bound to a WORK-scope closed episode
+                "text": "cross scope decay seam note",
+                "source_ref": "vault/doc-private.md",
+                "payload": {"episode_ref": ["ep-work-closed"], "domain": "private"},
+            },
+            {
+                "doc_id": "doc-work",  # a WORK-scope artifact bound to the SAME closed episode (control)
+                "text": "cross scope decay seam note",
+                "source_ref": "vault/doc-work.md",
+                "payload": {"episode_ref": ["ep-work-closed"], "domain": "work"},
+            },
+        ]
+    )
+    monkeypatch.setattr(closure_decay, "read_closed_episode_ids", lambda ids: {"ep-work-closed"})
+    monkeypatch.setattr(
+        closure_decay, "read_closed_episode_scopes", lambda ids: {"ep-work-closed": "work"}
+    )
+
+    try:
+        response = retrieve(RetrievalRequest(query="cross scope decay seam", k=2))
+    finally:
+        _clear_store()
+
+    by_id = {hit.doc_id: hit for hit in response.hits}
+    # Cross-scope: the work-scope closed episode must NOT dampen the private-scope hit (gate denies).
+    assert by_id["doc-private"].signal_payload.salience == {}
+    # Same-scope control: the work-scope hit IS dampened -- ordinary ERE-06 decay still fires.
+    assert by_id["doc-work"].signal_payload.salience != {}
+    assert by_id["doc-work"].score == pytest.approx(
+        by_id["doc-private"].score * CLOSURE_DECAY_STEP_DOWN_FACTOR
+    )
+
+
+def test_closure_decay_fails_closed_for_unconfirmable_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A hit whose OWN scope cannot be confirmed (no domain/scope_id) but whose bound closed episode
+    # has a KNOWN, specific scope -> fail CLOSED: the confirmed-scope episode's decay is NOT applied
+    # (Finding 2). A second hit DOES carry a scope, so read_closed_episode_scopes is consulted.
+    _patch_embeddings(monkeypatch)
+    get_store().set_documents(
+        [
+            {
+                "doc_id": "doc-noscope",
+                "text": "fail closed decay seam note",
+                "source_ref": "vault/doc-noscope.md",
+                "payload": {"episode_ref": ["ep-work-closed"]},  # NO scope key
+            },
+            {
+                "doc_id": "doc-scoped",
+                "text": "fail closed decay seam note",
+                "source_ref": "vault/doc-scoped.md",
+                "payload": {"episode_ref": ["ep-other"], "domain": "work"},  # forces scope read
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        closure_decay, "read_closed_episode_ids", lambda ids: {"ep-work-closed"}
+    )
+    monkeypatch.setattr(
+        closure_decay, "read_closed_episode_scopes", lambda ids: {"ep-work-closed": "work"}
+    )
+
+    try:
+        response = retrieve(RetrievalRequest(query="fail closed decay seam", k=2))
+    finally:
+        _clear_store()
+
+    by_id = {hit.doc_id: hit for hit in response.hits}
+    # Fail-closed: the unconfirmable-scope hit does NOT receive the confirmed-scope episode's decay.
+    assert by_id["doc-noscope"].signal_payload.salience == {}

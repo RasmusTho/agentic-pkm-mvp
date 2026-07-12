@@ -47,11 +47,12 @@ No I/O in this module: it is the pure gate + planning logic (co-occurrence detec
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Callable, Mapping, Sequence
 
-from app.episodes.ids import mint_episode_id
+from app.episodes.ids import EPISODE_ID_PREFIX
 
 if TYPE_CHECKING:
     from mimer_runtime.cross_scope import CrossScopeDecision
@@ -75,6 +76,9 @@ FLOW_REF_CAUSATION_PREFIX = "cross-scope-flow:"
 #: Receipt marker class (audit/provenance record for a governed crossing).
 FUSION_RECEIPT_CLASS = "cross_scope_fusion"
 
+#: Fixed, arbitrary namespace UUID for deterministic fused episode ids (Finding 3). Never reused.
+_FUSED_EPISODE_ID_NAMESPACE = uuid.UUID("2b6a1e5c-9d4f-4a7b-8c3e-1f0a5d7c2e94")
+
 
 #: A ``flow_provider`` resolves the explicit typed ``CrossScopeFlow`` (a plain mapping, the shape
 #: ``mimer_runtime.cross_scope.evaluate`` reads) for a given directional crossing, or ``None`` when
@@ -94,6 +98,21 @@ class FuseSegment:
     start: datetime
     end: datetime
     derived_from: tuple[str, ...] = ()
+
+
+def deterministic_fused_episode_id(a: FuseSegment, b: FuseSegment) -> str:
+    """A STABLE fused ``ep-<uuid>`` derived from the two members' identities (Finding 3).
+
+    Keyed on the sorted ``scope|episode_id`` of both constituent segments -- both of which are
+    themselves start-independent, deterministic ids
+    (:func:`app.episodes.segmenter._deterministic_episode_id`). So a crash/retry that re-runs
+    :func:`plan_fusions` over the same segments mints the SAME fused id, and
+    :func:`app.episodes.segmenter._emit_fused_note`'s existence check dedupes the redelivery instead
+    of writing a duplicate fused note + receipt. Order-independent: the two members are sorted first,
+    so ``(a, b)`` and ``(b, a)`` collapse to one id."""
+    members = sorted((f"{a.scope}|{a.episode_id}", f"{b.scope}|{b.episode_id}"))
+    basis = "cross_scope_fuse|" + "|".join(members)
+    return f"{EPISODE_ID_PREFIX}{uuid.uuid5(_FUSED_EPISODE_ID_NAMESPACE, basis)}"
 
 
 @dataclass(frozen=True)
@@ -192,7 +211,7 @@ def plan_fusions(
     segments: Sequence[FuseSegment],
     *,
     flow_provider: FlowProvider | None = None,
-    mint_id: Callable[[], str] = mint_episode_id,
+    mint_id: Callable[[FuseSegment, FuseSegment], str] = deterministic_fused_episode_id,
 ) -> FusionPlan:
     """Decide, per cross-scope co-occurring pair, fuse-or-split -- deny-by-default.
 
@@ -237,7 +256,7 @@ def plan_fusions(
                 merged = tuple(sorted(set(a.derived_from) | set(b.derived_from)))
                 allowed.append(
                     AllowedFusion(
-                        fused_episode_id=mint_id(),
+                        fused_episode_id=mint_id(a, b),
                         target_scope=target_scope,
                         source_scope=source_scope,
                         start=start,
@@ -304,6 +323,7 @@ __all__ = [
     "DeniedFusion",
     "FuseSegment",
     "FusionPlan",
+    "deterministic_fused_episode_id",
     "evaluate_episode_fuse",
     "fused_note_causation",
     "fusion_receipt_fields",

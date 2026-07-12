@@ -215,26 +215,38 @@ def admit_closed_ids_for_scope(
     :func:`app.episodes.cross_scope_fusion.evaluate_episode_fuse`, the single ``episode_fuse``
     operation, no new authority model): source=the episode's scope -> target=the artifact's scope.
 
-    - Same-scope closed episode -> always admitted (ordinary ERE-06 decay).
-    - Different-scope closed episode -> admitted ONLY if an explicit flow grants it (production
-      passes no ``flow_provider`` -> denied -> does not dampen).
-    - ``artifact_scope`` unknown, or a closed episode whose scope is unknown -> admitted (fail-open;
-      assignment already guarantees same-scope bindings, so this gate is defense-in-depth against a
-      stale/foreign ``episode_ref`` -- a genuine foreign-scope binding DOES carry a differing scope
-      from the projection and is filtered).
+    - Closed episode whose scope is UNKNOWN (not in ``closed_scopes`` -- e.g. the common unscoped-
+      payload ERE-06 path where ``closed_scopes`` is empty) -> admitted. Bindings are same-scope by
+      construction, so an unresolved episode scope is same-scope in the normal case; there is no
+      CONFIRMED foreign scope to deny.
+    - Closed episode whose scope IS known and equals ``artifact_scope`` -> admitted (ordinary ERE-06
+      decay).
+    - Closed episode whose scope IS known and differs -> admitted ONLY if an explicit flow grants it
+      (production passes no ``flow_provider`` -> denied -> does not dampen).
+    - ``artifact_scope`` UNKNOWN while a bound closed episode's scope IS known/specific -> DENIED
+      (Finding 2, fail-CLOSED for a privacy gate): the hit's scope cannot be confirmed, so a
+      confirmed-scope episode's decay is NOT applied to it. (When the episode scope is also unknown,
+      the first rule already admits -- fail-closed bites only for a confirmed-scope episode against
+      an unconfirmable-scope hit.)
 
     Filtering an episode OUT only ever RAISES an artifact's salience (it drops a dampening input),
-    so this gate is fail-open on both the privacy axis (no cross-scope influence) and the ADR-0058
-    axis (uncertainty keeps content visible)."""
+    so this gate is safe on both the privacy axis (no cross-scope influence) and the ADR-0058 axis
+    (uncertainty keeps content visible)."""
     ids = {e for e in closed_ids if e}
-    if not artifact_scope:
-        return ids
     from app.episodes.cross_scope_fusion import evaluate_episode_fuse
 
     admitted: set[str] = set()
     for eid in ids:
         episode_scope = closed_scopes.get(eid)
-        if not episode_scope or episode_scope == artifact_scope:
+        if not episode_scope:
+            # Episode scope unknown -> no CONFIRMED foreign scope to deny (same-scope by construction).
+            admitted.add(eid)
+            continue
+        if not artifact_scope:
+            # Fail-closed (Finding 2): a confirmed-scope closed episode must not dampen a hit whose
+            # own scope cannot be confirmed -- we cannot prove same-scope, so deny-by-default.
+            continue
+        if episode_scope == artifact_scope:
             admitted.add(eid)
             continue
         flow = flow_provider(episode_scope, artifact_scope) if flow_provider else None
