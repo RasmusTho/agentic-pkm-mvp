@@ -235,16 +235,21 @@ def close_episode(
     ``event_emitted`` on the returned result reflects whether THIS call's outbox insert was the one
     that actually landed (``write_outbox_event``'s non-empty return) vs. a deduped retry.
 
-    Guard-at-TOP (review-round fix): the reconciliation branch above performs two real DB writes
-    (outbox insert, projection UPDATE) even when the note rewrite itself is skipped, so this
-    function can no longer rely on ``write_episode_note``'s own internal guard check as an implicit
-    proxy gate for the whole function (that worked only while every write path funneled through
-    it). Asserted here explicitly and FIRST, before any write of any kind -- mirrors
-    ``app.episodes.assignment.commit_assignment_diff``'s own guard-at-top discipline for a function
-    that, like this one, performs DB writes beyond the vault-note seam.
+    Guard placement (review-round-2 fix): the reconciliation branch below performs two real DB
+    writes (outbox insert, projection UPDATE) even when the note rewrite itself is skipped, so it
+    cannot rely on ``write_episode_note``'s own internal guard check as an implicit proxy gate
+    (that only covered the whole function while every write path funneled through it). The guard
+    is asserted explicitly on ONLY that branch -- not unconditionally at the top of the function --
+    for two reasons: (1) the "unreadable note is always a silent no-op, never an error" contract
+    above must hold regardless of write-health state (an unconditional top-of-function assert would
+    turn a read-only diagnostic no-op into an uncaught ``WritesBlockedError``, and
+    ``run_closure_tick``'s candidate loop has no per-candidate try/except, so that would abort every
+    later candidate in the same tick too); (2) ``write_guard.assert_writes_allowed`` evaluates
+    ``DEFAULT_CONTRACT`` (DB ping, outbox-tail read, object-store count, index diagnosis --
+    genuinely not cheap), and the fresh-close branch already pays that cost once inside
+    ``write_episode_note``'s own guard-at-seam check, so asserting it again unconditionally here
+    would double per-closure health-evaluation cost across every quiesced episode a tick processes.
     """
-    write_guard.assert_writes_allowed(EPISODE_WRITE_ACTION)
-
     root = Path(vault_root)
     note_abs = root / candidate.note_path
     try:
@@ -261,12 +266,15 @@ def close_episode(
     time_fields = dict(fields.get("time") or {})
     already_closed = bool(time_fields.get("closed", False))
 
-    if not already_closed:
+    if already_closed:
+        # Nothing else on this branch funnels through write_episode_note, so nothing else would
+        # ever assert the guard before the outbox/projection writes below -- assert it here,
+        # exactly once, only for this branch (see the guard-placement note above).
+        write_guard.assert_writes_allowed(EPISODE_WRITE_ACTION)
+    else:
         # Guard-at-seam (mirrors ERE-02/05): write_episode_note asserts
-        # write_guard.assert_writes_allowed(EPISODE_WRITE_ACTION) itself too (defense in depth,
-        # matching assignment.py's own stamp-helpers still passing write_guard through even after
-        # commit_assignment_diff's top-of-function assert), before any filesystem mutation.
-        # Re-write the SAME note (same episode_id -> same deterministic path) with every
+        # write_guard.assert_writes_allowed(EPISODE_WRITE_ACTION) itself, before any filesystem
+        # mutation. Re-write the SAME note (same episode_id -> same deterministic path) with every
         # other field preserved verbatim and only `closed` flipped -- a proposal-class rewrite,
         # never a new note, never a governed transition (no governance import anywhere in this
         # module).

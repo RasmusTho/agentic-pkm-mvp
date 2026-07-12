@@ -323,6 +323,27 @@ def test_close_episode_blocked_guard_prevents_reconciliation_writes(
         close_episode(candidate, vault_root=tmp_path, write_guard=_blocked_guard())
 
 
+def test_close_episode_unreadable_note_is_noop_even_under_blocked_guard(
+    tmp_path: Path,
+) -> None:
+    """#3181 review-round-2 fix: the guard is asserted only on the reconciliation branch (already
+    closed), never unconditionally at the top of the function -- so the documented 'unreadable note
+    is always a silent no-op, never an error' contract must hold REGARDLESS of write-health state.
+    A blocked guard must never turn this diagnostic no-op into an uncaught WritesBlockedError (which
+    would also abort run_closure_tick's whole candidate loop, since it has no per-candidate
+    try/except)."""
+    episode_id = "ep-88888888-2222-4333-8444-555555555555"
+    end = _dt(10, 0)
+    # No note is ever written at this path -- note_abs.read_text() raises OSError (FileNotFoundError).
+    candidate = EpisodeCloseCandidate(
+        episode_id=episode_id, scope="work", note_path=episode_note_rel_path(episode_id), time_end=end
+    )
+
+    result = close_episode(candidate, vault_root=tmp_path, write_guard=_blocked_guard())
+
+    assert result is None
+
+
 # ---------------------------------------------------------------------------
 # AC1 headline: a quiesced episode closes once (idempotent across ticks)
 # ---------------------------------------------------------------------------
