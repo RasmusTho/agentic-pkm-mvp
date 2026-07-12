@@ -171,6 +171,78 @@ def derive_closure_salience(
     }
 
 
+def read_closed_episode_scopes(episode_ids: Iterable[str]) -> dict[str, str]:
+    """Like :func:`read_closed_episode_ids`, but returns ``{episode_id: scope}`` for the CLOSED
+    subset -- the scope input the ERE-08 cross-scope decay gate (:func:`admit_closed_ids_for_scope`)
+    needs. Same rebuildable-projection read, same fail-open posture (an id absent from the result is
+    open or never existed). Derived FROM the projection, never itself persisted."""
+    ids = sorted({e for e in episode_ids if e})
+    if not ids:
+        return {}
+    placeholders = ", ".join(["%s"] * len(ids))
+    query = (
+        f"SELECT episode_id, scope FROM {EPISODES_TABLE} "
+        f"WHERE closed = true AND episode_id IN ({placeholders})"
+    )
+    out: dict[str, str] = {}
+    with conn_rw() as conn:
+        _assert_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute(query, tuple(ids))
+            for row in cur.fetchall():
+                if isinstance(row, dict):
+                    eid, scope = row["episode_id"], row["scope"]
+                else:
+                    eid, scope = row[0], row[1]
+                out[str(eid)] = str(scope)
+    return out
+
+
+def admit_closed_ids_for_scope(
+    closed_ids: Iterable[str],
+    closed_scopes: Mapping[str, str],
+    artifact_scope: str | None,
+    *,
+    flow_provider: "Any | None" = None,
+) -> set[str]:
+    """ERE-08 (#3183) cross-scope decay seam gate: which CLOSED episodes may dampen an artifact in
+    ``artifact_scope``.
+
+    Deny-by-default across scopes (spec point 4; denial class ``cross_scope_no_flow``): a closed
+    episode in scope A must never dampen an artifact in scope B -- a closed private episode never
+    influences work-scope ranking, and vice versa. The decision routes through
+    ``mimer_runtime.cross_scope.evaluate`` (via
+    :func:`app.episodes.cross_scope_fusion.evaluate_episode_fuse`, the single ``episode_fuse``
+    operation, no new authority model): source=the episode's scope -> target=the artifact's scope.
+
+    - Same-scope closed episode -> always admitted (ordinary ERE-06 decay).
+    - Different-scope closed episode -> admitted ONLY if an explicit flow grants it (production
+      passes no ``flow_provider`` -> denied -> does not dampen).
+    - ``artifact_scope`` unknown, or a closed episode whose scope is unknown -> admitted (fail-open;
+      assignment already guarantees same-scope bindings, so this gate is defense-in-depth against a
+      stale/foreign ``episode_ref`` -- a genuine foreign-scope binding DOES carry a differing scope
+      from the projection and is filtered).
+
+    Filtering an episode OUT only ever RAISES an artifact's salience (it drops a dampening input),
+    so this gate is fail-open on both the privacy axis (no cross-scope influence) and the ADR-0058
+    axis (uncertainty keeps content visible)."""
+    ids = {e for e in closed_ids if e}
+    if not artifact_scope:
+        return ids
+    from app.episodes.cross_scope_fusion import evaluate_episode_fuse
+
+    admitted: set[str] = set()
+    for eid in ids:
+        episode_scope = closed_scopes.get(eid)
+        if not episode_scope or episode_scope == artifact_scope:
+            admitted.add(eid)
+            continue
+        flow = flow_provider(episode_scope, artifact_scope) if flow_provider else None
+        if evaluate_episode_fuse(episode_scope, artifact_scope, flow=flow).allowed:
+            admitted.add(eid)
+    return admitted
+
+
 def read_closed_episode_ids(episode_ids: Iterable[str]) -> set[str]:
     """DB-backed reader (the production ``retrieve()`` call site): which of ``episode_ids`` are
     currently ``closed`` per the rebuildable ``episodes`` projection (ERE-02).
@@ -234,9 +306,11 @@ def read_closed_episode_ids_from_vault(episode_ids: Iterable[str], *, vault_root
 __all__ = [
     "CLOSURE_DECAY_STEP_DOWN_FACTOR",
     "ClosureDecaySchemaMissingError",
+    "admit_closed_ids_for_scope",
     "derive_closure_salience",
     "is_exempt_note_class",
     "read_closed_episode_ids",
     "read_closed_episode_ids_from_vault",
+    "read_closed_episode_scopes",
     "resolve_episode_ids",
 ]

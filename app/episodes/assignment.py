@@ -111,6 +111,12 @@ from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
 logger = logging.getLogger(__name__)
 
+#: A cross-scope flow provider resolves the explicit typed ``CrossScopeFlow`` (a plain mapping, the
+#: shape ``mimer_runtime.cross_scope.evaluate`` reads) for a directional crossing, or ``None`` when
+#: none grants it. Production passes no provider (authoring flow grants is out of scope), so every
+#: cross-scope binding is denied (ERE-08 AC4). Mirrors ``cross_scope_fusion.FlowProvider``.
+CrossScopeFlowProvider = Callable[[str, str], "Mapping[str, Any] | None"]
+
 # Distinct action string for the assignment write seam (mirrors
 # app.episodes.store.EPISODE_WRITE_ACTION's per-seam-action pattern), asserted inside
 # commit_assignment_diff itself -- not a caller-side helper (AC4: enforcement at the production
@@ -239,15 +245,39 @@ class AssignmentDecision:
 # ---------------------------------------------------------------------------
 
 
+def _cross_scope_binding_allowed(
+    artifact_scope: str,
+    episode_scope: str,
+    flow_provider: "CrossScopeFlowProvider | None",
+) -> bool:
+    """ERE-08 (#3183) assignment seam gate: may an artifact in ``artifact_scope`` bind to an episode
+    in ``episode_scope``? Deny-by-default -- routed through ``mimer_runtime.cross_scope.evaluate``
+    (via :func:`app.episodes.cross_scope_fusion.evaluate_episode_fuse`, the single ``episode_fuse``
+    operation, no new authority model). Binding an artifact into a different-scope episode admits it
+    into that episode's cross-scope situation, so the crossing is source=``artifact_scope`` ->
+    target=``episode_scope``. Absence of an explicit flow denies ("similarity is not permission").
+
+    Production passes NO ``flow_provider`` (authoring flow grants is out of scope), so a cross-scope
+    binding is ALWAYS denied -- assignment never crosses scopes unflowed (AC4). Imported lazily to
+    keep this pure module free of an import-time ``mimer_runtime`` dependency."""
+    from app.episodes.cross_scope_fusion import evaluate_episode_fuse
+
+    flow = flow_provider(artifact_scope, episode_scope) if flow_provider else None
+    return bool(evaluate_episode_fuse(artifact_scope, episode_scope, flow=flow).allowed)
+
+
 def compute_assignments(
     artifacts: Sequence[ArtifactCandidate],
     episodes: Sequence[EpisodeBoundsRecord],
+    *,
+    flow_provider: "CrossScopeFlowProvider | None" = None,
 ) -> list[AssignmentDecision]:
     """The pure assignment rule: which artifacts bind to which episodes, and on what basis.
 
-    For every (artifact, episode) pair sharing the SAME ``scope`` (deny-by-default cross-scope --
-    an artifact never binds to a different-scope episode regardless of provenance or time overlap,
-    ERE-08's posture honored here):
+    For every (artifact, episode) pair sharing the SAME ``scope`` (and, for a DIFFERENT-scope pair,
+    only when an explicit ``CrossScopeFlow`` admits it via :func:`_cross_scope_binding_allowed` --
+    deny-by-default, ERE-08's posture enforced here through ``mimer_runtime.cross_scope.evaluate``;
+    production passes no ``flow_provider`` so a cross-scope binding is always denied, AC4):
 
     - provenance-anchored (AC2): ``artifact.artifact_ref in episode.derived_from`` -> binds at
       :data:`BASIS_PROVENANCE`, even when the artifact's ``observed_at`` sits outside
@@ -269,7 +299,9 @@ def compute_assignments(
     seen: set[tuple[str, str]] = set()
     for artifact in artifacts:
         for episode in episodes:
-            if artifact.scope != episode.scope:
+            if artifact.scope != episode.scope and not _cross_scope_binding_allowed(
+                artifact.scope, episode.scope, flow_provider
+            ):
                 continue
             key = (artifact.artifact_ref, episode.episode_id)
             if key in seen:

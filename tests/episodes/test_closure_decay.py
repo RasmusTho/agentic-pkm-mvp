@@ -227,6 +227,12 @@ def test_closure_affects_ranking_only(monkeypatch: pytest.MonkeyPatch) -> None:
         ]
     )
     monkeypatch.setattr(closure_decay, "read_closed_episode_ids", lambda ids: {"ep-closed-2"})
+    # ERE-08 (#3183): this hit carries a scope (`domain: work`), so the production decay path now
+    # consults the cross-scope decay gate. The closed episode is SAME-scope (work), so it is
+    # admitted and still dampens -- exercising the gate's same-scope pass-through.
+    monkeypatch.setattr(
+        closure_decay, "read_closed_episode_scopes", lambda ids: {"ep-closed-2": "work"}
+    )
 
     try:
         response = retrieve(RetrievalRequest(query="ranking only seam", k=2))
