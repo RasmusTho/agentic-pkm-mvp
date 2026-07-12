@@ -443,6 +443,13 @@
       "issue": "#2892"
     },
     {
+      "artifact": "docs/EPISODE_RESOLUTION_ENGINE/stream_registry.md",
+      "category": "iv",
+      "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
+      "disposition": "stay",
+      "issue": "#3184"
+    },
+    {
       "artifact": "docs/HEIMDAL/CAPABILITY_CHARTER.md",
       "category": "ii",
       "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",

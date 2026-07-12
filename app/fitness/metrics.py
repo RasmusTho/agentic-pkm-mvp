@@ -112,7 +112,10 @@ def _process_outbox_event(
         uuid4(),
         kind="fitness",
         source_ref=payload.get("source_ref", "fitness"),
-        payload={"title": payload["title"]},
+        # CI latency probe (kind="fitness", never a real note) writing store_vector_index directly
+        # -- bypasses the build_indexed_unit_payload choke, so it carries the honest 'unbound'
+        # sentinel explicitly to satisfy the invariant->producers store-payload census.
+        payload={"title": payload["title"], "episode_ref": "unbound"},
         embedding=list(vec),
         model=identity.model,
         identity=identity,

@@ -96,7 +96,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/dispatcher/",
             "tests/builderops/",
             "tests/dispatcher/",
+            "tests/governance/",
             "docs/builderops/",
+            "importlinter.ini",
         ),
         ("tests/builderops", "tests/dispatcher", "tests/governance"),
     ),
@@ -146,6 +148,18 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "docs/OBSERVABILITY_STABILIZATION/",
         ),
         ("tests/health", "tests/invariants", "tests/api"),
+    ),
+    (
+        "store_ingest",
+        (
+            "app/stores/",
+            "app/ingest/",
+            "tests/stores/",
+            "tests/ingest/",
+            "docs/DB_SCHEMA.md",
+            "docs/RUNTIME_CORRECTNESS_KERNEL/",
+        ),
+        ("tests/stores", "tests/ingest", "tests/architecture"),
     ),
     (
         "relevance",

@@ -1,8 +1,10 @@
 import os
 import json
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
+
+from .pg import PgObjectStore
 
 
 def _dsn() -> str:
@@ -74,31 +76,34 @@ def _ensure_decisions(conn) -> None:
 
 class PgObjects:
     def upsert(self, *, id: str | None = None, kind: str, payload: dict, source_ref: str | None = None, path: str | None = None):
+        # PgObjects is a temporary compatibility adapter for the vault-root
+        # ingest path.  Delegate to the canonical writer so its assert-only
+        # migration preflight and migration hint remain the single contract.
+        str_id = id or str(uuid4())
+        canonical_store = PgObjectStore()
+
+        # ``decisions.object_id`` still has a live FK to the legacy ``objects``
+        # table.  Keep the smallest possible parent row until #3510 migrates
+        # that FK; ``store_objects`` remains exclusively canonical-owned.
         conn = psycopg.connect(_dsn())
         try:
             with conn:
                 with conn.cursor() as cur:
-                    str_id = id or str(uuid4())
-                    effective_source_ref = source_ref or path
                     cur.execute(
-                        "INSERT INTO objects (id, uuid, kind, payload, created_at, updated_at) "
-                        "VALUES (%s,%s,%s,%s::jsonb, now(), now()) "
-                        "ON CONFLICT (id) DO UPDATE SET "
-                        "uuid=EXCLUDED.uuid, kind=EXCLUDED.kind, payload=EXCLUDED.payload, updated_at=now()",
-                        (str_id, str_id, kind, json.dumps(payload)),
+                        "INSERT INTO objects (id, kind, payload) VALUES (%s, %s, '{}'::jsonb) "
+                        "ON CONFLICT (id) DO NOTHING",
+                        (str_id, kind),
                     )
-                    cur.execute(
-                        "INSERT INTO store_objects (object_id, kind, source_ref, payload, created_at, updated_at) "
-                        "VALUES (%s,%s,%s,%s::jsonb, now(), now()) "
-                        "ON CONFLICT (object_id) DO UPDATE SET "
-                        "kind=EXCLUDED.kind, source_ref=EXCLUDED.source_ref, payload=EXCLUDED.payload, updated_at=now() "
-                        "RETURNING object_id",
-                        (str_id, kind, effective_source_ref, json.dumps(payload)),
-                    )
-                    row = cur.fetchone()
-            return {"id": (row[0] if isinstance(row, (list, tuple)) else row.get("id"))}
         finally:
             conn.close()
+
+        canonical_store.put(
+            object_id=UUID(str_id),
+            kind=kind,
+            source_ref=source_ref or path,
+            payload=payload,
+        )
+        return {"id": str_id}
 
 
 class PgDecisions:

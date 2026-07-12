@@ -130,6 +130,17 @@ def test_journaling_change_has_a_ci_owner() -> None:
     assert "tests/journaling" in selection.targets
 
 
+def test_store_ingest_change_selects_its_owned_contract_tests() -> None:
+    selection = select_tests(["app/stores/postgres.py", "tests/ingest/test_vault_root_ingest_pg.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("store_ingest",)
+    assert selection.unowned_paths == ()
+    assert "tests/stores" in selection.targets
+    assert "tests/ingest" in selection.targets
+    assert "tests/architecture" in selection.targets
+
+
 def test_heimdal_capture_adapter_change_has_a_ci_owner() -> None:
     selection = select_tests(["app/heimdal/capture_adapter.py", "tests/heimdal/test_capture_adapter.py"])
 
@@ -177,7 +188,7 @@ def test_unowned_e2e_file_fails_closed_until_it_has_an_owner() -> None:
         ),
         pytest.param(
             ["scripts/x.sh", "tests/governance/test_y.py"],
-            ("ops_deploy",),
+            ("builder_system", "ops_deploy"),
             "tests/governance/test_y.py",
             id="subsystem+out-of-subsystem-test",
         ),
@@ -430,6 +441,26 @@ def test_builder_system_change_selects_its_own_regression_tests() -> None:
 
     assert selection.full_suite is False
     assert selection.subsystems == ("builder_system",)
+    assert "tests/builderops" in selection.targets
+    assert "tests/governance" in selection.targets
+
+
+def test_governance_test_change_is_owned_by_builder_system() -> None:
+    selection = select_tests(["tests/governance/test_project_pickup_deprecation.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("builder_system",)
+    assert selection.unowned_paths == ()
+    assert "tests/governance/test_project_pickup_deprecation.py" in selection.targets
+
+
+def test_import_linter_config_change_selects_builder_system_regressions() -> None:
+    """The architecture-fitness config must not fail selector ownership first."""
+    selection = select_tests(["importlinter.ini"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("builder_system",)
+    assert selection.unowned_paths == ()
     assert "tests/builderops" in selection.targets
     assert "tests/governance" in selection.targets
 
