@@ -14,10 +14,14 @@ ADR-0051 commitment 2, ADR-0054 §3):
 - :func:`fold_signals_into_segments` is the PURE core: given a batch of
   normalized :class:`SegmentationSignal` and the currently-open segment per
   scope (AC7: partitioned per-scope, never cross-scope fused), it walks each
-  scope's signals in ``observed_at`` order, closes a segment whenever
-  :func:`detect_shift` fires a boundary, and also closes any segment gone
-  stale purely from elapsed wall-clock time (the >45min-silence rule) even
-  absent a new triggering signal. No I/O, no vault, no DB -- fully
+  scope's signals in ``observed_at`` order and closes a segment whenever
+  :func:`detect_shift` fires a boundary. Quiescence (the >45min-silence rule)
+  is measured against OBSERVED-time stream frontiers, never wall-clock: a
+  segment closes only when the streams that could still extend it have
+  observedly moved more than the gap past its last signal
+  (:func:`_closure_frontier` -- a session-bound segment requires the
+  *Heimdal* frontier specifically, so delivery/tick lag can never split one
+  session across two proposals, AC3). No I/O, no vault, no DB -- fully
   unit-testable and deterministic, so it is also the module's idempotency
   guarantee under at-least-once redelivery (AC2): re-folding a signal whose
   ``signal_id`` an open segment already recorded is a no-op.
@@ -26,14 +30,18 @@ ADR-0051 commitment 2, ADR-0054 §3):
   registered stream since its own durable cursor, calls the pure fold, emits
   a ``segmentation: proposed`` Episode note per closed segment (AC5, via
   ``app.episodes.store.write_episode_note`` -- the ERE-02 guarded seam),
-  persists updated open-segment state, and ONLY THEN advances each stream's
-  cursor -- a crash before that point means the next tick reprocesses the
-  same batch, deduped by fold-by-key plus a deterministic ``episode_id`` per
-  closed segment (a retried emission never double-writes a note, AC2).
+  persists updated open-segment state + stream watermarks, advances each
+  stream's cursor, and ONLY THEN deletes closed-segment state -- a crash at
+  any point means the next tick reprocesses/reconverges, deduped by
+  fold-by-key (retained ``signal_ids`` ledgers) plus a deterministic
+  ``episode_id`` per closed segment (a retried emission never double-writes
+  a note, AC2 / INV-ERE-F), even when only ONE of the two cursors advanced
+  before the crash.
 """
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -61,6 +69,8 @@ from app.episodes.vault_activity_stream import (
 from app.heimdal.observation_log import ObservationRow
 from app.heimdal.publish import advance_cursor_for_consumer, read_observations_for_consumer
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
+
+logger = logging.getLogger(__name__)
 
 
 def enumerate_consumable_streams(
@@ -135,6 +145,11 @@ HEIMDAL_STREAM_ID: Final[str] = "heimdal.observations"
 TIME_GAP_MINUTES: Final[int] = 45
 _TIME_GAP: Final[timedelta] = timedelta(minutes=TIME_GAP_MINUTES)
 
+# The four *_DETECTION_ENABLED constants below are COMPILE-TIME DOCUMENTATION
+# of which shift dimensions are active in v1, not runtime flags -- there is
+# deliberately no env/settings toggle path (RQ-E1 tuning happens as code
+# change against this single source, never as drifting runtime config).
+
 #: Goal-shift dimension: a signal's goal/project binding set that is
 #: completely disjoint from the open segment's accumulated goal set is a
 #: shift -- conservative (requires BOTH sides non-empty; absence of goal
@@ -162,6 +177,8 @@ _EPISODE_ID_NAMESPACE: Final[uuid.UUID] = uuid.UUID("6f1d9a3a-8c3e-4f7a-9b1a-8f9
 
 _OPEN_SEGMENT_KEY_PREFIX: Final[str] = "open_segment:"
 
+_STREAM_WATERMARK_KEY_PREFIX: Final[str] = "stream_watermark:"
+
 _DEFAULT_SCOPE: Final[str] = "default"
 
 
@@ -187,11 +204,23 @@ class SegmentationSignal:
     #: never silently cross-fused with a scoped one.
     scope: str
     provenance_ref: str
+    #: Bitemporal end of the observation window (HEIM-10), when the source
+    #: carries one (e.g. a voice observation spanning 09:00-09:30). Extends
+    #: the segment's `last_signal_at` so emitted bounds cover the whole
+    #: observed window, not just its start.
+    observed_at_end: datetime | None = None
     protagonists: tuple[str, ...] = ()
     goal: tuple[str, ...] = ()
     #: ADR-0054 seam: Heimdal's per-session boundary hint.
     heimdal_session_id: str | None = None
     causal_break: bool = False
+
+    @property
+    def observed_until(self) -> datetime:
+        """The latest observed instant this signal evidences."""
+        if self.observed_at_end is not None and self.observed_at_end > self.observed_at:
+            return self.observed_at_end
+        return self.observed_at
 
 
 @dataclass(frozen=True)
@@ -261,27 +290,24 @@ def _iso(value: datetime) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _goal_shift(open_segment: OpenSegment, signal: SegmentationSignal) -> bool:
-    if not GOAL_SHIFT_DETECTION_ENABLED:
+def _disjoint_set_shift(enabled: bool, open_set: frozenset[str], signal_set: frozenset[str]) -> bool:
+    """Shared shape of the goal- and protagonist-shift dimensions: a shift
+    fires only when detection is enabled AND both sides carry evidence AND
+    the sets are completely disjoint -- absence of evidence on either side
+    is never treated as a shift (conservative bar; the next set-valued
+    dimension in this family reuses this helper instead of a third copy)."""
+    if not enabled:
         return False
-    if not open_segment.goal or not signal.goal:
+    if not open_set or not signal_set:
         return False
-    return open_segment.goal.isdisjoint(signal.goal)
-
-
-def _protagonist_shift(open_segment: OpenSegment, signal: SegmentationSignal) -> bool:
-    if not PROTAGONIST_SHIFT_DETECTION_ENABLED:
-        return False
-    if not open_segment.protagonists or not signal.protagonists:
-        return False
-    return open_segment.protagonists.isdisjoint(signal.protagonists)
+    return open_set.isdisjoint(signal_set)
 
 
 def _causal_break(signal: SegmentationSignal) -> bool:
     return CAUSAL_BREAK_DETECTION_ENABLED and signal.causal_break
 
 
-def detect_shift(open_segment: OpenSegment, signal: SegmentationSignal, *, now: datetime) -> bool:
+def detect_shift(open_segment: OpenSegment, signal: SegmentationSignal) -> bool:
     """Whether `signal` should close `open_segment` and start a new one.
 
     Order matters (AC3 first): a signal continuing the open segment's own
@@ -289,14 +315,17 @@ def detect_shift(open_segment: OpenSegment, signal: SegmentationSignal, *, now: 
     proposed episodes (ADR-0054 seam), so no other dimension may split it.
     Only once the session-hint check does not apply do the remaining four
     dimensions run (place is unfed in v1, see `PLACE_SHIFT_DETECTION_ENABLED`).
+    All comparisons are observed-time; wall-clock never enters shift detection.
     """
     if signal.heimdal_session_id is not None and signal.heimdal_session_id == open_segment.heimdal_session_id:
         return False
     if signal.observed_at - open_segment.last_signal_at > _TIME_GAP:
         return True
-    if _goal_shift(open_segment, signal):
+    if _disjoint_set_shift(GOAL_SHIFT_DETECTION_ENABLED, open_segment.goal, frozenset(signal.goal)):
         return True
-    if _protagonist_shift(open_segment, signal):
+    if _disjoint_set_shift(
+        PROTAGONIST_SHIFT_DETECTION_ENABLED, open_segment.protagonists, frozenset(signal.protagonists)
+    ):
         return True
     if _causal_break(signal):
         return True
@@ -307,7 +336,7 @@ def _new_open_segment(signal: SegmentationSignal) -> OpenSegment:
     return OpenSegment(
         scope=signal.scope,
         start=signal.observed_at,
-        last_signal_at=signal.observed_at,
+        last_signal_at=signal.observed_until,
         heimdal_session_id=signal.heimdal_session_id,
         protagonists=frozenset(signal.protagonists),
         goal=frozenset(signal.goal),
@@ -327,7 +356,13 @@ def _extend_open_segment(open_segment: OpenSegment, signal: SegmentationSignal) 
         derived_from = derived_from + (signal.provenance_ref,)
     return replace(
         open_segment,
-        last_signal_at=max(open_segment.last_signal_at, signal.observed_at),
+        # Bitemporal bounds cover EVERY folded signal: a late-delivered
+        # signal with an earlier observed_at (the two stream cursors are
+        # independent, so cross-stream arrival order is not observed order)
+        # widens `start` downward -- time.start must never postdate a signal
+        # in the segment's own derived_from (AC1).
+        start=min(open_segment.start, signal.observed_at),
+        last_signal_at=max(open_segment.last_signal_at, signal.observed_until),
         heimdal_session_id=open_segment.heimdal_session_id or signal.heimdal_session_id,
         protagonists=open_segment.protagonists | frozenset(signal.protagonists),
         goal=open_segment.goal | frozenset(signal.goal),
@@ -348,11 +383,32 @@ def _close(open_segment: OpenSegment) -> ClosedSegment:
     )
 
 
+def _closure_frontier(segment: OpenSegment, frontiers: Mapping[str, datetime]) -> datetime | None:
+    """The observed-time frontier a segment's quiescence is measured against.
+
+    Session-bound segments (AC3): only the HEIMDAL stream's own frontier
+    counts. The observation log is sequence-ordered and cursor-consumed in
+    order, so a Heimdal frontier more than the gap past `last_signal_at`
+    means the stream itself has observedly moved on -- whereas another
+    stream's frontier (or wall-clock) advancing says nothing about whether
+    this session's later observations are merely still in flight. Delivery
+    or tick lag therefore can never split one session across two proposals.
+
+    Unbound segments: the max frontier across all consumed streams -- any
+    stream having observedly moved past the gap evidences quiescence.
+
+    ``None`` (no frontier evidence yet) means: do not close.
+    """
+    if segment.heimdal_session_id is not None:
+        return frontiers.get(HEIMDAL_STREAM_ID)
+    return max(frontiers.values(), default=None)
+
+
 def fold_signals_into_segments(
     signals: Sequence[SegmentationSignal],
     *,
     open_segments: Mapping[str, OpenSegment] | None = None,
-    now: datetime,
+    frontiers: Mapping[str, datetime] | None = None,
 ) -> tuple[dict[str, OpenSegment], list[ClosedSegment]]:
     """Pure core (AC1/AC2/AC3/AC7): fold `signals` into per-scope open segments.
 
@@ -361,15 +417,23 @@ def fold_signals_into_segments(
     adapter), walks each scope's signals in `observed_at` order against that
     scope's carried-over open segment (continuity across ticks via the
     `open_segments` argument), and closes a segment whenever
-    :func:`detect_shift` fires. After the signal walk, also closes any
-    open segment (touched this tick or not) whose `last_signal_at` is more
-    than `TIME_GAP_MINUTES` stale relative to `now` -- the pure >45min-
-    silence rule, needing no triggering signal. No I/O; deterministic;
-    idempotent under a redelivered/overlapping `signals` batch (duplicate
-    `signal_id`s are no-ops, see :func:`_extend_open_segment`).
+    :func:`detect_shift` fires.
+
+    After the signal walk, also closes any open segment (touched this tick
+    or not) that has gone quiescent: its `last_signal_at` lies more than
+    `TIME_GAP_MINUTES` behind the relevant OBSERVED-time stream frontier
+    (`frontiers`: stream_id -> max observed instant consumed to date; see
+    :func:`_closure_frontier` for which frontier governs which segment).
+    Wall-clock never closes a segment -- if no frontier evidence exists,
+    everything stays open (conservative; ERE-06 owns real closure).
+
+    No I/O; deterministic; idempotent under a redelivered/overlapping
+    `signals` batch (duplicate `signal_id`s are no-ops, see
+    :func:`_extend_open_segment`).
     """
     working: dict[str, OpenSegment] = dict(open_segments or {})
     closed: list[ClosedSegment] = []
+    frontier_map: Mapping[str, datetime] = frontiers or {}
 
     by_scope: dict[str, list[SegmentationSignal]] = {}
     for signal in signals:
@@ -382,7 +446,7 @@ def fold_signals_into_segments(
             if current is None:
                 current = _new_open_segment(signal)
                 continue
-            if detect_shift(current, signal, now=now):
+            if detect_shift(current, signal):
                 closed.append(_close(current))
                 current = _new_open_segment(signal)
             else:
@@ -391,7 +455,8 @@ def fold_signals_into_segments(
             working[scope] = current
 
     for scope, current in list(working.items()):
-        if now - current.last_signal_at > _TIME_GAP:
+        frontier = _closure_frontier(current, frontier_map)
+        if frontier is not None and frontier - current.last_signal_at > _TIME_GAP:
             closed.append(_close(current))
             del working[scope]
 
@@ -410,13 +475,47 @@ def _observation_id_of(row: ObservationRow, payload: Mapping[str, Any]) -> str:
     return row.id
 
 
-def _signal_from_heimdal_row(row: ObservationRow) -> SegmentationSignal:
+def _parse_observation_time(value: Any) -> datetime | None:
+    """Parse a payload observation-time value: epoch seconds (the watcher's
+    `mtime` float) or an ISO-8601 string. ``None`` when absent/unparseable --
+    the caller skips the signal fail-loud (count + log), never substitutes
+    emission time."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(float(value), tz=timezone.utc)
+    if isinstance(value, str) and value.strip():
+        text = value.strip()
+        try:
+            return datetime.fromtimestamp(float(text), tz=timezone.utc)
+        except ValueError:
+            try:
+                return _parse_dt(text)
+            except ValueError:
+                return None
+    return None
+
+
+def _signal_from_heimdal_row(row: ObservationRow) -> SegmentationSignal | None:
+    """Normalize one observation-log row, or ``None`` when it carries no
+    observation time (bounds come from ``observed_at``, NEVER emission time --
+    a row without ``observed_at_start`` is skipped fail-loud, not silently
+    stamped with the log row's insert time; the publish contract makes this
+    unreachable for schema-validated observations)."""
     payload = row.envelope.get("payload")
     payload = payload if isinstance(payload, Mapping) else {}
     observation_id = _observation_id_of(row, payload)
 
-    observed_at_raw = payload.get("observed_at_start")
-    observed_at = _parse_dt(observed_at_raw) if observed_at_raw else row.created_at
+    observed_at = _parse_observation_time(payload.get("observed_at_start"))
+    if observed_at is None:
+        logger.warning(
+            "segmentation: skipping heimdal observation without observed_at_start "
+            "(observation_id=%s log_row=%s) -- bounds are never emission time",
+            observation_id,
+            row.id,
+        )
+        return None
+    observed_at_end = _parse_observation_time(payload.get("observed_at_end"))
 
     scope_hint = payload.get("scope_hint")
     scope = scope_hint.strip() if isinstance(scope_hint, str) and scope_hint.strip() else _DEFAULT_SCOPE
@@ -441,6 +540,7 @@ def _signal_from_heimdal_row(row: ObservationRow) -> SegmentationSignal:
         stream_id=HEIMDAL_STREAM_ID,
         signal_id=observation_id,
         observed_at=observed_at,
+        observed_at_end=observed_at_end,
         scope=scope,
         provenance_ref=f"heimdal.observations:{observation_id}",
         protagonists=protagonists,
@@ -450,7 +550,25 @@ def _signal_from_heimdal_row(row: ObservationRow) -> SegmentationSignal:
     )
 
 
-def _signal_from_vault_activity_row(row: VaultActivityRow, *, vault_root: Path) -> SegmentationSignal:
+def _signal_from_vault_activity_row(row: VaultActivityRow, *, vault_root: Path) -> SegmentationSignal | None:
+    """Normalize one vault-activity outbox row, or ``None`` when it carries no
+    observation time. The payload's ``mtime`` (the watcher's observed file
+    change time) is the observation time; the outbox row's ``created_at`` is
+    emission/enqueue time and is NEVER substituted -- a delayed or backfilled
+    scan must not shift episode bounds to enqueue time (spec: bounds from
+    ``observed_at``, never emission time). Rows without a usable ``mtime``
+    (e.g. `ingest.object.created`/`deleted` payloads, which do not carry one
+    today) are skipped fail-loud (count + log)."""
+    observed_at = _parse_observation_time(row.payload.get("mtime"))
+    if observed_at is None:
+        logger.warning(
+            "segmentation: skipping vault-activity row without observation time "
+            "(topic=%s outbox_row=%s) -- bounds are never emission time",
+            row.topic,
+            row.id,
+        )
+        return None
+
     dims = resolve_activity_dimensions(row, vault_root=vault_root)
     scope_raw = dims.get("scope")
     scope = scope_raw.strip() if isinstance(scope_raw, str) and scope_raw.strip() else _DEFAULT_SCOPE
@@ -460,12 +578,10 @@ def _signal_from_vault_activity_row(row: VaultActivityRow, *, vault_root: Path) 
     # yet): sphere membership is the closest available goal/context binding.
     goal = tuple(sorted({str(s) for s in spheres if str(s).strip()}))
 
-    created_at = row.created_at if row.created_at.tzinfo else row.created_at.replace(tzinfo=timezone.utc)
-
     return SegmentationSignal(
         stream_id=VAULT_ACTIVITY_STREAM_ID,
         signal_id=row.id,
-        observed_at=created_at,
+        observed_at=observed_at,
         scope=scope,
         provenance_ref=f"vault.activity:{row.id}",
         protagonists=(),
@@ -526,13 +642,21 @@ def _emit_proposal(
     return result.episode_id
 
 
+def _load_stream_watermarks() -> dict[str, datetime]:
+    out: dict[str, datetime] = {}
+    for key, value in engine_state.all_state_with_prefix(_STREAM_WATERMARK_KEY_PREFIX).items():
+        raw = value.get("observed_until")
+        if raw:
+            out[key[len(_STREAM_WATERMARK_KEY_PREFIX) :]] = _parse_dt(raw)
+    return out
+
+
 def run_segmentation_tick(
     *,
     vault_root: Path | str,
     registry: StreamRegistry | None = None,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     consumer_id: str = CONSUMER_ID,
-    now: datetime | None = None,
     limit: int | None = None,
 ) -> dict[str, Any]:
     """THE production entrypoint (``python -m app.cli episodes tick``).
@@ -540,15 +664,22 @@ def run_segmentation_tick(
     Enumerates consumers strictly through the registry (AC4, via
     :func:`enumerate_consumable_streams` -- never a hardcoded source list),
     reads new signals since each live stream's own durable cursor, folds
-    them per-scope into open segments (:func:`fold_signals_into_segments`),
-    emits a proposal per closed segment, persists updated open-segment
-    state, and ONLY THEN advances each stream's cursor.
+    them per-scope into open segments (:func:`fold_signals_into_segments`,
+    quiescence measured against durable observed-time stream watermarks --
+    never wall-clock), and emits a proposal per closed segment.
+
+    Crash-safe ordering (INV-ERE-F): emit -> persist open state + watermarks
+    -> advance cursors -> delete closed-segment state LAST. A crash between
+    the two cursor advances replays only one stream, but the closed
+    segment's retained ``signal_ids`` ledger dedups the replayed rows and
+    the deterministic episode id skips the already-written note -- the tick
+    reconverges instead of double-proposing.
     """
-    tick_now = now if now is not None else datetime.now(timezone.utc)
     root = Path(vault_root)
     live_streams = {entry.stream_id for entry in enumerate_consumable_streams(registry=registry)}
 
     consumed: dict[str, int] = {}
+    skipped_no_observation_time: dict[str, int] = {}
     signals: list[SegmentationSignal] = []
     heimdal_rows: list[ObservationRow] = []
     vault_rows: list[VaultActivityRow] = []
@@ -556,19 +687,44 @@ def run_segmentation_tick(
     if HEIMDAL_STREAM_ID in live_streams:
         heimdal_rows = read_observations_for_consumer(consumer_id, limit=limit)
         consumed[HEIMDAL_STREAM_ID] = len(heimdal_rows)
-        signals.extend(_signal_from_heimdal_row(row) for row in heimdal_rows)
+        for h_row in heimdal_rows:
+            signal = _signal_from_heimdal_row(h_row)
+            if signal is None:
+                skipped_no_observation_time[HEIMDAL_STREAM_ID] = (
+                    skipped_no_observation_time.get(HEIMDAL_STREAM_ID, 0) + 1
+                )
+            else:
+                signals.append(signal)
 
     if VAULT_ACTIVITY_STREAM_ID in live_streams:
         vault_rows = read_vault_activity_for_consumer(consumer_id, limit=limit)
         consumed[VAULT_ACTIVITY_STREAM_ID] = len(vault_rows)
-        signals.extend(_signal_from_vault_activity_row(row, vault_root=root) for row in vault_rows)
+        for v_row in vault_rows:
+            signal = _signal_from_vault_activity_row(v_row, vault_root=root)
+            if signal is None:
+                skipped_no_observation_time[VAULT_ACTIVITY_STREAM_ID] = (
+                    skipped_no_observation_time.get(VAULT_ACTIVITY_STREAM_ID, 0) + 1
+                )
+            else:
+                signals.append(signal)
 
     open_state = engine_state.all_state_with_prefix(_OPEN_SEGMENT_KEY_PREFIX)
     open_segments = {
         key[len(_OPEN_SEGMENT_KEY_PREFIX) :]: OpenSegment.from_state(value) for key, value in open_state.items()
     }
 
-    updated_open, closed_segments = fold_signals_into_segments(signals, open_segments=open_segments, now=tick_now)
+    # Observed-time stream frontiers: durable high-water marks, advanced by
+    # this batch's own observed instants (never wall-clock, never enqueue
+    # time). Quiescence closure is measured against these.
+    watermarks = _load_stream_watermarks()
+    for signal in signals:
+        current = watermarks.get(signal.stream_id)
+        if current is None or signal.observed_until > current:
+            watermarks[signal.stream_id] = signal.observed_until
+
+    updated_open, closed_segments = fold_signals_into_segments(
+        signals, open_segments=open_segments, frontiers=watermarks
+    )
 
     proposed_ids: list[str] = []
     for closed in closed_segments:
@@ -578,21 +734,35 @@ def run_segmentation_tick(
 
     for scope, segment in updated_open.items():
         engine_state.set_state(f"{_OPEN_SEGMENT_KEY_PREFIX}{scope}", segment.to_state())
-    closed_scopes = {c.scope for c in closed_segments} - set(updated_open)
-    for scope in closed_scopes:
-        engine_state.delete_state(f"{_OPEN_SEGMENT_KEY_PREFIX}{scope}")
+    for stream_id, watermark in watermarks.items():
+        engine_state.set_state(
+            f"{_STREAM_WATERMARK_KEY_PREFIX}{stream_id}", {"observed_until": _iso(watermark)}
+        )
 
-    # Advance cursors LAST (INV-ERE-F): a crash before this point means the
-    # next tick re-reads the same batch, deduped by fold-by-key
-    # (signal_ids already recorded on the open segment) plus the
-    # deterministic episode id (an already-written note is never re-emitted).
+    # Advance cursors only after proposals and open state are durable; delete
+    # closed-segment state LAST. A crash between the two advances leaves the
+    # closed segment's signal_ids ledger in place, so the one-stream replay
+    # on the next tick folds to no-ops and the deterministic episode id
+    # skips the existing note (never a second partial proposal).
+    # Known residual (documented, accepted): a crash in the narrow window
+    # between the final cursor advance and the closed-state delete leaves an
+    # already-emitted segment's state loadable for one more tick; a genuinely
+    # NEW in-gap signal for that scope would extend it and be skipped at
+    # re-emission (its ref missing from one proposal's derived_from) -- an
+    # under-enrichment, never a duplicate or a lost note. ERE-07's re-cut
+    # path is the human correction for any mis-bounded proposal.
     if heimdal_rows:
         advance_cursor_for_consumer(consumer_id, heimdal_rows)
     if vault_rows:
         advance_vault_activity_cursor(consumer_id, vault_rows)
 
+    closed_scopes = {c.scope for c in closed_segments} - set(updated_open)
+    for scope in closed_scopes:
+        engine_state.delete_state(f"{_OPEN_SEGMENT_KEY_PREFIX}{scope}")
+
     return {
         "consumed": consumed,
+        "skipped_no_observation_time": skipped_no_observation_time,
         "proposed": proposed_ids,
         "open_segments": len(updated_open),
     }

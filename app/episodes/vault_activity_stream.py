@@ -128,31 +128,54 @@ def read_vault_activity_for_consumer(consumer_id: str, *, limit: int | None = No
     return rows
 
 
-def _note_rel_path_from_payload(payload: Mapping[str, Any]) -> str | None:
+_EMPTY_DIMENSIONS: dict[str, Any] = {"scope": None, "sphere_memberships": [], "situated_identity": None}
+
+
+def _resolve_note_path(payload: Mapping[str, Any], *, vault_root: Path) -> Path | None:
+    """Resolve the payload's note reference to a path INSIDE ``vault_root``, or ``None``.
+
+    `ingest.vault.changed` carries `relative_path` (vault-relative) plus
+    `vault_path` (absolute at ingest time); `ingest.object.created` /
+    `ingest.object.deleted` carry only `path` (absolute at ingest time,
+    `app/services/vault_sync.py`). An absolute ingest-time path must never be
+    read verbatim: `Path(vault_root) / absolute` discards ``vault_root``
+    entirely, so a relocated vault or an explicit ``--vault-root`` override
+    would silently read the ingest-time location. Instead every candidate --
+    absolute (ingest-time) or relative (could still traverse out via `..`) --
+    is containment-checked against the CURRENT ``vault_root`` and rejected
+    (``None`` -> empty dimensions) when it does not resolve underneath it;
+    never a read outside the engine's own vault root.
+    """
+    root = Path(vault_root).expanduser().resolve()
     for key in ("relative_path", "vault_path", "path"):
         value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+        if not (isinstance(value, str) and value.strip()):
+            continue
+        candidate = Path(value.strip())
+        resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()
+        if resolved == root or not resolved.is_relative_to(root):
+            continue
+        return resolved
     return None
 
 
 def resolve_activity_dimensions(row: VaultActivityRow, *, vault_root: Path) -> dict[str, Any]:
     """Best-effort frontmatter dimension enrichment via `extract_context_dimensions_for_note`.
 
-    Never raises: a note that is missing, unreadable, or already deleted
-    (e.g. the note behind an `ingest.object.deleted` row) yields empty
-    dimensions rather than failing the tick -- the row still contributes a
-    bare time-dimension signal.
+    Never raises: a note that is missing, unreadable, already deleted (e.g.
+    the note behind an `ingest.object.deleted` row), or referenced by an
+    ingest-time absolute path outside the current ``vault_root``
+    (:func:`_resolve_note_path`) yields empty dimensions rather than failing
+    the tick -- the row still contributes a bare time-dimension signal.
     """
-    rel_path = _note_rel_path_from_payload(row.payload)
-    if rel_path is None:
-        return {"scope": None, "sphere_memberships": [], "situated_identity": None}
+    note_path = _resolve_note_path(row.payload, vault_root=vault_root)
+    if note_path is None:
+        return dict(_EMPTY_DIMENSIONS)
     try:
-        note_path = (Path(vault_root) / rel_path).resolve()
         text = note_path.read_text(encoding="utf-8")
         frontmatter, _body = load_frontmatter(text)
     except Exception:
-        return {"scope": None, "sphere_memberships": [], "situated_identity": None}
+        return dict(_EMPTY_DIMENSIONS)
     return extract_context_dimensions_for_note(frontmatter)
 
 

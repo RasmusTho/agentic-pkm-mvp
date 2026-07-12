@@ -309,6 +309,34 @@ Interpretation:
 - the log is Heimdal's durable evidence stream; it is not authority over knowledge (HEIM-8),
 - consumer projections built by replaying the log from a cursor are derived and rebuildable.
 
+## Episode Resolution Engine tick-runtime state
+
+Migration-owned (ERE-04, #3179): Alembic revision `a1b2c3d4e5f6` creates the table;
+`app/episodes/engine_state.py` is assert-only (fail-loud `EngineStateSchemaMissingError` preflight
+with a migration hint on every query; **no autocreate path at all** — unlike the Heimdal stores
+there is no `STORE_SCHEMA_AUTOCREATE` opt-in here, test fixtures run the migration). See
+`docs/EVENTS.md :: Secondary per-consumer cursor readers` for the consumer contract.
+
+- `episode_engine_state` — generic key/value state for the segmentation tick
+  (`app/episodes/segmenter.py::run_segmentation_tick`).
+  - `key` (`text`, PK) — namespaced row families:
+    - `cursor:vault.activity:<consumer_id>` — the engine's own durable read position over the
+      `outbox` table's vault-activity topics (independent of `outbox.delivered_at`, which the
+      worker dispatcher owns);
+    - `open_segment:<scope>` — one scope's currently-open (not yet proposed) segment state;
+    - `stream_watermark:<stream_id>` — max observed instant consumed per stream (observed-time
+      quiescence frontier).
+  - `value` (`jsonb`, `NOT NULL`)
+  - `updated_at` (`timestamptz`, `NOT NULL`, default `now()`)
+
+Interpretation:
+- pure rebuildable tick-runtime bookkeeping — never authoritative; Episode notes in the vault are
+  the source of record (ADR-0051 OD-1/OD-2) and the `episodes` table is a rebuildable projection;
+- recovery = reset this table's rows **together with** the `mimer.episode_resolution_engine` row in
+  `heimdal_observation_cursor` (full both-stream replay is deterministic and emission-deduped); a
+  single-stream reset is a skewed replay and is not a supported operator action (see the migration
+  docstring).
+
 ## Explicit Deltas / Known Gaps
 - The primary runtime store is the `store_*` set, migration-owned since Alembic revision
   `c2766a04d001` (KERNEL-04; `_ensure_tables()` is assert-only outside tests). The AMG-core tables
