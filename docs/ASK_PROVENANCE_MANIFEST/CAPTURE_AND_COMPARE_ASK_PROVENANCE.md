@@ -53,4 +53,4 @@ No Lens UI, API expansion, raw audit log, remote export, span-level citation sup
 
 ## Related GitHub Issues
 
-Create one bounded implementation issue after this specification is merged. TCD hint: Sol / high reasoning for boundary design and review; Terra / high reasoning is appropriate for the bounded implementation once the contract is accepted.
+Implementation issue: [#3546](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3546). TCD hint: Sol / high reasoning for boundary design and review; Terra / high reasoning is appropriate for the bounded implementation once the contract is accepted.
