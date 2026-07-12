@@ -50,12 +50,13 @@ def _response(
     *,
     reviewed: list[str] | None = None,
     accepted_hash: str | None = None,
+    content: str | None = None,
 ) -> str:
     return json.dumps(
         {
             "schema_version": RESPONSE_SCHEMA_VERSION,
             "stance": stance,
-            "content": f"{stance} answer",
+            "content": content or f"{stance} answer",
             "claims": [f"{stance} claim"],
             "risks": [f"{stance} risk"],
             "blocking_questions": [],
@@ -70,15 +71,17 @@ class _ConsensusAdapter:
     adapter_id: str
     provider: str
     model: str
+    content: str = ""
 
     def execute(self, request: Mapping[str, Any]) -> AdapterResult:
         if request["phase"] == "draft":
-            return AdapterResult(_response("draft"))
+            return AdapterResult(_response("draft", content=self.content or None))
         return AdapterResult(
             _response(
                 "accept",
                 reviewed=list(request["reviewed_artifact_refs"]),
                 accepted_hash=request["input_artifacts"][0]["artifact_hash"],
+                content=self.content or None,
             )
         )
 
@@ -187,6 +190,35 @@ def test_markdown_report_fences_untrusted_question_and_model_text(tmp_path: Path
     assert "<script>alert('x')</script>" in rendered
     assert "<script>bad</script>" in rendered
     assert "<img src=x>" in rendered
+
+
+def test_markdown_report_fences_untrusted_synthesis_and_readiness(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    service = ModelInquiryService.from_env(env)
+    service.start(
+        question="Safe question",
+        workflow="fable-gpt-architecture",
+        inquiry_id="inq_test_markdown_synthesis_untrusted",
+        source_refs=[{"ref_type": "github_issue", "ref": "#3540"}],
+    )
+    content = "# Synthesis heading\n\n<script>bad</script>\n```"
+    adapters = {
+        role: _ConsensusAdapter(f"{role}-adapter", role, f"{role}-model", content)
+        for role in ("fable", "gpt_codex")
+    }
+
+    result = ModelInquiryRunner(service, adapters).run(
+        "inq_test_markdown_synthesis_untrusted", max_rounds=1
+    )
+    ModelInquiryPromotionGateway(service).evaluate("inq_test_markdown_synthesis_untrusted")
+    report = service.write_human_readable_report("inq_test_markdown_synthesis_untrusted")
+
+    rendered = report.read_text(encoding="utf-8")
+    assert result["outcome"] == "consensus"
+    assert "## Shared synthesis" in rendered
+    assert "````" in rendered
+    assert "# Synthesis heading" in rendered
+    assert "<script>bad</script>" in rendered
 
 
 def test_start_persists_question_before_provider_call(tmp_path: Path) -> None:

@@ -7,6 +7,7 @@ from typing import Any
 
 from app.builderops.model_inquiry_contract import (
     ModelInquiryIssueProposal,
+    ModelTurnResponse,
     parse_issue_proposal,
     parse_model_turn_response,
 )
@@ -43,7 +44,8 @@ def render_markdown_report(trace: Mapping[str, Any]) -> str:
 
     synthesis = trace.get("synthesis")
     if synthesis is not None:
-        lines.extend(["## Shared synthesis", "", _text(_mapping(synthesis, "synthesis"), "content"), ""])
+        lines.extend(["## Shared synthesis", ""])
+        lines.extend(_render_model_content(_text(_mapping(synthesis, "synthesis"), "content")))
 
     readiness = trace.get("readiness")
     if readiness is not None:
@@ -54,8 +56,7 @@ def render_markdown_report(trace: Mapping[str, Any]) -> str:
                 "",
                 f"Outcome: **{_text(readiness_map, 'outcome')}**",
                 "",
-                _text(readiness_map, "rationale"),
-                "",
+                *_fenced(_text(readiness_map, "rationale")),
             ]
         )
 
@@ -87,7 +88,21 @@ def _render_turn(turn: Mapping[str, Any]) -> list[str]:
         lines.extend(_fenced(content))
         return lines
 
-    lines.extend([f"Stance: **{response.stance}**", "", "#### Response", ""])
+    lines.extend([f"Stance: **{response.stance}**", ""])
+    lines.extend(_render_response(response))
+    return lines
+
+
+def _render_model_content(content: str) -> list[str]:
+    try:
+        response = parse_model_turn_response(content)
+    except BuilderOpsValidationError:
+        return _fenced(content)
+    return [f"Stance: **{response.stance}**", "", *_render_response(response)]
+
+
+def _render_response(response: ModelTurnResponse) -> list[str]:
+    lines = ["#### Response", ""]
     lines.extend(_render_response_content(response.content))
     _append_list(lines, "Claims", response.claims)
     _append_list(lines, "Risks", response.risks)
