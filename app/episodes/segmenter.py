@@ -68,6 +68,19 @@ from pathlib import Path
 from typing import Any, Final, Mapping, Sequence
 
 from app.episodes import engine_state
+from app.episodes.calendar_stream import (
+    CALENDAR_STREAM_ID,
+    AttendeeResolved,
+    AttendeeUnresolved,
+    CalendarBinding,
+    CalendarRawItem,
+    RegisterEntrySnapshot,
+    parse_vevent,
+    read_calendar_raw_items_for_tick,
+    read_register_snapshot,
+    resolve_attendee_readonly,
+    slugify_summary,
+)
 from app.episodes.ids import EPISODE_ID_PREFIX
 from app.episodes.notes import episode_note_rel_path
 from app.episodes.store import write_episode_note
@@ -612,6 +625,62 @@ def _signal_from_vault_activity_row(row: VaultActivityRow, *, vault_root: Path) 
     )
 
 
+def _signal_from_calendar_row(
+    binding: CalendarBinding,
+    item: CalendarRawItem,
+    *,
+    register_snapshot: Sequence[RegisterEntrySnapshot],
+) -> SegmentationSignal | None:
+    """Normalize one raw CalDAV VEVENT resource (ERE-09, #3184) to a
+    SegmentationSignal, or ``None`` when it carries no usable DTSTART or its
+    ICS body does not parse (bounds are never poll time -- mirrors
+    :func:`_signal_from_heimdal_row` / :func:`_signal_from_vault_activity_row`).
+
+    Attendees resolve three-state, READ-ONLY against ``register_snapshot``
+    (HEIM-6-honest; Scope: "no register mutation" -- see
+    ``app.episodes.calendar_stream``'s module docstring): only ``resolved``
+    and ``unresolved`` refs feed ``protagonists`` (a stable id either way,
+    never a bare surface-form string); an ``ambiguous`` match asserts no
+    single id and contributes nothing (HEIM-6). Scope comes from the
+    calendar's own private-bindings scope mapping (``binding.scope``, AC6 /
+    ERE-08 per-calendar discipline) -- never inferred from event content, so
+    cross-scope isolation is inherited for free from the already-shipped
+    per-scope partitioning in :func:`fold_signals_into_segments`.
+    """
+    event = parse_vevent(item.ics_text)
+    if event is None or event.dtstart is None:
+        logger.warning(
+            "segmentation: skipping calendar item without a usable DTSTART "
+            "(calendar=%s uid=%s) -- bounds are never poll time",
+            binding.calendar_id,
+            item.uid,
+        )
+        return None
+
+    protagonists: list[str] = []
+    for attendee in event.attendees:
+        result = resolve_attendee_readonly(attendee.surface_form, known_entries=register_snapshot)
+        if isinstance(result, (AttendeeResolved, AttendeeUnresolved)):
+            protagonists.append(result.entity_id)
+        # AttendeeAmbiguous: no single id asserted (HEIM-6) -- this attendee
+        # contributes no protagonist evidence to the signal.
+
+    goal = (slugify_summary(event.summary),) if event.summary else ()
+
+    return SegmentationSignal(
+        stream_id=CALENDAR_STREAM_ID,
+        signal_id=f"{item.uid}:{item.etag}",
+        observed_at=event.dtstart,
+        observed_at_end=event.dtend,
+        scope=binding.scope,
+        provenance_ref=f"calendar:{item.uid}:{item.etag}",
+        protagonists=tuple(sorted(set(protagonists))),
+        goal=goal,
+        heimdal_session_id=None,
+        causal_break=False,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Emission (AC5) + production tick entrypoint
 # ---------------------------------------------------------------------------
@@ -705,6 +774,7 @@ def run_segmentation_tick(
 
     consumed: dict[str, int] = {}
     skipped_no_observation_time: dict[str, int] = {}
+    degraded: list[str] = []
     signals: list[SegmentationSignal] = []
     heimdal_rows: list[ObservationRow] = []
     vault_rows: list[VaultActivityRow] = []
@@ -732,6 +802,40 @@ def run_segmentation_tick(
                 )
             else:
                 signals.append(signal)
+
+    if CALENDAR_STREAM_ID in live_streams:
+        # ERE-09 (#3184): registry-driven calendar ingestion, mirroring the
+        # vault_activity block above (Coordinator contract clarification,
+        # #3184 -- an additive block here is in scope; the pure shift-
+        # detection core below is untouched). Credential resolution
+        # (`resolve_calendar_bindings`, inside `read_calendar_raw_items_for_tick`)
+        # fails LOUD and propagates out of this tick when the registry says
+        # calendar is live but private-bindings config is missing (AC4) --
+        # deliberately NOT caught here, unlike a per-calendar unreachable
+        # fetch, which the helper already folds into `calendar_degraded`
+        # (AC5) instead of raising. No durable read-position cursor: unlike
+        # the append-only heimdal/outbox logs, a CalDAV poll re-reads the
+        # calendar's current item set each tick and relies on the
+        # uid+etag-keyed `signal_id` for at-least-once idempotency (an
+        # unchanged event redelivers the same signal_id -> no-op fold; an
+        # edited event gets a new etag -> a new signal, itself append-only
+        # evidence of the change) -- the same INV-ERE-F guarantee, a
+        # different mechanism.
+        calendar_items, calendar_degraded = read_calendar_raw_items_for_tick()
+        consumed[CALENDAR_STREAM_ID] = len(calendar_items)
+        degraded.extend(calendar_degraded)
+        if calendar_items:
+            calendar_register_snapshot = read_register_snapshot(vault_root=root)
+            for cal_binding, cal_item in calendar_items:
+                signal = _signal_from_calendar_row(
+                    cal_binding, cal_item, register_snapshot=calendar_register_snapshot
+                )
+                if signal is None:
+                    skipped_no_observation_time[CALENDAR_STREAM_ID] = (
+                        skipped_no_observation_time.get(CALENDAR_STREAM_ID, 0) + 1
+                    )
+                else:
+                    signals.append(signal)
 
     open_state = engine_state.all_state_with_prefix(_OPEN_SEGMENT_KEY_PREFIX)
     open_segments = {
@@ -803,6 +907,10 @@ def run_segmentation_tick(
         "skipped_no_observation_time": skipped_no_observation_time,
         "proposed": proposed_ids,
         "open_segments": len(updated_open),
+        # AC5 (ERE-09, #3184): calendar_ids (or other future streams) that
+        # degraded softly this tick -- never raised out of this function,
+        # never stalls segmentation on the remaining streams.
+        "degraded": degraded,
     }
 
 
