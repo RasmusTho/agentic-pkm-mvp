@@ -34,9 +34,9 @@ Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kern
   these are historical-only. The temporary `PgObjects` compatibility adapter remains on the active
   vault-root ingest path. It preflights the migration-owned store schema and delegates the durable
   object write to `store_objects`; it retains only a minimal `objects` parent row while the live
-  `decisions.object_id` foreign key requires it. #3488 owns removal of that parent-row compatibility.
+  `decisions.object_id` foreign key requires it. #3510 owns removal of that parent-row compatibility.
   `app/services/decisions.py` still reads/writes
-  `decisions`, whose runtime DDL remains a separately tracked migration follow-up.
+  `decisions`, whose runtime DDL remains the separately tracked #3488 migration follow-up.
   `chunks`/`embeddings`/`membership` are touched by the backfill job
   (`app/jobs/backfill.py`) and `app/store/membership_store.py` rather than purely historical.
 
@@ -317,8 +317,8 @@ Interpretation:
   `c2766a04d001` (KERNEL-04; `_ensure_tables()` is assert-only outside tests). The AMG-core tables
   under `app/alembic/versions/` are mostly legacy lineage. `PgObjects` remains only as a guarded
   compatibility adapter for vault-root ingest: its direct `store_objects` writer is delegated to
-  `app/stores/pg.py`, while a minimal `objects` parent row persists until #3488 removes the live FK.
-  `app/services/decisions.py` still reads/writes `decisions` while its runtime DDL is tracked
+  `app/stores/pg.py`, while a minimal `objects` parent row persists until #3510 removes the live FK.
+  `app/services/decisions.py` still reads/writes `decisions` while #3488 tracks its runtime DDL
   separately for Alembic migration. `chunks`/`embeddings`/`membership` are touched by the backfill job
   and `membership_store`. An earlier
   revision of this doc mis-attributed the store tables to Alembic, listed a fabricated `search_vector`

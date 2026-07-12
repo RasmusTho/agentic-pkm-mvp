@@ -83,7 +83,7 @@ class PgObjects:
         canonical_store = PgObjectStore()
 
         # ``decisions.object_id`` still has a live FK to the legacy ``objects``
-        # table.  Keep the smallest possible parent row until #3488 migrates
+        # table.  Keep the smallest possible parent row until #3510 migrates
         # that FK; ``store_objects`` remains exclusively canonical-owned.
         conn = psycopg.connect(_dsn())
         try:
