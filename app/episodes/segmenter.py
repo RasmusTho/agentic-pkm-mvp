@@ -16,18 +16,25 @@ ADR-0051 commitment 2, ADR-0054 §3):
   scope (AC7: partitioned per-scope, never cross-scope fused), it walks each
   scope's signals in ``observed_at`` order and closes a segment whenever
   :func:`detect_shift` fires a boundary. Quiescence (the >45min-silence rule)
-  is measured against a PER-SCOPE OBSERVED-time frontier, never wall-clock
+  is measured against a PER-SCOPE READ-POSITION frontier, never wall-clock
   and never a cross-scope/cross-stream frontier: a segment in scope X closes
-  on quiescence only when scope X's OWN observed head has moved more than the
-  gap past that segment's last signal (``frontiers``: scope -> max observed
-  instant consumed for that scope this tick). A sibling scope's later signal
-  in the same batch can therefore never close another scope's just-created
-  segment (the AC7 per-scope-isolation principle applied to closure). This
-  also keeps one Heimdal session from ever spanning two proposals (AC3): a
-  session continuing always *extends* via :func:`detect_shift`'s session-hint
-  branch, and only a genuinely later observation in that session's own scope
-  advances its frontier -- and by then that observation has already folded in
-  and moved ``last_signal_at`` forward with it. No I/O, no vault, no DB --
+  on quiescence only when scope X's OWN read position (the max ``observed_at``
+  START instant consumed for that scope, ``frontiers``: scope -> that
+  instant) has moved more than the gap past that segment's last signal. The
+  frontier keys on ``observed_at`` (where the next signal STARTED), NOT
+  ``observed_until`` (a signal's content-span END): one signal with a long
+  observed window must not push the frontier past a nested, later-started
+  segment in the same scope and quiesce-close it. A sibling scope's later
+  signal in the same batch can therefore never close another scope's
+  just-created segment (the AC7 per-scope-isolation principle applied to
+  closure). This also keeps one Heimdal session from ever spanning two
+  proposals (AC3): a session continuing always *extends* via
+  :func:`detect_shift`'s session-hint branch, and only a genuinely
+  later-started observation in that session's own scope advances its frontier
+  -- and by then that observation has already folded in and moved
+  ``last_signal_at`` forward with it. (``observed_until`` remains
+  authoritative for ``last_signal_at`` and emitted bounds -- only the closure
+  read-position keys on ``observed_at``.) No I/O, no vault, no DB --
   fully unit-testable and deterministic, so it is also the module's
   idempotency guarantee under at-least-once redelivery (AC2): re-folding a
   signal whose ``signal_id`` an open segment already recorded is a no-op.
@@ -38,7 +45,8 @@ ADR-0051 commitment 2, ADR-0054 §3):
 - :func:`run_segmentation_tick` is the production, I/O-performing entrypoint
   (``python -m app.cli episodes tick``): reads new signals from each *live*
   registered stream since its own durable cursor, builds this tick's
-  per-scope observed frontier from the consumed signals, calls the pure fold,
+  per-scope read-position frontier (max ``observed_at`` per scope) from the
+  consumed signals, calls the pure fold,
   emits a ``segmentation: proposed`` Episode note per closed segment (AC5, via
   ``app.episodes.store.write_episode_note`` -- the ERE-02 guarded seam),
   persists updated open-segment state, advances each stream's cursor, and
@@ -678,8 +686,9 @@ def run_segmentation_tick(
     :func:`enumerate_consumable_streams` -- never a hardcoded source list),
     reads new signals since each live stream's own durable cursor, folds
     them per-scope into open segments (:func:`fold_signals_into_segments`,
-    quiescence measured against this tick's PER-SCOPE observed frontier --
-    never wall-clock, never cross-scope), and emits a proposal per closed
+    quiescence measured against this tick's PER-SCOPE read-position frontier
+    (max observed_at per scope -- never wall-clock, never cross-scope, never
+    a signal's observed_until span end), and emits a proposal per closed
     segment. A scope with no signal this tick has no frontier entry, so its
     carried-over segment stays open and is deferred to ERE-06 (closure
     detection is out of scope for ERE-04).
@@ -729,20 +738,29 @@ def run_segmentation_tick(
         key[len(_OPEN_SEGMENT_KEY_PREFIX) :]: OpenSegment.from_state(value) for key, value in open_state.items()
     }
 
-    # Per-scope observed frontier for THIS tick: scope -> max observed instant
-    # among the signals consumed for that scope (never wall-clock, never
-    # enqueue time, never cross-scope). Quiescence closure is measured against
-    # each segment's own scope frontier -- a sibling scope's later signal can
-    # never close another scope's segment (AC7 isolation applied to closure),
-    # and a scope with no signal this tick has no entry, so its carried-over
-    # segment stays open (deferred to ERE-06). This is computed fresh per tick,
-    # not carried durably: per-scope-from-this-batch is sufficient and correct,
-    # so there is no stream-watermark row family to persist.
+    # Per-scope READ-POSITION frontier for THIS tick: scope -> max
+    # `observed_at` (the START of the latest signal consumed for that scope),
+    # never `observed_until` (a signal's content-span END). The frontier
+    # answers "how far has this scope's read position advanced" -- i.e. up to
+    # what start instant have we observed signals -- so a single signal whose
+    # observed window merely spans far into the future (a long
+    # observed_at_end) must NOT push the frontier past a nested, later-started
+    # segment created in the same tick and quiesce-close it (that would split
+    # one session across two proposals, the within-scope form of the AC3 bug).
+    # observed_until stays authoritative for `last_signal_at` and segment
+    # bounds (:func:`_extend_open_segment` / :func:`_close`); it is only the
+    # closure read-position that keys on observed_at. Never wall-clock, never
+    # enqueue time, never cross-scope: a sibling scope's later signal can never
+    # close another scope's segment (AC7 isolation applied to closure), and a
+    # scope with no signal this tick has no entry, so its carried-over segment
+    # stays open (deferred to ERE-06). Computed fresh per tick, not carried
+    # durably -- per-scope-from-this-batch is sufficient, so there is no
+    # stream-watermark row family to persist.
     scope_frontiers: dict[str, datetime] = {}
     for signal in signals:
         current = scope_frontiers.get(signal.scope)
-        if current is None or signal.observed_until > current:
-            scope_frontiers[signal.scope] = signal.observed_until
+        if current is None or signal.observed_at > current:
+            scope_frontiers[signal.scope] = signal.observed_at
 
     updated_open, closed_segments = fold_signals_into_segments(
         signals, open_segments=open_segments, frontiers=scope_frontiers

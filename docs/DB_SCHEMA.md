@@ -323,9 +323,9 @@ there is no `STORE_SCHEMA_AUTOCREATE` opt-in here, test fixtures run the migrati
     - `cursor:vault.activity:<consumer_id>` — the engine's own durable read position over the
       `outbox` table's vault-activity topics (independent of `outbox.delivered_at`, which the
       worker dispatcher owns);
-    - `open_segment:<scope>` — one scope's currently-open (not yet proposed) segment state;
-    - `stream_watermark:<stream_id>` — max observed instant consumed per stream (observed-time
-      quiescence frontier).
+    - `open_segment:<scope>` — one scope's currently-open (not yet proposed) segment state.
+  - (No `stream_watermark` row family: the quiescence-closure frontier is a per-scope
+    read position computed fresh from each tick's own consumed signals, not carried durably.)
   - `value` (`jsonb`, `NOT NULL`)
   - `updated_at` (`timestamptz`, `NOT NULL`, default `now()`)
 

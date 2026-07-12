@@ -46,14 +46,17 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from app.episodes import segmenter
 from app.episodes.engine_state import EngineStateSchemaMissingError, _assert_schema
 from app.episodes.notes import episode_note_rel_path, parse_episode_note
 from app.episodes.schema import validate_episode_note_fields
 from app.episodes.segmenter import (
+    HEIMDAL_STREAM_ID,
     ClosedSegment,
     SegmentationSignal,
     _deterministic_episode_id,
@@ -62,6 +65,7 @@ from app.episodes.segmenter import (
     _signal_from_heimdal_row,
     _signal_from_vault_activity_row,
     fold_signals_into_segments,
+    run_segmentation_tick,
 )
 from app.episodes.vault_activity_stream import VaultActivityRow, resolve_activity_dimensions
 from app.heimdal.observation_log import ObservationRow
@@ -375,6 +379,102 @@ def test_sibling_scope_progress_never_closes_segment() -> None:
     )
     assert [c for c in closed_3 if c.scope == "other"] == []
     assert open_3["other"].signal_ids == frozenset({"s2", "s3"})
+
+
+# ---------------------------------------------------------------------------
+# PR #3508 review round 3: the PRODUCTION frontier is built from observed_at
+# (read position), never observed_until (content-span end)
+# ---------------------------------------------------------------------------
+
+
+def _heimdal_row(
+    *,
+    observation_id: str,
+    observed_at_start: datetime,
+    observed_at_end: datetime | None = None,
+    episode_id: str | None = None,
+    protagonist: str | None = None,
+    scope_hint: str = "work",
+    sequence: int = 1,
+) -> ObservationRow:
+    payload: dict[str, Any] = {
+        "observation_id": observation_id,
+        "observed_at_start": observed_at_start.isoformat(),
+        "scope_hint": scope_hint,
+    }
+    if observed_at_end is not None:
+        payload["observed_at_end"] = observed_at_end.isoformat()
+    if episode_id is not None:
+        payload["episode_id"] = episode_id
+    if protagonist is not None:
+        payload["attributions"] = [{"mention_id": protagonist, "resolution": "resolved"}]
+    return ObservationRow(
+        id=f"log-{observation_id}",
+        topic="heimdal.observation.published",
+        idempotency_key=f"k-{observation_id}",
+        envelope={"payload": payload},
+        created_at=_dt(12, 0),
+        sequence=sequence,
+    )
+
+
+def test_tick_long_observed_window_never_closes_nested_session_segment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PR #3508 review round 3 (comment 3565377855): ENFORCEMENT test that
+    reaches the real ``run_segmentation_tick`` frontier construction (not a
+    hand-built frontier dict).
+
+    One tick, scope 'work':
+      A: observed_at=09:00, observed_at_end=10:30 (a LONG content window),
+         protagonist=alice, NO session.
+      B: observed_at=09:10, protagonist=bob (disjoint -> shift closes A and
+         opens B), session=sess-a.
+
+    A's protagonist shift closes A and opens the session-bound segment B with
+    last_signal_at=09:10. If the per-scope frontier were built from
+    ``observed_until`` (=A's 10:30 span end), the quiescence loop would then
+    close B in the SAME tick (10:30-09:10=80min>45) and sess-a's next-tick
+    continuation would reopen as a SECOND proposal -- the within-scope form of
+    the AC3 split. Built from ``observed_at`` (read position), the frontier is
+    max(09:00, 09:10)=09:10, so B (last 09:10) is NOT closed and stays open.
+    Expected: exactly ONE proposal (A) and ONE open segment (B)."""
+    row_a = _heimdal_row(
+        observation_id="obs-a",
+        observed_at_start=_dt(9, 0),
+        observed_at_end=_dt(10, 30),
+        protagonist="alice",
+        sequence=1,
+    )
+    row_b = _heimdal_row(
+        observation_id="obs-b",
+        observed_at_start=_dt(9, 10),
+        episode_id="sess-a",
+        protagonist="bob",
+        sequence=2,
+    )
+
+    # Stub the I/O boundaries so the REAL tick body (frontier building, fold,
+    # emission) runs without Postgres or live streams.
+    monkeypatch.setattr(
+        segmenter,
+        "enumerate_consumable_streams",
+        lambda *a, **k: (SimpleNamespace(stream_id=HEIMDAL_STREAM_ID),),
+    )
+    monkeypatch.setattr(segmenter, "read_observations_for_consumer", lambda *a, **k: [row_a, row_b])
+    monkeypatch.setattr(segmenter, "advance_cursor_for_consumer", lambda *a, **k: None)
+    monkeypatch.setattr(segmenter.engine_state, "all_state_with_prefix", lambda prefix: {})
+    monkeypatch.setattr(segmenter.engine_state, "set_state", lambda key, value: None)
+    monkeypatch.setattr(segmenter.engine_state, "delete_state", lambda key: None)
+
+    result = run_segmentation_tick(vault_root=tmp_path / "vault", write_guard=_allow_guard())
+
+    # A proposed exactly once; B's session-bound segment survives the tick.
+    assert len(result["proposed"]) == 1, result
+    assert result["open_segments"] == 1, result
+    # Exactly one note on disk (A) -- B was NOT emitted as a second proposal.
+    notes = list((tmp_path / "vault" / "episodes").glob("*.md"))
+    assert len(notes) == 1
 
 
 # ---------------------------------------------------------------------------
