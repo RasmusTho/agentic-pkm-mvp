@@ -51,6 +51,18 @@ path-typing). This module is the production tick (:func:`run_recut_tick`, wired 
    set against the on-disk id set and withdraws every one of the deleted episode's bindings
    (:func:`app.episodes.assignment.withdraw_episode_bindings`) -- so no artifact is ever left
    actively bound to an episode_id that no longer has a note.
+7. **Projection sync** (#3182 mirror of #3181 review finding P1-1,
+   ``app.episodes.closure._sync_projection_closed``): :func:`_write_relabeled` echoes the note's
+   CURRENT on-disk fields straight back through ``write_episode_note`` (only ``segmentation`` is
+   deliberately forced), so a re-cut relabel can carry an operator's edit to ANY note-sourced
+   column -- ``title``/``scope``/bounds/``parent_episode``/the list fields -- not just the label.
+   The ``episodes`` PROJECTION (ERE-02, ``app.jobs.episodes_projection``) is what
+   ``app.episodes.assignment.read_candidate_episodes_for_scopes`` and
+   ``app.episodes.closure.find_closable_episodes`` actually read; the only other writer,
+   ``rebuild_episodes_projection``, is a full TRUNCATE+replay no production caller schedules. So
+   :func:`_write_relabeled` issues its own targeted incremental ``UPDATE`` (:func:`_sync_projection_row`)
+   for every note-sourced column right after each relabel write -- never partial, since a partial
+   sync would leave exactly this bug class alive for whichever column it omitted.
 """
 
 from __future__ import annotations
@@ -63,15 +75,37 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Final, Mapping
 
+from app.db.db import conn_rw
 from app.episodes import engine_state
 from app.episodes.assignment import reconcile_episode_bindings, withdraw_episode_bindings
 from app.episodes.notes import EPISODE_NOTES_DIR, parse_episode_note
 from app.episodes.schema import EpisodeSchemaValidationError, validate_episode_note_fields
 from app.episodes.store import cut_snapshot, write_episode_note
+from app.jobs.episodes_projection import EPISODES_TABLE
 from app.vault.manager import iter_vault_markdown_files
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
 logger = logging.getLogger(__name__)
+
+_EPISODES_SCHEMA_MIGRATION_HINT = (
+    "episodes projection schema is migration-owned: run 'alembic upgrade head' against this "
+    "database. See app/alembic/versions/e0f2a9c4b7d1_ere02_episodes_projection.py."
+)
+
+
+class EpisodeRecutSchemaMissingError(RuntimeError):
+    """Raised when the ``episodes`` projection table is absent (pre-migration database)."""
+
+
+def _assert_schema(conn: Any) -> None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass(%s)", (EPISODES_TABLE,))
+        row = cur.fetchone()
+    oid = (row.get("to_regclass") if isinstance(row, dict) else row[0]) if row else None
+    if not oid:
+        raise EpisodeRecutSchemaMissingError(
+            f"Missing table '{EPISODES_TABLE}'. {_EPISODES_SCHEMA_MIGRATION_HINT}"
+        )
 
 # ---------------------------------------------------------------------------
 # Named, single-sourced quiet-window constant (AC5; RQ-E1 open research, mirrors
@@ -223,6 +257,64 @@ def _scan_episode_notes(vault_root: Path) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _sync_projection_row(episode_id: str, fields: Mapping[str, Any]) -> None:
+    """Incrementally sync the ``episodes`` projection row's note-sourced columns after a relabel
+    write (#3182 review fix -- ``app.episodes.assignment.read_candidate_episodes_for_scopes`` and
+    ``app.episodes.closure.find_closable_episodes`` read THIS table, and nothing else keeps it
+    current: the only other writer, ``app.jobs.episodes_projection.rebuild_episodes_projection``,
+    is a full TRUNCATE+replay no production caller invokes on any schedule). A targeted ``UPDATE``
+    -- never a rebuild -- mirrors ``app.episodes.closure._sync_projection_closed``'s
+    incremental-update-over-rebuild discipline for this same projection family.
+
+    Unlike closure's single ``closed`` column, :func:`_write_relabeled` echoes the note's FULL
+    on-disk cut back through ``write_episode_note`` (see module docstring point 7), so this syncs
+    every note-sourced column -- ``episode_id`` (the key) and ``note_path`` (never changes for the
+    same episode_id) are the only two omitted.
+
+    Idempotent by construction (writing the same on-disk values twice is the same as once), so
+    this is safe to call on every relabel, retried tick included. A zero-rowcount result (the
+    projection has no row for this episode -- e.g. truncated by a concurrent
+    ``rebuild_episodes_projection`` run) is logged, not raised: the vault note (SoR) already
+    carries the correct fields regardless, and the next rebuild re-derives this row from it.
+    """
+    time_fields = fields.get("time") or {}
+    with conn_rw() as conn:
+        _assert_schema(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE {EPISODES_TABLE} SET
+                    scope = %s, title = %s, time_start = %s, time_end = %s, closed = %s,
+                    segmentation = %s, parent_episode = %s, space = %s::jsonb,
+                    protagonists = %s::jsonb, goal = %s::jsonb, causation = %s::jsonb,
+                    derived_from = %s::jsonb
+                WHERE episode_id = %s
+                """,
+                (
+                    fields.get("scope"),
+                    fields.get("title"),
+                    time_fields.get("start"),
+                    time_fields.get("end"),
+                    bool(time_fields.get("closed", False)),
+                    fields.get("segmentation"),
+                    fields.get("parent_episode"),
+                    json.dumps(fields.get("space") or []),
+                    json.dumps(fields.get("protagonists") or []),
+                    json.dumps(fields.get("goal") or []),
+                    json.dumps(fields.get("causation") or []),
+                    json.dumps(fields.get("derived_from") or []),
+                    episode_id,
+                ),
+            )
+            rowcount = getattr(cur, "rowcount", None)
+    if not rowcount:
+        logger.warning(
+            "recut: episodes projection has no row for %s -- relabeled cut will not be "
+            "query-visible until the next rebuild_episodes_projection() run",
+            episode_id,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Relabel writes -- always echo the CURRENT on-disk cut fields back unchanged, only
 # `segmentation` differs, so app.episodes.store's terminality guard (AC2) passes trivially.
@@ -255,6 +347,9 @@ def _write_relabeled(
         vault_root=vault_root,
         write_guard=write_guard,
     )
+    # #3182 review fix (mirrors #3181 P1-1): keep the `episodes` projection current from the
+    # write path itself -- see _sync_projection_row's docstring for why this must never be partial.
+    _sync_projection_row(episode_id, result.fields)
     return result.fields
 
 
@@ -399,6 +494,7 @@ def run_recut_tick(
 
 __all__ = [
     "ACCEPTANCE_QUIET_WINDOW_MINUTES",
+    "EpisodeRecutSchemaMissingError",
     "SEGMENTATION_ACCEPTED",
     "SEGMENTATION_PROPOSED",
     "SEGMENTATION_RECUT",
