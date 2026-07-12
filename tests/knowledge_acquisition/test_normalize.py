@@ -9,8 +9,8 @@ emitting an empty normalized artifact from a record that carries a transcript.
 
 The ASR-path integration fixture (`ASR_RAW_RECORD_PR2931`) is copied literally from the
 raw record PR #2931's `youtube_plugin.fetch()` ASR branch persists (taken at head 4927ea93;
-success-record payload shape re-verified byte-identical at head af03d1f8 after #2931's own
-fix round), as exercised by its
+success-record payload shape re-verified byte-identical at merged head 926a86e8), as exercised
+by its
 `tests/knowledge_acquisition/test_asr_fallback.py::test_raw_record_shape_parity` — NOT
 invented. Regression target: review round 1 BLOCKER, where that record's plain-prose
 `caption_body` won a shape-sniffing dispatch, VTT-parsed to zero cues, and the whole
@@ -64,9 +64,9 @@ No duplication here.
 # --- ASR raw record fixture, copied literally from PR #2931 (KA-02) ---
 #
 # Shape source of truth: `app/knowledge_acquisition/youtube_plugin.py::fetch()` ASR branch
-# at PR #2931 head 4927ea93, re-verified byte-identical at head af03d1f8 (its fix round
-# changed dedup-identity internals and failure posture only, not the success-record payload
-# shape), plus the `persist_raw_record` defaulted fields
+# at PR #2931 head 4927ea93, re-verified byte-identical at merged head 926a86e8 (its fix
+# round changed dedup-identity internals and failure posture only, not the success-record
+# payload shape), plus the `persist_raw_record` defaulted fields
 # (content_identity/source_kind/item_ref/acquired_at), with the transcript values its own
 # test suite uses (`_fake_transcribe_result`: text="hej world", language="sv",
 # segments=[{start: 0.0, end: 1.5, text: "hej world"}]).
@@ -325,3 +325,47 @@ def test_lineage_stamps_content_identity_and_stage_version():
     assert result.source_content_identity == "sha256:deadbeef"
     assert result.stage == "normalize"
     assert result.stage_version == 1
+
+
+def test_quality_note_default_is_unreachable_or_removed():
+    """Review round 2 nit: `_DEFAULT_QUALITY_NOTE` was read via `_QUALITY_NOTES.get(method,
+    default)`, but every unrecognized acquisition_method already raises NormalizeError earlier
+    in normalize() — the default could never actually be returned. It has been removed; assert
+    that removal here (module no longer exposes the dead fallback) so a regression that
+    reintroduces an unreachable default is caught."""
+    import app.knowledge_acquisition.normalize as normalize_module
+
+    assert not hasattr(normalize_module, "_DEFAULT_QUALITY_NOTE")
+
+    # Every acquisition_method that reaches quality-note lookup is a recognized one; anything
+    # else fails loud before that point (test_unknown_acquisition_method_fails_loud).
+    for method in ("captions_manual", "captions_auto"):
+        record = _raw_record(
+            acquisition_method=method,
+            caption_body=MANUAL_CAPTION_VTT if method == "captions_manual" else ROLLING_AUTO_CAPTION_VTT,
+        )
+        result = normalize(record)
+        assert result.quality_note in normalize_module._QUALITY_NOTES.values()
+
+    asr_result = normalize(copy.deepcopy(ASR_RAW_RECORD_PR2931))
+    assert asr_result.quality_note in normalize_module._QUALITY_NOTES.values()
+
+
+def test_malformed_asr_segment_raises_normalize_error():
+    """Review round 2 nit: malformed asr_segments entries must surface the stage's own
+    NormalizeError, not a raw stdlib KeyError/ValueError — this matters before KA-06 (#2801)
+    wires stage dead-lettering, which needs one consistent stage-error type to catch."""
+    # Missing required key.
+    record = _asr_record(asr_segments=[{"start": 0.0, "end": 1.5}])
+    with pytest.raises(NormalizeError):
+        normalize(record)
+
+    # Non-numeric start.
+    record = _asr_record(asr_segments=[{"start": "not-a-number", "end": 1.5, "text": "hej"}])
+    with pytest.raises(NormalizeError):
+        normalize(record)
+
+    # Non-numeric end.
+    record = _asr_record(asr_segments=[{"start": 0.0, "end": "not-a-number", "text": "hej"}])
+    with pytest.raises(NormalizeError):
+        normalize(record)
