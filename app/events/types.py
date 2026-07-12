@@ -8,6 +8,11 @@ INGEST_NORMALIZE_DONE = "ingest.normalize.done"
 INGEST_CHUNK_DONE = "ingest.chunk.done"
 INGEST_INDEX_DONE = "ingest.index.done"
 INGEST_VAULT_CHANGED = "ingest.vault.changed"
+
+# ERE-06 (#3181): the Episode Resolution Engine's closure event -- plumbing only (the Episode
+# note's own `time.closed` flip is the SoR; a consumer that misses this event self-heals from the
+# `episodes` projection). See app/episodes/closure.py.
+EPISODE_CLOSED = "episode.closed"
 PANEL_SCAN_REQUESTED = "panel.scan.requested"
 INDEX_OBJECT_EMBEDDED = "index.object.embedded"
 INDEX_EMBEDDING_FAILED = "index.embedding.failed"
@@ -227,4 +232,5 @@ __all__ = [
     "HEIMDAL_CONSENT_GRANTED",
     "HEIMDAL_CONSENT_REVOKED",
     "HEIMDAL_OBSERVATION_CORRECTED",
+    "EPISODE_CLOSED",
 ]

@@ -77,11 +77,14 @@ Delivered (ERE-04, #3179), all single-sourced in `app/episodes/segmenter.py` —
 
 The Heimdal per-session `episode_id` boundary hint (ADR-0054 §3) is checked BEFORE all five dimensions: a signal continuing the open segment's own bound session always extends, overriding every other dimension (one session never spans two proposed episodes).
 
-Delivered (ERE-07, #3182), single-sourced in `app/episodes/recut.py`:
+Delivered (ERE-06, #3181):
 
-| Constant | Value | Meaning |
-| --- | --- | --- |
-| `ACCEPTANCE_QUIET_WINDOW_MINUTES` | `1440` (24h) | How long a `proposed` episode's tracked baseline must go unchanged before silence-is-acceptance transitions it to `accepted`, with no notification/approval surface. |
+| Constant | Value | Single-sourced in | Meaning |
+| --- | --- | --- | --- |
+| `EPISODE_CLOSURE_QUIESCENCE_MINUTES` | `45` (= `TIME_GAP_MINUTES`, reused, never a second copy) | `app/episodes/closure.py` | Once an episode's own bounded `time.end` lies this far behind wall-clock `now`, the engine flips `time.closed: true` on the note (ADR-0058 §1 permits age as a *closure* input; it never appears in the retrieval decay math itself). |
+| `CLOSURE_DECAY_STEP_DOWN_FACTOR` | `0.5` | `app/episodes/closure_decay.py` | v1 decay curve (RQ3 provisional): the single step-down factor a closed-episode binding's salience drops to at retrieval. Derived fresh on every read from `episode_ref` × the episode's `closed` state — never persisted (ADR-0058 §4). |
+
+**Exempt note-class gate (ADR-0058 §2).** Canonical knowledge artifacts stay at full salience even when episode-bound — decay only touches episode-near/raw material. v1 gates on the existing, already-populated state-axis bundle signals (single-sourced in `app/episodes/closure_decay.py::is_exempt_note_class`, compared through the `app/domain/state_axes.py` normalizers): `maturity == "evergreen"` (evergreen knowledge) or `review_state in {"reviewed","protected"}` (curated/durable products). This is deliberately the *honest subset* — the "accepted decision" class's canonical marker (`authority_state == accepted`) lives only in vault frontmatter and is not lifted onto the retrieval payload today, so the full dampenable-vs-exempt note-class table remains owner-open work in the ADR-0055/T2 table (#3131); the gate widens to consume it when it lands. See AC2 below.
 
 ## Capability acceptance criteria
 

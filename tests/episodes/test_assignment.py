@@ -67,6 +67,18 @@ from app.write_guard import WriteGuard, WritesBlockedError
 pytestmark = pytest.mark.not_pg
 
 
+@pytest.fixture(autouse=True)
+def _no_closure_candidates(monkeypatch: pytest.MonkeyPatch):
+    """ERE-06 (#3181) extended ``run_segmentation_tick`` with an unconditional closure step
+    (``app.episodes.closure.run_closure_tick``) that reads the ``episodes`` DB projection. These
+    ERE-05 tests predate closure and don't exercise it -- default to zero candidates so every
+    existing ``run_segmentation_tick`` call here stays a ``not pg`` test; closure's own tests
+    (``tests/episodes/test_closure.py``) override this explicitly."""
+    import app.episodes.closure as closure_module
+
+    monkeypatch.setattr(closure_module, "find_closable_episodes", lambda **k: [])
+
+
 def _dt(hour: int, minute: int, day: int = 11) -> datetime:
     return datetime(2026, 7, day, hour, minute, tzinfo=timezone.utc)
 
