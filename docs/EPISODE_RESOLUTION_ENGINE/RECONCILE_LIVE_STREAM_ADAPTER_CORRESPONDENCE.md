@@ -82,4 +82,4 @@ Not applicable: no new user-facing surface, no new durable state. Reconciliation
 
 ## Related GitHub Issues
 
-One issue: `[Episode Resolution Engine] adapter-correspondence: make live mean consumed, fail-loud on an adapterless live stream`. Child of parent #3175, `lane:governance`. Blocked on ERE-11. Note in `Context`: this slice repairs parent #3175's own capability AC (README:79), which is currently unmet because its named test asserts enumeration, not consumption.
+Issue **#3524** — `[Episode Resolution Engine] adapter-correspondence: make live mean consumed, fail-loud on an adapterless live stream`. Child of parent #3175, `lane:governance`, `agent:blocked`, `prio:low`. Blocked on ERE-11 (#3523). Spec landed in PR #3522. Note in `Context`: this slice repairs parent #3175's own capability AC (README:79), which is currently unmet because its named test asserts enumeration, not consumption.

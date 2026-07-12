@@ -90,4 +90,4 @@ Not applicable in the user-facing-surface sense: this task ships no new user-fac
 
 ## Related GitHub Issues
 
-One issue: `[Episode Resolution Engine] adapter-dispatch: registry-driven ingestion so a new source needs no engine change`. Child of parent #3175, `lane:governance`. Blocked until it is picked up as an owner-optional investment (not on the critical ERE build path). Pairs with ERE-12 (fail-loud correspondence); ERE-11 must merge first.
+Issue **#3523** — `[Episode Resolution Engine] adapter-dispatch: registry-driven ingestion so a new source needs no engine change`. Child of parent #3175, `lane:governance`, `agent:blocked`, `prio:low` (owner-optional investment, not on the critical ERE build path). Spec landed in PR #3522. Pairs with ERE-12 (#3524, fail-loud correspondence); ERE-11 must merge first.
