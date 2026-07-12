@@ -17,6 +17,16 @@ Usage::
 The ``builderops`` subcommand name is kept so that the invocation mirrors
 ``python3 -m app.cli builderops ...`` and automation scripts need no
 special-case handling for each entry point.
+
+The Capability Knowledge Model (CKM) command group is additionally mounted
+at the standalone root as ``python3 -m app.builderops ckm ...`` (not only
+under ``builderops``), matching the invocation documented across
+``docs/CAPABILITY_KNOWLEDGE_MODEL/*.md`` for the whole CKM CLI surface
+(seed, ingest, link, assess, gaps, overview, ...). Both forms resolve to
+the same command object:
+
+    python3 -m app.builderops ckm seed
+    python3 -m app.builderops builderops ckm seed
 """
 
 from __future__ import annotations
@@ -24,6 +34,7 @@ from __future__ import annotations
 import click
 
 from app.builderops.cli import builderops as builderops_cli
+from app.builderops.cli import ckm as ckm_cli
 
 
 @click.group(help="BuilderOps Vault CLI (standalone entry point).")
@@ -32,6 +43,7 @@ def _root() -> None:
 
 
 _root.add_command(builderops_cli, name="builderops")
+_root.add_command(ckm_cli, name="ckm")
 
 if __name__ == "__main__":
     _root()

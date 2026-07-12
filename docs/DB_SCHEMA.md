@@ -309,6 +309,92 @@ Interpretation:
 - the log is Heimdal's durable evidence stream; it is not authority over knowledge (HEIM-8),
 - consumer projections built by replaying the log from a cursor are derived and rebuildable.
 
+## Episode Resolution Engine tick-runtime state
+
+Migration-owned (ERE-04, #3179): Alembic revision `a1b2c3d4e5f6` creates the table;
+`app/episodes/engine_state.py` is assert-only (fail-loud `EngineStateSchemaMissingError` preflight
+with a migration hint on every query; **no autocreate path at all** — unlike the Heimdal stores
+there is no `STORE_SCHEMA_AUTOCREATE` opt-in here, test fixtures run the migration). See
+`docs/EVENTS.md :: Secondary per-consumer cursor readers` for the consumer contract.
+
+- `episode_engine_state` — generic key/value state for the segmentation tick
+  (`app/episodes/segmenter.py::run_segmentation_tick`).
+  - `key` (`text`, PK) — namespaced row families:
+    - `cursor:vault.activity:<consumer_id>` — the engine's own durable read position over the
+      `outbox` table's vault-activity topics (independent of `outbox.delivered_at`, which the
+      worker dispatcher owns);
+    - `open_segment:<scope>` — one scope's currently-open (not yet proposed) segment state.
+  - (No `stream_watermark` row family: the quiescence-closure frontier is a per-scope
+    read position computed fresh from each tick's own consumed signals, not carried durably.)
+  - `value` (`jsonb`, `NOT NULL`)
+  - `updated_at` (`timestamptz`, `NOT NULL`, default `now()`)
+
+Interpretation:
+- pure rebuildable tick-runtime bookkeeping — never authoritative; Episode notes in the vault are
+  the source of record (ADR-0051 OD-1/OD-2) and the `episodes` table is a rebuildable projection;
+- recovery = reset this table's rows **together with** the `mimer.episode_resolution_engine` row in
+  `heimdal_observation_cursor` (full both-stream replay is deterministic and emission-deduped); a
+  single-stream reset is a skewed replay and is not a supported operator action (see the migration
+  docstring).
+
+## Episode-artifact binding ledger
+
+Migration-owned (ERE-05, #3180): Alembic revision `b7c8d9e0f1a2` creates the table;
+`app/episodes/assignment.py` is assert-only (fail-loud `EpisodeAssignmentSchemaMissingError`
+preflight with a migration hint on every query that touches `episode_artifact_binding` OR
+`episodes` — **no autocreate path at all**, same posture as `episode_engine_state`). See
+`docs/EPISODE_RESOLUTION_ENGINE/ASSIGN_EPISODE_REF_TO_ARTIFACTS.md` for the assignment rule and
+write discipline.
+
+- `episode_artifact_binding` — one row per `(artifact_ref, episode_id)` pair: the assignment
+  PROVENANCE record (which episode, which rule, basis, confidence, when), not the artifact's own
+  bundle.
+  - `artifact_ref` (`text`, part of PK) — the SAME provenance-ref shape segmentation signals carry
+    (`heimdal.observations:<observation_id>` / `vault.activity:<outbox_row_id>`,
+    `app/episodes/segmenter.py`), so a binding always resolves back to the exact signal/event that
+    earned it.
+  - `episode_id` (`text`, part of PK)
+  - `scope` (`text`, `NOT NULL`)
+  - `basis` (`text`, `NOT NULL`, `CHECK IN ('provenance', 'time_overlap')`) — `provenance`: the
+    artifact's `artifact_ref` appears in the episode's own `derived_from` (binding-strength,
+    confidence `1.0`); `time_overlap`: bounds-only match (proposed-only, confidence `0.5`) — the
+    HEIM-6-honest confidence floor, never a confident claim from a weak correlation.
+  - `confidence` (`double precision`, `NOT NULL`)
+  - `binding_state` (`text`, `NOT NULL`, default `'active'`, `CHECK IN ('active', 'corrected')`)
+  - `rule` (`text`, `NOT NULL`) — the assignment-rule identifier (`ASSIGNMENT_RULE`), so a future
+    rule revision is distinguishable from this one in the audit trail.
+  - `assigned_at` (`timestamptz`, `NOT NULL`, default `now()`)
+  - `corrected_at` (`timestamptz`, nullable) — stamped when a re-cut (ERE-07) invalidates a prior
+    `active` binding; the row is flipped to `corrected`, never deleted (provenance survives the
+    correction).
+  - PRIMARY KEY `(artifact_ref, episode_id)` — the idempotency mechanism per (artifact, episode):
+    re-ticking the same pair is an UPSERT, never a duplicate row.
+  - Indexes: `episode_artifact_binding_episode_idx`, `episode_artifact_binding_scope_idx`,
+    `episode_artifact_binding_state_idx`.
+
+Interpretation:
+- **rebuildable, never authoritative**: this ledger is the DB-side projection of a derived fact
+  (which in-bounds artifacts bind to which episodes) over vault-canonical episode notes +
+  segmentation signals; it never emits or requires an `AuthorityReceipt`, and `episode_ref` on the
+  artifact's own bundle is `pending` (not authority) until an ERE-07 acceptance/re-cut transition —
+  pending-is-not-authority (`docs/architecture/semantic-dimensions.md :: episode_ref`);
+- **the ledger row is not the artifact's own bundle**: the actual knowledge-layer write is the
+  artifact's `episode_ref` field, upgraded in place on `store_objects`/`store_vector_index.payload`
+  (see `## Core Tables (Store)` above — this is the row `app/retrieval/envelope.py` actually reads)
+  and, for a vault-serialized artifact, on the note's own frontmatter through the guarded write
+  seam (`app.knowledge.write_ops.write_note_from_absolute`, ADR-0055 multi-writer rules). Both are
+  union-merges (never overwrite) so a multi-episode (nested) artifact accumulates every binding;
+  `app/episodes/assignment.py::commit_assignment_diff` performs both bundle mutations in the SAME
+  guarded commit as the ledger write, never touching `evidence_role`/`authority_state`/
+  `scope_binding`;
+- a `heimdal.observations:<id>`-anchored `artifact_ref` records a ledger row (provenance tracking)
+  but does NOT resolve to a bundle today — raw Heimdal observations are never themselves indexed
+  into `store_objects`/`store_vector_index` (HEIM-2: Heimdal is forbidden to do assignment, and
+  there is no "Heimdal observation's downstream candidate" bundle-minting path yet); this is a
+  documented scope boundary, not a silent gap;
+- forward-only (no downgrade path — see the migration docstring), same posture as
+  `episode_engine_state`/HEIM/ERE-02/ERE-04.
+
 ## Explicit Deltas / Known Gaps
 - The primary runtime store is the `store_*` set, migration-owned since Alembic revision
   `c2766a04d001` (KERNEL-04; `_ensure_tables()` is assert-only outside tests). The AMG-core tables

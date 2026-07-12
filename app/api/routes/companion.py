@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import asdict
+import errno
 import heapq
 import json
 import logging
@@ -73,6 +74,7 @@ from app.events.panel import (
     PanelIntentEvent,
     PanelIntentPayload,
 )
+from app.health_contract import DEFAULT_CONTRACT
 from app.knowledge.write_ops import write_note_from_absolute
 from app.observability.status_service import OrientationSignals, get_orientation_signals
 from app.orientation.leave_point_cursor import latest_leave_point_projection
@@ -310,6 +312,10 @@ class VaultSelectionRequiredResponse(BaseModel):
     actions: list[VaultSelectionRequiredAction] = Field(default_factory=list)
     requested_note_path: str | None = None
     trace_id: str | None = None
+    # Additive posture declaration consumed by the Companion picker.  It is
+    # deliberately independent of picker ``reason``: a configured vault can
+    # be temporarily unavailable without being uninitialized or misconfigured.
+    runtime_reconnecting: bool = False
 
 
 class VaultSettingUpdateRequest(BaseModel):
@@ -551,6 +557,26 @@ def _vault_selection_required_response(
     )
 
 
+def _runtime_reconnecting_for_configured_vault(
+    configured_vault_root: Path | None,
+) -> bool:
+    """Return the declared transient-runtime posture for a configured vault.
+
+    The picker must never infer reachability from an exception message or from
+    its own ``reason``.  ``unhealthy`` is the health contract's explicit
+    runtime-unavailable state (and is the state that makes ``/readyz`` return
+    503); all other contract states leave the additive field false.
+    """
+    if configured_vault_root is None:
+        return False
+    try:
+        health = DEFAULT_CONTRACT.evaluate()
+    except Exception:
+        # A failed read cannot honestly declare the reconnecting posture.
+        return False
+    return health.get("state") == "unhealthy"
+
+
 def _no_vault_selection_required_response(
     *,
     requested_note_path: str | None = None,
@@ -590,6 +616,9 @@ def _no_vault_selection_required_response(
         ],
         requested_note_path=requested_note_path,
         trace_id=trace_id,
+        runtime_reconnecting=_runtime_reconnecting_for_configured_vault(
+            configured_vault_root
+        ),
     )
 
 
@@ -963,6 +992,15 @@ def _resolve_browse_target(requested: str, base: Path) -> Path:
     raw = Path(text).expanduser()
     if not raw.is_absolute():
         raw = base / raw
+    try:
+        # Python 3.14's non-strict Path.resolve() no longer raises for a
+        # self-referential symlink. stat() still follows the link and reports
+        # ELOOP, giving this endpoint one version-independent loop signal
+        # before resolve() and the directory check could turn it into a 404.
+        raw.stat()
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise HTTPException(status_code=400, detail="invalid browse path") from exc
     try:
         resolved = raw.resolve()
     except (OSError, RuntimeError) as exc:

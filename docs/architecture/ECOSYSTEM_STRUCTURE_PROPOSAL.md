@@ -1,6 +1,6 @@
 State: Advisory design proposal (Fable-5 architecture pass, 2026-07-04). Design only — no code, no shipped schemas, no GitHub work. Every load-bearing claim carries an SBS reconciliation tag (`[conform]` / `[extend]` / `[reshape]`); every `reshape` is a routed proposal to the owner via CES/ADR, never enacted here. Where this proposal and an owner doc disagree, the owner doc wins until the owner decides otherwise.
 Doc role: Ecosystem structure proposal (advisory)
-Inputs: docs/SYSTEM_BREAKDOWN_STRUCTURE.md; docs/boundaries/** (14 charters + CES); docs/foundation/00-yggdrasil-doctrine.md; docs/architecture/system-context-overlay.md; docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md; docs/HEIMDAL/** (A1/A3/A4/A5) + ADR-0043 (Proposed, PR #2888 open — input, not settled truth); docs/architecture/ecosystem-federation.md (RESEARCH-08, merged); docs/KNOWLEDGE_ACQUISITION/README.md; docs/DESIGN_PRINCIPLES.md; docs/MODULAR_ARCHITECTURE.md; ADR-0041; docs/RUNTIME_CORRECTNESS_KERNEL/README.md; docs/testing/invariant-tests.md (referenced).
+Inputs: docs/SYSTEM_BREAKDOWN_STRUCTURE.md; docs/boundaries/** (14 charters + CES); docs/foundation/00-yggdrasil-doctrine.md; docs/architecture/system-context-overlay.md; docs/audits/YGGDRASIL_SYSTEM_BOUNDARY_INCOSE_2026-07-03.md; docs/HEIMDAL/** (A1/A3/A4/A5) + ADR-0043 (historical proposed input; PR #2888 closed unmerged — the ADR-0044–0047 reconciliation is current); docs/architecture/ecosystem-federation.md (RESEARCH-08, merged); docs/KNOWLEDGE_ACQUISITION/README.md; docs/DESIGN_PRINCIPLES.md; docs/MODULAR_ARCHITECTURE.md; ADR-0041; docs/RUNTIME_CORRECTNESS_KERNEL/README.md; docs/testing/invariant-tests.md (referenced).
 
 # Ecosystem Structure Proposal — one breakdown, Heimdal placed
 
@@ -29,7 +29,7 @@ root). This is a restoration, not an arbitrary rename.
 | **OD-5** | Promote the **three contracts** (event-bus, identity register, provenance/replay standard) at Heimdal design-acceptance; implementations stay module-lazy. |
 | **OD-6** | **Proportional, not maximal isolation.** The raw→published seam and raw-layer access controls are **designed-in from day one** (structural, upgradeable), but Heimdal's raw store does **not** get separate credentials/process/host isolation now — encryption + access control in the shared deployment. See the cross-cutting principle below. |
 | **OD-7** | Adopt the naming scheme; carry **OD-1 + OD-3 + OD-7** in **one** superseding/amending ADR against ADR-0043. |
-| **OD-8** | **Hold PR #2888**, reconcile it with this structure, land **one** coherent ratification (this structure + Mimer naming + RESEARCH-08 D1/D2/D3 references; D4 orthogonal). |
+| **OD-8** | **Historical (resolved):** PR #2888 was held and later closed unmerged; ADR-0044–0047 delivered the coherent ratification (structure, Mimer naming, and RESEARCH-08 D1–D4). |
 
 ### Cross-cutting owner principle (new, from OD-6) — applies to ALL systems
 
@@ -47,7 +47,7 @@ and proportional. Heimdal's always-on-OFF default, event minimization, and event
 ### Status of this doc
 
 Advisory design, decisions locked. **Enactment is not performed here:** the superseding naming ADR
-(OD-1/3/7), the #2888 reconciliation (OD-8), the thin bindings charter (OD-4), and the three
+(OD-1/3/7), the historical #2888 reconciliation (OD-8; now delivered by ADR-0044–0047), the thin bindings charter (OD-4), and the three
 substrate contracts (OD-5) are follow-up work, filed via `docs-to-issue` when the owner proceeds.
 The `Mimer` code/doc rename (`yggdrasil_runtime/` → Mimer, doctrine/SBS/SoI) is a bounded, mechanical
 enactment task, not done by this docs-only proposal.
@@ -135,7 +135,7 @@ The brief frames a two-way tension; the evidence shows **three** models:
 
 - **Model A** (SBS + ADR-0041 + INCOSE audit): Yggdrasil = a modular *single system*; 14 control boundaries; the internal decomposition is explicitly **not** an SoS (audit §3, settled; the owner paid 27-doc churn to remove that vocabulary).
 - **Model B1** (RESEARCH-08, merged): apex = Personal Agentic Ecosystem (acknowledged SoS, target-state, activation-gated); **Yggdrasil = a constituent** (the public knowledge/reasoning system); *no internal boundary is a constituent*; siblings are private-side systems.
-- **Model B2** (Heimdal A1 + draft ADR-0043, PR #2888 open): **Yggdrasil = the whole**; constituents = Munin (knowledge/memory), Hugin (agent-runtime), Heimdal (sensor).
+- **Model B2** (historical Heimdal A1 + draft ADR-0043 / closed-unmerged PR #2888): **Yggdrasil = the whole**; constituents = Munin (knowledge/memory), Hugin (agent-runtime), Heimdal (sensor). The current reconciliation is ADR-0044–0047.
 
 B1 and B2 agree the ecosystem is an acknowledged SoS with Heimdal as a peer constituent and a public/private seam. They **disagree** on the apex name, on Yggdrasil's referent, and — critically — on whether the knowledge/agent split is a constituent split. This proposal resolves the triangle by taking: the SoS apex from B1/B2 `[reshape → CES/ADR]`, the constituent set from B1 (Yggdrasil undivided) `[conform to audit §3]`, Heimdal's peer status from B1/B2 `[reshape → CES/ADR]`, and Model A unchanged **inside** Yggdrasil `[conform]`.
 
@@ -328,7 +328,7 @@ Recommended assignments (consistent with the recommended structure; final call i
 
 If the owner instead ratifies **Yggdrasil = whole** (OD-1 option B), this scheme still functions with one substitution: C1 needs a new Norse name (Mimir/Munin-class), and the churn plan in Alternative A's cost list must be accepted explicitly.
 
-`[reshape → all naming lands via a superseding/amending ADR against ADR-0043; PR #2888 should be reconciled with this proposal before merge — OD-8]`
+`[historical reshape route → PR #2888 was closed unmerged; ADR-0044–0047 now carry the relevant reconciliation against ADR-0043 — OD-8]`
 
 ---
 
@@ -374,7 +374,7 @@ Style of `docs/testing/invariant-tests.md`; each = name + one line + enforcement
 Each is the owner's call; options + consequences; recommendations flagged, never enacted.
 
 **OD-1 — What does "Yggdrasil" denote?** *(the required question; recommendation flagged)*
-- **Option A (RECOMMENDED): Yggdrasil = the knowledge-and-cognition constituent (C1);** apex = Personal Agentic Ecosystem. *Consequences:* near-zero churn (every existing "Yggdrasil" reference stays correct, including `yggdrasil_runtime/`); INCOSE-honest (no constituent split forced); coherent with merged RESEARCH-08 and ADR-0041's paid-for vocabulary cleanup. Cost: contradicts draft ADR-0043's D-NAME-WHOLE — requires amending/superseding that draft before PR #2888 merges; the world-tree metaphor no longer names the whole.
+- **Option A (RECOMMENDED): Yggdrasil = the knowledge-and-cognition constituent (C1);** apex = Personal Agentic Ecosystem. *Historical consequence:* this contradicted draft ADR-0043's D-NAME-WHOLE and required its amendment/supersession; PR #2888 was subsequently closed unmerged and ADR-0044–0047 landed the reconciliation. The world-tree metaphor no longer names the whole.
 - **Option B: Yggdrasil = the whole (SoS),** per draft ADR-0043. *Consequences:* metaphor-maximal and matches the 2026-07-04 in-principle decision; but forces either the structurally unsound Munin/Hugin constituent split (§6 Alt A) or a new name + mass re-referencing for the current system, and re-introduces "Yggdrasil is an SoS" post-ADR-0041.
 - **Option C: dual-scope** ("Yggdrasil" means both, disambiguated by context). *Consequences:* zero immediate churn, permanent ambiguity — the exact disease the boundary-language guardrails exist to prevent. Not recommended.
 
@@ -390,7 +390,7 @@ Each is the owner's call; options + consequences; recommendations flagged, never
 
 **OD-7 — Adopt the naming scheme (§7) and amend the name register.** Options: adopt as proposed / adopt with Norse apex name minted now / keep ADR-0043's register unchanged (implies OD-1 option B). Consequence: whichever way, **one** superseding/amending ADR should carry OD-1 + OD-3 + OD-7 together — they are one naming coherence decision.
 
-**OD-8 — Sequencing against PR #2888 and RESEARCH-08 D1–D4.** #2888 (ratifying ADR-0043 + the A1 model) is open and partially conflicts with this proposal (Yggdrasil referent; Munin/Hugin constituents). *Option A (recommended):* hold #2888, reconcile it with this proposal, land one coherent ratification (this structure + amended naming + D1/D2/D3 adoptions referenced, D4 orthogonal). *Option B:* merge #2888 as-is, then supersede — double churn. Also note: this proposal *assumes* the substance of RESEARCH-08 D2 (tier rule → ECO-8) and D3 (INV-EF1 → ECO-2); those remain their own owner decisions.
+**OD-8 — Historical sequencing against PR #2888 and RESEARCH-08 D1–D4.** This record predates the current reconciliation: #2888 was closed unmerged, and ADR-0044–0047 landed the relevant decisions. At the time, #2888 (ratifying ADR-0043 + the A1 model) partially conflicted with this proposal (Yggdrasil referent; Munin/Hugin constituents). *Option A (recommended):* hold #2888, reconcile it with this proposal, land one coherent ratification (this structure + amended naming + D1/D2/D3 adoptions referenced, D4 orthogonal). *Option B:* merge #2888 as-is, then supersede — double churn. These options are historical, not active work. This proposal *assumes* the substance of RESEARCH-08 D2 (tier rule → ECO-8) and D3 (INV-EF1 → ECO-2); those remain their own owner decisions.
 
 ---
 
@@ -398,7 +398,7 @@ Each is the owner's call; options + consequences; recommendations flagged, never
 
 | # | Load-bearing claim | Tag | Routing |
 |---|---|---|---|
-| 1 | Apex = Personal Agentic Ecosystem, acknowledged SoS, governance-by-contract (Layer 1, not runtime) | **reshape** | CES/ADR via OD-2 (refines RESEARCH-08 D1; reconcile with PR #2888) |
+| 1 | Apex = Personal Agentic Ecosystem, acknowledged SoS, governance-by-contract (Layer 1, not runtime) | **reshape** | CES/ADR via OD-2; historical PR #2888 route was superseded by ADR-0044–0047 |
 | 2 | Yggdrasil denotes the knowledge-and-cognition constituent (C1), not the whole | **reshape** | CES/ADR via OD-1 + OD-7 (amends/supersedes draft ADR-0043 D-NAME-WHOLE) |
 | 3 | Heimdal is a sibling constituent, not a subsystem of the knowledge system | **reshape** | CES/ADR — same reshape Heimdal A1 §1 routes; carried, not re-decided |
 | 4 | Knowledge/agent split is NOT a constituent split; Munin/Hugin reserved, unassigned | **conform** (audit §3, RESEARCH-08 claim 4) / **reshape** vs draft ADR-0043 register | OD-3, bundled into the OD-7 ADR |

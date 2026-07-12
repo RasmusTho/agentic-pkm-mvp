@@ -26,7 +26,9 @@ This task produces the channel-identity contract as a docs artifact under `docs/
 
 ## Concretely
 
-The contract this task establishes:
+The contract this task establishes is **target-state only**: the per-channel DB split below is not yet shipped. Current production uses the single `app` DB under compose project `pkm-prod`.
+
+The target-state contract is:
 
 - **stable channel**: code ref = `stable` (git tag or branch pointer); DB = `pkm_prod`; vault root = the operator's real vault (configured, not hard-coded); runtime artifacts = `tmp/`.
 - **dev channel**: code ref = `main` or a feature branch (no pin); DB = `pkm_dev`; vault root = the operator's dev vault (configured, not hard-coded); runtime artifacts = `tmp-dev/`.

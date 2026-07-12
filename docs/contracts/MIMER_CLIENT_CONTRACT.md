@@ -61,6 +61,7 @@ Base URL: the Mimer runtime API (`app/api/app.py`). All routes below exist on `m
 | Capture (write) | `POST /api/companion/capture` | Friction-free intake into the vault inbox note | `x-trace-id`; actor currently fixed (§9 F1) | Full governed chain (§4.1) |
 | Retrieve | `GET /search?q=` | Hybrid retrieval over the durable index (KERNEL-05) | `x-trace-id` | Read-only |
 | Ask | `POST /api/ask` | Grounded Q&A with per-source citations | `x-trace-id` | Read-only |
+| Voice ask | `POST /api/ask/voice` | One turn from transient audio to a grounded ASK answer and optional local speech | `x-trace-id` / response `trace_id` | **Read-only**; no transcript, capture intent, or audio is written |
 | Read note | `GET /api/artifacts/note?note_path=` | Fetch one note's title/body/hash by vault-relative path | `x-trace-id` | Read-only; traversal-guarded |
 | Health | `GET /healthz`, `GET /readyz`, `GET /api/status`, `GET /version` | Liveness/readiness/status/build discovery | — | Read-only |
 
@@ -97,6 +98,22 @@ Error contract (a client must handle each named state; never retry blindly):
 
 **Index-lag honesty:** the retrieval index is a rebuildable projection that trails the vault (watcher → ingest → index). A client MUST NOT present a retrieval miss as absence-of-knowledge without saying the index may lag, and MUST NOT assume read-your-write through `/search` after any write (§6 W6). The vault note outranks any projection of it (AGENT-FLOWS §10).
 
+### 4.3 `POST /api/ask/voice` (read-only voice ASK turn)
+
+Implementation: `app/api/routes/ask.py`. Send a multipart request with one required `audio` part and optional `session_id` and `zone_strategy` form fields. v1 accepts WAV, M4A/MP4, WebM, and Ogg containers (`audio/wav`, `audio/m4a` or `audio/mp4`, `audio/webm`, `audio/ogg`); it is turn-based, not streaming. Audio is capped at 5 MiB before STT work. Oversize input returns `413 {error: "audio_too_large", trace_id}` and an unsupported or undecodable container returns `415 {error: "audio_undecodable", trace_id}`.
+
+On a successful grounded turn, the response is `{transcript, detected_language, answer, sources, speech_plan, audio_url?, degraded, reason?, session_id?, trace_id}`. `answer` and `sources` retain the `POST /api/ask` `AskResponse` meaning and source attribution; `speech_plan` is the local TTS plan; `audio_url` is present only when local TTS synthesis produced a cached audio result. `detected_language` is STT-detected rather than client-pinned, and drives the local speech plan.
+
+This endpoint has no vault-content write path. A capture-intent utterance is returned as a suggestion with `degraded: true` and `reason: "capture_intent_surfaced"`; the client must call the governed capture endpoint (§4.1) only after explicit user intent to save it.
+
+Clients must handle the three named voice-leg degradation states without inventing an answer from client or model memory:
+
+| Condition | Response | Client behavior |
+| --- | --- | --- |
+| STT unavailable or yields no transcript | `503 {error: "stt_unavailable", trace_id}` | Surface the failure; do not substitute an empty or guessed answer. |
+| Grounded ASK unavailable after transcription | `503 {error: "ask_unavailable", transcript, detected_language, session_id?, trace_id}` | Preserve and show the heard transcript; do not answer from client/model memory. |
+| Local TTS unavailable or disabled | `200` grounded text response with `degraded: true`, `reason: "tts_unavailable"`, and no `audio_url` | Show the grounded answer and sources as text; do not fail the turn solely because speech is unavailable. |
+
 ## 5. Direct-filesystem write transport (owner-permitted, 2026-07-07)
 
 The owner has ruled that direct filesystem vault writes by external clients are **permitted now** — this extends the writer set that `docs/adr/ADR-0055-vault-multiwriter-consistency-model.md` governs (Mac runtime, Obsidian human, iCloud sync, Bifrost clients) with the external-app-agent class, ahead of that model's own T2/T3 enactment. Enacted via ADR-0056. Permission is not safety; §6 is the discipline that makes the permission survivable during the enactment gap.
@@ -107,11 +124,35 @@ The owner has ruled that direct filesystem vault writes by external clients are 
 - **Human-directed edits to any vault note** are permitted when the human directs the edit in the live session (matching ADR-0055's writer set, which does not restrict which notes the human's own session may touch). The client discipline of §6 (read-fresh, ownership courtesy, atomic replace) applies with full force here, because this is exactly the surface where a collision destroys human-authored prose — and it is exactly the "rewritten note class" ADR-0055 targets for its stale-detection + conflict-staging mechanism once enacted.
 - **Bifrost shells** additionally read/write the `_heimdal/**` control surface (settings/interests/consent/attention) — that is their product surface. Its versioned client schema is [`schemas/heimdal-control-notes.schema.json`](../../schemas/heimdal-control-notes.schema.json), mechanically checked against the runtime registry in `app/heimdal/settings_notes.py`. The schema is a published contract view; the registry remains the runtime authority.
 
+### Sources zone — sensor/acquisition landing zone
+
+Sensor-captured material has its own vault zone, separate from the human's quick-capture inbox and
+from human-authored notes. The default relative root is `Sources/`, with user-relevant default
+subfolders `Sources/Voice memos/`, `Sources/Video & podcasts/`, and `Sources/Articles/`. These are
+**settings-resolved defaults**, not fixed paths: the setting key follows the existing
+`inbox_dir_rel` convention, and its concrete settings/UI enactment remains follow-on work. Clients
+and writers therefore must not hardcode the displayed names.
+
+Only Heimdal-side sensor/acquisition writers create material notes in this zone. App agents and the
+capture endpoint are excluded; human edits are allowed but never required. Sources notes are
+`create-once` / append-only material: a re-derivation creates a new note, or uses a governed update,
+never silently rewrites the original. A Sources note becomes durable knowledge only through the
+governed candidate → proposal → human-confirm path (`WriteGuard` → `DecisionToken` →
+`AuthorityReceipt`). Moving or renaming the note into the knowledge tree is not a promotion.
+
+The zone is attention-free by design: it is an archive, not an unread queue or processing
+obligation; material reaches the human only through governed Mimer proposals. The owner selected the
+default **Sources** on 2026-07-10 from the shortlist Observationer, Källor, Referenser, Corpus,
+Underlag, Captured, Records, and Sources. The choice favors intuitive, user-visible names; “Evidence”
+was deliberately excluded because it collides with the ontology's `evidence_role`.
+
 ### Exclusion list — never direct-write, either family
 
 | Surface | Why |
 | --- | --- |
 | The capture inbox note (`<inbox_dir_rel>/inbox.md` or `VAULT_CAPTURE_NOTE_REL` override) | It is the runtime's actively-appended governed target; a client rewrite races the governed append and LWW can silently drop a capture. Intake goes through `POST /api/companion/capture` only. |
+| The capture inbox — **sensor/acquisition writers** | Sensor material belongs only in the Sources zone; the inbox remains human quick-capture through the governed capture endpoint. |
+| The Sources zone (`<sources_dir_rel>/`, default `Sources/`) — **app agents and the capture endpoint** | This archive is reserved for Heimdal-side sensor/acquisition writers; it is not an alternative client workspace or capture target. |
 | Companion notes (`⚙️ System/companions/`, legacy `_system/companions/`) | KnowledgePort-only, system-owned (`docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`, `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`). |
 | System-plane settings/bootstrap notes and other system-owned paths | Runtime-owned via KnowledgePort; a direct edit forks runtime state. |
 | `_heimdal/**` — **app agents only** | It is Bifrost's/the runtime's control seam; app agents have no role there. (Bifrost writes it by design, above.) |
@@ -260,3 +301,4 @@ No reshape: no existing boundary, charter, contract, or ADR is altered. The one 
 - `docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md`, ADR-0047 — why MCP is not a client transport today.
 - `docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md` — Bifrost topology design-of-record; Epic B #3020, B1 #3023/`bifrost#1`; ADR-0050.
 - `app/api/routes/{capture,search,ask,artifacts}.py`, `app/auth.py`, `app/knowledge/{adapters,write_ops}.py`, `app/components/concurrency.py`, `app/watcher/watcher.py` — implementation evidence (descriptive, not normative; `docs/ARCHITECTURE.md` owns runtime truth).
+- `docs/MIMER_VOICE_LOOP/SHARE_TRANSCRIPTION_CAPABILITY.md` — VOICE-02's internal shared-ASR seam: Heimdal capture and Mimer voice-ask reuse `app.media.transcribe.run_asr`; this is not a client transport.

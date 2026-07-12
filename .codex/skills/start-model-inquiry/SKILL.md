@@ -22,7 +22,9 @@ the inquiry in chat history.
    ```
 
 4. Delete the temporary input file.
-5. Report the returned `inquiry_id`, `final_state`, and `terminal_receipt_id`.
+5. Report the returned `inquiry_id`, `final_state`, `terminal_receipt_id`, and
+   `human_readable_report`. The last value is the Markdown file a human should open; the adjacent
+   JSON files remain the canonical audit trace.
 
 The launcher validates the shared vault and both explicit role adapters before it writes an
 inquiry. If preflight fails, surface the error and stop. Never substitute an in-chat Fable/GPT

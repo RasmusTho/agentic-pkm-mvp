@@ -212,8 +212,9 @@ services:
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
+    init: true
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import sys; from app.cli.health import _worker_runtime_status; r=_worker_runtime_status(); sys.exit(0 if r.get('ok') else 1)\""]
+      test: ["CMD", "python", "-m", "app.runtime.health_probe", "worker"]
       interval: 20s
       timeout: 15s
       retries: 3
@@ -265,9 +266,10 @@ services:
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
+    init: true
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import sys; from app.cli.health import _watcher_runtime_status; r=_watcher_runtime_status(); sys.exit(0 if r.get('ok') else 1)\""]
-      interval: 5s
+      test: ["CMD", "python", "-m", "app.runtime.health_probe", "watcher"]
+      interval: 20s
       timeout: 15s
       retries: 10
 

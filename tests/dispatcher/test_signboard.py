@@ -20,6 +20,7 @@ from app.dispatcher.signboard import (
     NoActiveVaultError,
     default_signboard_root,
     export_signboard,
+    validate_signboard,
 )
 from app.dispatcher.config import load_paths
 from app.dispatcher.events import JsonlEventWriter
@@ -351,3 +352,124 @@ def test_exported_card_carries_its_source_repo(tmp_env, store, tmp_path: Path) -
     content = card.read_text(encoding="utf-8")
     assert 'repo: "RasmusTho/bifrost"' in content
     assert "- Repo: `RasmusTho/bifrost`" in content
+
+
+# ---------------------------------------------------------------------------
+# #3439: read-only Signboard validation
+# ---------------------------------------------------------------------------
+
+
+def test_validate_clean_board_passes(tmp_env, store, tmp_path: Path) -> None:
+    tasks = seed_tasks(store)
+    board = tmp_path / "board"
+
+    export_signboard(store, board)
+
+    result = validate_signboard(store, board)
+
+    assert result["count"] == len(tasks)
+    assert result["findings"] == []
+
+
+def test_validate_detects_duplicate_cards(tmp_env, store, tmp_path: Path) -> None:
+    ready = next(task for task in seed_tasks(store) if task.status == "ready")
+    board = tmp_path / "board"
+    export_signboard(store, board)
+    card = next((board / "Ready").glob(f"{ready.task_id}--*.md"))
+    duplicate = board / "Done" / card.name
+    duplicate.write_text(card.read_text(encoding="utf-8"), encoding="utf-8")
+
+    result = validate_signboard(store, board)
+
+    assert any(finding["kind"] == "duplicate_card" for finding in result["findings"])
+
+
+def test_validate_detects_column_status_mismatch(tmp_env, store, tmp_path: Path) -> None:
+    ready = next(task for task in seed_tasks(store) if task.status == "ready")
+    board = tmp_path / "board"
+    export_signboard(store, board)
+    card = next((board / "Ready").glob(f"{ready.task_id}--*.md"))
+    wrong = board / "Done" / card.name
+    wrong.write_text(card.read_text(encoding="utf-8"), encoding="utf-8")
+    card.unlink()
+
+    result = validate_signboard(store, board)
+
+    assert any(finding["kind"] == "column_status_mismatch" for finding in result["findings"])
+
+
+def test_validate_detects_stale_card_for_missing_task(tmp_env, store, tmp_path: Path) -> None:
+    ready = next(task for task in seed_tasks(store) if task.status == "ready")
+    board = tmp_path / "board"
+    export_signboard(store, board)
+    card = next((board / "Ready").glob(f"{ready.task_id}--*.md"))
+    content = card.read_text(encoding="utf-8").replace(f'id: "{ready.task_id}"', 'id: "gone"')
+    card.write_text(content, encoding="utf-8")
+
+    result = validate_signboard(store, board)
+
+    assert any(finding["kind"] == "stale_card" for finding in result["findings"])
+
+
+def test_validate_detects_malformed_generated_card(tmp_env, store, tmp_path: Path) -> None:
+    seed_tasks(store)
+    board = tmp_path / "board"
+    malformed = board / "Ready" / "task-bad--broken.md"
+    malformed.parent.mkdir(parents=True)
+    malformed.write_text("---\ngenerated_by: dispatcher.signboard\nid: [\n---\n", encoding="utf-8")
+
+    result = validate_signboard(store, board)
+
+    assert any(finding["kind"] == "malformed_generated_card" for finding in result["findings"])
+
+
+def test_validate_reports_unreadable_card_without_mutation(
+    tmp_env, store, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed_tasks(store)
+    board = tmp_path / "board"
+    candidate = board / "Ready" / "task-unreadable--candidate.md"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_text("not read", encoding="utf-8")
+    original_read_text = Path.read_text
+
+    def unreadable_read_text(path: Path, *args, **kwargs):
+        if path == candidate:
+            raise OSError("permission denied")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", unreadable_read_text)
+
+    result = validate_signboard(store, board)
+
+    assert any(finding["kind"] == "unreadable_generated_card_candidate" for finding in result["findings"])
+    assert candidate.exists()
+
+
+def test_validate_ignores_human_authored_files(tmp_env, store, tmp_path: Path) -> None:
+    seed_tasks(store)
+    board = tmp_path / "board"
+    human = board / "Ready" / "task-human--notes.md"
+    human.parent.mkdir(parents=True)
+    human.write_text("# Human notes\n", encoding="utf-8")
+
+    result = validate_signboard(store, board)
+
+    assert result["findings"] == []
+
+
+def test_cli_signboard_validate_fails_loud_on_findings(
+    tmp_env, store, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from app.dispatcher.cli import main
+
+    seed_tasks(store)
+    board = tmp_path / "board"
+    broken = board / "Ready" / "task-bad--broken.md"
+    broken.parent.mkdir(parents=True)
+    broken.write_text("---\ngenerated_by: dispatcher.signboard\nid: [\n---\n", encoding="utf-8")
+
+    exit_code = main(["signboard-validate", str(board), "--json"])
+
+    assert exit_code == 1
+    assert '"ok": false' in capsys.readouterr().out

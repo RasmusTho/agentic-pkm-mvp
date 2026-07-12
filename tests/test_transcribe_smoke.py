@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.media import transcribe
 
 
@@ -32,3 +34,11 @@ def test_transcribe_smoke(monkeypatch, tmp_path):
     assert outbox.exists()
     lines = outbox.read_text(encoding="utf-8").strip().splitlines()
     assert lines and "transcript" in lines[-1]
+
+
+def test_transcribe_missing_provider_fails_loud(monkeypatch, tmp_path):
+    """The real model seam still reports the absent optional dependency."""
+    monkeypatch.setattr(transcribe, "WhisperModel", None)
+
+    with pytest.raises(RuntimeError, match="faster-whisper"):
+        transcribe.run_asr(tmp_path / "input.wav")

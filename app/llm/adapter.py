@@ -8,6 +8,7 @@ import requests
 
 from app.config.llm import get_provider
 from app.llm.trace import log_llm_call
+from app.settings.env_defaults import env_float
 
 
 def _prov() -> str:
@@ -53,7 +54,7 @@ def generate(
         r = requests.post(
             ollama_host.rstrip("/") + "/api/chat",
             json={"model": m, "messages": messages, "stream": False},
-            timeout=float(os.getenv("LLM_TIMEOUT", "120")),
+            timeout=env_float("LLM_TIMEOUT"),
         )
         r.raise_for_status()
         raw_response = r.json()
@@ -71,7 +72,7 @@ def generate(
             url,
             headers={"Authorization": f"Bearer {api}", "Content-Type": "application/json"},
             data=json.dumps({"model": m, "messages": messages}),
-            timeout=float(os.getenv("LLM_TIMEOUT", "60")),
+            timeout=env_float("LLM_TIMEOUT"),
         )
         r.raise_for_status()
         raw_response = r.json()
@@ -85,7 +86,7 @@ def generate(
             url,
             headers={"Authorization": f"Bearer {api}", "Content-Type": "application/json"},
             data=json.dumps({"model": m, "messages": messages}),
-            timeout=float(os.getenv("LLM_TIMEOUT", "60")),
+            timeout=env_float("LLM_TIMEOUT"),
         )
         r.raise_for_status()
         raw_response = r.json()

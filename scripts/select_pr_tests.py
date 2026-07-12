@@ -96,7 +96,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/dispatcher/",
             "tests/builderops/",
             "tests/dispatcher/",
+            "tests/governance/",
             "docs/builderops/",
+            "importlinter.ini",
         ),
         ("tests/builderops", "tests/dispatcher", "tests/governance"),
     ),
@@ -112,8 +114,18 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     ),
     (
         "companion_ui",
-        ("companion-ui/", "app/api/", "tests/companion_ui/", "tests/api/"),
-        ("tests/companion_ui", "tests/api", *E2E_TARGETS["companion_ui"]),
+        ("companion-ui/", "app/api/", "api/", "tests/companion_ui/", "tests/api/"),
+        (
+            "tests/companion_ui",
+            "tests/api",
+            "tests/architecture/test_openapi_sync.py",
+            *E2E_TARGETS["companion_ui"],
+        ),
+    ),
+    (
+        "canvas_chat",
+        ("app/chat/", "tests/chat/"),
+        ("tests/chat",),
     ),
     (
         "watcher_sync",
@@ -128,6 +140,41 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/e2e/test_panel_watcher_e2e.py",
         ),
         ("tests/watcher", "tests/sync", *E2E_TARGETS["watcher_sync"]),
+    ),
+    (
+        "runtime_health",
+        (
+            "app/runtime/health_probe.py",
+            "app/cli/health.py",
+            "docker-compose.yaml",
+            "tests/health/",
+            "tests/invariants/test_health_probe.py",
+            "tests/invariants/test_health_heartbeat_visibility.py",
+            "docs/OBSERVABILITY_STABILIZATION/",
+        ),
+        ("tests/health", "tests/invariants", "tests/api"),
+    ),
+    (
+        "store_ingest",
+        (
+            "app/stores/",
+            "app/ingest/",
+            "tests/stores/",
+            "tests/ingest/",
+            "docs/DB_SCHEMA.md",
+            "docs/RUNTIME_CORRECTNESS_KERNEL/",
+        ),
+        ("tests/stores", "tests/ingest", "tests/architecture"),
+    ),
+    (
+        "relevance",
+        ("app/relevance/", "tests/relevance/"),
+        ("tests/relevance",),
+    ),
+    (
+        "heimdal",
+        ("app/heimdal/", "tests/heimdal/", "docs/HEIMDAL/", "docs/HEIMDAL_CAPTURE_CLIENT/"),
+        ("tests/heimdal",),
     ),
     (
         "orchestration",
@@ -157,6 +204,23 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/agent_memory", "tests/retrieval", "tests/indexer", "tests/search", *E2E_TARGETS["memory_retrieval"]),
     ),
     (
+        "episodes",
+        (
+            "app/episodes/",
+            "app/jobs/episodes_projection.py",
+            "schemas/episode-note.schema.json",
+            # CI-selection owner only: the bundle schema is SIP surface; its
+            # enforcement probes live in tests/invariants. Full-suite routing
+            # for bundle-schema changes stays deferred until the pre-existing
+            # deprecated-store failure (from #3479) is repaired.
+            "schemas/metadata-bundle.schema.json",
+            "tests/episodes/",
+            "tests/invariants/test_episode_binding.py",
+            "tests/invariants/test_cross_scope_flow.py",
+        ),
+        ("tests/episodes", "tests/invariants"),
+    ),
+    (
         "llm_eval",
         (
             "app/llm/",
@@ -173,9 +237,43 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/llm", "tests/eval", "tests/evals", *E2E_TARGETS["llm_eval"]),
     ),
     (
+        "voice",
+        (
+            "app/voice/",
+            "tests/voice/",
+            "docs/MIMER_VOICE_LOOP/",
+            "docs/contracts/MIMER_CLIENT_CONTRACT.md",
+        ),
+        ("tests/voice",),
+    ),
+    (
+        "media",
+        ("app/media/",),
+        ("tests/test_transcribe_smoke.py",),
+    ),
+    (
         "events_receipts",
         ("app/events/", "app/receipts/", "docs/contracts/events/", "tests/events/", "tests/receipts/"),
         ("tests/events", "tests/receipts", "tests/contracts"),
+    ),
+    (
+        "heimdal_mimer",
+        (
+            "app/heimdal/",
+            "app/knowledge_acquisition/",
+            "docs/HEIMDAL/",
+            "docs/KARAKEEP_MIMER_ACQUISITION/",
+            "docs/KNOWLEDGE_ACQUISITION/",
+            "docs/EVENTS.md",
+            "tests/heimdal/",
+            "tests/knowledge_acquisition/",
+        ),
+        ("tests/heimdal", "tests/knowledge_acquisition"),
+    ),
+    (
+        "journaling",
+        ("app/journaling/", "tests/journaling/", "docs/CONVERSATIONAL_JOURNALING/"),
+        ("tests/journaling",),
     ),
     (
         "promotion_panel",
@@ -213,6 +311,19 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         "ops_deploy",
         ("scripts/", "ops/", "tests/ops/", "tests/scripts/", "tests/deploy/"),
         ("tests/ops", "tests/scripts", "tests/deploy"),
+    ),
+    (
+        # Skill-contract and cross-subsystem docs-contract surfaces: owned so
+        # they resolve via the subsystem loop instead of falling to
+        # unowned_paths when mixed with a path that already matches another
+        # subsystem (e.g. the docs/contracts + docs/HEIMDAL + api/openapi.yaml
+        # + .codex/skills mix reproduced by #3476 / PR #3475). Narrower
+        # docs/contracts/** files with a more specific subsystem owner (e.g.
+        # voice's docs/contracts/MIMER_CLIENT_CONTRACT.md) keep matching that
+        # owner too; subsystems dedupe and union their targets.
+        "docs_authoring",
+        (".codex/skills/", "docs/contracts/"),
+        GOVERNANCE_TARGETS,
     ),
 )
 

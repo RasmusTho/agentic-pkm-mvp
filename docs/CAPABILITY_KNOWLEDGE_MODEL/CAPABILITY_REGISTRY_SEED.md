@@ -26,8 +26,9 @@ Populate the capability forest from the taxonomy the repo already owns — the S
 
 ```bash
 python -m app.builderops ckm seed
-# → "seeded 8 domains, 14 boundaries, ~9 leaf capabilities (0 changed on re-run)"
-python -m app.builderops ckm seed   # second run: idempotent, 0 changes
+# → "seeded 31 capabilities, 31 changed" (8 domains + 14 boundaries + 9 leaf capabilities)
+python -m app.builderops ckm seed
+# → "seeded 31 capabilities, 0 changed" (second run: idempotent, 0 changes)
 ```
 
 ## Why This Matters
