@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 import requests
 
 from app.llm.trace import log_llm_call
+from app.settings.env_defaults import env_float
 
 _DEFAULT_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 _DEFAULT_BASE_DELAY = float(os.getenv("LLM_BASE_DELAY", "0.1"))
@@ -76,10 +77,12 @@ def _ollama_chat(
     user: str,
     model: str,
     temperature: float = 0.0,
-    timeout: float = 12.0,
+    timeout: float | None = None,
     max_tokens: int | None = None,
     response_format: dict[str, Any] | str | None = None,
 ) -> str:
+    if timeout is None:
+        timeout = env_float("LLM_TIMEOUT")
     body: dict[str, Any] = {
         "model": model,
         "messages": [
@@ -387,7 +390,7 @@ def call_llm(
                     user,
                     str(model),
                     temperature,
-                    timeout=float(os.getenv("LLM_TIMEOUT", "12")),
+                    timeout=env_float("LLM_TIMEOUT"),
                     max_tokens=max_tokens,
                     response_format=response_format,
                 )
@@ -424,7 +427,7 @@ def call_llm(
                 api_key=api_key,
                 model=str(model),
                 messages=messages,
-                timeout=float(os.getenv("LLM_TIMEOUT", "60")),
+                timeout=env_float("LLM_TIMEOUT"),
                 max_tokens=max_tokens,
                 response_format=response_format,
             )
@@ -444,7 +447,7 @@ def call_llm(
                 api_key=api_key,
                 model=str(model),
                 messages=messages,
-                timeout=float(os.getenv("LLM_TIMEOUT", "60")),
+                timeout=env_float("LLM_TIMEOUT"),
                 max_tokens=max_tokens,
                 response_format=response_format,
             )

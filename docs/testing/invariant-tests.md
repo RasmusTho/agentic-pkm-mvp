@@ -927,6 +927,31 @@ per HEIM-1..14, each xfail (honestly, via a Heimdal-local `require_future_heimda
 Heimdal slices A3/A5/A6 already discharge the invariant for real (HEIM-3, HEIM-8, HEIM-9), calling the
 real production path directly so a regression would fail the test rather than silently re-xfail.
 
+## Settings Spine invariants (SET-1..7)
+
+The Settings Spine (feature #3156, Option B ruling) consolidates five settings substrates into two
+scopes and one spine. Each SET invariant below is a fitness rule the spine must satisfy; they are
+added as their child slices land.
+
+### single_default_registry
+
+- **Purpose:** Every behavior-shaping environment default is declared exactly once; no call site
+  re-inlines a literal default (`os.getenv("KEY", "literal")`) for a registered key, so two components
+  can never silently disagree about one knob.
+- **Protected principle:** SET-4 (one declaration per behavior-shaping default); prevents the
+  five-substrate split-truth divergence from regrowing at new call sites.
+- **Affected boundaries:** WSP (settings resolution).
+- **Required fixture / data:** the registry `app/settings/env_defaults.py::ENV_DEFAULTS`; a synthetic
+  offending source file for the negative case.
+- **Expected failure mode:** the same env knob resolves to different defaults at different call sites
+  (audit F3: `LLM_TIMEOUT` → 12s/60s/120s; `WATCHER_ENABLE` → "0"/"1") with nobody having decided the
+  value.
+- **Current enforcement:** `static_test` — delivered by #3160 (SETTINGS-02).
+- **Eventual test path:** `tests/architecture/test_single_default_registry.py` (passes today).
+- **Related docs / contracts:** `docs/SETTINGS_SPINE/SINGLE_DEFAULT_REGISTRY.md`,
+  `docs/audits/SETTINGS_ARCHITECTURE_2026-07-07.md :: F3`.
+- **Related issues:** #3160; parent #3156.
+
 ## Related documents
 
 - [Traceability matrix](../architecture/traceability-matrix.md) — principle → contract → **this registry** → test → issue

@@ -29,6 +29,7 @@ from app.services.outbox import (
     payload_fingerprint,
     write_outbox_event,
 )
+from app.settings.env_defaults import env_str
 from app.settings.panel_actions import PanelActionMapping, load_panel_action_mappings
 from app.settings.tiering import resolve_dev_lab_env_typed, resolve_dev_lab_env_value
 from app.settings.watcher_settings import load_watcher_settings, resolve_auto_exec_enabled
@@ -471,7 +472,7 @@ class RegistryConfig:
 
     @classmethod
     def from_env(cls, specs: list[WatcherSpec], config_path: Path) -> "RegistryConfig":
-        enable = _as_bool(os.getenv("WATCHER_ENABLE", "1"))
+        enable = _as_bool(env_str("WATCHER_ENABLE"))
         vault_raw = (os.getenv("WATCHER_VAULT_PATH") or "").strip()
         if enable and not vault_raw:
             # No vault bound — idle until one is opened instead of raising

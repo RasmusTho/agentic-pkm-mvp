@@ -33,6 +33,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.settings.env_defaults import env_str
 from app.settings.tiering import resolve_dev_lab_env_typed
 from app.settings.watcher_settings import load_watcher_settings
 from app.vault.manager import VaultManager
@@ -144,7 +145,7 @@ class WatcherConfig:
 
     @classmethod
     def from_env(cls) -> "WatcherConfig":
-        enable = _as_bool(os.getenv("WATCHER_ENABLE", "0"))
+        enable = _as_bool(env_str("WATCHER_ENABLE"))
         vault_raw = (os.getenv("WATCHER_VAULT_PATH") or "").strip()
         if enable and not vault_raw:
             # No vault bound — idle until one is opened instead of raising
