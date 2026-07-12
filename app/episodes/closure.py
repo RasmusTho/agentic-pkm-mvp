@@ -54,7 +54,7 @@ from app.db.db import conn_rw
 from app.episodes.assignment import BINDING_STATE_ACTIVE, BINDING_TABLE
 from app.episodes.notes import parse_episode_note
 from app.episodes.segmenter import TIME_GAP_MINUTES
-from app.episodes.store import EPISODE_WRITE_ACTION, write_episode_note
+from app.episodes.store import write_episode_note
 from app.events.models import new_event
 from app.events.types import EPISODE_CLOSED
 from app.jobs.episodes_projection import EPISODES_TABLE
@@ -76,6 +76,15 @@ _QUIESCENCE: Final[timedelta] = timedelta(minutes=EPISODE_CLOSURE_QUIESCENCE_MIN
 #: a varying fingerprint would defeat the whole point of the idempotency key. One episode closes
 #: (in the decay-triggering sense) exactly once, so one fixed fingerprint per episode is correct.
 _CONTENT_FINGERPRINT: Final[str] = "episode-closed-v1"
+
+#: Distinct action string (round-3 review fix) for the reconciliation branch's own DB writes
+#: (outbox insert, projection UPDATE) -- deliberately NOT ``app.episodes.store.EPISODE_WRITE_ACTION``
+#: ("episodes.write_note"), which names the vault-note write seam specifically and is never
+#: reached on this branch. Reusing it would make a ``WritesBlockedError`` raised here report
+#: ``.action == "episodes.write_note"``, misdirecting anyone debugging a blocked-write incident
+#: toward the note-write seam instead of this module's own DB writes. Mirrors the per-seam-action
+#: pattern ``app.episodes.assignment.EPISODE_ASSIGNMENT_WRITE_ACTION`` already establishes.
+EPISODE_CLOSURE_RECONCILE_ACTION: Final[str] = "episodes.closure_reconcile"
 
 _EPISODES_SCHEMA_MIGRATION_HINT = (
     "episodes projection schema is migration-owned: run 'alembic upgrade head' against this "
@@ -269,15 +278,16 @@ def close_episode(
     if already_closed:
         # Nothing else on this branch funnels through write_episode_note, so nothing else would
         # ever assert the guard before the outbox/projection writes below -- assert it here,
-        # exactly once, only for this branch (see the guard-placement note above).
-        write_guard.assert_writes_allowed(EPISODE_WRITE_ACTION)
+        # exactly once, only for this branch (see the guard-placement note above). Uses this
+        # module's OWN action string, not the vault-note seam's, since no note write happens here.
+        write_guard.assert_writes_allowed(EPISODE_CLOSURE_RECONCILE_ACTION)
     else:
         # Guard-at-seam (mirrors ERE-02/05): write_episode_note asserts
-        # write_guard.assert_writes_allowed(EPISODE_WRITE_ACTION) itself, before any filesystem
-        # mutation. Re-write the SAME note (same episode_id -> same deterministic path) with every
-        # other field preserved verbatim and only `closed` flipped -- a proposal-class rewrite,
-        # never a new note, never a governed transition (no governance import anywhere in this
-        # module).
+        # write_guard.assert_writes_allowed(app.episodes.store.EPISODE_WRITE_ACTION) itself, before
+        # any filesystem mutation. Re-write the SAME note (same episode_id -> same deterministic
+        # path) with every other field preserved verbatim and only `closed` flipped -- a
+        # proposal-class rewrite, never a new note, never a governed transition (no governance
+        # import anywhere in this module).
         write_episode_note(
             title=str(fields.get("title") or ""),
             scope=str(fields.get("scope") or candidate.scope),
@@ -351,6 +361,7 @@ def run_closure_tick(
 
 __all__ = [
     "EPISODE_CLOSURE_QUIESCENCE_MINUTES",
+    "EPISODE_CLOSURE_RECONCILE_ACTION",
     "EpisodeClosureSchemaMissingError",
     "EpisodeCloseCandidate",
     "EpisodeCloseResult",

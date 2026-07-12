@@ -344,6 +344,36 @@ def test_close_episode_unreadable_note_is_noop_even_under_blocked_guard(
     assert result is None
 
 
+def test_close_episode_fresh_close_still_honors_blocked_guard(
+    tmp_path: Path,
+) -> None:
+    """#3181 review-round-3 fix: round 2 scoped the explicit guard assert to ONLY the
+    reconciliation (already-closed) branch, relying on write_episode_note's own internal
+    guard-at-seam check to cover the fresh-close branch instead -- confirm that reliance actually
+    holds: a blocked guard must still prevent a fresh (not-yet-closed) note from being flipped, and
+    must raise WritesBlockedError rather than silently proceeding, even though close_episode()
+    itself no longer asserts the guard on this branch directly."""
+    episode_id = "ep-99999999-2222-4333-8444-555555555555"
+    end = _dt(10, 0)
+    _write_open_episode_note(tmp_path, episode_id=episode_id, end=end)
+
+    candidate = EpisodeCloseCandidate(
+        episode_id=episode_id, scope="work", note_path=episode_note_rel_path(episode_id), time_end=end
+    )
+
+    from app.write_guard import WritesBlockedError
+
+    with pytest.raises(WritesBlockedError):
+        close_episode(candidate, vault_root=tmp_path, write_guard=_blocked_guard())
+
+    # The note was never rewritten -- write_episode_note's own guard-at-seam raised before any
+    # filesystem mutation (atomic, zero bytes touched).
+    from app.episodes.notes import parse_episode_note
+
+    text = (tmp_path / episode_note_rel_path(episode_id)).read_text(encoding="utf-8")
+    assert parse_episode_note(text)["time"]["closed"] is False
+
+
 # ---------------------------------------------------------------------------
 # AC1 headline: a quiesced episode closes once (idempotent across ticks)
 # ---------------------------------------------------------------------------
