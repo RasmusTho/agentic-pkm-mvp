@@ -150,6 +150,45 @@ def test_markdown_report_is_deterministic_and_derived(tmp_path: Path) -> None:
     } == json_before
 
 
+def test_markdown_report_fences_untrusted_question_and_model_text(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    service = ModelInquiryService.from_env(env)
+    service.start(
+        question="# Question\n\n<script>alert('x')</script>\n```",
+        workflow="fable-gpt-architecture",
+        inquiry_id="inq_test_markdown_untrusted",
+        source_refs=[{"ref_type": "github_issue", "ref": "#3540"}],
+    )
+    response = json.dumps(
+        {
+            "schema_version": RESPONSE_SCHEMA_VERSION,
+            "stance": "draft",
+            "content": "# Model heading\n\n<script>bad</script>\n```",
+            "claims": ["# Claim", "<b>claim</b>"],
+            "risks": ["```"],
+            "blocking_questions": ["<img src=x>"],
+            "reviewed_artifact_refs": [],
+            "accepted_artifact_hash": None,
+        }
+    )
+    service.commit_turn(
+        "inq_test_markdown_untrusted",
+        turn_id="draft-fable",
+        sequence=0,
+        role="fable",
+        content=response,
+        input_artifact_refs=["question"],
+        source_refs=[{"ref_type": "github_issue", "ref": "#3540"}],
+    )
+    report = service.write_human_readable_report("inq_test_markdown_untrusted")
+
+    rendered = report.read_text(encoding="utf-8")
+    assert "````" in rendered
+    assert "<script>alert('x')</script>" in rendered
+    assert "<script>bad</script>" in rendered
+    assert "<img src=x>" in rendered
+
+
 def test_start_persists_question_before_provider_call(tmp_path: Path) -> None:
     env = _env(tmp_path)
     question_file = tmp_path / "question.md"

@@ -29,8 +29,7 @@ def render_markdown_report(trace: Mapping[str, Any]) -> str:
         "",
         "## Question",
         "",
-        _text(question, "content"),
-        "",
+        *_fenced(_text(question, "content")),
         "## Model turns",
         "",
     ]
@@ -100,16 +99,15 @@ def _render_response_content(content: str) -> list[str]:
     try:
         proposal: ModelInquiryIssueProposal = parse_issue_proposal(content)
     except BuilderOpsValidationError:
-        return [content, ""]
-    return [f"Proposed issue: **{proposal.title}**", "", proposal.body, ""]
+        return _fenced(content)
+    return ["Proposed issue", "", *_fenced(f"{proposal.title}\n\n{proposal.body}")]
 
 
 def _append_list(lines: list[str], heading: str, values: list[str]) -> None:
     if not values:
         return
     lines.extend([f"#### {heading}", ""])
-    lines.extend(f"- {value}" for value in values)
-    lines.append("")
+    lines.extend(_fenced("\n".join(f"- {value}" for value in values)))
 
 
 def _fenced(content: str) -> list[str]:
