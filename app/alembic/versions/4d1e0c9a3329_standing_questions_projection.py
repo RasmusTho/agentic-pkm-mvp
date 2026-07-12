@@ -4,14 +4,14 @@ The vault Question note is canonical. This table is a query-only mirror and is
 repopulated exclusively by ``app.standing_questions.projection``.
 
 Revision ID: 4d1e0c9a3329
-Revises: b1c2d3e4f5a6
+Revises: b7c8d9e0f1a2
 """
 from typing import Sequence, Union
 
 from alembic import op
 
 revision: str = "4d1e0c9a3329"
-down_revision: Union[str, None] = "b1c2d3e4f5a6"
+down_revision: Union[str, None] = "b7c8d9e0f1a2"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 reversibility: str = "forward-only"
