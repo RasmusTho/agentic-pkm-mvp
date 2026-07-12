@@ -23,7 +23,7 @@ The owner requires every input source identified and part of the architecture. T
 | `decision.receipts` | **live** | receipt log + `decisions` projection / `decision.receipt` topic | time, goal, causation | vault-implicit | Mimer |
 | `kap.acquisitions` | **live** | `knowledge_acquisition.stage.completed` | time, goal (content-origin; low situational weight) | vault-implicit | Mimer |
 | `heimdal.attention` | **live** | attention log (daily `attention/YYYY-MM-DD.md`) | goal, protagonist | Heimdal-adjacent | Heimdal |
-| `calendar` | **planned** (ERE-09) | read-only CalDAV/ICS poll; credentials in private-bindings | time, protagonist, space (text), goal | per-calendar scope mapping | external via C3 |
+| `calendar` | **live** (ERE-09, #3184) | read-only CalDAV/ICS poll; credentials in private-bindings | time, protagonist, space (text), goal | per-calendar scope mapping | external via C3 |
 | `bifrost.native_capture` | **planned** (Epic B) | governed capture API / direct FS per MIMER_CLIENT_CONTRACT | space, protagonist, causation enrichment | Heimdal consent-gated | Bifrost→Heimdal |
 | `location` | **future** (ERE-10) | Heimdal v2 `modality: location` observations | space, time | Heimdal consent-gated (strict, opt-in per place/session) | Heimdal |
 | `screen`, `biometric`, `ambient_audio` | **future** | Heimdal v2 modality vocabulary | varies | Heimdal consent-gated (Posture B) | Heimdal |

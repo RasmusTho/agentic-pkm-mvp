@@ -68,6 +68,20 @@ from pathlib import Path
 from typing import Any, Final, Mapping, Sequence
 
 from app.episodes import engine_state
+from app.episodes.calendar_stream import (
+    CALENDAR_STREAM_ID,
+    AttendeeResolved,
+    AttendeeUnresolved,
+    CalendarBinding,
+    CalendarRawItem,
+    RegisterEntrySnapshot,
+    calendar_signal_id,
+    parse_vevent,
+    read_calendar_raw_items_for_tick,
+    read_register_snapshot,
+    resolve_attendee_readonly,
+    slugify_summary,
+)
 from app.episodes.ids import EPISODE_ID_PREFIX
 from app.episodes.notes import episode_note_rel_path
 from app.episodes.store import write_episode_note
@@ -612,6 +626,79 @@ def _signal_from_vault_activity_row(row: VaultActivityRow, *, vault_root: Path) 
     )
 
 
+def _signal_from_calendar_row(
+    binding: CalendarBinding,
+    item: CalendarRawItem,
+    *,
+    register_snapshot: Sequence[RegisterEntrySnapshot],
+) -> SegmentationSignal | None:
+    """Normalize one raw CalDAV VEVENT resource (ERE-09, #3184) to a
+    SegmentationSignal, or ``None`` when it carries no usable DTSTART or its
+    ICS body does not parse (bounds are never poll time -- mirrors
+    :func:`_signal_from_heimdal_row` / :func:`_signal_from_vault_activity_row`).
+
+    Attendees resolve three-state, READ-ONLY against ``register_snapshot``
+    (HEIM-6-honest; Scope: "no register mutation" -- see
+    ``app.episodes.calendar_stream``'s module docstring): only ``resolved``
+    and ``unresolved`` refs feed ``protagonists`` (a stable id either way,
+    never a bare surface-form string); an ``ambiguous`` match asserts no
+    single id and contributes nothing (HEIM-6). Scope comes from the
+    calendar's own private-bindings scope mapping (``binding.scope``, AC6 /
+    ERE-08 per-calendar discipline) -- never inferred from event content, so
+    cross-scope isolation is inherited for free from the already-shipped
+    per-scope partitioning in :func:`fold_signals_into_segments`.
+
+    ``signal_id``/``provenance_ref`` incorporate ``item.occurrence_key`` when
+    present (ERE-09 review round 1, finding 2): a server-expanded recurring
+    series' occurrences share one resource uid:etag, so without the
+    occurrence key every occurrence after the first would collide on the
+    same signal_id and never fold as separate evidence.
+
+    Review gate rounds 2+3 (findings 1+2): ``signal_id`` is built via
+    :func:`app.episodes.calendar_stream.calendar_signal_id`, the single
+    canonical scheme -- identity (``uid`` + occurrence_key, where
+    occurrence_key is this occurrence's own RECURRENCE-ID alone and thus
+    FULLY window-independent, finding 1) is separate from the per-occurrence
+    CHANGE-token (a structured-JSON hash of THIS occurrence's own content,
+    never the shared resource etag and never a delimiter-joined string,
+    finding 2).
+    """
+    event = parse_vevent(item.ics_text)
+    if event is None or event.dtstart is None:
+        logger.warning(
+            "segmentation: skipping calendar item without a usable DTSTART "
+            "(calendar=%s uid=%s) -- bounds are never poll time",
+            binding.calendar_id,
+            item.uid,
+        )
+        return None
+
+    protagonists: list[str] = []
+    for attendee in event.attendees:
+        result = resolve_attendee_readonly(attendee.surface_form, known_entries=register_snapshot)
+        if isinstance(result, (AttendeeResolved, AttendeeUnresolved)):
+            protagonists.append(result.entity_id)
+        # AttendeeAmbiguous: no single id asserted (HEIM-6) -- this attendee
+        # contributes no protagonist evidence to the signal.
+
+    goal = (slugify_summary(event.summary),) if event.summary else ()
+
+    signal_id = calendar_signal_id(item.uid, item.etag, item.occurrence_key, event)
+
+    return SegmentationSignal(
+        stream_id=CALENDAR_STREAM_ID,
+        signal_id=signal_id,
+        observed_at=event.dtstart,
+        observed_at_end=event.dtend,
+        scope=binding.scope,
+        provenance_ref=f"calendar:{signal_id}",
+        protagonists=tuple(sorted(set(protagonists))),
+        goal=goal,
+        heimdal_session_id=None,
+        causal_break=False,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Emission (AC5) + production tick entrypoint
 # ---------------------------------------------------------------------------
@@ -705,6 +792,7 @@ def run_segmentation_tick(
 
     consumed: dict[str, int] = {}
     skipped_no_observation_time: dict[str, int] = {}
+    degraded: list[str] = []
     signals: list[SegmentationSignal] = []
     heimdal_rows: list[ObservationRow] = []
     vault_rows: list[VaultActivityRow] = []
@@ -732,6 +820,56 @@ def run_segmentation_tick(
                 )
             else:
                 signals.append(signal)
+
+    if CALENDAR_STREAM_ID in live_streams:
+        # ERE-09 (#3184): registry-driven calendar ingestion, mirroring the
+        # vault_activity block above (Coordinator contract clarification,
+        # #3184 -- an additive block here is in scope; the pure shift-
+        # detection core below is untouched). Credential resolution
+        # (`resolve_calendar_bindings`, inside `read_calendar_raw_items_for_tick`)
+        # fails LOUD and propagates out of this tick when the registry says
+        # calendar is live but private-bindings config is missing (AC4) --
+        # deliberately NOT caught here, unlike a per-calendar unreachable
+        # fetch, which the helper already folds into `calendar_degraded`
+        # (AC5) instead of raising. No durable read-position cursor: unlike
+        # the append-only heimdal/outbox logs, a CalDAV poll re-reads the
+        # calendar's current item set each tick (bounded to a fixed past/
+        # future window -- `_CALDAV_TIME_RANGE_PAST`/`_CALDAV_TIME_RANGE_FUTURE`
+        # in calendar_stream.py, ERE-09 review round 1 finding 3) and relies
+        # on `calendar_signal_id` (`app.episodes.calendar_stream`) for
+        # at-least-once idempotency (an unchanged event redelivers the same
+        # signal_id -> no-op fold; an edited event gets a new signal ->
+        # itself append-only evidence of the change) -- the same INV-ERE-F
+        # guarantee, a different mechanism. Review gate rounds 2+3 (findings
+        # 1+2, PR #3519): for a non-recurring event (or any block without a
+        # RECURRENCE-ID) this is still plain `uid:etag`; for one occurrence
+        # of a server-expanded recurring series (review round 1 finding 2)
+        # it is `uid:occurrence_key:content_token` -- IDENTITY
+        # (`occurrence_key`) is this occurrence's own RECURRENCE-ID ALONE,
+        # fully window-independent (finding 1: never gated on how many
+        # sibling occurrences shared this tick's expand/time-range window,
+        # nor on block count -- round 3 removed the last block-count-gated
+        # DTSTART fallback, so the same real occurrence never gets two
+        # identities); the CHANGE-token is a structured-JSON hash of this
+        # occurrence's OWN content, never the shared resource etag and never
+        # a delimiter-joined string (finding 2: a recurring series is one
+        # CalDAV resource with one etag, so editing any single occurrence
+        # must not bump every unmodified sibling's signal_id too).
+        calendar_items, calendar_degraded = read_calendar_raw_items_for_tick()
+        consumed[CALENDAR_STREAM_ID] = len(calendar_items)
+        degraded.extend(calendar_degraded)
+        if calendar_items:
+            calendar_register_snapshot = read_register_snapshot(vault_root=root)
+            for cal_binding, cal_item in calendar_items:
+                signal = _signal_from_calendar_row(
+                    cal_binding, cal_item, register_snapshot=calendar_register_snapshot
+                )
+                if signal is None:
+                    skipped_no_observation_time[CALENDAR_STREAM_ID] = (
+                        skipped_no_observation_time.get(CALENDAR_STREAM_ID, 0) + 1
+                    )
+                else:
+                    signals.append(signal)
 
     open_state = engine_state.all_state_with_prefix(_OPEN_SEGMENT_KEY_PREFIX)
     open_segments = {
@@ -803,6 +941,10 @@ def run_segmentation_tick(
         "skipped_no_observation_time": skipped_no_observation_time,
         "proposed": proposed_ids,
         "open_segments": len(updated_open),
+        # AC5 (ERE-09, #3184): calendar_ids (or other future streams) that
+        # degraded softly this tick -- never raised out of this function,
+        # never stalls segmentation on the remaining streams.
+        "degraded": degraded,
     }
 
 

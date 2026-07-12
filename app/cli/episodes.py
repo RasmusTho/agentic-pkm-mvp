@@ -51,7 +51,8 @@ def tick(vault_root: str | None, as_json: bool) -> None:
     else:
         click.echo(
             "episodes tick: consumed="
-            f"{summary['consumed']} proposed={len(summary['proposed'])} open_segments={summary['open_segments']}"
+            f"{summary['consumed']} proposed={len(summary['proposed'])} open_segments={summary['open_segments']} "
+            f"degraded={summary.get('degraded', [])}"
         )
 
 
