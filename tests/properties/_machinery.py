@@ -733,6 +733,17 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "exists in this module by design -- this IS the production seam ERE-02 "
         "AC2 verifies (#3177)."
     ),
+    ("app/chat/session_log.py", 68): (
+        "guarded_by_caller: SessionLogWriter.open_session asserts "
+        "DEFAULT_WRITE_GUARD.assert_writes_allowed(CHAT_SESSION_PERSIST_ACTION) "
+        "at method entry -- deliberately positioned before ensure_note_uuid "
+        "healing as well as this session write, since healing a legacy note can "
+        "itself write frontmatter -- in addition to the port's own guard (#2953) "
+        "asserted unconditionally inside write_note_relative. New chat-artifact "
+        "seam added by #3486 (Route chat artifacts through WriteGuard); "
+        "registered here as a directly-related census repair of the site #3486 "
+        "left unclassified."
+    ),
 }
 
 

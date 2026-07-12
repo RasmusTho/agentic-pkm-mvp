@@ -94,8 +94,15 @@ def test_capture_appends_to_inbox_through_governed_pipeline(
     data = resp.json()
 
     # Policy gate ran with the bounded capture action: first to preserve the
-    # legacy guard-held failure ordering, then again for token issuance.
-    assert guard_actions == ["companion.capture.append", "companion.capture.append"]
+    # legacy guard-held failure ordering, then again for token issuance. The
+    # trailing knowledge.write_note assert is the guard-at-seam the append port
+    # itself now raises before any I/O (#3129, c5ce5a1b): the capture write
+    # rides the guarded deterministic writer rather than a bypass path.
+    assert guard_actions == [
+        "companion.capture.append",
+        "companion.capture.append",
+        "knowledge.write_note",
+    ]
 
     # The capture landed in the vault inbox per the note convention.
     inbox_note = vault / "Inbox" / "inbox.md"
