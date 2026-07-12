@@ -31,13 +31,10 @@ Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kern
   `tests/migrations/test_outbox_schema_parity.py`.
 - Alembic migrations under `app/alembic/versions/` define the legacy AMG-core
   (`objects`/`chunks`/`embeddings`/...) lineage; see "Historical migration lineage" below. Most of
-  these are historical-only. The temporary `PgObjects` compatibility adapter remains on the active
-  vault-root ingest path. It preflights the migration-owned store schema and delegates the durable
-  object write to `store_objects`; it retains only a minimal `objects` parent row while the live
-  `decisions.object_id` foreign key requires it. #3510 owns removal of that parent-row compatibility.
-  `app/services/decisions.py` still reads/writes
-  `decisions`, whose runtime DDL remains the separately tracked #3488 migration follow-up.
-  `chunks`/`embeddings`/`membership` are touched by the backfill job
+  these are historical-only, **but `objects` and `decisions` remain on the active runtime path**: vault
+  ingest writes `objects` via `app/stores/postgres.py` (`PgObjects.upsert`, reached through
+  `app/ingest/vault_root.py` → `get_stores()`), and `app/services/decisions.py` reads/writes
+  `decisions`. `chunks`/`embeddings`/`membership` are touched by the backfill job
   (`app/jobs/backfill.py`) and `app/store/membership_store.py` rather than purely historical.
 
 This document is a human-readable snapshot of what the code creates/uses in the v5.5 baseline. The
@@ -312,15 +309,41 @@ Interpretation:
 - the log is Heimdal's durable evidence stream; it is not authority over knowledge (HEIM-8),
 - consumer projections built by replaying the log from a cursor are derived and rebuildable.
 
+## Episode Resolution Engine tick-runtime state
+
+Migration-owned (ERE-04, #3179): Alembic revision `a1b2c3d4e5f6` creates the table;
+`app/episodes/engine_state.py` is assert-only (fail-loud `EngineStateSchemaMissingError` preflight
+with a migration hint on every query; **no autocreate path at all** — unlike the Heimdal stores
+there is no `STORE_SCHEMA_AUTOCREATE` opt-in here, test fixtures run the migration). See
+`docs/EVENTS.md :: Secondary per-consumer cursor readers` for the consumer contract.
+
+- `episode_engine_state` — generic key/value state for the segmentation tick
+  (`app/episodes/segmenter.py::run_segmentation_tick`).
+  - `key` (`text`, PK) — namespaced row families:
+    - `cursor:vault.activity:<consumer_id>` — the engine's own durable read position over the
+      `outbox` table's vault-activity topics (independent of `outbox.delivered_at`, which the
+      worker dispatcher owns);
+    - `open_segment:<scope>` — one scope's currently-open (not yet proposed) segment state.
+  - (No `stream_watermark` row family: the quiescence-closure frontier is a per-scope
+    read position computed fresh from each tick's own consumed signals, not carried durably.)
+  - `value` (`jsonb`, `NOT NULL`)
+  - `updated_at` (`timestamptz`, `NOT NULL`, default `now()`)
+
+Interpretation:
+- pure rebuildable tick-runtime bookkeeping — never authoritative; Episode notes in the vault are
+  the source of record (ADR-0051 OD-1/OD-2) and the `episodes` table is a rebuildable projection;
+- recovery = reset this table's rows **together with** the `mimer.episode_resolution_engine` row in
+  `heimdal_observation_cursor` (full both-stream replay is deterministic and emission-deduped); a
+  single-stream reset is a skewed replay and is not a supported operator action (see the migration
+  docstring).
+
 ## Explicit Deltas / Known Gaps
 - The primary runtime store is the `store_*` set, migration-owned since Alembic revision
   `c2766a04d001` (KERNEL-04; `_ensure_tables()` is assert-only outside tests). The AMG-core tables
-  under `app/alembic/versions/` are mostly legacy lineage. `PgObjects` remains only as a guarded
-  compatibility adapter for vault-root ingest: its direct `store_objects` writer is delegated to
-  `app/stores/pg.py`, while a minimal `objects` parent row persists until #3510 removes the live FK.
-  `app/services/decisions.py` still reads/writes `decisions` while #3488 tracks its runtime DDL
-  separately for Alembic migration. `chunks`/`embeddings`/`membership` are touched by the backfill job
-  and `membership_store`. An earlier
+  under `app/alembic/versions/` are mostly legacy lineage,
+  **except `objects` and `decisions`, which are still on the active runtime path** (vault ingest →
+  `PgObjects.upsert` INSERTs into `objects`; `app/services/decisions.py` reads/writes `decisions`);
+  `chunks`/`embeddings`/`membership` are touched by the backfill job and `membership_store`. An earlier
   revision of this doc mis-attributed the store tables to Alembic, listed a fabricated `search_vector`
   column, and over-broadly claimed none of the AMG-core tables were active — all corrected here.
 - This repo still contains historical migration lineage and merge history under `app/alembic/versions/`. If you hit unexpected columns or migration conflicts, inspect the migration set and record the intended baseline delta in the same change.

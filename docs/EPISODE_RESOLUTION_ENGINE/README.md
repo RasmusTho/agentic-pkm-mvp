@@ -62,6 +62,18 @@ Multiple tasks read/write the episode substrate; these invariants hold *across* 
 
 Segmentation thresholds (time-gap, goal/protagonist shift sensitivity) and the closure decay step-down factor are **named, single-sourced constants documented as provisional**. RQ-E1 (multi-stream thresholds) and RQ3 (decay curve, per-scope variation) are open research resolved *after* live data accumulates — the tuning pass is parent-issue validation work, not a pre-code gate. Over-segmentation is preferred (merge is a cheap re-cut; wrong fusion is costly).
 
+Delivered (ERE-04, #3179), all single-sourced in `app/episodes/segmenter.py` — no other module literal-copies these values:
+
+| Constant | Value | Meaning |
+| --- | --- | --- |
+| `TIME_GAP_MINUTES` | `45` | No signal for this long closes the open segment window (with or without a new triggering signal). |
+| `GOAL_SHIFT_DETECTION_ENABLED` | `True` | A signal's goal/project-binding set fully disjoint from the open segment's accumulated goal set is a shift. Conservative: fires only when both sides are non-empty. |
+| `PROTAGONIST_SHIFT_DETECTION_ENABLED` | `True` | A signal's resolved-attribution protagonist set fully disjoint from the open segment's accumulated protagonist set is a shift. Same both-sides-non-empty bar. |
+| `CAUSAL_BREAK_DETECTION_ENABLED` | `True` | v1 rule: an explicit Heimdal `supersedes` marker on the observation payload is a discontinuity. |
+| `PLACE_SHIFT_DETECTION_ENABLED` | `False` | Place/space is unfed in v1 (no calendar/location stream yet, ERE-09/ERE-10) — never contributes a shift; a documented absence, not a silent omission. |
+
+The Heimdal per-session `episode_id` boundary hint (ADR-0054 §3) is checked BEFORE all five dimensions: a signal continuing the open segment's own bound session always extends, overriding every other dimension (one session never spans two proposed episodes).
+
 ## Capability acceptance criteria
 
 - [ ] All live streams in the inventory are registered and consumed only via the registry (ERE-01/04). Verify: `tests/episodes/test_stream_registry.py::test_engine_consumes_only_registered_streams`
