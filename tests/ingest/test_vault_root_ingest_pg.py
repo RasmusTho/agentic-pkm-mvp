@@ -46,7 +46,7 @@ def _bootstrap_pg_tables_if_missing(dsn: str) -> None:
 
 
 @pytest.mark.pg
-def test_ingest_vault_root_persists_objects_before_classification(tmp_path: Path, monkeypatch) -> None:
+def test_ingest_vault_root_persists_decisions_with_legacy_fk_parent(tmp_path: Path, monkeypatch) -> None:
     if not _pg_available():
         pytest.skip("Postgres backend not available")
 
@@ -58,6 +58,7 @@ def test_ingest_vault_root_persists_objects_before_classification(tmp_path: Path
     vault_root = tmp_path / "vault"
     vault_root.mkdir()
     (vault_root / "sample.md").write_text("# Sample\nBody text", encoding="utf-8")
+    monkeypatch.setenv("VAULT_ROOT", str(vault_root))
 
     dsn = resolve_dsn(os.getenv("DATABASE_URL") or settings.db_dsn)
     _bootstrap_pg_tables_if_missing(dsn)
@@ -79,6 +80,37 @@ def test_ingest_vault_root_persists_objects_before_classification(tmp_path: Path
 
     with psycopg.connect(dsn, row_factory=dict_row) as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id FROM objects WHERE id = %s", (object_id,))
+            cur.execute("SELECT id, payload FROM objects WHERE id = %s", (object_id,))
+            parent = cur.fetchone()
+            cur.execute("SELECT object_id FROM store_objects WHERE object_id = %s", (object_id,))
             stored_object = cur.fetchone()
-    assert stored_object is not None, "objects table should contain the ingested id"
+    assert parent is not None, "decisions needs its retained legacy FK parent"
+    assert parent["payload"] == {}, "legacy parent must not become a second object writer"
+    assert stored_object is not None, "canonical store_objects should contain the ingested id"
+
+
+@pytest.mark.pg
+def test_ingest_vault_root_unmigrated_db_fails_with_migration_hint(tmp_path: Path, monkeypatch, caplog) -> None:
+    """The real PgObjectStore preflight reports its migration hint through ingest."""
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    (vault_root / "sample.md").write_text("# Sample\nBody text", encoding="utf-8")
+
+    dsn = resolve_dsn(os.getenv("DATABASE_URL") or settings.db_dsn)
+    _bootstrap_pg_tables_if_missing(dsn)
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
+
+    pg_store._TABLES_READY = False
+    try:
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            conn.execute("DROP TABLE store_objects")
+
+        assert ingest_vault_root(vault_root, limit=1) == 0
+        assert "run 'alembic upgrade head'" in caplog.text
+    finally:
+        monkeypatch.setenv("STORE_SCHEMA_AUTOCREATE", "1")
+        pg_store._TABLES_READY = False
+        pg_store._ensure_tables()

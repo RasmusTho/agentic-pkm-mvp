@@ -149,6 +149,18 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/health", "tests/invariants", "tests/api"),
     ),
     (
+        "store_ingest",
+        (
+            "app/stores/",
+            "app/ingest/",
+            "tests/stores/",
+            "tests/ingest/",
+            "docs/DB_SCHEMA.md",
+            "docs/RUNTIME_CORRECTNESS_KERNEL/",
+        ),
+        ("tests/stores", "tests/ingest", "tests/architecture"),
+    ),
+    (
         "relevance",
         ("app/relevance/", "tests/relevance/"),
         ("tests/relevance",),

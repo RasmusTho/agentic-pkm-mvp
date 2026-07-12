@@ -35,7 +35,7 @@ LEGACY_FILES = (
 # ``embeddings`` is the superseded legacy vector table: zero writers allowed
 # (table removal itself belongs to KERNEL-04).
 STORE_TABLE_WRITERS: dict[str, frozenset[str]] = {
-    "store_objects": frozenset({"app/stores/pg.py", "app/stores/postgres.py"}),
+    "store_objects": frozenset({"app/stores/pg.py"}),
     "store_vector_index": frozenset({"app/stores/pg.py"}),
     "store_relations": frozenset({"app/stores/pg.py"}),
     "store_relation_memberships": frozenset({"app/stores/pg.py"}),
