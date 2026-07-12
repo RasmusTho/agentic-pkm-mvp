@@ -96,6 +96,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/dispatcher/",
             "tests/builderops/",
             "tests/dispatcher/",
+            "tests/governance/",
             "docs/builderops/",
             "importlinter.ini",
         ),
