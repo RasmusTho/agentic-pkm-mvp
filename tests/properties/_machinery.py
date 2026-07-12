@@ -648,6 +648,12 @@ def find_write_frontmatter_call_sites(root: Path = APP_ROOT) -> list[tuple[str, 
 #                           asserts its own action string caller-side
 #                           (defense-in-depth, pre-dates #2953).
 WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
+    ("app/chat/session_log.py", 68): (
+        "guarded_by_caller: SessionLogWriter.open_session asserts "
+        "DEFAULT_WRITE_GUARD.assert_writes_allowed(CHAT_SESSION_PERSIST_ACTION) "
+        "before resolving identity and preparing the session artifact, in "
+        "addition to the port's own guard (#2807)."
+    ),
     ("app/briefing/compose.py", 254): (
         "guarded_by_caller: compose_briefing asserts write_guard."
         "assert_writes_allowed(BRIEFING_WRITE_ACTION) before the private atomic "
