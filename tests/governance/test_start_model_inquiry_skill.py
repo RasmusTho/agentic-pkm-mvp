@@ -103,6 +103,9 @@ def test_codex_skill_calls_common_command(tmp_path: Path) -> None:
     assert payload["inquiry_id"].startswith("inq_")
     assert payload["final_state"] == "consensus"
     assert payload["terminal_receipt_id"]
+    report = Path(payload["human_readable_report"])
+    assert report.is_file()
+    assert report.parent.name == payload["inquiry_id"]
     assert not marker.exists()
     trace = ModelInquiryService.from_env(env).trace(payload["inquiry_id"])
     assert trace["question"]["content"] == question
@@ -123,6 +126,7 @@ def test_claude_package_uses_common_launcher_contract(tmp_path: Path) -> None:
         "inquiry_id",
         "final_state",
         "terminal_receipt_id",
+        "human_readable_report",
     ):
         assert contract_field in codex
         assert contract_field in claude

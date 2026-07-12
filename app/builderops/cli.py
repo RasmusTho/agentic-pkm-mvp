@@ -453,6 +453,9 @@ def inquiry_evaluate(
         service = ModelInquiryService.from_env()
         gateway = ModelInquiryPromotionGateway(service)
         payload = gateway.evaluate(inquiry_id, actor=_parse_actor(created_by))
+        payload["human_readable_report"] = str(
+            service.write_human_readable_report(inquiry_id)
+        )
     except BuilderOpsValidationError as exc:
         raise click.ClickException(str(exc)) from exc
     _emit(payload, as_json)

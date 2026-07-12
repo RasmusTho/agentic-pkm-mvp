@@ -125,7 +125,7 @@ class ModelInquiryRunner:
             trace = self.service.trace(inquiry_id)
             terminal = _terminal_run_receipt(trace)
             if terminal is not None:
-                return _terminal_result(inquiry_id, terminal, replayed=True)
+                return self._finalize_terminal(inquiry_id, terminal, replayed=True)
             try:
                 adapters = self._adapters if self._adapters is not None else load_adapters(self._env)
             except (AdapterUnavailableError, BuilderOpsValidationError):
@@ -511,7 +511,19 @@ class ModelInquiryRunner:
             details=details,
             source_refs=list(trace["source_refs"]),
         )
-        return _terminal_result(inquiry_id, receipt, replayed=False)
+        return self._finalize_terminal(inquiry_id, receipt, replayed=False)
+
+    def _finalize_terminal(
+        self,
+        inquiry_id: str,
+        receipt: Mapping[str, Any],
+        *,
+        replayed: bool,
+    ) -> dict[str, Any]:
+        report_path = self.service.write_human_readable_report(inquiry_id)
+        result = _terminal_result(inquiry_id, receipt, replayed=replayed)
+        result["human_readable_report"] = str(report_path)
+        return result
 
 
 def _initial_context(trace: Mapping[str, Any]) -> dict[str, Any]:
