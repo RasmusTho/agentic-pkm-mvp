@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from app.db.db import conn_rw
+from app.domain.state_axes import normalize_maturity, normalize_review_state
 from app.jobs.episodes_projection import EPISODES_TABLE
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,49 @@ CLOSURE_DECAY_STEP_DOWN_FACTOR: float = 0.5
 #: real episode id, so neither can ever resolve to a closed binding (structurally immune, ADR-0058
 #: Edge case 1's "absence of episodic origin is absence of decay").
 _EPISODE_REF_SENTINELS = frozenset({"unbound", "pending"})
+
+# ADR-0058 §2 exempt note-class gate (amended 2026-07-11): canonical knowledge artifacts stay at
+# full salience even when episode-bound, because their liveness follows their OWN properties
+# (ADR-0051 commitment 5: episodic -> semantic is transformation, and the transformed artifact
+# carries its own standing) -- not the situation they were authored in. Without this gate, an
+# evergreen note or reviewed/protected decision authored inside a meeting would be halved the
+# moment that meeting closes (ADR-0058 §2's exact warning; Edge case 4). ADR-0058 §4 makes the
+# exempt check short-circuit to 1.0 BEFORE any binding math.
+#
+# v1 keys the gate on EXISTING, already-populated bundle signals -- deliberately NOT a new
+# note-class taxonomy (the concrete ADR-0055/T2 note-class table, #3131, is still unbuilt as a
+# decay classification). The honest signals are the two state axes the ingest/index producers
+# actually write onto every store_objects/store_vector_index payload (app/services/vault_sync.py
+# via normalize_artifact_state_axes; app/services/indexer.py::handle_ingest_object_created;
+# guaranteed present past app/index/artifact_metadata.py::build_indexed_unit_payload). Compared
+# through the SAME canonical normalizers the rest of the system uses (app/domain/state_axes.py),
+# so a legacy alias like review_state 'evergreen' -> 'reviewed' is honored:
+#   - maturity     == "evergreen"              -> ADR-0058 "evergreen knowledge notes"
+#   - review_state in {"reviewed","protected"} -> curated/durable products (project status +
+#     reviewed derivatives); a decision promoted through the vault normalizes here
+# Known honest gap (NOT invented around): the distinct "accepted decision" class carries its
+# canonical marker in `authority_state == accepted`, which lives only in vault frontmatter and is
+# NOT lifted onto the retrieval payload today (app/retrieval/envelope.py defaults authority_state
+# to "projection"; no ingest/index producer writes it top-level, and the choke-point
+# `review_state` enum has no "accepted" value). Gating on it would never match a real row, so the
+# accepted-decision class rides on its normalized review_state/maturity above until #3131's
+# note-class table (or an authority_state payload lift) lands -- see the PR/hand-back.
+_EXEMPT_REVIEW_STATES = frozenset({"reviewed", "protected"})
+_EXEMPT_MATURITIES = frozenset({"evergreen"})
+
+
+def is_exempt_note_class(payload: Mapping[str, Any] | None) -> bool:
+    """Whether a retrieval hit's bundle payload marks it a canonical knowledge artifact exempt
+    from closure decay (ADR-0058 §2). Gated on existing, populated state-axis bundle signals only
+    (see the module constants above), compared through the canonical ``app.domain.state_axes``
+    normalizers -- a payload without an exempt-class marker is dampenable as normal."""
+    if not isinstance(payload, Mapping):
+        return False
+    if normalize_review_state(payload.get("review_state")) in _EXEMPT_REVIEW_STATES:
+        return True
+    if normalize_maturity(payload.get("maturity")) in _EXEMPT_MATURITIES:
+        return True
+    return False
 
 EPISODES_SCHEMA_MIGRATION_HINT = (
     "episodes projection schema is migration-owned: run 'alembic upgrade head' against this "
@@ -86,7 +130,10 @@ def resolve_episode_ids(episode_ref: Any) -> tuple[str, ...]:
 
 
 def derive_closure_salience(
-    episode_ref: Any, closed_episode_ids: Iterable[str] | Mapping[str, Any]
+    episode_ref: Any,
+    closed_episode_ids: Iterable[str] | Mapping[str, Any],
+    *,
+    exempt_note_class: bool = False,
 ) -> tuple[float, dict[str, Any]]:
     """The pure decay derivation (ADR-0058 §2/§3): ``(factor, salience_metadata)``.
 
@@ -94,6 +141,10 @@ def derive_closure_salience(
     caller used -- DB projection or vault notes); anything not in it is treated as open-or-unknown,
     which the MAX rule below resolves to full salience (fail-open, never fail-closed).
 
+    - ``exempt_note_class`` (ADR-0058 §2 gate) -> ``(1.0, {})`` -- a canonical knowledge artifact
+      (accepted decision / evergreen knowledge note; see :func:`is_exempt_note_class`) stays at
+      full salience even when every binding is closed. Checked FIRST, short-circuiting before any
+      binding math (ADR-0058 §4).
     - No episode binding (``unbound``/``pending``/malformed) -> ``(1.0, {})`` -- structurally
       immune, no salience key at all (an open-episode or unbound artifact "carries none", per the
       spec's AC2).
@@ -103,6 +154,8 @@ def derive_closure_salience(
       {closed: True, factor, closed_episode_refs}})`` -- the step-down, with per-hit metadata so
       every consumer can see why (ADR-0058's "same honesty posture as provenance/temporal_validity").
     """
+    if exempt_note_class:
+        return 1.0, {}
     ids = resolve_episode_ids(episode_ref)
     if not ids:
         return 1.0, {}
@@ -182,6 +235,7 @@ __all__ = [
     "CLOSURE_DECAY_STEP_DOWN_FACTOR",
     "ClosureDecaySchemaMissingError",
     "derive_closure_salience",
+    "is_exempt_note_class",
     "read_closed_episode_ids",
     "read_closed_episode_ids_from_vault",
     "resolve_episode_ids",

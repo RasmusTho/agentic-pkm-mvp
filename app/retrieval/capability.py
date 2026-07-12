@@ -121,10 +121,21 @@ def _apply_closure_decay(hits: list["RetrievalHit"]) -> list["RetrievalHit"]:
     closed-episode-id read instead of one query per hit. A hit set with no episode bindings at all
     (the common case today) short-circuits to zero DB round-trips.
     """
-    from app.episodes.closure_decay import derive_closure_salience, read_closed_episode_ids, resolve_episode_ids
+    from app.episodes.closure_decay import (
+        derive_closure_salience,
+        is_exempt_note_class,
+        read_closed_episode_ids,
+        resolve_episode_ids,
+    )
+
+    # Precompute the ADR-0058 §2 exempt-class flag once per hit (a canonical knowledge artifact --
+    # evergreen note / reviewed-or-protected decision -- never dampens, even when episode-bound).
+    exempt = [is_exempt_note_class(hit.payload) for hit in hits]
 
     all_ids: set[str] = set()
-    for hit in hits:
+    for hit, is_exempt in zip(hits, exempt):
+        if is_exempt:
+            continue  # exempt classes never dampen -> their bindings need not be queried at all
         all_ids.update(resolve_episode_ids(hit.payload.get("episode_ref")))
     if not all_ids:
         return hits
@@ -134,8 +145,10 @@ def _apply_closure_decay(hits: list["RetrievalHit"]) -> list["RetrievalHit"]:
         return hits
 
     dampened: list[RetrievalHit] = []
-    for hit in hits:
-        factor, salience = derive_closure_salience(hit.payload.get("episode_ref"), closed_ids)
+    for hit, is_exempt in zip(hits, exempt):
+        factor, salience = derive_closure_salience(
+            hit.payload.get("episode_ref"), closed_ids, exempt_note_class=is_exempt
+        )
         if salience:
             hit = replace(
                 hit,

@@ -342,6 +342,7 @@ def test_new_evidence_becomes_new_proposal_not_edit(
 ) -> None:
     from types import SimpleNamespace
 
+    from app.episodes import closure as closure_module
     from app.episodes import segmenter
     from app.episodes.segmenter import HEIMDAL_STREAM_ID, run_segmentation_tick
     from app.heimdal.observation_log import ObservationRow
@@ -355,6 +356,12 @@ def test_new_evidence_becomes_new_proposal_not_edit(
         segmenter, "enumerate_consumable_streams", lambda *a, **k: (SimpleNamespace(stream_id=HEIMDAL_STREAM_ID),)
     )
     monkeypatch.setattr(segmenter, "advance_cursor_for_consumer", lambda *a, **k: None)
+    # ERE-06 (#3181): run_segmentation_tick now runs an unconditional closure pass
+    # (app.episodes.closure.run_closure_tick) that reads the `episodes` DB projection for closable
+    # candidates. This re-cut test drives the tick with no DB -- stub the closure candidate reader
+    # to none so the tick stays DB-free (this test is about segmentation re-cut, not decay
+    # closure; closure's own behaviour is covered in tests/episodes/test_closure.py).
+    monkeypatch.setattr(closure_module, "find_closable_episodes", lambda **k: [])
     monkeypatch.setattr(segmenter, "read_candidate_episodes_for_scopes", lambda scopes: [])
     monkeypatch.setattr(segmenter, "read_existing_bindings", lambda refs: {})
     monkeypatch.setattr(segmenter, "read_existing_bindings_for_episodes", lambda episode_ids: {})

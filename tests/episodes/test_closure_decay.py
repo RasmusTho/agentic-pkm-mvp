@@ -5,6 +5,8 @@ Spec: ``docs/EPISODE_RESOLUTION_ENGINE/EMIT_CLOSURE_AND_DERIVE_DECAY.md``;
 
 - AC2 (enforcement): a closed-episode binding derives the salience drop on the PRODUCTION
   ``retrieve()`` call site. Verify: ``test_closed_episode_binding_derives_salience_drop_at_retrieval``
+- AC2 (exempt-class clause): an exempt canonical-knowledge artifact carries NO drop even when its
+  episodes are all closed. Verify: ``test_exempt_class_binding_carries_no_salience_drop``
 - AC4: closure never touches ``evidence_role``, ``authority_state``, or scope -- ranking only.
   Verify: ``test_closure_affects_ranking_only``
 - AC6: re-opening restores full salience with no residue -- proving nothing was persisted.
@@ -120,6 +122,75 @@ def test_unbound_and_dangling_refs_carry_no_salience_drop(monkeypatch: pytest.Mo
 
     for hit in response.hits:
         assert hit.signal_payload.salience == {}
+
+
+# ---------------------------------------------------------------------------
+# AC2 (exempt-class clause): a canonical knowledge artifact carries NO drop even when its
+# episodes are all closed (ADR-0058 §2 exempt-class gate)
+# ---------------------------------------------------------------------------
+
+
+def test_exempt_class_binding_carries_no_salience_drop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR-0058 §2: an accepted decision / evergreen knowledge / reviewed-or-protected note bound
+    to a CLOSED episode must stay at full salience (its liveness follows its own properties, not
+    the situation it was authored in) -- while a non-exempt artifact bound to the SAME closed
+    episode still dampens. Gated on the honest, populated state-axis bundle signals
+    (``app.episodes.closure_decay.is_exempt_note_class``: maturity=='evergreen' or
+    review_state in {'reviewed','protected'}, normalized)."""
+    _patch_embeddings(monkeypatch)
+    get_store().set_documents(
+        [
+            {
+                # Exempt: evergreen knowledge note (maturity axis).
+                "doc_id": "doc-evergreen",
+                "text": "exempt class seam note",
+                "source_ref": "vault/doc-evergreen.md",
+                "payload": {"episode_ref": ["ep-closed-x"], "maturity": "evergreen"},
+            },
+            {
+                # Exempt: reviewed/durable decision (review_state axis; a promoted decision
+                # normalizes to 'reviewed').
+                "doc_id": "doc-reviewed",
+                "text": "exempt class seam note",
+                "source_ref": "vault/doc-reviewed.md",
+                "payload": {"episode_ref": ["ep-closed-x"], "review_state": "reviewed"},
+            },
+            {
+                # Non-exempt: raw/working material bound to the SAME closed episode -> dampens.
+                "doc_id": "doc-provisional",
+                "text": "exempt class seam note",
+                "source_ref": "vault/doc-provisional.md",
+                "payload": {"episode_ref": ["ep-closed-x"], "review_state": "provisional", "maturity": "draft"},
+            },
+        ]
+    )
+    monkeypatch.setattr(closure_decay, "read_closed_episode_ids", lambda ids: {"ep-closed-x"})
+
+    try:
+        response = retrieve(RetrievalRequest(query="exempt class seam", k=3))
+    finally:
+        _clear_store()
+
+    by_id = {hit.doc_id: hit for hit in response.hits}
+    evergreen_hit = by_id["doc-evergreen"]
+    reviewed_hit = by_id["doc-reviewed"]
+    provisional_hit = by_id["doc-provisional"]
+
+    # Exempt classes: NO drop even though their episode is closed.
+    assert evergreen_hit.signal_payload.salience == {}
+    assert reviewed_hit.signal_payload.salience == {}
+    # Non-exempt: still dampened, same closed episode.
+    assert provisional_hit.signal_payload.salience == {
+        "episode_closure": {
+            "closed": True,
+            "factor": CLOSURE_DECAY_STEP_DOWN_FACTOR,
+            "closed_episode_refs": ["ep-closed-x"],
+        }
+    }
+    # Identical raw text -> tied undamped scores; the exempt hits keep full score, the
+    # non-exempt one is halved (ranking consequence of the gate).
+    assert evergreen_hit.score == pytest.approx(reviewed_hit.score)
+    assert provisional_hit.score == pytest.approx(evergreen_hit.score * CLOSURE_DECAY_STEP_DOWN_FACTOR)
 
 
 # ---------------------------------------------------------------------------

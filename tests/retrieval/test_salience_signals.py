@@ -29,8 +29,12 @@ def _seed_store() -> None:
                     "origin": "vault",
                     "salience": "persisted-hot",
                     "staleness": "persisted-stale",
-                    "review_state": "evergreen",
-                    "maturity": "evergreen",
+                    # NON-exempt state axes (provisional / draft) so the closure-decay path below
+                    # actually dampens this doc -- an evergreen/reviewed/protected note is exempt
+                    # from closure decay (ADR-0058 §2, app.episodes.closure_decay.is_exempt_note_class)
+                    # and would carry NO drop, which the exempt-class test covers separately.
+                    "review_state": "provisional",
+                    "maturity": "draft",
                     # ERE-06 (#3181): a real episode binding, so the closure-decay derivation path
                     # actually has something to compute against below.
                     "episode_ref": ["ep-signal-closed-1"],
@@ -113,7 +117,7 @@ def test_staleness_not_sourced_from_state_axes_labels(monkeypatch) -> None:
         response = retrieve(RetrievalRequest(query="signal seam", k=1))
 
         assert "signal_payload" not in response.diagnostics
-        assert response.hits[0].payload["review_state"] == "evergreen"
-        assert response.hits[0].payload["maturity"] == "evergreen"
+        assert response.hits[0].payload["review_state"] == "provisional"
+        assert response.hits[0].payload["maturity"] == "draft"
     finally:
         get_store().set_documents([])
