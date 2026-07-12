@@ -3,18 +3,25 @@ from __future__ import annotations
 from app.watcher.scope import derive_scope_roots, matches_scope
 import hashlib
 import json
+import logging
 import time
 from collections.abc import Iterable
 from datetime import timezone, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from app.settings.ingestion import ingest_settings
 from app.watcher.config import WatcherConfig
 from app.watcher.heartbeat import write_heartbeat
 from app.watcher.relevance_tick import relevance_tick_enabled, run_relevance_tick
-from app.watcher.settings_delta import handle_settings_local_delta
+from app.watcher.settings_delta import (
+    handle_settings_local_delta,
+    handle_settings_source_delta,
+)
 from app.watcher.state import WatcherState
 from app.vault.manager import iter_vault_markdown_files
+
+_WATCHER_LOG = logging.getLogger(__name__)
 
 
 def _now_iso_from_timestamp(value: float) -> str:
@@ -317,6 +324,19 @@ def run_tick(
             hashed = _hash_file(cfg.vault_path / rel)
             if hashed is not None:
                 digest = hashed[0]
+        # A settings source edit (@Settings/*.md) re-ingests the effective bundle
+        # so the running services honor it within one tick (SETTINGS-01 / F1).
+        source_delta = handle_settings_source_delta(rel_path=rel)
+        if source_delta.is_source:
+            if source_delta.reloaded:
+                summary["settings_source_reloads_in_tick"] = int(
+                    summary.get("settings_source_reloads_in_tick", 0)
+                ) + 1
+            if source_delta.errors:
+                state.errors += len(source_delta.errors)
+                summary["settings_source_errors_in_tick"] = int(
+                    summary.get("settings_source_errors_in_tick", 0)
+                ) + len(source_delta.errors)
         state.update_file_state(
             rel_str,
             mtime=mtime,
@@ -381,6 +401,12 @@ def run_tick(
 
 def run_forever(cfg: WatcherConfig, state: WatcherState | None = None) -> None:
     state = state or WatcherState.load(cfg.state_path)
+    # Resolve vault-authored settings at watcher startup (SETTINGS-01 / F1) so the
+    # watcher's own tiering/scope settings honor the vault instead of code defaults.
+    try:
+        ingest_settings(reason="watcher_startup")
+    except Exception as exc:  # pragma: no cover - defensive; ingest already degrades
+        _WATCHER_LOG.warning("Settings ingestion at watcher startup failed: %s", exc)
     while True:
         now = time.time()
         summary = run_tick(cfg, state, now=now)

@@ -21,6 +21,7 @@ from app.cli.settings_explain import mask_dsn
 from app.observability.log import span, with_trace_id
 from app.version import get_runtime_version
 from app.runtime.health_probe import _watcher_runtime_status, _worker_runtime_status
+from app.settings.ingestion import get_settings_ingestion_state
 from app.settings.panel_actions import get_panel_actions_diagnostics
 from app.stores.db_health import ping_postgres, resolve_dsn
 
@@ -560,6 +561,13 @@ def _check_authority_spine() -> Dict[str, str]:
     }
 
 
+def _settings_ingestion_status() -> Dict[str, Any]:
+    """Effective-settings ingestion state (SET-1): ok / degraded_last_valid /
+    invalid_sources / no_vault, so a bad vault edit is visible on the surface
+    instead of silently running on code defaults."""
+    return get_settings_ingestion_state().to_payload()
+
+
 @span("health.check")
 def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     trace_id = with_trace_id(trace_id)
@@ -596,5 +604,5 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     required_ok = bool(_required_checks_ok(checks) and runtime_ok)
     suggested_actions = _suggested_actions(checks, runtime)
     runtime_version = get_runtime_version()
-    return {"environment": active_environment(), "ok": ok, "required_ok": required_ok, "checks": checks, "runtime": runtime, "trace_id": trace_id, "suggested_actions": suggested_actions, "v6_0_seams": check_v6_seams(), "authority_spine": _check_authority_spine(), "version": runtime_version.get("git_sha", "unknown")}
+    return {"environment": active_environment(), "ok": ok, "required_ok": required_ok, "checks": checks, "runtime": runtime, "settings": _settings_ingestion_status(), "trace_id": trace_id, "suggested_actions": suggested_actions, "v6_0_seams": check_v6_seams(), "authority_spine": _check_authority_spine(), "version": runtime_version.get("git_sha", "unknown")}
 __all__ = ["run_health"]

@@ -15,12 +15,57 @@ from app.vault.settings_service import (
 
 SETTINGS_LOCAL_REL = Path("settings/local.md")
 
+# Settings *source* files compile into the effective bundle (compiler.VAULT =
+# vault/@Settings). A change to one must re-ingest so the running services honor
+# the edit (SETTINGS-01 / F1) — distinct from the settings/local.md governed-write
+# path above.
+SETTINGS_SOURCE_DIR_NAME = "@Settings"
+
 
 @dataclass(frozen=True)
 class SettingsDeltaResult:
     values: dict[str, Any] | None
     receipts: tuple[SettingsWriteReceipt, ...] = ()
     errors: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SettingsSourceDeltaResult:
+    is_source: bool
+    reloaded: bool = False
+    state: str | None = None
+    errors: tuple[str, ...] = ()
+
+
+def is_settings_source_path(rel_path: Path) -> bool:
+    """True for a settings source markdown file (``@Settings/*.md``, incl. agents)."""
+    return rel_path.suffix == ".md" and SETTINGS_SOURCE_DIR_NAME in rel_path.parts
+
+
+def handle_settings_source_delta(
+    *, rel_path: Path, vault_settings_dir: Path | None = None
+) -> SettingsSourceDeltaResult:
+    """Re-ingest effective settings when a settings source file changes.
+
+    Reuses the ingestion entrypoint (compile → ``settings.changed`` bus → reload);
+    it adds no second loader. An invalid edit degrades loudly via the ingestion
+    state (``degraded_last_valid``) and never crashes the watcher tick.
+    """
+    if not is_settings_source_path(rel_path):
+        return SettingsSourceDeltaResult(is_source=False)
+
+    from app.settings.ingestion import STATE_OK, ingest_settings
+
+    state = ingest_settings(
+        reason="watcher_source_delta", vault_settings_dir=vault_settings_dir
+    )
+    errors = (state.error,) if state.error else ()
+    return SettingsSourceDeltaResult(
+        is_source=True,
+        reloaded=state.state == STATE_OK,
+        state=state.state,
+        errors=errors,
+    )
 
 
 def handle_settings_local_delta(
@@ -104,6 +149,10 @@ def handle_settings_local_delta(
 
 __all__ = [
     "SETTINGS_LOCAL_REL",
+    "SETTINGS_SOURCE_DIR_NAME",
     "SettingsDeltaResult",
+    "SettingsSourceDeltaResult",
     "handle_settings_local_delta",
+    "handle_settings_source_delta",
+    "is_settings_source_path",
 ]
