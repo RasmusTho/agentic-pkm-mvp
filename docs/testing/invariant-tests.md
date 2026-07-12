@@ -800,13 +800,15 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 - **Current enforcement:** `schema_enforced` (`episode_ref` is a required bundle field; the
   derived-types `allOf` conditional requires it alongside `derived_from`) + `runtime_test` (derivation
   runtime, `mimer_runtime.dri.derive_segment` propagates the source's binding — unbound, pending, or
-  bound). Scope: the field-threading and derivation-survival half of this invariant is enforced now
-  (#3178 / ERE-03); real episode-id assignment (ERE-05) and Episode-closure-driven relevance decay
-  (the Event Horizon model, ADR-0058) remain `future_runtime` — retrieval consumption of `episode_ref`
-  lands in ERE-06.
+  bound). Scope: the field-threading and derivation-survival half of this invariant was enforced by
+  #3178 / ERE-03; real episode-id assignment (`app.episodes.assignment.compute_assignments`, #3180 /
+  ERE-05) now feeds a real computed decision through the same production derivation path
+  (`test_observation_episode_binding_survives__ere05_end_to_end`) as an additional end-to-end case.
+  Episode-closure-driven relevance decay (the Event Horizon model, ADR-0058) and retrieval
+  consumption of `episode_ref` remain `future_runtime` — that lands in ERE-06.
 - **Runtime test path:** `tests/invariants/test_episode_binding.py::test_observation_episode_binding_survives` (runtime — passes).
 - **Related docs / contracts / ADRs:** [semantic-dimensions](../architecture/semantic-dimensions.md) (`episode_ref`), [functional-ontology](../architecture/functional-ontology.md) (`Episode`), [metadata-bundle](../architecture/metadata-bundle.md) §1/§3/§4; ADR-0051, ADR-0029, ADR-0058.
-- **Related issues:** #3178 (ERE-03, this slice); grounded in [EPISODE_AS_ONTOLOGICAL_PRIMITIVE](../research/EPISODE_AS_ONTOLOGICAL_PRIMITIVE.md).
+- **Related issues:** #3178 (ERE-03), #3180 (ERE-05, end-to-end case); grounded in [EPISODE_AS_ONTOLOGICAL_PRIMITIVE](../research/EPISODE_AS_ONTOLOGICAL_PRIMITIVE.md).
 
 ## Vault multi-writer consistency invariants (ADR-0055)
 
@@ -926,6 +928,31 @@ per HEIM-1..14, each xfail (honestly, via a Heimdal-local `require_future_heimda
 [`tests/invariants/_helpers.py::require_future_runtime`](../../tests/invariants/_helpers.py)) or, where
 Heimdal slices A3/A5/A6 already discharge the invariant for real (HEIM-3, HEIM-8, HEIM-9), calling the
 real production path directly so a regression would fail the test rather than silently re-xfail.
+
+## Settings Spine invariants (SET-1..7)
+
+The Settings Spine (feature #3156, Option B ruling) consolidates five settings substrates into two
+scopes and one spine. Each SET invariant below is a fitness rule the spine must satisfy; they are
+added as their child slices land.
+
+### single_default_registry
+
+- **Purpose:** Every behavior-shaping environment default is declared exactly once; no call site
+  re-inlines a literal default (`os.getenv("KEY", "literal")`) for a registered key, so two components
+  can never silently disagree about one knob.
+- **Protected principle:** SET-4 (one declaration per behavior-shaping default); prevents the
+  five-substrate split-truth divergence from regrowing at new call sites.
+- **Affected boundaries:** WSP (settings resolution).
+- **Required fixture / data:** the registry `app/settings/env_defaults.py::ENV_DEFAULTS`; a synthetic
+  offending source file for the negative case.
+- **Expected failure mode:** the same env knob resolves to different defaults at different call sites
+  (audit F3: `LLM_TIMEOUT` → 12s/60s/120s; `WATCHER_ENABLE` → "0"/"1") with nobody having decided the
+  value.
+- **Current enforcement:** `static_test` — delivered by #3160 (SETTINGS-02).
+- **Eventual test path:** `tests/architecture/test_single_default_registry.py` (passes today).
+- **Related docs / contracts:** `docs/SETTINGS_SPINE/SINGLE_DEFAULT_REGISTRY.md`,
+  `docs/audits/SETTINGS_ARCHITECTURE_2026-07-07.md :: F3`.
+- **Related issues:** #3160; parent #3156.
 
 ## Related documents
 

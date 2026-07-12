@@ -8,6 +8,7 @@ from typing import Dict
 
 from app.components.embeddings import get_embedding_client, get_embedding_identity
 from app.index.artifact_metadata import build_indexed_unit_payload
+from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.llm.embed_queue import EmbedDeadLetterError
 from app.llm.fallback_orchestrator import embed_with_fallback
 from app.observability.tracer import start_span
@@ -93,6 +94,17 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
         "raw_text": obj_payload.get("raw_text"),
         "text": content,
     }
+    # Carry the note's vault-canonical episode_ref (ERE-03/ERE-05, invariant->producers): the
+    # POST /ingest → outbox → this-handler path builds a FRESH store_objects/store_vector_index
+    # payload. When the event carries frontmatter (the ingest.vault.changed path), that frontmatter
+    # is the canonical episode_ref source, so project it in -- it wins the update-merge below,
+    # keeping a stamped binding across a body-edit reingest. When the event carries NO frontmatter
+    # (the raw POST /ingest path), episode_ref is deliberately left off `payload` so the merge
+    # PRESERVES any existing DB binding and the build_indexed_unit_payload choke defaults a fresh
+    # object to the honest 'unbound' -- never clobbering a real binding with 'unbound'.
+    frontmatter = obj_payload.get("frontmatter")
+    if isinstance(frontmatter, dict):
+        payload["episode_ref"] = episode_ref_from_frontmatter(frontmatter)
     trace_id = obj.get("trace_id")
     store = ObjectStore()
     existing = store.get_object(object_uuid)
