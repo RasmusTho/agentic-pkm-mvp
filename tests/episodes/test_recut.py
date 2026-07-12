@@ -359,6 +359,15 @@ def test_new_evidence_becomes_new_proposal_not_edit(
     monkeypatch.setattr(segmenter, "read_existing_bindings", lambda refs: {})
     monkeypatch.setattr(segmenter, "read_existing_bindings_for_episodes", lambda episode_ids: {})
     monkeypatch.setattr(segmenter, "commit_assignment_diff", lambda *a, **k: {"pending": 0, "corrected": 0})
+    # run_segmentation_tick also runs the ERE-06 closure sub-tick (app.episodes.closure), which
+    # queries the `episodes` DB projection via find_closable_episodes -- stub it out like every
+    # other DB boundary this test already stubs (house "not pg" discipline); this test is about
+    # ERE-07 recut/new-proposal behavior, not closure, so an empty candidate set is the correct
+    # fake (mirrors production reality today: nothing populates the projection with new episode
+    # rows outside a full rebuild, so find_closable_episodes has nothing to offer here either).
+    from app.episodes import closure as closure_module
+
+    monkeypatch.setattr(closure_module, "find_closable_episodes", lambda **k: [])
 
     def _row(obs_id: str, hour: int, minute: int) -> ObservationRow:
         payload = {

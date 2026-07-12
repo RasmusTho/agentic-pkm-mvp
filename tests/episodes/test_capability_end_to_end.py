@@ -166,8 +166,16 @@ def test_fixture_day_full_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(
         closure_module,
         "write_outbox_event",
-        lambda event, *, idempotency_key: emitted.append((event, idempotency_key)),
+        lambda event, *, idempotency_key: (emitted.append((event, idempotency_key)) or idempotency_key),
     )
+    # #3181 review fix: close_episode now ALSO syncs the `episodes` projection's `closed` column
+    # itself (app.episodes.closure._sync_projection_closed) -- stub it like every other DB
+    # boundary this fixture-day test stubs (house "not pg" discipline); the vault-scan fake above
+    # already exercises the candidate-filtering behavior this sync exists to make real in
+    # production, so this test only needs to prove close_episode CALLS it, not re-verify its SQL
+    # (that is covered directly in tests/episodes/test_closure.py).
+    projection_synced: list[str] = []
+    monkeypatch.setattr(closure_module, "_sync_projection_closed", projection_synced.append)
 
     # --- Tick 1: signals -> episodes -> bindings -> quiesce -> closure -------------------------
     result_1 = run_segmentation_tick(vault_root=vault_root, write_guard=_allow_guard())
@@ -179,6 +187,7 @@ def test_fixture_day_full_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert result_1["events_emitted"] == 1, result_1
     assert len(emitted) == 1
     assert emitted[0][0].payload["episode_id"] == closed_episode_id
+    assert projection_synced == [closed_episode_id]
 
     note_text = (vault_root / EPISODE_NOTES_DIR / f"{closed_episode_id}.md").read_text(encoding="utf-8")
     assert parse_episode_note(note_text)["time"]["closed"] is True
