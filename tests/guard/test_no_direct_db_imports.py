@@ -55,6 +55,12 @@ ALLOW_FILES = (
     # position; never touches `delivered_at` (the worker dispatcher's flag).
     # Same bounded read pattern as app/services/outbox.py above.
     'app/episodes/vault_activity_stream.py',
+    # episode_ref assignment ledger (ERE-05, #3180). Bounded reads over the
+    # rebuildable `episodes` projection + idempotent ON CONFLICT upserts to the
+    # `episode_artifact_binding` ledger (migration b7c8d9e0f1a2); same bounded
+    # conn_rw pattern as app/episodes/engine_state.py above. episode_ref never
+    # touches evidence_role/authority_state (pending is not authority).
+    'app/episodes/assignment.py',
     'app/store/relation_index.py',
     'app/memory_kv/store.py',
     'app/agent/repository.py',

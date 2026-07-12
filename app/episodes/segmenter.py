@@ -68,6 +68,17 @@ from pathlib import Path
 from typing import Any, Final, Mapping, Sequence
 
 from app.episodes import engine_state
+from app.episodes.assignment import (
+    ArtifactCandidate,
+    artifact_candidates_from_signals,
+    commit_assignment_diff,
+    compute_assignments,
+    diff_assignments,
+    episode_bounds_from_closed_segments,
+    read_candidate_episodes_for_scopes,
+    read_existing_bindings,
+    read_existing_bindings_for_episodes,
+)
 from app.episodes.calendar_stream import (
     CALENDAR_STREAM_ID,
     AttendeeResolved,
@@ -780,12 +791,27 @@ def run_segmentation_tick(
     carried-over segment stays open and is deferred to ERE-06 (closure
     detection is out of scope for ERE-04).
 
-    Crash-safe ordering (INV-ERE-F): emit -> persist open state -> advance
-    cursors -> delete closed-segment state LAST. A crash between the two
-    cursor advances replays only one stream, but the closed segment's
+    Crash-safe ordering (INV-ERE-F): emit -> assign -> persist open state ->
+    advance cursors -> delete closed-segment state LAST. A crash between the
+    two cursor advances replays only one stream, but the closed segment's
     retained ``signal_ids`` ledger dedups the replayed rows and the
     deterministic, start-independent episode id skips the already-written
     note -- the tick reconverges instead of double-proposing.
+
+    Assignment (ERE-05, #3180) runs AFTER segmentation, over the SAME
+    delta-window ``signals`` this tick already folded (no second stream
+    read): every signal is a candidate artifact, matched against both this
+    tick's freshly closed segments (in-memory -- not yet reflected in the
+    ``episodes`` PG projection) and already-persisted episodes for the
+    touched scopes (the source late-arriving artifacts bind against without
+    re-cutting bounds, AC7). See ``app.episodes.assignment`` for the rule.
+    Backfills a closing segment's own founding ``derived_from`` refs (review
+    round 1 P1) and reconciles corrections by every episode candidate touched
+    this tick, not just this-tick artifact_refs (review round 1 Finding 3) --
+    both a stale binding whose artifact never resurfaces and a founding
+    artifact folded on an earlier tick are still reachable. Bundle mutation
+    (Finding 1) is passed the real ``vault_root`` so the artifact's own
+    bundle -- not just the ledger row -- is upgraded on the production path.
     """
     root = Path(vault_root)
     live_streams = {entry.stream_id for entry in enumerate_consumable_streams(registry=registry)}
@@ -910,6 +936,65 @@ def run_segmentation_tick(
         if episode_id is not None:
             proposed_ids.append(episode_id)
 
+    # ERE-05 assignment: same delta-window signals, run strictly after segmentation/emission.
+    # A tick with no signals at all has nothing to assign (never touches the ledger or the DB);
+    # closed_segments is always empty too when signals is (fold_signals_into_segments only ever
+    # closes a scope whose frontier this tick's signals moved).
+    assignment_summary = {"pending": 0, "corrected": 0}
+    if signals:
+        artifacts = artifact_candidates_from_signals(signals)
+        fresh_episodes = episode_bounds_from_closed_segments(
+            closed_segments, episode_id_for=_deterministic_episode_id
+        )
+
+        # PR #3520 review round 1 (P1, comment 3565551866): when a segment closes on a LATER tick
+        # than the one(s) that folded its founding signals, those signals' own provenance_refs are
+        # absent from THIS tick's `signals` (already consumed on a prior tick) -- without this
+        # backfill, `closed.derived_from`'s founding artifacts never earn an
+        # `episode_artifact_binding` row unless coincidentally re-delivered. Every derived_from ref
+        # not already a candidate this tick gets a synthetic one: `observed_at=closed.start` is a
+        # safe stand-in for the PROVENANCE branch only (`compute_assignments` matches provenance by
+        # plain `artifact_ref` membership in `derived_from`, never by observed_at) -- every
+        # derived_from ref's REAL observed_at is, by construction, within [closed.start, closed.end]
+        # (fold_signals_into_segments/_extend_open_segment never fold a signal that didn't belong to
+        # the segment it extends), so this proxy never fabricates a stronger time-overlap claim than
+        # the artifact's real timing would honestly support.
+        seen_refs = {a.artifact_ref for a in artifacts}
+        backfilled_artifacts: list[ArtifactCandidate] = []
+        for closed in closed_segments:
+            for ref in closed.derived_from:
+                if ref in seen_refs:
+                    continue
+                seen_refs.add(ref)
+                backfilled_artifacts.append(
+                    ArtifactCandidate(artifact_ref=ref, scope=closed.scope, observed_at=closed.start)
+                )
+        artifacts = artifacts + backfilled_artifacts
+
+        touched_scopes = {a.scope for a in artifacts}
+        persisted_episodes = read_candidate_episodes_for_scopes(touched_scopes)
+        # This tick's freshly closed segments are authoritative over any (should-be-identical)
+        # stale projection row for the same id -- the projection is a rebuildable index that has
+        # not yet been refreshed with this tick's own emissions.
+        episodes_by_id = {e.episode_id: e for e in persisted_episodes}
+        episodes_by_id.update({e.episode_id: e for e in fresh_episodes})
+        decisions = compute_assignments(artifacts, list(episodes_by_id.values()))
+
+        # Review round 1 CONFIRMED (Finding 3, AC6 correction reachability): a binding keyed only
+        # by THIS tick's artifact_refs can never surface a PRIOR-tick binding whose artifact does
+        # not resurface as a signal this tick -- the common re-cut-invalidation case (ERE-07 narrows
+        # or re-cuts an episode without re-delivering the original signal). Merge in every existing
+        # binding for every episode CANDIDATE considered this tick (fresh closures + persisted
+        # episodes for the touched scopes) so diff_assignments' to_correct can see, and correct,
+        # stale bindings even when their artifact never reappears as a signal.
+        existing_bindings = dict(read_existing_bindings({a.artifact_ref for a in artifacts}))
+        existing_bindings.update(read_existing_bindings_for_episodes(episodes_by_id.keys()))
+
+        to_insert, to_correct = diff_assignments(existing_bindings, decisions)
+        assignment_summary = commit_assignment_diff(
+            to_insert, to_correct, write_guard=write_guard, vault_root=root
+        )
+
     for scope, segment in updated_open.items():
         engine_state.set_state(f"{_OPEN_SEGMENT_KEY_PREFIX}{scope}", segment.to_state())
 
@@ -941,6 +1026,7 @@ def run_segmentation_tick(
         "skipped_no_observation_time": skipped_no_observation_time,
         "proposed": proposed_ids,
         "open_segments": len(updated_open),
+        "assigned": assignment_summary,
         # AC5 (ERE-09, #3184): calendar_ids (or other future streams) that
         # degraded softly this tick -- never raised out of this function,
         # never stalls segmentation on the remaining streams.

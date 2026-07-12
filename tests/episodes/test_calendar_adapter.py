@@ -72,6 +72,26 @@ def _allow_guard() -> WriteGuard:
     return WriteGuard(lambda: {"state": "healthy", "reason": None})
 
 
+def _stub_assignment_io(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub the ERE-05 assignment DB I/O that ``run_segmentation_tick`` runs after segmentation
+    (ERE-05, #3180): a tick with any real signal now also assigns episode_ref bindings, which reads
+    ``episodes``/``episode_artifact_binding`` and commits the diff. These calendar tests exercise
+    the tick without Postgres, so the assignment reads/write are stubbed to no-ops -- mirrors
+    ``tests/episodes/test_segmentation_core.py``'s tick tests. No prior persisted episodes or ledger
+    rows in these fixtures."""
+    monkeypatch.setattr(segmenter, "read_candidate_episodes_for_scopes", lambda scopes: [])
+    monkeypatch.setattr(segmenter, "read_existing_bindings", lambda refs: {})
+    monkeypatch.setattr(segmenter, "read_existing_bindings_for_episodes", lambda episode_ids: {})
+    monkeypatch.setattr(
+        segmenter,
+        "commit_assignment_diff",
+        lambda to_insert, to_correct, write_guard=None, vault_root=None: {
+            "pending": len(to_insert),
+            "corrected": len(to_correct),
+        },
+    )
+
+
 def _dt(hour: int, minute: int, day: int = 11) -> datetime:
     return datetime(2026, 7, day, hour, minute, tzinfo=timezone.utc)
 
@@ -338,6 +358,7 @@ def test_calendar_joins_fusion_via_registry_only(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr(segmenter.engine_state, "all_state_with_prefix", lambda prefix: {})
     monkeypatch.setattr(segmenter.engine_state, "set_state", lambda key, value: None)
     monkeypatch.setattr(segmenter.engine_state, "delete_state", lambda key: None)
+    _stub_assignment_io(monkeypatch)
 
     result = run_segmentation_tick(vault_root=tmp_path / "vault", write_guard=_allow_guard())
     assert result["consumed"] == {segmenter.HEIMDAL_STREAM_ID: 0, CALENDAR_STREAM_ID: 1}
@@ -486,6 +507,7 @@ def test_unreachable_calendar_degrades_softly(tmp_path: Path, monkeypatch: pytes
     monkeypatch.setattr(segmenter.engine_state, "all_state_with_prefix", lambda prefix: {})
     monkeypatch.setattr(segmenter.engine_state, "set_state", lambda key, value: None)
     monkeypatch.setattr(segmenter.engine_state, "delete_state", lambda key: None)
+    _stub_assignment_io(monkeypatch)
 
     result = run_segmentation_tick(vault_root=tmp_path / "vault", write_guard=_allow_guard())
     assert result["degraded"] == ["unreachable-cal"]

@@ -179,6 +179,58 @@ def resolve_activity_dimensions(row: VaultActivityRow, *, vault_root: Path) -> d
     return extract_context_dimensions_for_note(frontmatter)
 
 
+def resolve_bundle_target_for_outbox_row_id(
+    row_id: str, *, vault_root: Path
+) -> tuple[str | None, Path | None]:
+    """Resolve one ``vault.activity:<row_id>`` provenance ref to its bundle-mutation target
+    (ERE-05, #3180 Finding 1): ``(object_id, note_path)``.
+
+    ``object_id`` is the ``store_objects``/``store_vector_index`` primary key -- read straight off
+    the outbox event payload's own ``uuid``/``object_id`` key when present (``ingest.object.created``
+    /``ingest.object.updated``/``ingest.object.metadata`` all carry one, see
+    ``app/services/vault_sync.py`` and ``app/api/routes/ingest.py``), else read from the resolved
+    note's own frontmatter ``uuid`` (``ingest.vault.changed`` carries only a path, never a bare
+    ``uuid`` key in its payload). ``note_path`` is the same vault-relative-path resolution
+    :func:`resolve_activity_dimensions` already performs (:func:`_resolve_note_path`), returned so
+    the caller can also stamp the note's own frontmatter through the guarded write seam -- one DB
+    read serves both the DB-side and vault-serialized bundle-mutation targets.
+
+    Never raises: a missing/already-purged outbox row, a note referenced outside the current
+    ``vault_root``, or an unreadable/deleted note all yield ``(None, None)`` (or a resolved
+    ``note_path`` with ``object_id=None`` when only the frontmatter read fails) -- callers treat
+    this as "no bundle to mutate for this artifact_ref" and skip it, never failing the whole tick
+    (mirrors :func:`resolve_activity_dimensions`'s best-effort posture; outbox rows are never
+    purged -- historical `to_correct` reconciliation, run ticks after the founding tick, resolves
+    exactly like a fresh lookup).
+    """
+    with conn_rw() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT payload FROM outbox WHERE id = %s::uuid", (row_id,))
+            row = cur.fetchone()
+    if row is None:
+        return None, None
+    payload = row["payload"] if isinstance(row, dict) else row[0]
+    if isinstance(payload, str):
+        payload = _json.loads(payload)
+    payload = dict(payload or {})
+
+    note_path = _resolve_note_path(payload, vault_root=vault_root)
+
+    raw_object_id = payload.get("uuid") or payload.get("object_id")
+    if isinstance(raw_object_id, str) and raw_object_id.strip():
+        return raw_object_id.strip(), note_path
+
+    if note_path is None:
+        return None, None
+    try:
+        text = note_path.read_text(encoding="utf-8")
+        frontmatter, _body = load_frontmatter(text)
+    except Exception:
+        return None, note_path
+    fm_uuid = frontmatter.get("uuid")
+    return (fm_uuid.strip() if isinstance(fm_uuid, str) and fm_uuid.strip() else None), note_path
+
+
 __all__ = [
     "VAULT_ACTIVITY_STREAM_ID",
     "VAULT_ACTIVITY_TOPICS",
@@ -186,5 +238,6 @@ __all__ = [
     "advance_vault_activity_cursor",
     "get_vault_activity_cursor",
     "read_vault_activity_for_consumer",
+    "resolve_bundle_target_for_outbox_row_id",
     "resolve_activity_dimensions",
 ]

@@ -5,6 +5,7 @@ from typing import Any
 
 from app.agents.panel.filters import strip_ai_panels
 from app.ingest.chunk_policy import CHUNK_POLICY_VERSION
+from app.ingest.episode_ref import episode_ref_from_frontmatter
 
 # Embed-pipeline version stamped into every store_vector_index row's
 # provenance (KERNEL-06, #2768). Bump this when the embedding pipeline
@@ -78,6 +79,14 @@ def build_indexed_unit_payload(
     payload_out["origin"] = str(payload_out.get("origin") or "unknown")
     payload_out["trust"] = str(payload_out.get("trust") or "unreviewed")
     payload_out["review_state"] = str(payload_out.get("review_state") or "provisional")
+    # episode_ref choke (ERE-03/ERE-05, invariant->producers): every store_vector_index row
+    # RETRIEVAL reads is written through this builder, so defaulting episode_ref here guarantees the
+    # field is ALWAYS present on the retrieval path -- a present, schema-valid binding is preserved,
+    # anything absent/malformed becomes the honest 'unbound' sentinel. Producers that carry the REAL
+    # vault-canonical binding (vault ingest, ERE-05 assignment) still win because this only fills a
+    # gap; it never overwrites a present binding. This is the structural backstop the store-payload
+    # census (tests/properties/test_store_payload_episode_ref.py) verifies for builder-covered sinks.
+    payload_out["episode_ref"] = episode_ref_from_frontmatter(payload_out)
     if embedding_identity is not None:
         payload_out["embedding_identity"] = _embedding_identity_dict(embedding_identity)
 

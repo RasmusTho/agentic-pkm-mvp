@@ -47,7 +47,7 @@ APP_ROOT = REPO_ROOT / "app"
 # NEVER run against a real vault -- they are not part of this census.
 
 REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
-    ("app/services/indexer.py", 125): (
+    ("app/services/indexer.py", 137): (
         "T-materialize sink (handle_ingest_object_created): the INGEST_OBJECT_CREATED "
         "event that CAUSED this row is its own record -- emitting a second event here "
         "would be a duplicate, not completeness (formal-model.md T-materialize)."
@@ -87,26 +87,27 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "caller drives through the promotion transition path (T-promote), which emits "
         "the promotion events; this write is the plan/graph bookkeeping half."
     ),
-    ("app/agents/normalizer/agent.py", 159): (
+    ("app/agents/normalizer/agent.py", 165): (
         "normalize_file's run(): legacy normalizer ingest shim used by classifier/"
         "normalizer test flows and the memory-backend CLI path; the object's creation "
         "event is emitted by the caller (ingest API / vault_alpha) that invokes normalize."
     ),
-    ("app/ingest/api.py", 112): (
+    ("app/ingest/api.py", 118): (
         "POST /ingest object persistence: insert_object_and_outbox already emitted "
         "ingest.object.created for this same logical ingest (T-ingest-api splits "
         "event-emission and object-materialization -- see formal-model.md T-materialize); "
         "this call is the eventual T-materialize-equivalent write for the API path."
     ),
-    ("app/ingest/vault_alpha.py", 555): (
+    ("app/ingest/vault_alpha.py", 564): (
         "Legacy vault-alpha ingest path: keeps classifier/normalizer flows working "
         "against the memory backend during tests/alpha runs; the alpha ingest pipeline "
         "emits its own ingest event upstream of this call in the same run. Line drifted "
-        "527 -> 555 (site unchanged); re-pinned by #3034 (A14) as a directly-related "
-        "repair -- the census gate only fires when this machinery is touched, so the "
-        "pre-existing drift surfaced on the first Heimdal PR to edit it."
+        "527 -> 555 -> 582 -> 558 (site unchanged); re-pinned by #3180 (ERE-05) -- round-3 "
+        "extracted the episode_ref helper into app/ingest/episode_ref.py, shifting this line "
+        "back up. The census gate only fires when this machinery is touched, so the drift "
+        "surfaces on the first PR to edit this file."
     ),
-    ("app/knowledge_acquisition/raw_record.py", 118): (
+    ("app/knowledge_acquisition/raw_record.py", 128): (
         "KA-01 immutable raw record (pre-pipeline by design): emitting the default "
         "INGEST_OBJECT_CREATED here would route the unprocessed raw payload straight "
         "into the indexer/embedding consumer, which the acquisition slice must not "
@@ -1001,4 +1002,454 @@ REGISTERED_WRITE_SEAMS: tuple[RegisteredWriteSeam, ...] = (
         invoke_factory=_mcp_vault_tools_invoke,
         unchanged_paths=_mcp_vault_tools_snapshot,
     ),
+)
+
+
+# ---------------------------------------------------------------------------
+# Store-payload episode_ref census (ERE-05, #3180 -- invariant->producers)
+# ---------------------------------------------------------------------------
+#
+# episode_ref is vault-canonical (ERE-03): every producer that writes a note's DB-side
+# store_objects / store_vector_index payload MUST carry episode_ref, or a stamped binding is
+# blind-dropped and retrieval reverts to `unbound`
+# (docs/EPISODE_RESOLUTION_ENGINE/ASSIGN_EPISODE_REF_TO_ARTIFACTS.md). Rounds 2/3/4 of PR #3520 each
+# found a producer the previous census missed. Round 4 CLOSED the scanner gap: it now recognizes
+# EVERY store-payload sink method name -- put, upsert, save_object, ingest_object,
+# index_ingest_object -- not just put/ingest_object (the round-3 blind spot that let save_object /
+# upsert producers drop episode_ref while the census passed). Audited against the write methods on
+# app/stores/base.py (ObjectStore.put, ObjectsStore.upsert, VectorIndex.upsert) and the
+# app/objects/__init__.py ObjectStore.save_object facade.
+#
+# Two gates (tests/properties/test_store_payload_episode_ref.py): (1) every sink site is classified
+# with a justification (a NEW unclassified sink fails); (2) every PRODUCER site is verified to carry
+# episode_ref by the check its classification names.
+#
+# Classification prefixes (the prefix selects the verification a producer gets):
+#   "carries_frontmatter"             -- fresh note payload whose dict literal includes episode_ref
+#                                        via episode_ref_from_frontmatter; verified: episode_ref key
+#                                        present in the statically-resolved payload dict.
+#   "carries_unbound_default"         -- frontmatter-less source (external/raw/api/fitness) whose
+#                                        payload dict includes an explicit episode_ref (honest
+#                                        'unbound'); verified same as carries_frontmatter.
+#   "carries_normalized"              -- normalizes episode_ref from an upstream-authored payload
+#                                        (reflection); verified same (episode_ref key present).
+#   "carries_via_indexed_unit_builder"-- payload = build_indexed_unit_payload(...); the builder
+#                                        unconditionally defaults episode_ref (the choke), so every
+#                                        store_vector_index row RETRIEVAL reads carries it. Verified:
+#                                        payload expr calls build_indexed_unit_payload AND
+#                                        test_build_indexed_unit_payload_always_sets_episode_ref.
+#   "preserves_existing_payload"      -- updates an existing object starting from
+#                                        dict(existing.payload); a stamped episode_ref survives.
+#                                        Verified: payload expr reads `.payload` of an existing row.
+#   "superseded_by_store_put"         -- an intermediate write immediately overwritten, for the same
+#                                        object_id in the same flow, by a carries_* store.put.
+#   "transport_passthrough"           -- store/facade plumbing forwarding a caller-built payload; the
+#                                        producing caller carries episode_ref, not this layer.
+#   "not_store_object_payload"        -- writes a DIFFERENT store (reasoning/decisions) or a
+#                                        Queue.put -- not a store_objects/store_vector_index payload.
+#   "harness_excluded"                -- dev/CI harness seeder (formal-model.md §2.3).
+_SINK_METHOD_NAMES: frozenset[str] = frozenset(
+    {"put", "upsert", "save_object", "ingest_object", "index_ingest_object"}
+)
+
+
+def find_store_payload_sink_sites(root: Path = APP_ROOT) -> list[tuple[str, int]]:
+    """AST-scan ``app/**/*.py`` for every store-payload SINK call site.
+
+    A sink is a call to any store write method that carries an object payload:
+    ``ingest_object``/``index_ingest_object`` (always payload=), ``save_object`` (payload inside the
+    DomainObject arg), or ``put``/``upsert`` that pass a ``payload=`` kwarg or ``**kwargs`` (the two
+    protocol methods on app/stores/base.py that take a payload; a bare ``Queue.put((...))`` or a
+    ``DecisionsStore.put(value=...)`` carries neither and is correctly skipped). Returns EVERY match
+    unfiltered -- classification against :data:`STORE_PAYLOAD_SINK_CLASSIFICATION` is the caller's
+    job, so this scanner cannot itself become an escape hatch. This is the round-4 meta-fix: the
+    round-3 scanner recognized only ``put``/``ingest_object`` and so missed the save_object/upsert
+    producers entirely.
+    """
+    sites: list[tuple[str, int]] = []
+    for path in sorted(root.rglob("*.py")):
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        try:
+            tree = ast.parse(source, filename=str(path))
+        except SyntaxError:
+            continue
+        rel = str(path.relative_to(REPO_ROOT))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else (
+                func.attr if isinstance(func, ast.Attribute) else None
+            )
+            if name not in _SINK_METHOD_NAMES:
+                continue
+            has_payload_kw = any(kw.arg == "payload" for kw in node.keywords)
+            has_star_kw = any(kw.arg is None for kw in node.keywords)
+            if name in ("put", "upsert"):
+                # object payload only when a payload=/**kwargs is present (skips Queue.put /
+                # DecisionsStore.put(value=...) / reasoning_store.upsert(id, output)).
+                if not (has_payload_kw or has_star_kw):
+                    continue
+            sites.append((rel, node.lineno))
+    return sites
+
+
+def _enclosing_function(tree: ast.AST, lineno: int) -> ast.AST | None:
+    best: ast.AST | None = None
+    best_span = None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            start = node.lineno
+            end = getattr(node, "end_lineno", None) or start
+            if start <= lineno <= end:
+                span = end - start
+                if best_span is None or span < best_span:
+                    best, best_span = node, span
+    return best
+
+
+def _name_assignments(name: str, func: ast.AST) -> list[ast.AST]:
+    """Every value expression assigned to ``name`` within ``func`` (plain and ``name.payload =``
+    attribute assigns), in source order."""
+    values: list[ast.AST] = []
+    for node in ast.walk(func):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == name:
+                    values.append(node.value)
+    return values
+
+
+def _dict_keys_reachable(expr: ast.AST, func: ast.AST, seen: frozenset[str] = frozenset()) -> set[str]:
+    """String keys reachable from ``expr`` as a payload dict, following ``Name`` assignments,
+    ``**unpack``, and ``dict(<name>)`` wrappers within ``func`` (bounded, cycle-guarded)."""
+    keys: set[str] = set()
+    if isinstance(expr, ast.Dict):
+        for k, v in zip(expr.keys, expr.values):
+            if k is None:  # ** unpack
+                keys |= _dict_keys_reachable(v, func, seen)
+            elif isinstance(k, ast.Constant) and isinstance(k.value, str):
+                keys.add(k.value)
+    elif isinstance(expr, ast.Name):
+        if expr.id in seen:
+            return keys
+        seen = seen | {expr.id}
+        for value in _name_assignments(expr.id, func):
+            keys |= _dict_keys_reachable(value, func, seen)
+    elif isinstance(expr, ast.Call):
+        # dict(<x>) wrapper -> recurse into its first positional arg.
+        f = expr.func
+        if isinstance(f, ast.Name) and f.id == "dict" and expr.args:
+            keys |= _dict_keys_reachable(expr.args[0], func, seen)
+    return keys
+
+
+def _domain_object_payload_expr(expr: ast.AST, func: ast.AST, seen: frozenset[str] = frozenset()) -> ast.AST | None:
+    """Resolve the payload expression written by ``save_object(<expr>)`` -- ``<expr>`` is a
+    DomainObject/shim (inline or a Name). Returns the payload= kwarg's value (or the last
+    ``<name>.payload = ...`` reassignment before the call)."""
+    if isinstance(expr, ast.Call):
+        for kw in expr.keywords:
+            if kw.arg == "payload":
+                return kw.value
+        return None
+    if isinstance(expr, ast.Name):
+        if expr.id in seen:
+            return None
+        seen = seen | {expr.id}
+        # a later ``<name>.payload = <p>`` reassignment wins (panel/promotion update path).
+        attr_payload: ast.AST | None = None
+        for node in ast.walk(func):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if (
+                        isinstance(target, ast.Attribute)
+                        and target.attr == "payload"
+                        and isinstance(target.value, ast.Name)
+                        and target.value.id == expr.id
+                    ):
+                        attr_payload = node.value
+        if attr_payload is not None:
+            return attr_payload
+        # else the DomainObject(...) the name was bound to.
+        for value in _name_assignments(expr.id, func):
+            resolved = _domain_object_payload_expr(value, func, seen)
+            if resolved is not None:
+                return resolved
+    return None
+
+
+def _kwargs_payload_expr(star_name: str, func: ast.AST) -> ast.AST | None:
+    """Resolve the ``payload`` value inside a ``**<star_name>`` kwargs built earlier in ``func`` --
+    both the ``{"payload": ...}`` dict-literal form (``upsert_kwargs = {"payload":
+    build_indexed_unit_payload(...), ...}``) and the ``dict(payload=..., ...)`` call form
+    (``upsert_kwargs = dict(kind="note", payload=canonical_payload, ...)`` -- vault_root)."""
+    for value in _name_assignments(star_name, func):
+        if isinstance(value, ast.Dict):
+            for k, v in zip(value.keys, value.values):
+                if isinstance(k, ast.Constant) and k.value == "payload":
+                    return v
+        elif isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "dict":
+            for kw in value.keywords:
+                if kw.arg == "payload":
+                    return kw.value
+    return None
+
+
+def _resolve_payload_expr(rel_path: str, lineno: int) -> tuple[ast.AST | None, ast.AST | None]:
+    """Return ``(payload_expr, enclosing_func)`` for the sink call at ``(rel_path, lineno)`` --
+    handles payload= kwarg, ``**kwargs``, and ``save_object(<DomainObject>)``. ``payload_expr`` is
+    ``None`` when unresolvable (which fails a producer census loudly)."""
+    path = REPO_ROOT / rel_path
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except (OSError, SyntaxError):
+        return None, None
+    func = _enclosing_function(tree, lineno)
+    if func is None:
+        return None, None
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and node.lineno == lineno):
+            continue
+        fn = node.func
+        name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
+        # direct payload= kwarg
+        for kw in node.keywords:
+            if kw.arg == "payload":
+                return kw.value, func
+        # save_object(<DomainObject-or-Name>)
+        if name == "save_object" and node.args:
+            return _domain_object_payload_expr(node.args[0], func), func
+        # **kwargs
+        for kw in node.keywords:
+            if kw.arg is None and isinstance(kw.value, ast.Name):
+                return _kwargs_payload_expr(kw.value.id, func), func
+        return None, func
+    return None, func
+
+
+def payload_keys_at_sink(rel_path: str, lineno: int) -> set[str] | None:
+    """Statically-resolved episode_ref-relevant key set of the payload written at the sink, or
+    ``None`` when unresolvable."""
+    expr, func = _resolve_payload_expr(rel_path, lineno)
+    if expr is None or func is None:
+        return None
+    return _dict_keys_reachable(expr, func)
+
+
+def payload_expr_at_sink(rel_path: str, lineno: int) -> str | None:
+    """The unparsed payload expression at the sink (for the builder / preserve structural checks),
+    or ``None`` when unresolvable."""
+    expr, _func = _resolve_payload_expr(rel_path, lineno)
+    return ast.unparse(expr) if expr is not None else None
+
+
+def payload_source_blob(rel_path: str, lineno: int) -> str | None:
+    """The payload expression at the sink PLUS the unparsed value of every ``Name`` it transitively
+    references (bounded, cycle-guarded), joined -- so a builder/preserve check sees through a
+    payload bound to a variable (``payload_out = build_indexed_unit_payload(...)``;
+    ``payload = dict(existing.payload)``). ``None`` when the payload arg cannot be resolved."""
+    expr, func = _resolve_payload_expr(rel_path, lineno)
+    if expr is None or func is None:
+        return None
+    texts: list[str] = []
+    seen_names: set[str] = set()
+    stack: list[ast.AST] = [expr]
+    while stack:
+        e = stack.pop()
+        texts.append(ast.unparse(e))
+        for n in ast.walk(e):
+            if isinstance(n, ast.Name) and n.id not in seen_names:
+                seen_names.add(n.id)
+                stack.extend(_name_assignments(n.id, func))
+    return "\n".join(texts)
+
+
+STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
+    # ============================================================================================
+    # Round-5 re-audit: EVERY classification below is verified by the sink's ACTUAL DB write
+    # DESTINATION (traced through facades: PgObjects.upsert -> PgObjectStore.put -> store_objects;
+    # ObjectStore.save_object -> (pg) store.put -> store_objects; ingest_object -> idx.upsert ->
+    # store_vector_index), NOT the surface method name. The round-4 misclassification of
+    # vault_root's objects_store.upsert as "not_store_object_payload" (it actually writes the
+    # canonical store_objects table) proved name/surface classification is unsafe. There is now NO
+    # "not a producer" escape hatch: every sink is a carry / preserve / builder / construction
+    # producer, or transport (forwards a verified-carrying caller payload), or harness.
+    # ============================================================================================
+    # -- carries_frontmatter: fresh note payload dict; episode_ref from frontmatter --------------
+    ("app/cli/alpha_human_flows.py", 120): (
+        "carries_frontmatter: _ingest_note payload carries episode_ref_from_frontmatter(frontmatter)"
+        "; index_ingest_object -> store_vector_index."
+    ),
+    ("app/cli/alpha_human_flows.py", 132): (
+        "carries_frontmatter: same payload (store_payload = {**payload, 'text': ...}) -> store.put "
+        "-> store_objects."
+    ),
+    ("app/ingest/vault_alpha.py", 564): (
+        "carries_frontmatter: obj.payload carries episode_ref_from_frontmatter(frontmatter); "
+        "ObjectStore().save_object(obj) -> (pg) store.put -> store_objects (round-5: the carrying "
+        "get_object_store().put below is in try/except:pass, so THIS row must carry it too)."
+    ),
+    ("app/ingest/vault_alpha.py", 598): (
+        "carries_frontmatter: store_payload carries episode_ref; get_object_store().put -> "
+        "store_objects."
+    ),
+    ("app/ingest/vault_alpha.py", 612): (
+        "carries_frontmatter: same store_payload -> index_ingest_object -> store_vector_index."
+    ),
+    ("app/ingest/vault_root.py", 91): (
+        "carries_frontmatter: canonical_payload carries episode_ref; objects_store.upsert -> "
+        "PgObjects.upsert -> PgObjectStore.put -> store_objects (round-5 finding: this IS a "
+        "canonical store_objects write, not the legacy `objects` table alone)."
+    ),
+    ("app/ingest/vault_root.py", 95): (
+        "carries_frontmatter: the id-less fallback of the same canonical_payload objects_store."
+        "upsert -> store_objects."
+    ),
+    ("app/ingest/vault_root.py", 110): (
+        "carries_frontmatter: _ingest_file payload carries episode_ref; index_ingest_object -> "
+        "store_vector_index."
+    ),
+    ("app/ingest/vault_root.py", 122): (
+        "carries_frontmatter: same payload ({**payload, 'text': ...}) -> store.put -> store_objects."
+    ),
+    # -- carries_unbound_default: frontmatter-less source; honest 'unbound' -----------------------
+    ("app/ingest/external.py", 66): (
+        "carries_unbound_default: external raw sources have no frontmatter and are never ERE-05 "
+        "targets; explicit 'unbound'; store.put -> store_objects."
+    ),
+    ("app/ingest/external.py", 67): (
+        "carries_unbound_default: same payload -> index_ingest_object -> store_vector_index."
+    ),
+    ("app/fitness/metrics.py", 111): (
+        "carries_unbound_default: CI latency probe (kind='fitness', never a note) writing "
+        "store_vector_index directly (bypasses the build_indexed_unit_payload choke); explicit "
+        "'unbound'."
+    ),
+    ("app/ingest/api.py", 118): (
+        "carries_unbound_default: programmatic ingest helper builds a fresh frontmatter-less "
+        "store_objects payload; episode_ref normalized to 'unbound' via the {**...} rebuild; "
+        "save_object -> store_objects."
+    ),
+    ("app/knowledge_acquisition/raw_record.py", 128): (
+        "carries_unbound_default: raw acquisition record is a frontmatter-less external source; "
+        "explicit 'unbound' via {**record_payload, ...}; save_object -> store_objects."
+    ),
+    # -- carries_normalized: normalize episode_ref from an upstream-authored payload --------------
+    ("app/ingest/reflection_consumer.py", 37): (
+        "carries_normalized: reflection re-ingest normalizes episode_ref from the queued "
+        "derived-artifact payload; ingest_object -> store_vector_index."
+    ),
+    # -- carries_via_indexed_unit_builder: payload = build_indexed_unit_payload(...) (the choke) --
+    ("app/cli/index_rebuild.py", 315): (
+        "carries_via_indexed_unit_builder: cold rebuild re-embeds store_objects rows through "
+        "build_indexed_unit_payload (defaults episode_ref) -> idx.upsert -> store_vector_index."
+    ),
+    ("app/cli/index_rebuild.py", 603): (
+        "carries_via_indexed_unit_builder: fallback rebuild upsert via build_indexed_unit_payload "
+        "-> store_vector_index."
+    ),
+    ("app/indexer/consumer.py", 73): (
+        "carries_via_indexed_unit_builder: legacy embedding-in-event path; payload = "
+        "build_indexed_unit_payload(...) -> idx.upsert -> store_vector_index."
+    ),
+    ("app/indexer/consumer.py", 162): (
+        "carries_via_indexed_unit_builder: INDEX_EMBEDDING_REQUESTED path; upsert_kwargs['payload'] "
+        "= build_indexed_unit_payload(payload=dict(obj.payload)) -> store_vector_index."
+    ),
+    ("app/search/service.py", 277): (
+        "carries_via_indexed_unit_builder: ingest_object's internal idx.upsert; payload_out = "
+        "build_indexed_unit_payload(payload=<caller payload>) -> store_vector_index."
+    ),
+    ("app/services/indexer.py", 137): (
+        "carries_via_indexed_unit_builder: handle_ingest_object_created save_object; domain.payload "
+        "= build_indexed_unit_payload(...) -> store_objects. Also carries frontmatter episode_ref "
+        "into the input on the vault-changed path and preserves an existing binding via the merge."
+    ),
+    ("app/services/indexer.py", 210): (
+        "carries_via_indexed_unit_builder: same handler's vector_index.upsert; upsert_kwargs["
+        "'payload'] = build_indexed_unit_payload(...) -> store_vector_index."
+    ),
+    # -- preserves_existing_payload: update starting from dict(existing.payload) ------------------
+    ("app/agents/panel/writeback.py", 213): (
+        "preserves_existing_payload: panel writeback updates from dict(existing.payload); save_object"
+        " -> store_objects; a stamped episode_ref survives (new-object branch has no prior row to "
+        "drop)."
+    ),
+    ("app/agents/panel_agent/execution.py", 62): (
+        "preserves_existing_payload: panel execution updates from dict(existing.payload or {}); "
+        "save_object -> store_objects."
+    ),
+    ("app/agents/panel_agent/runtime.py", 112): (
+        "preserves_existing_payload: _persist_log appends to dict(existing.payload); save_object -> "
+        "store_objects; episode_ref preserved."
+    ),
+    ("app/agents/planner/graph.py", 237): (
+        "preserves_existing_payload: panel-action frontmatter update reuses obj.payload from "
+        "get_object; save_object -> store_objects; episode_ref preserved."
+    ),
+    ("app/promotion/consumer.py", 97): (
+        "preserves_existing_payload: promotion updates from dict(existing.payload); save_object -> "
+        "store_objects; a new-note branch has no prior row and no binding (unbound correct via the "
+        "build_indexed_unit_payload choke at index time)."
+    ),
+    ("app/watcher/vault_watcher.py", 144): (
+        "preserves_existing_payload: _hydrate_store_with_markdown updates raw_text on "
+        "dict(obj.payload); save_object -> store_objects; episode_ref preserved."
+    ),
+    # -- carries_at_construction: payload built in a separate function that carries episode_ref;
+    #    verified by a RUNTIME test (the payload is opaque at this call site) ---------------------
+    ("app/agents/normalizer/agent.py", 165): (
+        "carries_at_construction: shim.payload = normalize_file(...)['payload'], which carries "
+        "episode_ref_from_frontmatter(frontmatter) in app/agents/normalizer/agent.py::normalize_file"
+        "; save_object -> store_objects. Verified by "
+        "test_normalizer_run_carries_episode_ref_to_store_objects."
+    ),
+    ("app/agents/planner/agent.py", 118): (
+        "carries_at_construction: obj = plan.to_object(), whose payload carries episode_ref='unbound'"
+        " (a Plan never originates in an episode) in app/domain/plan.py::Plan.to_object; save_object "
+        "-> store_objects. Verified by test_plan_to_object_carries_episode_ref."
+    ),
+    # -- transport_passthrough: facade/plumbing forwarding a caller-built (verified) payload ------
+    ("app/objects/__init__.py", 120): (
+        "transport_passthrough: ObjectStore.save_object facade forwards dict(obj.payload) to the "
+        "backing store.put -> store_objects; the caller that builds obj.payload carries episode_ref "
+        "(every save_object caller is itself a classified producer above)."
+    ),
+    ("app/stores/postgres.py", 100): (
+        "transport_passthrough: PgObjects.upsert forwards its caller-supplied payload arg to "
+        "canonical_store.put (PgObjectStore.put) -> store_objects; the caller (vault_root:92/96) "
+        "carries episode_ref in canonical_payload."
+    ),
+    # -- harness_excluded: dev/CI seeders (formal-model.md 2.3) -----------------------------------
+    ("app/cli/smoke.py", 115): "harness_excluded: smoke reality-probe seeder; never a real vault producer.",
+    ("app/cli/smoke.py", 139): "harness_excluded: smoke reality-probe seeder.",
+    ("app/cli/smoke.py", 277): "harness_excluded: smoke ASK-corpus seeder.",
+    ("app/cli/smoke.py", 281): "harness_excluded: smoke ASK-corpus seeder (index_ingest_object).",
+}
+
+STORE_PAYLOAD_CARRIES_DICT_PREFIXES: tuple[str, ...] = (
+    "carries_frontmatter",
+    "carries_unbound_default",
+    "carries_normalized",
+)
+#: Producers verified statically by a resolvable-dict episode_ref key, by tracing to
+#: build_indexed_unit_payload, or by tracing to an existing row's .payload.
+STORE_PAYLOAD_STATIC_PRODUCER_PREFIXES: tuple[str, ...] = STORE_PAYLOAD_CARRIES_DICT_PREFIXES + (
+    "carries_via_indexed_unit_builder",
+    "preserves_existing_payload",
+)
+#: carries_at_construction producers build the payload in a separate function (opaque at the call
+#: site) and are verified by a named RUNTIME test instead of the static resolver.
+STORE_PAYLOAD_PRODUCER_PREFIXES: tuple[str, ...] = STORE_PAYLOAD_STATIC_PRODUCER_PREFIXES + (
+    "carries_at_construction",
+)
+#: The ONLY non-producer exemptions -- each forwards a verified caller payload / is a harness. No
+#: "not_store_object_payload" or "superseded" escape hatches (round-5: those hid a real producer).
+_STORE_PAYLOAD_ALL_PREFIXES: tuple[str, ...] = STORE_PAYLOAD_PRODUCER_PREFIXES + (
+    "transport_passthrough",
+    "harness_excluded",
 )
