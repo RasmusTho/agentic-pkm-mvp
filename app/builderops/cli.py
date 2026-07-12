@@ -23,6 +23,8 @@ from app.builderops.ckm_reevaluation import (
     CkmReevaluationError,
     build_ckm_reevaluation_report,
 )
+from app.builderops.ckm.seed import SeedManifestError, seed_capabilities
+from app.builderops.ckm.store import CkmStore
 from app.builderops.config import BuilderOpsPaths, load_paths
 from app.builderops.evidence_bridge import (
     EvidenceBridgeError,
@@ -221,6 +223,10 @@ def _store(ctx: click.Context) -> SqliteBuilderOpsStore:
     return store
 
 
+def _ckm_store(ctx: click.Context) -> CkmStore:
+    return CkmStore.open_default(_effective_paths(ctx))
+
+
 def _gateway(ctx: click.Context) -> BuilderOpsPromotionGateway:
     return BuilderOpsPromotionGateway(_store(ctx))
 
@@ -323,6 +329,23 @@ def vault_release(root: Path, ticket_ref: str, agent: str, as_json: bool) -> Non
     except VaultQueueError as exc:
         raise click.ClickException(str(exc)) from exc
     _emit(payload, as_json)
+
+
+@builderops.group("ckm", help="Operate the projection-only Capability Knowledge Model.")
+def ckm() -> None:
+    """CKM commands operate only on additive BuilderOps state."""
+
+
+@ckm.command("seed", help="Seed reviewed SBS and capability-contract taxonomy into the CEG.")
+@click.pass_context
+def ckm_seed(ctx: click.Context) -> None:
+    store = _ckm_store(ctx)
+    store.ensure_schema()
+    try:
+        result = seed_capabilities(store)
+    except SeedManifestError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"seeded {result['seeded']} capabilities, {result['changed']} changed")
 
 
 @builderops.group("inquiry", help="Persist and inspect pre-ticket model inquiry artifacts.")

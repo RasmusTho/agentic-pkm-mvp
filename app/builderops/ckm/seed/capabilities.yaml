@@ -1,0 +1,187 @@
+capabilities:
+  - id: human-authority-kernel
+    name: Human Authority Kernel
+    definition: Durable human knowledge, semantic identity, provenance, authority, policy, and receipts.
+    parent: null
+    boundary_ref: null
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 1 macro-domains"
+  - id: cognitive-context-topology
+    name: Cognitive Context & Topology
+    definition: Workspace, scope, active context, principal context, deployment posture, synchronization, and federation.
+    parent: null
+    boundary_ref: null
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 1 macro-domains"
+  - id: human-experience
+    name: Human Experience
+    definition: Human intent, review, correction, navigation, approval, rejection, and explanation surfaces.
+    parent: null
+    boundary_ref: null
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 1 macro-domains"
+  - id: external-boundary
+    name: External Boundary
+    definition: Sources, adapters, providers, tools, egress, and external trust boundaries.
+    parent: null
+    boundary_ref: null
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 1 macro-domains"
+  - id: machine-substrate
+    name: Machine Substrate
+    definition: Persistence, derived representations, indexes, projections, and rebuildable machine artifacts.
+    parent: null
+    boundary_ref: null
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 1 macro-domains"
+  - id: cognitive-augmentation
+    name: Cognitive Augmentation
+    definition: Retrieval, context assembly, memory, learning, capabilities, agents, and workflows.
+    parent: null
+    boundary_ref: null
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 1 macro-domains"
+  - id: governed-execution
+    name: Governed Execution
+    definition: Authorized side effects, tool actuation, automation effects, preview, dry run, and rollback.
+    parent: null
+    boundary_ref: null
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 1 macro-domains"
+  - id: trust-fitness-evolution
+    name: Trust, Fitness & Evolution
+    definition: Observability, audit visibility, evaluations, architecture contracts, compatibility, and evolution discipline.
+    parent: null
+    boundary_ref: null
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 1 macro-domains"
+  - id: hix
+    name: Human Interaction & Intent
+    definition: Human-facing surfaces for intent capture, review, approval, correction, explanation, and navigation.
+    parent: human-experience
+    boundary_ref: HIX
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
+  - id: wsp
+    name: Workspace, Scope & Principal Context
+    definition: Active cognitive context as a governed set of bindings rather than a scalar active vault.
+    parent: cognitive-context-topology
+    boundary_ref: WSP
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
+  - id: hka
+    name: Human Knowledge & Artifact Substrate
+    definition: Durable human-authored and human-accepted knowledge artifacts that survive machine loss.
+    parent: human-authority-kernel
+    boundary_ref: HKA
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
+  - id: sip
+    name: Semantic Identity & Provenance
+    definition: Rebuildable semantic identity and provenance graph, ontology, lineage, attribution views, and semantic continuity.
+    parent: human-authority-kernel
+    boundary_ref: SIP
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
+  - id: gov
+    name: Governance, Policy, Authority & Receipts
+    definition: Admissibility, delegation, policy, authority, approval, accountability, and receipts.
+    parent: human-authority-kernel
+    boundary_ref: GOV
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
+  - id: ebf
+    name: External Boundary Fabric
+    definition: Boundary adapters for sources, providers, tools, editors, parsers, models, embeddings, and egress.
+    parent: external-boundary
+    boundary_ref: EBF
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
+  - id: pdm
+    name: Persistence & Data Management
+    definition: Storage abstraction, migrations, backups, restore, data lifecycle, and store health.
+    parent: machine-substrate
+    boundary_ref: PDM
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
+  - id: dri
+    name: Derived Representation & Indexing
+    definition: Rebuildable embeddings, chunks, indexes, projections, mirrors, relation overlays, and invalidation.
+    parent: machine-substrate
+    boundary_ref: DRI
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
+  - id: rca
+    name: Retrieval & Context Assembly
+    definition: Moment-specific search, ranking, evidence selection, citation basis, and context bundles.
+    parent: cognitive-augmentation
+    boundary_ref: RCA
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
+  - id: mem
+    name: Machine Memory & Learning
+    definition: Inspectable machine memory, review, promotion, recall, correction, decay, forgetting, and feedback.
+    parent: cognitive-augmentation
+    boundary_ref: MEM
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
+  - id: cao
+    name: Cognitive Capability & Agent Orchestration
+    definition: Reusable cognition, agent roles, planning, workflows, proposals, and non-side-effecting orchestration.
+    parent: cognitive-augmentation
+    boundary_ref: CAO
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
+  - id: exe
+    name: Capability Execution & Automation
+    definition: Side-effecting execution after authorization, tool actuation, automation effects, previews, and rollback.
+    parent: governed-execution
+    boundary_ref: EXE
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
+  - id: sfc
+    name: Synchronization, Federation & Consensus
+    definition: Node identity, replicas, sync state, causal ordering, conflict handling, convergence, and distributed receipts.
+    parent: cognitive-context-topology
+    boundary_ref: SFC
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
+  - id: oef
+    name: Observability, Evaluation & Fitness
+    definition: Traces, health, metrics, evaluations, drift detection, audit visibility, and architecture fitness.
+    parent: trust-fitness-evolution
+    boundary_ref: OEF
+    seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
+  - id: retrieval
+    name: Retrieval
+    definition: Finds candidate artifacts or projections relevant to a query or context with explicit provenance.
+    parent: rca
+    boundary_ref: RCA
+    seed_source: "docs/FINDING_AND_REORIENTING/README.md :: The cognitive-prosthetic framing"
+  - id: orientation
+    name: Orientation
+    definition: Returns a situational frame for where the human is and what they were doing without a query term.
+    parent: cao
+    boundary_ref: CAO
+    seed_source: "docs/FINDING_AND_REORIENTING/README.md :: The cognitive-prosthetic framing"
+  - id: resurfacing
+    name: Resurfacing
+    definition: Returns why-now candidates for material that plausibly needs attention without an explicit query.
+    parent: cao
+    boundary_ref: CAO
+    seed_source: "docs/FINDING_AND_REORIENTING/README.md :: The cognitive-prosthetic framing"
+  - id: context-building
+    name: Context building
+    definition: Assembles an inspectable context bundle from retrieval, orientation, resurfacing, provenance, receipts, and write guards.
+    parent: rca
+    boundary_ref: RCA
+    seed_source: "docs/CONTEXT_BUNDLES/README.md :: Context Bundles"
+  - id: citation-checking
+    name: Citation checking
+    definition: Validates outbound references against durable surfaces and runtime projections without rewriting outputs.
+    parent: oef
+    boundary_ref: OEF
+    seed_source: "docs/COMPONENTS.md :: CitationChecker"
+  - id: memory-candidate-extraction
+    name: Memory candidate extraction
+    definition: Proposes provenance-bearing candidates for agent memory or long-lived recall from a session, run, or artifact.
+    parent: mem
+    boundary_ref: MEM
+    seed_source: "docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md :: What agent memory is"
+  - id: note-patch-proposal
+    name: Note patch proposal
+    definition: Proposes a structured patch to a vault note for governance or a human-facing surface to accept or reject.
+    parent: cao
+    boundary_ref: CAO
+    seed_source: "docs/PANEL_AGENT.md :: Panel Agent"
+  - id: archive-exposure
+    name: Archive exposure
+    definition: Exposes retained material through discovery, citation, preview, and governed materialization modes.
+    parent: hka
+    boundary_ref: HKA
+    seed_source: "docs/CONCEPTS/ARCHIVE_EXPOSURE_CONTRACT.md :: Purpose"
+  - id: commitment-surfacing
+    name: Commitment surfacing
+    definition: Returns open commitments, next actions, and waiting items as a structured payload distinct from note state.
+    parent: cao
+    boundary_ref: CAO
+    seed_source: "docs/COMMITMENT_AS_FIRST_CLASS/README.md :: What this capability is"
