@@ -542,6 +542,23 @@ def test_recut_reconciles_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
     dropped_update = [(sql, params) for sql, params in executed if sql.strip().startswith("UPDATE")][0]
     assert "heimdal.observations:prov" in dropped_update[1]
 
+    # --- Case D (round-2 finding): a re-cut that changes the episode's SCOPE must CORRECT an
+    #     otherwise-preserved (unresolvable) time-overlap binding recorded under the old scope --
+    #     cross-scope deny-by-default; scope mismatch is definitive and must never be preserved. ---
+    executed.clear()
+    monkeypatch.setattr(
+        assignment_module, "conn_rw", lambda *a, **k: _FakeConn(_bindings_fixture(episode_id), executed)
+    )
+    result_rescoped = reconcile_episode_bindings(
+        episode_id, scope="personal", start=_dt(10, 0), end=None,  # end=None => the preserve branch
+        derived_from=[], write_guard=_allow_guard(),
+    )
+    rescoped_updates = [(sql, params) for sql, params in executed if sql.strip().startswith("UPDATE")]
+    # The unresolvable heimdal binding (seeded scope='work') is now cross-scope vs the 'personal'
+    # re-cut -> corrected, not preserved.
+    assert any("heimdal.observations:unresolvable" in params for _sql, params in rescoped_updates), \
+        "a preserved binding whose scope no longer matches the re-cut episode must be corrected (cross-scope deny)"
+
     # --- Merge-deletion side: the note is gone entirely -- every active binding withdrawn. ---
     executed.clear()
     monkeypatch.setattr(

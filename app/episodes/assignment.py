@@ -949,9 +949,16 @@ def reconcile_episode_bindings(
         if row.get("basis") != BASIS_TIME_OVERLAP:
             continue
         row_scope = str(row.get("scope") or scope)
+        if row_scope != scope:
+            # Cross-scope deny-by-default: a re-cut that changed the episode's scope leaves this
+            # binding recorded under the old scope. Scope mismatch is a DEFINITIVE signal (unlike
+            # bounds we cannot re-verify), so do NOT preserve it -- omitting it from `decisions`
+            # lets diff_assignments correct (withdraw) the now-cross-scope binding. ERE-08 owns the
+            # full cross-scope posture; this branch must not silently re-supply a cross-scope ref.
+            continue
         observed_at = _resolve_artifact_observed_at(artifact_ref, vault_root=vault_root)
         if end is None or observed_at is None:
-            # Cannot re-verify bounds -> preserve the binding rather than destroy it.
+            # Cannot re-verify bounds -> preserve the (same-scope) binding rather than destroy it.
             preserved.append(
                 AssignmentDecision(
                     artifact_ref=artifact_ref,
