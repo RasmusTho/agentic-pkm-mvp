@@ -45,6 +45,10 @@ class _VaultNote:
     frontmatter: dict
     body: str
     open_tasks: int
+    # ERE-06 (#3181): the note's own frontmatter `episode_ref` binding, read straight off
+    # frontmatter (this evaluator is vault-native/no-DB by design, CRE-03) -- 'unbound' when
+    # absent, matching the honest capture-time default (semantic-dimensions.md).
+    episode_ref: object = "unbound"
 
 
 class DeterministicRelevanceEvaluator:
@@ -78,6 +82,11 @@ class DeterministicRelevanceEvaluator:
 
         surfaced: list[SurfacedRef] = []
         inputs: list[str] = []
+        # ERE-06 (#3181), AC5: the basis artifacts this Moment would be grounded on -- every note
+        # that actually contributed a surfaced ref. Suppression checks this set, not `notes` (a
+        # note read from the vault but never surfaced never enters the "is this Moment stale"
+        # question at all).
+        basis_notes: list[_VaultNote] = []
 
         if daily is not None:
             surfaced.append(
@@ -88,6 +97,7 @@ class DeterministicRelevanceEvaluator:
                 )
             )
             inputs.append(daily.rel_path)
+            basis_notes.append(daily)
 
         band: UrgencyBand = "routine"
         basis_parts: list[str] = []
@@ -105,6 +115,7 @@ class DeterministicRelevanceEvaluator:
                 band = "pressing"
                 basis_parts.append(f"commitment within {due_in}d")
                 inputs.append(note.rel_path)
+                basis_notes.append(note)
             elif note.open_tasks:
                 surfaced.append(
                     SurfacedRef(
@@ -117,8 +128,17 @@ class DeterministicRelevanceEvaluator:
                     band = "timely"
                 basis_parts.append(f"{note.open_tasks} open loop(s) in {note.rel_path}")
                 inputs.append(note.rel_path)
+                basis_notes.append(note)
 
         if not surfaced:
+            return []
+
+        if self._all_basis_notes_closed_only(basis_notes):
+            # AC5: every basis artifact binds ONLY to closed episode(s) -- suppressed
+            # (open-loop-pressure drop, ADR-0058). A note with no binding (unbound/pending) is
+            # never "closed-only" (structurally immune, ADR-0058 Edge case 1), so this only fires
+            # when EVERY basis note carries a real, fully-closed binding; a mixed basis (any open
+            # or unbound note) always survives.
             return []
 
         need_basis = (
@@ -163,6 +183,38 @@ class DeterministicRelevanceEvaluator:
         )
         return [moment]
 
+    # -- ERE-06 (#3181) closure suppression, AC5 -----------------------------
+
+    def _all_basis_notes_closed_only(self, basis_notes: list[_VaultNote]) -> bool:
+        """Whether EVERY basis note's episode binding resolves to closed-only.
+
+        Vault-native (no DB, matching this evaluator's own no-external-source contract):
+        resolves each candidate episode id straight off the Episode notes' own frontmatter via
+        :func:`app.episodes.closure_decay.read_closed_episode_ids_from_vault`. A note with no
+        episode binding at all (``unbound``/``pending``/malformed) is never counted as
+        closed-only, so it alone keeps a Moment alive -- suppression requires unanimous
+        closed-only agreement across every basis note.
+        """
+        if not basis_notes:
+            return False
+
+        from app.episodes.closure_decay import read_closed_episode_ids_from_vault, resolve_episode_ids
+
+        per_note_ids = [resolve_episode_ids(note.episode_ref) for note in basis_notes]
+        all_ids = {episode_id for ids in per_note_ids for episode_id in ids}
+        if not all_ids:
+            return False
+        closed_ids = read_closed_episode_ids_from_vault(all_ids, vault_root=self.vault_root)
+        if not closed_ids:
+            return False
+
+        for ids in per_note_ids:
+            if not ids or any(episode_id not in closed_ids for episode_id in ids):
+                # This note is unbound, or binds to at least one non-closed/unresolved episode --
+                # not closed-only, so it single-handedly keeps the Moment alive.
+                return False
+        return True
+
     # -- vault-native reading (no external source) --------------------------
 
     def _read_daily_note(self) -> _VaultNote | None:
@@ -193,6 +245,7 @@ class DeterministicRelevanceEvaluator:
             frontmatter=frontmatter,
             body=body,
             open_tasks=len(_OPEN_TASK_RE.findall(body)),
+            episode_ref=frontmatter.get("episode_ref", "unbound"),
         )
 
     def _commitment_days_until(self, frontmatter: dict) -> int | None:

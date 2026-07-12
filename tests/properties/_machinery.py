@@ -732,13 +732,25 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "own monotonic-status check is not a write gate, so port coverage is "
         "what guards this seam (#3035, Epic #3019 A15 capture note / J0)."
     ),
-    ("app/episodes/store.py", 115): (
+    ("app/episodes/store.py", 203): (
         "guarded_by_port: write_episode_note passes write_guard (and the "
         "distinct episodes.write_note action) through to write_note_relative, "
         "which asserts write_guard.assert_writes_allowed(action) at the port "
         "itself before any I/O (#2910/#2953 precedent); no caller-side assert "
         "exists in this module by design -- this IS the production seam ERE-02 "
-        "AC2 verifies (#3177)."
+        "AC2 verifies (#3177). Line drifted 115 -> 203 (site unchanged; later "
+        "ERE-07 machine-terminality docstrings grew the module); re-pinned per "
+        "this census's own directly-related-repair convention the next time the "
+        "machinery was touched (#3183, ERE-08)."
+    ),
+    ("app/episodes/segmenter.py", 827): (
+        "guarded_by_port: _write_fusion_receipt passes write_guard (and the "
+        "distinct episodes.cross_scope_fusion_receipt action) through to "
+        "write_note_relative, which asserts write_guard.assert_writes_allowed"
+        "(action) at the port itself before any I/O -- so a blocked guard writes "
+        "neither the fusion receipt nor the fused note (receipt-before-note, "
+        "ERE-08 #3183). No caller-side assert by design, mirroring the ERE-02 "
+        "store seam above."
     ),
 }
 

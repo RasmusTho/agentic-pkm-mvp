@@ -138,6 +138,7 @@ def launch(
         "inquiry_id": inquiry_id,
         "final_state": outcome,
         "terminal_receipt_id": completed.get("terminal_receipt_id"),
+        "human_readable_report": completed.get("human_readable_report"),
         "preflight": preflight,
     }
 

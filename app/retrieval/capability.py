@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 from app.retrieval.hybrid import ScopeDenial, scoped_hybrid_search
@@ -65,6 +65,11 @@ class RetrievalHit:
     snippet: str | None
     source_ref: str | None
     payload: dict[str, Any]
+    # ERE-06 (#3181): the closure-derived decay signal for THIS hit, computed fresh at retrieve()
+    # time -- never persisted, never written back into `payload` (which stays whatever the durable
+    # store actually holds; see app/episodes/closure_decay.py). Empty (default) when the hit
+    # carries no episode binding or an open one.
+    signal_payload: "RetrievalSignalPayload" = field(default_factory=lambda: RetrievalSignalPayload())
 
     @classmethod
     def from_hybrid(cls, hit: dict[str, Any]) -> "RetrievalHit":
@@ -104,6 +109,93 @@ class RetrievalResponse:
     # excluded. Carried alongside hits so consumers (the ASK envelope seam) can surface them —
     # denials are scope-level, not per-hit, so downstream hit truncation must never drop them.
     denials: tuple[ScopeDenial, ...] = ()
+
+
+def _artifact_scope_of(payload: dict[str, Any]) -> str:
+    """The artifact's scope from a retrieval hit payload, for the ERE-08 cross-scope decay gate.
+
+    Mirrors the scope resolution in ``app.retrieval.envelope`` exactly: ``domain`` then ``scope_id``
+    are the string-valued scope carriers on the retrieval payload. ``scope_binding`` is deliberately
+    NOT consulted -- it is schema-typed as an OBJECT, never a plain scope string (Finding 4: the
+    old ``scope_binding`` branch was dead under ``isinstance(value, str)``). Empty string when the
+    payload carries no scope -- the decay gate then fails CLOSED for any confirmed-scope closed
+    episode (:func:`app.episodes.closure_decay.admit_closed_ids_for_scope`, Finding 2)."""
+    for key in ("domain", "scope_id"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def _apply_closure_decay(hits: list["RetrievalHit"]) -> list["RetrievalHit"]:
+    """ERE-06 (#3181): derive (never persist) the closure-based salience drop for every hit, then
+    re-sort the RETURNED set by the dampened score (ranking-only, AC4 -- this never changes
+    `evidence_role_in_context`, `authority_state`, or scope).
+
+    Lazily imported (avoids a retrieval -> episodes import at module load for callers that never
+    touch episode-bound content) and batched: every hit's episode ids are collected into ONE
+    closed-episode-id read instead of one query per hit. A hit set with no episode bindings at all
+    (the common case today) short-circuits to zero DB round-trips.
+    """
+    from app.episodes.closure_decay import (
+        admit_closed_ids_for_scope,
+        derive_closure_salience,
+        is_exempt_note_class,
+        read_closed_episode_ids,
+        read_closed_episode_scopes,
+        resolve_episode_ids,
+    )
+
+    # Precompute the ADR-0058 §2 exempt-class flag once per hit (a canonical knowledge artifact --
+    # evergreen note / reviewed-or-protected decision -- never dampens, even when episode-bound).
+    exempt = [is_exempt_note_class(hit.payload) for hit in hits]
+
+    all_ids: set[str] = set()
+    for hit, is_exempt in zip(hits, exempt):
+        if is_exempt:
+            continue  # exempt classes never dampen -> their bindings need not be queried at all
+        all_ids.update(resolve_episode_ids(hit.payload.get("episode_ref")))
+    if not all_ids:
+        return hits
+
+    closed_ids = read_closed_episode_ids(all_ids)
+    if not closed_ids:
+        return hits
+
+    # ERE-08 (#3183) cross-scope decay gate: a closed episode in scope A must never dampen an
+    # artifact in scope B without an explicit flow (deny-by-default; denial class
+    # cross_scope_no_flow). Only engage when at least one hit carries a resolvable scope -- absent
+    # scope falls back to the same-scope-by-construction assignment guarantee (fail-open, no extra
+    # read), which also keeps this off the hot path for the common unscoped-payload case.
+    hit_scopes = [_artifact_scope_of(hit.payload) for hit in hits]
+    closed_scopes = read_closed_episode_scopes(closed_ids) if any(hit_scopes) else {}
+
+    # Finding 6: memoize the admitted-closed-id set per DISTINCT artifact scope -- the gate result
+    # depends only on the scope, so compute it once per unique scope instead of once per hit.
+    admitted_by_scope: dict[str, set[str]] = {}
+
+    dampened: list[RetrievalHit] = []
+    for hit, is_exempt, artifact_scope in zip(hits, exempt, hit_scopes):
+        admitted = admitted_by_scope.get(artifact_scope)
+        if admitted is None:
+            admitted = admit_closed_ids_for_scope(closed_ids, closed_scopes, artifact_scope)
+            admitted_by_scope[artifact_scope] = admitted
+        factor, salience = derive_closure_salience(
+            hit.payload.get("episode_ref"), admitted, exempt_note_class=is_exempt
+        )
+        if salience:
+            hit = replace(
+                hit,
+                score=hit.score * factor,
+                signal_payload=RetrievalSignalPayload(salience=salience),
+            )
+        dampened.append(hit)
+    # Stable, descending re-sort of the already-retrieved set only -- dampening can never pull in
+    # a candidate excluded earlier by hybrid.py's own (undamped) top-k cut; it only reorders WITHIN
+    # what was already returned (a documented v1 scope limit of enacting the decay at this call
+    # site rather than inside hybrid.py's own fusion step).
+    dampened.sort(key=lambda h: h.score, reverse=True)
+    return dampened
 
 
 def retrieve(request: RetrievalRequest) -> RetrievalResponse:
@@ -149,9 +241,10 @@ def retrieve(request: RetrievalRequest) -> RetrievalResponse:
     }
     if request.provenance_metadata:
         metadata["provenance"]["hints"] = dict(request.provenance_metadata)
+    hits = _apply_closure_decay([RetrievalHit.from_hybrid(hit) for hit in raw_hits])
     return RetrievalResponse(
         query=request.query,
-        hits=[RetrievalHit.from_hybrid(hit) for hit in raw_hits],
+        hits=hits,
         trace_id=request.trace_id,
         metadata=metadata,
         diagnostics=diagnostics,

@@ -22,7 +22,9 @@ BuilderOps model-inquiry workflow before creating a ticket.
    ```
 
 4. Delete the temporary input file.
-5. Return the JSON `inquiry_id`, `final_state`, and `terminal_receipt_id` to the operator.
+5. Return the JSON `inquiry_id`, `final_state`, `terminal_receipt_id`, and
+   `human_readable_report` to the operator. The last value is the Markdown file a human should
+   open; the adjacent JSON files remain the canonical audit trace.
 
 The launcher performs vault and adapter preflight before writing the inquiry. Propagate any error
 verbatim enough to identify the missing dependency; do not fall back to chat-only orchestration.

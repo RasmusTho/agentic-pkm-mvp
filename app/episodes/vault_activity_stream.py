@@ -231,6 +231,41 @@ def resolve_bundle_target_for_outbox_row_id(
     return (fm_uuid.strip() if isinstance(fm_uuid, str) and fm_uuid.strip() else None), note_path
 
 
+def resolve_scope_for_outbox_row_id(row_id: str, *, vault_root: Path) -> str | None:
+    """Resolve one ``vault.activity:<row_id>`` provenance ref to its artifact's TRUE scope, or
+    ``None`` when it cannot be determined (ERE-08 #3183, Finding 1 -- the cross-scope gate needs the
+    artifact's real scope, never a scope forced by its caller).
+
+    Reads the (never-purged) outbox row, resolves the note it references (:func:`_resolve_note_path`),
+    and returns the SAME scope dimension segmentation itself assigns
+    (:func:`app.episodes.segmenter._signal_from_vault_activity_row` uses
+    ``resolve_activity_dimensions(...).get("scope")``, i.e.
+    ``extract_context_dimensions_for_note``'s ``scope``/``domain`` frontmatter read). Best-effort,
+    never raises: a missing/purged row, a note outside ``vault_root``, or an unreadable/deleted note
+    yields ``None`` -- the caller treats an unresolvable scope conservatively."""
+    with conn_rw() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT payload FROM outbox WHERE id = %s::uuid", (row_id,))
+            row = cur.fetchone()
+    if row is None:
+        return None
+    payload = row["payload"] if isinstance(row, dict) else row[0]
+    if isinstance(payload, str):
+        payload = _json.loads(payload)
+    payload = dict(payload or {})
+
+    note_path = _resolve_note_path(payload, vault_root=vault_root)
+    if note_path is None:
+        return None
+    try:
+        text = note_path.read_text(encoding="utf-8")
+        frontmatter, _body = load_frontmatter(text)
+    except Exception:
+        return None
+    scope = extract_context_dimensions_for_note(frontmatter).get("scope")
+    return scope.strip() if isinstance(scope, str) and scope.strip() else None
+
+
 __all__ = [
     "VAULT_ACTIVITY_STREAM_ID",
     "VAULT_ACTIVITY_TOPICS",
@@ -240,4 +275,5 @@ __all__ = [
     "read_vault_activity_for_consumer",
     "resolve_bundle_target_for_outbox_row_id",
     "resolve_activity_dimensions",
+    "resolve_scope_for_outbox_row_id",
 ]

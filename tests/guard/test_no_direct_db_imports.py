@@ -61,6 +61,23 @@ ALLOW_FILES = (
     # conn_rw pattern as app/episodes/engine_state.py above. episode_ref never
     # touches evidence_role/authority_state (pending is not authority).
     'app/episodes/assignment.py',
+    # Episode closure detection + episode.closed emission (ERE-06, #3181). Bounded reads over the
+    # rebuildable `episodes` projection (closure candidates) and the `episode_artifact_binding`
+    # ledger (bound-artifact count); same bounded conn_rw pattern as app/episodes/assignment.py
+    # above. No decay/salience field is ever written -- this module's only writes are the
+    # guarded episode-note rewrite (app.episodes.store) and the outbox event.
+    'app/episodes/closure.py',
+    # Closure-derived retrieval salience decay reader (ERE-06, #3181). A single bounded SELECT
+    # over the rebuildable `episodes` projection (which episode ids are closed) at the production
+    # retrieve() call site; never a write, same bounded pattern as the entries above. The salience
+    # contract's hard law (derived, never persisted) means this module has no write path at all.
+    'app/episodes/closure_decay.py',
+    # Human re-cut / silence-is-acceptance projection sync (ERE-07, #3182 review fix, mirrors
+    # #3181's app/episodes/closure.py entry above). A targeted incremental UPDATE over the
+    # rebuildable `episodes` projection issued from the relabel write path itself
+    # (_sync_projection_row), keeping it current with an operator's re-cut edits; same bounded
+    # conn_rw pattern as app/episodes/closure.py.
+    'app/episodes/recut.py',
     'app/store/relation_index.py',
     'app/memory_kv/store.py',
     'app/agent/repository.py',
