@@ -53,4 +53,4 @@ No revalidation fetch, durable per-claim validity field, automatic expiry, canon
 
 ## Related GitHub Issues
 
-Create one bounded implementation issue after this specification is merged. TCD hint: Terra / high reasoning; semantic non-collapse guards and a small, locally testable pure-function core dominate the risk.
+Implementation issue: [#3549](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3549). TCD hint: Terra / high reasoning; semantic non-collapse guards and a small, locally testable pure-function core dominate the risk.

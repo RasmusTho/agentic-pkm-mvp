@@ -1,4 +1,4 @@
-State: Specification directory — proposed capability; no new runtime behavior is claimed.
+State: Specification directory (parent feature issue #3545; first child #3546; no shipped behavior is claimed).
 Doc role: Feature specification
 Authority: Defines the ASK provenance-manifest experiment. Subordinate to current retrieval and authorization owner docs for runtime truth.
 Owner: Architecture / retrieval
@@ -35,7 +35,7 @@ The experiment is accepted only after fixture and adversarial evidence proves be
 
 ## Relationship to GitHub issues
 
-The parent feature issue and first child issue will be created after this specification is merged. The first child is the only immediate pickup candidate.
+Parent feature issue [#3545](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3545) is the validation hub and remains `agent:blocked` while child [#3546](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3546) delivers the experiment. See [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md).
 
 ## Related docs
 
