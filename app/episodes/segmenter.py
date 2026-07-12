@@ -68,6 +68,15 @@ from pathlib import Path
 from typing import Any, Final, Mapping, Sequence
 
 from app.episodes import engine_state
+from app.episodes.assignment import (
+    artifact_candidates_from_signals,
+    commit_assignment_diff,
+    compute_assignments,
+    diff_assignments,
+    episode_bounds_from_closed_segments,
+    read_candidate_episodes_for_scopes,
+    read_existing_bindings,
+)
 from app.episodes.ids import EPISODE_ID_PREFIX
 from app.episodes.notes import episode_note_rel_path
 from app.episodes.store import write_episode_note
@@ -693,12 +702,20 @@ def run_segmentation_tick(
     carried-over segment stays open and is deferred to ERE-06 (closure
     detection is out of scope for ERE-04).
 
-    Crash-safe ordering (INV-ERE-F): emit -> persist open state -> advance
-    cursors -> delete closed-segment state LAST. A crash between the two
-    cursor advances replays only one stream, but the closed segment's
+    Crash-safe ordering (INV-ERE-F): emit -> assign -> persist open state ->
+    advance cursors -> delete closed-segment state LAST. A crash between the
+    two cursor advances replays only one stream, but the closed segment's
     retained ``signal_ids`` ledger dedups the replayed rows and the
     deterministic, start-independent episode id skips the already-written
     note -- the tick reconverges instead of double-proposing.
+
+    Assignment (ERE-05, #3180) runs AFTER segmentation, over the SAME
+    delta-window ``signals`` this tick already folded (no second stream
+    read): every signal is a candidate artifact, matched against both this
+    tick's freshly closed segments (in-memory -- not yet reflected in the
+    ``episodes`` PG projection) and already-persisted episodes for the
+    touched scopes (the source late-arriving artifacts bind against without
+    re-cutting bounds, AC7). See ``app.episodes.assignment`` for the rule.
     """
     root = Path(vault_root)
     live_streams = {entry.stream_id for entry in enumerate_consumable_streams(registry=registry)}
@@ -772,6 +789,26 @@ def run_segmentation_tick(
         if episode_id is not None:
             proposed_ids.append(episode_id)
 
+    # ERE-05 assignment: same delta-window signals, run strictly after segmentation/emission.
+    # A tick with no signals at all has nothing to assign (never touches the ledger or the DB).
+    assignment_summary = {"pending": 0, "corrected": 0}
+    if signals:
+        artifacts = artifact_candidates_from_signals(signals)
+        fresh_episodes = episode_bounds_from_closed_segments(
+            closed_segments, episode_id_for=_deterministic_episode_id
+        )
+        touched_scopes = {a.scope for a in artifacts}
+        persisted_episodes = read_candidate_episodes_for_scopes(touched_scopes)
+        # This tick's freshly closed segments are authoritative over any (should-be-identical)
+        # stale projection row for the same id -- the projection is a rebuildable index that has
+        # not yet been refreshed with this tick's own emissions.
+        episodes_by_id = {e.episode_id: e for e in persisted_episodes}
+        episodes_by_id.update({e.episode_id: e for e in fresh_episodes})
+        decisions = compute_assignments(artifacts, list(episodes_by_id.values()))
+        existing_bindings = read_existing_bindings({a.artifact_ref for a in artifacts})
+        to_insert, to_correct = diff_assignments(existing_bindings, decisions)
+        assignment_summary = commit_assignment_diff(to_insert, to_correct, write_guard=write_guard)
+
     for scope, segment in updated_open.items():
         engine_state.set_state(f"{_OPEN_SEGMENT_KEY_PREFIX}{scope}", segment.to_state())
 
@@ -803,6 +840,7 @@ def run_segmentation_tick(
         "skipped_no_observation_time": skipped_no_observation_time,
         "proposed": proposed_ids,
         "open_segments": len(updated_open),
+        "assigned": assignment_summary,
     }
 
 

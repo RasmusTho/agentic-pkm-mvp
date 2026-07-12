@@ -1,7 +1,9 @@
 """Invariant probe: episode_ref threading into the metadata bundle + derivation survival.
 
 Invariant registry: docs/testing/invariant-tests.md :: observation_episode_binding_survives
-Issue: #3178 (ERE-03). Spec: docs/EPISODE_RESOLUTION_ENGINE/THREAD_EPISODE_REF_INTO_METADATA_BUNDLE.md
+Issue: #3178 (ERE-03), extended by #3180 (ERE-05, assignment end-to-end case).
+Spec: docs/EPISODE_RESOLUTION_ENGINE/THREAD_EPISODE_REF_INTO_METADATA_BUNDLE.md,
+docs/EPISODE_RESOLUTION_ENGINE/ASSIGN_EPISODE_REF_TO_ARTIFACTS.md
 Doctrine: docs/architecture/semantic-dimensions.md :: episode_ref; ADR-0051 (Episode as ontological
 primitive), ADR-0029 (orthogonal semantic roles).
 
@@ -17,6 +19,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from datetime import datetime, timezone
 
 import pytest
 from jsonschema.exceptions import ValidationError
@@ -81,10 +84,14 @@ def test_derived_types_allof_requires_episode_ref_like_derived_from() -> None:
 def test_observation_episode_binding_survives(monkeypatch: pytest.MonkeyPatch) -> None:
     # Invariant registry: docs/testing/invariant-tests.md :: observation_episode_binding_survives
     # AC2 (enforcement): episode_ref survives segment derivation on the PRODUCTION derivation path
-    # (mimer_runtime.dri.derive_segment), not merely in schema validation. Real episode-id assignment
-    # is out of scope here (ERE-05), so the bound/pending sources below are fabricated and injected
-    # into the capture registry the way a future assignment stage would leave them -- the point of
-    # this probe is that derive_segment must not drop or alter whatever binding the source carries.
+    # (mimer_runtime.dri.derive_segment), not merely in schema validation. The bound/pending sources
+    # in this first block are still hand-fabricated (mimer_runtime is a corpus-backed, in-memory-only
+    # test slice -- docs/MIMER_RUNTIME_SLICE_1/README.md -- disjoint from the real app/episodes
+    # runtime, so ERE-05's real assignment logic cannot literally write into this registry); the
+    # point of THIS block is that derive_segment must not drop or alter whatever binding the source
+    # carries, whatever produced it. The second block below (AC5, ERE-05 #3180) closes the gap: it
+    # calls the REAL app.episodes.assignment.compute_assignments rule to produce a binding, then
+    # feeds that real decision through this same production derivation path end to end.
     src = capture.capture(text="a bounded situation", principal_id="p-episode-bound")
 
     bound_bundle = dataclasses.replace(
@@ -119,6 +126,55 @@ def test_observation_episode_binding_survives(monkeypatch: pytest.MonkeyPatch) -
     # The trivial 'unbound' case is preserved too (no silent re-stamping to something else).
     seg_unbound = dri.derive_segment(artifact_id=unbound_bundle.object_id)
     assert seg_unbound.metadata_bundle.episode_ref == "unbound"
+
+
+def test_observation_episode_binding_survives__ere05_end_to_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # AC5 (ERE-05, #3180): the end-to-end case added to the observation_episode_binding_survives
+    # probe -- assign (the REAL production assignment rule) -> chunk/derive -> binding present on
+    # the derived bundle. Unlike the block above (fabricated bindings, ERE-03's original scope),
+    # this decision is computed by app.episodes.assignment.compute_assignments itself: a real
+    # in-bounds artifact, a real episode's bounds/derived_from, a real basis+confidence. The result
+    # is then carried into a MetadataBundle the same way a real capture/assignment pipeline would
+    # (episode_ref stamped from the computed decision, not hand-typed), and pushed through
+    # mimer_runtime.dri.derive_segment -- proving the ERE-05 output specifically survives
+    # derivation, not just a hand-fabricated stand-in for it.
+    from app.episodes.assignment import (
+        ArtifactCandidate,
+        EpisodeBoundsRecord,
+        compute_assignments,
+    )
+
+    episode = EpisodeBoundsRecord(
+        episode_id="ep-aaaaaaaa-2222-4333-8444-555555555555",
+        scope="work",
+        start=datetime(2026, 7, 11, 9, 0, tzinfo=timezone.utc),
+        end=datetime(2026, 7, 11, 10, 0, tzinfo=timezone.utc),
+        derived_from=("heimdal.observations:anchor-e2e",),
+    )
+    artifact = ArtifactCandidate(
+        artifact_ref="heimdal.observations:anchor-e2e",
+        scope="work",
+        observed_at=datetime(2026, 7, 11, 9, 15, tzinfo=timezone.utc),
+    )
+
+    decisions = compute_assignments([artifact], [episode])
+    assert len(decisions) == 1
+    decision = decisions[0]
+
+    src = capture.capture(text="a real assignment decision", principal_id="p-episode-ere05")
+    assigned_bundle = dataclasses.replace(
+        src.metadata_bundle,
+        object_id="artifact:ep-ere05-assigned-src",
+        episode_ref=[decision.episode_id],
+    )
+    registry = {assigned_bundle.object_id: capture.CapturedArtifact(metadata_bundle=assigned_bundle, text=src.text)}
+    monkeypatch.setattr(capture, "get_captured", lambda object_id: registry.get(object_id))
+
+    seg_assigned = dri.derive_segment(artifact_id=assigned_bundle.object_id)
+    assert list(seg_assigned.metadata_bundle.episode_ref) == [decision.episode_id]
+    assert_validates(seg_assigned.metadata_bundle.to_dict(), "metadata-bundle.schema.json")
 
 
 def test_capture_stamps_episode_ref_unbound() -> None:

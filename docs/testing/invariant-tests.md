@@ -800,13 +800,15 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 - **Current enforcement:** `schema_enforced` (`episode_ref` is a required bundle field; the
   derived-types `allOf` conditional requires it alongside `derived_from`) + `runtime_test` (derivation
   runtime, `mimer_runtime.dri.derive_segment` propagates the source's binding — unbound, pending, or
-  bound). Scope: the field-threading and derivation-survival half of this invariant is enforced now
-  (#3178 / ERE-03); real episode-id assignment (ERE-05) and Episode-closure-driven relevance decay
-  (the Event Horizon model, ADR-0058) remain `future_runtime` — retrieval consumption of `episode_ref`
-  lands in ERE-06.
+  bound). Scope: the field-threading and derivation-survival half of this invariant was enforced by
+  #3178 / ERE-03; real episode-id assignment (`app.episodes.assignment.compute_assignments`, #3180 /
+  ERE-05) now feeds a real computed decision through the same production derivation path
+  (`test_observation_episode_binding_survives__ere05_end_to_end`) as an additional end-to-end case.
+  Episode-closure-driven relevance decay (the Event Horizon model, ADR-0058) and retrieval
+  consumption of `episode_ref` remain `future_runtime` — that lands in ERE-06.
 - **Runtime test path:** `tests/invariants/test_episode_binding.py::test_observation_episode_binding_survives` (runtime — passes).
 - **Related docs / contracts / ADRs:** [semantic-dimensions](../architecture/semantic-dimensions.md) (`episode_ref`), [functional-ontology](../architecture/functional-ontology.md) (`Episode`), [metadata-bundle](../architecture/metadata-bundle.md) §1/§3/§4; ADR-0051, ADR-0029, ADR-0058.
-- **Related issues:** #3178 (ERE-03, this slice); grounded in [EPISODE_AS_ONTOLOGICAL_PRIMITIVE](../research/EPISODE_AS_ONTOLOGICAL_PRIMITIVE.md).
+- **Related issues:** #3178 (ERE-03), #3180 (ERE-05, end-to-end case); grounded in [EPISODE_AS_ONTOLOGICAL_PRIMITIVE](../research/EPISODE_AS_ONTOLOGICAL_PRIMITIVE.md).
 
 ## Vault multi-writer consistency invariants (ADR-0055)
 
