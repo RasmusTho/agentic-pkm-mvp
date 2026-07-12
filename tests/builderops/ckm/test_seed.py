@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 
+from app.builderops.__main__ import _root as builderops_standalone_root
 from app.builderops.ckm.seed import SeedManifestError, load_manifest, seed_capabilities
 from app.builderops.ckm.store import CkmStore
 
@@ -51,6 +54,20 @@ def test_loader_rejects_duplicates_and_cycles(tmp_path: Path) -> None:
         load_manifest(cycle)
 
 
+def test_loader_rejects_duplicate_names_across_distinct_slugs(tmp_path: Path) -> None:
+    # CkmStore.upsert_capability dedups on `name` (ON CONFLICT(name)), not on
+    # this manifest's `id`. Two entries with different slugs but the same
+    # `name` would otherwise silently collapse into a single row on seed.
+    duplicate_name = _manifest(
+        tmp_path,
+        "capabilities:\n"
+        "  - {id: one, name: Same Name, definition: First, parent: null, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n"
+        "  - {id: two, name: Same Name, definition: Second, parent: null, seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n",
+    )
+    with pytest.raises(SeedManifestError, match="duplicate capability name"):
+        load_manifest(duplicate_name)
+
+
 def test_seed_idempotent_and_incremental(store: CkmStore, tmp_path: Path) -> None:
     first = seed_capabilities(store)
     before = {item.name: item.to_dict() for item in store.list_capabilities()}
@@ -85,3 +102,50 @@ def test_seeded_rows_carry_provenance(store: CkmStore) -> None:
         capability.existence_provenance.startswith("seeded:docs/")
         for capability in store.list_capabilities()
     )
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["ckm", "seed"],
+        ["builderops", "ckm", "seed"],
+    ],
+)
+def test_cli_ckm_seed_reachable_at_documented_and_nested_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, argv: list[str]
+) -> None:
+    # docs/CAPABILITY_KNOWLEDGE_MODEL/*.md document every `ckm` subcommand as
+    # `python -m app.builderops ckm <verb>` (no `builderops` segment). The
+    # standalone entry point historically only exposed `ckm` nested under
+    # `builderops`, so the documented path raised "No such command 'ckm'".
+    db_path = tmp_path / "builderops.sqlite3"
+    monkeypatch.setenv("BUILDEROPS_DB_PATH", str(db_path))
+    monkeypatch.delenv("BUILDEROPS_VAULT_ROOT", raising=False)
+
+    first = CliRunner().invoke(builderops_standalone_root, argv, catch_exceptions=False)
+    assert first.exit_code == 0, first.output
+    assert "seeded 31 capabilities, 31 changed" in first.output
+
+    second = CliRunner().invoke(builderops_standalone_root, argv, catch_exceptions=False)
+    assert second.exit_code == 0, second.output
+    assert "seeded 31 capabilities, 0 changed" in second.output
+
+
+def test_cli_ckm_seed_wraps_write_path_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "builderops.sqlite3"
+    monkeypatch.setenv("BUILDEROPS_DB_PATH", str(db_path))
+    monkeypatch.delenv("BUILDEROPS_VAULT_ROOT", raising=False)
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr("app.builderops.cli.seed_capabilities", _boom)
+
+    result = CliRunner().invoke(
+        builderops_standalone_root, ["ckm", "seed"], catch_exceptions=False
+    )
+    assert result.exit_code != 0
+    assert "database is locked" in result.output
+    assert "idempotent" in result.output

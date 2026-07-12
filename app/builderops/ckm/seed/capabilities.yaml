@@ -1,133 +1,133 @@
 capabilities:
   - id: human-authority-kernel
     name: Human Authority Kernel
-    definition: Durable human knowledge, semantic identity, provenance, authority, policy, and receipts.
+    definition: Owns what must stay trustworthy independent of any machine — human knowledge, who it concerns, where it came from, who may act on it, and the proof that they did. See seed_source for the canonical scope.
     parent: null
     boundary_ref: null
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 1 macro-domains"
   - id: cognitive-context-topology
     name: Cognitive Context & Topology
-    definition: Workspace, scope, active context, principal context, deployment posture, synchronization, and federation.
+    definition: Tracks where the system's attention currently sits and how that state stays coherent as it deploys, replicates, and moves. See seed_source for the canonical scope.
     parent: null
     boundary_ref: null
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 1 macro-domains"
   - id: human-experience
     name: Human Experience
-    definition: Human intent, review, correction, navigation, approval, rejection, and explanation surfaces.
+    definition: The surfaces through which a person states intent, reviews the system's output, and steers or explains its behavior. See seed_source for the canonical scope.
     parent: null
     boundary_ref: null
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 1 macro-domains"
   - id: external-boundary
     name: External Boundary
-    definition: Sources, adapters, providers, tools, egress, and external trust boundaries.
+    definition: Everything the system talks to outside itself, and the trust line drawn at that edge. See seed_source for the canonical scope.
     parent: null
     boundary_ref: null
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 1 macro-domains"
   - id: machine-substrate
     name: Machine Substrate
-    definition: Persistence, derived representations, indexes, projections, and rebuildable machine artifacts.
+    definition: The rebuildable machine-side layer that stores and derives from human-owned knowledge, as distinct from that knowledge itself. See seed_source for the canonical scope.
     parent: null
     boundary_ref: null
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 1 macro-domains"
   - id: cognitive-augmentation
     name: Cognitive Augmentation
-    definition: Retrieval, context assembly, memory, learning, capabilities, agents, and workflows.
+    definition: Finds, remembers, and acts on a human's behalf — search, recall, learning, and agent workflows built on the substrate. See seed_source for the canonical scope.
     parent: null
     boundary_ref: null
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 1 macro-domains"
   - id: governed-execution
     name: Governed Execution
-    definition: Authorized side effects, tool actuation, automation effects, preview, dry run, and rollback.
+    definition: Where authorized intent becomes a real side effect, gated on prior approval and paired with preview/undo. See seed_source for the canonical scope.
     parent: null
     boundary_ref: null
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 1 macro-domains"
   - id: trust-fitness-evolution
     name: Trust, Fitness & Evolution
-    definition: Observability, audit visibility, evaluations, architecture contracts, compatibility, and evolution discipline.
+    definition: Keeps the system honest over time — visibility into what it is doing and whether its own architecture still holds up. See seed_source for the canonical scope.
     parent: null
     boundary_ref: null
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 1 macro-domains"
   - id: hix
     name: Human Interaction & Intent
-    definition: Human-facing surfaces for intent capture, review, approval, correction, explanation, and navigation.
+    definition: Human Experience's concrete surface set, where a person captures intent and reviews, corrects, or gets an explanation. See seed_source for the canonical scope.
     parent: human-experience
     boundary_ref: HIX
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
   - id: wsp
     name: Workspace, Scope & Principal Context
-    definition: Active cognitive context as a governed set of bindings rather than a scalar active vault.
+    definition: Models "where attention currently is" as an explicit, governed binding rather than one implicit global setting. See seed_source for the canonical scope.
     parent: cognitive-context-topology
     boundary_ref: WSP
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
   - id: hka
     name: Human Knowledge & Artifact Substrate
-    definition: Durable human-authored and human-accepted knowledge artifacts that survive machine loss.
+    definition: The store of record for material a human wrote or explicitly accepted, kept intact even if derived state is lost. See seed_source for the canonical scope.
     parent: human-authority-kernel
     boundary_ref: HKA
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
   - id: sip
     name: Semantic Identity & Provenance
-    definition: Rebuildable semantic identity and provenance graph, ontology, lineage, attribution views, and semantic continuity.
+    definition: The rebuildable graph answering "what is this and where did it come from" — identity, lineage, and attribution. See seed_source for the canonical scope.
     parent: human-authority-kernel
     boundary_ref: SIP
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
   - id: gov
     name: Governance, Policy, Authority & Receipts
-    definition: Admissibility, delegation, policy, authority, approval, accountability, and receipts.
+    definition: The authority layer — who may approve what, and the receipt trail proving it happened. See seed_source for the canonical scope.
     parent: human-authority-kernel
     boundary_ref: GOV
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
   - id: ebf
     name: External Boundary Fabric
-    definition: Boundary adapters for sources, providers, tools, editors, parsers, models, embeddings, and egress.
+    definition: The adapter layer at the system's outer edge, through which every source, tool, model, and egress path passes. See seed_source for the canonical scope.
     parent: external-boundary
     boundary_ref: EBF
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
   - id: pdm
     name: Persistence & Data Management
-    definition: Storage abstraction, migrations, backups, restore, data lifecycle, and store health.
+    definition: How data is physically stored, migrated, backed up, and restored, independent of the storage technology chosen. See seed_source for the canonical scope.
     parent: machine-substrate
     boundary_ref: PDM
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
   - id: dri
     name: Derived Representation & Indexing
-    definition: Rebuildable embeddings, chunks, indexes, projections, mirrors, relation overlays, and invalidation.
+    definition: Everything derived from durable data that can be discarded and recomputed on demand. See seed_source for the canonical scope.
     parent: machine-substrate
     boundary_ref: DRI
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
   - id: rca
     name: Retrieval & Context Assembly
-    definition: Moment-specific search, ranking, evidence selection, citation basis, and context bundles.
+    definition: Turns a moment's need into ranked, cited evidence and an assembled context bundle. See seed_source for the canonical scope.
     parent: cognitive-augmentation
     boundary_ref: RCA
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
   - id: mem
     name: Machine Memory & Learning
-    definition: Inspectable machine memory, review, promotion, recall, correction, decay, forgetting, and feedback.
+    definition: The reviewable memory layer — what gets promoted, recalled, corrected, decayed, or forgotten, and why. See seed_source for the canonical scope.
     parent: cognitive-augmentation
     boundary_ref: MEM
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
   - id: cao
     name: Cognitive Capability & Agent Orchestration
-    definition: Reusable cognition, agent roles, planning, workflows, proposals, and non-side-effecting orchestration.
+    definition: Composable cognition and agent behavior that proposes and plans without itself causing a side effect. See seed_source for the canonical scope.
     parent: cognitive-augmentation
     boundary_ref: CAO
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
   - id: exe
     name: Capability Execution & Automation
-    definition: Side-effecting execution after authorization, tool actuation, automation effects, previews, and rollback.
+    definition: Where an authorized proposal actually executes, with preview and rollback as first-class parts of the boundary. See seed_source for the canonical scope.
     parent: governed-execution
     boundary_ref: EXE
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
   - id: sfc
     name: Synchronization, Federation & Consensus
-    definition: Node identity, replicas, sync state, causal ordering, conflict handling, convergence, and distributed receipts.
+    definition: Keeps multiple nodes or replicas of the system in agreement — ordering, conflict resolution, and convergence. See seed_source for the canonical scope.
     parent: cognitive-context-topology
     boundary_ref: SFC
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"
   - id: oef
     name: Observability, Evaluation & Fitness
-    definition: Traces, health, metrics, evaluations, drift detection, audit visibility, and architecture fitness.
+    definition: The feedback loop on the system itself — traces, metrics, evaluation, and whether the architecture is still fit for purpose. See seed_source for the canonical scope.
     parent: trust-fitness-evolution
     boundary_ref: OEF
     seed_source: "docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: Level 2 control-boundary subsystems"

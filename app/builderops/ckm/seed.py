@@ -48,6 +48,7 @@ def load_manifest(path: Path = DEFAULT_MANIFEST_PATH, *, repo_root: Path = REPO_
 
     entries: list[SeedCapability] = []
     seen: set[str] = set()
+    seen_names: set[str] = set()
     for raw in payload["capabilities"]:
         if not isinstance(raw, dict):
             raise SeedManifestError("every capability entry must be a mapping")
@@ -68,9 +69,16 @@ def load_manifest(path: Path = DEFAULT_MANIFEST_PATH, *, repo_root: Path = REPO_
             raise SeedManifestError(f"capability {entry.slug!r} parent must be a slug or null")
         if entry.slug in seen:
             raise SeedManifestError(f"duplicate capability slug: {entry.slug}")
+        if entry.name in seen_names:
+            # CkmStore.upsert_capability dedups on `name` (ON CONFLICT(name)), not
+            # on this manifest's `id`/slug, so two entries that share a `name` but
+            # have different slugs would otherwise silently collapse into one row
+            # on seed, with the later entry overwriting the earlier one.
+            raise SeedManifestError(f"duplicate capability name: {entry.name}")
         if not _source_path(entry.seed_source, repo_root).is_file():
             raise SeedManifestError(f"seed source does not resolve: {entry.seed_source}")
         seen.add(entry.slug)
+        seen_names.add(entry.name)
         entries.append(entry)
 
     by_slug = {entry.slug: entry for entry in entries}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, cast
 
@@ -23,6 +24,7 @@ from app.builderops.ckm_reevaluation import (
     CkmReevaluationError,
     build_ckm_reevaluation_report,
 )
+from app.builderops.ckm.models import CkmValidationError
 from app.builderops.ckm.seed import SeedManifestError, seed_capabilities
 from app.builderops.ckm.store import CkmStore
 from app.builderops.config import BuilderOpsPaths, load_paths
@@ -262,8 +264,14 @@ def builderops(ctx: click.Context, db_path: Path | None) -> None:
 
 
 def _effective_paths(ctx: click.Context) -> BuilderOpsPaths:
+    # ``ckm`` is reachable both nested under the ``builderops`` group (whose
+    # callback populates ``ctx.obj["db_path"]`` via ``--db-path``) and
+    # mounted directly at the standalone CLI root (which has no such
+    # callback, so ``ctx.obj`` is None). Tolerate the missing dict rather
+    # than raising an AttributeError.
+    obj = ctx.obj or {}
     try:
-        return load_paths(db_path_override=ctx.obj.get("db_path"))
+        return load_paths(db_path_override=obj.get("db_path"))
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -344,7 +352,21 @@ def ckm_seed(ctx: click.Context) -> None:
     try:
         result = seed_capabilities(store)
     except SeedManifestError as exc:
+        # Manifest validation runs entirely before any write, so this never
+        # leaves partial store state.
         raise click.ClickException(str(exc)) from exc
+    except (sqlite3.Error, CkmValidationError) as exc:
+        # A write-path failure (e.g. a concurrent writer holding the
+        # BuilderOps sqlite file) can leave the CEG partially seeded, since
+        # each manifest entry upserts in its own transaction rather than one
+        # transaction spanning the whole run. Surface a clear operator
+        # message instead of a raw traceback; re-running `ckm seed` is safe
+        # because seeding is idempotent (INV-CKM-7) and will pick up
+        # wherever it left off.
+        raise click.ClickException(
+            f"ckm seed failed while writing to the store: {exc}. "
+            "Seeding is idempotent; re-run `ckm seed` to resume from where it stopped."
+        ) from exc
     click.echo(f"seeded {result['seeded']} capabilities, {result['changed']} changed")
 
 
