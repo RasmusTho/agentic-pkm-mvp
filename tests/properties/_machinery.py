@@ -98,14 +98,14 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "event-emission and object-materialization -- see formal-model.md T-materialize); "
         "this call is the eventual T-materialize-equivalent write for the API path."
     ),
-    ("app/ingest/vault_alpha.py", 582): (
+    ("app/ingest/vault_alpha.py", 558): (
         "Legacy vault-alpha ingest path: keeps classifier/normalizer flows working "
         "against the memory backend during tests/alpha runs; the alpha ingest pipeline "
         "emits its own ingest event upstream of this call in the same run. Line drifted "
-        "527 -> 555 -> 582 (site unchanged); re-pinned by #3180 (ERE-05) after the "
-        "episode_ref ingest-carry helper + store_payload key were added above it -- the "
-        "census gate only fires when this machinery is touched, so the drift surfaces on "
-        "the first PR to edit this file."
+        "527 -> 555 -> 582 -> 558 (site unchanged); re-pinned by #3180 (ERE-05) -- round-3 "
+        "extracted the episode_ref helper into app/ingest/episode_ref.py, shifting this line "
+        "back up. The census gate only fires when this machinery is touched, so the drift "
+        "surfaces on the first PR to edit this file."
     ),
     ("app/knowledge_acquisition/raw_record.py", 118): (
         "KA-01 immutable raw record (pre-pipeline by design): emitting the default "
@@ -997,3 +997,199 @@ REGISTERED_WRITE_SEAMS: tuple[RegisteredWriteSeam, ...] = (
         unchanged_paths=_mcp_vault_tools_snapshot,
     ),
 )
+
+
+# ---------------------------------------------------------------------------
+# Store-payload episode_ref census (ERE-05, #3180 -- invariant->producers)
+# ---------------------------------------------------------------------------
+#
+# episode_ref is vault-canonical (ERE-03): every producer that rebuilds a
+# note's DB-side store_objects/store_vector_index payload and writes it with
+# FULL-OVERWRITE semantics MUST carry episode_ref forward, or a reingest / cold
+# rebuild blind-drops a stamped binding and retrieval reverts to `unbound`
+# (docs/EPISODE_RESOLUTION_ENGINE/ASSIGN_EPISODE_REF_TO_ARTIFACTS.md). The
+# round-2 and round-3 re-reviews of PR #3520 each found a producer that had
+# missed the carry, so this census makes the rule structural: every
+# store-payload sink call site (``ingest_object``/``index_ingest_object`` and
+# any ``.put(payload=...)``) MUST be classified below, and every site
+# classified as a producer (``carries_*``) MUST be shown to include an
+# ``episode_ref`` key in the payload it passes (checked statically). A NEW
+# unclassified sink, or a ``carries_*`` producer whose payload lacks the key,
+# fails the gate instead of silently reintroducing the durability bug.
+#
+# Classification prefixes:
+#   "carries_frontmatter"     -- builds a fresh note payload and includes
+#                                episode_ref via episode_ref_from_frontmatter.
+#   "carries_unbound_default" -- a source with no frontmatter/no possible
+#                                binding (external raw), carries the honest
+#                                'unbound' sentinel explicitly.
+#   "carries_normalized"      -- normalizes episode_ref from an upstream-authored
+#                                payload (reflection re-ingest of a derived
+#                                artifact) via episode_ref_from_frontmatter.
+#   "transport_passthrough"   -- store/plumbing internals that forward a
+#                                caller-supplied payload dict unchanged; the
+#                                PRODUCING caller carries episode_ref, not this
+#                                transport layer (not a payload producer).
+#   "harness_excluded"        -- dev/CI harness seeder (formal-model.md §2.3),
+#                                never a real vault producer.
+STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
+    ("app/ingest/vault_alpha.py", 592): (
+        "carries_frontmatter: _ingest_single builds store_payload with "
+        "episode_ref_from_frontmatter(frontmatter); store.put projection."
+    ),
+    ("app/ingest/vault_alpha.py", 606): (
+        "carries_frontmatter: same store_payload fed to index_ingest_object "
+        "(store_vector_index projection)."
+    ),
+    ("app/ingest/vault_root.py", 99): (
+        "carries_frontmatter: _ingest_file payload carries "
+        "episode_ref_from_frontmatter(frontmatter); index_ingest_object projection."
+    ),
+    ("app/ingest/vault_root.py", 111): (
+        "carries_frontmatter: same payload (via {**payload, 'text': ...}) fed to "
+        "store.put; round-3 audit repaired this missed producer."
+    ),
+    ("app/cli/alpha_human_flows.py", 120): (
+        "carries_frontmatter: _ingest_note payload carries "
+        "episode_ref_from_frontmatter(frontmatter); index_ingest_object projection."
+    ),
+    ("app/cli/alpha_human_flows.py", 132): (
+        "carries_frontmatter: same payload (via store_payload = {**payload, 'text': ...}) "
+        "fed to store.put; round-3 audit repaired this missed producer."
+    ),
+    ("app/ingest/external.py", 66): (
+        "carries_unbound_default: external raw sources have no frontmatter and are never "
+        "ERE-05 assignment targets (fresh object_id each ingest); honest 'unbound' sentinel."
+    ),
+    ("app/ingest/external.py", 67): (
+        "carries_unbound_default: same payload fed to index_ingest_object."
+    ),
+    ("app/ingest/reflection_consumer.py", 37): (
+        "carries_normalized: reflection re-ingest normalizes episode_ref from the queued "
+        "derived-artifact payload via episode_ref_from_frontmatter (new object_id each time)."
+    ),
+    ("app/cli/smoke.py", 281): (
+        "harness_excluded: smoke ASK-corpus seeder (formal-model.md §2.3), never a real vault "
+        "producer; not on the episode-resolution path."
+    ),
+    ("app/objects/__init__.py", 120): (
+        "transport_passthrough: ObjectStore.save_object forwards dict(obj.payload) to the "
+        "backing store.put; the caller that builds obj.payload carries episode_ref."
+    ),
+    ("app/stores/postgres.py", 100): (
+        "transport_passthrough: PostgresObjectsStore.upsert forwards its caller-supplied "
+        "payload arg to canonical_store.put; not a payload producer."
+    ),
+}
+
+#: Classification prefixes that denote a real payload producer whose payload must contain an
+#: ``episode_ref`` key (checked statically by the census test). Non-producer prefixes
+#: (``transport_passthrough``/``harness_excluded``) are exempt from the key check.
+STORE_PAYLOAD_PRODUCER_PREFIXES: tuple[str, ...] = (
+    "carries_frontmatter",
+    "carries_unbound_default",
+    "carries_normalized",
+)
+_STORE_PAYLOAD_ALL_PREFIXES: tuple[str, ...] = STORE_PAYLOAD_PRODUCER_PREFIXES + (
+    "transport_passthrough",
+    "harness_excluded",
+)
+
+
+def find_store_payload_sink_sites(root: Path = APP_ROOT) -> list[tuple[str, int]]:
+    """AST-scan ``app/**/*.py`` for every store-payload SINK call site.
+
+    A sink is a call to ``ingest_object``/``index_ingest_object`` (the store_vector_index
+    producer) or any ``*.put(..., payload=...)`` (the store_objects producer / its transport).
+    Deliberately returns EVERY site with no filtering -- classification against
+    :data:`STORE_PAYLOAD_SINK_CLASSIFICATION` is the caller's job, so this scanner cannot itself
+    become a new escape hatch (mirrors :func:`find_write_frontmatter_call_sites`). Matches the
+    exact grep the ERE-05 round-3 audit ran: ``index_ingest_object|.put(...payload)``.
+    """
+    sites: list[tuple[str, int]] = []
+    for path in sorted(root.rglob("*.py")):
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        try:
+            tree = ast.parse(source, filename=str(path))
+        except SyntaxError:
+            continue
+        rel = str(path.relative_to(REPO_ROOT))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else (
+                func.attr if isinstance(func, ast.Attribute) else None
+            )
+            has_payload_kw = any(kw.arg == "payload" for kw in node.keywords)
+            if name in ("ingest_object", "index_ingest_object"):
+                sites.append((rel, node.lineno))
+            elif name == "put" and has_payload_kw:
+                sites.append((rel, node.lineno))
+    return sites
+
+
+def _enclosing_function(tree: ast.AST, lineno: int) -> ast.AST | None:
+    best: ast.AST | None = None
+    best_span = None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            start = node.lineno
+            end = getattr(node, "end_lineno", None) or start
+            if start <= lineno <= end:
+                span = end - start
+                if best_span is None or span < best_span:
+                    best, best_span = node, span
+    return best
+
+
+def _dict_keys_reachable(expr: ast.AST, func: ast.AST, seen: set[str] | None = None) -> set[str]:
+    """String keys reachable from ``expr`` as a payload dict, following ``Name`` assignments and
+    ``**unpack`` of names within ``func`` (bounded, guarded against cycles)."""
+    seen = seen if seen is not None else set()
+    keys: set[str] = set()
+    if isinstance(expr, ast.Dict):
+        for k, v in zip(expr.keys, expr.values):
+            if k is None:  # ** unpack
+                keys |= _dict_keys_reachable(v, func, seen)
+            elif isinstance(k, ast.Constant) and isinstance(k.value, str):
+                keys.add(k.value)
+    elif isinstance(expr, ast.Name):
+        if expr.id in seen:
+            return keys
+        seen = seen | {expr.id}
+        for node in ast.walk(func):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == expr.id:
+                        keys |= _dict_keys_reachable(node.value, func, seen)
+    return keys
+
+
+def payload_keys_at_sink(rel_path: str, lineno: int) -> set[str] | None:
+    """Statically resolve the ``episode_ref``-relevant key set of the ``payload=`` argument at the
+    sink call site ``(rel_path, lineno)`` -- ``None`` when the site or its payload arg cannot be
+    resolved (which fails the producer census loudly rather than passing on ambiguity)."""
+    path = REPO_ROOT / rel_path
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except (OSError, SyntaxError):
+        return None
+    func = _enclosing_function(tree, lineno)
+    if func is None:
+        return None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and node.lineno == lineno:
+            payload_arg = None
+            for kw in node.keywords:
+                if kw.arg == "payload":
+                    payload_arg = kw.value
+                    break
+            if payload_arg is None:
+                # positional payload not used by any known sink; treat as unresolved.
+                continue
+            return _dict_keys_reachable(payload_arg, func)
+    return None
