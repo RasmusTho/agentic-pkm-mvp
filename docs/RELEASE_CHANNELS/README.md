@@ -178,11 +178,11 @@ Promotion is the operation that turns an accepted commit on `main` into the runn
 
 1. **Prepare.** Diff `main` against the current `stable` ref. Enumerate:
    - code delta (commits/PRs included);
-   - migration delta (schema changes to apply to `pkm_prod`);
+   - migration delta (schema changes to apply to the current `app` DB under compose project `pkm-prod`);
    - config / settings delta;
    - risk notes (flags, known regressions, acceptance-criteria status of included PRs).
    The prepare phase produces a **promotion plan** the operator can review before executing.
-2. **Execute.** Advance the `stable` ref via a governed PR targeting `stable`. Apply migrations to `pkm_prod`. Restart the prod process from the updated `stable` checkout. Promotion is a single operator-triggered step, not a background automation.
+2. **Execute.** Advance the `stable` ref via a governed PR targeting `stable`. Apply migrations to the current `app` DB under compose project `pkm-prod`. Restart the prod process from the updated `stable` checkout. Promotion is a single operator-triggered step, not a background automation.
 3. **Verify.** Post-promotion health, status, and smoke checks against the running prod. Health must be green against [HEALTH.md](../HEALTH.md) contracts before the promotion is considered accepted.
 4. **Rollback (conditional).** If verification fails, return `stable` through a governed rollback PR, update prod to the merged `origin/stable` rollback commit, reverse any reversible migrations, and restart. Non-reversible migrations must be flagged during prepare so the operator chooses knowingly.
 
@@ -222,7 +222,7 @@ This is a deliberate invariant: the vault is a human cognitive surface, not a de
 
 This capability is docs-authoring at this stage. Task-level verification lives in the task files under this directory once [feature-breakdown](../../.codex/skills/feature-breakdown/SKILL.md) runs. Expected task-level `Verify:` shapes:
 
-- Behavioral ACs pointing at integration tests that exercise channel isolation (e.g. a dev process cannot connect to `pkm_prod`, a dev write cannot hit `vault/`).
+- Behavioral ACs pointing at integration tests that exercise the **target-state, unshipped** channel-isolation split (e.g. a dev process cannot connect to the planned `pkm_prod`, a dev write cannot hit `vault/`).
 - Non-behavioral ACs pointing at doc writeback anchors (this README, ENVIRONMENTS.md update), at the promotion skills under `.codex/skills/`, and at the promotion plan shape when produced.
 
 ## Validation / acceptance path (post-merge)
@@ -261,7 +261,7 @@ entrypoints under `.codex/skills/`, not redefined here.
 ## Relation to other capabilities
 
 - **[ENVIRONMENTS.md](../ENVIRONMENTS.md)** owns environment selection (`PKM_ENVIRONMENT=dev|prod`) and path scoping. This capability extends that model with channel identity, DB-per-channel, and promotion/rollback contracts. ENVIRONMENTS.md must be updated in the same change that creates this spec to drop the "deployment automation OoS" line (which is now partially superseded) and to point operators here for channel-level questions.
-- **[LOCAL_TEST_BOOTSTRAP](../LOCAL_TEST_BOOTSTRAP/)** continues to own the `test` channel's bootstrap golden path. This capability only adds the `pkm_test` DB-per-channel rule.
+- **[LOCAL_TEST_BOOTSTRAP](../LOCAL_TEST_BOOTSTRAP/)** continues to own the `test` channel's bootstrap golden path. The **target-state, unshipped** DB-per-channel split adds the planned `pkm_test` rule.
 - **[HEALTH.md](../HEALTH.md)** owns the health contract used during the verify phase of promotion.
 - **[DB_SCHEMA.md](../DB_SCHEMA.md)** owns schema definition; migration reversibility classification lives there, referenced during the promotion prepare phase.
 - **v6.0 priorities** ([V60_COGNITIVE_SUPPORT_PRIORITIES.md](../plans/V60_COGNITIVE_SUPPORT_PRIORITIES.md)) are orthogonal to this capability. Release channels unblock the operator from actually running the system while the v6.0 priorities continue being built. Without release channels, every v6.0 priority destabilizes the same running instance the operator is trying to use.
@@ -272,7 +272,7 @@ This README is the capability boundary. Task files under this directory are now 
 be treated as the bounded specification set for the release-channels capability:
 
 - `DEFINE_CHANNEL_IDENTITY.md` — channel identity, code ref, DB, vault, runtime-artifact mapping.
-- `SPLIT_POSTGRES_PER_CHANNEL.md` — `pkm_prod` / `pkm_dev` / `pkm_test` logical databases, connection-string resolution through the environment resolver, migration entry points.
+- `SPLIT_POSTGRES_PER_CHANNEL.md` — the **target-state, unshipped** `pkm_prod` / `pkm_dev` / `pkm_test` logical databases, connection-string resolution through the environment resolver, migration entry points.
 - `DEFINE_PROMOTION_PLAN_CONTRACT.md` — shape of the promotion plan produced by `prepare-promotion`.
 - `DEFINE_MIGRATION_REVERSIBILITY_CLASSIFICATION.md` — forward-only vs reversible migration classification and where it's declared.
 - `DEFINE_CONCURRENCY_RULE.md` — separate checkouts for prod and dev processes; how this is actually arranged on a single machine.

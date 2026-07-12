@@ -43,7 +43,7 @@ graph TD
 
   subgraph Platform["Platform / ecosystem"]
     DEPLOY[#2655 env-separation + pinned images #2698<br/>in-flight]
-    SOS[SoS enactment: merge #2888, #2890/#2891, glossary<br/>next]
+    SOS[SoS reconciliation delivered: #2888 closed unmerged; #2890/#2891 closed]
     KAP2[#2795 KAP Phase 2: one YouTube URL e2e<br/>next]
     SOS --> BUS[Layer-2 event-bus substrate<br/>next]
     KCLOSE -.-> BUS
@@ -86,7 +86,7 @@ produces wrong or untrustworthy behavior). Dotted = soft prerequisites (cheaper-
 | #2807 chat artifact via WriteGuard | in-flight | L | M | M | L | L | Closes the last canonical-artifact class writing outside WG |
 | #1956 v6.1 release hub (chat mutation etc.) | in-flight | M | L | H | M | L | Release-channel mechanics exist; the hub is sequencing, not building |
 | #2655/#2698 env separation, pinned images | in-flight | M | M | M | L | M | Operational safety for every later promotion |
-| SoS enactment (merge #2888; #2890/#2891; glossary per ADR-0043 §6) | next | L | M | M | L | L | Pure docs; unblocks coherent naming for Heimdal/Munin/Hugin work |
+| SoS reconciliation (#2888 closed unmerged; #2890/#2891 closed) | delivered | L | M | M | L | L | ADR and glossary reconciliation have landed |
 | #2795 KAP Phase 2 (one YouTube URL e2e) | next | M | L | H | M | L | First acquisition vertical; platform-first precedent; ends at candidate |
 | Layer-2 event-bus substrate | next | H | M | H | H | H | Open Fable design (generalize outbox vs stream-native); **premature before kernel closeout** — the outbox contract is its foundation either way |
 | Heimdal sensor constituent | next | H | L | H | H | M | Consent OFF-default fixed; KAP-backbone question open; O=H (every constituent consumes its stream) but R/M=H (new always-on surface, privacy seam) |

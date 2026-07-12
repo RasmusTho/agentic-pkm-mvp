@@ -36,6 +36,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # INV-EF1 compares the PR head with main and therefore needs a
+          # merge base, not just the two shallow tip commits.
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -93,6 +97,23 @@ jobs:
       - name: Lint (ruff)
         run: |
           ruff check app tests companion-ui/companion-app
+
+      # The public-seam gate compares the PR head with origin/main.  Keep the
+      # remote-tracking ref explicit rather than relying on checkout defaults.
+      # --force: the earlier `fetch-depth: 0` Checkout step already populates
+      # refs/remotes/origin/main with full history. Under main's normal push
+      # cadence, main can advance between that checkout and this step; a
+      # non-forced --depth=1 fetch of the newer tip is then rejected as
+      # "non-fast-forward" because git can't verify shallow ancestry against
+      # the existing full-depth ref (observed on PR #3514, CI Smoke run
+      # 29197410199, twice in a row). This only forces the local
+      # remote-tracking ref forward to whatever origin/main currently is —
+      # it fetches, never pushes, so it cannot lose or overwrite remote data.
+      - name: Fetch public-seam gate base
+        run: git fetch --no-tags --force --depth=1 origin main:refs/remotes/origin/main
+
+      - name: INV-EF1 public seam gate
+        run: python3 scripts/public_seam_lint.py --mode gate
 
       - name: Validate settings
         run: |

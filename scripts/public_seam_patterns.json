@@ -1,0 +1,11 @@
+{
+  "patterns": [
+    {"name": "operator-username", "category": "ii", "regex": "\\bras(?:mus|muss)\\b"},
+    {"name": "personal-home-path", "category": "ii", "regex": "/Users/rasmus(?:/|\\b)"},
+    {"name": "personal-host", "category": "iii", "regex": "\\bdemerzel\\b"},
+    {"name": "personal-machine", "category": "iii", "regex": "\\bmac\\s+mini\\b"},
+    {"name": "vault-midgard", "category": "iv", "regex": "\\bmidg(?:å|a)rd\\b"},
+    {"name": "vault-niflheim", "category": "iv", "regex": "\\bniflheim\\b"},
+    {"name": "vault-bifrost", "category": "iv", "regex": "\\bbifr(?:ö|o)st\\b"}
+  ]
+}

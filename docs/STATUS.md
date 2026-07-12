@@ -71,6 +71,7 @@ promote public internet readiness.
 ## CI & Test Markers
 - CI legs assert `docs/ARCHITECTURE.md` contains fitness guard statements, confirm CLI health smoke commands pass, and verify the worker logs show `worker starting`.
 - The runbook ensures `pytest -q -m "not pg and not alpha_llm"` plus curated fitness gates keep the SoT baseline stable before merges.
+- PR-unit test selection maps Heimdal/Mimer implementation, contract-doc, and test paths to the scoped `tests/heimdal` and `tests/knowledge_acquisition` suites; an unmapped changed surface fails selection before pytest rather than producing a false-green run.
 
 Validation posture note:
 - blocking smoke/release gates are anchored to the active baseline in this document

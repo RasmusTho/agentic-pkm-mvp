@@ -35,6 +35,10 @@
       "$ref": "_defs.schema.json#/$defs/scope_binding",
       "description": "Full scope membership, including multi-scope membership beyond the primary scope_id. Membership is not permission."
     },
+    "episode_ref": {
+      "$ref": "_defs.schema.json#/$defs/episode_ref",
+      "description": "The bounded lived situation (Episode) this object originated in: 'unbound', 'pending', or one or more episode_id references. Always present (the honest default is 'unbound'); never an authority, evidence, or scope-membership upgrade."
+    },
 
     "source_role": { "$ref": "_defs.schema.json#/$defs/source_role" },
     "authority_state": { "$ref": "_defs.schema.json#/$defs/authority_state" },
@@ -100,12 +104,13 @@
     "suppression_state",
     "created_by",
     "created_at",
-    "provenance_event_ids"
+    "provenance_event_ids",
+    "episode_ref"
   ],
   "additionalProperties": false,
   "allOf": [
     {
-      "$comment": "Derived/rebuildable representations must carry provenance lineage (derived_from).",
+      "$comment": "Derived/rebuildable representations must carry provenance lineage (derived_from) AND must not drop episode_ref (docs/architecture/semantic-dimensions.md :: episode_ref) — both survive derivation the same way.",
       "if": {
         "properties": {
           "object_type": {
@@ -118,7 +123,7 @@
         "properties": {
           "derived_from": { "minItems": 1 }
         },
-        "required": ["derived_from"]
+        "required": ["derived_from", "episode_ref"]
       }
     },
     {

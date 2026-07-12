@@ -61,6 +61,9 @@ Records are file-first under
 - `turn-ids/<turn_id>.json` separately reserves each immutable turn identity;
 - `synthesis.json` and `readiness.json` store optional derived artifacts;
 - `receipts/*.json` stores canonical `BuilderOpsReceipt` envelopes.
+- `report.md` is the automatically refreshed, human-readable Markdown projection after a terminal
+  run (and again after readiness evaluation). It is derived from the JSON records and is not an
+  authority surface.
 
 Writes use same-directory temporary files and no-overwrite links, so readers do not observe a
 partially serialized committed artifact. The manifest is the inquiry commit marker. Trace validates

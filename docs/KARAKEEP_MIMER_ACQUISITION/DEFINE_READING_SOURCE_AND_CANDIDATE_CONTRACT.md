@@ -50,6 +50,216 @@ The contract fixes durable Heimdal published evidence + producer cursor separate
 consumer cursor/candidate. Replay and revisions remain deterministic across restarts without a
 distributed transaction.
 
+## Karakeep source item and revision identity
+
+Heimdal's Karakeep adapter is the only component that reads the Karakeep REST API. It canonicalizes
+each saved link, note, or highlight as a source snapshot containing the Karakeep item id, item kind,
+source URL when present, title, saved note/highlight text, tags, upstream creation/update times, and
+the deleted/archived flags exposed by the API. Mimer does not contact Karakeep and never reconstructs
+this source snapshot from a candidate.
+
+Identity is deterministic and revision-aware:
+
+- `source_item_identity = karakeep:<item-id>` is the stable identity of the saved item and becomes
+  `episode_id` for every revision of that item.
+- `content_identity = sha256:<canonical-source-snapshot>` hashes canonical JSON with sorted keys and
+  includes the item id, all evidence-bearing fields, and the deletion flag. Credentials, endpoint
+  values, fetch timestamps, and cursor values are excluded.
+- `publication_profile_identity = sha256:<canonical-publication-stage-versions>` identifies the
+  adapter/attribution/publication-stage profile used to create published evidence from that snapshot.
+- `observation_id = karakeep:<item-id>:<content-identity-hex>:<publication-profile-identity-hex>`
+  identifies one immutable publication. Re-fetching identical content with the same publication
+  profile therefore republishes the same idempotency input and is a no-op.
+- A changed source snapshot creates a new `content_identity` and `observation_id`, sets
+  `supersedes` to the immediately preceding source-snapshot observation, and leaves `revision_of`
+  null.
+- Reprocessing the same canonical snapshot through a changed publication profile creates a new
+  `observation_id` with the same `content_identity`, sets `revision_of` to the preceding
+  publication of that same snapshot, and leaves `supersedes` null.
+- Every appended Karakeep publication—source update, same-snapshot reprocess, or tombstone—uses the
+  next strictly increasing per-item `sequence`; an idempotent re-fetch that appends nothing does not
+  allocate a sequence. This gives all publications sharing `episode_id = karakeep:<item-id>` a
+  deterministic total order.
+- A source deletion is a changed source snapshot with `content: null`,
+  `content_structure.karakeep.tombstone: true`, and `supersedes` naming the preceding live
+  observation. It is not a delete instruction.
+
+## Published-v1 field map
+
+Every saved item is assembled through `app.heimdal.publish.assemble_observation_payload` and
+published through `publish_full_observation`. The adapter supplies the following map; the publisher
+stamps `provenance.content_hash` and validates the result before the append.
+
+| Published-v1 field | Karakeep mapping |
+|---|---|
+| `observation_id` | Immutable revision id defined above. |
+| `episode_id` | Stable `karakeep:<item-id>` source-item identity. |
+| `observed_at_start` | Karakeep `createdAt`; if absent, the first observed upstream timestamp, explicitly reported with `clock_basis: inferred`. |
+| `attributions` | At least the operator-as-recorder attribution from the source-ingestion grant; source authors are additional subject mentions only when the upstream evidence supports them. |
+| `confidence` | Structured `source_integrity`, `attribution`, and `temporal` axes with score, method, and calibration; never a scalar. |
+| `provenance` | `sensor: karakeep_rest`, `capture_chain: [karakeep, karakeep_rest, heimdal_karakeep_adapter]`, the source `content_identity`, opaque `raw_ref`, stage versions, and publisher-stamped `content_hash`. |
+| `sensitivity` | `private` by default; an explicit source policy may only make it stricter. |
+| `consent` | The active operator-owned Karakeep source-ingestion grant (`basis: self_record`, non-empty `grant_ref`); third-party source material is marked, and source text does not invent consent. |
+
+### Optional/nullable published-v1 families
+
+`entity_mentions` is semantically optional: the adapter supplies mentions only when the source
+metadata or content supports them. The sanctioned assembler represents the no-mention case as
+`entity_mentions: []`, so Karakeep adapters use that empty array rather than bypassing the assembler.
+`content` is the minimized saved note/highlight/excerpt and may be null for a link-only item or
+tombstone. `modality` remains null because published-v1 has no text/web
+modality token; adding one requires a separately compatible schema revision. `observed_at_end`,
+`captured_at`, `clock_basis`, `content_structure`, `raw_ref`, `withheld`, and `scope_hint` are populated
+only when their canonical meanings apply. The adapter must not make an optional family required or
+smuggle an endpoint, credential, cursor, or private URL into one.
+
+The following fixture is the executable minimal link/note mapping used by the contract test. It uses
+the assembler-compatible empty `entity_mentions` array and a null modality to prove that neither
+family requires source-derived values.
+
+<!-- karakeep-published-v1-example:start -->
+```json
+{
+  "observation_id": "karakeep:item-42:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "episode_id": "karakeep:item-42",
+  "sequence": 0,
+  "revision_of": null,
+  "supersedes": null,
+  "observed_at_start": "2026-07-10T08:15:00+02:00",
+  "clock_basis": "device_metadata",
+  "captured_at": "2026-07-10T08:16:00+02:00",
+  "attributions": [
+    {
+      "mention_id": "operator-recorder",
+      "role": "recorder",
+      "resolution": "resolved",
+      "confidence": 1.0,
+      "basis": "capture_context"
+    }
+  ],
+  "entity_mentions": [],
+  "modality": null,
+  "content": "A saved note about the linked article.",
+  "content_structure": {
+    "karakeep": {
+      "item_kind": "link",
+      "source_item_identity": "karakeep:item-42",
+      "tombstone": false
+    }
+  },
+  "raw_ref": "raw:karakeep:item-42:aaaaaaaa",
+  "confidence": {
+    "source_integrity": {
+      "score": 1.0,
+      "method": "karakeep_api_snapshot",
+      "calibration": "by_construction"
+    },
+    "attribution": {
+      "score": 1.0,
+      "method": "operator_source_grant",
+      "calibration": "by_construction"
+    },
+    "temporal": {
+      "score": 1.0,
+      "method": "karakeep_created_at",
+      "calibration": "by_construction"
+    }
+  },
+  "provenance": {
+    "sensor": "karakeep_rest",
+    "capture_chain": ["karakeep", "karakeep_rest", "heimdal_karakeep_adapter"],
+    "content_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "content_identity": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "stage_versions": {"karakeep_adapter": "contract-v1"},
+    "raw_ref": "raw:karakeep:item-42:aaaaaaaa"
+  },
+  "sensitivity": "private",
+  "scope_hint": "operator_reading_inbox",
+  "consent": {
+    "basis": "self_record",
+    "granted_by": "operator",
+    "third_party": "marked",
+    "grant_ref": "grant:karakeep-source-ingestion"
+  }
+}
+```
+<!-- karakeep-published-v1-example:end -->
+
+The following lineage fixture distinguishes an upstream source update from a reprocess of the same
+snapshot. KMA-04 uses the immutable `observation_id` for its per-revision candidate lineage.
+
+<!-- karakeep-published-v1-lineage-example:start -->
+```json
+{
+  "prior_observation_id": "karakeep:item-42:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "prior_content_identity": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "prior_sequence": 0,
+  "source_update": {
+    "observation_id": "karakeep:item-42:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "content_identity": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "sequence": 1,
+    "revision_of": null,
+    "supersedes": "karakeep:item-42:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "same_snapshot_reprocess": {
+    "observation_id": "karakeep:item-42:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "content_identity": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "sequence": 2,
+    "revision_of": "karakeep:item-42:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "supersedes": null
+  },
+  "tombstone": {
+    "observation_id": "karakeep:item-42:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "content_identity": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "sequence": 3,
+    "revision_of": null,
+    "supersedes": "karakeep:item-42:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "tombstone": true
+  }
+}
+```
+<!-- karakeep-published-v1-lineage-example:end -->
+
+## Canonical publication and cursor seam
+
+The adapter calls only `publish_full_observation`; it does not create a Karakeep topic or log. Its
+source checkpoint advances only after published evidence is durable. That checkpoint records the
+upstream page/cursor plus the last durable item revision and is Heimdal-owned.
+
+Mimer reads the same append-only observation log only through
+`read_observations_for_consumer` and advances only through
+`advance_cursor_for_consumer`. Its one consumer id remains `mimer.candidate_projector`. The current
+projector advances a whole non-empty batch after attempting its writes; KMA-04 must change that
+behavior before enabling Karakeep projection so it advances only the contiguous durable prefix of
+rows whose candidate materialization returns `written` or `already_exists`. A WriteGuard refusal or
+item-scoped failure stops advancement at that row; later successful rows remain replayable rather
+than being allowed to skip it. A future durable per-item failure disposition may make a failed row
+safely advanceable only when its replay/audit evidence is persisted and tested. KMA-04's
+production-call-site regression must cover a blocked middle row followed by a successful row.
+Source and consumer cursors are independent and never participate in one transaction.
+
+## Additive Mimer candidate mapping
+
+KMA-04 extends the shipped `app.heimdal.candidate_projection.project_pending_candidates` branch for
+events whose `provenance.sensor` is `karakeep_rest`; it does not add another consumer, projector, or
+read API. Its Karakeep source-discriminated branch must preserve one candidate per immutable
+`observation_id` rather than applying the generic `episode_id` fold, because a Karakeep item shares
+an episode identity across source updates, reprocesses, and tombstones. It must cover two source
+revisions plus a tombstone in one production-call-site batch test. The branch quarantines observed
+content and materializes via the existing guarded `write_candidate_note`/WriteGuard call site.
+
+The additive projection is a `reading_source_note` with `requires_review: true`,
+`review_state: draft`, `source_authoritative: false`, and full Karakeep/Heimdal provenance. Its
+deterministic first-write-wins path is
+`Sources/Reading/Karakeep/<item-id>-<revision-prefix>.md`, where `revision-prefix` derives from the
+immutable `observation_id`. Replay of the same revision returns `already_exists`; a source update
+or same-snapshot reprocess creates new lineage at a new deterministic path and never deletes or
+overwrites a prior or human-reviewed note. A published source tombstone creates a review-required
+tombstone candidate linked to the prior revision; it never deletes or overwrites the prior candidate.
+
+The boundary forbids `/api/capture`, forbids `companion capture`, and forbids `Karakeep MCP`. It
+also forbids embedded endpoint or credential values in code, fixtures, events, notes, or receipts.
+
 ## Acceptance Criteria
 
 - [ ] Contract assigns Karakeep fetch, identity, revision, provenance, attribution/entity mentions,

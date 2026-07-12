@@ -62,6 +62,7 @@ The SBS is described across several docs, each with a single owner. Do not dupli
 | Review-gate fallback policy | this doc §12 | What to do when a required automated review gate is unavailable. |
 | Builder System boundary, authority model, and artifact map | this doc §3 | Defines the continuous-development enabling system, its relationship to the Product/Runtime SBS and CES, how builder agents classify Product, Builder, and boundary work, and the owner/authority/writeback map for Builder System artifacts and workflows. |
 | Builder Learning, evaluation, and TCD governance loop | this doc §3 + `docs/development/DELIVERY_FEEDBACK_LOOP.md` | Defines the allowed inputs, durable destinations, TCD signals, reevaluation inputs, terminal outcomes, and promotion path for builder learning without contaminating Product/Runtime memory. |
+| Cross-repo constituent-surface governance | `docs/adr/ADR-0050-cross-repo-governance-and-bifrost-client-repo.md` | Owns the accepted Bifrost constituent-repo decision and the hub tracking posture; this operating model owns the Builder System's classification and process implications. |
 
 This matrix is the **source-of-truth verification matrix** required for SBS operationalization. If a new SBS concern appears, add a row here naming exactly one owner doc.
 
@@ -80,6 +81,21 @@ PR governance, CI and architecture fitness, release/UAT/promotion workflows, own
 delivery receipts, BuilderOps Vault records and projections, TCD governance, and builder-learning
 feedback loops. It also includes external model, tool, GitHub, CI, and connector dependencies when
 they are used to produce or verify repo-governed changes.
+
+### Cross-repo constituent-surface scope
+
+The Builder System may govern a constituent-surface repository as well as this hub repository when
+an accepted decision names that relationship. ADR-0050 is the owner decision for the Bifrost
+constituent-surface repository (`RasmusTho/bifrost`); it keeps cross-repo tracking in this hub and
+does not make Bifrost a Builder System or a Product/Runtime SBS subsystem. Work in that repository
+is classified against this model: the constituent surface is Product/Runtime System work built by
+the Builder System, and changes to the governing route are boundary work.
+
+Hub `_shared` skill contracts that Bifrost mirrors are an explicitly **unchecked transition
+posture**, not a synchronization guarantee: drift is accepted only as visible debt until a governed
+cross-repo check or an explicit waiver replaces it. D18 and D19 in
+`SBS_TRANSITION_DEBT.md` carry the learning-capture and repo-parametrization consequences; this
+statement does not restate or supersede ADR-0050.
 
 The Builder System is **not** a Product/Runtime SBS subsystem. It is an enabling system around the
 Product/Runtime System. Classifying work as Builder System work does not claim shipped runtime

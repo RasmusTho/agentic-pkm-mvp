@@ -19,7 +19,7 @@ This feature specifies the release-channels capability: channel identity, DB-per
 
 ## Scope
 
-Produce a specification directory at `docs/RELEASE_CHANNELS/` that:
+Produce a specification directory at `docs/RELEASE_CHANNELS/` that defines the following **target-state, unshipped** capability (the current production DB remains `app` under compose project `pkm-prod`):
 
 - Defines the three channels (stable, dev, test) and maps them onto the existing environment model.
 - Declares four identity properties per channel: code ref, DB name, vault root, runtime-artifact directory.
@@ -131,7 +131,7 @@ Capability-level: verification of the capability as a whole lives in the validat
 Post-merge validation receipts accumulate on this issue as comments or checklist progress:
 
 - [ ] Stable channel runs unsupervised against the real vault for a bounded soak window (receipt: operator note + timestamp).
-- [ ] Dev session exercises schema change, vault reset, and runtime restart on `pkm_dev` / `vault-dev/` without touching `pkm_prod` / real vault (receipt: dev session log).
+- [ ] After the **target-state, unshipped** per-channel DB split lands, a dev session exercises schema change, vault reset, and runtime restart on `pkm_dev` / `vault-dev/` without touching `pkm_prod` / real vault (receipt: dev session log).
 - [ ] End-to-end promotion completed with a recorded promotion plan (receipt: plan file path + timestamp).
 - [ ] Rollback rehearsed in a controlled setting with migration reversal exercised (receipt: rollback run log).
 

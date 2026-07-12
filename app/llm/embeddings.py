@@ -10,6 +10,7 @@ import httpx
 
 from app.config.llm import get_provider
 from app.embedding_config import assert_embed_dim, get_embed_dim, l2_normalize
+from app.settings.env_defaults import env_float
 from app.llm.endpoints import require_ollama_base_url
 
 logger = logging.getLogger(__name__)
@@ -392,7 +393,7 @@ def _embed_single(text: str, provider: str, model: str, dim: Optional[int]) -> t
     if adapter is None:
         raise ValueError(f"Unsupported embedding provider: {provider!r}")
 
-    timeout = float(os.getenv("LLM_TIMEOUT", "60"))
+    timeout = env_float("LLM_TIMEOUT")
 
     # Oversized note: embed each in-window chunk and mean-pool so a single long
     # note cannot exceed the provider's input budget and abort the whole index

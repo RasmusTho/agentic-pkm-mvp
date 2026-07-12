@@ -43,6 +43,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.objects import DomainObject, ObjectStore
 from app.observability.log import json_log
 
@@ -105,6 +106,15 @@ def persist_raw_record(
     record_payload.setdefault("source_kind", source_kind)
     record_payload.setdefault("item_ref", item_ref)
     record_payload.setdefault("acquired_at", time.time())
+    # Carry episode_ref (ERE-03/ERE-05, invariant->producers): a raw acquisition record is a
+    # frontmatter-less external source and never an ERE-05 assignment target, so the honest
+    # vault-canonical value is the 'unbound' sentinel -- normalized from whatever the caller's
+    # payload carries (kept if a valid binding, else 'unbound'), never left absent. The {**...}
+    # rebuild keeps this an explicit dict literal so the store-payload census can see the key.
+    record_payload = {
+        **record_payload,
+        "episode_ref": episode_ref_from_frontmatter(record_payload),
+    }
 
     domain_object = DomainObject(
         uuid=str(object_id),

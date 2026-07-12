@@ -5,7 +5,7 @@ Owner: OEF — Observability, Evaluation & Fitness (registry); CES practice (rul
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: canonical (invariant → probe mapping); subordinate to the doctrine, ontology, semantic dimensions, contracts, and boundary charters it maps
-Last reviewed: 2026-06-27
+Last reviewed: 2026-07-11
 Last verified against: docs/architecture/traceability-matrix.md, docs/foundation/00-yggdrasil-doctrine.md, docs/architecture/semantic-dimensions.md, docs/architecture/cross-scope-flow.md, docs/architecture/metadata-bundle.md, docs/architecture/context-envelope.md, docs/architecture/memory-model.md, docs/architecture/authority-transition-flow.md, docs/architecture/retrieval-contract.md, docs/boundaries/README.md, schemas/README.md
 
 # Mimer Invariant Test Registry
@@ -68,6 +68,18 @@ blocks the structurally-expressible part, the skeleton holds the cross-field or 
 declarative-schema-impossible and therefore live here as the source of truth.
 
 ## Registry
+
+### inv_ef1_public_private_seam
+
+- **Purpose:** The public repository carries no secret-shaped values, and every retained personal binding has an owned, per-artifact INV-EF1 register row rather than an unreviewed baseline exception.
+- **Protected principle:** INV-EF1 public/private operator-invariance (`docs/architecture/ecosystem-federation.md` § Public/private invariant).
+- **Affected boundaries:** CES / Builder System public seam; GitHub Actions CI.
+- **Required fixture / data:** `scripts/public_seam_patterns.json` and `docs/architecture/inv-ef1-register.json`.
+- **Expected failure mode:** A PR adds a secret-shaped value, or adds an operator-bound identifier without an owned register row.
+- **Current enforcement:** `static_test` — GATE scans changed content in PR CI; DOCTOR reconciles stale register rows, uncovered drift, and pending migrations across the tracked tree.
+- **Eventual test path:** `tests/scripts/test_public_seam_lint.py`.
+- **Related docs / contracts / ADRs:** `docs/adr/ADR-0046-inv-ef1-public-private-seam.md`; `docs/architecture/SBS_TRANSITION_DEBT.md`.
+- **Related issues:** #2892.
 
 ### capture_stamps_scope
 
@@ -779,16 +791,24 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 - **Protected principle:** matrix #3, #16 (provenance/context survives derivation); doctrine — an
   artifact's lived context is part of what it means.
 - **Affected boundaries:** SIP, DRI, RCA, HKA.
-- **Required fixture / data:** a future capture/Episode runtime; the `episode_ref` dimension
-  ([semantic-dimensions](../architecture/semantic-dimensions.md)); [ADR-0051](../adr/ADR-0051-episode-as-ontological-primitive.md).
+- **Required fixture / data:** the `episode_ref` dimension
+  ([semantic-dimensions](../architecture/semantic-dimensions.md)); the metadata bundle schema
+  (`schemas/metadata-bundle.schema.json`); [ADR-0051](../adr/ADR-0051-episode-as-ontological-primitive.md).
 - **Expected failure mode:** a segment/projection/retrieval result drops `episode_ref`, so an
   observation can no longer be traced to the situation that produced it and closure-driven decay
   cannot apply.
-- **Current enforcement:** `future_runtime` (Episode entity + dimension defined by ADR-0051; no
-  capture runtime or test skeleton yet — probe named for when the slice lands).
-- **Eventual test path:** `tests/invariants/test_episode_binding.py::test_observation_episode_binding_survives` (future).
-- **Related docs / contracts / ADRs:** [semantic-dimensions](../architecture/semantic-dimensions.md) (`episode_ref`), [functional-ontology](../architecture/functional-ontology.md) (`Episode`); ADR-0051, ADR-0029.
-- **Related issues:** none yet (downstream capture epic; grounded in [EPISODE_AS_ONTOLOGICAL_PRIMITIVE](../research/EPISODE_AS_ONTOLOGICAL_PRIMITIVE.md)).
+- **Current enforcement:** `schema_enforced` (`episode_ref` is a required bundle field; the
+  derived-types `allOf` conditional requires it alongside `derived_from`) + `runtime_test` (derivation
+  runtime, `mimer_runtime.dri.derive_segment` propagates the source's binding — unbound, pending, or
+  bound). Scope: the field-threading and derivation-survival half of this invariant was enforced by
+  #3178 / ERE-03; real episode-id assignment (`app.episodes.assignment.compute_assignments`, #3180 /
+  ERE-05) now feeds a real computed decision through the same production derivation path
+  (`test_observation_episode_binding_survives__ere05_end_to_end`) as an additional end-to-end case.
+  Episode-closure-driven relevance decay (the Event Horizon model, ADR-0058) and retrieval
+  consumption of `episode_ref` remain `future_runtime` — that lands in ERE-06.
+- **Runtime test path:** `tests/invariants/test_episode_binding.py::test_observation_episode_binding_survives` (runtime — passes).
+- **Related docs / contracts / ADRs:** [semantic-dimensions](../architecture/semantic-dimensions.md) (`episode_ref`), [functional-ontology](../architecture/functional-ontology.md) (`Episode`), [metadata-bundle](../architecture/metadata-bundle.md) §1/§3/§4; ADR-0051, ADR-0029, ADR-0058.
+- **Related issues:** #3178 (ERE-03), #3180 (ERE-05, end-to-end case); grounded in [EPISODE_AS_ONTOLOGICAL_PRIMITIVE](../research/EPISODE_AS_ONTOLOGICAL_PRIMITIVE.md).
 
 ## Vault multi-writer consistency invariants (ADR-0055)
 
@@ -878,7 +898,7 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 | authority_transition_state_is_consistent | #9 | GOV | schema + static | `tests/invariants/test_authority_transition.py` |
 | context_bundle_is_not_context_envelope | #7,#8 | RCA/CAO | schema + static | `tests/invariants/test_context_envelope.py` |
 | storage_write_is_not_authority_transition | #9,#12 | PDM/GOV | doc + xfail | `tests/invariants/test_authority_transition.py` (xfail) |
-| observation_episode_binding_survives | #3,#16 | SIP/DRI/RCA | future_runtime | `tests/invariants/test_episode_binding.py` (future) |
+| observation_episode_binding_survives | #3,#16 | SIP/DRI/RCA | schema + runtime | `tests/invariants/test_episode_binding.py` |
 | propose_when_uncertain | #17 | CAO/GOV/HIX | doc + xfail | `tests/invariants/test_context_envelope.py` (xfail) |
 | standards_are_adapters | #18 | EBF/SIP/CES | doc_only | `TBD` (CES review) |
 | connect_proposals_candidate_only | #9 | GOV/RCA | static + runtime | `tests/invariants/test_expansion_invariants.py`, `tests/expansion/test_connect_findings.py` |
@@ -908,6 +928,31 @@ per HEIM-1..14, each xfail (honestly, via a Heimdal-local `require_future_heimda
 [`tests/invariants/_helpers.py::require_future_runtime`](../../tests/invariants/_helpers.py)) or, where
 Heimdal slices A3/A5/A6 already discharge the invariant for real (HEIM-3, HEIM-8, HEIM-9), calling the
 real production path directly so a regression would fail the test rather than silently re-xfail.
+
+## Settings Spine invariants (SET-1..7)
+
+The Settings Spine (feature #3156, Option B ruling) consolidates five settings substrates into two
+scopes and one spine. Each SET invariant below is a fitness rule the spine must satisfy; they are
+added as their child slices land.
+
+### single_default_registry
+
+- **Purpose:** Every behavior-shaping environment default is declared exactly once; no call site
+  re-inlines a literal default (`os.getenv("KEY", "literal")`) for a registered key, so two components
+  can never silently disagree about one knob.
+- **Protected principle:** SET-4 (one declaration per behavior-shaping default); prevents the
+  five-substrate split-truth divergence from regrowing at new call sites.
+- **Affected boundaries:** WSP (settings resolution).
+- **Required fixture / data:** the registry `app/settings/env_defaults.py::ENV_DEFAULTS`; a synthetic
+  offending source file for the negative case.
+- **Expected failure mode:** the same env knob resolves to different defaults at different call sites
+  (audit F3: `LLM_TIMEOUT` → 12s/60s/120s; `WATCHER_ENABLE` → "0"/"1") with nobody having decided the
+  value.
+- **Current enforcement:** `static_test` — delivered by #3160 (SETTINGS-02).
+- **Eventual test path:** `tests/architecture/test_single_default_registry.py` (passes today).
+- **Related docs / contracts:** `docs/SETTINGS_SPINE/SINGLE_DEFAULT_REGISTRY.md`,
+  `docs/audits/SETTINGS_ARCHITECTURE_2026-07-07.md :: F3`.
+- **Related issues:** #3160; parent #3156.
 
 ## Related documents
 

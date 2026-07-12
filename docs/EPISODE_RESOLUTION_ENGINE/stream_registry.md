@@ -90,16 +90,16 @@ streams:
     owner_constituent: Heimdal
     notes: "attention log, daily attention/YYYY-MM-DD.md"
 
-  # --- planned ----------------------------------------------------------
   - stream_id: calendar
-    status: planned
-    transport: "caldav_ics_poll"
+    status: live
+    transport: "module:app.episodes.calendar_stream"
     dimensions_fed: [time, protagonist, space, goal]
     consent_class: per_calendar_scope_mapping
     cadence: sparse
     owner_constituent: "external via C3"
-    notes: "ERE-09; read-only CalDAV/ICS poll, credentials in private-bindings"
+    notes: "ERE-09 (#3184); read-only CalDAV/ICS poll, credentials in private-bindings, no register mutation"
 
+  # --- planned ----------------------------------------------------------
   - stream_id: bifrost.native_capture
     status: planned
     transport: "governed_capture_api"
