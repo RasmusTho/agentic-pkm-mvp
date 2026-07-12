@@ -742,6 +742,7 @@ def test_non_atomic_lifecycle_write_does_not_manufacture_false_recut(
     report a re-cut and must NOT relabel accepted->re-cut -- and must self-heal the stale baseline."""
     vault_root = tmp_path / "vault"
     _stub_bindings(monkeypatch)
+    sync_calls = _stub_projection_sync(monkeypatch)
     fake_state = _install_fake_engine_state(monkeypatch)
 
     episode_id = "ep-fa11ed00-1111-4111-8111-111111111111"
@@ -767,6 +768,14 @@ def test_non_atomic_lifecycle_write_does_not_manufacture_false_recut(
 
     # Self-heal: the stale baseline label was refreshed to the on-disk truth.
     assert fake_state.all_state_with_prefix("episode_recut_state:")[baseline_key]["segmentation"] == "accepted"
+
+    # Code-review round-1 finding (#3538): the self-heal branch must ALSO (re)sync the
+    # projection -- this exact signature (cut hash matches, tracked label lags on-disk) is
+    # indistinguishable from "the earlier _write_relabeled call's own projection sync failed
+    # transiently and was never retried," so self-heal must not silently skip it.
+    self_heal_syncs = [f for eid, f in sync_calls if eid == episode_id]
+    assert self_heal_syncs, "self-heal must (re)sync the projection, not just the in-memory baseline"
+    assert self_heal_syncs[-1]["segmentation"] == "accepted"
 
 
 # ---------------------------------------------------------------------------
@@ -1013,3 +1022,73 @@ def test_further_edit_to_already_recut_episode_still_syncs_projection(
     _sql, params = update_calls[-1]
     assert params[3] == "2026-07-11T12:00:00+00:00"  # the SECOND edit's widened bound synced too
     assert params[-1] == episode_id
+
+
+# ---------------------------------------------------------------------------
+# Code-review round-1 fix on #3538: the two branches that call _sync_projection_row without
+# going through write_episode_note (already-re-cut further edit; self-heal) must assert the
+# guard themselves, mirroring app.episodes.closure.close_episode's identical "already closed"
+# branch fix.
+# ---------------------------------------------------------------------------
+
+
+def _blocked_guard() -> WriteGuard:
+    return WriteGuard(lambda: {"state": "safe_mode", "reason": "review-fix test"})
+
+
+def test_further_edit_to_already_recut_episode_honors_blocked_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A blocked WriteGuard must prevent the already-re-cut "further edit" branch's own DB write
+    (there is no `write_episode_note` call on this branch to provide an implicit guard check)."""
+    vault_root = tmp_path / "vault"
+    _stub_bindings(monkeypatch)
+    _install_fake_engine_state(monkeypatch)
+
+    episode_id = "ep-cccccccc-2222-4333-8444-555555555555"
+    _write_initial(vault_root, episode_id=episode_id, segmentation="proposed")
+
+    conn = _ProjectionSyncConn({episode_id})
+    monkeypatch.setattr(recut_module, "conn_rw", lambda *a, **k: conn)
+
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 5))
+    _edit_note_directly(vault_root, episode_id, protagonists=[])
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 10))  # -> re-cut
+
+    _edit_note_directly(vault_root, episode_id, **{"time.end": "2026-07-11T12:00:00+00:00"})
+    update_count_before = len([c for c in conn.calls if c[0].strip().upper().startswith("UPDATE")])
+
+    from app.write_guard import WritesBlockedError
+
+    with pytest.raises(WritesBlockedError):
+        run_recut_tick(vault_root=vault_root, write_guard=_blocked_guard(), now=_dt(10, 15))
+
+    update_count_after = len([c for c in conn.calls if c[0].strip().upper().startswith("UPDATE")])
+    assert update_count_after == update_count_before, "a blocked guard must prevent the projection UPDATE"
+
+
+def test_self_heal_honors_blocked_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A blocked WriteGuard must prevent the self-heal branch's own (re)sync DB write."""
+    vault_root = tmp_path / "vault"
+    _stub_bindings(monkeypatch)
+    _install_fake_engine_state(monkeypatch)
+
+    episode_id = "ep-dddddddd-2222-4333-8444-555555555555"
+    _write_initial(vault_root, episode_id=episode_id, segmentation="proposed")
+
+    conn = _ProjectionSyncConn({episode_id})
+    monkeypatch.setattr(recut_module, "conn_rw", lambda *a, **k: conn)
+
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 0))
+    # Model the torn state directly (bypasses recut's own bookkeeping): cut unchanged, only the
+    # on-disk segmentation moves ahead of the tracked baseline -- self-heal's exact trigger.
+    _edit_note_directly(vault_root, episode_id, segmentation="accepted")
+    update_count_before = len([c for c in conn.calls if c[0].strip().upper().startswith("UPDATE")])
+
+    from app.write_guard import WritesBlockedError
+
+    with pytest.raises(WritesBlockedError):
+        run_recut_tick(vault_root=vault_root, write_guard=_blocked_guard(), now=_dt(10, 5))
+
+    update_count_after = len([c for c in conn.calls if c[0].strip().upper().startswith("UPDATE")])
+    assert update_count_after == update_count_before, "a blocked guard must prevent the projection UPDATE"

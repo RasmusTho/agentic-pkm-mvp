@@ -111,6 +111,17 @@ def _assert_schema(conn: Any) -> None:
             f"Missing table '{EPISODES_TABLE}'. {_EPISODES_SCHEMA_MIGRATION_HINT}"
         )
 
+
+#: Distinct action string (code-review round-1 fix, mirrors
+#: ``app.episodes.closure.EPISODE_CLOSURE_RECONCILE_ACTION``'s per-seam-action pattern) for
+#: :func:`run_recut_tick`'s two branches that call :func:`_sync_projection_row` WITHOUT going
+#: through ``write_episode_note`` first (the already-re-cut "further edit" branch, and the
+#: self-heal branch): neither is covered by ``write_episode_note``'s own internal
+#: guard-at-seam check, so each asserts the guard itself, exactly once, using this module's own
+#: action string rather than ``app.episodes.store.EPISODE_WRITE_ACTION`` (which names the
+#: vault-note write seam specifically and is never reached on these branches).
+EPISODE_RECUT_RECONCILE_ACTION: Final[str] = "episodes.recut_reconcile"
+
 # ---------------------------------------------------------------------------
 # Named, single-sourced quiet-window constant (AC5; RQ-E1 open research, mirrors
 # app.episodes.segmenter.TIME_GAP_MINUTES's provisional-constant discipline).
@@ -456,6 +467,12 @@ def run_recut_tick(
                 # state.content_hash just proved), so the projection must still be synced here,
                 # explicitly, from the current on-disk fields (no note rewrite occurs on this
                 # branch; _sync_projection_row is otherwise only reachable via _write_relabeled).
+                # Guard placement (code-review round-1 finding, mirrors
+                # app.episodes.closure.close_episode's identical "already closed" branch fix):
+                # this branch's own DB write is not covered by write_episode_note's internal
+                # guard-at-seam check (no such call happens here), so it must assert the guard
+                # itself before issuing the UPDATE.
+                write_guard.assert_writes_allowed(EPISODE_RECUT_RECONCILE_ACTION)
                 _sync_projection_row(episode_id, fields)
                 logger.info(
                     "recut: further operator edit detected for already-re-cut episode %s", episode_id
@@ -473,6 +490,19 @@ def run_recut_tick(
             # preserving the acceptance-by-silence aging clock. This makes writer-identity
             # detection self-correcting: a missed baseline write can never manufacture a false
             # re-cut on a later tick.
+            #
+            # Code-review round-1 finding (#3538): this signature is ALSO exactly what a FAILED
+            # _sync_projection_row retry looks like on the next tick -- e.g. the accept-by-silence
+            # _write_relabeled call below (see the acceptance-by-silence block) echoes the cut back genuinely UNCHANGED (only
+            # segmentation differs), so if its projection sync raised transiently after
+            # write_episode_note already succeeded, the next tick's cut hash still matches (hash
+            # excludes segmentation) and lands here. Retry the sync here too -- idempotent by
+            # construction, so a call that was already synced costs one no-op UPDATE -- otherwise
+            # this branch would silently absorb a genuinely pending sync retry and leave the
+            # projection permanently stale for that episode. Same guard-placement reasoning as the
+            # already-re-cut branch above: no write_episode_note call happens on this branch.
+            write_guard.assert_writes_allowed(EPISODE_RECUT_RECONCILE_ACTION)
+            _sync_projection_row(episode_id, fields)
             _record_baseline(episode_id, fields, first_seen_at=state.first_seen_at)
             logger.info(
                 "recut: self-healed stale baseline label for episode %s (baseline=%s, on-disk=%s)",
@@ -506,6 +536,7 @@ def run_recut_tick(
 
 __all__ = [
     "ACCEPTANCE_QUIET_WINDOW_MINUTES",
+    "EPISODE_RECUT_RECONCILE_ACTION",
     "EpisodeRecutSchemaMissingError",
     "SEGMENTATION_ACCEPTED",
     "SEGMENTATION_PROPOSED",
