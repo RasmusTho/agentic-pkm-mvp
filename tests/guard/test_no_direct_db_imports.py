@@ -78,6 +78,12 @@ ALLOW_FILES = (
     # (_sync_projection_row), keeping it current with an operator's re-cut edits; same bounded
     # conn_rw pattern as app/episodes/closure.py.
     'app/episodes/recut.py',
+    # Episode creation -> episodes projection sync (#3532, ERE-02 follow-up, mirrors #3181's
+    # app/episodes/closure.py entry above). A targeted incremental INSERT ... ON CONFLICT DO
+    # NOTHING over the rebuildable `episodes` projection, issued from the note-creation write
+    # path itself (_sync_new_episode_row) right after write_episode_note mints a brand-new
+    # note; same bounded conn_rw pattern as app/episodes/closure.py / recut.py.
+    'app/episodes/segmenter.py',
     'app/store/relation_index.py',
     'app/memory_kv/store.py',
     'app/agent/repository.py',
