@@ -100,8 +100,17 @@ jobs:
 
       # The public-seam gate compares the PR head with origin/main.  Keep the
       # remote-tracking ref explicit rather than relying on checkout defaults.
+      # --force: the earlier `fetch-depth: 0` Checkout step already populates
+      # refs/remotes/origin/main with full history. Under main's normal push
+      # cadence, main can advance between that checkout and this step; a
+      # non-forced --depth=1 fetch of the newer tip is then rejected as
+      # "non-fast-forward" because git can't verify shallow ancestry against
+      # the existing full-depth ref (observed on PR #3514, CI Smoke run
+      # 29197410199, twice in a row). This only forces the local
+      # remote-tracking ref forward to whatever origin/main currently is —
+      # it fetches, never pushes, so it cannot lose or overwrite remote data.
       - name: Fetch public-seam gate base
-        run: git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main
+        run: git fetch --no-tags --force --depth=1 origin main:refs/remotes/origin/main
 
       - name: INV-EF1 public seam gate
         run: python3 scripts/public_seam_lint.py --mode gate
