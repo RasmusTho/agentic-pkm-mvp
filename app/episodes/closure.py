@@ -54,7 +54,7 @@ from app.db.db import conn_rw
 from app.episodes.assignment import BINDING_STATE_ACTIVE, BINDING_TABLE
 from app.episodes.notes import parse_episode_note
 from app.episodes.segmenter import TIME_GAP_MINUTES
-from app.episodes.store import write_episode_note
+from app.episodes.store import EPISODE_WRITE_ACTION, write_episode_note
 from app.events.models import new_event
 from app.events.types import EPISODE_CLOSED
 from app.jobs.episodes_projection import EPISODES_TABLE
@@ -234,7 +234,17 @@ def close_episode(
     update is permanently lost to a crash between the note write and these two follow-up writes.
     ``event_emitted`` on the returned result reflects whether THIS call's outbox insert was the one
     that actually landed (``write_outbox_event``'s non-empty return) vs. a deduped retry.
+
+    Guard-at-TOP (review-round fix): the reconciliation branch above performs two real DB writes
+    (outbox insert, projection UPDATE) even when the note rewrite itself is skipped, so this
+    function can no longer rely on ``write_episode_note``'s own internal guard check as an implicit
+    proxy gate for the whole function (that worked only while every write path funneled through
+    it). Asserted here explicitly and FIRST, before any write of any kind -- mirrors
+    ``app.episodes.assignment.commit_assignment_diff``'s own guard-at-top discipline for a function
+    that, like this one, performs DB writes beyond the vault-note seam.
     """
+    write_guard.assert_writes_allowed(EPISODE_WRITE_ACTION)
+
     root = Path(vault_root)
     note_abs = root / candidate.note_path
     try:
@@ -253,8 +263,10 @@ def close_episode(
 
     if not already_closed:
         # Guard-at-seam (mirrors ERE-02/05): write_episode_note asserts
-        # write_guard.assert_writes_allowed(EPISODE_WRITE_ACTION) itself, before any filesystem
-        # mutation. Re-write the SAME note (same episode_id -> same deterministic path) with every
+        # write_guard.assert_writes_allowed(EPISODE_WRITE_ACTION) itself too (defense in depth,
+        # matching assignment.py's own stamp-helpers still passing write_guard through even after
+        # commit_assignment_diff's top-of-function assert), before any filesystem mutation.
+        # Re-write the SAME note (same episode_id -> same deterministic path) with every
         # other field preserved verbatim and only `closed` flipped -- a proposal-class rewrite,
         # never a new note, never a governed transition (no governance import anywhere in this
         # module).

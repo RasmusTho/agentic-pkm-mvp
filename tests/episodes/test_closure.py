@@ -280,6 +280,49 @@ def test_close_episode_already_closed_note_reconciles_outbox_and_projection(
     assert update_calls[0][1] == (episode_id,)
 
 
+def _blocked_guard() -> WriteGuard:
+    return WriteGuard(lambda: {"state": "safe_mode", "reason": "review-fix test"})
+
+
+def test_close_episode_blocked_guard_prevents_reconciliation_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#3181 review-round fix: the reconciliation path (note already closed) performs real DB
+    writes (outbox insert, projection UPDATE) even though it skips write_episode_note -- so it
+    must assert the guard itself rather than relying on write_episode_note's internal check as an
+    implicit proxy gate (that only worked while every write funneled through it). A write-blocked
+    health state must prevent BOTH the fresh-close write and the reconciliation writes."""
+    episode_id = "ep-77777777-2222-4333-8444-555555555555"
+    end = _dt(10, 0)
+    write_episode_note(
+        title="Already closed",
+        scope="work",
+        start=(end - timedelta(hours=1)).isoformat(),
+        end=end.isoformat(),
+        closed=True,
+        segmentation="proposed",
+        episode_id=episode_id,
+        vault_root=tmp_path,
+        write_guard=_allow_guard(),
+    )
+
+    def _boom(*a: Any, **k: Any) -> None:
+        raise AssertionError("no write should be attempted while writes are blocked")
+
+    monkeypatch.setattr(closure_module, "write_outbox_event", _boom)
+    monkeypatch.setattr(closure_module, "_sync_projection_closed", _boom)
+    monkeypatch.setattr(closure_module, "_count_active_bound_artifacts", _boom)
+
+    candidate = EpisodeCloseCandidate(
+        episode_id=episode_id, scope="work", note_path=episode_note_rel_path(episode_id), time_end=end
+    )
+
+    from app.write_guard import WritesBlockedError
+
+    with pytest.raises(WritesBlockedError):
+        close_episode(candidate, vault_root=tmp_path, write_guard=_blocked_guard())
+
+
 # ---------------------------------------------------------------------------
 # AC1 headline: a quiesced episode closes once (idempotent across ticks)
 # ---------------------------------------------------------------------------
