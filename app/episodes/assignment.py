@@ -20,20 +20,27 @@ class, no governance import anywhere in this module):
 
 Bundle mutation (review-round-2 fix, Finding 1 -- the ledger alone left retrieval returning
 ``unbound`` forever): the ledger row is NOT the artifact's own bundle. The artifact's own bundle
-lives in two places, and BOTH are upgraded, when resolvable, in the SAME guarded commit:
+lives in two places, and BOTH are upgraded, when resolvable:
 
-- **DB-side bundle rows**: ``store_objects``/``store_vector_index`` (``app/stores/pg.py``,
-  KERNEL-04) each carry a ``payload`` JSONB column; retrieval (``app/retrieval/envelope.py`` via
-  ``app/retrieval/hybrid.py::_load_all_docs`` -> ``get_vector_index().all_rows()``) reads
-  ``payload['episode_ref']`` off ``store_vector_index`` specifically. Both rows are updated in the
-  SAME transaction as the ledger writes (this function already holds ``conn_rw()`` open), a plain
-  read-merge-write of the ``episode_ref`` key ONLY -- ``kind``/``source_ref``/``embedding``/every
-  other payload key is left untouched, and the union-not-overwrite merge means a multi-episode
-  (nested) artifact accumulates every binding across ticks (spec point 1's "zero or more").
-- **Vault-serialized bundle** (spec point 3): for a ``vault.activity``-sourced artifact, the
-  underlying note's OWN frontmatter ``episode_ref`` field is stamped through the SAME guarded
-  write seam ERE-02 uses (``app.knowledge.write_ops.write_note_from_absolute``, ADR-0055
-  multi-writer rules) -- health-gate asserted, no human confirm, proposal class.
+- **Vault-serialized bundle** (spec point 3; the ERE-03 CANONICAL source): for a
+  ``vault.activity``-sourced artifact, the underlying note's OWN frontmatter ``episode_ref`` field
+  is stamped through the SAME guarded write seam ERE-02 uses
+  (``app.knowledge.write_ops.write_note_from_absolute``, ADR-0055 multi-writer rules) -- health-gate
+  asserted, no human confirm, proposal class. This is stamped FIRST (see the ordering note on
+  :func:`commit_assignment_diff`), because it is the durable source of truth: the vault ingest
+  pipeline (``app/ingest/vault_alpha.py``) now reprojects ``episode_ref`` from this frontmatter on
+  every reingest, so a later body edit / cold rebuild re-derives the binding instead of dropping it
+  (round-2 Finding 1 -- invariant->producers: every bundle producer carries the field).
+- **DB-side bundle rows** (the reingest-stable PROJECTION): ``store_objects``/``store_vector_index``
+  (``app/stores/pg.py``, KERNEL-04) each carry a ``payload`` JSONB column; retrieval
+  (``app/retrieval/envelope.py`` via ``app/retrieval/hybrid.py::_load_all_docs`` ->
+  ``get_vector_index().all_rows()``) reads ``payload['episode_ref']`` off ``store_vector_index``
+  specifically. Both rows are updated in ONE transaction with the ledger write, via a targeted
+  ``jsonb_set`` on the ``episode_ref`` key ONLY (round-2 Finding 3 -- never a read-modify-write of
+  the whole ``payload`` column, so a concurrent writer's change to ``evidence_role``/
+  ``authority_state``/``scope_binding``/any other key is never clobbered). The union-not-overwrite
+  merge means a multi-episode (nested) artifact accumulates every binding across ticks (spec point
+  1's "zero or more").
 
 Resolution (:func:`_resolve_bundle_object_id_and_note_path`, ``app.episodes.vault_activity_stream
 .resolve_bundle_target_for_outbox_row_id``): an ``artifact_ref`` is the SAME provenance-ref shape
@@ -578,33 +585,45 @@ def _read_bundle_payload(cur: Any, table: str, object_id: str) -> dict[str, Any]
     return dict(payload or {})
 
 
-def _write_bundle_payload(cur: Any, table: str, object_id: str, payload: Mapping[str, Any]) -> None:
+def _jsonb_set_episode_ref(cur: Any, table: str, object_id: str, value: str | list[str]) -> None:
+    """Set ONLY the ``episode_ref`` key on ``object_id``'s payload via ``jsonb_set`` (round-2
+    Finding 3): a targeted single-key update, never a read-modify-write of the whole ``payload``
+    column, so a concurrent writer's change to a DIFFERENT key (``evidence_role``/
+    ``authority_state``/``scope_binding``/...) between our read and our write is never clobbered.
+    Both ``store_objects`` and ``store_vector_index`` carry a ``jsonb payload`` column (KERNEL-04,
+    ``app/stores/pg.py``), so the same statement applies to both. ``updated_at`` still advances so
+    the ``store_vector_index.generation()`` token moves and the retrieval cache re-derives."""
     cur.execute(
-        f"UPDATE {table} SET payload = %s::jsonb, updated_at = now() WHERE object_id = %s::uuid",
-        (json.dumps(dict(payload)), object_id),
+        f"UPDATE {table} SET "
+        f"payload = jsonb_set(coalesce(payload, '{{}}'::jsonb), '{{episode_ref}}', %s::jsonb), "
+        f"updated_at = now() WHERE object_id = %s::uuid",
+        (json.dumps(value), object_id),
     )
 
 
 def _apply_bundle_episode_ref_insert(cur: Any, object_id: str, episode_ids: Sequence[str]) -> None:
     """Upgrade ``object_id``'s DB-side bundle rows' ``episode_ref`` (union, never overwrite).
 
-    Touches ONLY the ``episode_ref`` payload key on ``store_objects`` AND ``store_vector_index``
-    -- every other payload key (``evidence_role``, ``authority_state``, ``scope_binding``,
-    ``kind``, embeddings, ...) is read back unchanged and re-written verbatim. A row absent from
-    one or both tables (e.g. not yet embedded) is silently skipped for that table -- never an
+    Reads the current ``episode_ref`` value to compute the union, then writes ONLY that key back
+    via ``jsonb_set`` (:func:`_jsonb_set_episode_ref`) -- every other payload key
+    (``evidence_role``, ``authority_state``, ``scope_binding``, ``kind``, embeddings, ...) is left
+    exactly as any concurrent writer has it, never round-tripped through this seam. A row absent
+    from one or both tables (e.g. not yet embedded) is silently skipped for that table -- never an
     error, since not every object_id necessarily has a vector-index row yet.
     """
     for table in ("store_objects", "store_vector_index"):
         payload = _read_bundle_payload(cur, table, object_id)
         if payload is None:
             continue
-        payload["episode_ref"] = _merged_episode_ref(payload.get("episode_ref"), episode_ids)
-        _write_bundle_payload(cur, table, object_id, payload)
+        _jsonb_set_episode_ref(
+            cur, table, object_id, _merged_episode_ref(payload.get("episode_ref"), episode_ids)
+        )
 
 
 def _apply_bundle_episode_ref_correction(cur: Any, object_id: str, episode_id: str) -> None:
     """Remove ``episode_id`` from ``object_id``'s DB-side bundle rows' ``episode_ref`` (Finding 3:
-    a correction is an ordinary bundle update too, not just a ledger-row flip).
+    a correction is an ordinary bundle update too, not just a ledger-row flip), again via a
+    targeted ``jsonb_set`` on only that key.
 
     An empty result reverts to the honest ``'unbound'`` sentinel (never an empty array -- the
     schema requires ``episode_ref`` arrays to be non-empty, ``schemas/_defs.schema.json``).
@@ -616,8 +635,7 @@ def _apply_bundle_episode_ref_correction(cur: Any, object_id: str, episode_id: s
         remaining = [
             e for e in _merged_episode_ref(payload.get("episode_ref"), ()) if e != episode_id
         ]
-        payload["episode_ref"] = remaining if remaining else "unbound"
-        _write_bundle_payload(cur, table, object_id, payload)
+        _jsonb_set_episode_ref(cur, table, object_id, remaining if remaining else "unbound")
 
 
 def _transform_note_frontmatter_episode_ref(
@@ -704,20 +722,33 @@ def commit_assignment_diff(
     artifact, the note's own frontmatter (Finding 1; see module docstring's Bundle mutation
     section).
 
-    Guard-at-seam (AC4): ``write_guard.assert_writes_allowed`` is asserted FIRST, before any DB
-    statement executes -- a blocked guard means zero rows touched, mirroring
+    Guard-at-seam (AC4): ``write_guard.assert_writes_allowed`` is asserted FIRST, before any write
+    -- a blocked guard means zero rows/bytes touched, mirroring
     ``app.episodes.store.write_episode_note``'s guard-at-seam discipline. Proposal class: this
     function never imports ``app.governance.governed_write`` and never constructs a
     ``DecisionToken``/``AuthorityReceipt`` -- a `pending` binding structurally cannot carry one.
+
+    **Ordering (round-2 Finding 2 -- vault-canonical first, then the DB projection).** The vault
+    note's own frontmatter is the ERE-03 canonical source of ``episode_ref``; the DB payload is a
+    reingest-stable projection of it (``app/ingest/vault_alpha.py`` now reprojects it on every
+    reingest). So this seam stamps the vault frontmatter FIRST (Phase A), and only if every stamp
+    succeeds does it open the DB transaction and commit the ledger + payload projection (Phase B).
+    A frontmatter write failure (``WritesBlockedError`` from a guard that flipped, or a real write
+    ``OSError``) therefore raises BEFORE any DB commit -- a clean tick retry, never a committed
+    ledger row sitting in front of an un-stamped note (which would make every future
+    :func:`diff_assignments` treat the binding as satisfied and never repair it). Conversely a DB
+    failure AFTER a successful frontmatter stamp leaves the ledger empty, so the next tick simply
+    re-computes the same decision and idempotently re-stamps (union-merge is a no-op on an
+    already-stamped note) -- recoverable, not fire-and-forget. A genuinely missing/unreadable note
+    (deleted between resolution and stamp) is best-effort skipped inside the stamp helper -- its
+    ledger row still commits, so a vanished artifact never wedges the whole tick.
 
     Each insert is an UPSERT (``ON CONFLICT (artifact_ref, episode_id) DO UPDATE``) so a
     reinstated/upgraded decision (:func:`diff_assignments`) overwrites its own prior row rather
     than colliding; each correction flips ``binding_state`` to ``corrected`` and stamps
     ``corrected_at`` without deleting the row (provenance survives the correction). The ledger rows
-    and both DB-side bundle-payload updates run inside ONE Postgres transaction (commit-or-nothing
-    for this tick's whole diff); the vault-note frontmatter write is a separate filesystem write
-    through the guarded seam (never atomic with the DB transaction across failure domains, same
-    posture as every other vault-write producer in this codebase).
+    and both DB-side bundle-payload ``jsonb_set`` updates run inside ONE Postgres transaction
+    (commit-or-nothing for this tick's whole diff).
 
     ``vault_root=None`` (the default) skips ALL bundle mutation -- ledger-only, backward compatible
     with every pre-Finding-1 caller/test that only cares about the ledger.
@@ -727,20 +758,38 @@ def commit_assignment_diff(
     if not to_insert and not to_correct:
         return {"pending": 0, "corrected": 0}
 
-    note_targets: list[tuple[Path, list[str]]] = []
-    note_removals: list[tuple[Path, str]] = []
+    # Phase A -- resolve every artifact_ref to its bundle target (read-only) and stamp the
+    # vault-canonical frontmatter FIRST. Any stamp WRITE failure raises here, before Phase B opens
+    # a transaction, so the ledger is never committed ahead of an un-stamped note (Finding 2).
+    insert_object_ids: list[str | None] = []
+    for decision in to_insert:
+        object_id, note_path = _resolve_bundle_object_id_and_note_path(
+            decision.artifact_ref, vault_root=vault_root
+        )
+        insert_object_ids.append(object_id)
+        if note_path is not None:
+            _stamp_note_frontmatter_episode_ref_insert(
+                note_path, [decision.episode_id], vault_root=Path(vault_root), write_guard=write_guard  # type: ignore[arg-type]
+            )
+    correct_object_ids: list[str | None] = []
+    for artifact_ref, episode_id in to_correct:
+        object_id, note_path = _resolve_bundle_object_id_and_note_path(
+            artifact_ref, vault_root=vault_root
+        )
+        correct_object_ids.append(object_id)
+        if note_path is not None:
+            _stamp_note_frontmatter_episode_ref_correction(
+                note_path, episode_id, vault_root=Path(vault_root), write_guard=write_guard  # type: ignore[arg-type]
+            )
 
+    # Phase B -- ledger + DB payload projection in ONE transaction (commit-or-nothing). Reached
+    # only after every canonical frontmatter stamp succeeded.
     with conn_rw() as conn:
         _assert_table_schema(conn, BINDING_TABLE)
         with conn.cursor() as cur:
-            for decision in to_insert:
-                object_id, note_path = _resolve_bundle_object_id_and_note_path(
-                    decision.artifact_ref, vault_root=vault_root
-                )
+            for decision, object_id in zip(to_insert, insert_object_ids):
                 if object_id is not None:
                     _apply_bundle_episode_ref_insert(cur, object_id, [decision.episode_id])
-                if note_path is not None:
-                    note_targets.append((note_path, [decision.episode_id]))
                 cur.execute(
                     f"""
                     INSERT INTO {BINDING_TABLE} (
@@ -767,14 +816,9 @@ def commit_assignment_diff(
                         BINDING_STATE_ACTIVE,
                     ),
                 )
-            for artifact_ref, episode_id in to_correct:
-                object_id, note_path = _resolve_bundle_object_id_and_note_path(
-                    artifact_ref, vault_root=vault_root
-                )
+            for (artifact_ref, episode_id), object_id in zip(to_correct, correct_object_ids):
                 if object_id is not None:
                     _apply_bundle_episode_ref_correction(cur, object_id, episode_id)
-                if note_path is not None:
-                    note_removals.append((note_path, episode_id))
                 cur.execute(
                     f"""
                     UPDATE {BINDING_TABLE}
@@ -783,20 +827,6 @@ def commit_assignment_diff(
                     """,
                     (BINDING_STATE_CORRECTED, artifact_ref, episode_id),
                 )
-
-    # Vault-note frontmatter writes happen AFTER the DB transaction commits (a separate failure
-    # domain -- filesystem vs Postgres -- never mixed into the same transaction boundary). A
-    # guard-blocked write here still raises WritesBlockedError; that would only happen if the
-    # guard flipped to blocking mid-commit, since the same guard already passed at the top of this
-    # function moments ago.
-    for note_path, episode_ids in note_targets:
-        _stamp_note_frontmatter_episode_ref_insert(
-            note_path, episode_ids, vault_root=Path(vault_root), write_guard=write_guard  # type: ignore[arg-type]
-        )
-    for note_path, episode_id in note_removals:
-        _stamp_note_frontmatter_episode_ref_correction(
-            note_path, episode_id, vault_root=Path(vault_root), write_guard=write_guard  # type: ignore[arg-type]
-        )
 
     return {"pending": len(to_insert), "corrected": len(to_correct)}
 

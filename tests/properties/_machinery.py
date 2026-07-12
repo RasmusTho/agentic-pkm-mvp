@@ -98,13 +98,14 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "event-emission and object-materialization -- see formal-model.md T-materialize); "
         "this call is the eventual T-materialize-equivalent write for the API path."
     ),
-    ("app/ingest/vault_alpha.py", 555): (
+    ("app/ingest/vault_alpha.py", 582): (
         "Legacy vault-alpha ingest path: keeps classifier/normalizer flows working "
         "against the memory backend during tests/alpha runs; the alpha ingest pipeline "
         "emits its own ingest event upstream of this call in the same run. Line drifted "
-        "527 -> 555 (site unchanged); re-pinned by #3034 (A14) as a directly-related "
-        "repair -- the census gate only fires when this machinery is touched, so the "
-        "pre-existing drift surfaced on the first Heimdal PR to edit it."
+        "527 -> 555 -> 582 (site unchanged); re-pinned by #3180 (ERE-05) after the "
+        "episode_ref ingest-carry helper + store_payload key were added above it -- the "
+        "census gate only fires when this machinery is touched, so the drift surfaces on "
+        "the first PR to edit this file."
     ),
     ("app/knowledge_acquisition/raw_record.py", 118): (
         "KA-01 immutable raw record (pre-pipeline by design): emitting the default "

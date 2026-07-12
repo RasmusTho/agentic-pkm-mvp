@@ -261,6 +261,33 @@ def _frontmatter_title(frontmatter: dict) -> str | None:
     return _normalize_title(value)
 
 
+# episode_ref string sentinels (schemas/_defs.schema.json :: episode_ref). Mirrors
+# app.retrieval.envelope._EPISODE_REF_SENTINELS / mimer_runtime.metadata.EPISODE_REF_SENTINELS
+# (each layer keeps its own copy rather than importing across a boundary -- the established
+# pattern in this codebase for this tiny closed set).
+_EPISODE_REF_SENTINELS = frozenset({"unbound", "pending"})
+
+
+def _episode_ref_from_frontmatter(frontmatter: dict) -> str | list[str]:
+    """Carry the note's vault-canonical ``episode_ref`` into the DB projection (ERE-03/ERE-05,
+    invariant->producers: every bundle producer carries the field).
+
+    episode_ref is stamped on the note's OWN frontmatter by the ERE-05 assignment seam
+    (``app.episodes.assignment``), which is the durable source of truth. This ingest producer
+    projects it into ``store_payload`` so a later BODY-edit reingest re-derives the same binding
+    from the frontmatter instead of blind-overwriting it with an absent key (the round-2 Finding 1
+    durability bug). Only schema-valid shapes cross -- the ``unbound``/``pending`` sentinels or a
+    non-empty list of non-empty episode_id strings; anything absent/malformed falls back to the
+    honest ``unbound`` default (same posture as ``app.retrieval.envelope._episode_ref_from_payload``:
+    never fail ingest on a dirty value, never smuggle an out-of-shape one)."""
+    value = frontmatter.get("episode_ref")
+    if isinstance(value, str) and value in _EPISODE_REF_SENTINELS:
+        return value
+    if isinstance(value, (list, tuple)) and value and all(isinstance(x, str) and x for x in value):
+        return list(value)
+    return "unbound"
+
+
 def _derive_title(body: str, path: Path) -> str:
     first_non_empty: str | None = None
     for line in body.splitlines():
@@ -579,6 +606,9 @@ def _ingest_single(path: Path, *, vault_root: Path, trace_id: str, raw_text: str
         "review_state": review_state,
         "text": stripped_text,
         "ingest_fingerprint": ingest_fingerprint,
+        # Vault-canonical episode binding (ERE-03/ERE-05): carry the frontmatter's episode_ref into
+        # the DB projection so a reingest never blind-drops a stamped binding (round-2 Finding 1).
+        "episode_ref": _episode_ref_from_frontmatter(frontmatter),
     }
 
     try:

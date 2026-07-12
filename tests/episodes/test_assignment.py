@@ -670,8 +670,16 @@ class _BundleCursor:
             "UPDATE store_vector_index"
         ):
             table = "store_objects" if "store_objects" in stripped else "store_vector_index"
-            payload_json, object_id = params
-            self._rows[(table, object_id)] = json.loads(payload_json)
+            # Finding 3: the production write is a targeted jsonb_set on the episode_ref key ONLY,
+            # never a full-column overwrite -- this fake models exactly that (params carry the new
+            # episode_ref VALUE, not a whole payload; every other key is left in place), so a test
+            # asserting a sibling key survives is meaningful.
+            assert "jsonb_set" in stripped and "'{episode_ref}'" in stripped, stripped
+            assert "SET payload = %s::jsonb" not in stripped, "must not blind-overwrite the column"
+            episode_ref_json, object_id = params
+            existing = self._rows.get((table, object_id))
+            if existing is not None:
+                existing["episode_ref"] = json.loads(episode_ref_json)
             self._result = None
             return
         self._result = None
@@ -811,6 +819,220 @@ def test_bundle_object_id_resolution_returns_none_for_heimdal_refs_and_no_vault_
     assert _resolve_bundle_object_id_and_note_path(
         "vault.activity:row-1", vault_root=None
     ) == (None, None)
+
+
+# ---------------------------------------------------------------------------
+# Round-2 Finding 2: vault-canonical frontmatter stamped FIRST, then DB commit
+# ---------------------------------------------------------------------------
+
+
+def _note_with_uuid(tmp_path: Path, object_id: str) -> Path:
+    vault_root = tmp_path / "vault"
+    note_path = vault_root / "notes" / "artifact.md"
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text(f"---\nuuid: {object_id}\ntitle: t\n---\n\nbody\n", encoding="utf-8")
+    return vault_root
+
+
+def test_commit_stamps_frontmatter_before_touching_the_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Round-2 Finding 2 (ordering): the vault-canonical frontmatter stamp must happen BEFORE the
+    DB ledger+payload transaction, so a frontmatter failure aborts before any commit rather than
+    leaving a committed ledger row in front of an un-stamped note."""
+    object_id = "66666666-6666-4666-8666-666666666666"
+    vault_root = _note_with_uuid(tmp_path, object_id)
+    note_path = vault_root / "notes" / "artifact.md"
+    monkeypatch.setattr(
+        assignment_module,
+        "_resolve_bundle_object_id_and_note_path",
+        lambda artifact_ref, *, vault_root: (object_id, note_path),
+    )
+
+    order: list[str] = []
+
+    import app.knowledge.write_ops as write_ops
+
+    real_write = write_ops.write_note_from_absolute
+
+    def _tracking_write(*args: Any, **kwargs: Any):
+        order.append("frontmatter")
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(write_ops, "write_note_from_absolute", _tracking_write)
+
+    class _OrderCursor:
+        def __init__(self) -> None:
+            self._result: Any = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
+            order.append("db")
+            self._result = (BINDING_TABLE,) if "to_regclass" in sql else None
+
+        def fetchone(self):
+            return self._result
+
+    class _OrderConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def cursor(self):
+            return _OrderCursor()
+
+    monkeypatch.setattr(assignment_module, "conn_rw", lambda *a, **k: _OrderConn())
+
+    decision = AssignmentDecision(
+        artifact_ref="vault.activity:row-order",
+        episode_id="ep-order-0001-4333-8444-555555555555",
+        scope="work",
+        basis=BASIS_TIME_OVERLAP,
+        confidence=TIME_OVERLAP_CONFIDENCE,
+    )
+    commit_assignment_diff([decision], [], write_guard=_allow_guard(), vault_root=vault_root)
+
+    assert "frontmatter" in order and "db" in order
+    assert order.index("frontmatter") < order.index("db"), (
+        "the canonical frontmatter stamp must precede any DB statement (Finding 2 ordering)"
+    )
+
+
+def test_commit_frontmatter_write_failure_aborts_before_any_db_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Round-2 Finding 2: if the frontmatter write raises (OSError, concurrent editor, note
+    moved), the whole tick aborts BEFORE the DB transaction opens -- zero ledger rows -- so a
+    later tick re-computes and idempotently re-stamps, never a committed ledger row wedged in
+    front of an un-stamped note."""
+    object_id = "77777777-7777-4777-8777-777777777777"
+    vault_root = _note_with_uuid(tmp_path, object_id)
+    note_path = vault_root / "notes" / "artifact.md"
+    monkeypatch.setattr(
+        assignment_module,
+        "_resolve_bundle_object_id_and_note_path",
+        lambda artifact_ref, *, vault_root: (object_id, note_path),
+    )
+
+    import app.knowledge.write_ops as write_ops
+
+    def _boom_write(*args: Any, **kwargs: Any):
+        raise OSError("disk full / note locked mid-tick")
+
+    monkeypatch.setattr(write_ops, "write_note_from_absolute", _boom_write)
+    monkeypatch.setattr(
+        assignment_module, "conn_rw", lambda *a, **k: _fake_conn_that_must_not_be_called()
+    )
+
+    decision = AssignmentDecision(
+        artifact_ref="vault.activity:row-fail",
+        episode_id="ep-fail-0001-4333-8444-555555555555",
+        scope="work",
+        basis=BASIS_TIME_OVERLAP,
+        confidence=TIME_OVERLAP_CONFIDENCE,
+    )
+    with pytest.raises(OSError):
+        commit_assignment_diff([decision], [], write_guard=_allow_guard(), vault_root=vault_root)
+
+
+# ---------------------------------------------------------------------------
+# Round-2 Finding 3: targeted jsonb_set never clobbers a concurrent sibling-key write
+# ---------------------------------------------------------------------------
+
+
+def test_commit_jsonb_set_preserves_concurrent_sibling_key_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Round-2 Finding 3 (concurrency): the DB payload update is a targeted jsonb_set on the
+    episode_ref key only -- a concurrent writer changing a DIFFERENT key (evidence_role) between
+    our SELECT and our UPDATE is NOT clobbered. A blind read-modify-write of the whole payload
+    column WOULD write back the stale evidence_role; jsonb_set does not."""
+    object_id = "88888888-8888-4888-8888-888888888888"
+    vault_root = _note_with_uuid(tmp_path, object_id)
+    note_path = vault_root / "notes" / "artifact.md"
+    monkeypatch.setattr(
+        assignment_module,
+        "_resolve_bundle_object_id_and_note_path",
+        lambda artifact_ref, *, vault_root: (object_id, note_path),
+    )
+
+    rows: dict[tuple[str, str], dict[str, Any]] = {
+        ("store_objects", object_id): {"kind": "note", "evidence_role": "reference"},
+        ("store_vector_index", object_id): {"kind": "note", "evidence_role": "reference"},
+    }
+
+    class _RaceCursor:
+        def __init__(self) -> None:
+            self._result: Any = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
+            stripped = sql.strip()
+            if "to_regclass" in stripped:
+                self._result = (BINDING_TABLE,)
+                return
+            if stripped.startswith("SELECT payload FROM store_"):
+                table = "store_objects" if "store_objects" in stripped else "store_vector_index"
+                obj = params[0]
+                row = rows.get((table, obj))
+                self._result = (json.dumps(row),) if row is not None else None
+                # A concurrent writer lands a DIFFERENT-key change AFTER our read, BEFORE our
+                # jsonb_set UPDATE -- exactly the READ COMMITTED window Finding 3 is about.
+                if row is not None:
+                    row["evidence_role"] = "evidence"
+                return
+            if stripped.startswith("UPDATE store_"):
+                assert "jsonb_set" in stripped and "'{episode_ref}'" in stripped, stripped
+                table = "store_objects" if "store_objects" in stripped else "store_vector_index"
+                episode_ref_json, obj = params
+                existing = rows.get((table, obj))
+                if existing is not None:
+                    existing["episode_ref"] = json.loads(episode_ref_json)
+                self._result = None
+                return
+            self._result = None
+
+        def fetchone(self):
+            return self._result
+
+    class _RaceConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def cursor(self):
+            return _RaceCursor()
+
+    monkeypatch.setattr(assignment_module, "conn_rw", lambda *a, **k: _RaceConn())
+
+    decision = AssignmentDecision(
+        artifact_ref="vault.activity:row-race",
+        episode_id="ep-race-0001-4333-8444-555555555555",
+        scope="work",
+        basis=BASIS_TIME_OVERLAP,
+        confidence=TIME_OVERLAP_CONFIDENCE,
+    )
+    commit_assignment_diff([decision], [], write_guard=_allow_guard(), vault_root=vault_root)
+
+    for table in ("store_objects", "store_vector_index"):
+        # Our episode_ref landed AND the concurrent writer's evidence_role change survived --
+        # jsonb_set touched only its own key.
+        assert rows[(table, object_id)]["episode_ref"] == [decision.episode_id]
+        assert rows[(table, object_id)]["evidence_role"] == "evidence"
 
 
 # ---------------------------------------------------------------------------

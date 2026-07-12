@@ -222,9 +222,14 @@ def test_observation_episode_binding_survives__ere05_end_to_end(
                 row = store_rows.get((table, params[0]))
                 self._result = (json.dumps(row),) if row is not None else None
             elif stripped.startswith("UPDATE store_"):
+                # Finding 3: targeted jsonb_set on the episode_ref key only, never a full-column
+                # overwrite (params carry the episode_ref value, not a whole payload).
                 table = "store_objects" if "store_objects" in stripped else "store_vector_index"
-                payload_json, obj_id = params
-                store_rows[(table, obj_id)] = json.loads(payload_json)
+                assert "jsonb_set" in stripped and "'{episode_ref}'" in stripped
+                episode_ref_json, obj_id = params
+                existing = store_rows.get((table, obj_id))
+                if existing is not None:
+                    existing["episode_ref"] = json.loads(episode_ref_json)
                 self._result = None
             else:
                 self._result = None
