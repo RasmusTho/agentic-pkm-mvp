@@ -92,13 +92,17 @@ def parse_validated_episode_note(text: str) -> dict[str, Any]:
 
 def _strict_episode_frontmatter(text: str) -> dict[str, Any]:
     """Parse episode frontmatter without the generic reader's YAML-error fallback."""
-    if not text.startswith("---"):
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].rstrip("\r\n") != "---":
         return {}
-    parts = text.split("---", 2)
-    if len(parts) < 3:
+    closing_index = next(
+        (index for index, line in enumerate(lines[1:], start=1) if line.rstrip("\r\n") == "---"),
+        None,
+    )
+    if closing_index is None:
         raise EpisodeFrontmatterParseError("unterminated episode frontmatter")
     try:
-        fields = yaml.safe_load(parts[1]) or {}
+        fields = yaml.safe_load("".join(lines[1:closing_index])) or {}
     except yaml.YAMLError as exc:
         raise EpisodeFrontmatterParseError("invalid episode frontmatter YAML") from exc
     return fields if isinstance(fields, dict) else {}

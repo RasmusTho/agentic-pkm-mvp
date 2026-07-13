@@ -88,6 +88,9 @@ def test_raw_frontmatter_validation_allows_renderer_metadata_only() -> None:
     text = render_episode_note(_fields())
     assert parse_validated_episode_note(text)["episode_id"] == _fields()["episode_id"]
 
+    delimiter_title = render_episode_note(_fields(title="---"))
+    assert parse_validated_episode_note(delimiter_title)["title"] == "---"
+
     malformed = text.replace(
         "artifact_class: episode_note\n", "artifact_class: episode_note\nunexpected: value\n"
     )
