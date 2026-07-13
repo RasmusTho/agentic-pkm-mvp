@@ -10,6 +10,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import yaml
+
+from app.episodes.schema import validate_episode_note_fields
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 ARTIFACT_CLASS = "episode_note"
@@ -31,6 +34,10 @@ _FRONTMATTER_FIELDS = (
     "segmentation",
     "derived_from",
 )
+
+
+class EpisodeFrontmatterParseError(ValueError):
+    """Raised when an episode note has syntactically invalid YAML frontmatter."""
 
 
 def episode_note_rel_path(episode_id: str) -> str:
@@ -69,10 +76,44 @@ def parse_episode_note(text: str) -> dict[str, Any]:
     return {name: data[name] for name in _FRONTMATTER_FIELDS if name in data}
 
 
+def parse_validated_episode_note(text: str) -> dict[str, Any]:
+    """Return a schema-valid episode note without hiding unknown frontmatter.
+
+    ``artifact_class`` is rendering metadata, not part of the episode schema. All
+    other raw frontmatter participates in validation before the projection or any
+    other derived consumer accepts the note, so ``additionalProperties: false``
+    cannot be bypassed by :func:`parse_episode_note`'s intentionally narrow view.
+    """
+    raw_fields = _strict_episode_frontmatter(text)
+    raw_fields.pop("artifact_class", None)
+    validate_episode_note_fields(raw_fields)
+    return raw_fields
+
+
+def _strict_episode_frontmatter(text: str) -> dict[str, Any]:
+    """Parse episode frontmatter without the generic reader's YAML-error fallback."""
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].rstrip("\r\n") != "---":
+        return {}
+    closing_index = next(
+        (index for index, line in enumerate(lines[1:], start=1) if line.rstrip("\r\n") == "---"),
+        None,
+    )
+    if closing_index is None:
+        raise EpisodeFrontmatterParseError("unterminated episode frontmatter")
+    try:
+        fields = yaml.safe_load("".join(lines[1:closing_index])) or {}
+    except yaml.YAMLError as exc:
+        raise EpisodeFrontmatterParseError("invalid episode frontmatter YAML") from exc
+    return fields if isinstance(fields, dict) else {}
+
+
 __all__ = [
     "ARTIFACT_CLASS",
+    "EpisodeFrontmatterParseError",
     "EPISODE_NOTES_DIR",
     "episode_note_rel_path",
     "parse_episode_note",
+    "parse_validated_episode_note",
     "render_episode_note",
 ]
