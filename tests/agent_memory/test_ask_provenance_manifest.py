@@ -13,6 +13,7 @@ from app.agent_memory.ask_provenance_manifest import (
     compare_manifests,
     prune_expired_manifests,
     schedule_ask_provenance_capture,
+    start_ask_provenance_runtime,
 )
 
 
@@ -94,8 +95,7 @@ def test_shadow_capture_preserves_ask_response_and_side_effects(
         "ASK_SYNTHESIS_RECEIPTS_PATH",
         str(tmp_path / "runtime" / "activation" / "ask_synthesis_receipts.jsonl"),
     )
-    path = tmp_path / "runtime" / "ask_provenance.jsonl"
-    monkeypatch.setenv("ASK_PROVENANCE_RUNTIME_ROOT", str(tmp_path / "runtime"))
+    path = tmp_path / "runtime" / "agent_memory" / "ask_provenance.jsonl"
     monkeypatch.setenv("ASK_PROVENANCE_MANIFEST_PATH", str(path))
     monkeypatch.setattr("app.api.routes.ask._ensure_hybrid_store_loaded", lambda: None)
     ask_module._HYBRID_WARMED = True
@@ -173,6 +173,25 @@ def test_comparison_classifies_only_supported_drift(tmp_path: Path) -> None:
     malformed["identities"]["canonical_index"] = {"status": "available"}
     assert compare_manifests(
         malformed,
+        left,
+        current_authorization=_snapshot(),
+        privacy_key=b"test-only-key",
+    ) == {"classification": "indeterminate", "reason": "manifest_invalid"}
+
+    changed_query = json.loads(json.dumps(left))
+    changed_query["query_hash"] = "different-keyed-query-hash"
+    assert compare_manifests(
+        changed_query,
+        left,
+        current_authorization=_snapshot(),
+        privacy_key=b"test-only-key",
+    ) == {"classification": "indeterminate", "reason": "query_changed"}
+
+    naive_time = json.loads(json.dumps(left))
+    naive_time["captured_at"] = "2026-01-01T00:00:00"
+    naive_time["expires_at"] = "2026-01-02T00:00:00"
+    assert compare_manifests(
+        naive_time,
         left,
         current_authorization=_snapshot(),
         privacy_key=b"test-only-key",
@@ -278,23 +297,42 @@ def test_manifest_retention_is_local_and_bounded(tmp_path: Path) -> None:
     ) == {"classification": "indeterminate", "reason": "manifest_expired"}
 
 
-def test_manifest_path_rejects_runtime_symlink_escape(tmp_path: Path) -> None:
+def test_manifest_path_rejects_runtime_symlink_escape(tmp_path: Path, monkeypatch) -> None:
     outside = tmp_path / "Yggdrasil"
     outside.mkdir()
     runtime_link = tmp_path / "runtime"
     runtime_link.symlink_to(outside, target_is_directory=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(
+        "ASK_PROVENANCE_MANIFEST_PATH",
+        str(runtime_link / "agent_memory" / "manifest.jsonl"),
+    )
 
     result = capture_ask_provenance(
         answer="answer",
         query="q",
         evidence=[],
         authorization=_snapshot(),
-        path=runtime_link / "manifest.jsonl",
         privacy_key=b"test-only-key",
     )
 
     assert result is None
-    assert not (outside / "manifest.jsonl").exists()
+    assert not (outside / "agent_memory" / "manifest.jsonl").exists()
+
+
+def test_runtime_startup_prunes_without_ask(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ASK_PROVENANCE_MANIFEST_ENABLED", "1")
+    monkeypatch.setenv("ASK_PROVENANCE_PRIVACY_KEY", "test-only-key")
+    path = tmp_path / "runtime" / "agent_memory" / "ask_provenance_manifests.jsonl"
+    expired = _capture(path)
+    expired["captured_at"] = "2019-01-01T00:00:00Z"
+    expired["expires_at"] = "2020-01-01T00:00:00Z"
+    path.write_text(json.dumps(expired) + "\n", encoding="utf-8")
+
+    start_ask_provenance_runtime()
+
+    assert path.read_text(encoding="utf-8") == ""
 
 
 def test_shadow_capture_respects_latency_budget(tmp_path: Path, monkeypatch) -> None:
@@ -323,6 +361,16 @@ def test_shadow_capture_respects_latency_budget(tmp_path: Path, monkeypatch) -> 
 
     assert entered.wait(timeout=1)
     assert elapsed < 0.1
+    assert (
+        len(
+            [
+                thread
+                for thread in threading.enumerate()
+                if thread.name == "ask-provenance-capture-worker"
+            ]
+        )
+        == 1
+    )
     release.set()
     assert finished.wait(timeout=1)
 

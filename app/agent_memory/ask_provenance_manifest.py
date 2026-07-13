@@ -19,6 +19,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from queue import Full, Queue
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
@@ -32,6 +33,9 @@ DEFAULT_RETENTION_DAYS = 14
 DEFAULT_MAX_RECORDS = 256
 _JANITOR_PATHS: set[Path] = set()
 _JANITOR_LOCK = threading.Lock()
+_CAPTURE_QUEUE: Queue[dict[str, Any]] = Queue(maxsize=64)
+_CAPTURE_WORKER_LOCK = threading.Lock()
+_CAPTURE_WORKER_STARTED = False
 
 
 @dataclass(frozen=True)
@@ -85,11 +89,11 @@ def _manifest_path(explicit: Path | None) -> Path:
     path = explicit or (Path(configured).expanduser() if configured else DEFAULT_PATH)
     resolved = path.expanduser().resolve(strict=False)
     if explicit is None:
-        runtime_root = (
-            Path(os.getenv("ASK_PROVENANCE_RUNTIME_ROOT", str(DEFAULT_PATH.parent)))
-            .expanduser()
-            .resolve(strict=False)
-        )
+        lexical_root = (Path.cwd() / DEFAULT_PATH.parent).absolute()
+        for candidate in (lexical_root, lexical_root.parent):
+            if candidate.is_symlink():
+                raise ValueError("ASK provenance runtime root cannot be a symlink")
+        runtime_root = lexical_root.resolve(strict=False)
         if not resolved.is_relative_to(runtime_root):
             raise ValueError("ASK provenance path escapes its dedicated runtime root")
     elif "runtime" not in {part.casefold() for part in resolved.parts}:
@@ -138,6 +142,8 @@ def _validate_manifest(manifest: Mapping[str, Any]) -> None:
             raise ValueError(f"invalid manifest field: {field}")
     captured_at = datetime.fromisoformat(manifest["captured_at"].replace("Z", "+00:00"))
     expires_at = datetime.fromisoformat(manifest["expires_at"].replace("Z", "+00:00"))
+    if captured_at.utcoffset() is None or expires_at.utcoffset() is None:
+        raise ValueError("manifest timestamps must be timezone-aware")
     if expires_at <= captured_at:
         raise ValueError("manifest expiry must follow capture")
     if not isinstance(manifest.get("ordered_evidence"), list):
@@ -338,10 +344,33 @@ def schedule_ask_provenance_capture(**capture_kwargs: Any) -> None:
         logger.warning("ask.provenance scheduling skipped: %s", type(exc).__name__)
         return
     capture_kwargs["path"] = path
+    _ensure_capture_worker()
+    try:
+        _CAPTURE_QUEUE.put_nowait(capture_kwargs)
+    except Full:
+        logger.warning("ask.provenance capture skipped: bounded_queue_full")
+
+
+def _ensure_capture_worker() -> None:
+    """Start the single bounded capture worker once per process."""
+
+    global _CAPTURE_WORKER_STARTED
+    with _CAPTURE_WORKER_LOCK:
+        if _CAPTURE_WORKER_STARTED:
+            return
+        _CAPTURE_WORKER_STARTED = True
+
+    def consume() -> None:
+        while True:
+            capture_kwargs = _CAPTURE_QUEUE.get()
+            try:
+                capture_ask_provenance(**capture_kwargs)
+            finally:
+                _CAPTURE_QUEUE.task_done()
+
     threading.Thread(
-        target=capture_ask_provenance,
-        kwargs=capture_kwargs,
-        name="ask-provenance-capture",
+        target=consume,
+        name="ask-provenance-capture-worker",
         daemon=True,
     ).start()
 
@@ -368,6 +397,20 @@ def _ensure_retention_janitor(path: Path) -> None:
         name="ask-provenance-retention",
         daemon=True,
     ).start()
+
+
+def start_ask_provenance_runtime() -> None:
+    """Initialize pruning and bounded workers from application lifespan."""
+
+    if not shadow_capture_enabled():
+        return
+    try:
+        path = _manifest_path(None)
+        prune_expired_manifests(path)
+        _ensure_retention_janitor(path)
+        _ensure_capture_worker()
+    except Exception as exc:
+        logger.warning("ask.provenance runtime init skipped: %s", type(exc).__name__)
 
 
 def _status_value(record: Mapping[str, Any]) -> str | None:
@@ -398,6 +441,8 @@ def compare_manifests(
         return {"classification": "indeterminate", "reason": "manifest_invalid"}
 
     instant = now or datetime.now(timezone.utc)
+    if instant.utcoffset() is None:
+        return {"classification": "indeterminate", "reason": "comparison_time_invalid"}
     if any(
         datetime.fromisoformat(manifest["expires_at"].replace("Z", "+00:00")) <= instant
         for manifest in (left, right)
@@ -445,6 +490,8 @@ def compare_manifests(
         axes.append("authorization")
     if axes:
         return {"classification": "scope_mismatch", "mismatch_axes": axes}
+    if left["query_hash"] != right["query_hash"]:
+        return {"classification": "indeterminate", "reason": "query_changed"}
 
     left_index = _status_value(left["identities"]["canonical_index"])
     right_index = _status_value(right["identities"]["canonical_index"])
@@ -529,4 +576,5 @@ __all__ = [
     "prune_expired_manifests",
     "schedule_ask_provenance_capture",
     "shadow_capture_enabled",
+    "start_ask_provenance_runtime",
 ]

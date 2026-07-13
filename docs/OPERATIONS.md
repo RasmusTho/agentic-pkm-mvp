@@ -118,14 +118,15 @@ When the issue is health semantics or degraded-state rules, switch to `docs/HEAL
 The ASK provenance manifest is an opt-in read-side experiment, not a canonical
 audit store. It is disabled unless `ASK_PROVENANCE_MANIFEST_ENABLED=1` and a
 local `ASK_PROVENANCE_PRIVACY_KEY` is present. Its JSONL file must remain below
-`ASK_PROVENANCE_RUNTIME_ROOT` (default `runtime/agent_memory`); resolved path or
-symlink escapes fail closed, so do not point the root into a vault or index
+the fixed repo-local `runtime/agent_memory` root; resolved path/root symlinks
+and escapes fail closed, so it cannot be relocated into a vault or index
 surface.
 
-Enabled capture is dispatched after the answer to a daemon worker. File locks,
-atomic replacement, retention, and fsync therefore do not extend ASK response
-latency. Records expire after 14 days, are capped at 256 entries, and an hourly
-per-path janitor removes expired records even if no later ASK occurs. An
+Enabled capture is dispatched after the answer through a bounded queue to one
+daemon worker. File locks, atomic replacement, retention, and fsync therefore
+do not extend ASK response latency or create unbounded worker threads. Records
+expire after 14 days, are capped at 256 entries, and startup pruning plus an
+hourly per-path janitor removes expired records even if no later ASK occurs. An
 expired, malformed, inaccessible, or identity-incomplete record is not
 comparable and must yield `indeterminate`. Capture/janitor failure is logged
 locally and never changes the ASK response or authorizes a write.

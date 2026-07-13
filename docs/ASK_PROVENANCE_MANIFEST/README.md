@@ -27,11 +27,12 @@ requires a local `ASK_PROVENANCE_PRIVACY_KEY`. Records default to restricted
 and are capped at 256 entries. The answer, query, principal, source ids, and
 observed execution identities are hashed; correlation hashes use the local
 privacy key. `ASK_PROVENANCE_MANIFEST_PATH` may relocate the file only within
-the dedicated `ASK_PROVENANCE_RUNTIME_ROOT` (default:
-`runtime/agent_memory`); resolved/symlink escapes are rejected. Capture is
-post-answer and dispatched to a daemon worker, so locking, retention, and
-fsync never block the ASK response. A per-path hourly janitor enforces expiry
-even when no later ASK occurs.
+the fixed repo-local `runtime/agent_memory` root; root/path symlinks and escapes
+are rejected. Capture is post-answer and dispatched through a bounded queue to
+one daemon worker, so locking, retention, and fsync never block the ASK
+response or create unbounded worker threads. Application startup immediately
+prunes expired records and starts a per-path hourly janitor, so expiry remains
+enforced even when no later ASK occurs.
 
 ## Cross-task invariants / interaction safety
 
