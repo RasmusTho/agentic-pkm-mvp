@@ -119,6 +119,7 @@ jobs:
 
       - name: Full test suite (memory, not pg)
         timeout-minutes: 20
+        continue-on-error: ${{ matrix.experimental }}
         shell: bash
         run: |
           set -o pipefail

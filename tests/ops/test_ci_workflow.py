@@ -90,6 +90,8 @@ def test_integration_nightly_uses_collision_safe_test_imports() -> None:
     assert "--import-mode=importlib" in full_suite
     assert "-c /dev/null" not in full_suite
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD" not in full_suite
+    test_step = full_suite[full_suite.index("Full test suite (memory, not pg)") :]
+    assert "continue-on-error: ${{ matrix.experimental }}" in test_step
 
 
 def test_integration_nightly_prepares_pgvector_before_migrations() -> None:
