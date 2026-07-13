@@ -3,7 +3,8 @@ Doc role: Research
 Authority: Evidence and recommendation for issue #3195 under parent #3194. Provider facts are bounded to the cited primary sources as accessed on 2026-07-13; the Yggdrasil assessment is advisory and subordinate to current owner docs and contracts.
 Owner: AI Conversation Intelligence research roadmap (#3194), downstream of EBF/SIP/HKA owner boundaries
 Temporal class: snapshot
-Review cadence: before any privacy, adapter, or prototype issue is made Ready
+Review cadence: event-driven
+Source of truth: mixed
 Last reviewed: 2026-07-13
 Last verified against: `docs/research/CHAT_SURFACE_BUILD_VS_BUY.md`, `docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md`, `docs/boundaries/EBF.md`, `docs/boundaries/SIP.md`, and the primary sources in the source register
 
