@@ -114,11 +114,19 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     ),
     (
         "companion_ui",
-        ("companion-ui/", "app/api/", "api/", "tests/companion_ui/", "tests/api/"),
+        (
+            "companion-ui/",
+            "app/api/",
+            "api/",
+            "tests/companion_ui/",
+            "tests/api/",
+            "tests/architecture/test_openapi_static_contract.py",
+        ),
         (
             "tests/companion_ui",
             "tests/api",
             "tests/architecture/test_openapi_sync.py",
+            "tests/architecture/test_openapi_static_contract.py",
             *E2E_TARGETS["companion_ui"],
         ),
     ),
