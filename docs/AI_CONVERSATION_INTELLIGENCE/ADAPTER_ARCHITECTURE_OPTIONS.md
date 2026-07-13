@@ -66,7 +66,8 @@ drift while preserving source truth, lineage, deletion semantics, and legible fa
 - `docs/AI_CONVERSATION_INTELLIGENCE/PRIVACY_SECURITY_AND_DATA_OWNERSHIP.md`
 - `docs/boundaries/EBF.md`
 - `docs/boundaries/SIP.md`
+- `docs/boundaries/PDM.md`
 
 ## Related GitHub Issues
 
-Parent #3194; bounded child #3596, blocked on #3595.
+Parent #3194; bounded child #3596, delivered after prerequisite #3595.

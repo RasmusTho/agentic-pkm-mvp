@@ -1,6 +1,6 @@
 State: Active advisory research specification for parent validation hub #3194. No runtime capability, adapter, ingestion path, schema, or product decision is enacted.
 Doc role: Target-state research specification directory
-Authority: Owns the delivered privacy baseline and the remaining bounded research sequence under #3194; subordinate to current Product owner docs, boundary charters, contracts, and any later accepted ADR.
+Authority: Owns the delivered privacy and adapter-research baselines and the remaining bounded research sequence under #3194; subordinate to current Product owner docs, boundary charters, contracts, and any later accepted ADR.
 Owner: AI Conversation Intelligence research roadmap (#3194)
 Temporal class: strategic
 Review cadence: event-driven
@@ -22,20 +22,18 @@ The already delivered inputs are:
 - [conceptual conversation data model](../research/AI_CONVERSATION_INTELLIGENCE_DATA_MODEL.md) (#3196);
 - [knowledge taxonomy](../research/AI_CONVERSATION_INTELLIGENCE_KNOWLEDGE_TAXONOMY.md) (#3197).
 - [privacy, security, and data-ownership baseline](../research/AI_CONVERSATION_INTELLIGENCE_PRIVACY_SECURITY_AND_DATA_OWNERSHIP.md) (#3595).
+- [adapter architecture options](../research/AI_CONVERSATION_INTELLIGENCE_ADAPTER_ARCHITECTURE_OPTIONS.md) (#3596).
 
 ## Remaining research tasks and execution order
 
-1. [Adapter architecture options](ADAPTER_ARCHITECTURE_OPTIONS.md) — compare provider-neutral
-   acquisition seams under the privacy baseline.
-2. [Feasibility prototype scope](FEASIBILITY_PROTOTYPE_SCOPE.md) — define a docs-only, zero-write
+1. [Feasibility prototype scope](FEASIBILITY_PROTOTYPE_SCOPE.md) — define a docs-only, zero-write
    experiment with measurable stop/go criteria.
-3. [Research summary and decision gate](RESEARCH_SUMMARY_AND_DECISION_GATE.md) — reconcile all
+2. [Research summary and decision gate](RESEARCH_SUMMARY_AND_DECISION_GATE.md) — reconcile all
    research, publish the bounded implementation backlog, and author an ADR only if a real decision
    is mature and authorized.
 
-The remaining tasks are serial. The delivered privacy and ownership baseline constrains admissible
-acquisition; acquisition seams constrain the prototype; all prior evidence is required before
-synthesis or an ADR decision.
+The remaining tasks are serial. The delivered privacy/ownership and adapter-research baselines
+constrain the prototype; all prior evidence is required before synthesis or an ADR decision.
 
 ## Cross-task invariants / interaction safety
 
@@ -73,9 +71,10 @@ decision or evidence without inventing a ruling.
 ## Relationship to GitHub issues
 
 - Parent validation hub: #3194 (`agent:blocked` while children remain).
-- Delivered research: #3195, #3196, #3197, and #3595 (privacy/security/data ownership).
-- Remaining children: #3596 (adapter architecture), #3597 (feasibility prototype scope), and #3598
-  (research summary/ADR gate). They proceed serially; each becomes eligible for strict readiness
+- Delivered research: #3195, #3196, #3197, #3595 (privacy/security/data ownership), and #3596
+  (adapter architecture options).
+- Remaining children: #3597 (feasibility prototype scope) and #3598 (research summary/ADR gate).
+  They proceed serially; each becomes eligible for strict readiness
   only after its predecessor is delivered and its parent receipt is verified.
 
 ## Non-goals
