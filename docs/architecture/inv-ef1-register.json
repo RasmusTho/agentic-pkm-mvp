@@ -1290,6 +1290,13 @@
       "issue": "#2892"
     },
     {
+      "artifact": "docs/development/BUILDER_SYSTEM_PROCESS_MAP.md",
+      "category": "iii",
+      "why_load_bearing": "The Builder System owner doc preserves the explicit machine boundary required by the verification dispatch contract.",
+      "disposition": "stay",
+      "issue": "#3602"
+    },
+    {
       "artifact": "docs/ops/COLIMA_FULL_HOST_MOUNT.md",
       "category": "iii",
       "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
