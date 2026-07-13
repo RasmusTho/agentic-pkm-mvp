@@ -374,7 +374,7 @@ class Selection:
     def pytest_args(self) -> str:
         marker = f'-m "{PR_MARKER_EXPRESSION}"'
         if self.full_suite:
-            return f"-q {marker}"
+            return f"-q {marker} tests --ignore=tests/e2e"
         return " ".join(("-q", marker, *self.targets))
 
 

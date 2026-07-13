@@ -68,3 +68,6 @@ def test_ci_smoke_keeps_legacy_skills_lint_when_consolidating_smoke() -> None:
 
     assert "cache: pip" in workflow
     assert "python3 scripts/lint_skills_consistency.py" in workflow
+    assert "docs/DIAGRAMS.md must not contain literal" in workflow
+    assert "Mermaid fences must not be indented" in workflow
+    assert "Forbidden math fence syntax inside table detected" in workflow

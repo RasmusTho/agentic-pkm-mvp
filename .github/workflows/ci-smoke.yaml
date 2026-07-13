@@ -143,6 +143,9 @@ jobs:
           grep -q '```mermaid' docs/DIAGRAMS.md
           grep -q '<!-- DOCS-LINKS:BEGIN -->' README.md
           grep -q '<!-- DOCS-LINKS:END -->' README.md
+          grep -qF '\n' docs/DIAGRAMS.md && { echo "docs/DIAGRAMS.md must not contain literal \\n sequences"; exit 1; } || true
+          grep -qE '^[[:space:]]+```mermaid' docs/DIAGRAMS.md && { echo "Mermaid fences must not be indented"; exit 1; } || true
+          grep -qF '$begin:math:text$' docs/DIAGRAMS.md && { echo "Forbidden math fence syntax inside table detected"; exit 1; } || true
 
       # Kept here when the legacy `smoke` workflow is retired. This is
       # intentionally unconditional so governance-only PRs retain coverage.

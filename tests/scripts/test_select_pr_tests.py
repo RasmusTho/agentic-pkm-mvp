@@ -559,6 +559,7 @@ def test_any_alembic_versions_migration_change_selects_full_suite() -> None:
 
     assert selection.full_suite is True
     assert selection.reason == "database migration or schema surface changed"
+    assert "tests --ignore=tests/e2e" in selection.pytest_args
 
 
 def test_bundle_schema_and_invariant_change_selects_episodes_coverage() -> None:
