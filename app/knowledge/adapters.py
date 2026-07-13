@@ -276,6 +276,15 @@ class FsVaultAdapter:
                         dir_fd=parent_fd,
                         follow_symlinks=False,
                     )
+                    staged_sync_fd = os.open(
+                        staged_name,
+                        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                        dir_fd=parent_fd,
+                    )
+                    try:
+                        os.fsync(staged_sync_fd)
+                    finally:
+                        os.close(staged_sync_fd)
                     opened_mode = stat.S_IMODE(opened_stat.st_mode)
 
                 _require_anchored_directory_identity(

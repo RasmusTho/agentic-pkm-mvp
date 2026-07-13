@@ -229,6 +229,52 @@ def test_rewritten_write_preserves_existing_file_mode(tmp_path: Path) -> None:
     assert target.stat().st_mode & 0o777 == 0o644
 
 
+def test_rewritten_write_fsyncs_staged_mode_before_atomic_exchange(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/mode-durability.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    target.chmod(0o644)
+    expected_version = hashlib.sha256(b"observed body").hexdigest()
+    real_chmod = os.chmod
+    real_fsync = os.fsync
+    real_exchange = adapters_module._atomic_exchange_at
+    staged_mode_changed = False
+    staged_mode_synced = False
+
+    def recording_chmod(path, mode, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        nonlocal staged_mode_changed
+        real_chmod(path, mode, **kwargs)
+        if str(path).endswith(".rewrite-swap"):
+            staged_mode_changed = True
+
+    def recording_fsync(fd: int) -> None:
+        nonlocal staged_mode_synced
+        if staged_mode_changed and stat.S_ISREG(os.fstat(fd).st_mode):
+            staged_mode_synced = True
+        real_fsync(fd)
+
+    def asserting_exchange(
+        first_dir_fd: int,
+        first_name: str,
+        second_dir_fd: int,
+        second_name: str,
+    ) -> None:
+        assert staged_mode_synced
+        real_exchange(first_dir_fd, first_name, second_dir_fd, second_name)
+
+    monkeypatch.setattr(os, "chmod", recording_chmod)
+    monkeypatch.setattr(os, "fsync", recording_fsync)
+    monkeypatch.setattr(adapters_module, "_atomic_exchange_at", asserting_exchange)
+
+    adapter.write_note(locator, "ENGINE", expected_version=expected_version)
+
+    assert target.stat().st_mode & 0o777 == 0o644
+
+
 def test_rewritten_write_preserves_human_save_when_rollback_exchange_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
