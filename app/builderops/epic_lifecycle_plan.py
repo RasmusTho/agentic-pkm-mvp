@@ -150,11 +150,9 @@ def _plan_claim(
     labels = set(issue["labels"])
     if "agent:ready" not in labels:
         plan["blocked_reasons"].append("missing-agent-ready-label")
-    if issue["project_status"] != "Ready":
-        plan["blocked_reasons"].append("project-status-not-ready")
     if plan["blocked_reasons"]:
         plan["authority_notes"].append(
-            "Claim planning only proposes mutations for open Ready issues with agent:ready."
+            "Claim planning only proposes mutations for open issues with agent:ready."
         )
         return
 
