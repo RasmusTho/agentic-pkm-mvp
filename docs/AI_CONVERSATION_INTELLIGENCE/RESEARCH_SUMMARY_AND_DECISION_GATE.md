@@ -67,7 +67,7 @@ boundary that prevents advisory findings from becoming architecture by accumulat
 - `docs/AI_CONVERSATION_INTELLIGENCE/README.md`
 - All `docs/research/AI_CONVERSATION_INTELLIGENCE_*.md` research artifacts
 - `docs/development/PARENT_ISSUE_CLOSURE.md`
-- `docs/adr/README.md`
+- `docs/adr/INDEX.md`
 
 ## Related GitHub Issues
 
