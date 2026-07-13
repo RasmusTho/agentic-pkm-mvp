@@ -221,6 +221,14 @@ def restore(backup_dir: Path, target: DispatcherPaths) -> dict[str, str]:
         target.state_dir.exists() and any(target.state_dir.iterdir())
     ):
         raise ValueError("Restore target must be a separate, empty state root")
+    target_root = target.state_dir.resolve()
+    try:
+        db_relative = target.db_path.resolve().relative_to(target_root)
+        events_relative = target.events_path.resolve().relative_to(target_root)
+    except ValueError as exc:
+        raise ValueError("Restore artifacts must be inside the target state root") from exc
+    if db_relative == events_relative:
+        raise ValueError("Restore database and events targets must be distinct")
     source = backup_dir / DEFAULT_DB_NAME
     if not source.exists():
         raise ValueError(f"Backup database missing: {source}")
@@ -243,12 +251,27 @@ def restore(backup_dir: Path, target: DispatcherPaths) -> dict[str, str]:
         raise ValueError(f"Backup database integrity failed: {source_integrity}")
     if schema_error is not None:
         raise ValueError(f"Backup database is invalid: {schema_error}")
-    target.state_dir.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(source) as input_db, sqlite3.connect(target.db_path) as output:
-        input_db.backup(output)
-    with sqlite3.connect(target.db_path) as conn:
-        integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
-    if integrity != "ok":
-        raise ValueError(f"Restored database integrity failed: {integrity}")
-    shutil.copy2(events, target.events_path)
+    target.state_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{target.state_dir.name}.tmp-", dir=target.state_dir.parent)
+    )
+    staged_db = staging / db_relative
+    staged_events = staging / events_relative
+    try:
+        staged_db.parent.mkdir(parents=True, exist_ok=True)
+        staged_events.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(source) as input_db, sqlite3.connect(staged_db) as output:
+            input_db.backup(output)
+        with sqlite3.connect(staged_db) as conn:
+            integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+        if integrity != "ok":
+            raise ValueError(f"Restored database integrity failed: {integrity}")
+        shutil.copy2(events, staged_events)
+        staging.replace(target.state_dir)
+    except (OSError, sqlite3.Error) as exc:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise ValueError(f"Dispatcher restore failed: {exc}") from exc
+    except ValueError:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
     return {"db": str(target.db_path), "events": str(target.events_path), "integrity": integrity}

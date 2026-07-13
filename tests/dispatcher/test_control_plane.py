@@ -221,6 +221,49 @@ def test_restore_rejects_corrupt_events_without_creating_target(tmp_path: Path) 
     assert not restored.state_dir.exists()
 
 
+def test_restore_events_copy_failure_leaves_target_empty_and_retryable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, paths = _store(tmp_path)
+    paths.events_path.touch()
+    backup = tmp_path / "backup"
+    control_plane.backup(paths, backup)
+    restored = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "restored")})
+    original_copy2 = control_plane.shutil.copy2
+
+    def fail_events_copy(source: object, destination: object, *_args: object, **_kwargs: object) -> object:
+        if Path(source) == backup / "events.jsonl":
+            raise OSError("events copy failed")
+        return original_copy2(source, destination, *_args, **_kwargs)
+
+    monkeypatch.setattr(control_plane.shutil, "copy2", fail_events_copy)
+    with pytest.raises(ValueError, match="Dispatcher restore failed: events copy failed"):
+        control_plane.restore(backup, restored)
+    assert not restored.state_dir.exists()
+    assert not list(tmp_path.glob(".restored.tmp-*"))
+
+    monkeypatch.setattr(control_plane.shutil, "copy2", original_copy2)
+    assert control_plane.restore(backup, restored)["integrity"] == "ok"
+
+
+def test_restore_rejects_custom_artifacts_outside_empty_target_root(tmp_path: Path) -> None:
+    _, paths = _store(tmp_path)
+    paths.events_path.touch()
+    backup = tmp_path / "backup"
+    control_plane.backup(paths, backup)
+    restored = load_paths(
+        {
+            "DISPATCHER_STATE_DIR": str(tmp_path / "restored"),
+            "DISPATCHER_DB_PATH": str(tmp_path / "live" / "dispatcher.sqlite3"),
+            "DISPATCHER_EVENTS_PATH": str(tmp_path / "live" / "events.jsonl"),
+        }
+    )
+    with pytest.raises(ValueError, match="artifacts must be inside"):
+        control_plane.restore(backup, restored)
+    assert not restored.state_dir.exists()
+    assert not (tmp_path / "live").exists()
+
+
 def test_mode_transition_rejects_stale_revision_without_losing_accepted_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store, paths = _store(tmp_path)
     monkeypatch.setattr(control_plane, "health", lambda _paths: {"ok": False})
