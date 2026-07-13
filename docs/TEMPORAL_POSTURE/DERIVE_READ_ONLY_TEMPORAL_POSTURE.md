@@ -11,6 +11,8 @@ can_parallelize_with: []
 
 # Derive Read-Only Temporal Posture
 
+State: Implemented. Delivered by issue #3549 on 2026-07-13.
+
 ## Purpose
 
 Provide an inspectable temporal-review overlay that is honest about what date evidence does and does not establish.

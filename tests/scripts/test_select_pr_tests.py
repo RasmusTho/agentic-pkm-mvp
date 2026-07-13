@@ -203,6 +203,21 @@ def test_premortem_admission_change_selects_decision_calibration_coverage() -> N
     assert "tests/agent_memory/test_ask_synthesis_gate.py" in selection.targets
 
 
+def test_temporal_posture_change_selects_semantic_noncollapse_coverage() -> None:
+    selection = select_tests(
+        [
+            "app/temporal/posture.py",
+            "config/temporal_posture.v1.json",
+            "tests/temporal/test_temporal_posture.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("temporal_posture",)
+    assert "tests/temporal" in selection.targets
+    assert "tests/retrieval/test_view_freshness_metadata.py" in selection.targets
+
+
 def test_journaling_change_has_a_ci_owner() -> None:
     selection = select_tests(
         ["app/journaling/day_context.py", "tests/journaling/test_assemble_day_context.py"]

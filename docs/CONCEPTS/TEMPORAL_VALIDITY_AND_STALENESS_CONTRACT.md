@@ -158,6 +158,10 @@ For now, the correct posture is:
 - allow future representation through signals, policies, or explicit markers,
 - and avoid prematurely hardening one flat metadata field as the only model.
 
+The delivered Temporal Posture v1 experiment (`app/temporal/posture.py` and
+`config/temporal_posture.v1.json`) is one such secondary signal: a read-time, allowlisted review
+overlay that never persists validity, changes canonical artifacts, or affects retrieval order.
+
 Possible future representations may include:
 - explicit re-evaluation markers,
 - freshness signals,
