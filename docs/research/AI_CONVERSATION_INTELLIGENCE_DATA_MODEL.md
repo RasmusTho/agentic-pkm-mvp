@@ -100,6 +100,25 @@ An edited message is not silently overwritten in the research model. If the sour
 they are related as revisions. If it exposes only the latest state, the acquisition records that
 limitation; the model does not fabricate prior versions.
 
+### Minimum conceptual lifecycles
+
+Lifecycle describes what has happened to an object; it does not confer truth or authority. These
+working state families are intentionally conceptual and do not prescribe enums, transitions,
+storage, automation, or retention behavior.
+
+| Concept | Minimum states or dispositions worth distinguishing | Boundary rule |
+| --- | --- | --- |
+| `Acquisition` | initiated, completed, partial, failed, withdrawn | Partial or failed acquisition never silently appears complete; withdrawal records the disposition without claiming that every derived copy was erased. |
+| `ConversationRecord` / acquired material | retained, access-restricted, superseded-by-recapture, redacted, deletion-requested, unavailable | The source record is not rewritten to match later interpretation; retention and deletion semantics need a dedicated policy issue. |
+| `NormalizedProjection` | proposed, generated, invalidated, superseded, rebuildable/unavailable | Invalidating or rebuilding a projection does not alter the acquired source or upgrade standing. |
+| `KnowledgeCandidate` | proposed, under-review, accepted-to-governance, rejected, corrected, superseded, deferred | “Accepted-to-governance” is only a routing disposition; HKA standing still requires GOV and an authority receipt. |
+| `MemoryCandidate` | proposed, under-review, accepted-to-MEM, rejected, corrected, stale, forgotten/withdrawn | MEM owns the eventual `MemoryRecord` lifecycle; acceptance into MEM remains advisory and is not HKA promotion. |
+| `AcceptedArtifactRef` | current link, superseded link, unavailable link | The referenced artifact's lifecycle and authority remain owned by HKA/GOV, not by the conversation model. |
+
+Transitions should be attributable review or derivation activities with timestamps, reasons, and
+the prior state. A source deletion, candidate rejection, projection invalidation, memory forgetting,
+and HKA supersession are different acts and must not share one overloaded “deleted” state.
+
 ### Identity boundaries
 
 Provider IDs are source-scoped locators, not universal semantic identity. A usable identity key is
@@ -164,11 +183,13 @@ association. [PROV-DM](https://www.w3.org/TR/prov-dm/) further distinguishes spe
 alternate entities. This memo uses those distinctions as research grounding for explicit lineage
 and version posture; it does not propose adopting RDF, PROV serialization, or global IRIs.
 
-[Activity Streams 2.0](https://www.w3.org/TR/activitystreams-core/) demonstrates a generalized
-separation among objects, actors, activities, attachments, attribution, context, and reply
-relations. It supports treating provider-specific interaction items as extensible source objects,
-but it is a social-activity interchange model, not an AI-conversation schema. This memo therefore
-borrows no normative types from it.
+[Activity Streams 2.0 Core](https://www.w3.org/TR/activitystreams-core/) demonstrates a generalized
+separation among objects, actors, and activities. Its separate
+[Activity Vocabulary](https://www.w3.org/TR/activitystreams-vocabulary/) defines properties such as
+attachments, attribution, context, and reply relations. Together they support treating
+provider-specific interaction items as extensible source objects, but they form a social-activity
+interchange model, not an AI-conversation schema. This memo therefore borrows no normative types
+from either specification.
 
 ## Minimum provenance envelope
 
@@ -263,7 +284,7 @@ Creating or implementing these issues is outside #3196.
 | [MemoryRecord](../contracts/MEMORY_RECORD.md) | Machine memory requires explicit review, provenance, confidence, staleness, and correction posture. | A candidate is not a memory record or durable knowledge by extraction alone. |
 | [Input-source options](AI_CONVERSATION_INTELLIGENCE_INPUT_SOURCES.md) | Acquisition modes, provenance risks, and the recommendation that the model remain provider-neutral. | No adapter or ingestion path is assumed. |
 | [W3C PROV-O](https://www.w3.org/TR/prov-o/) and [PROV-DM](https://www.w3.org/TR/prov-dm/) | Entity/activity/agent separation, derivation, attribution, specialization, and alternate-version grounding. | No adoption of RDF, PROV serialization, or its complete ontology. |
-| [W3C Activity Streams 2.0](https://www.w3.org/TR/activitystreams-core/) | Comparative grounding for extensible objects, actors, activities, attachments, attribution, context, and replies. | It is not selected as the conversation data model. |
+| [W3C Activity Streams 2.0 Core](https://www.w3.org/TR/activitystreams-core/) and [Activity Vocabulary](https://www.w3.org/TR/activitystreams-vocabulary/) | Comparative grounding for extensible objects, actors, activities, attachments, attribution, context, and replies. | Neither specification is selected as the conversation data model. |
 
 ## Explicit non-claims
 
