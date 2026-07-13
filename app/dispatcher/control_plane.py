@@ -10,15 +10,60 @@ from pathlib import Path
 from typing import Any
 
 from app.dispatcher.config import DispatcherPaths
+from app.dispatcher.schema import SCHEMA_VERSION
 from app.dispatcher.store import SqliteStore
 
 STATE_KEY = "control_plane_state"
 MODES = frozenset({"normal", "degraded", "recovery"})
 _ALLOWED = {"normal": {"degraded"}, "degraded": {"recovery"}, "recovery": {"normal"}}
+_REQUIRED_TABLES = frozenset(
+    {"dispatcher_tasks", "dispatcher_leases", "dispatcher_events", "dispatcher_meta"}
+)
+_REQUIRED_COLUMNS = {
+    "dispatcher_tasks": frozenset({"task_id", "issue_number", "status", "repo"}),
+    "dispatcher_leases": frozenset(
+        {"lease_id", "resource", "holder", "expires_at", "released_at"}
+    ),
+    "dispatcher_events": frozenset(
+        {"event_id", "timestamp", "task_id", "event_type", "actor"}
+    ),
+    "dispatcher_meta": frozenset({"key", "value"}),
+}
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _dispatcher_schema_error(conn: sqlite3.Connection) -> str | None:
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    missing = sorted(_REQUIRED_TABLES - tables)
+    if missing:
+        return f"missing dispatcher tables: {', '.join(missing)}"
+    for table, required in _REQUIRED_COLUMNS.items():
+        columns = {
+            str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        missing_columns = sorted(required - columns)
+        if missing_columns:
+            return f"missing dispatcher columns in {table}: {', '.join(missing_columns)}"
+    row = conn.execute(
+        "SELECT value FROM dispatcher_meta WHERE key = 'schema_version'"
+    ).fetchone()
+    if row is None:
+        return "missing dispatcher schema_version"
+    try:
+        version = int(row[0])
+    except (TypeError, ValueError):
+        return "invalid dispatcher schema_version"
+    if version != SCHEMA_VERSION:
+        return f"unsupported dispatcher schema_version: {version}"
+    return None
 
 
 def state(store: SqliteStore) -> dict[str, Any]:
@@ -49,6 +94,10 @@ def health(paths: DispatcherPaths) -> dict[str, Any]:
     try:
         with sqlite3.connect(paths.db_path, timeout=0) as conn:
             integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+            schema_error = _dispatcher_schema_error(conn)
+            if schema_error is not None:
+                result["db"]["error"] = schema_error
+                return result
             conn.execute("BEGIN IMMEDIATE")
             conn.rollback()
         result["db"].update({"integrity": integrity, "writable": True})
@@ -96,20 +145,22 @@ def transition(store: SqliteStore, paths: DispatcherPaths, mode: str, *, activat
 
 def backup(paths: DispatcherPaths, destination: Path) -> dict[str, str]:
     resolved_destination = destination.resolve()
+    target = destination / paths.db_path.name
+    events_target = destination / paths.events_path.name
+    source_paths = {paths.db_path.resolve(), paths.events_path.resolve()}
+    target_paths = {target.resolve(), events_target.resolve()}
     if (
         resolved_destination == paths.state_dir.resolve()
         or resolved_destination.is_relative_to(paths.state_dir.resolve())
-        or (resolved_destination / paths.db_path.name).resolve() == paths.db_path.resolve()
+        or bool(source_paths & target_paths)
     ):
         raise ValueError("Backup destination must be separate from dispatcher state")
     proof = health(paths)
     if not proof["ok"]:
         raise ValueError("Dispatcher state is unsafe to back up")
     destination.mkdir(parents=True, exist_ok=True)
-    target = destination / paths.db_path.name
     with sqlite3.connect(paths.db_path) as source, sqlite3.connect(target) as output:
         source.backup(output)
-    events_target = destination / paths.events_path.name
     shutil.copy2(paths.events_path, events_target)
     return {"db": str(target), "events": str(events_target), "created_at": _now()}
 
@@ -134,10 +185,13 @@ def restore(backup_dir: Path, target: DispatcherPaths) -> dict[str, str]:
     try:
         with sqlite3.connect(source, timeout=0) as input_db:
             source_integrity = input_db.execute("PRAGMA integrity_check").fetchone()[0]
+            schema_error = _dispatcher_schema_error(input_db)
     except sqlite3.Error as exc:
         raise ValueError(f"Backup database is invalid: {exc}") from exc
     if source_integrity != "ok":
         raise ValueError(f"Backup database integrity failed: {source_integrity}")
+    if schema_error is not None:
+        raise ValueError(f"Backup database is invalid: {schema_error}")
     target.state_dir.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(source) as input_db, sqlite3.connect(target.db_path) as output:
         input_db.backup(output)

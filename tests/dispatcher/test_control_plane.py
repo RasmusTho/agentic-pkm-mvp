@@ -73,6 +73,70 @@ def test_restore_rejects_corrupt_backup_without_creating_target(tmp_path: Path) 
     assert not restored.state_dir.exists()
 
 
+@pytest.mark.parametrize(
+    "schema_sql, expected_error",
+    [
+        (None, "missing dispatcher tables"),
+        ("CREATE TABLE unrelated (id INTEGER)", "missing dispatcher tables"),
+        (
+            """
+            CREATE TABLE dispatcher_tasks (task_id TEXT);
+            CREATE TABLE dispatcher_leases (lease_id TEXT);
+            CREATE TABLE dispatcher_events (event_id TEXT);
+            CREATE TABLE dispatcher_meta (key TEXT, value TEXT);
+            INSERT INTO dispatcher_meta VALUES ('schema_version', '2');
+            """,
+            "missing dispatcher columns",
+        ),
+    ],
+)
+def test_recovery_rejects_sqlite_without_dispatcher_schema(
+    tmp_path: Path, schema_sql: str | None, expected_error: str
+) -> None:
+    paths = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "state")})
+    paths.state_dir.mkdir()
+    with sqlite3.connect(paths.db_path) as conn:
+        if schema_sql is not None:
+            conn.executescript(schema_sql)
+    paths.events_path.touch()
+
+    proof = control_plane.health(paths)
+    assert proof["ok"] is False
+    assert expected_error in proof["db"]["error"]
+    with pytest.raises(ValueError, match="unsafe"):
+        control_plane.backup(paths, tmp_path / "backup")
+
+    backup = tmp_path / "restore-source"
+    backup.mkdir()
+    (backup / paths.db_path.name).write_bytes(paths.db_path.read_bytes())
+    (backup / paths.events_path.name).write_text("", encoding="utf-8")
+    restored = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "restored")})
+    with pytest.raises(ValueError, match=expected_error):
+        control_plane.restore(backup, restored)
+    assert not restored.state_dir.exists()
+
+
+def test_backup_rejects_custom_events_target_equal_to_source_before_writing(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    logs_dir = tmp_path / "logs"
+    paths = load_paths(
+        {
+            "DISPATCHER_STATE_DIR": str(state_dir),
+            "DISPATCHER_EVENTS_PATH": str(logs_dir / "custom.jsonl"),
+        }
+    )
+    store = SqliteStore(paths.db_path, JsonlEventWriter(paths.events_path))
+    store.initialize()
+    logs_dir.mkdir()
+    paths.events_path.touch()
+
+    with pytest.raises(ValueError, match="separate from dispatcher state"):
+        control_plane.backup(paths, logs_dir)
+    assert not (logs_dir / paths.db_path.name).exists()
+
+
 def test_restore_rejects_corrupt_events_without_creating_target(tmp_path: Path) -> None:
     _, paths = _store(tmp_path)
     backup = tmp_path / "backup"
