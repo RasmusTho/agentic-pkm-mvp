@@ -472,15 +472,16 @@ def test_rewritten_write_stays_on_anchored_parent_when_path_is_swapped_to_symlin
         adapters_module, "_open_conflict_directory", swap_parent_after_anchor
     )
 
-    adapter.write_note(
-        locator,
-        "ENGINE",
-        expected_version=hashlib.sha256(b"observed body").hexdigest(),
-    )
+    with pytest.raises(KnowledgeWriteConflict, match="write directory changed"):
+        adapter.write_note(
+            locator,
+            "ENGINE",
+            expected_version=hashlib.sha256(b"observed body").hexdigest(),
+        )
 
-    assert (moved_notes / target.name).read_bytes() == b"ENGINE"
+    assert (moved_notes / target.name).read_bytes() == b"observed body"
     assert outside_target.read_bytes() == b"OUTSIDE"
-    assert list((moved_notes / "_conflicts").glob("*.md.conflict"))
+    assert not list((moved_notes / "_conflicts").glob("*.md.conflict"))
 
 
 def test_rewritten_write_stays_on_anchored_conflict_dir_when_path_is_swapped(
@@ -516,15 +517,60 @@ def test_rewritten_write_stays_on_anchored_conflict_dir_when_path_is_swapped(
         adapters_module, "_atomic_exchange_at", swap_conflict_dir_after_anchor
     )
 
-    adapter.write_note(
-        locator,
-        "ENGINE",
-        expected_version=hashlib.sha256(b"observed body").hexdigest(),
-    )
+    with pytest.raises(KnowledgeWriteConflict, match="write directory changed"):
+        adapter.write_note(
+            locator,
+            "ENGINE",
+            expected_version=hashlib.sha256(b"observed body").hexdigest(),
+        )
 
     assert target.read_bytes() == b"ENGINE"
     assert list(retained_conflicts.glob("*.md.conflict"))
     assert list(outside.iterdir()) == []
+
+
+def test_rewritten_write_never_reports_success_after_parent_moves_at_exchange(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    notes = vault_root / "Notes"
+    moved_notes = tmp_path / "moved-notes"
+    notes.mkdir(parents=True)
+    target = notes / "race.md"
+    target.write_bytes(b"observed body")
+    adapter = FsVaultAdapter(vault_root)
+    locator = NoteLocator(vault="Vault", path="Notes/race.md")
+    real_exchange = adapters_module._atomic_exchange_at
+    swapped = False
+
+    def move_parent_at_exchange(
+        first_dir_fd: int,
+        first_name: str,
+        second_dir_fd: int,
+        second_name: str,
+    ) -> None:
+        nonlocal swapped
+        if not swapped:
+            notes.rename(moved_notes)
+            notes.mkdir()
+            (notes / target.name).write_bytes(b"THIRD-WRITER")
+            swapped = True
+        real_exchange(first_dir_fd, first_name, second_dir_fd, second_name)
+
+    monkeypatch.setattr(adapters_module, "_atomic_exchange_at", move_parent_at_exchange)
+
+    with pytest.raises(KnowledgeWriteConflict, match="write directory changed"):
+        adapter.write_note(
+            locator,
+            "ENGINE",
+            expected_version=hashlib.sha256(b"observed body").hexdigest(),
+        )
+
+    assert (notes / target.name).read_bytes() == b"THIRD-WRITER"
+    assert (moved_notes / target.name).read_bytes() == b"ENGINE"
+    artifacts = list((moved_notes / "_conflicts").glob("*.md.conflict"))
+    assert len(artifacts) == 1
+    assert artifacts[0].read_bytes() == b"observed body"
 
 
 def test_rewritten_write_fsyncs_anchored_directories(

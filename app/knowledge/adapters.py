@@ -131,6 +131,36 @@ def _read_handle(handle) -> bytes:  # type: ignore[no-untyped-def]
     return handle.read()
 
 
+def _require_anchored_directory_identity(
+    parent_fd: int,
+    parent_path: Path,
+    conflict_fd: int,
+    locator: NoteLocator,
+) -> None:
+    try:
+        current_parent = os.stat(parent_path, follow_symlinks=False)
+        anchored_parent = os.fstat(parent_fd)
+        current_conflict = os.stat(
+            "_conflicts", dir_fd=parent_fd, follow_symlinks=False
+        )
+        anchored_conflict = os.fstat(conflict_fd)
+    except OSError as exc:
+        raise KnowledgeWriteConflict(
+            f"version mismatch for rewritten note {locator.path}: "
+            "anchored write directory changed"
+        ) from exc
+    if (
+        not stat.S_ISDIR(current_parent.st_mode)
+        or not _same_file_identity(current_parent, anchored_parent)
+        or not stat.S_ISDIR(current_conflict.st_mode)
+        or not _same_file_identity(current_conflict, anchored_conflict)
+    ):
+        raise KnowledgeWriteConflict(
+            f"version mismatch for rewritten note {locator.path}: "
+            "anchored write directory changed"
+        )
+
+
 class FsVaultAdapter:
     def __init__(
         self,
@@ -248,6 +278,9 @@ class FsVaultAdapter:
                     )
                     opened_mode = stat.S_IMODE(opened_stat.st_mode)
 
+                _require_anchored_directory_identity(
+                    parent_fd, target.parent, conflict_fd, locator
+                )
                 try:
                     _atomic_exchange_at(
                         parent_fd, target.name, parent_fd, staged_name
@@ -264,6 +297,9 @@ class FsVaultAdapter:
                 # this pre-exchange version as a standard conflicted copy.
                 preserve_staged_conflict = True
                 os.fsync(parent_fd)
+                _require_anchored_directory_identity(
+                    parent_fd, target.parent, conflict_fd, locator
+                )
                 artifact_name = _conflict_artifact_name(locator)
                 os.rename(
                     staged_name,
@@ -332,6 +368,9 @@ class FsVaultAdapter:
                             f"version mismatch for rewritten note {locator.path}: "
                             "target content changed after atomic exchange"
                         )
+                _require_anchored_directory_identity(
+                    parent_fd, target.parent, conflict_fd, locator
+                )
             except (FileNotFoundError, NotADirectoryError) as exc:
                 raise KnowledgeWriteConflict(
                     f"version mismatch for rewritten note {locator.path}: target is missing"
