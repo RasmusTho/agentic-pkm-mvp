@@ -26,6 +26,7 @@ from app.builderops.ckm_reevaluation import (
     build_ckm_reevaluation_report,
 )
 from app.builderops.ckm.models import CkmValidationError
+from app.builderops.ckm.ingest_github import ingest_github
 from app.builderops.ckm.ingest_repo import ingest_repo
 from app.builderops.ckm.seed import SeedManifestError, seed_capabilities
 from app.builderops.ckm.store import CkmStore
@@ -384,18 +385,36 @@ def ckm_seed(ctx: click.Context) -> None:
     click.echo(f"seeded {result['seeded']} capabilities, {result['changed']} changed")
 
 
-@ckm.command("ingest", help="Ingest deterministic local repository artifacts into the CEG.")
-@click.option("--source", type=click.Choice(["repo"]), required=True)
+@ckm.command("ingest", help="Ingest repository and GitHub delivery artifacts into the CEG.")
+@click.option("--source", type=click.Choice(["repo", "github", "all"]), required=True)
 @click.option("--repo-root", type=click.Path(file_okay=False, path_type=Path), default=Path.cwd)
 @click.option("--git-limit", type=click.IntRange(1, 5000), default=500, show_default=True)
 @click.pass_context
 def ckm_ingest(ctx: click.Context, source: str, repo_root: Path, git_limit: int) -> None:
-    del source  # Reserved for the sibling source adapters documented by the CKM spec.
     try:
-        result = ingest_repo(_ckm_store(ctx), repo_root, git_limit=git_limit)
+        store = _ckm_store(ctx)
+        result: dict[str, Any] = {}
+        if source in {"repo", "all"}:
+            result["repo"] = ingest_repo(store, repo_root, git_limit=git_limit)
+        if source in {"github", "all"}:
+            result["github"] = ingest_github(store)
     except (OSError, ValueError, sqlite3.Error, subprocess.CalledProcessError) as exc:
-        raise click.ClickException(f"ckm repo ingestion failed: {exc}") from exc
-    segments = [f"{name}: {data['artifacts']} artifacts (+{data['changed']})" for name, data in result.items()]
+        raise click.ClickException(f"ckm ingestion failed: {exc}") from exc
+    if source == "github" and result["github"]["status"] != "ok":
+        click.echo(result["github"]["status"])
+        return
+    segments: list[str] = []
+    for name, data in result.get("repo", {}).items():
+        segments.append(f"{name}: {data['artifacts']} artifacts (+{data['changed']})")
+    github = result.get("github")
+    if github:
+        if github["status"] != "ok":
+            segments.append(github["status"])
+        else:
+            segments.extend(
+                f"github {name}: {data['artifacts']} artifacts (+{data['changed']})"
+                for name, data in (("issues", github["issues"]), ("pull_requests", github["pull_requests"]))
+            )
     click.echo("; ".join(segments))
 
 
