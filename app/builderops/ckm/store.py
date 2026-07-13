@@ -244,6 +244,26 @@ class CkmStore:
             rows = conn.execute("SELECT * FROM ckm_artifact ORDER BY source_ref").fetchall()
         return [CkmArtifact.from_row(row) for row in rows]
 
+    # --- Source watermarks ---------------------------------------------------
+
+    def get_watermark(self, source: str) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM ckm_watermark WHERE source = ?", (source,)
+            ).fetchone()
+        return str(row["value"]) if row is not None else None
+
+    def set_watermark(self, source: str, value: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO ckm_watermark (source, value, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(source) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+                """,
+                (source, value, utc_now()),
+            )
+            conn.commit()
+
     # --- Evidence edge ---------------------------------------------------------
 
     def upsert_evidence_edge(
