@@ -95,7 +95,12 @@ def transition(store: SqliteStore, paths: DispatcherPaths, mode: str, *, activat
 
 
 def backup(paths: DispatcherPaths, destination: Path) -> dict[str, str]:
-    if destination.resolve() == paths.state_dir.resolve():
+    resolved_destination = destination.resolve()
+    if (
+        resolved_destination == paths.state_dir.resolve()
+        or resolved_destination.is_relative_to(paths.state_dir.resolve())
+        or (resolved_destination / paths.db_path.name).resolve() == paths.db_path.resolve()
+    ):
         raise ValueError("Backup destination must be separate from dispatcher state")
     proof = health(paths)
     if not proof["ok"]:

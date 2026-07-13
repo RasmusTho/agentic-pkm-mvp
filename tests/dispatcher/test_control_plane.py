@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -50,6 +51,8 @@ def test_control_plane_rejects_missing_events_and_nonempty_restore_target(tmp_pa
     paths.events_path.touch()
     with pytest.raises(ValueError, match="Backup destination must be separate"):
         control_plane.backup(paths, paths.state_dir)
+    with pytest.raises(ValueError, match="Backup destination must be separate"):
+        control_plane.backup(paths, paths.state_dir / "nested")
     control_plane.backup(paths, tmp_path / "backup")
     restored = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "restored")})
     restored.state_dir.mkdir()
@@ -101,6 +104,15 @@ def test_cli_status_reads_persisted_control_plane_state(tmp_path: Path, monkeypa
     store.set_meta(control_plane.STATE_KEY, '{"activation_id":"receipt","mode":"recovery","revision":4,"updated_at":"now"}')
     assert main(["status", "--json"]) == 0
     assert '"mode": "recovery"' in capsys.readouterr().out
+
+
+def test_cli_status_emits_json_error_for_uninitialized_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "dispatcher.sqlite3").touch()
+    monkeypatch.setenv("DISPATCHER_STATE_DIR", str(state_dir))
+    assert main(["status", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["ok"] is False
 
 
 def test_expired_lease_rejects_heartbeat_and_preserves_takeover(tmp_path: Path) -> None:

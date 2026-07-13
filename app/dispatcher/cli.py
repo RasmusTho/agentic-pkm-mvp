@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from typing import Any
 
@@ -318,7 +319,7 @@ def _cmd_status(args: argparse.Namespace, store: SqliteStore) -> int:
         from app.dispatcher.control_plane import state
         try:
             control_plane = state(store)
-        except ValueError as exc:
+        except (ValueError, sqlite3.Error) as exc:
             return _emit_error(str(exc), args.json)
     else:
         control_plane = {"mode": "unavailable", "revision": None}
