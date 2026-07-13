@@ -544,7 +544,28 @@ def test_episodes_runtime_change_selects_episodes_coverage() -> None:
     assert selection.unowned_paths == ()
     assert "tests/episodes" in selection.targets
     assert "tests/invariants" in selection.targets
+    assert "tests/architecture/test_cross_scope_flow_schema.py" in selection.targets
     assert "tests/episodes/test_stream_registry.py" in selection.targets
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "docs/architecture/cross-scope-flow.md",
+        "schemas/_defs.schema.json",
+        "tests/architecture/test_cross_scope_flow_schema.py",
+    ],
+)
+def test_cross_scope_flow_contract_surface_selects_episodes_coverage(path: str) -> None:
+    selection = select_tests([path])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("episodes",)
+    assert selection.unowned_paths == ()
+    assert "tests/episodes" in selection.targets
+    assert "tests/invariants" in selection.targets
+    assert "tests/architecture/test_cross_scope_flow_schema.py" in selection.targets
+
 
 def test_standing_questions_store_change_selects_owned_coverage() -> None:
     selection = select_tests(
