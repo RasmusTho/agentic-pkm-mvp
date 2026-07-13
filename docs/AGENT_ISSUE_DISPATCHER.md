@@ -49,6 +49,12 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   before `retry_after`. Terminal completion additionally requires two fresh clean review receipts
   after the final durable repair attempt. Standard and strongest-capability repair budgets are
   persisted across restart.
+- The schema-valid coordinator receipt carries ordered repair/review events into the same
+  lease-fenced ledger; a no-repair delivery still requires two distinct clean review sessions.
+  Check eligibility selects the latest GitHub rerun per check name. Schema-v3 health, backup, and
+  restore validation covers verification runs, attempts, exceptions, and their write-critical keys.
+- The Codex process boundary drains bounded stderr concurrently and rejects non-zero exits or
+  terminal error events even when stdout contained an otherwise valid receipt.
 - `verification-ingest` and `verification-status` are host-neutral dispatcher CLI surfaces. The
   Demerzel enable/disable/poll wrapper and service configuration remain host-local outside Git.
 - GitHub Actions remains artifact-only. The consumer grants no mutation or merge authority beyond

@@ -27,6 +27,7 @@ from app.dispatcher.verification_dispatch import (
     VerificationRun,
     VerificationSubscriptionBusy,
 )
+from app.dispatcher.verification_agent_loop import VerificationAgentLoop
 
 
 @dataclass(frozen=True)
@@ -175,6 +176,15 @@ class LaunchConfig:
     developer_instructions: str
 
 
+class CodexExecFailure(RuntimeError):
+    def __init__(self, receipt: Mapping[str, object]) -> None:
+        self.receipt = dict(receipt)
+        super().__init__(
+            f"codex exec failed closed (exit={receipt.get('returncode')}): "
+            f"{receipt.get('stderr') or receipt.get('terminal_error') or 'no stderr'}"
+        )
+
+
 class CodexExecLauncher:
     """Explicit least-privilege non-interactive verification coordinator."""
 
@@ -254,6 +264,8 @@ class CodexExecLauncher:
         env = {k: v for k, v in os.environ.items() if k not in {"OPENAI_API_KEY", "CODEX_API_KEY"}}
         stop_heartbeat = threading.Event()
         heartbeat_thread: threading.Thread | None = None
+        stderr_thread: threading.Thread | None = None
+        stderr_chunks: list[str] = []
         if self.runner is subprocess.run:
             process = subprocess.Popen(
                 self.command(resume_session_id), cwd=self.worktree, env=env,
@@ -261,6 +273,16 @@ class CodexExecLauncher:
             )
             assert process.stdout is not None
             lines = process.stdout
+            assert process.stderr is not None
+
+            def drain_stderr() -> None:
+                while chunk := process.stderr.read(4096):
+                    stderr_chunks.append(chunk)
+                    if sum(map(len, stderr_chunks)) > 16_384:
+                        stderr_chunks[:] = ["".join(stderr_chunks)[-16_384:]]
+
+            stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+            stderr_thread.start()
             if on_heartbeat:
                 def pulse() -> None:
                     while not stop_heartbeat.wait(30):
@@ -273,14 +295,18 @@ class CodexExecLauncher:
                 capture_output=True, text=True, check=False,
             )
             lines = result.stdout.splitlines()
+            stderr_chunks = [str(getattr(result, "stderr", ""))[-16_384:]]
         thread_id: str | None = resume_session_id
         terminal: dict[str, object] | None = None
+        terminal_error: str | None = None
         schema = json.loads(self.receipt_schema.read_text(encoding="utf-8"))
         for line in lines:
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if event.get("type") in {"turn.failed", "error"}:
+                terminal_error = json.dumps(event, sort_keys=True)
             if event.get("type") == "thread.started" and isinstance(event.get("thread_id"), str):
                 thread_id = event["thread_id"]
                 if on_thread_started:
@@ -299,10 +325,28 @@ class CodexExecLauncher:
                             continue
                         terminal = candidate
         if self.runner is subprocess.run:
+            if stderr_thread:
+                stderr_thread.join(timeout=1)
             process.wait()
+            returncode = process.returncode
+            if stderr_thread:
+                stderr_thread.join(timeout=1)
             stop_heartbeat.set()
             if heartbeat_thread:
                 heartbeat_thread.join(timeout=1)
+        else:
+            returncode = result.returncode
+        if returncode != 0 or terminal_error is not None:
+            detail = "".join(stderr_chunks).strip() or terminal_error or "no stderr"
+            raise CodexExecFailure(
+                {
+                    "outcome": "codex_exec_failed",
+                    "returncode": returncode,
+                    "stderr": detail[-16_384:],
+                    "terminal_error": terminal_error,
+                    "session_id": thread_id,
+                }
+            )
         if not thread_id:
             raise RuntimeError("codex exec produced no thread identity")
         if terminal is None:
@@ -334,7 +378,19 @@ def live_truth_rejection(
         return "stale_head"
     if not checks:
         return "missing_checks"
-    for check in checks:
+    latest: dict[str, tuple[tuple[int, str, int], Mapping[str, object]]] = {}
+    for index, check in enumerate(checks):
+        name = check.get("name")
+        key = name if isinstance(name, str) and name else f"__unnamed_{index}"
+        check_id = check.get("id")
+        rank = (
+            check_id if isinstance(check_id, int) and not isinstance(check_id, bool) else -1,
+            str(check.get("started_at") or check.get("completed_at") or ""),
+            index,
+        )
+        if key not in latest or rank > latest[key][0]:
+            latest[key] = (rank, check)
+    for _, check in latest.values():
         if check.get("status") != "completed" or check.get("conclusion") not in {
             "success", "neutral", "skipped"
         }:
@@ -471,12 +527,36 @@ class VerificationConsumer:
         def heartbeat() -> None:
             self.ledger.heartbeat(claimed.run_id, self.holder, lease_id)
 
-        session_id, receipt = self.launcher.launch(
-            pack,
-            resume_session_id=claimed.coordinator_session_id,
-            on_thread_started=started,
-            on_heartbeat=heartbeat,
-        )
+        try:
+            session_id, receipt = self.launcher.launch(
+                pack,
+                resume_session_id=claimed.coordinator_session_id,
+                on_thread_started=started,
+                on_heartbeat=heartbeat,
+            )
+        except CodexExecFailure as exc:
+            failed_session = exc.receipt.get("session_id")
+            if isinstance(failed_session, str) and failed_session:
+                self.ledger.record_attempt(
+                    claimed.run_id,
+                    "verification",
+                    failed_session,
+                    self.launcher.config.model,
+                    self.launcher.config.reasoning_effort,
+                    pack,
+                    "launch_failed",
+                    exc.receipt,
+                    holder=self.holder,
+                    lease_id=lease_id,
+                )
+            return self.ledger.terminal(
+                claimed.run_id,
+                "failed",
+                exc.receipt,
+                reason="codex_exec_failed",
+                holder=self.holder,
+                lease_id=lease_id,
+            )
         current = self.ledger.get(claimed.run_id)
         if current is not None and current.status == "claimed":
             started(session_id)
@@ -490,6 +570,8 @@ class VerificationConsumer:
             pack,
             "rate_limited" if self._rate_limited(receipt) else "launched",
             receipt,
+            holder=self.holder,
+            lease_id=lease_id,
         )
         if self._rate_limited(receipt):
             return self.ledger.backoff(
@@ -510,6 +592,15 @@ class VerificationConsumer:
                 claimed.run_id, dict(receipt), _retry_at(receipt.get("retry_after")),
                 holder=self.holder, lease_id=lease_id,
             )
+        review_events = receipt.get("review_events")
+        if isinstance(review_events, list):
+            loop = VerificationAgentLoop(
+                self.ledger,
+                claimed.run_id,
+                holder=self.holder,
+                lease_id=lease_id,
+            )
+            loop.apply_events(review_events, context=pack)
         status = {"delivered": "completed", "blocked": "failed", "needs_human": "needs_human"}.get(verdict)
         if status is None:
             return self.ledger.terminal(

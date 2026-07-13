@@ -72,10 +72,49 @@ _REQUIRED_COLUMNS = {
 # usable-schema check: a hand-created table can have the right columns but no
 # primary key or UNIQUE index, and will only fail later when a writer runs.
 _REQUIRED_UNIQUE_KEYS = {
-    "dispatcher_tasks": ("task_id",),
-    "dispatcher_leases": ("lease_id",),
-    "dispatcher_events": ("event_id",),
-    "dispatcher_meta": ("key",),
+    "dispatcher_tasks": (("task_id",),),
+    "dispatcher_leases": (("lease_id",),),
+    "dispatcher_events": (("event_id",),),
+    "dispatcher_meta": (("key",),),
+}
+_V3_REQUIRED_TABLES = frozenset(
+    {"verification_runs", "verification_attempts", "verification_exceptions"}
+)
+_V3_REQUIRED_COLUMNS = {
+    "verification_runs": frozenset(
+        {
+            "run_id", "idempotency_key", "contract_version", "repository",
+            "pr_number", "head_sha", "stage", "request_json", "status",
+            "claimed_by", "lease_id", "lease_expires_at", "last_heartbeat_at",
+            "coordinator_session_id", "context_pack_json", "terminal_receipt_json",
+            "stop_reason", "retry_after", "created_at", "updated_at",
+        }
+    ),
+    "verification_attempts": frozenset(
+        {
+            "attempt_id", "run_id", "attempt_kind", "ordinal", "session_id",
+            "capability", "reasoning_effort", "context_hash", "outcome",
+            "receipt_json", "created_at",
+        }
+    ),
+    "verification_exceptions": frozenset(
+        {
+            "exception_id", "run_id", "failure_class", "head_sha", "packet_json",
+            "created_at", "updated_at",
+        }
+    ),
+}
+_V3_REQUIRED_UNIQUE_KEYS = {
+    "verification_runs": (
+        ("run_id",), ("idempotency_key",),
+        ("repository", "pr_number", "head_sha", "stage"),
+    ),
+    "verification_attempts": (
+        ("attempt_id",), ("run_id", "attempt_kind", "ordinal"),
+    ),
+    "verification_exceptions": (
+        ("exception_id",), ("run_id", "failure_class", "head_sha"),
+    ),
 }
 _LEGACY_V1_TABLES = frozenset({"dispatcher_tasks", "dispatcher_events"})
 _LEGACY_V1_COLUMNS = {
@@ -114,12 +153,9 @@ def _dispatcher_schema_error(conn: sqlite3.Connection) -> str | None:
         missing_columns = sorted(required - columns)
         if missing_columns:
             return f"missing dispatcher columns in {table}: {', '.join(missing_columns)}"
-    for table, required_key in _REQUIRED_UNIQUE_KEYS.items():
-        if not _has_unique_key(conn, table, required_key):
-            return (
-                f"missing required unique key in {table}: "
-                f"{', '.join(required_key)}"
-            )
+    unique_error = _unique_key_error(conn, _REQUIRED_UNIQUE_KEYS)
+    if unique_error:
+        return unique_error
     row = conn.execute(
         "SELECT value FROM dispatcher_meta WHERE key = 'schema_version'"
     ).fetchone()
@@ -131,6 +167,35 @@ def _dispatcher_schema_error(conn: sqlite3.Connection) -> str | None:
         return "invalid dispatcher schema_version"
     if version not in {1, 2, SCHEMA_VERSION}:
         return f"unsupported dispatcher schema_version: {version}"
+    if version == SCHEMA_VERSION:
+        missing_v3 = sorted(_V3_REQUIRED_TABLES - tables)
+        if missing_v3:
+            return f"missing dispatcher tables: {', '.join(missing_v3)}"
+        for table, required in _V3_REQUIRED_COLUMNS.items():
+            columns = {
+                str(row[1])
+                for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            missing_columns = sorted(required - columns)
+            if missing_columns:
+                return f"missing dispatcher columns in {table}: {', '.join(missing_columns)}"
+        unique_error = _unique_key_error(conn, _V3_REQUIRED_UNIQUE_KEYS)
+        if unique_error:
+            return unique_error
+    return None
+
+
+def _unique_key_error(
+    conn: sqlite3.Connection,
+    requirements: dict[str, tuple[tuple[str, ...], ...]],
+) -> str | None:
+    for table, required_keys in requirements.items():
+        for required_key in required_keys:
+            if not _has_unique_key(conn, table, required_key):
+                return (
+                    f"missing required unique key in {table}: "
+                    f"{', '.join(required_key)}"
+                )
     return None
 
 
