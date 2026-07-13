@@ -188,6 +188,21 @@ def test_curation_adapter_change_selects_curation_coverage() -> None:
     assert "tests/invariants" in selection.targets
 
 
+def test_premortem_admission_change_selects_decision_calibration_coverage() -> None:
+    selection = select_tests(
+        [
+            "app/calibration/premortem_admission.py",
+            "tests/calibration/test_premortem_admission.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("decision_calibration",)
+    assert "tests/calibration" in selection.targets
+    assert "tests/services/test_outcome_receipt_log.py" in selection.targets
+    assert "tests/agent_memory/test_ask_synthesis_gate.py" in selection.targets
+
+
 def test_journaling_change_has_a_ci_owner() -> None:
     selection = select_tests(
         ["app/journaling/day_context.py", "tests/journaling/test_assemble_day_context.py"]
