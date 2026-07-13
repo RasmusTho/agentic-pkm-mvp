@@ -1,0 +1,106 @@
+name: Verification Dispatch Request
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  build-request:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Resolve triggering PR
+        id: resolve
+        env:
+          EVENT_PATH: ${{ github.event_path }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          event = json.loads(Path(os.environ["EVENT_PATH"]).read_text())
+          pull_requests = event.get("workflow_run", {}).get("pull_requests", [])
+          number = pull_requests[0].get("number") if pull_requests else None
+          if isinstance(number, int):
+              with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+                  output.write(f"pr_number={number}\n")
+          PY
+
+      - name: Fetch current PR and linked issue
+        if: steps.resolve.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
+        run: |
+          mkdir -p verification-dispatch
+          gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
+            > verification-dispatch/pr.json
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          pr = json.loads(Path("verification-dispatch/pr.json").read_text())
+          body = pr.get("body") or ""
+          match = re.search(r"\b(?:Fixes|Closes|Resolves)\s+#(\d+)\b", body, re.I)
+          if match:
+              with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+                  output.write(f"issue_number={int(match.group(1))}\n")
+          PY
+        id: snapshots
+
+      - name: Fetch linked issue
+        if: steps.snapshots.outputs.issue_number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ steps.snapshots.outputs.issue_number }}
+        run: |
+          if ! gh api "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}" \
+            > verification-dispatch/issue.json; then
+            printf '{}\n' > verification-dispatch/issue.json
+          fi
+
+      - name: Build bounded request
+        id: build
+        env:
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          test -n "${RUN_HEAD_SHA}"
+          test -f verification-dispatch/pr.json || printf '{}\n' \
+            > verification-dispatch/pr.json
+          test -f verification-dispatch/issue.json || printf '{}\n' \
+            > verification-dispatch/issue.json
+          python3 scripts/build_verification_dispatch_request.py \
+            --event-json "$GITHUB_EVENT_PATH" \
+            --pr-json verification-dispatch/pr.json \
+            --issue-json verification-dispatch/issue.json \
+            --output-json verification-dispatch/request.json \
+            --output-markdown verification-dispatch/request.md \
+            --github-output "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.build.outputs.emitted == 'true'
+        with:
+          name: verification-dispatch-${{ steps.resolve.outputs.pr_number }}-${{ github.event.workflow_run.head_sha }}
+          path: |
+            verification-dispatch/request.json
+            verification-dispatch/request.md
