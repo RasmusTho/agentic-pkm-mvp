@@ -54,6 +54,11 @@ note-store+projection pattern (`docs/EPISODE_RESOLUTION_ENGINE/EPISODE_NOTE_STOR
 
 ## Concretely
 
+Not yet implemented (#3532 audit finding): this task (SQ-01) has not shipped, and no `questions`
+CLI group exists in `app/cli/` today — `python -m app.cli questions ...` does not currently run.
+The block below is the TARGET shape this task builds toward, mirroring the already-shipped
+`episodes` CLI (`app/cli/episodes.py`), not a description of current behavior.
+
 ```
 $ python -m app.cli questions create --text "Should we migrate the retrieval index to BGE-M3 fully?" --scope work
 → WriteReceipt(operation="standing_questions.write_note", locator=vault://questions/sq-...)
