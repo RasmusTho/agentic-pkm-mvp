@@ -226,6 +226,7 @@ def test_legacy_v1_db_self_heals_without_reinitialize(tmp_path: Path) -> None:
 
     events = store.list_events("github-RasmusTho--agentic-pkm-mvp-issue-101")
     assert [e.event_id for e in events] == ["evt-legacy"]
+    assert store.get_meta("schema_version") == str(SCHEMA_VERSION)
 
 
 def test_concurrent_legacy_migration_does_not_raise_or_corrupt(tmp_path: Path) -> None:

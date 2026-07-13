@@ -73,17 +73,27 @@ def test_claim_missing_task_rejected(store: SqliteStore) -> None:
         claim(store, "nonexistent", "agent-1", ttl_minutes=60)
 
 
-def test_heartbeat_updates_lease(store: SqliteStore) -> None:
+def test_heartbeat_renews_lease_and_task_expiry(store: SqliteStore, monkeypatch: pytest.MonkeyPatch) -> None:
     task = _task()
     store.upsert_task(task)
+
+    clock = iter(["2026-04-25T10:00:00+00:00", "2026-04-25T10:30:00+00:00"])
+    monkeypatch.setattr("app.dispatcher.leases._utc_now", lambda: next(clock))
 
     _, lease = claim(store, "task-1", "agent-1", ttl_minutes=60)
     original_heartbeat = lease.heartbeat_at
 
     updated_lease = heartbeat(store, "task-1", "agent-1")
 
-    assert updated_lease.expires_at == lease.expires_at
+    assert updated_lease.expires_at == "2026-04-25T11:30:00+00:00"
+    assert updated_lease.expires_at > lease.expires_at
     assert updated_lease.heartbeat_at >= original_heartbeat
+    persisted_task = store.get_task("task-1")
+    persisted_lease = store.get_lease(lease.lease_id)
+    assert persisted_task is not None
+    assert persisted_lease is not None
+    assert persisted_task.lease_expires_at == updated_lease.expires_at
+    assert persisted_lease.expires_at == updated_lease.expires_at
 
 
 def test_heartbeat_wrong_agent_rejected(store: SqliteStore) -> None:
