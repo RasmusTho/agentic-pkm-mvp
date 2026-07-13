@@ -65,4 +65,5 @@ task makes the experiment falsifiable and keeps implementation authority in a la
 
 ## Related GitHub Issues
 
-Parent #3194; bounded child #3597, blocked on #3596.
+Parent #3194; bounded child #3597, delivered after #3596. This source task remains a specification;
+the resulting research artifact authorizes no experiment execution.
