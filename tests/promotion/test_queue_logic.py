@@ -103,7 +103,7 @@ def test_run_once_writes_note_via_knowledge_port(tmp_path: Path, monkeypatch):
 
     calls: list[tuple[str, str]] = []
 
-    def _fake_write(path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
+    def _fake_write(path: Path, content: str, *, vault_root: Path | None = None, **kwargs):  # type: ignore[no-untyped-def]
         resolved_root = (vault_root or (tmp_path / "vault")).resolve()
         rel = Path(path).resolve().relative_to(resolved_root).as_posix()
         calls.append((rel, content))

@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 from dataclasses import asdict
 import errno
+import hashlib
 import heapq
 import json
 import logging
@@ -4411,7 +4412,12 @@ def update_companion_workspace_note_body(
         original_content=original_content,
         new_body=req.new_body,
     )
-    write_note_from_absolute(note_path, new_content, vault_root=vault_root)
+    # Shared knowledge-write seam (#3450): the active-note path is REWRITTEN-
+    # classified, so it requires an expected_version. We already read
+    # ``original_content`` above for the content-hash freshness check, so its
+    # hash is the exact expected_version the filesystem seam recomputes.
+    expected_version = hashlib.sha256(original_content.encode("utf-8")).hexdigest()
+    write_note_from_absolute(note_path, new_content, vault_root=vault_root, expected_version=expected_version)
     updated_content = note_path.read_text(encoding="utf-8")
     content_hash_after = _content_hash(updated_content)
     return WorkspaceBodyUpdateResponse(
@@ -4483,7 +4489,11 @@ def update_workspace_body(req: BodyUpdateRequest) -> BodyUpdateResponse | VaultS
     else:
         new_content = req.new_body if req.new_body.endswith("\n") else req.new_body + "\n"
 
-    write_note_from_absolute(note_path, new_content, vault_root=vault_root)
+    # Shared knowledge-write seam (#3450): this path is REWRITTEN-classified,
+    # so it requires an expected_version. ``current`` was just read above, so
+    # its hash is the exact expected_version the filesystem seam recomputes.
+    expected_version = hashlib.sha256(current.encode("utf-8")).hexdigest()
+    write_note_from_absolute(note_path, new_content, vault_root=vault_root, expected_version=expected_version)
 
     written = note_path.read_text(encoding="utf-8")
     return BodyUpdateResponse(
@@ -4584,7 +4594,13 @@ def save_note_body(req: NoteSaveRequest) -> NoteSaveResponse | VaultSelectionReq
     else:
         new_content = req.new_body if req.new_body.endswith("\n") else req.new_body + "\n"
 
-    write_note_from_absolute(note_path, new_content, vault_root=vault_root)
+    # Shared knowledge-write seam (#3450): this path is REWRITTEN-classified,
+    # so it requires an expected_version. ``current`` was just read above
+    # (and already validated against ``expected_content_hash`` when the
+    # caller supplied one), so its hash is the exact expected_version the
+    # filesystem seam recomputes.
+    expected_version = hashlib.sha256(current.encode("utf-8")).hexdigest()
+    write_note_from_absolute(note_path, new_content, vault_root=vault_root, expected_version=expected_version)
 
     written = note_path.read_text(encoding="utf-8")
     return NoteSaveResponse(

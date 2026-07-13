@@ -10,7 +10,9 @@ def test_ensure_note_uuid_keeps_existing_uuid_without_write(monkeypatch, tmp_pat
     note.write_text("---\nuuid: existing-uuid\n---\n\nBody\n", encoding="utf-8")
     calls: list[str] = []
 
-    def _fake_write(path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
+    def _fake_write(
+        path: Path, content: str, *, vault_root: Path | None = None, expected_version: str | None = None
+    ):  # type: ignore[no-untyped-def]
         calls.append(str(path))
         return None
 
@@ -25,7 +27,9 @@ def test_ensure_note_uuid_writes_via_knowledge_port(monkeypatch, tmp_path: Path)
     note.write_text("Body\n", encoding="utf-8")
     captured: dict[str, str] = {}
 
-    def _fake_write(path: Path, content: str, *, vault_root: Path | None = None):  # type: ignore[no-untyped-def]
+    def _fake_write(
+        path: Path, content: str, *, vault_root: Path | None = None, expected_version: str | None = None
+    ):  # type: ignore[no-untyped-def]
         captured["path"] = Path(path).resolve().relative_to(Path(path).anchor).as_posix()
         captured["content"] = content
         return None

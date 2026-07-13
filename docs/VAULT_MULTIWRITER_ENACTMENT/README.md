@@ -27,4 +27,4 @@ This capability enacts ADR-0055's local-file safety posture without changing its
 
 ## Relationship to GitHub issues
 
-Feature parent: #3132. Child issue numbers are added here when filed. #3129 remains a separate INV-VW2 repair and is not part of this capability.
+Feature parent: #3132. Children: VMW-01 #3450, VMW-02 #3451, VMW-03 #3452, and VMW-04 #3453. #3129 remains a separate INV-VW2 repair and is not part of this capability.

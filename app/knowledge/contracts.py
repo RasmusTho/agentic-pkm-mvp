@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 
+
 def _is_probably_absolute(path: str) -> bool:
     return path.startswith("/") or (len(path) > 1 and path[1] == ":" and path[0].isalpha())
 
@@ -44,6 +45,9 @@ class WriteReceipt:
     adapter: str
     trace_id: str | None = None
     fallback_used: bool = False
+    note_class: str | None = None
+    writer_identity: str | None = None
+    written_at: str | None = None
 
 
 class KnowledgePort(Protocol):
@@ -51,7 +55,14 @@ class KnowledgePort(Protocol):
 
     def read_note(self, locator: NoteLocator) -> str: ...
 
-    def write_note(self, locator: NoteLocator, content: str) -> WriteReceipt: ...
+    def write_note(
+        self,
+        locator: NoteLocator,
+        content: str,
+        *,
+        expected_version: str | None = None,
+        writer_identity: str | None = None,
+    ) -> WriteReceipt: ...
 
     def append_note(self, locator: NoteLocator, content: str) -> WriteReceipt: ...
 

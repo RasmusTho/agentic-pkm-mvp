@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import uuid
 from pathlib import Path
 from typing import Any
@@ -66,12 +67,26 @@ class FilesystemVaultAdapter:
         expected_mtime_ns: int | None = None,
     ) -> bool:
         resolved = Path(path).resolve()
-        if expected_mtime_ns is not None and resolved.exists():
+        expected_version: str | None = None
+        if resolved.exists():
             current_mtime_ns = resolved.stat().st_mtime_ns
-            if current_mtime_ns != expected_mtime_ns:
+            if expected_mtime_ns is not None and current_mtime_ns != expected_mtime_ns:
                 return False
+            # The watcher's own staleness guard is mtime-based, but the shared
+            # knowledge-write seam (#3450) classifies most watcher-owned paths
+            # as REWRITTEN and requires a content-hash expected_version before
+            # it will overwrite an existing note. Compute it from the bytes we
+            # just confirmed are current so a legitimate mtime-fresh write
+            # (e.g. ensure_uuid injecting a uuid) is not rejected as a
+            # would-be silent overwrite.
+            expected_version = hashlib.sha256(resolved.read_bytes()).hexdigest()
         rendered = dump_frontmatter(frontmatter, body)
-        write_note_from_absolute(resolved, rendered, vault_root=self.vault_root)
+        write_note_from_absolute(
+            resolved,
+            rendered,
+            vault_root=self.vault_root,
+            expected_version=expected_version,
+        )
         return True
 
     def rename_note(self, uuid_value: str, new_path: Path) -> None:

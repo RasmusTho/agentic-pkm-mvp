@@ -82,10 +82,22 @@ class HybridKnowledgePort:
             f"{locator.vault}:{locator.path}",
         )
 
-    def write_note(self, locator: NoteLocator, content: str) -> WriteReceipt:
+    def write_note(
+        self,
+        locator: NoteLocator,
+        content: str,
+        *,
+        expected_version: str | None = None,
+        writer_identity: str | None = None,
+    ) -> WriteReceipt:
+        kwargs: dict[str, str] = {}
+        if expected_version is not None:
+            kwargs["expected_version"] = expected_version
+        if writer_identity is not None:
+            kwargs["writer_identity"] = writer_identity
         return self._execute_with_fallback(
             "write_note",
-            lambda port: port.write_note(locator, content),
+            lambda port: port.write_note(locator, content, **kwargs),
             f"{locator.vault}:{locator.path}",
         )
 

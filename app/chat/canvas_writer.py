@@ -11,6 +11,7 @@ boundary) — no direct file-system writes from this module.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from app.chat.session_log import SessionLog, SessionLogWriter
@@ -122,8 +123,15 @@ class CanvasWriter:
         else:
             new_content = new_body if new_body.endswith("\n") else new_body + "\n"
 
-        # Write through KnowledgePort boundary
-        write_note_from_absolute(note_abs, new_content, vault_root=self._vault_root)
+        # Write through KnowledgePort boundary. Canvas body edits target an
+        # existing note, which the shared knowledge-write seam (#3450)
+        # classifies as REWRITTEN — pass the hash of the content we just read
+        # as expected_version so a legitimate same-session edit is not
+        # rejected as a would-be silent overwrite.
+        expected_version = hashlib.sha256(current.encode("utf-8")).hexdigest()
+        write_note_from_absolute(
+            note_abs, new_content, vault_root=self._vault_root, expected_version=expected_version
+        )
 
         # Append a single provenance turn for this body edit.
         self._log_writer.append_turn(
