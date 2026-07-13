@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -47,12 +48,39 @@ def test_control_plane_rejects_missing_events_and_nonempty_restore_target(tmp_pa
         control_plane.backup(paths, tmp_path / "backup")
 
     paths.events_path.touch()
+    with pytest.raises(ValueError, match="Backup destination must be separate"):
+        control_plane.backup(paths, paths.state_dir)
     control_plane.backup(paths, tmp_path / "backup")
     restored = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "restored")})
     restored.state_dir.mkdir()
     restored.events_path.touch()
     with pytest.raises(ValueError, match="separate, empty"):
         control_plane.restore(tmp_path / "backup", restored)
+
+
+def test_restore_rejects_corrupt_backup_without_creating_target(tmp_path: Path) -> None:
+    _, paths = _store(tmp_path)
+    backup = tmp_path / "backup"
+    backup.mkdir()
+    (backup / paths.db_path.name).write_text("not sqlite", encoding="utf-8")
+    (backup / paths.events_path.name).write_text("{}\n", encoding="utf-8")
+    restored = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "restored")})
+    with pytest.raises(ValueError, match="Backup database"):
+        control_plane.restore(backup, restored)
+    assert not restored.state_dir.exists()
+
+
+def test_restore_rejects_corrupt_events_without_creating_target(tmp_path: Path) -> None:
+    _, paths = _store(tmp_path)
+    backup = tmp_path / "backup"
+    backup.mkdir()
+    with sqlite3.connect(backup / paths.db_path.name) as conn:
+        conn.execute("CREATE TABLE probe (id INTEGER)")
+    (backup / paths.events_path.name).write_text("{not-json}\n", encoding="utf-8")
+    restored = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "restored")})
+    with pytest.raises(ValueError, match="Backup events are invalid"):
+        control_plane.restore(backup, restored)
+    assert not restored.state_dir.exists()
 
 
 def test_mode_transition_rejects_stale_revision_without_losing_accepted_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

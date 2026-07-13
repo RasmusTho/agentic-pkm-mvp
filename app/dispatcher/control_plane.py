@@ -95,6 +95,8 @@ def transition(store: SqliteStore, paths: DispatcherPaths, mode: str, *, activat
 
 
 def backup(paths: DispatcherPaths, destination: Path) -> dict[str, str]:
+    if destination.resolve() == paths.state_dir.resolve():
+        raise ValueError("Backup destination must be separate from dispatcher state")
     proof = health(paths)
     if not proof["ok"]:
         raise ValueError("Dispatcher state is unsafe to back up")
@@ -118,6 +120,19 @@ def restore(backup_dir: Path, target: DispatcherPaths) -> dict[str, str]:
     events = backup_dir / target.events_path.name
     if not events.exists():
         raise ValueError(f"Backup events missing: {events}")
+    try:
+        for line in events.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                json.loads(line)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Backup events are invalid: {exc}") from exc
+    try:
+        with sqlite3.connect(source, timeout=0) as input_db:
+            source_integrity = input_db.execute("PRAGMA integrity_check").fetchone()[0]
+    except sqlite3.Error as exc:
+        raise ValueError(f"Backup database is invalid: {exc}") from exc
+    if source_integrity != "ok":
+        raise ValueError(f"Backup database integrity failed: {source_integrity}")
     target.state_dir.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(source) as input_db, sqlite3.connect(target.db_path) as output:
         input_db.backup(output)
