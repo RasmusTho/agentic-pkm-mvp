@@ -223,16 +223,20 @@ def heartbeat(
             )
         if lease["released_at"] is not None or _parse_rfc3339(lease["expires_at"]) <= _parse_rfc3339(now):
             raise ValueError(f"Cannot heartbeat lease {task['lease_id']}: lease has expired")
-        expires = _expires_at(lease["ttl_seconds"])
+        # A heartbeat proves that the current holder is still active; it must
+        # not renew the bounded claim window.  Keep the acquisition-time
+        # expiry so a continuously heartbeating worker can still be reclaimed
+        # once its finite TTL elapses.
+        expires = lease["expires_at"]
         updated = conn.execute(
-            "UPDATE dispatcher_leases SET heartbeat_at = ?, expires_at = ? WHERE lease_id = ? AND holder = ? AND released_at IS NULL AND expires_at > ?",
-            (now, expires, lease["lease_id"], agent_id, now),
+            "UPDATE dispatcher_leases SET heartbeat_at = ? WHERE lease_id = ? AND holder = ? AND released_at IS NULL AND expires_at > ?",
+            (now, lease["lease_id"], agent_id, now),
         )
         if updated.rowcount != 1:
             raise ValueError(f"Cannot heartbeat lease {task['lease_id']}: lease changed concurrently")
         updated = conn.execute(
-            "UPDATE dispatcher_tasks SET last_heartbeat_at = ?, lease_expires_at = ?, updated_at = ? WHERE task_id = ? AND lease_id = ? AND claimed_by = ?",
-            (now, expires, now, task_id, lease["lease_id"], agent_id),
+            "UPDATE dispatcher_tasks SET last_heartbeat_at = ?, updated_at = ? WHERE task_id = ? AND lease_id = ? AND claimed_by = ?",
+            (now, now, task_id, lease["lease_id"], agent_id),
         )
         if updated.rowcount != 1:
             raise ValueError(f"Cannot heartbeat lease {task['lease_id']}: task changed concurrently")

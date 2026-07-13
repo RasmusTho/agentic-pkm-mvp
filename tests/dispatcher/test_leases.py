@@ -82,8 +82,14 @@ def test_heartbeat_updates_lease(store: SqliteStore) -> None:
 
     updated_lease = heartbeat(store, "task-1", "agent-1")
 
-    assert updated_lease.expires_at >= lease.expires_at
+    assert updated_lease.expires_at == lease.expires_at
     assert updated_lease.heartbeat_at >= original_heartbeat
+    persisted_task = store.get_task("task-1")
+    persisted_lease = store.get_lease(lease.lease_id)
+    assert persisted_task is not None
+    assert persisted_lease is not None
+    assert persisted_task.lease_expires_at == lease.expires_at
+    assert persisted_lease.expires_at == lease.expires_at
 
 
 def test_heartbeat_wrong_agent_rejected(store: SqliteStore) -> None:
