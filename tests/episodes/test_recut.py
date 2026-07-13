@@ -403,6 +403,67 @@ def test_concurrent_body_save_between_scan_and_relabel_is_not_overwritten(
     assert parse_episode_note(saved_text)["segmentation"] == "proposed"
 
 
+def test_concurrent_delete_between_scan_and_acceptance_is_not_resurrected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    _stub_bindings(monkeypatch)
+    _stub_projection_sync(monkeypatch)
+    _install_fake_engine_state(monkeypatch)
+
+    episode_id = "ep-22222222-6666-4666-8666-666666666666"
+    _write_initial(vault_root, episode_id=episode_id)
+    t0 = _dt(10, 0)
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=t0)
+    note_path = vault_root / episode_note_rel_path(episode_id)
+    real_write = recut_module.write_episode_note
+
+    def concurrent_delete(**kwargs: Any):
+        note_path.unlink()
+        return real_write(**kwargs)
+
+    monkeypatch.setattr(recut_module, "write_episode_note", concurrent_delete)
+
+    with pytest.raises(KnowledgeWriteConflict):
+        run_recut_tick(
+            vault_root=vault_root,
+            write_guard=_allow_guard(),
+            now=t0 + timedelta(minutes=ACCEPTANCE_QUIET_WINDOW_MINUTES),
+        )
+    assert not note_path.exists()
+
+
+def test_concurrent_delete_between_scan_and_recut_is_not_resurrected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    _stub_bindings(monkeypatch)
+    _stub_projection_sync(monkeypatch)
+    _install_fake_engine_state(monkeypatch)
+
+    episode_id = "ep-22222222-7777-4777-8777-777777777777"
+    _write_initial(vault_root, episode_id=episode_id)
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 0))
+    note_path = vault_root / episode_note_rel_path(episode_id)
+    note_path.write_text(
+        note_path.read_text(encoding="utf-8").replace(
+            "title: Debugging session", "title: Concurrent deletion target", 1
+        ),
+        encoding="utf-8",
+    )
+    real_write = recut_module.write_episode_note
+
+    def concurrent_delete(**kwargs: Any):
+        note_path.unlink()
+        return real_write(**kwargs)
+
+    monkeypatch.setattr(recut_module, "write_episode_note", concurrent_delete)
+
+    with pytest.raises(KnowledgeWriteConflict):
+        run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 5))
+    assert not note_path.exists()
+
+
 # ---------------------------------------------------------------------------
 # AC2 (enforcement) -- terminality at the production write seam
 # ---------------------------------------------------------------------------
@@ -853,6 +914,42 @@ def test_legacy_baseline_adopts_canonical_body_hash_without_false_recut(
     result = run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 5))
     assert result["recut_detected"] == []
     assert "body_hash" in fake_state._store[baseline_key]
+
+
+def test_canonical_lifecycle_rewrite_rebaselines_before_frontmatter_only_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    _stub_bindings(monkeypatch)
+    _stub_projection_sync(monkeypatch)
+    _install_fake_engine_state(monkeypatch)
+
+    episode_id = "ep-1e9ac000-2222-4222-8222-222222222222"
+    _write_initial(vault_root, episode_id=episode_id)
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 0))
+
+    # ERE-06 lifecycle rewrite: the cut and segmentation are unchanged, but the generated body's
+    # `(closed: ...)` line changes and must become the new canonical baseline.
+    _write_initial(vault_root, episode_id=episode_id, closed=True)
+    lifecycle_result = run_recut_tick(
+        vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 5)
+    )
+    assert lifecycle_result["recut_detected"] == []
+
+    note_path = vault_root / episode_note_rel_path(episode_id)
+    note_path.write_text(
+        note_path.read_text(encoding="utf-8").replace(
+            "title: Debugging session", "title: Post-closure retitle", 1
+        ),
+        encoding="utf-8",
+    )
+    recut_result = run_recut_tick(
+        vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 10)
+    )
+    final_text = note_path.read_text(encoding="utf-8")
+    assert recut_result["recut_detected"] == [episode_id]
+    assert "# Episode: Post-closure retitle" in final_text
+    assert "# Episode: Debugging session" not in final_text
 
 
 def test_content_hash_excludes_engine_lifecycle_fields(tmp_path: Path) -> None:

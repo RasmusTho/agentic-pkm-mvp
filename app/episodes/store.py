@@ -51,6 +51,7 @@ from app.episodes.notes import (
 )
 from app.episodes.schema import validate_episode_note_fields
 from app.knowledge.contracts import WriteReceipt
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.write_ops import write_note_relative
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
@@ -198,6 +199,18 @@ def write_episode_note(
     # `segmentation` (echoing every cut field back unchanged) passes trivially; an attempted cut
     # mutation is rejected here and the note is left byte-for-byte untouched.
     existing_text = _read_existing_episode_note(rel_path, vault_root)
+    current_version = (
+        hashlib.sha256(existing_text.encode("utf-8")).hexdigest()
+        if existing_text is not None
+        else None
+    )
+    if (
+        expected_existing_version is not None
+        and current_version != expected_existing_version
+    ):
+        raise KnowledgeWriteConflict(
+            f"version mismatch for episode note {rel_path}: scan-time content changed or vanished"
+        )
     existing_fields: dict[str, Any] | None = None
     preserved_body: str | None = None
     if existing_text is not None:
@@ -240,12 +253,11 @@ def write_episode_note(
     # rewrite of an existing note requires the ``expected_version`` of the bytes we read
     # above -- otherwise the seam refuses the write as a would-be silent overwrite. A
     # brand-new episode note (``existing_text is None``) needs no version.
-    current_version = (
-        hashlib.sha256(existing_text.encode("utf-8")).hexdigest()
-        if existing_text is not None
-        else None
+    expected_version = (
+        expected_existing_version
+        if expected_existing_version is not None
+        else current_version
     )
-    expected_version = expected_existing_version or current_version
     receipt = write_note_relative(
         rel_path,
         content,

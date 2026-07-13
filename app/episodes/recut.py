@@ -556,6 +556,12 @@ def run_recut_tick(
         current_hash = compute_fields_hash(fields)
         current_body_hash = compute_body_hash(body, fields=fields)
         current_body_canonical = _body_is_canonical(fields, body)
+        canonical_lifecycle_body_advanced = (
+            state.body_hash is not None
+            and state.body_canonical is True
+            and current_body_canonical
+            and current_body_hash != state.body_hash
+        )
         if state.body_hash is None:
             body_changed = not current_body_canonical
         elif state.body_canonical is True and current_body_canonical:
@@ -649,6 +655,17 @@ def run_recut_tick(
                 segmentation,
             )
             continue
+
+        if canonical_lifecycle_body_advanced:
+            # A recognized machine-authored canonical rewrite is not a re-cut, but its exact body
+            # version still becomes the new baseline. Otherwise a later frontmatter-only edit can
+            # compare against an older generated body and misclassify that stale template as human.
+            _record_baseline(
+                episode_id,
+                fields,
+                body=body,
+                first_seen_at=state.first_seen_at,
+            )
 
         # Backward-compatible baseline migration: pre-#3561 records have no body hash. A
         # non-canonical body was handled as a re-cut above; a canonical body can be adopted
