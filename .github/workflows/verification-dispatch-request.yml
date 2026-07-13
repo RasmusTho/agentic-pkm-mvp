@@ -70,6 +70,7 @@ jobs:
         id: resolve
         if: steps.inspect.outputs.run_head_sha != ''
         run: |
+          mkdir -p verification-dispatch
           test -f verification-dispatch/pr-candidates.json || printf '[]\n' \
             > verification-dispatch/pr-candidates.json
           python3 - <<'PY'

@@ -35,6 +35,20 @@ def test_successful_current_head_emits_dispatch_artifact() -> None:
     assert "github.event.workflow_run.head_sha" in text
 
 
+def test_resolve_step_creates_candidate_directory_before_fallback_write() -> None:
+    text = _workflow_text()
+    resolve_step = text.split("- name: Resolve triggering PR", 1)[1].split(
+        "- name: Fetch current PR and linked issue", 1
+    )[0]
+
+    mkdir_offset = resolve_step.index("mkdir -p verification-dispatch")
+    fallback_offset = resolve_step.index(
+        "test -f verification-dispatch/pr-candidates.json"
+    )
+
+    assert mkdir_offset < fallback_offset
+
+
 def test_workflow_is_artifact_only_and_least_privilege() -> None:
     text = _workflow_text()
     lowered = text.lower()
