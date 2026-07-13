@@ -42,6 +42,12 @@ DOCS_TARGETS = (
     "tests/architecture",
 )
 
+DOCS_ONLY_EXCLUDED_EXACT = {
+    # This owner document is executable CrossScopeFlow contract surface. Route
+    # even a docs-only edit through Episodes instead of the generic docs lane.
+    "docs/architecture/cross-scope-flow.md",
+}
+
 GOVERNANCE_TARGETS = (
     "tests/governance",
     "tests/scripts",
@@ -253,6 +259,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "app/episodes/",
             "app/jobs/episodes_projection.py",
+            # CrossScopeFlow is an Episodes contract even though its shared
+            # definition and owner documentation live outside app/episodes.
+            "schemas/_defs.schema.json",
             "schemas/episode-note.schema.json",
             # CI-selection owner only: the bundle schema is SIP surface; its
             # enforcement probes live in tests/invariants. Full-suite routing
@@ -260,10 +269,16 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # deprecated-store failure (from #3479) is repaired.
             "schemas/metadata-bundle.schema.json",
             "tests/episodes/",
+            "tests/architecture/test_cross_scope_flow_schema.py",
             "tests/invariants/test_episode_binding.py",
             "tests/invariants/test_cross_scope_flow.py",
+            "docs/architecture/cross-scope-flow.md",
         ),
-        ("tests/episodes", "tests/invariants"),
+        (
+            "tests/episodes",
+            "tests/invariants",
+            "tests/architecture/test_cross_scope_flow_schema.py",
+        ),
     ),
     (
         "llm_eval",
@@ -456,7 +471,9 @@ def _non_test_signal(paths: tuple[str, ...], tolerated_test_dirs: tuple[str, ...
 def _is_docs_only(paths: tuple[str, ...]) -> bool:
     non_test = _non_test_signal(paths, DOCS_TARGETS)
     return bool(non_test) and all(
-        path.startswith("docs/") or path in {"README.md", "AGENTS.md"} for path in non_test
+        path not in DOCS_ONLY_EXCLUDED_EXACT
+        and (path.startswith("docs/") or path in {"README.md", "AGENTS.md"})
+        for path in non_test
     )
 
 
