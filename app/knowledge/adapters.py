@@ -70,14 +70,18 @@ def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
     return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
 
 
-def _preserve_displaced_conflict(staged: Path, target: Path, locator: NoteLocator) -> None:
+def _preserve_displaced_conflict(
+    staged: Path, vault_root: Path, locator: NoteLocator
+) -> Path:
     artifact_rel = conflict_artifact_path(
         locator.path,
         writer_identity=f"concurrent-save-{uuid.uuid4().hex}",
         written_at=datetime.now(UTC),
     )
-    artifact = target.with_name(artifact_rel.name)
+    artifact = vault_root.resolve() / "_conflicts" / Path(artifact_rel)
+    artifact.parent.mkdir(parents=True, exist_ok=True)
     os.rename(staged, artifact)
+    return artifact
 
 
 class FsVaultAdapter:
@@ -133,6 +137,7 @@ class FsVaultAdapter:
                 ) from exc
             staged = Path(staged_name)
             preserve_staged_conflict = False
+            staged_is_artifact = False
             try:
                 payload = content.encode("utf-8")
                 with os.fdopen(staged_fd, "wb") as staged_handle:
@@ -176,7 +181,21 @@ class FsVaultAdapter:
                     os.chmod(staged, stat.S_IMODE(opened_stat.st_mode))
                     opened_mode = stat.S_IMODE(opened_stat.st_mode)
 
-                _atomic_exchange(target, staged)
+                try:
+                    _atomic_exchange(target, staged)
+                except OSError as exc:
+                    raise KnowledgeWriteConflict(
+                        f"version mismatch for rewritten note {locator.path}: "
+                        "atomic exchange failed"
+                    ) from exc
+
+                # The displaced inode must keep a durable path for the lifetime of any
+                # already-open external descriptor. There is no portable way to know when
+                # such descriptors close, so every successful optimistic exchange retains
+                # this pre-exchange version as a standard conflicted copy.
+                preserve_staged_conflict = True
+                staged = _preserve_displaced_conflict(staged, self.vault_root, locator)
+                staged_is_artifact = True
 
                 displaced_version = hashlib.sha256(staged.read_bytes()).hexdigest()
                 displaced_mode = stat.S_IMODE(staged.stat().st_mode)
@@ -216,12 +235,21 @@ class FsVaultAdapter:
                 raise KnowledgeWriteConflict(
                     f"version mismatch for rewritten note {locator.path}: target is missing"
                 ) from exc
+            except OSError as exc:
+                raise KnowledgeWriteConflict(
+                    f"version mismatch for rewritten note {locator.path}: "
+                    "filesystem exchange verification failed; displaced content was preserved"
+                ) from exc
             finally:
                 if staged_fd >= 0:
                     os.close(staged_fd)
                 try:
                     if preserve_staged_conflict and staged.exists():
-                        _preserve_displaced_conflict(staged, target, locator)
+                        if not staged_is_artifact:
+                            staged = _preserve_displaced_conflict(
+                                staged, self.vault_root, locator
+                            )
+                            staged_is_artifact = True
                     else:
                         staged.unlink(missing_ok=True)
                 except OSError:
