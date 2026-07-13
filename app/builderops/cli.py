@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, cast
 
@@ -25,6 +26,7 @@ from app.builderops.ckm_reevaluation import (
     build_ckm_reevaluation_report,
 )
 from app.builderops.ckm.models import CkmValidationError
+from app.builderops.ckm.ingest_repo import ingest_repo
 from app.builderops.ckm.seed import SeedManifestError, seed_capabilities
 from app.builderops.ckm.store import CkmStore
 from app.builderops.config import BuilderOpsPaths, load_paths
@@ -380,6 +382,21 @@ def ckm_seed(ctx: click.Context) -> None:
             "Seeding is idempotent; re-run `ckm seed` to resume from where it stopped."
         ) from exc
     click.echo(f"seeded {result['seeded']} capabilities, {result['changed']} changed")
+
+
+@ckm.command("ingest", help="Ingest deterministic local repository artifacts into the CEG.")
+@click.option("--source", type=click.Choice(["repo"]), required=True)
+@click.option("--repo-root", type=click.Path(file_okay=False, path_type=Path), default=Path.cwd)
+@click.option("--git-limit", type=click.IntRange(1, 5000), default=500, show_default=True)
+@click.pass_context
+def ckm_ingest(ctx: click.Context, source: str, repo_root: Path, git_limit: int) -> None:
+    del source  # Reserved for the sibling source adapters documented by the CKM spec.
+    try:
+        result = ingest_repo(_ckm_store(ctx), repo_root, git_limit=git_limit)
+    except (OSError, ValueError, sqlite3.Error, subprocess.CalledProcessError) as exc:
+        raise click.ClickException(f"ckm repo ingestion failed: {exc}") from exc
+    segments = [f"{name}: {data['artifacts']} artifacts (+{data['changed']})" for name, data in result.items()]
+    click.echo("; ".join(segments))
 
 
 @builderops.group("inquiry", help="Persist and inspect pre-ticket model inquiry artifacts.")

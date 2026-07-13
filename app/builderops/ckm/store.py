@@ -79,7 +79,7 @@ class CkmStore:
     # --- Schema lifecycle ----------------------------------------------------
 
     def ensure_schema(self) -> dict[str, Any]:
-        """Create ``ckm_*`` tables if absent. Idempotent. Emits a receipt."""
+        """Create ``ckm_*`` tables if absent and receipt the first ensure."""
 
         # Ensure the shared BuilderOps substrate (builderops_records, etc.)
         # exists first: receipt writes below depend on it.
@@ -88,6 +88,13 @@ class CkmStore:
             for statement in CKM_DDL_STATEMENTS:
                 conn.execute(statement)
             conn.commit()
+        prior_receipts = [
+            receipt
+            for receipt in self._receipt_store.list_records("BuilderOpsReceipt")
+            if receipt.get("event_type") == "ckm_schema_ensured"
+        ]
+        if prior_receipts:
+            return prior_receipts[-1]
         return self._emit_schema_receipt(event_type="ckm_schema_ensured", action="ensure_schema")
 
     def rebuild(self) -> dict[str, Any]:
@@ -243,6 +250,39 @@ class CkmStore:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM ckm_artifact ORDER BY source_ref").fetchall()
         return [CkmArtifact.from_row(row) for row in rows]
+
+    def delete_artifacts_not_in(self, source: str, source_refs: set[str]) -> int:
+        """Remove stale projections for one fully enumerated repository source."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, source_ref FROM ckm_artifact WHERE source = ?", (source,)
+            ).fetchall()
+            stale = [row for row in rows if row["source_ref"] not in source_refs]
+            for row in stale:
+                conn.execute("DELETE FROM ckm_evidence_edge WHERE artifact_id = ?", (row["id"],))
+                conn.execute("DELETE FROM ckm_artifact WHERE id = ?", (row["id"],))
+            conn.commit()
+        return len(stale)
+
+    # --- Source watermarks ---------------------------------------------------
+
+    def get_watermark(self, source: str) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM ckm_watermark WHERE source = ?", (source,)
+            ).fetchone()
+        return str(row["value"]) if row is not None else None
+
+    def set_watermark(self, source: str, value: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO ckm_watermark (source, value, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(source) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+                """,
+                (source, value, utc_now()),
+            )
+            conn.commit()
 
     # --- Evidence edge ---------------------------------------------------------
 

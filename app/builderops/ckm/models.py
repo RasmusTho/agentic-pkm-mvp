@@ -35,6 +35,7 @@ CAPABILITY_LIFECYCLE_STATES = frozenset({"candidate", "confirmed", "deprecated"}
 ARTIFACT_KINDS = frozenset({
     "requirement",
     "adr",
+    "spec",
     "document",
     "source_file",
     "test",

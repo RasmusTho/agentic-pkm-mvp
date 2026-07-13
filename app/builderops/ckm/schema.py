@@ -21,6 +21,7 @@ CKM_TABLE_NAMES = (
     "ckm_evidence_edge",
     "ckm_assessment",
     "ckm_finding",
+    "ckm_watermark",
 )
 
 CKM_DDL_STATEMENTS = [
@@ -128,5 +129,12 @@ CKM_DDL_STATEMENTS = [
     """
     CREATE INDEX IF NOT EXISTS idx_ckm_finding_capability
     ON ckm_finding(capability_id)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ckm_watermark (
+        source TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
     """,
 ]
