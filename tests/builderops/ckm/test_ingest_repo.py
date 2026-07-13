@@ -187,3 +187,33 @@ def test_git_watermark_stays_on_snapshot_when_head_moves_during_ingest(
     assert result["git"]["changed"] == 1
     assert store.get_watermark("git") == late_head
     assert store.get_artifact_by_source_ref(f"git:{late_head}") is not None
+
+
+def test_tree_metadata_and_watermark_share_one_file_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = _repo(tmp_path / "repo")
+    target = root / "docs/guide.md"
+    original_read_bytes = Path.read_bytes
+    moved = False
+
+    def moving_read_bytes(path: Path) -> bytes:
+        nonlocal moved
+        content = original_read_bytes(path)
+        if path == target and not moved:
+            moved = True
+            path.write_text("---\ntask_id: LATE-SPEC\n---\n\n# A late spec\n", encoding="utf-8")
+        return content
+
+    monkeypatch.setattr(Path, "read_bytes", moving_read_bytes)
+    store = _store(tmp_path)
+    ingest_repo(store, root)
+    first = store.get_artifact_by_source_ref("docs/guide.md")
+    assert first is not None
+    assert first.artifact_kind == "document"
+
+    result = ingest_repo(store, root)
+    second = store.get_artifact_by_source_ref("docs/guide.md")
+    assert result["docs"]["changed"] == 1
+    assert second is not None
+    assert second.artifact_kind == "spec"

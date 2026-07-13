@@ -43,10 +43,16 @@ def _tree_watermark(items: Iterable[tuple[str, str]]) -> str:
 
 
 def _file_artifact(
-    root: Path, path: Path, *, kind: str, summary: str, source: str
+    root: Path,
+    path: Path,
+    *,
+    content: bytes,
+    kind: str,
+    summary: str,
+    source: str,
 ) -> RepoArtifact:
     relative = _relative(root, path)
-    content_hash = _digest(path.read_bytes())
+    content_hash = _digest(content)
     return RepoArtifact(
         natural_key=relative,
         artifact_kind=kind,
@@ -102,36 +108,54 @@ def _doc_kind(relative: str, text: str) -> str:
 
 def iter_docs(root: Path) -> Iterable[RepoArtifact]:
     for path in sorted((root / "docs").glob("**/*.md")):
-        text = path.read_text(encoding="utf-8")
+        content = path.read_bytes()
+        text = content.decode("utf-8")
         yield _file_artifact(
             root,
             path,
+            content=content,
             kind=_doc_kind(_relative(root, path), text),
             summary=f"{_first_markdown_heading(text)} — {_state_line(text)}",
             source="repo_docs",
         )
 
 
-def _test_summary(path: Path) -> str:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+def _test_summary(path: Path, text: str) -> str:
+    tree = ast.parse(text, filename=str(path))
     names = [node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_")]
     return ", ".join(sorted(names)) or "(no test functions)"
 
 
 def iter_tests(root: Path) -> Iterable[RepoArtifact]:
     for path in sorted((root / "tests").glob("**/test_*.py")):
-        yield _file_artifact(root, path, kind="test", summary=_test_summary(path), source="repo_tests")
+        content = path.read_bytes()
+        yield _file_artifact(
+            root,
+            path,
+            content=content,
+            kind="test",
+            summary=_test_summary(path, content.decode("utf-8")),
+            source="repo_tests",
+        )
 
 
-def _source_summary(path: Path) -> str:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+def _source_summary(path: Path, text: str) -> str:
+    tree = ast.parse(text, filename=str(path))
     docstring = ast.get_docstring(tree)
     return docstring.splitlines()[0] if docstring and docstring.splitlines() else "(no module docstring)"
 
 
 def iter_source(root: Path) -> Iterable[RepoArtifact]:
     for path in sorted((root / "app").glob("**/*.py")):
-        yield _file_artifact(root, path, kind="source_file", summary=_source_summary(path), source="repo_source")
+        content = path.read_bytes()
+        yield _file_artifact(
+            root,
+            path,
+            content=content,
+            kind="source_file",
+            summary=_source_summary(path, content.decode("utf-8")),
+            source="repo_source",
+        )
 
 
 def _git(root: Path, *args: str) -> str:
