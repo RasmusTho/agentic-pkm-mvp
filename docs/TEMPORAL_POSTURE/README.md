@@ -1,4 +1,4 @@
-State: Specification directory (implementation issue #3549; no shipped behavior is claimed).
+State: Implemented. Delivered by issue #3549 on 2026-07-13.
 Doc role: Feature specification
 Authority: Defines a narrow read-only temporal-posture experiment. Subordinate to `docs/CONCEPTS/TEMPORAL_VALIDITY_AND_STALENESS_CONTRACT.md` for semantic boundaries.
 Owner: Product / cognitive support
@@ -17,7 +17,11 @@ View/cache freshness and source-vs-index drift already exist, but they are not f
 
 | Task | Purpose | Status |
 | --- | --- | --- |
-| [DERIVE_READ_ONLY_TEMPORAL_POSTURE.md](DERIVE_READ_ONLY_TEMPORAL_POSTURE.md) | Implement and evaluate a narrow, policy-driven overlay with no content or retrieval mutation. | First executable slice |
+| [DERIVE_READ_ONLY_TEMPORAL_POSTURE.md](DERIVE_READ_ONLY_TEMPORAL_POSTURE.md) | Implement and evaluate a narrow, policy-driven overlay with no content or retrieval mutation. | Delivered by #3549 |
+
+The shipped slice is `app/temporal/posture.py` with the repo-governed
+`config/temporal_posture.v1.json` allowlist. It recomputes presentation metadata at read time and
+returns a content-free fixed-clock corpus receipt; it stores no per-artifact posture.
 
 ## Interaction safety
 
