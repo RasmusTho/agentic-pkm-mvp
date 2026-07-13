@@ -45,7 +45,23 @@ def test_incremental_watermark_semantics(tmp_path: Path) -> None:
     store = _store(tmp_path)
     first = ingest_repo(store, root)
     assert first["docs"]["changed"] == 3
+    with store._connect() as conn:
+        rows_before = {
+            table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in (
+                "ckm_artifact",
+                "ckm_watermark",
+                "builderops_records",
+                "builderops_idempotency_keys",
+            )
+        }
     assert ingest_repo(store, root)["docs"]["changed"] == 0
+    with store._connect() as conn:
+        rows_after = {
+            table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in rows_before
+        }
+    assert rows_after == rows_before
     _write(root / "docs/guide.md", "State: Accepted\n\n# A guide\n")
     changed = ingest_repo(store, root)
     assert changed["docs"]["changed"] == 1

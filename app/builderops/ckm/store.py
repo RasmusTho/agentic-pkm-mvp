@@ -79,7 +79,7 @@ class CkmStore:
     # --- Schema lifecycle ----------------------------------------------------
 
     def ensure_schema(self) -> dict[str, Any]:
-        """Create ``ckm_*`` tables if absent. Idempotent. Emits a receipt."""
+        """Create ``ckm_*`` tables if absent and receipt the first ensure."""
 
         # Ensure the shared BuilderOps substrate (builderops_records, etc.)
         # exists first: receipt writes below depend on it.
@@ -88,6 +88,13 @@ class CkmStore:
             for statement in CKM_DDL_STATEMENTS:
                 conn.execute(statement)
             conn.commit()
+        prior_receipts = [
+            receipt
+            for receipt in self._receipt_store.list_records("BuilderOpsReceipt")
+            if receipt.get("event_type") == "ckm_schema_ensured"
+        ]
+        if prior_receipts:
+            return prior_receipts[-1]
         return self._emit_schema_receipt(event_type="ckm_schema_ensured", action="ensure_schema")
 
     def rebuild(self) -> dict[str, Any]:
