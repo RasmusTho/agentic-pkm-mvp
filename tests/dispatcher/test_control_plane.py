@@ -145,6 +145,54 @@ def test_health_rejects_unsupported_dispatcher_schema_version(tmp_path: Path) ->
     assert "unsupported dispatcher schema_version" in proof["db"]["error"]
 
 
+def test_future_schema_is_rejected_without_mutating_recovery_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Every recovery entry point must leave an unknown schema byte-for-byte intact."""
+    _, paths = _store(tmp_path)
+    paths.events_path.touch()
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.execute(
+            "UPDATE dispatcher_meta SET value = '99' WHERE key = 'schema_version'"
+        )
+    before = paths.db_path.read_bytes()
+
+    with pytest.raises(ValueError, match="unsupported dispatcher schema_version: '99'"):
+        SqliteStore(paths.db_path).get_meta("schema_version")
+    assert paths.db_path.read_bytes() == before
+
+    proof = control_plane.health(paths)
+    assert proof["ok"] is False
+    assert proof["db"]["error"] == "unsupported dispatcher schema_version: 99"
+    assert paths.db_path.read_bytes() == before
+
+    backup_dir = tmp_path / "backup"
+    with pytest.raises(ValueError, match="unsafe"):
+        control_plane.backup(paths, backup_dir)
+    assert not backup_dir.exists()
+    assert paths.db_path.read_bytes() == before
+
+    monkeypatch.setenv("DISPATCHER_STATE_DIR", str(paths.state_dir))
+    assert main(["status", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["control_plane"] == {
+        "mode": "unavailable",
+        "revision": None,
+        "error": "unsupported dispatcher schema_version: 99",
+    }
+    assert paths.db_path.read_bytes() == before
+
+    restore_source = tmp_path / "restore-source"
+    restore_source.mkdir()
+    (restore_source / paths.db_path.name).write_bytes(before)
+    (restore_source / paths.events_path.name).write_text("", encoding="utf-8")
+    restored = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "restored")})
+    with pytest.raises(ValueError, match="unsupported dispatcher schema_version: 99"):
+        control_plane.restore(restore_source, restored)
+    assert not restored.state_dir.exists()
+    assert paths.db_path.read_bytes() == before
+
+
 def test_recovery_rejects_column_compatible_schema_without_unique_keys(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
