@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import subprocess
 from pathlib import Path
 
@@ -78,11 +79,26 @@ def test_ingest_reconciles_deleted_tree_artifacts(tmp_path: Path) -> None:
     assert store.get_artifact_by_source_ref("docs/guide.md") is None
 
 
-def test_cold_git_ingest_does_not_skip_history_past_limit(tmp_path: Path) -> None:
+def test_cold_git_ingest_pages_through_history_before_advancing_watermark(tmp_path: Path, monkeypatch) -> None:
     root = _repo(tmp_path / "repo")
     for number in range(4):
         _write(root / f"docs/{number}.md", f"# {number}\\n")
         subprocess.run(["git", "-C", str(root), "add", "."], check=True)
         subprocess.run(["git", "-C", str(root), "-c", "user.name=CKM", "-c", "user.email=ckm@example.test", "commit", "-qm", f"commit {number}"], check=True)
-    result = ingest_repo(_store(tmp_path), root, git_limit=2)
+    module = importlib.import_module("app.builderops.ckm.ingest_repo")
+    original_git = module._git
+    log_calls: list[tuple[str, ...]] = []
+
+    def tracked_git(path: Path, *args: str) -> str:
+        if args[0] == "log":
+            log_calls.append(args)
+        return original_git(path, *args)
+
+    monkeypatch.setattr(module, "_git", tracked_git)
+    store = _store(tmp_path)
+    result = ingest_repo(store, root, git_limit=2)
     assert result["git"]["artifacts"] == 5
+    assert store.get_watermark("git") == subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"], check=True, text=True, capture_output=True
+    ).stdout.strip()
+    assert [next(arg for arg in call if arg.startswith("--skip=")) for call in log_calls] == ["--skip=0", "--skip=2", "--skip=4"]

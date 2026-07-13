@@ -128,32 +128,50 @@ def _git(root: Path, *args: str) -> str:
 
 
 def iter_git(root: Path, previous_head: str | None, *, limit: int = 500) -> Iterable[RepoArtifact]:
+    """Yield every commit since the git watermark in bounded local-git pages.
+
+    ``limit`` is a page size, not a completeness cap.  Advancing the git
+    watermark to ``HEAD`` after only one page would permanently hide the older
+    commits from later incremental runs.
+    """
+    if limit < 1:
+        raise ValueError("git_limit must be at least 1")
     current_head = _git(root, "rev-parse", "HEAD").strip()
     revision = f"{previous_head}..{current_head}" if previous_head else current_head
-    # Do not advance the watermark past unprocessed history.  The repository
-    # adapter is a completeness-first local projection, so a cold ingest must
-    # enumerate every commit before recording HEAD as its watermark.
-    log = _git(root, "log", "--format=%H|%s", "--name-only", revision)
-    records: list[tuple[str, str, list[str]]] = []
-    for line in log.splitlines():
-        if len(line) > 41 and line[40] == "|" and all(char in "0123456789abcdef" for char in line[:40]):
-            records.append((line[:40], line[41:], []))
-        elif line and records:
-            records[-1][2].append(line)
-    for sha, subject, changed_paths in records:
-        yield RepoArtifact(
-            natural_key=f"git:{sha}", artifact_kind="commit", payload_summary=subject,
-            provenance=json.dumps(
-                {
-                    "sha": sha,
-                    "changed_paths": changed_paths,
-                    "extraction_method": "local_git_log",
-                    "payload_summary": subject,
-                },
-                sort_keys=True,
-            ),
-            source="repo_git", source_watermark=sha,
+    skip = 0
+    while True:
+        log = _git(
+            root,
+            "log",
+            f"--max-count={limit}",
+            f"--skip={skip}",
+            "--format=%H|%s",
+            "--name-only",
+            revision,
         )
+        records: list[tuple[str, str, list[str]]] = []
+        for line in log.splitlines():
+            if len(line) > 41 and line[40] == "|" and all(char in "0123456789abcdef" for char in line[:40]):
+                records.append((line[:40], line[41:], []))
+            elif line and records:
+                records[-1][2].append(line)
+        for sha, subject, changed_paths in records:
+            yield RepoArtifact(
+                natural_key=f"git:{sha}", artifact_kind="commit", payload_summary=subject,
+                provenance=json.dumps(
+                    {
+                        "sha": sha,
+                        "changed_paths": changed_paths,
+                        "extraction_method": "local_git_log",
+                        "payload_summary": subject,
+                    },
+                    sort_keys=True,
+                ),
+                source="repo_git", source_watermark=sha,
+            )
+        if len(records) < limit:
+            return
+        skip += len(records)
 
 
 def _ingest_tree(store: CkmStore, source: str, artifacts: Iterable[RepoArtifact]) -> dict[str, int | str]:
