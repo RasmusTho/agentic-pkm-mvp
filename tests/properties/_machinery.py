@@ -452,12 +452,15 @@ from typing import Callable as _Callable  # noqa: E402
 #                      (formal-model.md §2.3), e.g. the app-local device
 #                      registry, not a Human Knowledge Artifact.
 WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
-    ("app/ports/filesystem_vault_adapter.py", 44): (
+    ("app/ports/filesystem_vault_adapter.py", 45): (
         "guarded: FilesystemVaultAdapter.ensure_uuid calls this class's OWN "
-        "write_frontmatter method (line 60), which routes through "
-        "write_note_from_absolute (the knowledge port, line 74) -- covered by "
+        "write_frontmatter method (line 61), which routes through "
+        "write_note_from_absolute (the knowledge port, line 84) -- covered by "
         "the port's own guard-at-seam assertion (#2910), not the "
-        "MarkdownSettingsStore primitive this census is otherwise about."
+        "MarkdownSettingsStore primitive this census is otherwise about. "
+        "Line drifted 44 -> 45 (site unchanged); re-pinned per this census's "
+        "own directly-related-repair convention when #3450 threaded an opt-in "
+        "expected_version through write_frontmatter."
     ),
     ("app/vault/manager.py", 669): (
         "guarded: _ensure_frontmatter_id asserts DEFAULT_WRITE_GUARD."
@@ -732,16 +735,16 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "own monotonic-status check is not a write gate, so port coverage is "
         "what guards this seam (#3035, Epic #3019 A15 capture note / J0)."
     ),
-    ("app/episodes/store.py", 203): (
+    ("app/episodes/store.py", 217): (
         "guarded_by_port: write_episode_note passes write_guard (and the "
         "distinct episodes.write_note action) through to write_note_relative, "
         "which asserts write_guard.assert_writes_allowed(action) at the port "
         "itself before any I/O (#2910/#2953 precedent); no caller-side assert "
         "exists in this module by design -- this IS the production seam ERE-02 "
-        "AC2 verifies (#3177). Line drifted 115 -> 203 (site unchanged; later "
-        "ERE-07 machine-terminality docstrings grew the module); re-pinned per "
-        "this census's own directly-related-repair convention the next time the "
-        "machinery was touched (#3183, ERE-08)."
+        "AC2 verifies (#3177). Line drifted 115 -> 203 -> 217 (site unchanged; "
+        "the 203 -> 217 shift came from #3450 reading the current note bytes "
+        "once to supply an opt-in expected_version); re-pinned per this "
+        "census's own directly-related-repair convention (#3450)."
     ),
     ("app/episodes/segmenter.py", 897): (
         "guarded_by_port: _write_fusion_receipt passes write_guard (and the "

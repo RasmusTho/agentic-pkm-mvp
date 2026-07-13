@@ -54,24 +54,42 @@ def test_runtime_note_classes_accept_settings_resolved_capture_and_sources_paths
     )
 
 
-def test_rewritten_write_requires_expected_version_at_filesystem_seam(tmp_path: Path) -> None:
+def test_rewritten_write_enforces_only_on_opt_in_expected_version_at_filesystem_seam(
+    tmp_path: Path,
+) -> None:
+    """VMW-01 enactment-gap model (owner decision 2026-07-13): enforcement of the
+    rewritten-note version guard is OPT-IN. A versionless rewrite is performed
+    normally so legacy writers are never broken during progressive migration
+    (#3570), while still recording the structured ``note_class`` outcome on the
+    receipt. A caller that opts in with ``expected_version`` gets optimistic
+    concurrency: a stale version is refused with ``KnowledgeWriteConflict``."""
     note = tmp_path / "Notes" / "human.md"
     note.parent.mkdir(parents=True)
     note.write_text("old", encoding="utf-8")
 
-    with pytest.raises(KnowledgeWriteConflict, match="expected_version"):
-        write_note_from_absolute(note, "new", vault_root=tmp_path)
+    # Deferred enforcement: no expected_version -> the write succeeds (not a raise)
+    # and the receipt still records the REWRITTEN classification.
+    deferred_receipt = write_note_from_absolute(note, "new", vault_root=tmp_path)
+    assert note.read_text(encoding="utf-8") == "new"
+    assert deferred_receipt.note_class is NoteClass.REWRITTEN
 
-    assert note.read_text(encoding="utf-8") == "old"
-    expected = hashlib.sha256(b"old").hexdigest()
+    # Opt-in optimistic concurrency: a mismatched expected_version DOES raise and
+    # leaves the note untouched (no silent overwrite of a concurrently-changed note).
+    stale_version = hashlib.sha256(b"old").hexdigest()
+    with pytest.raises(KnowledgeWriteConflict, match="version mismatch"):
+        write_note_from_absolute(note, "newer", vault_root=tmp_path, expected_version=stale_version)
+    assert note.read_text(encoding="utf-8") == "new"
+
+    # Opt-in with the correct current version writes and stamps writer provenance.
+    current_version = hashlib.sha256(b"new").hexdigest()
     receipt = write_note_from_absolute(
         note,
-        "new",
+        "newer",
         vault_root=tmp_path,
-        expected_version=expected,
+        expected_version=current_version,
         writer_identity="mac-runtime",
     )
-    assert note.read_text(encoding="utf-8") == "new"
+    assert note.read_text(encoding="utf-8") == "newer"
     assert receipt.writer_identity == "mac-runtime"
 
 

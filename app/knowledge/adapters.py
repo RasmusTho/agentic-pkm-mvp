@@ -48,9 +48,15 @@ class FsVaultAdapter:
     ) -> WriteReceipt:
         target = self._absolute_path(locator)
         note_class = self._classify(locator.path, WriteOperation.WRITE)
-        if target.exists() and note_class is NoteClass.REWRITTEN:
-            if not expected_version:
-                raise KnowledgeWriteConflict(f"expected_version is required for rewritten note {locator.path}")
+        # Opt-in optimistic concurrency (VMW-01 enactment-gap model; owner decision
+        # 2026-07-13). Enforcement applies ONLY when the caller opts in by passing
+        # ``expected_version``: a versionless write is performed normally so legacy
+        # writers are never broken during progressive migration (#3570) -- the
+        # structured outcome is still recorded on the receipt's ``note_class``. When a
+        # caller DOES pass ``expected_version``, a REWRITTEN note whose current bytes no
+        # longer match is refused with ``KnowledgeWriteConflict`` (INV-VW1: no silent
+        # overwrite of a concurrently-changed note).
+        if expected_version is not None and target.exists() and note_class is NoteClass.REWRITTEN:
             current_version = hashlib.sha256(target.read_bytes()).hexdigest()
             if current_version != expected_version:
                 raise KnowledgeWriteConflict(f"version mismatch for rewritten note {locator.path}")
