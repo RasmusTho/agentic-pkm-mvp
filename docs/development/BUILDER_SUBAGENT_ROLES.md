@@ -58,6 +58,12 @@ Four initial execution roles. Each maps to exactly one canonical skill and stays
 | `backlog_contract_maintainer` | `.codex/agents/backlog-contract-maintainer.toml` | Repair stale, malformed, duplicate, or drifted Issue/PR/Project state. | `.codex/skills/issue-maintenance-change-control/SKILL.md` |
 | `verification_closer` | `.codex/agents/verification-closer.toml` | Verify a PR against its governing contract, check CI/review state, and close delivery. | `.codex/skills/verification-and-closure/SKILL.md` |
 
+The host-local verification dispatch consumer may launch or resume the coordinator session for this
+adapter, but it does not broaden the adapter's authority. Every independent review and re-review is
+a fresh session; only the coordinator may resume its recorded session after restart. Repair attempts
+are accounted across the whole PR as two standard attempts followed by at most two
+strongest-capability attempts.
+
 ## Skill-to-role routing matrix
 
 | Task shape | Canonical skill | Role |

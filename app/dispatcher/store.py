@@ -127,13 +127,11 @@ class SqliteStore:
         # dispatcher_meta, so its absence is recognized only together with
         # the v1-specific missing ``repo`` column.
         is_unversioned_v1 = current_version is None and "repo" not in columns
-        if current_version not in {"1", str(SCHEMA_VERSION)} and not is_unversioned_v1:
+        if current_version not in {"1", "2", str(SCHEMA_VERSION)} and not is_unversioned_v1:
             version = "missing" if current_version is None else repr(current_version)
             raise ValueError(f"unsupported dispatcher schema_version: {version}")
-        if current_version == str(SCHEMA_VERSION):
-            raise ValueError(
-                "dispatcher schema_version 2 is incompatible with the on-disk schema"
-            )
+        if current_version == "2" and "repo" not in columns:
+            raise ValueError("dispatcher schema_version 2 is incompatible with the on-disk schema")
 
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -153,13 +151,17 @@ class SqliteStore:
                 ).fetchone()
                 current_version = None if row is None else str(row["value"])
             is_unversioned_v1 = current_version is None and "repo" not in columns
-            if current_version not in {"1", str(SCHEMA_VERSION)} and not is_unversioned_v1:
+            if current_version not in {"1", "2", str(SCHEMA_VERSION)} and not is_unversioned_v1:
                 version = "missing" if current_version is None else repr(current_version)
                 raise ValueError(f"unsupported dispatcher schema_version: {version}")
             if current_version == str(SCHEMA_VERSION) and "repo" in columns:
                 conn.commit()
                 return
             if current_version == str(SCHEMA_VERSION):
+                raise ValueError(
+                    f"dispatcher schema_version {SCHEMA_VERSION} is incompatible with the on-disk schema"
+                )
+            if current_version == "2" and "repo" not in columns:
                 raise ValueError(
                     "dispatcher schema_version 2 is incompatible with the on-disk schema"
                 )

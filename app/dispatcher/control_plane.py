@@ -129,7 +129,7 @@ def _dispatcher_schema_error(conn: sqlite3.Connection) -> str | None:
         version = int(row[0])
     except (TypeError, ValueError):
         return "invalid dispatcher schema_version"
-    if version not in {1, SCHEMA_VERSION}:
+    if version not in {1, 2, SCHEMA_VERSION}:
         return f"unsupported dispatcher schema_version: {version}"
     return None
 
