@@ -325,6 +325,17 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (".codex/skills/", "docs/contracts/"),
         GOVERNANCE_TARGETS,
     ),
+    (
+        # Property-lane test machinery (RESEARCH-03 P-1..P-7). Owned so a change
+        # to a non-test helper like tests/properties/_machinery.py (the
+        # write-seam census / classification registry) resolves to the property
+        # tests that validate it, instead of fail-closing as unowned (exit 2).
+        # A changed test_*.py file already runs directly; this covers the
+        # shared machinery those tests import.
+        "properties",
+        ("tests/properties/",),
+        ("tests/properties",),
+    ),
 )
 
 
