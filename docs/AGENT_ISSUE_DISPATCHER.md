@@ -6,7 +6,7 @@ Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed (GitHub issue contracts + repo governance docs)
 Last reviewed: 2026-07-10
-Last verified against: #617, #621, #622, #623, #624, #625, #637, #639, #640, #561, #3312, AGENTS.md, docs/ARCHITECTURE.md, docs/development/GITHUB_GOVERNANCE_SETUP.md, .github/github-governance.yml
+Last verified against: #617, #621, #622, #623, #624, #625, #637, #639, #640, #561, #3312, #3603, AGENTS.md, docs/ARCHITECTURE.md, docs/development/GITHUB_GOVERNANCE_SETUP.md, .github/github-governance.yml
 
 # Agent Issue Dispatcher (MVP Contract)
 
@@ -38,12 +38,17 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 **Verification dispatch consumer: SHIPPED IN REPO (host enablement is separate)**
 
 - `app.dispatcher.verification_dispatch` extends the same SQLite control plane with versioned,
-  idempotent PR/head verification runs, exclusive expiring claims, attempts, receipts, backoff, and
-  deduplicated Human Exception packets.
+  idempotent PR/head verification runs, one global active subscription slot, exact lease-token
+  fencing, durable retry timestamps, attempts, receipts, and deduplicated Human Exception packets.
 - `app.dispatcher.verification_consumer` re-fetches live PR/check truth, requires a successful
   ChatGPT/keyring auth preflight, builds a minimal immutable context pack, and launches only the
-  registered `verification_closer` adapter with explicit `codex exec --json --sandbox
-  workspace-write --output-schema` semantics.
+  registered `verification_closer` adapter with its pinned model, reasoning, sandbox, and developer
+  instructions. Streaming `codex exec --json --output-schema` events persist the thread identity
+  immediately; only a schema-valid final `agent_message` receipt drives terminal state.
+- Missing or pending checks and auth/rate limits enter time-bounded `backoff`; replay cannot launch
+  before `retry_after`. Terminal completion additionally requires two fresh clean review receipts
+  after the final durable repair attempt. Standard and strongest-capability repair budgets are
+  persisted across restart.
 - `verification-ingest` and `verification-status` are host-neutral dispatcher CLI surfaces. The
   Demerzel enable/disable/poll wrapper and service configuration remain host-local outside Git.
 - GitHub Actions remains artifact-only. The consumer grants no mutation or merge authority beyond
