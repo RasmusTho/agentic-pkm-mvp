@@ -75,10 +75,10 @@ material.
 
 | Posture | Meaning |
 | --- | --- |
-| source material / noncanonical | The content exists in acquired material; source presence grants no acceptance. |
-| derived candidate | A named method proposed an interpretation; review has not accepted it. |
-| human-asserted candidate | A human explicitly stated or corrected the candidate, but canonical standing still depends on the relevant owner/governance contract. |
-| reviewed for a bounded route | A human or governed process accepted it for a named MEM or HKA route. |
+| unreviewed / noncanonical | No review has granted standing for a durable-use route. |
+| review pending | A named review has begun but made no disposition. |
+| reviewed for advisory use | A bounded review accepted advisory use, such as entry into a MEM-owned lifecycle; this is not HKA standing. |
+| submitted for governed transition | Review accepted routing to HKA/GOV, but the authority transition is incomplete. |
 | governed durable standing | HKA carries the accepted artifact plus the GOV authority receipt. |
 
 Provider roles such as `user`, `assistant`, `system`, and `tool` belong to source attribution. A
@@ -99,6 +99,8 @@ transformation/review activities. Distinguish at least:
 
 Provenance is a graph, not a confidence score. A candidate can be high-confidence extraction from a
 low-authority source, or low-confidence extraction from a highly authoritative artifact.
+Whether cited material may serve as evidence is a separate evidence-role/admissibility decision; it
+is neither provenance nor authority standing.
 
 #### 4. Temporal standing
 
@@ -121,11 +123,11 @@ Avoid one blended “confidence” number. At minimum, review should be able to 
 - **extraction confidence:** did the transform correctly capture what the source expressed?
 - **identity/link confidence:** do proposed participant, entity, citation, or cross-conversation
   links refer to the intended things?
-- **support posture:** how direct, independent, and admissible is the cited support?
 - **content uncertainty:** how qualified, ambiguous, contested, or incomplete is the proposition?
 
 These measures do not grant authority. Unknown is a legitimate value; disagreement should remain
-visible rather than averaged away.
+visible rather than averaged away. Evidence role and admissibility are recorded outside confidence:
+a claim may be extracted confidently while its cited support remains unresolved or inadmissible.
 
 #### 6. Lifecycle and disposition
 
@@ -149,10 +151,12 @@ model-confident version.
 
 ### Required non-taxonomic envelope
 
-Scope binding, sensitivity, rights/consent, source role, evidence role, Episode posture, identity,
-and exact lineage remain mandatory governance context even though they are not axes in the knowledge
-taxonomy. The minimum provenance envelope is defined as research in the #3196 data-model memo; this
-taxonomy consumes that separation and does not replace it.
+Scope binding, sensitivity, rights/consent, source role, **evidence role/admissibility**, Episode
+posture, identity, and exact lineage remain mandatory governance context even though they are not
+axes in the knowledge taxonomy. Evidence posture answers what material may do in reasoning; it is
+not inferred from authority, provenance, or confidence. The minimum provenance envelope is defined
+as research in the #3196 data-model memo; this taxonomy consumes that separation and does not
+replace it.
 
 ## Mapping to existing Yggdrasil concepts
 
