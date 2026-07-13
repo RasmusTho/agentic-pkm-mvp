@@ -1,6 +1,6 @@
-State: BMI-01 through BMI-05 are implemented; parent end-to-end acceptance remains pending. A real
-Fable acceptance run requires an explicitly configured local adapter, which is not present on the
-current delivery host.
+State: BMI-01 through BMI-05 are implemented; parent end-to-end acceptance remains pending. The
+configured remote host owns the real-provider adapter and subscription sessions; that host-specific
+configuration is not stored in the repository.
 Doc role: Specification directory
 Authority: Defines the BuilderOps pre-ticket model-inquiry capability and its task decomposition. BuilderOps Vault authority remains owned by ADR-0010.
 Owner: BuilderOps governance
@@ -29,7 +29,8 @@ its advisory claim files never guarantee exclusive ownership.
 - every model turn is traceable to its input artifacts, model identity, run, and content hash;
 - a deterministic readiness gate decides `issue_ready`, `needs_input`, or `not_ready`;
 - only an accepted promotion path may create a GitHub Issue through REST;
-- desktop skills are thin launchers over the same BuilderOps command and state.
+- desktop skills transfer one question to the configured remote-host launcher, which owns the same
+  BuilderOps command, state, and subscription-authenticated model sessions.
 
 ## Implementation Tasks
 
@@ -38,7 +39,7 @@ its advisory claim files never guarantee exclusive ownership.
 | [External BuilderOps Vault Configuration](EXTERNAL_BUILDEROPS_VAULT_CONFIGURATION.md) | BMI-01 | Explicit shared artifact-root configuration with local SQLite and shared advisory claims. |
 | [Pre-Ticket Inquiry Records](PRE_TICKET_INQUIRY_RECORDS.md) | BMI-02 | Durable inquiry/run/turn records, CLI/API entrypoint, and trace query. |
 | [Model Turn Adapters](MODEL_TURN_ADAPTERS.md) | BMI-03 | Structured command/API adapter contract, retries, and bounded adversarial loop. |
-| [Desktop Skill Launchers](DESKTOP_SKILL_LAUNCHERS.md) | BMI-04 | Codex and Claude Desktop skill packages that invoke the shared inquiry command. |
+| [Desktop Skill Launchers](DESKTOP_SKILL_LAUNCHERS.md) | BMI-04 | Codex and Claude Desktop skill packages that delegate to the configured remote-host inquiry launcher. |
 | [Promotion And Traceability](PROMOTION_AND_TRACEABILITY.md) | BMI-05 | Readiness gate, PromotionIntent, Issue creation, and delivery lineage. |
 
 BMI-02 stores its durable record graph under
@@ -49,9 +50,12 @@ BMI-03 adds `builderops inquiry run`. Its `--dry-run` mode is deterministic and 
 provider-enabled mode uses explicit per-role adapters, strict response validation, durable terminal
 receipts, and no provider fallback.
 
-BMI-04 adds worktree-safe Codex and portable Claude launchers over the same command. BMI-05 adds the
-structured Issue proposal, readiness receipt, file-first PromotionIntent, REST-only Issue crossing,
-crash reconciliation marker, and append-only delivery references.
+BMI-04 adds Codex and portable Claude bridge skills that transfer the question to a configured
+remote-host launcher. The configured remote host owns the BuilderOps command, configured role
+adapters, subscription sessions, and durable artifacts; its host-specific configuration remains
+outside Git. BMI-05 adds the structured Issue proposal, readiness receipt, file-first
+PromotionIntent, REST-only Issue crossing, crash reconciliation marker, and append-only delivery
+references.
 
 ## Execution Order
 
@@ -96,9 +100,9 @@ Partial failure examples:
   `tests/builderops/test_builderops_paths.py::test_shared_vault_bootstrap_creates_advisory_claims_but_never_sqlite`.
 - [x] A GitHub Issue is created only after readiness and promotion evidence are recorded. Verify:
   `tests/builderops/test_model_inquiry_promotion.py::test_issue_promotion_requires_ready_receipt`.
-- [x] Desktop launcher instructions invoke the common BuilderOps command rather than a desktop-app
-  automation protocol. Verify: doc writeback at `.codex/skills/start-model-inquiry/SKILL.md` and
-  packaged Claude skill manifest.
+- [x] Desktop launcher instructions transfer the question to the configured remote-host launcher rather
+  than starting local BuilderOps or automating a desktop app. Verify:
+  `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
 
 ## Relationship To GitHub Issues
 
