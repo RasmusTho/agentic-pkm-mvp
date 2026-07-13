@@ -223,10 +223,14 @@ def heartbeat(
         )
 
     now = _utc_now()
+    if _parse_rfc3339(lease.expires_at) <= _parse_rfc3339(now):
+        raise ValueError(f"Cannot heartbeat lease {task.lease_id}: lease has expired")
     lease.heartbeat_at = now
+    lease.expires_at = _expires_at(lease.ttl_seconds)
     store.upsert_lease(lease)
 
     task.last_heartbeat_at = now
+    task.lease_expires_at = lease.expires_at
     task.updated_at = now
     store.upsert_task(task)
 

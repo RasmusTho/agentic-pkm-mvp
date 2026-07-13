@@ -29,6 +29,8 @@ class DispatcherStore(Protocol):
         self, status: str | None = None, repo: str | None = None
     ) -> list[TaskRecord]: ...
     def list_events(self, task_id: str | None = None) -> list[EventRecord]: ...
+    def get_meta(self, key: str) -> str | None: ...
+    def set_meta(self, key: str, value: str) -> None: ...
 
 
 def _dumps(value: Any) -> str | None:
@@ -150,6 +152,24 @@ class SqliteStore:
             conn.execute(
                 "INSERT OR REPLACE INTO dispatcher_meta(key, value) VALUES (?, ?)",
                 ("schema_version", str(SCHEMA_VERSION)),
+            )
+            conn.commit()
+
+    # ----- coordination metadata -----
+
+    def get_meta(self, key: str) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM dispatcher_meta WHERE key = ?", (key,)
+            ).fetchone()
+        return None if row is None else str(row["value"])
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO dispatcher_meta(key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
             )
             conn.commit()
 

@@ -82,7 +82,7 @@ def test_heartbeat_updates_lease(store: SqliteStore) -> None:
 
     updated_lease = heartbeat(store, "task-1", "agent-1")
 
-    assert updated_lease.expires_at == lease.expires_at
+    assert updated_lease.expires_at >= lease.expires_at
     assert updated_lease.heartbeat_at >= original_heartbeat
 
 

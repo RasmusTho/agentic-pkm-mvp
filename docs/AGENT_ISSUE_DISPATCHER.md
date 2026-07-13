@@ -52,6 +52,10 @@ Normative boundary:
   visibility only and never distributed locks.
 - External boards (including GitHub Projects) are optional projections and must not be required in the agent hot path.
 
+The logical Builder Control Plane boundary is defined in
+`docs/development/BUILDER_CONTROL_PLANE.md`. It records observable control-mode and recovery
+receipts only; it does not replace GitHub lifecycle truth or claim physical runtime enforcement.
+
 ## Non-Goals (MVP)
 
 - Replacing GitHub Issues/PRs/CI as durable truth.

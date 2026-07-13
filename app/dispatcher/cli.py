@@ -36,7 +36,7 @@ from app.dispatcher.sync_github import (
 REQUIRED_COMMANDS = frozenset([
     "init", "queue", "next", "show", "claim",
     "heartbeat", "release", "update", "move", "block", "complete", "events", "pull",
-    "export-signboard", "signboard-validate",
+    "export-signboard", "signboard-validate", "backup", "mode",
 ])
 
 
@@ -313,9 +313,19 @@ def _cmd_link_pr(args: argparse.Namespace, store: SqliteStore) -> int:
 def _cmd_status(args: argparse.Namespace, store: SqliteStore) -> int:
     paths = load_paths()
     status = singleton_status(paths)
+    control_plane: dict[str, Any]
+    if status["db_exists"]:
+        from app.dispatcher.control_plane import state
+        try:
+            control_plane = state(store)
+        except ValueError as exc:
+            return _emit_error(str(exc), args.json)
+    else:
+        control_plane = {"mode": "unavailable", "revision": None}
     _emit({
         "ok": True,
         **status,
+        "control_plane": control_plane,
         **_coordination_payload(bool(status["db_exists"])),
     }, args.json)
     return 0
@@ -438,6 +448,45 @@ def _cmd_signboard_validate(args: argparse.Namespace, store: SqliteStore) -> int
     return 0
 
 
+def _cmd_health(args: argparse.Namespace, store: SqliteStore) -> int:
+    from app.dispatcher.control_plane import health
+    result = health(load_paths())
+    _emit({"ok": result["ok"], **result}, args.json)
+    return 0 if result["ok"] else 1
+
+
+def _cmd_backup(args: argparse.Namespace, store: SqliteStore) -> int:
+    from pathlib import Path
+    from app.dispatcher.control_plane import backup
+    try:
+        _emit({"ok": True, **backup(load_paths(), Path(args.destination))}, args.json)
+        return 0
+    except ValueError as exc:
+        return _emit_error(str(exc), args.json)
+
+
+def _cmd_restore(args: argparse.Namespace, store: SqliteStore) -> int:
+    from pathlib import Path
+    from app.dispatcher.config import load_paths as target_paths
+    from app.dispatcher.control_plane import restore
+    try:
+        target = target_paths({"DISPATCHER_STATE_DIR": args.target_state_dir})
+        _emit({"ok": True, **restore(Path(args.backup_dir), target)}, args.json)
+        return 0
+    except ValueError as exc:
+        return _emit_error(str(exc), args.json)
+
+
+def _cmd_mode(args: argparse.Namespace, store: SqliteStore) -> int:
+    from app.dispatcher.control_plane import transition
+    try:
+        result = transition(store, load_paths(), args.mode, activation_id=args.activation_id, expected_revision=args.expected_revision)
+        _emit({"ok": True, "control_plane": result}, args.json)
+        return 0
+    except ValueError as exc:
+        return _emit_error(str(exc), args.json)
+
+
 # ---------------------------------------------------------------------------
 # Parser
 # ---------------------------------------------------------------------------
@@ -461,6 +510,10 @@ _COMMAND_MAP = {
     "pull": _cmd_pull,
     "export-signboard": _cmd_export_signboard,
     "signboard-validate": _cmd_signboard_validate,
+    "health": _cmd_health,
+    "backup": _cmd_backup,
+    "restore": _cmd_restore,
+    "mode": _cmd_mode,
 }
 
 
@@ -546,6 +599,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("status", help="Show dispatcher path/status information")
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("health", help="Check dispatcher database and event-log health")
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("backup", help="Create an online dispatcher backup")
+    p.add_argument("destination")
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("restore", help="Restore a backup into a separate state root")
+    p.add_argument("backup_dir")
+    p.add_argument("--target-state-dir", required=True)
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("mode", help="Make an explicit logical control-plane mode transition")
+    p.add_argument("mode", choices=("normal", "degraded", "recovery"))
+    p.add_argument("--activation-id", required=True)
+    p.add_argument("--expected-revision", type=int, required=True)
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("pull", help="Pull open agent:ready issues from GitHub")
