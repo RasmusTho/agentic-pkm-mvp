@@ -47,6 +47,7 @@ from app.episodes.assignment import (
 from app.episodes.notes import episode_note_rel_path, parse_episode_note
 from app.episodes.recut import (
     ACCEPTANCE_QUIET_WINDOW_MINUTES,
+    compute_body_hash,
     compute_fields_hash,
     run_recut_tick,
 )
@@ -284,6 +285,37 @@ def test_recut_detection_is_writer_identity_not_content_heuristic(
     result = run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 5))
     assert result["recut_detected"] == []
     assert any(kind == "reconcile" and args["episode_id"] == episode_id for kind, args in calls)
+
+
+def test_body_only_human_edit_survives_quiet_window_relabel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A body-only Obsidian edit is part of the markdown re-cut surface. It must prevent the
+    quiet-window acceptance path from replacing that body with the generated template."""
+    vault_root = tmp_path / "vault"
+    _stub_bindings(monkeypatch)
+    _stub_projection_sync(monkeypatch)
+    _install_fake_engine_state(monkeypatch)
+
+    episode_id = "ep-22222222-2222-4222-8222-222222222222"
+    _write_initial(vault_root, episode_id=episode_id, segmentation="proposed")
+    t0 = _dt(10, 0)
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=t0)
+
+    note_path = vault_root / episode_note_rel_path(episode_id)
+    human_body = "\n## Human correction\n\nKeep this body exactly as written.\n"
+    note_path.write_text(note_path.read_text(encoding="utf-8") + human_body, encoding="utf-8")
+
+    result = run_recut_tick(
+        vault_root=vault_root,
+        write_guard=_allow_guard(),
+        now=t0 + timedelta(minutes=ACCEPTANCE_QUIET_WINDOW_MINUTES),
+    )
+
+    assert result["recut_detected"] == [episode_id]
+    assert result["accepted"] == []
+    assert human_body.strip() in note_path.read_text(encoding="utf-8")
+    assert parse_episode_note(note_path.read_text(encoding="utf-8"))["segmentation"] == "re-cut"
 
 
 # ---------------------------------------------------------------------------
@@ -715,6 +747,29 @@ def test_silence_acceptance_content_hash_helper_is_stable(tmp_path: Path) -> Non
     assert compute_fields_hash(fields) != compute_fields_hash(changed)
 
 
+def test_content_hash_includes_markdown_body() -> None:
+    assert compute_body_hash("body a") != compute_body_hash("body b")
+
+
+def test_legacy_baseline_adopts_canonical_body_hash_without_false_recut(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    _stub_bindings(monkeypatch)
+
+    episode_id = "ep-1e9ac000-1111-4111-8111-111111111111"
+    _write_initial(vault_root, episode_id=episode_id)
+    fake_state = _install_fake_engine_state(monkeypatch)
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 0))
+
+    baseline_key = f"episode_recut_state:{episode_id}"
+    fake_state._store[baseline_key].pop("body_hash")
+
+    result = run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 5))
+    assert result["recut_detected"] == []
+    assert "body_hash" in fake_state._store[baseline_key]
+
+
 def test_content_hash_excludes_engine_lifecycle_fields(tmp_path: Path) -> None:
     """Finding 2: the writer-identity hash must cover ONLY the human-owned cut. An engine-only
     lifecycle write -- a `segmentation` relabel or an ERE-06 `time.closed` flip -- must NOT change
@@ -781,6 +836,43 @@ def test_non_atomic_lifecycle_write_does_not_manufacture_false_recut(
 # ---------------------------------------------------------------------------
 # AC6 -- split and merge flows land in consistent state
 # ---------------------------------------------------------------------------
+
+
+def test_invalid_but_present_episode_note_does_not_trigger_deletion_withdrawal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    calls = _stub_bindings(monkeypatch)
+    _stub_projection_sync(monkeypatch)
+    fake_state = _install_fake_engine_state(monkeypatch)
+
+    episode_id = "ep-77777777-7777-4777-8777-777777777777"
+    _write_initial(vault_root, episode_id=episode_id)
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(9, 0))
+    calls.clear()
+
+    note_path = vault_root / episode_note_rel_path(episode_id)
+    valid_text = note_path.read_text(encoding="utf-8")
+    note_path.write_text(valid_text.replace("scope: work", "scope:"), encoding="utf-8")
+
+    invalid_result = run_recut_tick(
+        vault_root=vault_root, write_guard=_allow_guard(), now=_dt(9, 5)
+    )
+    assert invalid_result["bindings_corrected"] == 0
+    assert not [args for kind, args in calls if kind == "withdraw"]
+    assert f"episode_recut_state:{episode_id}" in fake_state.all_state_with_prefix(
+        "episode_recut_state:"
+    )
+
+    # Once the editor produces valid frontmatter again, the preserved baseline still detects the
+    # human change instead of treating the note as first sight.
+    note_path.write_text(valid_text, encoding="utf-8")
+    _edit_note_directly(vault_root, episode_id, protagonists=[])
+    repaired_result = run_recut_tick(
+        vault_root=vault_root, write_guard=_allow_guard(), now=_dt(9, 10)
+    )
+    assert repaired_result["recut_detected"] == [episode_id]
+    assert not [args for kind, args in calls if kind == "withdraw"]
 
 
 def test_split_and_merge_flows_consistent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

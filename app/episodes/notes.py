@@ -44,14 +44,7 @@ def episode_note_rel_path(episode_id: str) -> str:
     return f"{EPISODE_NOTES_DIR}/{episode_id}.md"
 
 
-def render_episode_note(fields: dict[str, Any]) -> str:
-    """Render an episode note: YAML frontmatter (the schema-validated source of truth)
-    plus a short human-readable body."""
-    fm: dict[str, Any] = {"artifact_class": ARTIFACT_CLASS}
-    for name in _FRONTMATTER_FIELDS:
-        if name in fields:
-            fm[name] = fields[name]
-
+def _canonical_body(fields: dict[str, Any]) -> str:
     time_fields = fields.get("time") or {}
     lines: list[str] = [
         f"# Episode: {fields.get('title', '')}",
@@ -66,14 +59,35 @@ def render_episode_note(fields: dict[str, Any]) -> str:
         "rebuildable query index only, never authoritative.",
         "",
     ]
-    body = "\n".join(lines).rstrip() + "\n"
-    return dump_frontmatter(fm, body)
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_episode_note(fields: dict[str, Any], *, body: str | None = None) -> str:
+    """Render an episode note: YAML frontmatter (the schema-validated source of truth)
+    plus a short human-readable body.
+
+    ``body`` is an explicit preservation path for an existing human-edited body. New notes and
+    notes whose body is still machine-generated use the canonical body derived from ``fields``.
+    """
+    fm: dict[str, Any] = {"artifact_class": ARTIFACT_CLASS}
+    for name in _FRONTMATTER_FIELDS:
+        if name in fields:
+            fm[name] = fields[name]
+
+    return dump_frontmatter(fm, _canonical_body(fields) if body is None else body)
+
+
+def parse_episode_note_document(text: str) -> tuple[dict[str, Any], str]:
+    """Parse both the schema fields and markdown body from an Episode note."""
+    data, body = load_frontmatter(text)
+    fields = {name: data[name] for name in _FRONTMATTER_FIELDS if name in data}
+    return fields, body
 
 
 def parse_episode_note(text: str) -> dict[str, Any]:
     """Parse an episode note's frontmatter back into its situation-model fields."""
-    data, _body = load_frontmatter(text)
-    return {name: data[name] for name in _FRONTMATTER_FIELDS if name in data}
+    fields, _body = parse_episode_note_document(text)
+    return fields
 
 
 def parse_validated_episode_note(text: str) -> dict[str, Any]:
@@ -114,6 +128,7 @@ __all__ = [
     "EPISODE_NOTES_DIR",
     "episode_note_rel_path",
     "parse_episode_note",
+    "parse_episode_note_document",
     "parse_validated_episode_note",
     "render_episode_note",
 ]

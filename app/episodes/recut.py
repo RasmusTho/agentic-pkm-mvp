@@ -11,7 +11,7 @@ path-typing). This module is the production tick (:func:`run_recut_tick`, wired 
    never a content heuristic. ``app.episodes.store.write_episode_note`` is the ONLY machine writer
    of episode notes (ERE-02's guarded seam; nothing else in this codebase writes an episode note's
    own frontmatter), and every call this module makes to it immediately records the resulting
-   fields as this episode's tracked baseline (:func:`_record_baseline`, persisted via
+   fields and markdown body as this episode's tracked baseline (:func:`_record_baseline`, persisted via
    ``app.episodes.engine_state``). On each tick, a note's CURRENT on-disk fields are compared
    against that tracked baseline: identical -> nothing external touched it since the engine's own
    last write; different -> BY CONSTRUCTION some writer other than the engine touched the file
@@ -48,7 +48,8 @@ path-typing). This module is the production tick (:func:`run_recut_tick`, wired 
    reconciled) and the new sibling note's first-sight adoption (reconciled, binding whatever its
    own ``derived_from`` supports). A merge shows up as a re-cut on the surviving (widened) note
    plus a DELETION of the other note, which this module detects by diffing the tracked-baseline id
-   set against the on-disk id set and withdraws every one of the deleted episode's bindings
+   set against canonical paths that are actually absent (invalid-but-present notes are retained)
+   and withdraws every one of the deleted episode's bindings
    (:func:`app.episodes.assignment.withdraw_episode_bindings`) -- so no artifact is ever left
    actively bound to an episode_id that no longer has a note.
 7. **Projection sync** (#3182 mirror of #3181 review finding P1-1,
@@ -67,6 +68,13 @@ path-typing). This module is the production tick (:func:`run_recut_tick`, wired 
    never reaches :func:`_write_relabeled` at all -- ``segmentation`` is already correct, so
    :func:`run_recut_tick` calls :func:`_sync_projection_row` directly from that branch instead, so
    this stays a re-cut-detection-wide invariant, not merely a `_write_relabeled`-scoped one.
+8. **Human body preservation** (#3561): body content has its own backward-compatible fingerprint.
+   A body-only edit is a re-cut, while generated lifecycle-label changes normalize to one canonical
+   sentinel so engine relabels cannot create false positives. The store seam preserves any body that
+   diverged from the generated template across the atomic relabel rewrite.
+9. **Invalid is not deleted** (#3561): the scan retains canonical path identity even when parsing or
+   schema validation fails. Only a genuinely absent path triggers binding withdrawal and baseline
+   deletion; a repaired save resumes against the preserved baseline.
 """
 
 from __future__ import annotations
@@ -82,7 +90,12 @@ from typing import Any, Final, Mapping
 from app.db.db import conn_rw
 from app.episodes import engine_state
 from app.episodes.assignment import reconcile_episode_bindings, withdraw_episode_bindings
-from app.episodes.notes import EPISODE_NOTES_DIR, parse_episode_note
+from app.episodes.notes import (
+    EPISODE_NOTES_DIR,
+    episode_note_rel_path,
+    parse_episode_note_document,
+    render_episode_note,
+)
 from app.episodes.schema import EpisodeSchemaValidationError, validate_episode_note_fields
 from app.episodes.store import cut_snapshot, write_episode_note
 from app.jobs.episodes_projection import EPISODES_TABLE
@@ -181,6 +194,24 @@ def compute_fields_hash(fields: Mapping[str, Any]) -> str:
     ).hexdigest()
 
 
+def compute_body_hash(body: str, *, fields: Mapping[str, Any] | None = None) -> str:
+    """Fingerprint the markdown body independently from the cut-frontmatter fingerprint.
+
+    Keeping the hashes separate preserves compatibility with pre-body-tracking baselines: an old
+    state record has no ``body_hash`` and can be migrated without making every existing Episode
+    look like a human re-cut.
+    """
+    # The generated body contains lifecycle labels such as ``segmentation``. Hash all canonical
+    # generated variants as one sentinel so an engine-authored relabel cannot manufacture a body
+    # re-cut. Once the body diverges from the template, hash its exact human-authored content.
+    material = (
+        "<canonical-episode-body>"
+        if fields is not None and _body_is_canonical(fields, body)
+        else body
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
 @dataclass(frozen=True)
 class _RecutState:
     """This module's own record of the last state it either wrote or observed for one
@@ -196,13 +227,17 @@ class _RecutState:
     content_hash: str
     segmentation: str
     first_seen_at: datetime
+    body_hash: str | None = None
 
     def to_state(self) -> dict[str, Any]:
-        return {
+        value: dict[str, Any] = {
             "content_hash": self.content_hash,
             "segmentation": self.segmentation,
             "first_seen_at": _iso(self.first_seen_at),
         }
+        if self.body_hash is not None:
+            value["body_hash"] = self.body_hash
+        return value
 
     @classmethod
     def from_state(cls, value: Mapping[str, Any]) -> "_RecutState":
@@ -210,6 +245,7 @@ class _RecutState:
             content_hash=str(value["content_hash"]),
             segmentation=str(value["segmentation"]),
             first_seen_at=_parse_dt(value["first_seen_at"]),
+            body_hash=str(value["body_hash"]) if value.get("body_hash") is not None else None,
         )
 
 
@@ -222,11 +258,18 @@ def _load_tracked_states() -> dict[str, _RecutState]:
     return out
 
 
-def _record_baseline(episode_id: str, fields: Mapping[str, Any], *, first_seen_at: datetime) -> None:
+def _record_baseline(
+    episode_id: str,
+    fields: Mapping[str, Any],
+    *,
+    body: str,
+    first_seen_at: datetime,
+) -> None:
     state = _RecutState(
         content_hash=compute_fields_hash(fields),
         segmentation=str(fields.get("segmentation")),
         first_seen_at=first_seen_at,
+        body_hash=compute_body_hash(body, fields=fields),
     )
     engine_state.set_state(_state_key(episode_id), state.to_state())
 
@@ -251,16 +294,33 @@ def _episode_bounds(fields: Mapping[str, Any]) -> tuple[datetime, datetime | Non
     return start, end
 
 
-def _scan_episode_notes(vault_root: Path) -> dict[str, dict[str, Any]]:
-    """Every schema-valid episode note currently on disk, keyed by ``episode_id``. Mirrors
-    ``app.jobs.episodes_projection._iter_episode_notes``'s orphan-skip discipline: a malformed
-    note is skipped (logged), never crashes the tick."""
+@dataclass(frozen=True)
+class _ScannedEpisodeNote:
+    fields: dict[str, Any]
+    body: str
+
+
+@dataclass(frozen=True)
+class _EpisodeNoteScan:
+    valid: dict[str, _ScannedEpisodeNote]
+    present_ids: frozenset[str]
+
+
+def _scan_episode_notes(vault_root: Path) -> _EpisodeNoteScan:
+    """Scan valid notes while retaining canonical paths that are invalid-but-present.
+
+    Invalid notes remain excluded from processing, but their path-derived IDs prevent the deletion
+    reconciler from withdrawing bindings or forgetting a baseline during a transient editor save.
+    """
     subtree = vault_root / EPISODE_NOTES_DIR
-    out: dict[str, dict[str, Any]] = {}
+    valid: dict[str, _ScannedEpisodeNote] = {}
+    present_ids: set[str] = set()
     for path in iter_vault_markdown_files(vault_root, subtree_root=subtree):
+        if path.parent == subtree:
+            present_ids.add(path.stem)
         try:
             text = path.read_text(encoding="utf-8")
-            fields = parse_episode_note(text)
+            fields, body = parse_episode_note_document(text)
             validate_episode_note_fields(fields)
         except (OSError, EpisodeSchemaValidationError) as exc:
             logger.warning("recut: skipping unreadable/invalid episode note %s: %s", path, exc)
@@ -268,8 +328,17 @@ def _scan_episode_notes(vault_root: Path) -> dict[str, dict[str, Any]]:
         episode_id = fields.get("episode_id")
         if not isinstance(episode_id, str) or not episode_id:
             continue
-        out[episode_id] = fields
-    return out
+        present_ids.add(episode_id)
+        valid[episode_id] = _ScannedEpisodeNote(fields=fields, body=body)
+    return _EpisodeNoteScan(valid=valid, present_ids=frozenset(present_ids))
+
+
+def _body_is_canonical(fields: Mapping[str, Any], body: str) -> bool:
+    """Whether ``body`` is still the generated template for the current frontmatter."""
+    _canonical_fields, canonical_body = parse_episode_note_document(
+        render_episode_note(dict(fields))
+    )
+    return body == canonical_body
 
 
 def _sync_projection_row(episode_id: str, fields: Mapping[str, Any]) -> None:
@@ -346,7 +415,13 @@ def _write_relabeled(
     segmentation: str,
     vault_root: Path,
     write_guard: WriteGuard,
-) -> dict[str, Any]:
+    body: str | None = None,
+) -> tuple[dict[str, Any], str]:
+    source_body = body
+    if source_body is None:
+        existing_text = (vault_root / episode_note_rel_path(episode_id)).read_text(encoding="utf-8")
+        _existing_fields, source_body = parse_episode_note_document(existing_text)
+    body_was_canonical = _body_is_canonical(fields, source_body)
     time_fields = fields.get("time") or {}
     result = write_episode_note(
         title=fields["title"],
@@ -368,7 +443,11 @@ def _write_relabeled(
     # #3182 review fix (mirrors #3181 P1-1): keep the `episodes` projection current from the
     # write path itself -- see _sync_projection_row's docstring for why this must never be partial.
     _sync_projection_row(episode_id, result.fields)
-    return result.fields
+    if body_was_canonical:
+        _rendered_fields, result_body = parse_episode_note_document(render_episode_note(result.fields))
+    else:
+        result_body = source_body
+    return result.fields, result_body
 
 
 # ---------------------------------------------------------------------------
@@ -394,7 +473,8 @@ def run_recut_tick(
     moment = now if now is not None else datetime.now(timezone.utc)
 
     tracked = _load_tracked_states()
-    on_disk = _scan_episode_notes(root)
+    scan = _scan_episode_notes(root)
+    on_disk = scan.valid
 
     recut_detected: list[str] = []
     accepted: list[str] = []
@@ -402,13 +482,15 @@ def run_recut_tick(
     bindings_corrected = 0
 
     # Merge-deletion side (AC6): a previously-tracked episode with no note on disk anymore.
-    for missing_id in sorted(set(tracked) - set(on_disk)):
+    for missing_id in sorted(set(tracked) - set(scan.present_ids)):
         result = withdraw_episode_bindings(missing_id, write_guard=write_guard, vault_root=root)
         bindings_corrected += result.get("corrected", 0)
         _forget_baseline(missing_id)
         logger.info("recut: episode %s note deleted -- withdrew its active bindings", missing_id)
 
-    for episode_id, fields in on_disk.items():
+    for episode_id, note in on_disk.items():
+        fields = note.fields
+        body = note.body
         state = tracked.get(episode_id)
         segmentation = str(fields.get("segmentation"))
 
@@ -437,12 +519,16 @@ def run_recut_tick(
             # re-cut -- the terminality guard already froze its cut, round-1 Finding 2 self-heal)
             # and reconcile whatever bindings its own derived_from + bounds support (AC4, also the
             # split/merge "re-bound to the sibling" case, AC6).
-            _record_baseline(episode_id, fields, first_seen_at=moment)
+            _record_baseline(episode_id, fields, body=body, first_seen_at=moment)
             _reconcile(fields)
             continue
 
         current_hash = compute_fields_hash(fields)
-        if current_hash != state.content_hash:
+        current_body_hash = compute_body_hash(body, fields=fields)
+        body_changed = (
+            state.body_hash is not None and current_body_hash != state.body_hash
+        ) or (state.body_hash is None and not _body_is_canonical(fields, body))
+        if current_hash != state.content_hash or body_changed:
             # Writer-identity by elimination (AC1, see module docstring point 1): the engine is
             # the sole known machine writer of episode notes and always re-baselines on its own
             # successful writes, and the fingerprint covers ONLY the human-owned CUT (never the
@@ -454,12 +540,13 @@ def run_recut_tick(
             # terminal.
             recut_detected.append(episode_id)
             if segmentation != SEGMENTATION_RECUT:
-                fields = _write_relabeled(
+                fields, body = _write_relabeled(
                     episode_id,
                     fields,
                     segmentation=SEGMENTATION_RECUT,
                     vault_root=root,
                     write_guard=write_guard,
+                    body=body,
                 )
                 logger.info("recut: operator edit detected for episode %s -- segmentation=re-cut", episode_id)
             else:
@@ -480,7 +567,7 @@ def run_recut_tick(
                 logger.info(
                     "recut: further operator edit detected for already-re-cut episode %s", episode_id
                 )
-            _record_baseline(episode_id, fields, first_seen_at=moment)
+            _record_baseline(episode_id, fields, body=body, first_seen_at=moment)
             _reconcile(fields)
             continue
 
@@ -506,7 +593,12 @@ def run_recut_tick(
             # already-re-cut branch above: no write_episode_note call happens on this branch.
             write_guard.assert_writes_allowed(EPISODE_RECUT_RECONCILE_ACTION)
             _sync_projection_row(episode_id, fields)
-            _record_baseline(episode_id, fields, first_seen_at=state.first_seen_at)
+            _record_baseline(
+                episode_id,
+                fields,
+                body=body,
+                first_seen_at=state.first_seen_at,
+            )
             logger.info(
                 "recut: self-healed stale baseline label for episode %s (baseline=%s, on-disk=%s)",
                 episode_id,
@@ -515,18 +607,35 @@ def run_recut_tick(
             )
             continue
 
+        # Backward-compatible baseline migration: pre-#3561 records have no body hash. A
+        # non-canonical body was handled as a re-cut above; a canonical body can be adopted
+        # without manufacturing a re-cut or resetting the quiet-window clock.
+        if state.body_hash is None:
+            _record_baseline(
+                episode_id,
+                fields,
+                body=body,
+                first_seen_at=state.first_seen_at,
+            )
+
         # Acceptance-by-silence (AC5) applies only to a still-`proposed` episode whose baseline
         # has aged past the quiet window.
         if segmentation == SEGMENTATION_PROPOSED and (moment - state.first_seen_at) >= _QUIET_WINDOW:
-            new_fields = _write_relabeled(
+            new_fields, new_body = _write_relabeled(
                 episode_id,
                 fields,
                 segmentation=SEGMENTATION_ACCEPTED,
                 vault_root=root,
                 write_guard=write_guard,
+                body=body,
             )
             accepted.append(episode_id)
-            _record_baseline(episode_id, new_fields, first_seen_at=state.first_seen_at)
+            _record_baseline(
+                episode_id,
+                new_fields,
+                body=new_body,
+                first_seen_at=state.first_seen_at,
+            )
             logger.info("recut: silence-is-acceptance for episode %s -- segmentation=accepted", episode_id)
 
     return {
@@ -544,6 +653,7 @@ __all__ = [
     "SEGMENTATION_ACCEPTED",
     "SEGMENTATION_PROPOSED",
     "SEGMENTATION_RECUT",
+    "compute_body_hash",
     "compute_fields_hash",
     "run_recut_tick",
 ]

@@ -23,6 +23,8 @@ ADR-0051 §5: proposals stand by default; the only human action is a **re-cut**.
 4. **Binding reconciliation**: after a re-cut changes bounds, the next tick corrects affected `episode_ref` bindings (ERE-05's correction path): artifacts now out-of-bounds are unbound (back to `unbound` or re-bound to the sibling), all with provenance.
 5. **Distinguishing writers**: engine-authored edits carry the write provenance of the ERE writer identity (per the multi-writer posture, ADR-0053/0056 line); an edit not authored by the engine is by definition an operator/agent re-cut. No heuristic content-diffing.
 6. **Projection sync** (review fix, mirrors ERE-06's `app.episodes.closure._sync_projection_closed`): every relabel write echoes the note's full on-disk cut back through `write_episode_note`, so `app.episodes.assignment.read_candidate_episodes_for_scopes` / `app.episodes.closure.find_closable_episodes` (both readers of the `episodes` DB projection, not the vault note) would otherwise see a stale row after a re-cut. The relabel write path itself issues a targeted incremental `UPDATE` of every note-sourced column (`app.episodes.recut._sync_projection_row`) — never a full `rebuild_episodes_projection()` replay.
+7. **Human body preservation**: the markdown body is part of the re-cut surface even though Episode semantics remain frontmatter-first. A body-only edit participates in the tracked baseline, becomes `segmentation: re-cut`, and every machine relabel carries a human-edited body through unchanged instead of regenerating the template over it. Generated canonical bodies remain free to refresh their derived labels/headings.
+8. **Invalid is not deleted**: a canonical Episode-note path that still exists but is temporarily unreadable or schema-invalid is skipped for that tick without withdrawing bindings or forgetting its baseline. Merge-deletion withdrawal runs only when the tracked canonical path is actually absent; once a mid-edit note becomes valid again, its preserved baseline still detects and reconciles the human re-cut.
 
 ## Concretely
 
@@ -45,6 +47,8 @@ Opt-out segmentation is only trustworthy if a human's correction is permanent. A
 - [ ] AC4: re-cut bounds change triggers binding reconciliation with provenance (out-of-bounds artifacts unbound/re-bound). Verify: `tests/episodes/test_recut.py::test_recut_reconciles_bindings`
 - [ ] AC5: acceptance-by-silence transitions `proposed → accepted` after the quiet window without any notification/approval surface. Verify: `tests/episodes/test_recut.py::test_silence_is_acceptance`
 - [ ] AC6: split (one → two notes) and merge (widen + delete) fixture flows land in consistent state (no orphaned bindings, no dangling `parent_episode`). Verify: `tests/episodes/test_recut.py::test_split_and_merge_flows_consistent`
+- [ ] AC7: a body-only human edit survives the quiet-window relabel path and is detected as a re-cut rather than overwritten by the generated body template. Verify: `tests/episodes/test_recut.py::test_body_only_human_edit_survives_quiet_window_relabel`
+- [ ] AC8: an invalid-but-present Episode note neither triggers deletion withdrawal nor loses its tracked baseline; a later valid save is still detected against that baseline. Verify: `tests/episodes/test_recut.py::test_invalid_but_present_episode_note_does_not_trigger_deletion_withdrawal`
 
 ## How to Verify (Pre-Merge)
 
