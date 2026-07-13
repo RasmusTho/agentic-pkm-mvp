@@ -750,7 +750,18 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "(action) at the port itself before any I/O -- so a blocked guard writes "
         "neither the fusion receipt nor the fused note (receipt-before-note, "
         "ERE-08 #3183). No caller-side assert by design, mirroring the ERE-02 "
-        "store seam above."
+        "store seam above. Line drifted 827 -> 897 (site unchanged; an upstream "
+        "episodes-projection sync change grew the module); re-pinned per this "
+        "census's own directly-related-repair convention the next time the "
+        "machinery was touched (#3329)."
+    ),
+    ("app/standing_questions/question_store.py", 165): (
+        "guarded_by_caller: QuestionStore._write asserts self.write_guard."
+        "assert_writes_allowed(WRITE_ACTION) on the line immediately before this "
+        "call (question_store.py:164), before any serialisation, path creation, or "
+        "filesystem mutation, and ALSO passes the same guard/action through to the "
+        "port's own guard as defense-in-depth (#3329). This is the sole production "
+        "write seam for Standing Questions Question notes."
     ),
 }
 

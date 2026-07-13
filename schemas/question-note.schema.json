@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Standing Question note",
+  "type": "object",
+  "required": ["question_id", "scope", "text", "status", "created_at", "registered_via", "evidence"],
+  "additionalProperties": false,
+  "properties": {
+    "question_id": {"type": "string", "pattern": "^sq-[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$"},
+    "scope": {"type": "string", "minLength": 1},
+    "text": {"type": "string", "minLength": 1},
+    "status": {"enum": ["open", "answered", "closed"]},
+    "created_at": {"type": "string", "format": "date-time"},
+    "registered_via": {"enum": ["capture_intent", "explicit"]},
+    "standing_answer_ref": {"type": ["string", "null"]},
+    "candidate_answer_ref": {"type": ["string", "null"]},
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["artifact_ref", "source_stream", "matched_at", "confidence_class", "provenance_ref", "quoted_span"],
+        "additionalProperties": false,
+        "properties": {
+          "artifact_ref": {"type": "string"},
+          "source_stream": {"type": "string"},
+          "matched_at": {"type": "string", "format": "date-time"},
+          "confidence_class": {"type": "string"},
+          "provenance_ref": {"type": "string"},
+          "quoted_span": {"type": "string"}
+        }
+      }
+    },
+    "last_matched_at": {"type": ["string", "null"], "format": "date-time"},
+    "last_refreshed_at": {"type": ["string", "null"], "format": "date-time"}
+  }
+}
