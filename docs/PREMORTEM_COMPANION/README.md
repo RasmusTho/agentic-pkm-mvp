@@ -1,4 +1,4 @@
-State: Specification directory (parent feature issue #3547; first child #3548; no shipped behavior is claimed).
+State: The first read-only admission slice is implemented; no reflective model packet or user-facing companion surface is shipped.
 Doc role: Feature specification
 Authority: Defines a future, read-only personal-decision reflection capability. Subordinate to `docs/DECISION_CALIBRATION/README.md` for outcome-receipt truth and to context-admission contracts for retrieval authority.
 Owner: Product / decision support
@@ -17,7 +17,14 @@ Decision Calibration CAL-01 establishes canonical `decision_record` identity (`o
 
 | Task | Purpose | Status |
 | --- | --- | --- |
-| [VERIFY_DECISION_HISTORY_ADMISSION.md](VERIFY_DECISION_HISTORY_ADMISSION.md) | Establish fail-closed decision selection, outcome linkage, scoped admission, and citation behavior. | First executable slice |
+| [VERIFY_DECISION_HISTORY_ADMISSION.md](VERIFY_DECISION_HISTORY_ADMISSION.md) | Establish fail-closed decision selection, outcome linkage, scoped admission, and citation behavior. | Implemented as read-only adapter (#3548) |
+
+The adapter lives at `app/calibration/premortem_admission.py`. It delegates
+canonical identity to `resolve_vault_uuid`, reads CAL-01 outcomes only through
+`iter_outcome_receipts`, and requires the caller's current citation resolver
+for every content-bearing decision or outcome. Its result is ephemeral and
+contains content-free exclusion counts; it has no model, write, scheduler,
+profile, inference, or follow-up seam.
 
 Only after that task is accepted may a follow-up render a transient packet with separate evidence, recorded outcome, and model-hypothesis regions.
 

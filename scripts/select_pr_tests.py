@@ -181,6 +181,20 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/curation", "tests/invariants"),
     ),
     (
+        "decision_calibration",
+        (
+            "app/calibration/",
+            "tests/calibration/",
+            "docs/PREMORTEM_COMPANION/",
+            "docs/DECISION_CALIBRATION/",
+        ),
+        (
+            "tests/calibration",
+            "tests/services/test_outcome_receipt_log.py",
+            "tests/agent_memory/test_ask_synthesis_gate.py",
+        ),
+    ),
+    (
         "heimdal",
         ("app/heimdal/", "tests/heimdal/", "docs/HEIMDAL/", "docs/HEIMDAL_CAPTURE_CLIENT/"),
         ("tests/heimdal",),
