@@ -2,18 +2,32 @@
 # `docker compose down` (even without -v) cannot destroy prod data.
 # Usage: docker compose -f docker-compose.yaml -f docker-compose.prod.yml -p pkm-prod up -d
 services:
+  # Production uses the project-local Ollama service over the Compose network.
+  # Do not publish 11434: the mac mini may also have a host Ollama listener,
+  # and api/worker must not depend on host.docker.internal routing.
+  ollama:
+    ports: !override []
+
   api:
     environment:
       API_HEALTHCHECK_URL: http://host.docker.internal:18000/readyz
       PKM_ENVIRONMENT: prod
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app@db:5432/app}
       DB_DSN: ${DB_DSN:-postgresql+psycopg://app:app@db:5432/app}
+      OLLAMA_BASE_URL: http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
 
   worker:
     environment:
       PKM_ENVIRONMENT: prod
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app:app@db:5432/app}
       DB_DSN: ${DB_DSN:-postgresql+psycopg://app:app@db:5432/app}
+      OLLAMA_BASE_URL: http://ollama:11434
+    depends_on:
+      ollama:
+        condition: service_healthy
 
   watcher:
     environment:

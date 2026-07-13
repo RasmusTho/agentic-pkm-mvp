@@ -270,6 +270,31 @@ Environment separation MUST be explicit across the following surfaces.
 
 **Operational consequence**: production incidents, unsafe drift, or blocked write conditions should route through health/write-guard/operator workflows rather than ad hoc override behavior.
 
+<a id="prod-ollama-topology"></a>
+
+### Production Ollama topology
+
+Production's API and worker use the `ollama` service in the `pkm-prod` Compose project at
+`http://ollama:11434`. The production overlay starts that service before API/worker readiness and
+does **not** publish port `11434` to the macOS host. This avoids relying on
+`host.docker.internal` and prevents a collision with any host-local Ollama process.
+
+The provider cache is the project-scoped `pkm-prod_ollama` volume inherited from the base Compose
+file. It is persistent across normal recreate/redeploy operations, but Compose never downloads a
+model implicitly. Before enabling Ollama-backed work, the operator must confirm that this cache
+contains the configured models — currently `nomic-embed-text:latest` (768 dimensions) and the
+configured chat model — without changing the existing embedding provider/model/dimension identity.
+
+The Mac mini's shared Colima budget remains 4 GB. A sidecar restores transport; it does not make
+the co-resident embedding and chat models fit more memory. Keep embedding work serial and do not
+start a rebuild or download models as part of a transport-only redeploy. Inspect model/cache disk
+usage and the running container memory before any later rebuild.
+
+To roll back this topology, redeploy the previous committed production revision (where the
+production API/worker point at the prior provider route) using the same `pkm-prod` project. The
+named cache volume is preserved; do not remove it unless an operator intentionally accepts losing
+the cached models.
+
 ## Runtime Control Surface
 
 The runtime provides explicit environment selection through a documented control surface with a clear priority hierarchy for `dev`, `prod`, and `test`.

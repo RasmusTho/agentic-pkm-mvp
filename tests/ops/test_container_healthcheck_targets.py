@@ -9,6 +9,7 @@ import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+_PROD_OLLAMA_BASE_URL = "http://ollama:11434"
 
 
 class _ComposeLoader(yaml.SafeLoader):
@@ -58,3 +59,22 @@ def test_no_container_healthcheck_targets_api_health() -> None:
                 f"{compose_path.name}:{service_name} healthcheck must use /healthz or /readyz, "
                 "not /api/health"
             )
+
+
+def test_prod_api_and_worker_use_the_internal_ollama_service() -> None:
+    """Prod must start and address its Compose-local Ollama provider (#3462)."""
+    prod_compose = yaml.load(
+        (REPO_ROOT / "docker-compose.prod.yml").read_text(encoding="utf-8"),
+        Loader=_ComposeLoader,
+    ) or {}
+    services = prod_compose.get("services") or {}
+
+    ollama = services.get("ollama") or {}
+    assert ollama.get("ports") == [], "prod must not publish Ollama's host port"
+
+    for service_name in ("api", "worker"):
+        service = services.get(service_name) or {}
+        environment = service.get("environment") or {}
+        assert environment.get("OLLAMA_BASE_URL") == _PROD_OLLAMA_BASE_URL
+        assert "host.docker.internal" not in environment["OLLAMA_BASE_URL"]
+        assert (service.get("depends_on") or {}).get("ollama") == {"condition": "service_healthy"}
