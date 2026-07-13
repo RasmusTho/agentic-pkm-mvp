@@ -20,6 +20,11 @@ from app.agent_memory.recall_explanation import (
     render_recall_footer,
 )
 from app.agent_memory.recall_retrieval import RecallCandidate, retrieve_relevant_promoted
+from app.agent_memory.ask_provenance_manifest import (
+    AuthorizationSnapshot,
+    capture_ask_provenance,
+    shadow_capture_enabled,
+)
 from app.agents.ask.state import AgentState, RetrievedHit
 from app.agents.ask.utils import build_ask_context, get_ask_settings, llm_answer, score_hit
 from app.config.environment import active_environment
@@ -65,6 +70,7 @@ def _retrieve_node(state: AgentState, *, k: int, ask_settings) -> AgentState:
         ask_score = score_hit(hit)
         enriched.append(_to_retrieved_hit(hit, ask_score=ask_score))
     state.hits = enriched
+    state.retrieval_metadata = dict(getattr(response, "metadata", {}) or {})
     # Content-free scope denials ride the state separately from hits (KERNEL-10): they are
     # scope-level, so later rerank/truncation of hits must never drop them. getattr keeps
     # compatibility with test fakes that return a hits-only response.
@@ -77,7 +83,9 @@ def _rerank_node(state: AgentState, *, ask_settings) -> AgentState:
         return state
     reranker = get_reranker()
     # Order by ask_score first (if present); otherwise use reranker
-    sorted_hits = sorted(state.hits, key=lambda h: (h.ask_score if h.ask_score is not None else 0.0), reverse=True)
+    sorted_hits = sorted(
+        state.hits, key=lambda h: h.ask_score if h.ask_score is not None else 0.0, reverse=True
+    )
 
     class _RRItem:
         def __init__(self, id: str, text: str):
@@ -284,6 +292,52 @@ def _synthesis_source_paths(state: AgentState) -> dict[str, str]:
     return paths
 
 
+def _capture_provenance_shadow(
+    state: AgentState,
+    *,
+    envelope: dict[str, Any],
+    admitted_source_ids: Iterable[str],
+) -> None:
+    """Best-effort post-answer capture with no return path into ASK."""
+
+    if not shadow_capture_enabled() or state.answer is None:
+        return
+    hits = {hit.object_id: hit for hit in state.hits}
+    evidence: list[dict[str, Any]] = []
+    for source_id in admitted_source_ids:
+        hit = hits.get(source_id)
+        evidence.append(
+            {
+                "source_id": source_id,
+                "canonical_source_hash": (hit.payload.get("content_hash") if hit else None),
+            }
+        )
+    policy = {
+        "citation_policy": envelope.get("citation_policy") or {},
+        "mutation_policy": envelope.get("mutation_policy") or {},
+        "execution_policy": envelope.get("execution_policy") or {},
+    }
+    authorization_context = {
+        "access_mode": envelope.get("access_mode"),
+        "active_workspace_id": envelope.get("active_workspace_id"),
+        "allowed_capabilities": envelope.get("allowed_capabilities") or [],
+    }
+    capture_ask_provenance(
+        answer=state.answer,
+        query=state.query,
+        evidence=evidence,
+        authorization=AuthorizationSnapshot(
+            scope_id=str(envelope.get("active_scope_id") or "scope:unscoped"),
+            principal_id=str(envelope.get("principal_id") or "principal:unknown"),
+            authorization_context=authorization_context,
+            policy=policy,
+            authorized_source_ids=tuple(admitted_source_ids),
+        ),
+        retrieval_identity=state.retrieval_metadata.get("canonical_index_identity"),
+        synthesis_identity=state.llm_route,
+    )
+
+
 def _answer_node(state: AgentState, *, ask_settings) -> AgentState:
     if not state.hits and not state.recalled:
         # Preserve the fallback only when neither retrieval nor recall produced context.
@@ -293,7 +347,9 @@ def _answer_node(state: AgentState, *, ask_settings) -> AgentState:
     if state.hits:
         # Default answer: snippet/text of top hit
         top = state.hits[0]
-        fallback = (top.snippet or top.payload.get("text") or top.payload.get("raw_text") or "").strip()
+        fallback = (
+            top.snippet or top.payload.get("text") or top.payload.get("raw_text") or ""
+        ).strip()
     else:
         # Recall-only path: retrieval was empty but guarded recall found supporting memory.
         fallback = _recall_only_fallback(state)
@@ -357,13 +413,20 @@ def _answer_node(state: AgentState, *, ask_settings) -> AgentState:
     # the recall receipt — outside the answer prose, never shown when recall is empty.
     footer = render_recall_footer(state.recalled or [])
     state.answer = f"{answer_text}\n\n{footer}" if footer else answer_text
+    _capture_provenance_shadow(
+        state,
+        envelope=envelope,
+        admitted_source_ids=decision.admitted_artifact_ids,
+    )
     return state
 
 
 def build_ask_graph(ask_settings=None):
     ask_settings = ask_settings or get_ask_settings()
     graph = StateGraph(AgentState)
-    graph.add_node("retrieve", lambda s: _retrieve_node(s, k=TOP_K_INITIAL, ask_settings=ask_settings))
+    graph.add_node(
+        "retrieve", lambda s: _retrieve_node(s, k=TOP_K_INITIAL, ask_settings=ask_settings)
+    )
     graph.add_node("rerank", lambda s: _rerank_node(s, ask_settings=ask_settings))
     graph.add_node("recall", lambda s: _recall_node(s, ask_settings=ask_settings))
     graph.add_node("answer", lambda s: _answer_node(s, ask_settings=ask_settings))
