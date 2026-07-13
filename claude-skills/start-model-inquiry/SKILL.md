@@ -11,6 +11,11 @@ do not conduct the inquiry in chat history or in the local workspace.
 
 ## Launch
 
+Run this fixed-path protocol as a single-flight operation. Do not start a second invocation for
+`Tailscale_macmini` until the first has returned and removed its temporary question file. If a
+concurrent invocation is known or cannot be ruled out, report the block and stop; do not use a
+different remote path.
+
 1. Write the question verbatim to a local, temporary UTF-8 Markdown file with mode `0600`. Treat
    the question as file content; never interpolate it into a shell command.
 2. Copy that file to the configured host:
@@ -41,6 +46,7 @@ the remote launcher is host-specific operator configuration outside Git.
   a launcher failure. Report the observed output and stop.
 - Do not re-run the inquiry to recover a missing response. It may already have durable artifacts on
   the configured remote host.
+- Do not overlap invocations that use the fixed remote question path.
 - Do not inspect or recover an inquiry from the vault as a substitute for the launcher's response.
 - Do not substitute an in-chat Fable/GPT exchange or silently use one model for both roles.
 

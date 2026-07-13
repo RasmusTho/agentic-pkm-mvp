@@ -131,6 +131,8 @@ def test_desktop_skills_route_to_macmini_launcher(tmp_path: Path) -> None:
             "empty stdout",
             "malformed JSON",
             "Do not re-run the inquiry",
+            "single-flight operation",
+            "do not use a\ndifferent remote path",
         ):
             assert contract_field in skill
         for required_boundary in (
