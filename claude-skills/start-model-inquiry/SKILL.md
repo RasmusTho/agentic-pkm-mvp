@@ -11,10 +11,15 @@ do not conduct the inquiry in chat history or in the local workspace.
 
 ## Launch
 
-Run this fixed-path protocol as a single-flight operation. Do not start a second invocation for
-`Tailscale_macmini` until the first has returned and removed its temporary question file. If a
-concurrent invocation is known or cannot be ruled out, report the block and stop; do not use a
-different remote path.
+Run this fixed-path protocol as a single-flight operation. Before staging a question, acquire the
+exclusive remote lock exactly once:
+
+   ```bash
+   ssh -T Tailscale_macmini 'mkdir /tmp/yggdrasil-model-inquiry.lock'
+   ```
+
+   If the lock command fails, report its error and stop. Do not remove an existing lock, reuse the
+   fixed question path, or substitute a different remote path.
 
 1. Write the question verbatim to a local, temporary UTF-8 Markdown file with mode `0600`. Treat
    the question as file content; never interpolate it into a shell command.
@@ -30,8 +35,15 @@ different remote path.
    ssh -T Tailscale_macmini '$HOME/.local/bin/yggdrasil-model-inquiry --question-file /tmp/model-inquiry-question.md'
    ```
 
-4. Delete the temporary question file locally and from `/tmp` on the configured remote host after the command
-   returns, including on failure. Do not delete durable inquiry artifacts.
+4. After acquiring the lock, always delete the temporary question file locally and release the
+   remote staging path after the command returns, including on failure:
+
+   ```bash
+   ssh -T Tailscale_macmini 'rm -f /tmp/model-inquiry-question.md; rmdir /tmp/yggdrasil-model-inquiry.lock'
+   ```
+
+   Do not delete durable inquiry artifacts. If release fails, report the error; do not start
+   another inquiry.
 5. Require the launcher to return one non-empty JSON response on stdout. Return its `inquiry_id`,
    `final_state`, `terminal_receipt_id`, and `human_readable_report` exactly as returned.
 
@@ -46,7 +58,8 @@ the remote launcher is host-specific operator configuration outside Git.
   a launcher failure. Report the observed output and stop.
 - Do not re-run the inquiry to recover a missing response. It may already have durable artifacts on
   the configured remote host.
-- Do not overlap invocations that use the fixed remote question path.
+- Do not overlap invocations that use the fixed remote question path; acquire and release its
+  exclusive remote lock around each launch.
 - Do not inspect or recover an inquiry from the vault as a substitute for the launcher's response.
 - Do not substitute an in-chat Fable/GPT exchange or silently use one model for both roles.
 

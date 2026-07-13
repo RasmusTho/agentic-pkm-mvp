@@ -35,10 +35,12 @@ The operator machine needs the `Tailscale_macmini` SSH alias. A failed copy or S
 stdout, malformed JSON, or absent response field fails loudly: report the error and stop. Do not
 retry, inspect the vault for a substitute response, or fall back to an in-chat inquiry.
 
-The established remote command has one fixed `/tmp/model-inquiry-question.md` input path. Treat it
-as a single-flight protocol: wait for an active invocation to return and remove its temporary file
-before starting the next one. If concurrent use is known or cannot be ruled out, stop and report
-the block; do not substitute a different remote path.
+The established remote command has one fixed `/tmp/model-inquiry-question.md` input path. Before
+copying the question, both packages acquire the atomic remote lock with
+`mkdir /tmp/yggdrasil-model-inquiry.lock`. A failed lock acquisition stops the launch without
+removing the existing lock. After an acquired launch returns, each package removes only its staged
+question file and releases the lock with `rmdir`. This prevents one desktop session from overwriting
+another inquiry's question while retaining the required fixed copy and launcher commands.
 
 ## Concretely
 
@@ -62,8 +64,8 @@ other.
 - [x] Both packages fail loudly for a copy/SSH failure, empty stdout, malformed JSON, or an absent
   receipt field. Verify:
   `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
-- [x] Both packages serialize the fixed remote question path rather than silently overwriting a
-  concurrent inquiry. Verify:
+- [x] Both packages atomically lock the fixed remote question path rather than silently overwriting
+  a concurrent inquiry. Verify:
   `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
 
 ## How to Verify (Pre-Merge)

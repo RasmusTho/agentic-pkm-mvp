@@ -132,7 +132,9 @@ def test_desktop_skills_route_to_macmini_launcher(tmp_path: Path) -> None:
             "malformed JSON",
             "Do not re-run the inquiry",
             "single-flight operation",
-            "do not use a\ndifferent remote path",
+            "mkdir /tmp/yggdrasil-model-inquiry.lock",
+            "rm -f /tmp/model-inquiry-question.md; rmdir /tmp/yggdrasil-model-inquiry.lock",
+            "Do not remove an existing lock",
         ):
             assert contract_field in skill
         for required_boundary in (
