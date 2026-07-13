@@ -12,7 +12,7 @@ from app.dispatcher.cli import main
 from app.dispatcher.config import load_paths
 from app.dispatcher.events import JsonlEventWriter
 from app.dispatcher.models import TaskRecord
-from app.dispatcher.schema import DDL_STATEMENTS
+from app.dispatcher.schema import DDL_STATEMENTS, SCHEMA_VERSION
 from app.dispatcher.store import SqliteStore
 
 
@@ -66,7 +66,7 @@ def test_recovery_accepts_and_restores_canonical_v1_until_store_migrates_it(
 
     # Recovery preserves the v1 artifact; the normal store path owns its
     # atomic in-place migration once the restored dispatcher is opened.
-    assert SqliteStore(restored.db_path).get_meta("schema_version") == "2"
+    assert SqliteStore(restored.db_path).get_meta("schema_version") == str(SCHEMA_VERSION)
 
 
 def test_health_backup_and_restore_to_separate_root(tmp_path: Path) -> None:
@@ -170,7 +170,7 @@ def test_health_accepts_compatible_v1_shape_until_store_migrates_it(
 
     assert control_plane.health(paths)["ok"] is True
     migrated = SqliteStore(paths.db_path)
-    assert migrated.get_meta("schema_version") == "2"
+    assert migrated.get_meta("schema_version") == str(SCHEMA_VERSION)
 
 
 def test_health_rejects_unsupported_dispatcher_schema_version(tmp_path: Path) -> None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 DDL_STATEMENTS: tuple[str, ...] = (
     """
@@ -55,6 +55,63 @@ DDL_STATEMENTS: tuple[str, ...] = (
         value TEXT NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS verification_runs (
+        run_id TEXT PRIMARY KEY,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        contract_version TEXT NOT NULL,
+        repository TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        head_sha TEXT NOT NULL,
+        stage TEXT NOT NULL,
+        request_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        claimed_by TEXT,
+        lease_id TEXT,
+        lease_expires_at TEXT,
+        last_heartbeat_at TEXT,
+        coordinator_session_id TEXT,
+        context_pack_json TEXT,
+        terminal_receipt_json TEXT,
+        stop_reason TEXT,
+        retry_after TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(repository, pr_number, head_sha, stage)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS verification_attempts (
+        attempt_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        attempt_kind TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        session_id TEXT NOT NULL,
+        capability TEXT NOT NULL,
+        reasoning_effort TEXT NOT NULL,
+        context_hash TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        receipt_json TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(run_id) REFERENCES verification_runs(run_id),
+        UNIQUE(run_id, attempt_kind, ordinal)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS verification_exceptions (
+        exception_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        failure_class TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        packet_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(run_id) REFERENCES verification_runs(run_id),
+        UNIQUE(run_id, failure_class, head_sha)
+    )
+    """,
     "CREATE INDEX IF NOT EXISTS idx_dispatcher_events_task ON dispatcher_events(task_id)",
     "CREATE INDEX IF NOT EXISTS idx_dispatcher_leases_resource ON dispatcher_leases(resource)",
+    "CREATE INDEX IF NOT EXISTS idx_verification_runs_status ON verification_runs(status)",
+    "CREATE INDEX IF NOT EXISTS idx_verification_attempts_run ON verification_attempts(run_id)",
 )

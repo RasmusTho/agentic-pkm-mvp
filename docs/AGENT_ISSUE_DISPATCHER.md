@@ -35,6 +35,20 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - Three adoption receipts verified and logged on parent feature issue (#636).
 - Existing GitHub issue/PR/label/project governance in `AGENTS.md` and `docs/development/GITHUB_GOVERNANCE_SETUP.md` remains current truth today.
 
+**Verification dispatch consumer: SHIPPED IN REPO (host enablement is separate)**
+
+- `app.dispatcher.verification_dispatch` extends the same SQLite control plane with versioned,
+  idempotent PR/head verification runs, exclusive expiring claims, attempts, receipts, backoff, and
+  deduplicated Human Exception packets.
+- `app.dispatcher.verification_consumer` re-fetches live PR/check truth, requires a successful
+  ChatGPT/keyring auth preflight, builds a minimal immutable context pack, and launches only the
+  registered `verification_closer` adapter with explicit `codex exec --json --sandbox
+  workspace-write --output-schema` semantics.
+- `verification-ingest` and `verification-status` are host-neutral dispatcher CLI surfaces. The
+  Demerzel enable/disable/poll wrapper and service configuration remain host-local outside Git.
+- GitHub Actions remains artifact-only. The consumer grants no mutation or merge authority beyond
+  `.codex/skills/verification-and-closure/SKILL.md`.
+
 ## Source-of-Truth Boundaries
 
 | Surface | Role in MVP | Authority |

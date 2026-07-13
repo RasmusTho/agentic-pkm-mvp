@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Verification closer terminal receipt",
+  "type": "object",
+  "properties": {
+    "verdict": {"enum": ["delivered", "blocked", "needs_human", "retry"]},
+    "head_sha": {"type": "string", "minLength": 40},
+    "summary": {"type": "string"},
+    "receipt_ids": {"type": "array", "items": {"type": "string"}}
+  },
+  "required": ["verdict", "head_sha", "summary", "receipt_ids"],
+  "additionalProperties": false
+}
