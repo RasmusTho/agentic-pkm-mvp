@@ -81,6 +81,17 @@ class FsVaultAdapter:
                             "target was replaced"
                         )
 
+                    # Re-read through the still-open descriptor immediately before the
+                    # mutation. Path identity alone cannot detect an editor that saved
+                    # through another descriptor to the same inode after our first read.
+                    handle.seek(0)
+                    latest_bytes = handle.read()
+                    if hashlib.sha256(latest_bytes).hexdigest() != expected_version:
+                        raise KnowledgeWriteConflict(
+                            f"version mismatch for rewritten note {locator.path}: "
+                            "target changed during version check"
+                        )
+
                     handle.seek(0)
                     handle.write(content.encode("utf-8"))
                     handle.truncate()

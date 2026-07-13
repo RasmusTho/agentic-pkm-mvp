@@ -13,7 +13,7 @@ from typing import Any
 import yaml
 
 from app.episodes.schema import validate_episode_note_fields
-from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
+from scripts.yaml_roundtrip import dump_frontmatter
 
 ARTIFACT_CLASS = "episode_note"
 
@@ -86,11 +86,25 @@ def render_episode_note(fields: dict[str, Any], *, body: str | None = None) -> s
 
 def parse_episode_note_document(text: str) -> tuple[dict[str, Any], str]:
     """Parse schema fields and the exact raw suffix after the frontmatter delimiter."""
-    data, _normalized_body = load_frontmatter(text)
-    parts = text.split("---", 2) if text.startswith("---") else []
-    body = parts[2] if len(parts) == 3 else text
+    data = _strict_episode_frontmatter(text)
+    body = _raw_episode_body(text)
     fields = {name: data[name] for name in _FRONTMATTER_FIELDS if name in data}
     return fields, body
+
+
+def _raw_episode_body(text: str) -> str:
+    """Return the exact suffix after a standalone closing delimiter line."""
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].rstrip("\r\n") != "---":
+        return text
+    offset = len(lines[0])
+    for line in lines[1:]:
+        if line.rstrip("\r\n") == "---":
+            # Preserve the delimiter line ending as the body's leading separator so
+            # render_episode_note can concatenate it to its frontmatter-only prefix.
+            return text[offset + 3 :]
+        offset += len(line)
+    raise EpisodeFrontmatterParseError("unterminated episode frontmatter")
 
 
 def parse_episode_note(text: str) -> dict[str, Any]:

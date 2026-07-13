@@ -327,10 +327,11 @@ def _scan_episode_notes(vault_root: Path) -> _EpisodeNoteScan:
         if path.parent == subtree:
             present_ids.add(path.stem)
         try:
-            text = path.read_text(encoding="utf-8")
+            raw_bytes = path.read_bytes()
+            text = raw_bytes.decode("utf-8")
             fields, body = parse_episode_note_document(text)
             validate_episode_note_fields(fields)
-        except (OSError, EpisodeSchemaValidationError) as exc:
+        except (OSError, UnicodeDecodeError, EpisodeSchemaValidationError) as exc:
             logger.warning("recut: skipping unreadable/invalid episode note %s: %s", path, exc)
             continue
         episode_id = fields.get("episode_id")
@@ -350,7 +351,7 @@ def _scan_episode_notes(vault_root: Path) -> _EpisodeNoteScan:
         valid[episode_id] = _ScannedEpisodeNote(
             fields=fields,
             body=body,
-            version=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            version=hashlib.sha256(raw_bytes).hexdigest(),
         )
     return _EpisodeNoteScan(valid=valid, present_ids=frozenset(present_ids))
 

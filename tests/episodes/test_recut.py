@@ -44,7 +44,7 @@ from app.episodes.assignment import (
     BINDING_STATE_ACTIVE,
     BINDING_TABLE,
 )
-from app.episodes.notes import episode_note_rel_path, parse_episode_note
+from app.episodes.notes import episode_note_rel_path, parse_episode_note, parse_episode_note_document
 from app.episodes.recut import (
     ACCEPTANCE_QUIET_WINDOW_MINUTES,
     compute_body_hash,
@@ -317,6 +317,48 @@ def test_body_only_human_edit_survives_quiet_window_relabel(
     assert result["accepted"] == []
     assert human_body.strip() in note_path.read_text(encoding="utf-8")
     assert parse_episode_note(note_path.read_text(encoding="utf-8"))["segmentation"] == "re-cut"
+
+
+def test_raw_body_parser_ignores_triple_hyphen_inside_yaml_scalar(
+    tmp_path: Path,
+) -> None:
+    vault_root = tmp_path / "vault"
+    episode_id = "ep-22222222-aaaa-4aaa-8aaa-222222222222"
+    _write_initial(vault_root, episode_id=episode_id, title="alpha---beta")
+    note_text = (vault_root / episode_note_rel_path(episode_id)).read_text(encoding="utf-8")
+
+    fields, body = parse_episode_note_document(note_text)
+
+    assert fields["title"] == "alpha---beta"
+    assert body.lstrip("\r\n").startswith("# Episode: alpha---beta")
+    assert "segmentation:" not in body
+
+
+def test_crlf_note_version_matches_raw_bytes_and_body_survives_relabel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    _stub_bindings(monkeypatch)
+    _stub_projection_sync(monkeypatch)
+    _install_fake_engine_state(monkeypatch)
+    episode_id = "ep-22222222-bbbb-4bbb-8bbb-222222222222"
+    _write_initial(vault_root, episode_id=episode_id)
+    note_path = vault_root / episode_note_rel_path(episode_id)
+    crlf_text = note_path.read_bytes().replace(b"\n", b"\r\n")
+    note_path.write_bytes(crlf_text)
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 0))
+
+    edited_bytes = note_path.read_bytes().replace(
+        b"title: Debugging session", b"title: CRLF human title", 1
+    )
+    note_path.write_bytes(edited_bytes)
+    _fields, body_before = parse_episode_note_document(edited_bytes.decode("utf-8"))
+
+    result = run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 5))
+
+    _fields, body_after = parse_episode_note_document(note_path.read_bytes().decode("utf-8"))
+    assert result["recut_detected"] == [episode_id]
+    assert body_after == body_before
 
 
 def test_whitespace_only_body_edit_survives_recut_relabel(

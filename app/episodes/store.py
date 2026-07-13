@@ -104,7 +104,7 @@ def cut_snapshot(fields: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _read_existing_episode_note(rel_path: str, vault_root: Path | str) -> str | None:
+def _read_existing_episode_note(rel_path: str, vault_root: Path | str) -> tuple[str, bytes] | None:
     """Best-effort read of the CURRENT on-disk text at ``rel_path``, or ``None`` when no note
     exists there yet (a brand-new episode_id, never terminal). Reads the filesystem directly
     (mirrors ``app.episodes.segmenter._emit_proposal``'s existence check) rather than through the
@@ -117,8 +117,9 @@ def _read_existing_episode_note(rel_path: str, vault_root: Path | str) -> str | 
     if not note_path.exists():
         return None
     try:
-        return note_path.read_text(encoding="utf-8")
-    except OSError:
+        raw_bytes = note_path.read_bytes()
+        return raw_bytes.decode("utf-8"), raw_bytes
+    except (OSError, UnicodeDecodeError):
         return None
 
 
@@ -198,10 +199,11 @@ def write_episode_note(
     # accepted/re-cut has its cut frozen against machine mutation. A relabel that only changes
     # `segmentation` (echoing every cut field back unchanged) passes trivially; an attempted cut
     # mutation is rejected here and the note is left byte-for-byte untouched.
-    existing_text = _read_existing_episode_note(rel_path, vault_root)
+    existing_document = _read_existing_episode_note(rel_path, vault_root)
+    existing_text = existing_document[0] if existing_document is not None else None
     current_version = (
-        hashlib.sha256(existing_text.encode("utf-8")).hexdigest()
-        if existing_text is not None
+        hashlib.sha256(existing_document[1]).hexdigest()
+        if existing_document is not None
         else None
     )
     if (

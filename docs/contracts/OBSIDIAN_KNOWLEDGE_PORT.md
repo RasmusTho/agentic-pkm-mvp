@@ -21,7 +21,7 @@ This contract follows:
 
 ## Interface surface (domain-level)
 - `read_note(locator)`
-- `write_note(locator, content, expected_version=None)` — `expected_version` opts a rewritten note into optimistic concurrency; changed or missing targets fail with `KnowledgeWriteConflict` rather than being overwritten or recreated.
+- `write_note(locator, content, expected_version=None)` — `expected_version` opts a rewritten note into optimistic concurrency over raw on-disk bytes; changed (including same-inode saves) or missing targets fail with `KnowledgeWriteConflict` rather than being overwritten or recreated.
 - `append_note(locator, content)`
 - `prepend_note(locator, content)`
 - `search_notes(vault, query, limit=20)`
