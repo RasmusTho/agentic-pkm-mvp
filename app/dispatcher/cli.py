@@ -322,9 +322,9 @@ def _cmd_status(args: argparse.Namespace, store: SqliteStore) -> int:
     control_plane: dict[str, Any]
     fallback_reason: str | None = None
     if status["db_exists"]:
-        from app.dispatcher.control_plane import state
+        from app.dispatcher.control_plane import readonly_state
         try:
-            control_plane = state(store)
+            control_plane = readonly_state(paths.db_path)
         except (ValueError, sqlite3.Error) as exc:
             control_plane = {
                 "mode": "unavailable",

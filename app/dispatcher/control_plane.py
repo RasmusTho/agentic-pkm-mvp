@@ -106,6 +106,32 @@ def _dispatcher_schema_error(conn: sqlite3.Connection) -> str | None:
 
 def state(store: SqliteStore) -> dict[str, Any]:
     raw = store.get_meta(STATE_KEY)
+    return _parse_state(raw)
+
+
+def readonly_state(db_path: Path) -> dict[str, Any]:
+    """Read control-plane state without initializing or migrating its database.
+
+    ``status`` is an observation command.  It must be safe to run against a
+    missing, incomplete, or legacy dispatcher database, rather than opening it
+    through :class:`SqliteStore`, whose normal connection path self-heals the
+    schema.  SQLite's ``mode=ro`` URI guarantees this connection cannot create
+    the database or modify its schema; validating the full dispatcher shape
+    first also prevents status from treating a partial database as usable.
+    """
+    uri = f"{db_path.resolve().as_uri()}?mode=ro"
+    with sqlite3.connect(uri, uri=True) as conn:
+        conn.execute("PRAGMA query_only = ON")
+        schema_error = _dispatcher_schema_error(conn)
+        if schema_error is not None:
+            raise ValueError(schema_error)
+        row = conn.execute(
+            "SELECT value FROM dispatcher_meta WHERE key = ?", (STATE_KEY,)
+        ).fetchone()
+    return _parse_state(None if row is None else str(row[0]))
+
+
+def _parse_state(raw: str | None) -> dict[str, Any]:
     if raw is None:
         return {"mode": "normal", "revision": 0, "updated_at": None, "activation_id": None}
     try:

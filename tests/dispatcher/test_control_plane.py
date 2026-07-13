@@ -295,7 +295,32 @@ def test_cli_status_emits_fallback_payload_for_uninitialized_database(tmp_path: 
     assert payload["coordination_mode"] == "github-label-only-fallback"
     assert payload["fallback_reason"] == "dispatcher_db_uninitialized"
     assert payload["control_plane"]["mode"] == "unavailable"
-    assert "no such table" in payload["control_plane"]["error"]
+    assert "missing dispatcher tables" in payload["control_plane"]["error"]
+
+
+def test_cli_status_is_readonly_for_initialized_database_missing_schema_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    state_dir = tmp_path / "state"
+    monkeypatch.setenv("DISPATCHER_STATE_DIR", str(state_dir))
+    store = SqliteStore(state_dir / "dispatcher.sqlite3")
+    store.initialize()
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute("DELETE FROM dispatcher_meta WHERE key = 'schema_version'")
+    before = store.db_path.read_bytes()
+
+    assert main(["status", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert store.db_path.read_bytes() == before
+    assert payload["ok"] is True
+    assert payload["coordination_mode"] == "github-label-only-fallback"
+    assert payload["fallback_reason"] == "dispatcher_db_uninitialized"
+    assert payload["control_plane"] == {
+        "mode": "unavailable",
+        "revision": None,
+        "error": "missing dispatcher schema_version",
+    }
 
 
 def test_expired_lease_rejects_heartbeat_and_preserves_takeover(tmp_path: Path) -> None:
