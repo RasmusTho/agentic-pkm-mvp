@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from app.builderops.ckm.ingest_repo import ingest_repo, iter_docs, iter_source, iter_tests
+from app.builderops.ckm.ingest_repo import ingest_repo, iter_docs, iter_git, iter_source, iter_tests
 from app.builderops.ckm.store import CkmStore
 
 
@@ -33,9 +33,9 @@ def _store(tmp_path: Path) -> CkmStore:
 
 def test_adapters_yield_typed_provenanced_records(tmp_path: Path) -> None:
     root = _repo(tmp_path / "repo")
-    artifacts = [*iter_docs(root), *iter_tests(root), *iter_source(root)]
+    artifacts = [*iter_docs(root), *iter_tests(root), *iter_source(root), *iter_git(root, None)]
     assert artifacts
-    assert {artifact.artifact_kind for artifact in artifacts} >= {"adr", "spec", "document", "test", "source_file"}
+    assert {artifact.artifact_kind for artifact in artifacts} >= {"adr", "spec", "document", "test", "source_file", "commit"}
     assert all(artifact.natural_key and artifact.provenance and artifact.payload_summary for artifact in artifacts)
 
 
@@ -64,3 +64,25 @@ def test_ingest_is_readonly_and_offline(tmp_path: Path) -> None:
     ingest_repo(_store(tmp_path), root)
     after = subprocess.run(["git", "-C", str(root), "status", "--porcelain"], check=True, text=True, capture_output=True).stdout
     assert after == before == ""
+
+
+def test_ingest_reconciles_deleted_tree_artifacts(tmp_path: Path) -> None:
+    root = _repo(tmp_path / "repo")
+    store = _store(tmp_path)
+    ingest_repo(store, root)
+    (root / "docs/guide.md").unlink()
+    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(root), "-c", "user.name=CKM", "-c", "user.email=ckm@example.test", "commit", "-qm", "remove guide"], check=True)
+    result = ingest_repo(store, root)
+    assert result["docs"]["removed"] == 1
+    assert store.get_artifact_by_source_ref("docs/guide.md") is None
+
+
+def test_cold_git_ingest_does_not_skip_history_past_limit(tmp_path: Path) -> None:
+    root = _repo(tmp_path / "repo")
+    for number in range(4):
+        _write(root / f"docs/{number}.md", f"# {number}\\n")
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(root), "-c", "user.name=CKM", "-c", "user.email=ckm@example.test", "commit", "-qm", f"commit {number}"], check=True)
+    result = ingest_repo(_store(tmp_path), root, git_limit=2)
+    assert result["git"]["artifacts"] == 5

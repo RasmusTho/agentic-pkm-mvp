@@ -112,7 +112,8 @@ def iter_tests(root: Path) -> Iterable[RepoArtifact]:
 
 def _source_summary(path: Path) -> str:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    return (ast.get_docstring(tree) or "(no module docstring)").splitlines()[0]
+    docstring = ast.get_docstring(tree)
+    return docstring.splitlines()[0] if docstring and docstring.splitlines() else "(no module docstring)"
 
 
 def iter_source(root: Path) -> Iterable[RepoArtifact]:
@@ -129,7 +130,10 @@ def _git(root: Path, *args: str) -> str:
 def iter_git(root: Path, previous_head: str | None, *, limit: int = 500) -> Iterable[RepoArtifact]:
     current_head = _git(root, "rev-parse", "HEAD").strip()
     revision = f"{previous_head}..{current_head}" if previous_head else current_head
-    log = _git(root, "log", f"--max-count={limit}", "--format=%H|%s", "--name-only", revision)
+    # Do not advance the watermark past unprocessed history.  The repository
+    # adapter is a completeness-first local projection, so a cold ingest must
+    # enumerate every commit before recording HEAD as its watermark.
+    log = _git(root, "log", "--format=%H|%s", "--name-only", revision)
     records: list[tuple[str, str, list[str]]] = []
     for line in log.splitlines():
         if len(line) > 41 and line[40] == "|" and all(char in "0123456789abcdef" for char in line[:40]):
@@ -162,9 +166,11 @@ def _ingest_tree(store: CkmStore, source: str, artifacts: Iterable[RepoArtifact]
             continue
         store.upsert_artifact(source_ref=artifact.natural_key, artifact_kind=artifact.artifact_kind, source=artifact.source, watermark=artifact.source_watermark, provenance=artifact.provenance)
         changed += 1
+    artifact_source = materialized[0].source if materialized else f"repo_{source}"
+    removed = store.delete_artifacts_not_in(artifact_source, {artifact.natural_key for artifact in materialized})
     if store.get_watermark(source) != watermark:
         store.set_watermark(source, watermark)
-    return {"artifacts": len(materialized), "changed": changed, "watermark": watermark}
+    return {"artifacts": len(materialized), "changed": changed, "removed": removed, "watermark": watermark}
 
 
 def ingest_repo(store: CkmStore, root: Path, *, git_limit: int = 500) -> dict[str, dict[str, int | str]]:
