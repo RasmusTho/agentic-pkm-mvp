@@ -374,7 +374,7 @@ class Selection:
     def pytest_args(self) -> str:
         marker = f'-m "{PR_MARKER_EXPRESSION}"'
         if self.full_suite:
-            return f"-q {marker}"
+            return f"-q {marker} tests --ignore=tests/e2e"
         return " ".join(("-q", marker, *self.targets))
 
 
@@ -440,8 +440,18 @@ def _changed_test_targets(paths: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(
         path
         for path in paths
-        if path.startswith("tests/") and path.endswith(".py") and path not in GENERIC_PR_EXCLUDED_TARGETS
+        if (
+            path.startswith("tests/")
+            and not path.startswith("tests/e2e/")
+            and path.endswith(".py")
+            and path not in GENERIC_PR_EXCLUDED_TARGETS
+        )
     )
+
+
+def _pr_targets(targets: list[str]) -> tuple[str, ...]:
+    """Keep slower end-to-end coverage in the post-merge/nightly lanes."""
+    return _dedupe(target for target in targets if not target.startswith("tests/e2e/"))
 
 
 def select_tests(changed_files: list[str]) -> Selection:
@@ -452,9 +462,9 @@ def select_tests(changed_files: list[str]) -> Selection:
     if any(_is_full_suite_file(path) for path in paths):
         return Selection(True, (), (), FULL_SUITE_REASONS[0])
 
-    if any(path.startswith("tests/e2e/") and path not in E2E_OWNER_BY_FILE for path in paths):
-        unowned = tuple(path for path in paths if path.startswith("tests/e2e/") and path not in E2E_OWNER_BY_FILE)
-        return Selection(False, ("unowned",), (), "unowned e2e test changed", unowned)
+    non_e2e_paths = tuple(path for path in paths if not path.startswith("tests/e2e/"))
+    if not non_e2e_paths:
+        return Selection(False, ("e2e",), ALWAYS_TARGETS, "E2E coverage is deferred to post-merge/nightly")
 
     # "alembic/" never matches a real path in this repo -- migrations live under
     # app/alembic/versions/ -- so that arm alone left every migration file routing
@@ -492,7 +502,7 @@ def select_tests(changed_files: list[str]) -> Selection:
     # Every scoped branch funnels through this single return, so a changed
     # tests/** file is always unioned in exactly once — no per-branch splice
     # to forget if a future branch is added here (the #3383 failure mode).
-    return Selection(False, subsystems, _dedupe([*targets, *changed_tests]), reason)
+    return Selection(False, subsystems, _pr_targets([*targets, *changed_tests]), reason)
 
 
 def changed_files_from_git(base_ref: str, head_ref: str) -> list[str]:

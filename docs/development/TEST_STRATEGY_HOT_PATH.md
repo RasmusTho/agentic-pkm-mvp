@@ -6,7 +6,7 @@ Temporal class: operational
 Review cadence: event-driven
 Source of truth: code, workflow files, and repo-local skill docs
 Last reviewed: 2026-05-14
-Last verified against: `.github/workflows/smoke.yml`, `.github/workflows/ci-smoke.yaml`, `.github/workflows/issue-pr-governance.yml`, `tests/architecture/test_agent_skill_entrypoints.py`, `tests/architecture/test_dispatcher_skill_integration.py`, `docs/development/PR_HOT_PATH.md`, `docs/development/PR_ESCALATION_PATHS.md`, `docs/development/PARENT_ISSUE_CLOSURE.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`
+Last verified against: `.github/workflows/ci-smoke.yaml`, `.github/workflows/issue-pr-governance.yml`, `tests/architecture/test_agent_skill_entrypoints.py`, `tests/architecture/test_dispatcher_skill_integration.py`, `docs/development/PR_HOT_PATH.md`, `docs/development/PR_ESCALATION_PATHS.md`, `docs/development/PARENT_ISSUE_CLOSURE.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`
 
 # Test Strategy for the Hot Path
 
@@ -17,16 +17,16 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
 
 - Skill entrypoints and shared skill-index routing are covered by `tests/architecture/test_agent_skill_entrypoints.py`.
 - Dispatcher-oriented skill sequencing is covered by `tests/architecture/test_dispatcher_skill_integration.py`.
-- The broad runtime smoke workflows live in `.github/workflows/smoke.yml` and `.github/workflows/ci-smoke.yaml`.
+- The broad runtime smoke workflow lives in `.github/workflows/ci-smoke.yaml`; it also carries the skills-consistency lint that previously ran in the retired duplicate `smoke` workflow.
 - Governance PR contract checks live in `.github/workflows/issue-pr-governance.yml`.
 - The hot-path and direct-repair invariants are covered by `tests/architecture/test_pr_hot_path_governance.py`.
-- PR unit CI uses `scripts/select_pr_tests.py` to map changed files to subsystem-scoped pytest targets. Shared CI/test configuration, migrations, dependencies, and shared fixtures run the deterministic broad suite; an unmapped code or E2E path fails selection until it is assigned to a subsystem.
+- PR unit CI uses `scripts/select_pr_tests.py` to map changed files to subsystem-scoped pytest targets. Shared CI/test configuration, migrations, dependencies, and shared fixtures run the deterministic broad suite; E2E coverage is deferred to post-merge and nightly validation.
 - Store and vault-ingest changes are owned by the `store_ingest` selection and run its focused
   `tests/stores`, `tests/ingest`, and architecture contracts in the ordinary `not pg` job. That job
   intentionally excludes live-Postgres tests; a PR that changes a Postgres store or vault ingest
   path must record its explicit `pg`/integrated-runtime validation separately rather than treating
   the selected CI result as database-path evidence.
-- E2E tests under `tests/e2e/` are selected by owned file targets, not by the whole directory, for subsystem-scoped PR CI. Opt-in classes (live LLM, browser, human UAT, eval) are excluded from generic PR pytest and run only in their dedicated subsystem lane.
+- E2E tests under `tests/e2e/` run after merge and in the nightly suite, not on ordinary PRs. Opt-in classes (live LLM, browser, human UAT, eval) remain in their dedicated post-merge or nightly lanes.
 
 ## Check Levels
 
@@ -43,7 +43,7 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
    - Examples: tests limited to the changed code path, including narrow behavior tests around touched modules.
 
 5. Runtime smoke tests
-   - Examples: `.github/workflows/smoke.yml` and the heavy slices in `.github/workflows/ci-smoke.yaml`.
+   - Examples: the heavy slices in `.github/workflows/ci-smoke.yaml`.
 
 6. Release/promotion smoke
    - Examples: promotion-channel or release-specific smoke that proves the runtime surface being released is healthy.
@@ -70,8 +70,8 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
 
 - Run level 1.
 - Run level 2 if the change affects skills or agent entrypoints.
-- Run level 4 for the touched runtime surface. In PR CI, the touched System of Interest is selected from changed paths and mapped to focused pytest targets; cross-subsystem paths union their owners' targets, while unknown code and E2E paths fail selection until an owner is declared.
-- Run level 5 only when the touched runtime surface is the thing smoke is meant to prove.
+- Run level 4 for the touched runtime surface. In PR CI, the touched System of Interest is selected from changed paths and mapped to focused pytest targets; cross-subsystem paths union their owners' targets, while unknown runtime code fails selection until an owner is declared.
+- Run level 5 after merge when the touched runtime surface is the thing smoke is meant to prove.
 - Use level 6 for promotion or release validation.
 
 ### Release / Promotion PRs
@@ -83,8 +83,8 @@ The goal is to keep docs-only and governance/skill PRs cheap while preserving di
 - Docs-only PRs should not run full runtime smoke by default.
 - Governance/skill PRs should run cheap skill coherence and workflow invariant tests before any broader smoke.
 - Runtime PRs should run focused tests first and add smoke only when the runtime surface is actually touched.
-- Subsystem-scoped CI must be conservative: workflow/test configuration, dependency files, migrations, and shared fixtures choose the broad deterministic suite. Unmapped runtime or E2E paths fail closed until an owning subsystem and focused test target are declared; they must never silently borrow the whole repository's suite.
-- E2E coverage must be split by subsystem-owned files. A subsystem target may include only the e2e flows it owns or shares; `tests/e2e` as a whole is reserved for full fallback, nightly, or explicit manual verification.
+- Subsystem-scoped CI must be conservative: workflow/test configuration, dependency files, migrations, and shared fixtures choose the broad deterministic suite. Unmapped runtime paths fail selection until an owner is declared; they must never silently borrow the whole repository's suite.
+- E2E coverage is reserved for post-merge, nightly, or explicit manual verification.
 - Slow or flaky test classes should be marked and routed to their dedicated subsystem, nightly, or manual workflow. They must not install dependencies or invoke pytest on unrelated PRs.
 - Direct repair PRs are classified by the surfaces they touch, not by whether they carry a governing issue.
 - Failing required checks must be classified, not ignored as out-of-scope.
