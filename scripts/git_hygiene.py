@@ -393,6 +393,7 @@ def _worktree_reclaim_reason(
     protected_branches: set[str],
     pr_states: dict[str, dict[str, Any]] | None,
     cwd: Path,
+    locked: bool = False,
 ) -> tuple[str | None, str | None]:
     """Decide whether a present worktree is safe to reclaim.
 
@@ -416,6 +417,11 @@ def _worktree_reclaim_reason(
         return "root_worktree", None
     if branch in protected_branches:
         return "protected_branch", None
+    # `git worktree list --porcelain` exposes a `locked` record for worktrees
+    # guarded by another tool or session.  A lock is positive preservation
+    # evidence, not stale metadata: never make it a removal candidate.
+    if locked:
+        return "locked_worktree", None
     if f"worktree:{path}" in active_resources or _branch_has_active_lease(
         branch, active_resources
     ):
@@ -518,6 +524,37 @@ def _lease_resources(active_leases: list[dict[str, Any]], now: float | None = No
     }
 
 
+PRESERVATION_REASONS = {
+    "active_lease",
+    "dirty_worktree",
+    "locked_worktree",
+    "unknown_merge_state",
+    "worktree_state_unavailable",
+}
+
+
+def _preservation_receipt(item: dict[str, Any]) -> dict[str, Any] | None:
+    """Return an operator-readable receipt for non-destructive holds."""
+    reason = item.get("reason")
+    if item.get("artifact") != "worktree" or reason not in PRESERVATION_REASONS:
+        return None
+    next_action = {
+        "active_lease": "wait for the owning agent to release or supersede its lease",
+        "dirty_worktree": "preserve local drift; inspect or commit it before any cleanup",
+        "locked_worktree": "preserve the lock; verify the owning session before any cleanup",
+        "unknown_merge_state": "verify merge and ownership state before any cleanup",
+        "worktree_state_unavailable": "restore or inspect the worktree; do not infer abandonment",
+    }[reason]
+    return {
+        "artifact": "worktree",
+        "path": item["path"],
+        "branch": item.get("branch", ""),
+        "reason": reason,
+        "action": "preserve",
+        "next_action": next_action,
+    }
+
+
 def build_janitor_plan(
     cwd: Path,
     *,
@@ -537,6 +574,7 @@ def build_janitor_plan(
     checked_out = _checked_out_branches(worktrees)
 
     skipped: list[dict[str, Any]] = []
+    preservation_receipts: list[dict[str, Any]] = []
     local_branches = []
     for branch in _local_branches(cwd):
         reason = _local_branch_skip_reason(
@@ -579,9 +617,14 @@ def build_janitor_plan(
             protected_branches=protected,
             pr_states=pr_states,
             cwd=cwd,
+            locked="locked" in worktree,
         )
         if reason:
-            skipped.append({"artifact": "worktree", "path": path, "branch": branch, "reason": reason})
+            item = {"artifact": "worktree", "path": path, "branch": branch, "reason": reason}
+            skipped.append(item)
+            receipt = _preservation_receipt(item)
+            if receipt:
+                preservation_receipts.append(receipt)
             continue
         reclaimable_worktrees.append(
             {"path": path, "branch": branch, "merge_proof": merge_proof}
@@ -646,6 +689,7 @@ def build_janitor_plan(
         "skipped": skipped,
         "prune_candidates": prune_candidates,
         "active_leases_respected": sorted(active_resources),
+        "preservation_receipts": preservation_receipts,
     }
 
 
@@ -717,6 +761,23 @@ def janitor_apply(
         remote_policy=remote_policy,
         pr_states=pr_states,
     )
+
+    preservation_receipts = plan.get("preservation_receipts", [])
+    if preservation_receipts:
+        return {
+            **plan,
+            "mode": "apply",
+            "destructive_actions": actions,
+            "errors": [
+                {
+                    "artifact": "worktree",
+                    "action": "preserve",
+                    "reason": "preservation_evidence_present",
+                    "preservation_receipts": preservation_receipts,
+                }
+            ],
+            "ok": False,
+        }
 
     apply_git(["worktree", "prune"], {"artifact": "worktree", "action": "prune_metadata"})
     reclaimable = plan.get("reclaimable_worktrees", plan["candidates"]["worktrees"])
