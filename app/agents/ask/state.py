@@ -34,6 +34,9 @@ class AgentState(RuntimeStateModel):
     trace_id: Optional[str] = None
     query: str
     hits: List[RetrievedHit] = Field(default_factory=list)
+    # Authoritative metadata observed on the retrieval response. Shadow
+    # experiments may inspect it, but it never feeds ranking or answer text.
+    retrieval_metadata: dict[str, Any] = Field(default_factory=dict)
     # Content-free scope denials from the retrieval prefilter (KERNEL-10), as plain dicts
     # (ScopeDenial.to_dict()) so they survive the langgraph state round-trip. Scope-level, not
     # per-hit: reranking/truncating hits must never drop them. Carried to the ContextEnvelope

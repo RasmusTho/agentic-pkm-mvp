@@ -1,4 +1,4 @@
-State: Specification directory (parent feature issue #3545; first child #3546; no shipped behavior is claimed).
+State: The first executable slice is implemented behind a disabled-by-default local flag; no user-facing Lens is shipped.
 Doc role: Feature specification
 Authority: Defines the ASK provenance-manifest experiment. Subordinate to current retrieval and authorization owner docs for runtime truth.
 Owner: Architecture / retrieval
@@ -19,7 +19,20 @@ Manifest capture occurs after normal authorization, retrieval, ranking, and answ
 
 | Task | Purpose | Status |
 | --- | --- | --- |
-| [CAPTURE_AND_COMPARE_ASK_PROVENANCE.md](CAPTURE_AND_COMPARE_ASK_PROVENANCE.md) | Capture local immutable manifests and safely compare two executions at the identity granularity actually available. | First executable slice |
+| [CAPTURE_AND_COMPARE_ASK_PROVENANCE.md](CAPTURE_AND_COMPARE_ASK_PROVENANCE.md) | Capture local immutable manifests and safely compare two executions at the identity granularity actually available. | Implemented behind disabled-by-default flag (#3546) |
+
+Runtime capture is enabled only with `ASK_PROVENANCE_MANIFEST_ENABLED=1` and
+requires a local `ASK_PROVENANCE_PRIVACY_KEY`. Records default to restricted
+`runtime/agent_memory/ask_provenance_manifests.jsonl`, expire after 14 days,
+and are capped at 256 entries. The answer, query, principal, source ids, and
+observed execution identities are hashed; correlation hashes use the local
+privacy key. `ASK_PROVENANCE_MANIFEST_PATH` may relocate the file only within
+the fixed repo-local `runtime/agent_memory` root; root/path symlinks and escapes
+are rejected. Capture is post-answer and dispatched through a bounded queue to
+one daemon worker, so locking, retention, and fsync never block the ASK
+response or create unbounded worker threads. Application startup immediately
+prunes expired records and starts a per-path hourly janitor, so expiry remains
+enforced even when no later ASK occurs.
 
 ## Cross-task invariants / interaction safety
 
