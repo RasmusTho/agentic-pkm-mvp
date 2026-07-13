@@ -93,6 +93,63 @@ def test_rewritten_write_enforces_only_on_opt_in_expected_version_at_filesystem_
     assert receipt.writer_identity == "mac-runtime"
 
 
+def test_rewritten_write_with_expected_version_conflicts_when_target_was_deleted(
+    tmp_path: Path,
+) -> None:
+    """An expected version means the caller observed an existing rewritten note. If that note
+    vanishes before the filesystem seam, recreating it would resurrect stale human state."""
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/deleted.md")
+    stale_version = hashlib.sha256(b"previous body").hexdigest()
+
+    with pytest.raises(KnowledgeWriteConflict, match="version mismatch"):
+        adapter.write_note(locator, "stale resurrection", expected_version=stale_version)
+
+    assert not (tmp_path / locator.path).exists()
+
+
+def test_rewritten_write_does_not_resurrect_target_deleted_after_adapter_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/delete-race.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    expected_version = hashlib.sha256(b"observed body").hexdigest()
+    real_open = Path.open
+
+    class _DeleteAfterRead:
+        def __init__(self, handle) -> None:  # type: ignore[no-untyped-def]
+            self._handle = handle
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, *exc) -> None:  # type: ignore[no-untyped-def]
+            self._handle.close()
+
+        def read(self, *args):  # type: ignore[no-untyped-def]
+            data = self._handle.read(*args)
+            target.unlink()
+            return data
+
+        def __getattr__(self, name: str):
+            return getattr(self._handle, name)
+
+    def racing_open(path: Path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        handle = real_open(path, *args, **kwargs)
+        mode = kwargs.get("mode", args[0] if args else "r")
+        return _DeleteAfterRead(handle) if path == target and "r" in mode else handle
+
+    monkeypatch.setattr(Path, "open", racing_open)
+
+    with pytest.raises(KnowledgeWriteConflict, match="version mismatch"):
+        adapter.write_note(locator, "stale resurrection", expected_version=expected_version)
+
+    assert not target.exists()
+
+
 def test_filesystem_write_receipt_carries_writer_provenance(tmp_path: Path) -> None:
     adapter = FsVaultAdapter(tmp_path)
     locator = NoteLocator(vault="Vault", path="Notes/provenance.md")

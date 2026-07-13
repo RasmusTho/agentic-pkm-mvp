@@ -1084,6 +1084,34 @@ def test_path_frontmatter_id_mismatch_is_not_adopted_or_treated_as_deletion(
     assert f"episode_recut_state:{foreign_id}" not in states
 
 
+def test_nested_episode_copy_cannot_replace_canonical_scan_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    _stub_bindings(monkeypatch)
+    _stub_projection_sync(monkeypatch)
+    _install_fake_engine_state(monkeypatch)
+
+    episode_id = "ep-77777777-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    _write_initial(vault_root, episode_id=episode_id)
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(9, 0))
+
+    canonical_path = vault_root / episode_note_rel_path(episode_id)
+    canonical_text = canonical_path.read_text(encoding="utf-8")
+    nested_path = canonical_path.parent / "zzzz-archive" / "foreign-copy.md"
+    nested_path.parent.mkdir(parents=True)
+    nested_path.write_text(
+        canonical_text.replace("title: Debugging session", "title: Nested foreign copy", 1)
+        .replace("# Episode: Debugging session", "# Episode: Nested foreign copy", 1),
+        encoding="utf-8",
+    )
+
+    result = run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(9, 5))
+
+    assert result["recut_detected"] == []
+    assert canonical_path.read_text(encoding="utf-8") == canonical_text
+
+
 def test_split_and_merge_flows_consistent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     vault_root = tmp_path / "vault"
     calls = _stub_bindings(monkeypatch)

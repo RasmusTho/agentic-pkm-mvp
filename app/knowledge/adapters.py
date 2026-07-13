@@ -56,12 +56,52 @@ class FsVaultAdapter:
         # caller DOES pass ``expected_version``, a REWRITTEN note whose current bytes no
         # longer match is refused with ``KnowledgeWriteConflict`` (INV-VW1: no silent
         # overwrite of a concurrently-changed note).
-        if expected_version is not None and target.exists() and note_class is NoteClass.REWRITTEN:
-            current_version = hashlib.sha256(target.read_bytes()).hexdigest()
-            if current_version != expected_version:
-                raise KnowledgeWriteConflict(f"version mismatch for rewritten note {locator.path}")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        if expected_version is not None and note_class is NoteClass.REWRITTEN:
+            try:
+                # Open without creation and keep the same descriptor through the write.
+                # If the path is deleted or replaced concurrently, this descriptor cannot
+                # recreate or overwrite the new path; the identity checks below turn that
+                # race into an explicit conflict for the caller.
+                with target.open("r+b") as handle:
+                    opened_stat = os.fstat(handle.fileno())
+                    current_bytes = handle.read()
+                    current_version = hashlib.sha256(current_bytes).hexdigest()
+                    if current_version != expected_version:
+                        raise KnowledgeWriteConflict(
+                            f"version mismatch for rewritten note {locator.path}"
+                        )
+
+                    path_stat = target.stat()
+                    if (path_stat.st_dev, path_stat.st_ino) != (
+                        opened_stat.st_dev,
+                        opened_stat.st_ino,
+                    ):
+                        raise KnowledgeWriteConflict(
+                            f"version mismatch for rewritten note {locator.path}: "
+                            "target was replaced"
+                        )
+
+                    handle.seek(0)
+                    handle.write(content.encode("utf-8"))
+                    handle.truncate()
+                    handle.flush()
+
+                    path_stat = target.stat()
+                    if (path_stat.st_dev, path_stat.st_ino) != (
+                        opened_stat.st_dev,
+                        opened_stat.st_ino,
+                    ):
+                        raise KnowledgeWriteConflict(
+                            f"version mismatch for rewritten note {locator.path}: "
+                            "target changed during write"
+                        )
+            except FileNotFoundError as exc:
+                raise KnowledgeWriteConflict(
+                    f"version mismatch for rewritten note {locator.path}: target is missing"
+                ) from exc
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
         return WriteReceipt(
             operation="write_note",
             locator=locator,

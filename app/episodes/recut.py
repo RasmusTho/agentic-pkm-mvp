@@ -336,16 +336,17 @@ def _scan_episode_notes(vault_root: Path) -> _EpisodeNoteScan:
         episode_id = fields.get("episode_id")
         if not isinstance(episode_id, str) or not episode_id:
             continue
-        if path.parent == subtree and path.stem != episode_id:
+        expected_rel_path = episode_note_rel_path(episode_id)
+        actual_rel_path = path.relative_to(vault_root).as_posix()
+        if actual_rel_path != expected_rel_path:
             logger.warning(
-                "recut: skipping episode note whose canonical path id %s disagrees with "
-                "frontmatter episode_id %s: %s",
-                path.stem,
+                "recut: skipping episode note outside its canonical episode_id path "
+                "(expected=%s, actual=%s, episode_id=%s)",
+                expected_rel_path,
+                actual_rel_path,
                 episode_id,
-                path,
             )
             continue
-        present_ids.add(episode_id)
         valid[episode_id] = _ScannedEpisodeNote(
             fields=fields,
             body=body,
