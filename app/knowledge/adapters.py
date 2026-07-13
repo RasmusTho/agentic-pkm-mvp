@@ -7,7 +7,6 @@ import os
 import stat
 import subprocess
 import sys
-import tempfile
 import uuid
 from datetime import UTC, datetime
 import hashlib
@@ -28,7 +27,15 @@ from app.knowledge.multiwriter import (
 logger = logging.getLogger(__name__)
 
 
-def _atomic_exchange(first: Path, second: Path) -> None:
+_DIRECTORY_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+
+def _atomic_exchange_at(
+    first_dir_fd: int,
+    first_name: str,
+    second_dir_fd: int,
+    second_name: str,
+) -> None:
     """Atomically swap two same-filesystem paths or fail closed.
 
     Python does not expose the exchange variants of rename. Linux and macOS do,
@@ -37,15 +44,27 @@ def _atomic_exchange(first: Path, second: Path) -> None:
     a non-atomic check-then-write sequence.
     """
     libc = ctypes.CDLL(ctypes.util.find_library("c") or None, use_errno=True)
-    first_raw = os.fsencode(first)
-    second_raw = os.fsencode(second)
+    first_raw = os.fsencode(first_name)
+    second_raw = os.fsencode(second_name)
     if sys.platform == "darwin":
-        rename_exchange = getattr(libc, "renamex_np", None)
+        rename_exchange = getattr(libc, "renameatx_np", None)
         if rename_exchange is None:
             raise KnowledgeCapabilityError("atomic path exchange is unavailable")
-        rename_exchange.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        rename_exchange.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
         rename_exchange.restype = ctypes.c_int
-        result = rename_exchange(first_raw, second_raw, 0x00000002)  # RENAME_SWAP
+        result = rename_exchange(
+            first_dir_fd,
+            first_raw,
+            second_dir_fd,
+            second_raw,
+            0x00000002,
+        )  # RENAME_SWAP
     elif sys.platform.startswith("linux"):
         rename_exchange = getattr(libc, "renameat2", None)
         if rename_exchange is None:
@@ -58,36 +77,39 @@ def _atomic_exchange(first: Path, second: Path) -> None:
             ctypes.c_uint,
         ]
         rename_exchange.restype = ctypes.c_int
-        result = rename_exchange(-100, first_raw, -100, second_raw, 0x00000002)
+        result = rename_exchange(
+            first_dir_fd,
+            first_raw,
+            second_dir_fd,
+            second_raw,
+            0x00000002,
+        )
     else:
         raise KnowledgeCapabilityError("atomic path exchange is unavailable")
     if result != 0:
         error_number = ctypes.get_errno()
-        raise OSError(error_number, os.strerror(error_number), str(first))
+        raise OSError(error_number, os.strerror(error_number), first_name)
 
 
 def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
     return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
 
 
-def _conflict_directory(vault_root: Path, target: Path) -> Path:
-    resolved_root = vault_root.resolve()
-    root_is_filesystem_anchor = resolved_root == Path(resolved_root.anchor)
-    boundary = target.parent.resolve() if root_is_filesystem_anchor else resolved_root
-    directory = boundary / "_conflicts"
-    if directory.is_symlink():
-        raise KnowledgeCapabilityError("conflict directory must not be a symlink")
-    directory.mkdir(parents=True, exist_ok=True)
+def _open_conflict_directory(parent_fd: int) -> int:
     try:
-        directory.resolve().relative_to(boundary)
-    except ValueError as exc:
-        raise KnowledgeCapabilityError("conflict directory escapes write boundary") from exc
-    return directory
+        os.mkdir("_conflicts", mode=0o700, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+    except FileExistsError:
+        pass
+    try:
+        return os.open("_conflicts", _DIRECTORY_OPEN_FLAGS, dir_fd=parent_fd)
+    except OSError as exc:
+        raise KnowledgeCapabilityError(
+            "conflict directory must be an anchored non-symlink directory"
+        ) from exc
 
 
-def _preserve_displaced_conflict(
-    staged: Path, conflict_directory: Path, locator: NoteLocator
-) -> Path:
+def _conflict_artifact_name(locator: NoteLocator) -> str:
     artifact_rel = conflict_artifact_path(
         locator.path,
         writer_identity=f"concurrent-save-{uuid.uuid4().hex}",
@@ -96,9 +118,17 @@ def _preserve_displaced_conflict(
     # ``.md.conflict`` is intentionally not a markdown-indexable extension. The
     # displaced inode remains durable and human-recoverable without becoming a
     # second authority-like note in search, projection, or retrieval scans.
-    artifact = conflict_directory / f"{artifact_rel.name}.conflict"
-    os.rename(staged, artifact)
-    return artifact
+    return f"{artifact_rel.name}.conflict"
+
+
+def _read_entry(dir_fd: int, name: str) -> bytes:
+    fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=dir_fd)
+    with os.fdopen(fd, "rb") as handle:
+        return handle.read()
+
+
+def _read_handle(handle) -> bytes:  # type: ignore[no-untyped-def]
+    return handle.read()
 
 
 class FsVaultAdapter:
@@ -144,42 +174,56 @@ class FsVaultAdapter:
         # longer match is refused with ``KnowledgeWriteConflict`` (INV-VW1: no silent
         # overwrite of a concurrently-changed note).
         if expected_version is not None and note_class is NoteClass.REWRITTEN:
-            conflict_directory = _conflict_directory(self.vault_root, target)
-            try:
-                staged_fd, staged_name = tempfile.mkstemp(
-                    prefix=f".{target.name}.", suffix=".rewrite-swap", dir=target.parent
-                )
-            except FileNotFoundError as exc:
-                raise KnowledgeWriteConflict(
-                    f"version mismatch for rewritten note {locator.path}: target is missing"
-                ) from exc
-            staged = Path(staged_name)
+            parent_fd = -1
+            conflict_fd = -1
+            staged_fd = -1
+            staged_dir_fd = -1
+            staged_name = f".{target.name}.{uuid.uuid4().hex}.rewrite-swap"
             preserve_staged_conflict = False
             staged_is_artifact = False
             try:
+                parent_fd = os.open(target.parent, _DIRECTORY_OPEN_FLAGS)
+                conflict_fd = _open_conflict_directory(parent_fd)
+                staged_dir_fd = parent_fd
+                staged_fd = os.open(
+                    staged_name,
+                    os.O_RDWR | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=parent_fd,
+                )
                 payload = content.encode("utf-8")
-                with os.fdopen(staged_fd, "wb") as staged_handle:
-                    staged_fd = -1
+                open_staged_fd = staged_fd
+                staged_fd = -1
+                with os.fdopen(open_staged_fd, "wb") as staged_handle:
                     staged_handle.write(payload)
                     staged_handle.flush()
                     os.fsync(staged_handle.fileno())
-                staged_stat = staged.stat()
+                staged_stat = os.stat(
+                    staged_name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 payload_version = hashlib.sha256(payload).hexdigest()
 
                 # Validate twice through one descriptor, then use an atomic path exchange
                 # as the linearization point. The displaced original remains addressable at
                 # ``staged`` so a same-inode save in the final check/exchange gap can be
                 # detected and atomically rolled back instead of being silently overwritten.
-                with target.open("r+b") as handle:
+                target_fd = os.open(
+                    target.name,
+                    os.O_RDWR | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=parent_fd,
+                )
+                with os.fdopen(target_fd, "r+b") as handle:
                     opened_stat = os.fstat(handle.fileno())
-                    current_bytes = handle.read()
+                    current_bytes = _read_handle(handle)
                     current_version = hashlib.sha256(current_bytes).hexdigest()
                     if current_version != expected_version:
                         raise KnowledgeWriteConflict(
                             f"version mismatch for rewritten note {locator.path}"
                         )
 
-                    path_stat = target.stat()
+                    path_stat = os.stat(
+                        target.name, dir_fd=parent_fd, follow_symlinks=False
+                    )
                     if not _same_file_identity(path_stat, opened_stat):
                         raise KnowledgeWriteConflict(
                             f"version mismatch for rewritten note {locator.path}: "
@@ -190,17 +234,25 @@ class FsVaultAdapter:
                     # mutation. Path identity alone cannot detect an editor that saved
                     # through another descriptor to the same inode after our first read.
                     handle.seek(0)
-                    latest_bytes = handle.read()
+                    latest_bytes = _read_handle(handle)
                     if hashlib.sha256(latest_bytes).hexdigest() != expected_version:
                         raise KnowledgeWriteConflict(
                             f"version mismatch for rewritten note {locator.path}: "
                             "target changed during version check"
                         )
-                    os.chmod(staged, stat.S_IMODE(opened_stat.st_mode))
+                    os.chmod(
+                        staged_name,
+                        stat.S_IMODE(opened_stat.st_mode),
+                        dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
                     opened_mode = stat.S_IMODE(opened_stat.st_mode)
 
                 try:
-                    _atomic_exchange(target, staged)
+                    _atomic_exchange_at(
+                        parent_fd, target.name, parent_fd, staged_name
+                    )
+                    os.fsync(parent_fd)
                 except OSError as exc:
                     raise KnowledgeWriteConflict(
                         f"version mismatch for rewritten note {locator.path}: "
@@ -212,39 +264,70 @@ class FsVaultAdapter:
                 # such descriptors close, so every successful optimistic exchange retains
                 # this pre-exchange version as a standard conflicted copy.
                 preserve_staged_conflict = True
-                staged = _preserve_displaced_conflict(staged, conflict_directory, locator)
+                artifact_name = _conflict_artifact_name(locator)
+                os.rename(
+                    staged_name,
+                    artifact_name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=conflict_fd,
+                )
+                os.fsync(parent_fd)
+                os.fsync(conflict_fd)
+                staged_name = artifact_name
+                staged_dir_fd = conflict_fd
                 staged_is_artifact = True
 
-                displaced_version = hashlib.sha256(staged.read_bytes()).hexdigest()
-                displaced_mode = stat.S_IMODE(staged.stat().st_mode)
+                displaced_version = hashlib.sha256(
+                    _read_entry(conflict_fd, staged_name)
+                ).hexdigest()
+                displaced_mode = stat.S_IMODE(
+                    os.stat(
+                        staged_name,
+                        dir_fd=conflict_fd,
+                        follow_symlinks=False,
+                    ).st_mode
+                )
                 if displaced_version != expected_version or displaced_mode != opened_mode:
                     preserve_staged_conflict = True
-                    path_stat = target.stat()
+                    path_stat = os.stat(
+                        target.name, dir_fd=parent_fd, follow_symlinks=False
+                    )
                     if _same_file_identity(path_stat, staged_stat):
                         try:
-                            _atomic_exchange(target, staged)
+                            _atomic_exchange_at(
+                                parent_fd,
+                                target.name,
+                                conflict_fd,
+                                staged_name,
+                            )
+                            os.fsync(parent_fd)
+                            os.fsync(conflict_fd)
                         except OSError as exc:
                             raise KnowledgeWriteConflict(
                                 f"version mismatch for rewritten note {locator.path}: "
                                 "atomic rollback failed; displaced content was preserved"
                             ) from exc
-                    if staged.exists() and hashlib.sha256(staged.read_bytes()).hexdigest() == (
-                        payload_version
-                    ):
+                    if hashlib.sha256(
+                        _read_entry(staged_dir_fd, staged_name)
+                    ).hexdigest() == payload_version:
                         preserve_staged_conflict = False
                     raise KnowledgeWriteConflict(
                         f"version mismatch for rewritten note {locator.path}: "
                         "target changed at atomic exchange"
                     )
 
-                path_stat = target.stat()
+                path_stat = os.stat(
+                    target.name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 if not _same_file_identity(path_stat, staged_stat):
                     preserve_staged_conflict = True
                     raise KnowledgeWriteConflict(
                         f"version mismatch for rewritten note {locator.path}: "
                         "target changed after atomic exchange"
                     )
-                if hashlib.sha256(target.read_bytes()).hexdigest() != payload_version:
+                if hashlib.sha256(
+                    _read_entry(parent_fd, target.name)
+                ).hexdigest() != payload_version:
                         raise KnowledgeWriteConflict(
                             f"version mismatch for rewritten note {locator.path}: "
                             "target content changed after atomic exchange"
@@ -262,19 +345,35 @@ class FsVaultAdapter:
                 if staged_fd >= 0:
                     os.close(staged_fd)
                 try:
-                    if preserve_staged_conflict and staged.exists():
+                    if preserve_staged_conflict:
                         if not staged_is_artifact:
-                            staged = _preserve_displaced_conflict(
-                                staged, conflict_directory, locator
+                            artifact_name = _conflict_artifact_name(locator)
+                            os.rename(
+                                staged_name,
+                                artifact_name,
+                                src_dir_fd=staged_dir_fd,
+                                dst_dir_fd=conflict_fd,
                             )
+                            os.fsync(staged_dir_fd)
+                            os.fsync(conflict_fd)
+                            staged_name = artifact_name
+                            staged_dir_fd = conflict_fd
                             staged_is_artifact = True
-                    else:
-                        staged.unlink(missing_ok=True)
+                    elif staged_dir_fd >= 0:
+                        try:
+                            os.unlink(staged_name, dir_fd=staged_dir_fd)
+                            os.fsync(staged_dir_fd)
+                        except FileNotFoundError:
+                            pass
                 except OSError:
                     logger.exception(
-                        "rewritten-note swap cleanup failed; retained staged content at %s",
-                        staged,
+                        "rewritten-note swap cleanup failed; retained staged entry %s",
+                        staged_name,
                     )
+                if conflict_fd >= 0:
+                    os.close(conflict_fd)
+                if parent_fd >= 0:
+                    os.close(parent_fd)
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
