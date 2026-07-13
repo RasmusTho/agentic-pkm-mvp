@@ -300,8 +300,9 @@ class VerificationDispatchLedger:
                 SET lease_expires_at=?, last_heartbeat_at=?, updated_at=?
                 WHERE run_id=? AND claimed_by=? AND lease_id=?
                   AND status IN ('claimed','running')
+                  AND lease_expires_at>?
                 """,
-                (expires, now, now, run_id, holder, lease_id),
+                (expires, now, now, run_id, holder, lease_id, now),
             )
             if result.rowcount != 1:
                 raise ValueError("verification heartbeat ownership mismatch")
@@ -325,8 +326,9 @@ class VerificationDispatchLedger:
                 UPDATE verification_runs
                 SET status='running', coordinator_session_id=?, context_pack_json=?, updated_at=?
                 WHERE run_id=? AND claimed_by=? AND lease_id=? AND status='claimed'
+                  AND lease_expires_at>?
                 """,
-                (session_id, _json(dict(context_pack)), now, run_id, holder, lease_id),
+                (session_id, _json(dict(context_pack)), now, run_id, holder, lease_id, now),
             )
             if result.rowcount != 1:
                 raise ValueError("verification start ownership mismatch")
@@ -349,6 +351,7 @@ class VerificationDispatchLedger:
             raise ValueError("invalid verification terminal status")
         if status == "completed" and not self.closure_ready(run_id):
             raise ValueError("completed requires two fresh clean reviews after the final repair")
+        now = _now()
         with self.store._connect() as conn:
             result = conn.execute(
                 """
@@ -360,16 +363,18 @@ class VerificationDispatchLedger:
                     updated_at=?
                 WHERE run_id=? AND claimed_by=? AND lease_id=?
                   AND status IN ('claimed','running')
+                  AND lease_expires_at>?
                 """,
                 (
                     status,
                     _json(dict(receipt)),
                     reason,
                     status,
-                    _now(),
+                    now,
                     run_id,
                     holder,
                     lease_id,
+                    now,
                 ),
             )
             if result.rowcount == 0:
@@ -401,6 +406,7 @@ class VerificationDispatchLedger:
             raise ValueError("malformed verification rebind head")
         if new_head_sha != observed_head_sha:
             raise ValueError("verification rebind does not match live PR head")
+        now = _now()
         with self.store._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -421,14 +427,16 @@ class VerificationDispatchLedger:
                 WHERE run_id=? AND current_head_sha=?
                   AND claimed_by=? AND lease_id=?
                   AND status IN ('claimed','running')
+                  AND lease_expires_at>?
                 """,
                 (
                     new_head_sha,
-                    _now(),
+                    now,
                     run_id,
                     expected_head_sha,
                     holder,
                     lease_id,
+                    now,
                 ),
             )
             if result.rowcount != 1:
@@ -451,6 +459,7 @@ class VerificationDispatchLedger:
         lease_id: str,
     ) -> VerificationRun:
         _parse_timestamp(retry_after)
+        now = _now()
         with self.store._connect() as conn:
             result = conn.execute(
                 """
@@ -459,8 +468,9 @@ class VerificationDispatchLedger:
                     lease_id=NULL, lease_expires_at=NULL, updated_at=?
                 WHERE run_id=? AND claimed_by=? AND lease_id=?
                   AND status IN ('claimed','running')
+                  AND lease_expires_at>?
                 """,
-                (_json(dict(receipt)), retry_after, _now(), run_id, holder, lease_id),
+                (_json(dict(receipt)), retry_after, now, run_id, holder, lease_id, now),
             )
             if result.rowcount != 1:
                 raise ValueError("verification backoff ownership mismatch")
@@ -538,6 +548,7 @@ class VerificationDispatchLedger:
             raise ValueError("invalid verification attempt kind")
         context_hash = hashlib.sha256(_json(dict(context)).encode()).hexdigest()
         attempt_id = f"vattempt-{uuid.uuid4().hex[:12]}"
+        now = _now()
         with self.store._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             owner = conn.execute(
@@ -545,8 +556,9 @@ class VerificationDispatchLedger:
                 SELECT 1 FROM verification_runs
                 WHERE run_id=? AND claimed_by=? AND lease_id=?
                   AND status IN ('claimed','running')
+                  AND lease_expires_at>?
                 """,
-                (run_id, holder, lease_id),
+                (run_id, holder, lease_id, now),
             ).fetchone()
             if owner is None:
                 raise ValueError("verification attempt ownership mismatch")
@@ -583,7 +595,7 @@ class VerificationDispatchLedger:
                 (
                     attempt_id, run_id, kind, ordinal,
                     session_id, capability, reasoning_effort, context_hash, outcome,
-                    _json(dict(receipt)) if receipt else None, _now(),
+                    _json(dict(receipt)) if receipt else None, now,
                 ),
             )
             conn.commit()
@@ -616,6 +628,7 @@ class VerificationDispatchLedger:
             digest = hashlib.sha256(f"{run_id}:{batch_id}:{index}".encode()).hexdigest()
             return f"vattempt-{digest[:16]}"
 
+        now = _now()
         with self.store._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             owner = conn.execute(
@@ -623,8 +636,9 @@ class VerificationDispatchLedger:
                 SELECT current_head_sha FROM verification_runs
                 WHERE run_id=? AND claimed_by=? AND lease_id=?
                   AND status IN ('claimed','running')
+                  AND lease_expires_at>?
                 """,
-                (run_id, holder, lease_id),
+                (run_id, holder, lease_id, now),
             ).fetchone()
             if owner is None:
                 raise ValueError("verification event batch ownership mismatch")
@@ -751,8 +765,9 @@ class VerificationDispatchLedger:
                 SELECT 1 FROM verification_runs
                 WHERE run_id=? AND claimed_by=? AND lease_id=?
                   AND status IN ('claimed','running')
+                  AND lease_expires_at>?
                 """,
-                (run_id, holder, lease_id),
+                (run_id, holder, lease_id, now),
             ).fetchone()
             if owner is None:
                 raise ValueError("verification exception ownership mismatch")
