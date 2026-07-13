@@ -219,7 +219,7 @@ jobs:
 
       - name: Enable pgvector extension
         run: |
-          python -c "import os, psycopg; psycopg.connect(os.environ['DATABASE_URL'], autocommit=True).execute('CREATE EXTENSION IF NOT EXISTS vector')"
+          python -c "import os, psycopg; url = os.environ['DATABASE_URL'].replace('postgresql+psycopg://', 'postgresql://', 1); psycopg.connect(url, autocommit=True).execute('CREATE EXTENSION IF NOT EXISTS vector')"
 
       - name: Upgrade database
         run: alembic upgrade head
