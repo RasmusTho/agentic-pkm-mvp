@@ -31,6 +31,11 @@ ALLOW_FILES = (
     # for app/services/decisions.py and app/jobs/backfill.py above.
     'app/receipts/decision_receipt_log.py',
     'app/jobs/decisions_projection.py',
+    # Slice 4 (#2973): one-time DB->log export of historical decision rows.
+    # Same bounded pattern as decisions_projection.py above: reads the
+    # `decisions` projection table directly through conn_rw to find rows not
+    # yet represented in the receipt log.
+    'app/jobs/decisions_export.py',
     # Decision-outcome receipt log + its projection writer (issue #3502). Same
     # bounded pattern as the decision-receipt log / decisions-projection pair
     # above: the vault JSONL receipt is canonical, `decision_outcomes` is a

@@ -105,6 +105,14 @@ genuinely DB-only content — shrinking what the off-machine cold-storage work (
    protocol (backfill + dual-read window + doctor). **Not executed without operator ack.** TCD:
    Opus/xhigh (prod data migration).
 
+   **Build-only portion delivered (issue #2973):** `export_decisions_to_receipt_log()`
+   (`app/jobs/decisions_export.py`) — the DB→log export function itself — is built, tested
+   (`tests/jobs/test_decisions_export.py`), and wired into a CLI group (`python -m app.cli decisions
+   export|doctor|rebuild`). It is read-only over the DB, idempotent (safe to re-run), and fails loud
+   rather than silently dropping a row it cannot faithfully place in the log. **Running it against
+   prod, and the remaining flip-canonical / backup-scope-note steps, stay operator-gated** — the
+   function existing does not execute the migration.
+
 ## SBS reconciliation (binding)
 
 - **Conforms:** decisions are GOV receipts; putting the canonical copy on the durable readable surface
