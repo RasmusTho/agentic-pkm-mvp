@@ -115,6 +115,7 @@ def build_request(
     generated_at = run.get("updated_at")
     if not (
         repository
+        and pr.get("state") == "open"
         and isinstance(pr_number, int)
         and isinstance(run_id, int)
         and isinstance(run_attempt, int)

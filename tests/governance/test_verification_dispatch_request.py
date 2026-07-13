@@ -30,9 +30,10 @@ def _event(
     }
 
 
-def _pr(*, head_sha: str = HEAD_SHA) -> dict[str, object]:
+def _pr(*, head_sha: str = HEAD_SHA, state: str = "open") -> dict[str, object]:
     return {
         "number": 3602,
+        "state": state,
         "body": "Fixes #3602",
         "base": {"ref": "main"},
         "head": {"ref": "codex/issue-3602", "sha": head_sha},
@@ -78,6 +79,17 @@ def test_non_eligible_events_are_noops() -> None:
         build_request(event=_event(), pr=_pr(head_sha="b" * 40), issue=_issue())
         is None
     )
+
+
+def test_associated_pr_must_still_be_open() -> None:
+    assert build_request(event=_event(), pr=_pr(), issue=_issue()) is not None
+    assert (
+        build_request(event=_event(), pr=_pr(state="closed"), issue=_issue())
+        is None
+    )
+    merged_pr = _pr(state="closed")
+    merged_pr["merged_at"] = "2026-07-13T12:00:01Z"
+    assert build_request(event=_event(), pr=merged_pr, issue=_issue()) is None
 
 
 def test_replay_collapses_and_new_head_redispatches() -> None:
