@@ -84,6 +84,44 @@ def test_local_command_adapter_is_bounded_and_secret_safe(tmp_path: Path) -> Non
         echo_secret.execute({"request": True})
 
 
+def test_local_command_adapter_exposes_allowlisted_exit_diagnostic_without_stderr() -> None:
+    adapter = LocalCommandAdapter(
+        adapter_id="fable-command",
+        provider="fable",
+        model="configured-specialist",
+        argv=(
+            sys.executable,
+            "-c",
+            "import sys; print('credential-sentinel', file=sys.stderr); sys.exit(17)",
+        ),
+        timeout_seconds=2,
+    )
+
+    with pytest.raises(AdapterExecutionError) as raised:
+        adapter.execute({"request": True})
+
+    error = raised.value
+    assert error.failure_class == "command_exit_nonzero"
+    assert error.exit_code == 17
+    assert "credential-sentinel" not in str(error)
+
+
+def test_local_command_adapter_maps_subscription_timeout_exit_to_timeout() -> None:
+    adapter = LocalCommandAdapter(
+        adapter_id="fable-command",
+        provider="fable",
+        model="configured-specialist",
+        argv=(sys.executable, "-c", "import sys; sys.exit(124)"),
+        timeout_seconds=2,
+    )
+
+    with pytest.raises(AdapterExecutionError) as raised:
+        adapter.execute({"request": True})
+
+    assert raised.value.failure_class == "command_timeout"
+    assert raised.value.exit_code == 124
+
+
 def test_provider_enabled_roles_require_distinct_non_mock_attestation() -> None:
     config = {
         role: {

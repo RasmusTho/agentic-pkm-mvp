@@ -15,6 +15,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 from app.builderops.config import load_paths
+from app.builderops.model_inquiry_adapters import ADAPTER_FAILURE_CLASSES
 from app.builderops.model_inquiry_contract import (
     canonical_hash,
     github_issue_url_matches,
@@ -1973,10 +1974,16 @@ def _validate_provider_attempt_receipt(
         "output_hash",
         "classification",
     }
-    if set(details) != expected_fields or details.get("classification") != expected_classifications.get(
-        str(outcome)
+    allowed_fields = {frozenset(expected_fields)}
+    if outcome == "provider_error":
+        allowed_fields.add(frozenset({*expected_fields, "diagnostic"}))
+    if (
+        frozenset(details) not in allowed_fields
+        or details.get("classification") != expected_classifications.get(str(outcome))
     ):
         raise BuilderOpsValidationError("provider attempt details do not match outcome contract")
+    if "diagnostic" in details:
+        _validate_adapter_failure_diagnostic(details["diagnostic"])
     for field in ("request_hash", "context_hash", "input_hash"):
         _validate_sha256(details.get(field), f"attempt {field}")
     output_hash = details.get("output_hash")
@@ -1984,6 +1991,27 @@ def _validate_provider_attempt_receipt(
         _validate_sha256(output_hash, "attempt output_hash")
     if request_id != f"adapter_req_{str(details['request_hash'])[:32]}":
         raise BuilderOpsValidationError("provider attempt request ID does not match request hash")
+
+
+def _validate_adapter_failure_diagnostic(value: Any) -> None:
+    if not isinstance(value, Mapping):
+        raise BuilderOpsValidationError("adapter failure diagnostic must be an object")
+    expected_fields = {"adapter_id", "adapter_failure_class"}
+    optional_exit_code = "adapter_exit_code"
+    if set(value) not in (expected_fields, { *expected_fields, optional_exit_code }):
+        raise BuilderOpsValidationError("invalid adapter failure diagnostic fields")
+    _safe_id(str(value.get("adapter_id", "")), "adapter failure adapter_id")
+    failure_class = value.get("adapter_failure_class")
+    if not isinstance(failure_class, str) or failure_class not in ADAPTER_FAILURE_CLASSES:
+        raise BuilderOpsValidationError("invalid adapter failure class")
+    if optional_exit_code in value:
+        exit_code = value[optional_exit_code]
+        if (
+            not isinstance(exit_code, int)
+            or isinstance(exit_code, bool)
+            or not 1 <= exit_code <= 255
+        ):
+            raise BuilderOpsValidationError("invalid adapter exit code")
 
 
 def _fsync_directory(path: Path) -> None:
