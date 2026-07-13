@@ -107,6 +107,42 @@ def test_adapter_fails_closed_without_cross_scope_disclosure(tmp_path: Path) -> 
     assert "Beta" not in rendered
 
 
+def test_adapter_preserves_partial_posture_when_another_finding_is_excluded(
+    tmp_path: Path,
+) -> None:
+    admitted = _finding(finding_id="admitted")
+    excluded = CurationFinding(
+        finding_id="excluded",
+        note_uuid=admitted.note_uuid,
+        finding_class=admitted.finding_class,
+        track=admitted.track,
+        span=admitted.span,
+        observed=admitted.observed,
+        proposed=admitted.proposed,
+        evidence=("a.md", "denied.md"),
+        language_verdict=admitted.language_verdict,
+        reversal=admitted.reversal,
+    )
+    admission = _admission(
+        {
+            "a.md": AdmittedContradictionCitation(handle="a.md", scope="work"),
+            "b.md": AdmittedContradictionCitation(handle="b.md", scope="work"),
+        }
+    )
+
+    result = run_contradiction_triage(
+        vault_root=tmp_path,
+        queries=["conflict"],
+        admission=admission,
+        outbox_path=tmp_path / "outbox.jsonl",
+        harness=lambda **_: _report(admitted, excluded),
+    )
+
+    assert [finding.finding_id for finding in result.findings] == ["admitted"]
+    assert result.diagnostic == "partial_findings"
+    assert "denied.md" not in repr(result)
+
+
 def test_adapter_is_zero_write_at_production_call_site(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -21,6 +21,8 @@ observed claims, two citation handles, and interpretation. Citation handles
 must resolve through the caller-supplied current-scope admission boundary;
 otherwise the whole logical finding is excluded with a content-free
 diagnostic. `success/no_findings` remains distinct from `failed/scan_failed`.
+Mixed admitted and excluded results retain a content-free `partial_findings`
+diagnostic so a consumer cannot mistake an incomplete scan for a complete one.
 
 The Bench is a supporting read path for the existing note/Panel confirmation model, not a parallel review UI. It must never infer a truth verdict, edit either source, create a receipt, or introduce a Bench-specific disposition. A later durable dismissal or superseding-decision flow requires its own authority, lifecycle, privacy, concurrency, and recovery contract.
 

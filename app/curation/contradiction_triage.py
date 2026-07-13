@@ -134,7 +134,9 @@ def run_contradiction_triage(
             continue
         admitted.append(projected)
 
-    if admitted:
+    if admitted and (excluded or report.suppressed_by_cross_scope_denial):
+        diagnostic = "partial_findings"
+    elif admitted:
         diagnostic = "ok"
     elif excluded or report.suppressed_by_cross_scope_denial:
         diagnostic = "finding_excluded"
