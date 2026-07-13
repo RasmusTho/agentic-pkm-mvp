@@ -92,6 +92,7 @@ from app.episodes import engine_state
 from app.episodes.assignment import reconcile_episode_bindings, withdraw_episode_bindings
 from app.episodes.notes import (
     EPISODE_NOTES_DIR,
+    EpisodeFrontmatterParseError,
     episode_note_rel_path,
     parse_episode_note_document,
     render_episode_note,
@@ -331,7 +332,12 @@ def _scan_episode_notes(vault_root: Path) -> _EpisodeNoteScan:
             text = raw_bytes.decode("utf-8")
             fields, body = parse_episode_note_document(text)
             validate_episode_note_fields(fields)
-        except (OSError, UnicodeDecodeError, EpisodeSchemaValidationError) as exc:
+        except (
+            OSError,
+            UnicodeDecodeError,
+            EpisodeFrontmatterParseError,
+            EpisodeSchemaValidationError,
+        ) as exc:
             logger.warning("recut: skipping unreadable/invalid episode note %s: %s", path, exc)
             continue
         episode_id = fields.get("episode_id")

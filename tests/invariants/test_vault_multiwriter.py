@@ -196,6 +196,56 @@ def test_rewritten_write_conflicts_with_same_inode_save_after_version_read(
     assert target.read_bytes() == b"HUMAN-SAVE"
 
 
+def test_rewritten_write_rolls_back_same_inode_save_after_final_version_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/final-read-race.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    expected_version = hashlib.sha256(b"observed body").hexdigest()
+    real_open = Path.open
+    reads = 0
+
+    class _SaveAfterFinalRead:
+        def __init__(self, handle) -> None:  # type: ignore[no-untyped-def]
+            self._handle = handle
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, *exc) -> None:  # type: ignore[no-untyped-def]
+            self._handle.close()
+
+        def read(self, *args):  # type: ignore[no-untyped-def]
+            nonlocal reads
+            data = self._handle.read(*args)
+            reads += 1
+            if reads == 2:
+                with real_open(target, "r+b") as concurrent:
+                    concurrent.seek(0)
+                    concurrent.write(b"HUMAN-AFTER-FINAL-READ")
+                    concurrent.truncate()
+                    concurrent.flush()
+            return data
+
+        def __getattr__(self, name: str):
+            return getattr(self._handle, name)
+
+    def racing_open(path: Path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        handle = real_open(path, *args, **kwargs)
+        mode = kwargs.get("mode", args[0] if args else "r")
+        return _SaveAfterFinalRead(handle) if path == target and mode == "r+b" else handle
+
+    monkeypatch.setattr(Path, "open", racing_open)
+
+    with pytest.raises(KnowledgeWriteConflict, match="version mismatch"):
+        adapter.write_note(locator, "ENGINE", expected_version=expected_version)
+
+    assert target.read_bytes() == b"HUMAN-AFTER-FINAL-READ"
+
+
 def test_filesystem_write_receipt_carries_writer_provenance(tmp_path: Path) -> None:
     adapter = FsVaultAdapter(tmp_path)
     locator = NoteLocator(vault="Vault", path="Notes/provenance.md")

@@ -21,7 +21,7 @@ This contract follows:
 
 ## Interface surface (domain-level)
 - `read_note(locator)`
-- `write_note(locator, content, expected_version=None)` — `expected_version` opts a rewritten note into optimistic concurrency over raw on-disk bytes; changed (including same-inode saves) or missing targets fail with `KnowledgeWriteConflict` rather than being overwritten or recreated.
+- `write_note(locator, content, expected_version=None)` — `expected_version` opts a rewritten note into optimistic concurrency over raw on-disk bytes. The filesystem adapter performs an atomic path exchange and verifies the displaced original, rolling the exchange back when a same-inode save raced the linearization point; changed or missing targets fail with `KnowledgeWriteConflict` rather than being overwritten or recreated. Unsupported atomic-exchange platforms fail closed with `KnowledgeCapabilityError`.
 - `append_note(locator, content)`
 - `prepend_note(locator, content)`
 - `search_notes(vault, query, limit=20)`

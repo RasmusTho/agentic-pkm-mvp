@@ -22,7 +22,7 @@ The system MUST use a DedupTaskQueue for tasks that can be triggered concurrentl
 Writes to notes or objects MUST use optimistic locking with a version token to prevent silent corruption.
 
 - **Version token:** use a version column, content hash, or `mtime` snapshot captured at read time.
-- **Mismatch behavior:** on version mismatch, including when a target observed at read time has been deleted or changed through the same inode before the write seam, the write MUST fail safe (no overwrite or stale resurrection), emit a warning/diagnostic, and surface a retry path. Filesystem content hashes are hashes of raw on-disk bytes, not newline-normalized text.
+- **Mismatch behavior:** on version mismatch, including when a target observed at read time has been deleted or changed through the same inode before the write seam, the write MUST fail safe (no overwrite or stale resurrection), emit a warning/diagnostic, and surface a retry path. Filesystem content hashes are hashes of raw on-disk bytes, not newline-normalized text. Rewritten-note compare-and-swap uses an atomic same-filesystem path exchange; the displaced original is verified after the exchange and atomically restored if it changed at the linearization point. Platforms without an atomic exchange primitive fail closed.
 - **No silent merges:** automatic merges are not allowed unless explicitly specified by the owning component.
 
 ## Event idempotency keys (MUST)

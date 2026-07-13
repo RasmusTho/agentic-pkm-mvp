@@ -1096,6 +1096,30 @@ def test_invalid_but_present_episode_note_does_not_trigger_deletion_withdrawal(
         vault_root=vault_root, write_guard=_allow_guard(), now=_dt(9, 10)
     )
     assert repaired_result["recut_detected"] == [episode_id]
+
+
+def test_unterminated_frontmatter_is_invalid_but_present_without_aborting_tick(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    calls = _stub_bindings(monkeypatch)
+    _stub_projection_sync(monkeypatch)
+    fake_state = _install_fake_engine_state(monkeypatch)
+    episode_id = "ep-77777777-cccc-4ccc-8ccc-777777777777"
+    _write_initial(vault_root, episode_id=episode_id)
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(9, 0))
+    calls.clear()
+
+    note_path = vault_root / episode_note_rel_path(episode_id)
+    note_path.write_text("---\nepisode_id: " + episode_id + "\ntitle: mid-save", encoding="utf-8")
+
+    result = run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(9, 5))
+
+    assert result["bindings_corrected"] == 0
+    assert not [args for kind, args in calls if kind == "withdraw"]
+    assert f"episode_recut_state:{episode_id}" in fake_state.all_state_with_prefix(
+        "episode_recut_state:"
+    )
     assert not [args for kind, args in calls if kind == "withdraw"]
 
 

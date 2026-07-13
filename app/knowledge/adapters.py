@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
 import os
 import subprocess
+import sys
+import tempfile
 from datetime import UTC, datetime
 import hashlib
 from pathlib import Path
@@ -12,6 +16,48 @@ from app.knowledge.errors import KnowledgeCapabilityError, KnowledgeDependencyEr
 from app.knowledge.locators import make_note_locator
 from app.knowledge.obsidian_cli_scope import scoped_cli_args
 from app.knowledge.multiwriter import NoteClass, WriteOperation, classify_note
+
+
+def _atomic_exchange(first: Path, second: Path) -> None:
+    """Atomically swap two same-filesystem paths or fail closed.
+
+    Python does not expose the exchange variants of rename. Linux and macOS do,
+    and both are used by the supported runtime/CI environments. An unsupported
+    platform must reject optimistic rewritten-note writes rather than degrade to
+    a non-atomic check-then-write sequence.
+    """
+    libc = ctypes.CDLL(ctypes.util.find_library("c") or None, use_errno=True)
+    first_raw = os.fsencode(first)
+    second_raw = os.fsencode(second)
+    if sys.platform == "darwin":
+        rename_exchange = getattr(libc, "renamex_np", None)
+        if rename_exchange is None:
+            raise KnowledgeCapabilityError("atomic path exchange is unavailable")
+        rename_exchange.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        rename_exchange.restype = ctypes.c_int
+        result = rename_exchange(first_raw, second_raw, 0x00000002)  # RENAME_SWAP
+    elif sys.platform.startswith("linux"):
+        rename_exchange = getattr(libc, "renameat2", None)
+        if rename_exchange is None:
+            raise KnowledgeCapabilityError("atomic path exchange is unavailable")
+        rename_exchange.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        rename_exchange.restype = ctypes.c_int
+        result = rename_exchange(-100, first_raw, -100, second_raw, 0x00000002)
+    else:
+        raise KnowledgeCapabilityError("atomic path exchange is unavailable")
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), str(first))
+
+
+def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
+    return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
 
 
 class FsVaultAdapter:
@@ -58,10 +104,27 @@ class FsVaultAdapter:
         # overwrite of a concurrently-changed note).
         if expected_version is not None and note_class is NoteClass.REWRITTEN:
             try:
-                # Open without creation and keep the same descriptor through the write.
-                # If the path is deleted or replaced concurrently, this descriptor cannot
-                # recreate or overwrite the new path; the identity checks below turn that
-                # race into an explicit conflict for the caller.
+                staged_fd, staged_name = tempfile.mkstemp(
+                    prefix=f".{target.name}.", suffix=".rewrite-swap", dir=target.parent
+                )
+            except FileNotFoundError as exc:
+                raise KnowledgeWriteConflict(
+                    f"version mismatch for rewritten note {locator.path}: target is missing"
+                ) from exc
+            staged = Path(staged_name)
+            try:
+                payload = content.encode("utf-8")
+                with os.fdopen(staged_fd, "wb") as staged_handle:
+                    staged_fd = -1
+                    staged_handle.write(payload)
+                    staged_handle.flush()
+                    os.fsync(staged_handle.fileno())
+                staged_stat = staged.stat()
+
+                # Validate twice through one descriptor, then use an atomic path exchange
+                # as the linearization point. The displaced original remains addressable at
+                # ``staged`` so a same-inode save in the final check/exchange gap can be
+                # detected and atomically rolled back instead of being silently overwritten.
                 with target.open("r+b") as handle:
                     opened_stat = os.fstat(handle.fileno())
                     current_bytes = handle.read()
@@ -72,10 +135,7 @@ class FsVaultAdapter:
                         )
 
                     path_stat = target.stat()
-                    if (path_stat.st_dev, path_stat.st_ino) != (
-                        opened_stat.st_dev,
-                        opened_stat.st_ino,
-                    ):
+                    if not _same_file_identity(path_stat, opened_stat):
                         raise KnowledgeWriteConflict(
                             f"version mismatch for rewritten note {locator.path}: "
                             "target was replaced"
@@ -92,24 +152,39 @@ class FsVaultAdapter:
                             "target changed during version check"
                         )
 
-                    handle.seek(0)
-                    handle.write(content.encode("utf-8"))
-                    handle.truncate()
-                    handle.flush()
+                _atomic_exchange(target, staged)
 
+                displaced_version = hashlib.sha256(staged.read_bytes()).hexdigest()
+                if displaced_version != expected_version:
                     path_stat = target.stat()
-                    if (path_stat.st_dev, path_stat.st_ino) != (
-                        opened_stat.st_dev,
-                        opened_stat.st_ino,
-                    ):
+                    if _same_file_identity(path_stat, staged_stat):
+                        _atomic_exchange(target, staged)
+                    raise KnowledgeWriteConflict(
+                        f"version mismatch for rewritten note {locator.path}: "
+                        "target changed at atomic exchange"
+                    )
+
+                path_stat = target.stat()
+                if not _same_file_identity(path_stat, staged_stat):
+                    raise KnowledgeWriteConflict(
+                        f"version mismatch for rewritten note {locator.path}: "
+                        "target changed after atomic exchange"
+                    )
+                if hashlib.sha256(target.read_bytes()).hexdigest() != hashlib.sha256(
+                    payload
+                ).hexdigest():
                         raise KnowledgeWriteConflict(
                             f"version mismatch for rewritten note {locator.path}: "
-                            "target changed during write"
+                            "target content changed after atomic exchange"
                         )
-            except FileNotFoundError as exc:
+            except (FileNotFoundError, NotADirectoryError) as exc:
                 raise KnowledgeWriteConflict(
                     f"version mismatch for rewritten note {locator.path}: target is missing"
                 ) from exc
+            finally:
+                if staged_fd >= 0:
+                    os.close(staged_fd)
+                staged.unlink(missing_ok=True)
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
