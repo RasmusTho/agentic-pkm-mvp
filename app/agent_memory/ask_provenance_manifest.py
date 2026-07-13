@@ -12,6 +12,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import tempfile
 import threading
 import time
@@ -36,6 +37,7 @@ _JANITOR_LOCK = threading.Lock()
 _CAPTURE_QUEUE: Queue[dict[str, Any]] = Queue(maxsize=64)
 _CAPTURE_WORKER_LOCK = threading.Lock()
 _CAPTURE_WORKER_STARTED = False
+_DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
@@ -108,7 +110,7 @@ def _validate_identity_record(record: Any, *, value_field: str) -> None:
         if (
             set(record) != {"status", value_field}
             or not isinstance(record.get(value_field), str)
-            or not record[value_field]
+            or not _DIGEST_PATTERN.fullmatch(record[value_field])
         ):
             raise ValueError("available identity requires a non-empty value")
         return
@@ -137,9 +139,14 @@ def _validate_manifest(manifest: Mapping[str, Any]) -> None:
     }
     if set(manifest) != required or manifest.get("schema") != SCHEMA:
         raise ValueError("invalid ASK provenance manifest shape")
-    for field in ("manifest_id", "captured_at", "expires_at", "answer_hash", "query_hash"):
+    for field in ("manifest_id", "captured_at", "expires_at"):
         if not isinstance(manifest.get(field), str) or not manifest[field]:
             raise ValueError(f"invalid manifest field: {field}")
+    for field in ("answer_hash", "query_hash"):
+        if not isinstance(manifest.get(field), str) or not _DIGEST_PATTERN.fullmatch(
+            manifest[field]
+        ):
+            raise ValueError(f"invalid manifest digest: {field}")
     captured_at = datetime.fromisoformat(manifest["captured_at"].replace("Z", "+00:00"))
     expires_at = datetime.fromisoformat(manifest["expires_at"].replace("Z", "+00:00"))
     if captured_at.utcoffset() is None or expires_at.utcoffset() is None:
@@ -163,14 +170,18 @@ def _validate_manifest(manifest: Mapping[str, Any]) -> None:
     principal_reason = authorization["principal_unavailable_reason"]
     if (principal_hash is None) == (principal_reason is None):
         raise ValueError("principal identity must be available xor unavailable")
-    if principal_hash is not None and (not isinstance(principal_hash, str) or not principal_hash):
+    if principal_hash is not None and (
+        not isinstance(principal_hash, str) or not _DIGEST_PATTERN.fullmatch(principal_hash)
+    ):
         raise ValueError("invalid principal hash")
     if principal_reason is not None and (
         not isinstance(principal_reason, str) or not principal_reason
     ):
         raise ValueError("invalid principal unavailable reason")
     for field in ("authorization_context_hash", "policy_hash"):
-        if not isinstance(authorization[field], str) or not authorization[field]:
+        if not isinstance(authorization[field], str) or not _DIGEST_PATTERN.fullmatch(
+            authorization[field]
+        ):
             raise ValueError(f"invalid authorization field: {field}")
     for position, item in enumerate(manifest["ordered_evidence"]):
         if not isinstance(item, Mapping) or set(item) != {
@@ -181,6 +192,10 @@ def _validate_manifest(manifest: Mapping[str, Any]) -> None:
             raise ValueError("invalid ordered evidence")
         if item.get("position") != position:
             raise ValueError("evidence order is not canonical")
+        if not isinstance(item.get("source_id_hash"), str) or not _DIGEST_PATTERN.fullmatch(
+            item["source_id_hash"]
+        ):
+            raise ValueError("invalid evidence source hash")
         source_hash = item.get("canonical_source_hash")
         _validate_identity_record(source_hash, value_field="value")
     identities = manifest.get("identities")

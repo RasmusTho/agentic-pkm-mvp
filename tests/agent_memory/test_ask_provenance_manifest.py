@@ -16,6 +16,9 @@ from app.agent_memory.ask_provenance_manifest import (
     start_ask_provenance_runtime,
 )
 
+SOURCE_HASH_A = "a" * 64
+SOURCE_HASH_B = "b" * 64
+
 
 def _snapshot(*, scope: str = "work", principal: str = "owner") -> AuthorizationSnapshot:
     return AuthorizationSnapshot(
@@ -28,7 +31,7 @@ def _snapshot(*, scope: str = "work", principal: str = "owner") -> Authorization
 
 
 def _capture(
-    path: Path, *, source_hash: str = "hash-a", index_identity: str | None = "index-a"
+    path: Path, *, source_hash: str = SOURCE_HASH_A, index_identity: str | None = "index-a"
 ) -> dict:
     if "runtime" not in {part.casefold() for part in path.parts}:
         path = path.parent / "runtime" / path.name
@@ -72,7 +75,7 @@ def test_shadow_capture_preserves_ask_response_and_side_effects(
                     source_ref="vault/private.md",
                     payload={
                         "provenance": {
-                            "content_hash": "hash-a",
+                            "content_hash": SOURCE_HASH_A,
                             "chunk_policy_version": "chunk-v1",
                             "pipeline_version": "pipeline-v1",
                         },
@@ -120,7 +123,7 @@ def test_shadow_capture_preserves_ask_response_and_side_effects(
         record = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
         assert record["ordered_evidence"][0]["canonical_source_hash"] == {
             "status": "available",
-            "value": "hash-a",
+            "value": SOURCE_HASH_A,
         }
         assert record["authorization"]["principal_hash"] is None
         assert (
@@ -153,8 +156,8 @@ def test_manifest_is_minimal_and_privacy_safe(tmp_path: Path) -> None:
 
 
 def test_comparison_classifies_only_supported_drift(tmp_path: Path) -> None:
-    left = _capture(tmp_path / "left.jsonl", source_hash="hash-a")
-    right = _capture(tmp_path / "right.jsonl", source_hash="hash-b")
+    left = _capture(tmp_path / "left.jsonl", source_hash=SOURCE_HASH_A)
+    right = _capture(tmp_path / "right.jsonl", source_hash=SOURCE_HASH_B)
     comparison = compare_manifests(
         left, right, current_authorization=_snapshot(), privacy_key=b"test-only-key"
     )
@@ -179,7 +182,7 @@ def test_comparison_classifies_only_supported_drift(tmp_path: Path) -> None:
     ) == {"classification": "indeterminate", "reason": "manifest_invalid"}
 
     changed_query = json.loads(json.dumps(left))
-    changed_query["query_hash"] = "different-keyed-query-hash"
+    changed_query["query_hash"] = "c" * 64
     assert compare_manifests(
         changed_query,
         left,
@@ -196,6 +199,30 @@ def test_comparison_classifies_only_supported_drift(tmp_path: Path) -> None:
         current_authorization=_snapshot(),
         privacy_key=b"test-only-key",
     ) == {"classification": "indeterminate", "reason": "manifest_invalid"}
+
+    malformed_digest_paths = (
+        ("answer_hash",),
+        ("query_hash",),
+        ("authorization", "principal_hash"),
+        ("authorization", "authorization_context_hash"),
+        ("authorization", "policy_hash"),
+        ("ordered_evidence", 0, "source_id_hash"),
+        ("ordered_evidence", 0, "canonical_source_hash", "value"),
+        ("identities", "canonical_index", "value_hash"),
+        ("identities", "synthesis", "value_hash"),
+    )
+    for field_path in malformed_digest_paths:
+        malformed_digest = json.loads(json.dumps(left))
+        target = malformed_digest
+        for part in field_path[:-1]:
+            target = target[part]
+        target[field_path[-1]] = "x"
+        assert compare_manifests(
+            malformed_digest,
+            left,
+            current_authorization=_snapshot(),
+            privacy_key=b"test-only-key",
+        ) == {"classification": "indeterminate", "reason": "manifest_invalid"}
 
 
 def test_scope_mismatch_redacts_evidence_details(tmp_path: Path) -> None:
