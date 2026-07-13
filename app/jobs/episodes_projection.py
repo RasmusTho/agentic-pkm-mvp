@@ -28,8 +28,8 @@ from pathlib import Path
 from typing import Any
 
 from app.db.db import conn_rw
-from app.episodes.notes import EPISODE_NOTES_DIR, parse_episode_note
-from app.episodes.schema import EpisodeSchemaValidationError, validate_episode_note_fields
+from app.episodes.notes import EPISODE_NOTES_DIR, parse_validated_episode_note
+from app.episodes.schema import EpisodeSchemaValidationError
 from app.vault.manager import iter_vault_markdown_files
 
 EPISODES_TABLE = "episodes"
@@ -49,20 +49,14 @@ class DoctorReport:
     vault_rows: int
     missing_in_db: list[dict[str, Any]] = field(default_factory=list)
     extra_in_db: list[dict[str, Any]] = field(default_factory=list)
+    unreadable_vault_notes: list[dict[str, str]] = field(default_factory=list)
 
 
-def _iter_episode_notes(vault_root: Path) -> list[tuple[str, dict[str, Any]]]:
-    """Yield ``(note_rel_path, fields)`` for every schema-valid episode note under
-    ``vault_root/episodes``. Skips (does not raise on) malformed notes -- callers collect
-    those as orphans."""
-    subtree = vault_root / EPISODE_NOTES_DIR
-    out: list[tuple[str, dict[str, Any]]] = []
-    for path in iter_vault_markdown_files(vault_root, subtree_root=subtree):
-        rel = path.relative_to(vault_root).as_posix()
-        text = path.read_text(encoding="utf-8")
-        fields = parse_episode_note(text)
-        out.append((rel, fields))
-    return out
+def _episode_note_paths(vault_root: Path) -> list[Path]:
+    """Return every episode-note path; callers validate each raw note explicitly."""
+    return list(
+        iter_vault_markdown_files(vault_root, subtree_root=vault_root / EPISODE_NOTES_DIR)
+    )
 
 
 def row_tuple(fields: dict[str, Any], note_path: str) -> tuple[Any, ...]:
@@ -94,22 +88,27 @@ def rebuild_episodes_projection(vault_root: Path) -> RebuildSummary:
     Runs in one transaction: the truncate and every replayed insert commit together, so a
     failure mid-replay leaves the prior projection intact.
     """
-    notes = _iter_episode_notes(vault_root)
-    summary = RebuildSummary(total_notes=len(notes))
+    note_paths = _episode_note_paths(vault_root)
+    summary = RebuildSummary(total_notes=len(note_paths))
+    validated_rows: list[tuple[dict[str, Any], str]] = []
+
+    # Read and validate before entering the truncating transaction. Schema-invalid
+    # notes are deliberately excluded from this derived index, while a vault I/O,
+    # decode, or frontmatter parse failure preserves the prior projection.
+    for path in note_paths:
+        note_path = path.relative_to(vault_root).as_posix()
+        try:
+            fields = parse_validated_episode_note(path.read_text(encoding="utf-8"))
+        except EpisodeSchemaValidationError as exc:
+            summary.skipped_invalid.append({"note_path": note_path, "reason": str(exc)})
+            continue
+        validated_rows.append((fields, note_path))
 
     with conn_rw() as conn:
         with conn.cursor() as cur:
             cur.execute(f"TRUNCATE TABLE {EPISODES_TABLE}")
 
-            for note_path, fields in notes:
-                try:
-                    validate_episode_note_fields(fields)
-                except EpisodeSchemaValidationError as exc:
-                    summary.skipped_invalid.append(
-                        {"note_path": note_path, "reason": str(exc)}
-                    )
-                    continue
-
+            for fields, note_path in validated_rows:
                 cur.execute(
                     f"""
                     INSERT INTO {EPISODES_TABLE} (
@@ -232,20 +231,27 @@ def _db_projection_rows() -> list[tuple[Any, ...]]:
     return sorted(rows, key=lambda row: row[0])
 
 
-def _vault_projection_rows(vault_root: Path) -> list[tuple[Any, ...]]:
+def _vault_projection_rows(
+    vault_root: Path,
+) -> tuple[list[tuple[Any, ...]], list[dict[str, str]]]:
     rows: list[tuple[Any, ...]] = []
-    for note_path, fields in _iter_episode_notes(vault_root):
+    unreadable: list[dict[str, str]] = []
+    for path in _episode_note_paths(vault_root):
+        note_path = path.relative_to(vault_root).as_posix()
         try:
-            validate_episode_note_fields(fields)
+            fields = parse_validated_episode_note(path.read_text(encoding="utf-8"))
         except EpisodeSchemaValidationError:
             continue
+        except Exception as exc:
+            unreadable.append({"note_path": note_path, "reason": str(exc)})
+            continue
         rows.append(_comparison_row(fields, note_path))
-    return sorted(rows, key=lambda row: row[0])
+    return sorted(rows, key=lambda row: row[0]), unreadable
 
 
 def doctor_episodes_projection(vault_root: Path) -> DoctorReport:
     """Assert the DB projection matches the vault notes row-for-row."""
-    vault_rows = _vault_projection_rows(vault_root)
+    vault_rows, unreadable_vault_notes = _vault_projection_rows(vault_root)
     db_rows = _db_projection_rows()
 
     vault_counter = Counter(vault_rows)
@@ -258,11 +264,12 @@ def doctor_episodes_projection(vault_root: Path) -> DoctorReport:
         return {"episode_id": row[0], "note_path": row[-1]}
 
     return DoctorReport(
-        ok=not missing and not extra,
+        ok=not missing and not extra and not unreadable_vault_notes,
         db_rows=len(db_rows),
         vault_rows=len(vault_rows),
         missing_in_db=[_fmt(r) for r in missing],
         extra_in_db=[_fmt(r) for r in extra],
+        unreadable_vault_notes=unreadable_vault_notes,
     )
 
 

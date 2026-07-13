@@ -72,12 +72,15 @@ ADR-0051 commitment 2, ADR-0054 §3):
 from __future__ import annotations
 
 import logging
+import subprocess
+import sys
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Final, Mapping, Sequence
 
+from app.components.concurrency import DedupTaskQueue
 from app.db.db import conn_rw
 from app.episodes import cross_scope_fusion, engine_state
 from app.episodes.assignment import (
@@ -106,7 +109,7 @@ from app.episodes.calendar_stream import (
     slugify_summary,
 )
 from app.episodes.ids import EPISODE_ID_PREFIX
-from app.episodes.notes import episode_note_rel_path
+from app.episodes.notes import episode_note_rel_path, parse_validated_episode_note
 from app.episodes.store import write_episode_note
 from app.jobs.episodes_projection import EPISODES_TABLE, row_tuple
 from app.knowledge.write_ops import write_note_relative
@@ -236,6 +239,8 @@ _EPISODE_ID_NAMESPACE: Final[uuid.UUID] = uuid.UUID("6f1d9a3a-8c3e-4f7a-9b1a-8f9
 _OPEN_SEGMENT_KEY_PREFIX: Final[str] = "open_segment:"
 
 _DEFAULT_SCOPE: Final[str] = "default"
+
+_PROJECTION_RETRY_LAUNCHES = DedupTaskQueue(ttl_seconds=30.0)
 
 
 # ---------------------------------------------------------------------------
@@ -778,7 +783,10 @@ def _sync_new_episode_row(fields: Mapping[str, Any], note_path: str) -> None:
     re-derives this row from the vault regardless.
     """
     try:
-        with conn_rw() as conn:
+        # Projection convergence is best-effort, including when this is a
+        # redelivery of an existing vault note. Never let an unreachable DB
+        # consume a segmenter's default driver connect timeout.
+        with conn_rw(connect_timeout=1) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
@@ -804,6 +812,66 @@ def _sync_new_episode_row(fields: Mapping[str, Any], note_path: str) -> None:
         )
 
 
+def _retry_existing_episode_projection_sync(*, vault_root: Path, rel_path: str) -> None:
+    """Launch bounded projection convergence for an already-durable episode note.
+
+    A note can exist while its initial projection sync did not: the projection write is
+    deliberately non-blocking, so a transient database failure must not roll back the
+    vault-canonical note. Redelivery is therefore also a convergence opportunity. Read
+    the existing note rather than reconstructing fields from the current segment, because
+    the note is the source of record and may have since received a permitted human edit.
+
+    An unreadable note is likewise never a reason to fail a redelivery. The normal
+    projection rebuild remains the recovery path for malformed legacy notes. The
+    tick validates the canonical note but delegates all database work to a detached
+    supervisor, so it cannot be stalled by backend discovery or connection setup.
+    """
+    note_path = Path(vault_root) / rel_path
+    try:
+        parse_validated_episode_note(note_path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning(
+            "segmenter: could not read a schema-valid existing episode note %s for projection-sync retry",
+            rel_path,
+            exc_info=True,
+        )
+        return
+    # Validate in the hot path, but never open a fresh DB connection here: DNS
+    # and lock waits are unbounded at the driver level. The detached supervisor
+    # owns one bounded worker attempt and is deduplicated per note.
+    if not _PROJECTION_RETRY_LAUNCHES.try_acquire(rel_path):
+        return
+    _launch_episode_projection_retry(vault_root=vault_root, rel_path=rel_path)
+
+
+def _launch_episode_projection_retry(*, vault_root: Path, rel_path: str) -> None:
+    """Start the bounded retry supervisor without waiting for database I/O."""
+    try:
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "app.episodes.projection_retry",
+                "--vault-root",
+                str(vault_root),
+                "--note-path",
+                rel_path,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            start_new_session=True,
+        )
+    except Exception:
+        _PROJECTION_RETRY_LAUNCHES.release(rel_path)
+        logger.warning(
+            "segmenter: could not launch bounded episode projection-sync retry for %s",
+            rel_path,
+            exc_info=True,
+        )
+
+
 def _emit_proposal(
     closed: ClosedSegment,
     *,
@@ -814,8 +882,10 @@ def _emit_proposal(
     episode_id = _deterministic_episode_id(closed)
     rel_path = episode_note_rel_path(episode_id)
     if (Path(vault_root) / rel_path).exists():
-        # Idempotent under redelivery (AC2): this exact segment was already
-        # proposed by an earlier tick -- never double-propose.
+        # Idempotent under redelivery (AC2): never double-propose the note, but
+        # retry the best-effort derived projection sync in case the first attempt
+        # failed after the durable vault write landed.
+        _retry_existing_episode_projection_sync(vault_root=vault_root, rel_path=rel_path)
         return None
 
     title = f"Proposed episode -- {closed.scope} -- {_iso(closed.start)}"
@@ -915,6 +985,10 @@ def _emit_fused_note(
     the fused id (a re-emitted receipt+note pair skips an already-written note)."""
     rel_path = episode_note_rel_path(fuse.fused_episode_id)
     if (Path(vault_root) / rel_path).exists():
+        # The receipt and note are both idempotent. As for split proposals, a
+        # redelivery must still converge the rebuildable projection if its
+        # original best-effort sync failed.
+        _retry_existing_episode_projection_sync(vault_root=vault_root, rel_path=rel_path)
         return None
     title = f"Fused episode -- {fuse.target_scope} -- {_iso(fuse.start)}"
     result = write_episode_note(
