@@ -1,4 +1,4 @@
-State: Specification directory (parent feature issue #3543; first child #3544; no shipped behavior is claimed).
+State: First read-only adapter slice implemented by issue #3544; parent #3543 remains the validation hub.
 Doc role: Feature specification
 Authority: Defines the future read-only contradiction-triage surface. Subordinate to `docs/MIMER_CAPABILITY_HARDENING/GRADUATED_CURATION.md` for the shipped contradiction-pass harness and to `docs/CONCEPTS/CONTEXT_ADMISSIBILITY_CONTRACT.md` for scope admission.
 Owner: Product / architecture
@@ -12,6 +12,17 @@ Contradiction Triage Bench makes a consequential tension from the existing curat
 ## Current foundation and boundary
 
 The contradiction-pass harness from G2-4 is delivered: it produces scope-aware findings with two resolvable citations and retains the semantic-curation propose-only guard. This capability does **not** replace that harness, its panel-proposal materialization, or its declined-proposal ledger.
+
+The supported Bench read boundary is
+`app.curation.contradiction_triage::run_contradiction_triage`. It invokes the
+sanctioned `app.curation.contradiction::run_contradiction_pass` path with
+`materialize=False` and projects only the existing finding id, verbatim
+observed claims, two citation handles, and interpretation. Citation handles
+must resolve through the caller-supplied current-scope admission boundary;
+otherwise the whole logical finding is excluded with a content-free
+diagnostic. `success/no_findings` remains distinct from `failed/scan_failed`.
+Mixed admitted and excluded results retain a content-free `partial_findings`
+diagnostic so a consumer cannot mistake an incomplete scan for a complete one.
 
 The Bench is a supporting read path for the existing note/Panel confirmation model, not a parallel review UI. It must never infer a truth verdict, edit either source, create a receipt, or introduce a Bench-specific disposition. A later durable dismissal or superseding-decision flow requires its own authority, lifecycle, privacy, concurrency, and recovery contract.
 

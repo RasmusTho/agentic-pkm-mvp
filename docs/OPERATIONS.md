@@ -5,8 +5,8 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-07-08
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, app/relevance/now_surface.py, tests/relevance/test_vault_native_moments.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #1948/#1977/#2115/#2119/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state at 8e19a275 on 2026-07-08
+Last reviewed: 2026-07-13
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, tests/agent_memory/test_ask_provenance_manifest.py, tests/relevance/test_vault_native_moments.py, Makefile, scripts/verify_runtime_stack.sh, merged PRs #1948/#1977/#2115/#2119/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-07-13
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
@@ -112,6 +112,24 @@ Use `docs/runbooks/UAT_PANEL_WATCHER.md` for the detailed walkthrough and `docs/
 When the issue is startup topology or Compose wiring, switch to `docs/INFRASTRUCTURE.md`.
 When the issue is signal interpretation, switch to `docs/OBSERVABILITY.md`.
 When the issue is health semantics or degraded-state rules, switch to `docs/HEALTH.md`.
+
+## ASK provenance shadow operations
+
+The ASK provenance manifest is an opt-in read-side experiment, not a canonical
+audit store. It is disabled unless `ASK_PROVENANCE_MANIFEST_ENABLED=1` and a
+local `ASK_PROVENANCE_PRIVACY_KEY` is present. Its JSONL file must remain below
+the fixed repo-local `runtime/agent_memory` root; resolved path/root symlinks
+and escapes fail closed, so it cannot be relocated into a vault or index
+surface.
+
+Enabled capture is dispatched after the answer through a bounded queue to one
+daemon worker. File locks, atomic replacement, retention, and fsync therefore
+do not extend ASK response latency or create unbounded worker threads. Records
+expire after 14 days, are capped at 256 entries, and startup pruning plus an
+hourly per-path janitor removes expired records even if no later ASK occurs. An
+expired, malformed, inaccessible, or identity-incomplete record is not
+comparable and must yield `indeterminate`. Capture/janitor failure is logged
+locally and never changes the ASK response or authorizes a write.
 
 ## Watcher Operations
 

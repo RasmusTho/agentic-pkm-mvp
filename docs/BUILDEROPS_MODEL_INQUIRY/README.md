@@ -1,6 +1,6 @@
 State: BMI-01 through BMI-05 are implemented; parent end-to-end acceptance remains pending. The
-configured remote host owns the real-provider adapter and subscription sessions; that host-specific
-configuration is not stored in the repository.
+configured remote host owns credentials, subscription sessions, and host-specific launcher settings;
+the portable high-reasoning adapter profile is versioned in the repository.
 Doc role: Specification directory
 Authority: Defines the BuilderOps pre-ticket model-inquiry capability and its task decomposition. BuilderOps Vault authority remains owned by ADR-0010.
 Owner: BuilderOps governance
@@ -52,8 +52,10 @@ receipts, and no provider fallback.
 
 BMI-04 adds Codex and portable Claude bridge skills that transfer the question to a configured
 remote-host launcher. The configured remote host owns the BuilderOps command, configured role
-adapters, subscription sessions, and durable artifacts; its host-specific configuration remains
-outside Git. BMI-05 adds the structured Issue proposal, readiness receipt, file-first
+adapters, subscription sessions, and durable artifacts; its credentials and launcher-path settings
+remain outside Git. The versioned subscription adapter profile gives both roles explicit `xhigh`
+reasoning effort and a 540-second inner deadline; the host wrapper permits 600 seconds per role.
+BMI-05 adds the structured Issue proposal, readiness receipt, file-first
 PromotionIntent, REST-only Issue crossing, crash reconciliation marker, and append-only delivery
 references.
 
@@ -103,6 +105,9 @@ Partial failure examples:
 - [x] Desktop launcher instructions transfer the question to the configured remote-host launcher rather
   than starting local BuilderOps or automating a desktop app. Verify:
   `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
+- [x] A terminal adapter failure produces a secret-safe diagnostic receipt and one desktop-launch
+  JSON result without fallback or retry. Verify:
+  `tests/governance/test_start_model_inquiry_skill.py::test_local_launcher_emits_terminal_provider_error_json`.
 
 ## Relationship To GitHub Issues
 

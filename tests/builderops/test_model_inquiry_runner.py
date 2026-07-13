@@ -140,7 +140,11 @@ class FailingAdapter:
     model: str = "fixture"
 
     def execute(self, request: Mapping[str, Any]) -> AdapterResult:
-        raise AdapterExecutionError("classified fixture failure")
+        raise AdapterExecutionError(
+            "classified fixture failure",
+            failure_class="command_exit_nonzero",
+            exit_code=17,
+        )
 
 
 @dataclass
@@ -187,11 +191,28 @@ def test_runner_records_all_terminal_conditions(tmp_path: Path) -> None:
     assert unavailable["outcome"] == "provider_unavailable"
 
     error_service, _ = _start(tmp_path, "inq_runner_error")
+    gpt_after_fable_failure = _scripted("gpt_codex", [_response("draft")])
     provider_error = ModelInquiryRunner(
         error_service,
-        {"fable": FailingAdapter(), "gpt_codex": _scripted("gpt_codex", [_response("draft")])},
+        {"fable": FailingAdapter(), "gpt_codex": gpt_after_fable_failure},
     ).run("inq_runner_error", max_rounds=1)
     assert provider_error["outcome"] == "provider_error"
+    assert provider_error["details"]["diagnostic"] == {
+        "adapter_id": "failing",
+        "adapter_failure_class": "command_exit_nonzero",
+        "adapter_exit_code": 17,
+    }
+    provider_error_trace = error_service.trace("inq_runner_error")
+    failure_receipts = [
+        receipt
+        for receipt in provider_error_trace["receipts"]
+        if receipt["event_type"] in {"inquiry_provider_attempt_terminal", "inquiry_run_terminal"}
+    ]
+    assert len(failure_receipts) == 2
+    assert failure_receipts[0]["details"]["diagnostic"] == failure_receipts[1]["details"][
+        "diagnostic"
+    ]
+    assert not gpt_after_fable_failure.calls
 
     for inquiry_id in (
         "inq_runner_consensus",

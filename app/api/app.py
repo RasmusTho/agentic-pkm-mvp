@@ -207,6 +207,9 @@ def _warm_retrieval_cache() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.agent_memory.ask_provenance_manifest import start_ask_provenance_runtime
+
+    start_ask_provenance_runtime()
     await _run_index_preflight()
     _log_v6_seam_status()
     _warm_retrieval_cache()

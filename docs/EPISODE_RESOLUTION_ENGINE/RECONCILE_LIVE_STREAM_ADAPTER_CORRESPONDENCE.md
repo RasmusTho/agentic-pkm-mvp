@@ -19,21 +19,41 @@ ERE-11 makes the drift *visible* (the `no_adapter` tick-summary key). ERE-12 mak
 
 ## What This Task Does
 
-1. **Resolve the true state of the four streams (owner-facing decision, pre-filled recommendation).** For each of `chat.sessions`, `decision.receipts`, `kap.acquisitions`, `heimdal.attention`, decide exactly one:
-   - **(a) genuinely adapter-pending** → the entry is mis-declared: downgrade `status: live → planned` in `stream_registry.md` (and the README inventory row) with a one-line reason, so `live` stops over-claiming. This is the conservative default and the recommended path for v1 — none of the four has a shipped normalizer today.
+1. **Resolve the true state of the four streams (owner-facing decision, pre-filled recommendation).** `chat.sessions` is carved out from the default downgrade path because downstream contracts already depend on it remaining live episode signal. Keep it `live` and land a follow-up adapter before ERE-12 closes. A product decision may downgrade it only if the same change reconciles every entry in the bounded authoritative inventory below. Repo-wide literal and semantic-alias searches remain useful discovery aids, but they are not allowed to stand in for that explicit contract boundary. For each of `decision.receipts`, `kap.acquisitions`, and `heimdal.attention`, decide exactly one:
+   - **(a) genuinely adapter-pending** → the entry is mis-declared: downgrade `status: live → planned` in `stream_registry.md` (and the README inventory row) with a one-line reason, so `live` stops over-claiming. This is the conservative default and the recommended path for v1 — none of these three has a shipped normalizer today.
    - **(b) should be consumed now** → spec a follow-up adapter slice (ERE-13+) per stream and keep it `live` only once its adapter merges.
-   The slice's deliverable is the reconciliation, not four new adapters: pick (a) for all four unless the owner directs otherwise. Whichever is chosen, the invariant after this slice is total: every `live` entry resolves to exactly one adapter.
+   The slice's deliverable is the reconciliation, not four new adapters: pick (a) for these three unless the owner directs otherwise, and treat the `chat.sessions` adapter as a prerequisite follow-up. Whichever is chosen, the invariant after this slice is total: every `live` entry resolves to exactly one adapter. Any change to stream liveness or the seeded inventory must update `STREAM_REGISTRY_AND_SIGNAL_CONTRACT.md` in the same change; the ERE-01 contract may never retain a stale inventory.
 2. **Flip the dispatch guard to fail-loud.** Once the registry is reconciled so every `live` entry has an adapter, change ERE-11's `no_adapter` *report* into a hard error: a `live` registry entry that resolves to no adapter raises at the tick entrypoint (fail-loud, mirroring the ERE-01 `UnknownTransportError` / "no silent default streams" discipline), never a silent skip. This closes the drift permanently — a future `live` entry added without an adapter breaks the tick immediately and loudly, at declaration time, not at stream #8.
 3. **Strengthen the capability-AC test to assert consumption.** Replace/augment `test_engine_consumes_only_registered_streams` so it drives `run_segmentation_tick` (not just `run_segmenter_stub` enumeration) and asserts that the set of streams actually *read from* equals the registry's live set — so the test name stops over-claiming and the README:79 AC is honestly discharged.
-4. **Update the canonical inventory to true state.** The README Input-source inventory table and `stream_registry.md` reflect the reconciled statuses, with the 1:1 registry-match property (README:16) restored to actually true.
+4. **Update the canonical inventory to true state.** The README Input-source inventory table, `stream_registry.md`, and `STREAM_REGISTRY_AND_SIGNAL_CONTRACT.md` reflect the reconciled statuses, with the 1:1 registry-match property (README:16) restored to actually true. If `chat.sessions` stays live as required by the current downstream contracts, those voice-loop and conversational-journaling specs remain consistent without edits; any downgrade requires their writeback in the same change.
+
+## Authoritative `chat.sessions` Reconciliation Inventory
+
+This table is the deterministic reconciliation boundary for a `chat.sessions` liveness change. A
+future contract that asserts the stream is live or consumed must add itself here when authored; ERE-12
+does not claim that a text search can prove semantic completeness.
+
+| Role | Required reconciliation surfaces |
+| --- | --- |
+| ERE liveness and seeded inventory authority | `docs/EPISODE_RESOLUTION_ENGINE/README.md`; `docs/EPISODE_RESOLUTION_ENGINE/stream_registry.md`; `docs/EPISODE_RESOLUTION_ENGINE/STREAM_REGISTRY_AND_SIGNAL_CONTRACT.md`; `docs/EPISODE_RESOLUTION_ENGINE/REGISTRY_DRIVEN_ADAPTER_DISPATCH.md` |
+| Mimer Voice Loop downstream contract | `docs/MIMER_VOICE_LOOP/README.md`; `docs/MIMER_VOICE_LOOP/PARENT_FEATURE_ISSUE.md`; `docs/MIMER_VOICE_LOOP/CARRY_SESSION_FOLLOWUP_CONTEXT.md` |
+| Conversational Journaling downstream contract | `docs/CONVERSATIONAL_JOURNALING/README.md`; `docs/CONVERSATIONAL_JOURNALING/PARENT_FEATURE_ISSUE.md`; `docs/CONVERSATIONAL_JOURNALING/LEAD_REFLECTION_CONVERSATION.md` |
+| Heimdal Screen Stream downstream contract | `docs/HEIMDAL_SCREEN_STREAM/REGISTER_SCREEN_STREAM_WITH_ERE.md` |
+| Registered owner/spec summaries | the rows for the three capability directories in `docs/DOCS_INDEX.md` |
+
+Advisory, research, audit, and archived captures are evidence, not stream-liveness contracts. For
+example, `docs/research/yggdrasil-closed-loops-ideation.md` records the discovery-time live posture but
+does not authorize or block a later reconciliation. A liveness-change PR may update such evidence for
+reader clarity, but it must not count those files as substitutes for any inventory row above.
 
 ## Concretely
 
 ```
-# After reconciliation (recommended path (a)): the four become planned,
-# so live ⇒ consumed, and the registry matches the engine 1:1.
+# After reconciliation: chat.sessions remains live after its adapter lands;
+# the other three take recommended path (a), so live ⇒ consumed and the
+# registry matches the engine 1:1.
 $ python -m app.cli episodes streams --json | jq '[.streams[] | select(.status=="live") | .stream_id]'
-["heimdal.observations", "vault.activity", "calendar"]
+["heimdal.observations", "vault.activity", "chat.sessions", "calendar"]
 
 # A live entry with no adapter is now a hard error, not a silent skip:
 $ python -m app.cli episodes tick --json   # with a live entry lacking an adapter
@@ -47,11 +67,12 @@ The ERE README opens with the owner's requirement: *"every input source identifi
 
 ## Acceptance Criteria
 
-- [ ] AC1: every `live` entry in `stream_registry.md` resolves to exactly one adapter after reconciliation — the four previously-unconsumed streams are either downgraded to `planned` with a documented reason or have a merged adapter. Verify: `tests/episodes/test_adapter_dispatch.py::test_every_live_entry_resolves_to_an_adapter`
+- [ ] AC1: every `live` entry in `stream_registry.md` resolves to exactly one adapter after reconciliation. `chat.sessions` remains live by default and therefore requires a merged adapter before ERE-12 closes; it may be downgraded only by a product decision that reconciles every row in `Authoritative chat.sessions Reconciliation Inventory` in the same change. The other three previously-unconsumed streams are either downgraded to `planned` with a documented reason or have a merged adapter. Verify: `tests/episodes/test_adapter_dispatch.py::test_every_live_entry_resolves_to_an_adapter`
 - [ ] AC2 (enforcement): a `live` registry entry that resolves to no adapter raises at the `run_segmentation_tick` production entrypoint (fail-loud), never a silent skip nor a bare `no_adapter` report. The test drives the real tick with a fixture registry containing an adapterless live entry and asserts it raises. Verify: `tests/episodes/test_adapter_dispatch.py::test_live_without_adapter_fails_loud_at_tick`
 - [ ] AC3 (capability-AC honesty): `test_engine_consumes_only_registered_streams` asserts the streams `run_segmentation_tick` actually reads equal the registry's live set — consumption, not just enumeration. Verify: `tests/episodes/test_stream_registry.py::test_engine_consumes_only_registered_streams`
-- [ ] AC4 (doc truth): the README Input-source inventory and `stream_registry.md` reflect the reconciled statuses, and the 1:1 registry-match claim (README:16) holds against the live engine. Verify: doc writeback at `docs/EPISODE_RESOLUTION_ENGINE/README.md :: Input-source inventory (canonical)` + `docs/EPISODE_RESOLUTION_ENGINE/stream_registry.md`
-- [ ] AC5: the ERE-04/ERE-09 segmentation behavior and all existing tests remain green — reconciliation changes which streams are declared live, never how the consumed ones segment. Verify: `tests/episodes/test_segmentation_core.py` + `tests/episodes/test_calendar_adapter.py` (both whole-file, unmodified)
+- [ ] AC4 (doc truth): the README Input-source inventory, `stream_registry.md`, and `STREAM_REGISTRY_AND_SIGNAL_CONTRACT.md` reflect the reconciled statuses, and the 1:1 registry-match claim (README:16) holds against the live engine. Any stream-liveness or seeded-inventory change updates all three surfaces in the same change. Verify: doc writeback at `docs/EPISODE_RESOLUTION_ENGINE/README.md :: Input-source inventory (canonical)` + `docs/EPISODE_RESOLUTION_ENGINE/stream_registry.md` + `docs/EPISODE_RESOLUTION_ENGINE/STREAM_REGISTRY_AND_SIGNAL_CONTRACT.md :: What This Task Does`
+- [ ] AC5 (`chat.sessions` downstream contract): every entry in `Authoritative chat.sessions Reconciliation Inventory` remains consistent with stream liveness. If the stream is downgraded, every inventory row is reconciled in the same change; otherwise the ERE-12 PR records that the inventoried live-stream claims remain valid. Literal `chat.sessions` and semantic-alias searches are discovery aids only and may reveal a contract that must first be added to the inventory; neither search is completeness proof. Verify: doc writeback at `docs/EPISODE_RESOLUTION_ENGINE/RECONCILE_LIVE_STREAM_ADAPTER_CORRESPONDENCE.md :: Authoritative chat.sessions Reconciliation Inventory` + PR body owner-doc / source-doc writeback receipt covering every inventory row
+- [ ] AC6: the ERE-04/ERE-09 segmentation behavior and all existing tests remain green — reconciliation changes which streams are declared live, never how the consumed ones segment. Verify: `tests/episodes/test_segmentation_core.py` + `tests/episodes/test_calendar_adapter.py` (both whole-file, unmodified)
 
 ## How to Verify (Pre-Merge)
 
@@ -62,11 +83,11 @@ pytest -q tests/episodes/test_segmentation_core.py tests/episodes/test_calendar_
 pytest -q -m "not pg"
 ```
 
-If the owner chooses path (b) for any stream (build the adapter now rather than downgrade), that stream's adapter gets its own slice/issue and its own behavioral tests; ERE-12 still owns the fail-loud guard + the correspondence invariant + the strengthened capability-AC test.
+The `chat.sessions` adapter follows path (b) by default. If the owner chooses path (b) for another stream (build the adapter now rather than downgrade), that stream's adapter gets its own slice/issue and its own behavioral tests; ERE-12 still owns the fail-loud guard + the correspondence invariant + the strengthened capability-AC test.
 
 ## Out of Scope
 
-- Building the actual normalizers for `chat.sessions` / `decision.receipts` / `kap.acquisitions` / `heimdal.attention` (each is a separate follow-up slice if the owner chooses path (b); the recommended path (a) downgrades them to `planned`).
+- Building the actual normalizers for `chat.sessions` / `decision.receipts` / `kap.acquisitions` / `heimdal.attention` (each is a separate follow-up slice). `chat.sessions` follows path (b) by default; only the other three follow the recommended path (a) to `planned` unless the owner directs otherwise.
 - The dispatch mechanism itself (delivered by ERE-11 — this slice only tightens its guard).
 - Shift-detection, threshold, or scope-partitioning changes.
 
@@ -79,6 +100,7 @@ Not applicable: no new user-facing surface, no new durable state. Reconciliation
 - `docs/EPISODE_RESOLUTION_ENGINE/README.md :: Input-source inventory (canonical)` (the 1:1 claim being restored) and `:: Capability acceptance criteria` (README:79, the AC being honestly discharged)
 - `docs/EPISODE_RESOLUTION_ENGINE/stream_registry.md` (the markdown-first declaration reconciled to true state)
 - `docs/EPISODE_RESOLUTION_ENGINE/REGISTRY_DRIVEN_ADAPTER_DISPATCH.md` (ERE-11 — the dispatch this slice makes strict)
+- `docs/MIMER_VOICE_LOOP/CARRY_SESSION_FOLLOWUP_CONTEXT.md` and the other downstream contract surfaces in AC5's authoritative inventory (the live/consumed-stream claims any downgrade must reconcile)
 
 ## Related GitHub Issues
 

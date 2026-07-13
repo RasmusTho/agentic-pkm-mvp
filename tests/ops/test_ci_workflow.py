@@ -34,28 +34,40 @@ def test_pr_ci_fetches_base_ref_before_diff_selection() -> None:
     assert "--depth=1" not in workflow
 
 
-def test_panel_llm_e2e_is_path_scoped_and_does_not_install_when_unconfigured() -> None:
+def test_panel_llm_e2e_runs_only_after_merge() -> None:
     workflow = CI_SMOKE_WORKFLOW.read_text(encoding="utf-8")
 
     assert "panel_llm_e2e:" in workflow
-    assert "needs.smoke.outputs.panel_llm_e2e == 'true'" in workflow
+    assert "if: github.event_name != 'pull_request'" in workflow
     assert "'app/agents/panel_agent/**'" in workflow
     assert "'app/agents/panel/**'" in workflow
     assert "'tests/agents/panel_agent/**'" in workflow
     assert "'tests/agents/test_panel*.py'" in workflow
     assert "id: live-llm" in workflow
     assert "steps.live-llm.outputs.enabled == 'true'" in workflow
-    assert "Guard: skip when LLM E2E not configured" not in workflow
+    assert "Docker smoke runs after merge, not on pull requests." in workflow
 
 
-def test_dedicated_subsystem_workflows_have_pr_path_filters() -> None:
+def test_dedicated_subsystem_workflows_have_path_filters_and_browser_runs_post_merge() -> None:
     browser = BROWSER_WORKFLOW.read_text(encoding="utf-8")
     image = IMAGE_WORKFLOW.read_text(encoding="utf-8")
     import_linter = IMPORT_LINTER_WORKFLOW.read_text(encoding="utf-8")
 
     assert "paths:" in browser
+    assert "branches: [main]" in browser
+    assert "pull_request:" not in browser
     assert "'companion-ui/**'" in browser
     assert "paths:" in image
     assert "'Dockerfile'" in image
     assert "paths:" in import_linter
     assert "'app/**'" in import_linter
+
+
+def test_ci_smoke_keeps_legacy_skills_lint_when_consolidating_smoke() -> None:
+    workflow = CI_SMOKE_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "cache: pip" in workflow
+    assert "python3 scripts/lint_skills_consistency.py" in workflow
+    assert "docs/DIAGRAMS.md must not contain literal" in workflow
+    assert "Mermaid fences must not be indented" in workflow
+    assert "Forbidden math fence syntax inside table detected" in workflow

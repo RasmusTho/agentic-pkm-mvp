@@ -82,7 +82,7 @@ Posture:
 The command is wrapped with `@span("health.check")`, so health check runs are recorded in `docs/OBSERVABILITY.md`. Exceptions populate `extra.error`.
 
 ## CI behavior
-- `.github/workflows/smoke.yml` runs the dependency check with `LLM_PROVIDER=mock`.
+- `.github/workflows/ci-smoke.yaml` runs the dependency check with `LLM_PROVIDER=mock`.
 - Run `python -m app.cli health status --json` after manual ingestion to confirm `state` is `running` and that `catch_up_progress["processing_mode"]` is `idle` (or `replay` while the worker catches up).
 ## Health threshold env-var overrides (lab profile only)
 
