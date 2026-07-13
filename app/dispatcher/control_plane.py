@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.dispatcher.config import DispatcherPaths
+from app.dispatcher.config import DEFAULT_DB_NAME, DEFAULT_EVENTS_NAME, DispatcherPaths
 from app.dispatcher.schema import SCHEMA_VERSION
 from app.dispatcher.store import SqliteStore
 
@@ -20,12 +21,49 @@ _REQUIRED_TABLES = frozenset(
     {"dispatcher_tasks", "dispatcher_leases", "dispatcher_events", "dispatcher_meta"}
 )
 _REQUIRED_COLUMNS = {
-    "dispatcher_tasks": frozenset({"task_id", "issue_number", "status", "repo"}),
+    "dispatcher_tasks": frozenset(
+        {
+            "task_id",
+            "issue_number",
+            "title",
+            "status",
+            "priority",
+            "repo",
+            "source_anchor_refs",
+            "claimed_by",
+            "lease_id",
+            "lease_expires_at",
+            "linked_pr",
+            "blocked_reason",
+            "last_heartbeat_at",
+            "sync_state",
+            "created_at",
+            "updated_at",
+        }
+    ),
     "dispatcher_leases": frozenset(
-        {"lease_id", "resource", "holder", "expires_at", "released_at"}
+        {
+            "lease_id",
+            "resource",
+            "holder",
+            "ttl_seconds",
+            "acquired_at",
+            "expires_at",
+            "heartbeat_at",
+            "released_at",
+            "release_reason",
+        }
     ),
     "dispatcher_events": frozenset(
-        {"event_id", "timestamp", "task_id", "event_type", "actor"}
+        {
+            "event_id",
+            "timestamp",
+            "task_id",
+            "event_type",
+            "actor",
+            "lease_id",
+            "payload",
+        }
     ),
     "dispatcher_meta": frozenset({"key", "value"}),
 }
@@ -61,7 +99,7 @@ def _dispatcher_schema_error(conn: sqlite3.Connection) -> str | None:
         version = int(row[0])
     except (TypeError, ValueError):
         return "invalid dispatcher schema_version"
-    if version != SCHEMA_VERSION:
+    if version not in {1, SCHEMA_VERSION}:
         return f"unsupported dispatcher schema_version: {version}"
     return None
 
@@ -145,23 +183,36 @@ def transition(store: SqliteStore, paths: DispatcherPaths, mode: str, *, activat
 
 def backup(paths: DispatcherPaths, destination: Path) -> dict[str, str]:
     resolved_destination = destination.resolve()
-    target = destination / paths.db_path.name
-    events_target = destination / paths.events_path.name
     source_paths = {paths.db_path.resolve(), paths.events_path.resolve()}
+    target = destination / DEFAULT_DB_NAME
+    events_target = destination / DEFAULT_EVENTS_NAME
     target_paths = {target.resolve(), events_target.resolve()}
     if (
         resolved_destination == paths.state_dir.resolve()
         or resolved_destination.is_relative_to(paths.state_dir.resolve())
+        or any(source.is_relative_to(resolved_destination) for source in source_paths)
         or bool(source_paths & target_paths)
     ):
         raise ValueError("Backup destination must be separate from dispatcher state")
+    if destination.exists():
+        raise ValueError("Backup destination must not already exist")
     proof = health(paths)
     if not proof["ok"]:
         raise ValueError("Dispatcher state is unsafe to back up")
-    destination.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(paths.db_path) as source, sqlite3.connect(target) as output:
-        source.backup(output)
-    shutil.copy2(paths.events_path, events_target)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{destination.name}.tmp-", dir=destination.parent)
+    )
+    try:
+        staged_db = staging / DEFAULT_DB_NAME
+        staged_events = staging / DEFAULT_EVENTS_NAME
+        with sqlite3.connect(paths.db_path) as source, sqlite3.connect(staged_db) as output:
+            source.backup(output)
+        shutil.copy2(paths.events_path, staged_events)
+        staging.replace(destination)
+    except (OSError, sqlite3.Error) as exc:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise ValueError(f"Dispatcher backup failed: {exc}") from exc
     return {"db": str(target), "events": str(events_target), "created_at": _now()}
 
 
@@ -170,10 +221,10 @@ def restore(backup_dir: Path, target: DispatcherPaths) -> dict[str, str]:
         target.state_dir.exists() and any(target.state_dir.iterdir())
     ):
         raise ValueError("Restore target must be a separate, empty state root")
-    source = backup_dir / target.db_path.name
+    source = backup_dir / DEFAULT_DB_NAME
     if not source.exists():
         raise ValueError(f"Backup database missing: {source}")
-    events = backup_dir / target.events_path.name
+    events = backup_dir / DEFAULT_EVENTS_NAME
     if not events.exists():
         raise ValueError(f"Backup events missing: {events}")
     try:

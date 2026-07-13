@@ -116,6 +116,34 @@ def test_recovery_rejects_sqlite_without_dispatcher_schema(
     assert not restored.state_dir.exists()
 
 
+def test_health_accepts_compatible_v1_shape_until_store_migrates_it(
+    tmp_path: Path,
+) -> None:
+    store, paths = _store(tmp_path)
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.execute(
+            "UPDATE dispatcher_meta SET value = '1' WHERE key = 'schema_version'"
+        )
+    paths.events_path.touch()
+
+    assert control_plane.health(paths)["ok"] is True
+    migrated = SqliteStore(paths.db_path)
+    assert migrated.get_meta("schema_version") == "2"
+
+
+def test_health_rejects_unsupported_dispatcher_schema_version(tmp_path: Path) -> None:
+    _, paths = _store(tmp_path)
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.execute(
+            "UPDATE dispatcher_meta SET value = '99' WHERE key = 'schema_version'"
+        )
+    paths.events_path.touch()
+
+    proof = control_plane.health(paths)
+    assert proof["ok"] is False
+    assert "unsupported dispatcher schema_version" in proof["db"]["error"]
+
+
 def test_backup_rejects_custom_events_target_equal_to_source_before_writing(
     tmp_path: Path,
 ) -> None:
@@ -135,6 +163,49 @@ def test_backup_rejects_custom_events_target_equal_to_source_before_writing(
     with pytest.raises(ValueError, match="separate from dispatcher state"):
         control_plane.backup(paths, logs_dir)
     assert not (logs_dir / paths.db_path.name).exists()
+
+
+def test_backup_uses_canonical_names_and_restores_custom_sources(
+    tmp_path: Path,
+) -> None:
+    paths = load_paths(
+        {
+            "DISPATCHER_STATE_DIR": str(tmp_path / "state"),
+            "DISPATCHER_DB_PATH": str(tmp_path / "db-source" / "artifact"),
+            "DISPATCHER_EVENTS_PATH": str(tmp_path / "event-source" / "artifact"),
+        }
+    )
+    store = SqliteStore(paths.db_path, JsonlEventWriter(paths.events_path))
+    store.initialize()
+    paths.events_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.events_path.touch()
+
+    backup_dir = tmp_path / "backup"
+    receipt = control_plane.backup(paths, backup_dir)
+    assert Path(receipt["db"]).name == "dispatcher.sqlite3"
+    assert Path(receipt["events"]).name == "events.jsonl"
+    assert Path(receipt["db"]) != Path(receipt["events"])
+
+    restored = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "restored")})
+    result = control_plane.restore(backup_dir, restored)
+    assert result["integrity"] == "ok"
+
+
+def test_backup_failure_does_not_publish_partial_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, paths = _store(tmp_path)
+    paths.events_path.touch()
+    destination = tmp_path / "backup"
+
+    def fail_copy(*_args: object, **_kwargs: object) -> None:
+        raise OSError("copy failed")
+
+    monkeypatch.setattr(control_plane.shutil, "copy2", fail_copy)
+    with pytest.raises(ValueError, match="backup failed"):
+        control_plane.backup(paths, destination)
+    assert not destination.exists()
+    assert not list(tmp_path.glob(".backup.tmp-*"))
 
 
 def test_restore_rejects_corrupt_events_without_creating_target(tmp_path: Path) -> None:

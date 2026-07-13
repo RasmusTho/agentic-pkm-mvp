@@ -27,5 +27,7 @@ unhealthy dispatcher observations and return to `normal` requires healthy observ
 ## Recovery Tools
 
 `health` checks database integrity, immediate-write availability, and JSONL parseability. `backup`
-uses SQLite's online backup API. `restore` writes only to a separate empty state root and verifies the
-restored database. These are operational tools, not deployment automation.
+uses SQLite's online backup API, stages the canonical `dispatcher.sqlite3` + `events.jsonl` artifact
+pair, and publishes it only into a new separate destination after both artifacts succeed. `restore`
+consumes that canonical pair, writes only to a separate empty state root, and verifies the restored
+dispatcher schema and database integrity. These are operational tools, not deployment automation.

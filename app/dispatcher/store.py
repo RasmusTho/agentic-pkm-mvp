@@ -106,7 +106,17 @@ class SqliteStore:
             # Fresh DB: initialize() will create the table via DDL_STATEMENTS,
             # which already includes the repo column — nothing to migrate.
             return
-        if "repo" in {row["name"] for row in conn.execute("PRAGMA table_info(dispatcher_tasks)")}:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(dispatcher_tasks)")}
+        meta_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='dispatcher_meta'"
+        ).fetchone()
+        current_version = None
+        if meta_exists is not None:
+            row = conn.execute(
+                "SELECT value FROM dispatcher_meta WHERE key='schema_version'"
+            ).fetchone()
+            current_version = None if row is None else str(row["value"])
+        if "repo" in columns and current_version == str(SCHEMA_VERSION):
             return
 
         conn.execute("BEGIN IMMEDIATE")
@@ -140,6 +150,12 @@ class SqliteStore:
                     WHERE task_id LIKE 'github-issue-%'
                     """
                 )
+            for stmt in DDL_STATEMENTS:
+                conn.execute(stmt)
+            conn.execute(
+                "INSERT OR REPLACE INTO dispatcher_meta(key, value) VALUES (?, ?)",
+                ("schema_version", str(SCHEMA_VERSION)),
+            )
             conn.commit()
         except Exception:
             conn.rollback()
