@@ -118,7 +118,7 @@ def _ingest_kind(
     fetch: Callable[[str, str | None], Sequence[Mapping[str, Any]]],
     fetch_kind: str,
     artifact_kind: str,
-) -> dict[str, int | str]:
+) -> tuple[dict[str, int | str], str, str | None, str | None]:
     watermark_key = "github_issues" if artifact_kind == "issue" else "github_pull_requests"
     previous = store.get_watermark(watermark_key)
     records = [normalize_github_payload(item, artifact_kind=artifact_kind) for item in fetch(fetch_kind, previous)]
@@ -137,9 +137,12 @@ def _ingest_kind(
             changed += 1
         if newest is None or record.source_watermark > newest:
             newest = record.source_watermark
-    if newest is not None and newest != previous:
-        store.set_watermark(watermark_key, newest)
-    return {"artifacts": len(records), "changed": changed, "watermark": newest or "(none)"}
+    return (
+        {"artifacts": len(records), "changed": changed, "watermark": newest or "(none)"},
+        watermark_key,
+        previous,
+        newest,
+    )
 
 
 def ingest_github(
@@ -152,10 +155,20 @@ def ingest_github(
     store.ensure_schema()
     try:
         fetch = fetch or _gh_fetch(repository)
-        issues = _ingest_kind(store, fetch=fetch, fetch_kind="issues", artifact_kind="issue")
-        pulls = _ingest_kind(store, fetch=fetch, fetch_kind="pulls", artifact_kind="pull_request")
+        issues, issues_key, issues_previous, issues_newest = _ingest_kind(
+            store, fetch=fetch, fetch_kind="issues", artifact_kind="issue"
+        )
+        pulls, pulls_key, pulls_previous, pulls_newest = _ingest_kind(
+            store, fetch=fetch, fetch_kind="pulls", artifact_kind="pull_request"
+        )
     except FileNotFoundError:
         return {"status": "skipped (gh unavailable)"}
     except subprocess.CalledProcessError as exc:
         return {"status": "skipped (gh unavailable or rate-limited)", "detail": str(exc)}
+    for key, previous, newest in (
+        (issues_key, issues_previous, issues_newest),
+        (pulls_key, pulls_previous, pulls_newest),
+    ):
+        if newest is not None and newest != previous:
+            store.set_watermark(key, newest)
     return {"status": "ok", "issues": issues, "pull_requests": pulls}

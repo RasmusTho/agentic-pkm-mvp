@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -83,6 +84,19 @@ def test_offline_degrade_preserves_watermark_via_entrypoint(tmp_path: Path, monk
     invocation = runner.invoke(builderops, ["--db-path", str(db_path), "ckm", "ingest", "--source", "github"])
     assert invocation.exit_code == 0
     assert "skipped (gh unavailable)" in invocation.output
+
+
+def test_partial_fetch_failure_never_advances_either_watermark(tmp_path: Path) -> None:
+    def partly_unavailable(kind: str, since: str | None) -> list[dict[str, object]]:
+        if kind == "issues":
+            return [_issue()]
+        raise subprocess.CalledProcessError(1, ["gh", "api"])
+
+    result = ingest_github(_store(tmp_path), fetch=partly_unavailable)
+    assert result["status"] == "skipped (gh unavailable or rate-limited)"
+    store = _store(tmp_path)
+    assert store.get_watermark("github_issues") is None
+    assert store.get_watermark("github_pull_requests") is None
 
 
 def test_rest_only_no_graphql() -> None:
