@@ -19,6 +19,18 @@ from app.builderops.models import BuilderOpsValidationError
 
 ADAPTER_CONFIG_ENV = "BUILDEROPS_INQUIRY_ADAPTERS_JSON"
 ROLE_NAMES = ("fable", "gpt_codex")
+SUBSCRIPTION_ADAPTER_TIMEOUT_EXIT_CODE = 124
+ADAPTER_FAILURE_CLASSES = frozenset(
+    {
+        "command_exit_nonzero",
+        "command_timeout",
+        "stdout_empty",
+        "stdout_oversize",
+        "stdout_unavailable",
+        "output_contains_allowed_environment",
+        "unexpected_adapter_error",
+    }
+)
 
 
 class AdapterUnavailableError(RuntimeError):
@@ -26,7 +38,26 @@ class AdapterUnavailableError(RuntimeError):
 
 
 class AdapterExecutionError(RuntimeError):
-    pass
+    """An adapter failure carrying only safe, allowlisted diagnostic metadata."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_class: str = "unexpected_adapter_error",
+        exit_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.failure_class = (
+            failure_class
+            if failure_class in ADAPTER_FAILURE_CLASSES
+            else "unexpected_adapter_error"
+        )
+        self.exit_code = (
+            exit_code
+            if isinstance(exit_code, int) and not isinstance(exit_code, bool) and 1 <= exit_code <= 255
+            else None
+        )
 
 
 @dataclass(frozen=True)
@@ -114,16 +145,26 @@ class LocalCommandAdapter:
             raise AdapterUnavailableError(f"local command unavailable: {self.adapter_id}") from exc
         if process.returncode != 0:
             raise AdapterExecutionError(
-                f"local command failed with exit {process.returncode}: {self.adapter_id}"
+                f"local command failed with exit {process.returncode}: {self.adapter_id}",
+                failure_class=(
+                    "command_timeout"
+                    if process.returncode == SUBSCRIPTION_ADAPTER_TIMEOUT_EXIT_CODE
+                    else "command_exit_nonzero"
+                ),
+                exit_code=process.returncode,
             )
         text = stdout.decode("utf-8", errors="replace").strip()
         if not text:
-            raise AdapterExecutionError(f"local command returned empty output: {self.adapter_id}")
+            raise AdapterExecutionError(
+                f"local command returned empty output: {self.adapter_id}",
+                failure_class="stdout_empty",
+            )
         if self.environment and any(
             value and value in text for value in self.environment.values()
         ):
             raise AdapterExecutionError(
-                f"local command output contained an allowed environment value: {self.adapter_id}"
+                f"local command output contained an allowed environment value: {self.adapter_id}",
+                failure_class="output_contains_allowed_environment",
             )
         return AdapterResult(response_text=text)
 
@@ -364,6 +405,22 @@ def sanitized_adapter_identity(adapter: ModelTurnAdapter) -> dict[str, str]:
     }
 
 
+def sanitized_adapter_failure(error: Exception, *, adapter_id: str) -> dict[str, str | int]:
+    """Project an exception into the only adapter diagnostic that receipts may retain."""
+    failure_class = "unexpected_adapter_error"
+    exit_code: int | None = None
+    if isinstance(error, AdapterExecutionError):
+        failure_class = error.failure_class
+        exit_code = error.exit_code
+    result: dict[str, str | int] = {
+        "adapter_id": adapter_id,
+        "adapter_failure_class": failure_class,
+    }
+    if exit_code is not None:
+        result["adapter_exit_code"] = exit_code
+    return result
+
+
 def _positive_float(value: Any, role: str, field: str) -> float:
     try:
         parsed = float(value)
@@ -395,7 +452,10 @@ def _read_bounded_process_output(
 ) -> bytes:
     if process.stdout is None:
         _kill_process_group(process)
-        raise AdapterExecutionError(f"local command stdout unavailable: {adapter_id}")
+        raise AdapterExecutionError(
+            f"local command stdout unavailable: {adapter_id}",
+            failure_class="stdout_unavailable",
+        )
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ)
     deadline = time.monotonic() + timeout_seconds
@@ -406,7 +466,10 @@ def _read_bounded_process_output(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 _kill_process_group(process)
-                raise AdapterExecutionError(f"local command timed out: {adapter_id}")
+                raise AdapterExecutionError(
+                    f"local command timed out: {adapter_id}",
+                    failure_class="command_timeout",
+                )
             events = selector.select(min(remaining, 0.1))
             if not events and process.poll() is not None:
                 events = [(next(iter(selector.get_map().values())), selectors.EVENT_READ)]
@@ -419,18 +482,25 @@ def _read_bounded_process_output(
                 if size > max_output_bytes:
                     _kill_process_group(process)
                     raise AdapterExecutionError(
-                        f"local command output exceeded limit: {adapter_id}"
+                        f"local command output exceeded limit: {adapter_id}",
+                        failure_class="stdout_oversize",
                     )
                 chunks.append(chunk)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             _kill_process_group(process)
-            raise AdapterExecutionError(f"local command timed out: {adapter_id}")
+            raise AdapterExecutionError(
+                f"local command timed out: {adapter_id}",
+                failure_class="command_timeout",
+            )
         process.wait(timeout=remaining)
         return b"".join(chunks)
     except subprocess.TimeoutExpired as exc:
         _kill_process_group(process)
-        raise AdapterExecutionError(f"local command timed out: {adapter_id}") from exc
+        raise AdapterExecutionError(
+            f"local command timed out: {adapter_id}",
+            failure_class="command_timeout",
+        ) from exc
     finally:
         selector.close()
 
@@ -455,6 +525,7 @@ def adapter_request_id(request: Mapping[str, Any]) -> str:
 
 __all__ = [
     "ADAPTER_CONFIG_ENV",
+    "ADAPTER_FAILURE_CLASSES",
     "AdapterExecutionError",
     "AdapterResult",
     "AdapterUnavailableError",
@@ -463,6 +534,7 @@ __all__ = [
     "ModelTurnAdapter",
     "ScriptedAdapter",
     "adapter_request_id",
+    "sanitized_adapter_failure",
     "load_adapter_descriptors",
     "load_adapters",
     "sanitized_adapter_identity",

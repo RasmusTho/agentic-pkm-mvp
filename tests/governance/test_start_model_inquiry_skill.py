@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -7,11 +8,14 @@ import sys
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from app.builderops.model_inquiry import ModelInquiryService
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = REPO_ROOT / "scripts" / "start_model_inquiry.sh"
 PYTHON_LAUNCHER = REPO_ROOT / "scripts" / "start_model_inquiry.py"
+SUBSCRIPTION_ADAPTER = REPO_ROOT / "scripts" / "model_inquiry_subscription_adapter.py"
 
 
 def _adapter_script(tmp_path: Path) -> Path:
@@ -116,6 +120,84 @@ def test_local_launcher_runs_common_command(tmp_path: Path) -> None:
     assert '"builderops",\n                "inquiry",\n                "start"' in launcher
 
 
+def test_local_launcher_emits_terminal_provider_error_json(tmp_path: Path) -> None:
+    env = _configured_env(tmp_path)
+    failing_adapter = tmp_path / "failing_adapter.py"
+    failing_adapter.write_text(
+        "import sys\nprint('credential-sentinel', file=sys.stderr)\nsys.exit(17)\n",
+        encoding="utf-8",
+    )
+    config = json.loads(env["BUILDEROPS_INQUIRY_ADAPTERS_JSON"])
+    config["fable"]["argv"] = [sys.executable, str(failing_adapter)]
+    env["BUILDEROPS_INQUIRY_ADAPTERS_JSON"] = json.dumps(config)
+    question_file = tmp_path / "question.md"
+    question_file.write_text("Produce a safe failure receipt.", encoding="utf-8")
+
+    result = subprocess.run(
+        [str(LAUNCHER), "--question-file", str(question_file), "--max-rounds", "1"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count("\n") == 1
+    payload = json.loads(result.stdout)
+    assert payload["final_state"] == "provider_error"
+    assert payload["inquiry_id"]
+    assert payload["terminal_receipt_id"]
+    assert Path(payload["human_readable_report"]).is_file()
+    assert payload["diagnostic"] == {
+        "adapter_id": "adapter-fable",
+        "adapter_failure_class": "command_exit_nonzero",
+        "adapter_exit_code": 17,
+    }
+    rendered = "".join(
+        path.read_text(encoding="utf-8")
+        for path in (tmp_path / "vault").rglob("*.json")
+    )
+    assert "credential-sentinel" not in rendered
+    assert "credential-sentinel" not in result.stdout
+
+
+def test_subscription_adapter_uses_high_reasoning_profile(monkeypatch) -> None:
+    spec = importlib.util.spec_from_file_location("model_inquiry_subscription_adapter", SUBSCRIPTION_ADAPTER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module.shutil, "which", lambda name: f"/fixtures/{name}")
+
+    fable_argv = module.build_argv("fable", "system prompt")
+    codex_argv = module.build_argv("gpt_codex", "system prompt")
+
+    assert module.COMMAND_TIMEOUT_SECONDS == 540
+    assert fable_argv[fable_argv.index("--effort") + 1] == "xhigh"
+    assert codex_argv[codex_argv.index("-c") + 1] == 'model_reasoning_effort="xhigh"'
+
+
+def test_subscription_adapter_uses_safe_timeout_exit(monkeypatch) -> None:
+    spec = importlib.util.spec_from_file_location("model_inquiry_subscription_adapter", SUBSCRIPTION_ADAPTER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module.shutil, "which", lambda name: f"/fixtures/{name}")
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(module.subprocess.TimeoutExpired(args[0], 540)),
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        module.run_role(
+            {"system_prompt": "system", "reviewed_artifact_refs": [], "phase": "draft"},
+            "fable",
+        )
+
+    assert raised.value.code == module.TIMEOUT_EXIT_CODE
+
+
 def test_desktop_skills_route_to_macmini_launcher(tmp_path: Path) -> None:
     codex = (REPO_ROOT / ".codex/skills/start-model-inquiry/SKILL.md").read_text()
     claude = (REPO_ROOT / "claude-skills/start-model-inquiry/SKILL.md").read_text()
@@ -137,6 +219,7 @@ def test_desktop_skills_route_to_macmini_launcher(tmp_path: Path) -> None:
             "Do not remove an existing lock",
             "Do not register remote lock release until the launch outcome is known",
             "Do not release the remote lock after an ambiguous launcher outcome",
+            "high-reasoning profile",
         ):
             assert contract_field in skill
         for required_boundary in (

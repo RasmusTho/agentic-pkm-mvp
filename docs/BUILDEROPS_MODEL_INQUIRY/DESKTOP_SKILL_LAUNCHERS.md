@@ -27,9 +27,11 @@ ssh -T Tailscale_macmini '$HOME/.local/bin/yggdrasil-model-inquiry --question-fi
 ```
 
 The configured remote host owns the BuilderOps vault, adapters, durable artifacts, and the existing
-Claude and Codex subscription sessions. Its launcher is host-specific operator configuration and
-stays outside Git. Neither skill rebuilds that environment, configures providers, or reimplements
-orchestration in prompt prose.
+Claude and Codex subscription sessions. Its launcher settings, credentials, and executable paths
+are host-specific operator configuration and stay outside Git; the portable subscription adapter
+profile is versioned with the BuilderOps command. That profile gives both roles `xhigh` reasoning
+effort and a bounded extended deadline. Neither skill rebuilds that environment, configures
+providers, or reimplements orchestration in prompt prose.
 
 The operator machine needs the `Tailscale_macmini` SSH alias. A failed copy or SSH command, empty
 stdout, malformed JSON, or absent response field fails loudly: report the error and stop. Do not
@@ -76,6 +78,9 @@ other.
 - [x] Both packages release the remote lock only after a pre-launch failure or a verified receipt,
   preserving it after an ambiguous launcher result. Verify:
   `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
+- [x] A terminal `provider_error` returns one JSON response carrying the established receipt fields
+  and only an optional allowlisted diagnostic object. Verify:
+  `tests/governance/test_start_model_inquiry_skill.py::test_local_launcher_emits_terminal_provider_error_json`.
 
 ## How to Verify (Pre-Merge)
 
@@ -91,7 +96,7 @@ the operator. Generated archives are release artifacts and remain outside Git so
 - automating clicks or keystrokes in the other desktop app;
 - storing model transcripts in Companion UI or a human knowledge vault.
 - installing Python, BuilderOps, Codex, or Claude on the local machine;
-- changing the remote launcher or its authenticated subscription sessions.
+- changing authenticated subscription sessions or local desktop configuration.
 
 ## Related Docs
 

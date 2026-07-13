@@ -55,10 +55,11 @@ Example shape (credentials stay in the separately named local environment variab
 }
 ```
 
-The current repository and delivery host do not include an executable or configured Fable
-provider. A provider-enabled run therefore records `provider_unavailable` until an operator
-explicitly configures the `fable` role. It never substitutes Codex, Claude, Anthropic, OpenAI,
-mock, or the deterministic dry-run planner and calls that substitute Fable.
+A configured remote subscription host may provide local command adapters for both roles. Its
+versioned profile uses explicit `xhigh` reasoning effort for Fable and GPT/Codex, a 540-second
+inner command deadline, and a 600-second host adapter deadline. Credentials, subscription sessions,
+and host-specific executable paths remain outside Git. It never substitutes Codex, Claude,
+Anthropic, OpenAI, mock, or the deterministic dry-run planner for a missing Fable role.
 
 ## Concretely
 
@@ -105,8 +106,10 @@ terminal receipts.
 
 Local commands receive canonical JSON on stdin with `shell=False`, an explicit environment
 allowlist, a timeout, and an incremental output ceiling. Stderr is discarded rather than persisted.
-HTTP and command adapters reject output containing a configured credential value. Raw provider
-errors, headers, argv, inherited environment, and credentials never enter receipts or trace.
+On a command failure, receipts may retain only the allowlisted adapter ID, diagnostic class, and
+numeric exit code when present. HTTP and command adapters reject output containing a configured
+credential value. Raw provider errors, headers, argv, inherited environment, and credentials never
+enter receipts or trace.
 
 ## Out of Scope
 

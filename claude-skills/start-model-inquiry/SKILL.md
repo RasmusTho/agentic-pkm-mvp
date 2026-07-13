@@ -63,6 +63,10 @@ The configured remote host owns the existing Claude and Codex subscription sessi
 and durable inquiry artifacts. `Tailscale_macmini` is an operator-configured SSH host alias, and
 the remote launcher is host-specific operator configuration outside Git.
 
+The configured remote launcher owns the high-reasoning profile and extended per-role deadline for
+both independent roles. Do not lower or override that profile from the desktop skill, and do not
+move its model or adapter configuration into the local workspace.
+
 ## Failure Handling
 
 - If `scp` fails after acquiring the lock, run the pre-launch remote cleanup first, then report the

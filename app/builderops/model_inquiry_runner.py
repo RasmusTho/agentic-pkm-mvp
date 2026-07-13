@@ -12,6 +12,7 @@ from app.builderops.model_inquiry_adapters import (
     ModelTurnAdapter,
     load_adapter_descriptors,
     load_adapters,
+    sanitized_adapter_failure,
     sanitized_adapter_identity,
 )
 from app.builderops.model_inquiry_contract import (
@@ -465,6 +466,11 @@ class ModelInquiryRunner:
             "output_hash": output_hash,
             "classification": _error_classification(error, outcome),
         }
+        if outcome == "provider_error":
+            details["diagnostic"] = sanitized_adapter_failure(
+                error,
+                adapter_id=str(request["adapter_identity"]["adapter_id"]),
+            )
         self.service.commit_provider_attempt_receipt(
             inquiry_id,
             adapter_request_id=str(request["adapter_request_id"]),
