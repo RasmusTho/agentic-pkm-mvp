@@ -75,7 +75,7 @@ same minimization/deletion controls before bytes move.
 | F07 pagination | Three pages with opaque cursors | Repeated item, empty middle page, cursor loop | Page receipts, collision/dedup decision, safe stop |
 | F08 identity collision | Same native item ID under two source bindings | Cross-account collision trap | Distinct scoped identities; no global-ID merge |
 | F09 correction | Later observation changes one turn and retracts another | Chronology and provenance preservation | Supersession/retraction edges; earlier evidence not rewritten |
-| F10 deletion graph | Raw item with two projections and three derived candidates | One unreachable copy and one failed deletion | Per-copy partial state; never a false “deleted” claim |
+| F10 simulated deletion graph | Abstract content-free graph with raw, projection, and candidate nodes | Injected unreachable-copy and failed-deletion states; no actual undeletable payload | Correct per-node partial disposition is a conformance pass; never a false “deleted” claim |
 | F11 malformed/unknown | Unknown item kind, invalid timestamp, oversized depth marker | Temptation to coerce or skip | Quarantine/reject with content-free reason |
 | F12 taxonomy review | Same spans annotated independently by two reviewers | Multi-label and confidence disagreement | Both annotations, agreement measure, no forced consensus |
 | F13 prompt injection | Source text instructs tools, network access, and writes | Data/instruction confusion | Text remains inert; attempted capability use stops run |
@@ -109,8 +109,11 @@ temporary location, time/CPU/memory ceilings, retention deadline, and cleanup ve
 3. output is confined to a disposable non-synced temporary directory or memory filesystem;
 4. telemetry, traces, test reports, and logs are content-free and use fixture IDs only;
 5. the experiment has no `StorePort`, database, queue, outbox, HKA, MEM, vault, or runtime write path;
-6. the deletion/cleanup command and evidence collector are tested before fixture processing; and
-7. the run stops on scope drift, unexpected file/network access, secret/canary leakage, or an unknown
+6. deny-by-default network and process/tool controls plus a filesystem/runtime-write allowlist produce
+   content-free attempted-access and policy receipts, and an independent preflight proves that the
+   receipts detect a blocked canary action in each class;
+7. the deletion/cleanup command and evidence collector are tested before fixture processing; and
+8. the run stops on scope drift, unexpected file/network access, secret/canary leakage, or an unknown
    fixture/version state.
 
 This research delivery satisfies none of those execution prerequisites; it only makes them reviewable.
@@ -132,11 +135,14 @@ For a future, separately authorized implementation:
 6. **Annotate candidates.** Two reviewers independently apply the proposed multi-label taxonomy to
    F12 spans. Store annotations only in the disposable run; authority remains candidate-only.
 7. **Exercise lifecycle cases.** Replay all fixtures, reorder safe page delivery, retry interruption,
-   present duplicates/collisions, apply correction/retraction, and traverse the deletion-copy graph.
+   present duplicates/collisions, apply correction/retraction, and traverse F10's abstract deletion-copy
+   graph. Its injected failed/unreachable states test truthful disposition only and create no real copy.
 8. **Measure.** Calculate the frozen metrics below by fixture, source family, and stage. Record numerator,
    denominator, unit, and excluded cases; never replace an unknown denominator with zero.
-9. **Adversarial check.** Confirm injection text remained inert, canaries did not reach logs/reports,
-   and no network/durable/runtime write occurred. Any violation is terminal.
+9. **Adversarial check.** Reconcile the preflight-tested deny/audit receipts and filesystem/runtime-write
+   allowlist: injection text remained inert, canaries did not reach logs/reports, every attempted network
+   or process/tool action was denied and reported, and no write occurred outside the sandbox. Missing or
+   internally inconsistent evidence is terminal; absence of a receipt is not counted as zero events.
 10. **Destroy and verify.** Delete sandbox inputs/outputs and verify the declared copy graph. Retain only
     content-free aggregate metrics, hashes, exact code/config revisions, failure categories, review
     receipts, and cleanup status if the later issue explicitly authorizes that receipt.
@@ -159,9 +165,11 @@ external model. F14 canaries test leakage but are not credentials. Discovery of 
 credentials, or an unplanned path is an incident-style stop: isolate, do not paste into an issue/PR,
 delete controlled copies, and invoke the repository's owned response path.
 
-Cleanup is successful only when every declared temporary input, raw observation, projection, candidate,
-annotation, log, report, cache, and backup edge is `deleted` or a named exception is visibly `partial`.
-Hash-only content-free run receipts may remain only if the later issue explicitly authorizes them.
+Actual sandbox cleanup is separate from simulated F10 disposition. Cleanup is successful only when every
+real temporary input, raw observation, projection, candidate, annotation, log, report, cache, and backup
+edge is verified `deleted`; an actual `partial`, unreachable, unknown, or failed payload copy blocks go.
+F10 passes by reporting its abstract injected states correctly, not by leaving bytes behind. Hash-only
+content-free run receipts may remain only if the later issue explicitly authorizes them.
 
 ## Metrics and decision criteria
 
@@ -179,8 +187,9 @@ No value in this section is a result. Thresholds are proposed before-run gates.
 | Taxonomy span traceability | Annotations with exact spans, labels, reviewer, confidence, and version ÷ annotations | 100% | Missing evidence/standing: fail H4 |
 | Taxonomy disagreement | Per-label positive agreement and Jaccard overlap, reported with raw counts | Report all; no go minimum | Forced consensus or hidden denominator: stop; low agreement redirects taxonomy work |
 | Authority separation | Candidate/projection outcomes that remain non-HKA/non-MEM ÷ all outcomes | 100% | Any automatic promotion/write: stop |
-| Deletion-copy completeness | Declared copy nodes with verified terminal status ÷ declared nodes | 100% accounted; 100% controlled payload deleted | Unreachable/unknown payload copy: stop and report partial |
-| Safety containment | Unexpected network, provider/model call, tool execution, durable/runtime write, or canary leakage | Exactly 0 events | Any event: immediate stop |
+| Simulated deletion disposition | F10 abstract nodes with the expected deleted/failed/unreachable/partial status ÷ F10 nodes | 100%; injected failures are reported, never coerced to deleted | Wrong/hidden disposition: fail lifecycle conformance |
+| Actual cleanup completeness | Real sandbox copy nodes verified deleted ÷ declared real copy nodes | 100% accounted and deleted | Any real unreachable/unknown/partial/failed payload copy: stop |
+| Safety containment | Preflight-tested deny/audit and write-allowlist receipts reconciled; unexpected successful network/provider/model/process/tool action, out-of-sandbox or durable/runtime write, or canary leakage | Complete evidence; exactly 0 successful forbidden events and 0 leaks | Any violation, missing receipt, untested detector, or evidence mismatch: immediate stop/inconclusive, never zero |
 | Stage latency | Monotonic elapsed milliseconds per fixture and stage; p50/p95 plus max | Reported, no adoption threshold | Missing instrumentation: inconclusive; this fixture set cannot prove production latency |
 | Compute cost | CPU-seconds, peak memory MiB, temporary bytes, and any external charge | Reported; external charge = 0 | External charge/call: stop; otherwise informs later budget only |
 | Reviewer effort | Minutes per fixture plus disagreement-resolution minutes, reported by reviewer | Reported, no adoption threshold | Missing/biased sample: inconclusive; high load redirects UI/taxonomy design |
