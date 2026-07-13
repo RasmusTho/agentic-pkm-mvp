@@ -71,4 +71,5 @@ boundary that prevents advisory findings from becoming architecture by accumulat
 
 ## Related GitHub Issues
 
-Parent #3194; final bounded child #3598, blocked on #3597.
+Parent #3194; final bounded child #3598, delivered after #3597. The synthesis records an advisory
+no-ADR outcome; parent closure remains a post-merge lifecycle action.
