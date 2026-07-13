@@ -184,7 +184,13 @@ def _select_target(meta: Dict[str, Any], move_policy: Dict[str, Any], legacy_con
     return target_path, None
 
 
-def _write_note_via_port(path: Path, content: str, vault_root: Path | None = None) -> None:
+def _write_note_via_port(
+    path: Path,
+    content: str,
+    vault_root: Path | None = None,
+    *,
+    expected_version: str | None = None,
+) -> None:
     resolved = path.resolve()
     root_candidates: list[Path] = []
     if vault_root is not None:
@@ -192,7 +198,7 @@ def _write_note_via_port(path: Path, content: str, vault_root: Path | None = Non
     root_candidates.append(Path(resolved.anchor) if resolved.anchor else Path("/"))
     for root in root_candidates:
         try:
-            write_note_from_absolute(resolved, content, vault_root=root)
+            write_note_from_absolute(resolved, content, vault_root=root, expected_version=expected_version)
             return
         except ValueError:
             continue
@@ -251,13 +257,21 @@ def run_once() -> int:
 
                 uuid = ev.get("uuid")
                 with span("worker.read_frontmatter"):
-                    frontmatter, body = load_frontmatter(p.read_text(encoding="utf-8"))
+                    original_text = p.read_text(encoding="utf-8")
+                    frontmatter, body = load_frontmatter(original_text)
                 meta = dict(frontmatter)
                 meta["review_state"] = "promoted"
                 body_lines = [ln for ln in (body.splitlines()) if "Promote" not in ln.strip()]
                 body = "\n".join(body_lines).lstrip("\n")
                 updated_text = dump_frontmatter(meta, body)
-                _write_note_via_port(p, updated_text, vault_root=vault_root)
+                # Shared knowledge-write seam (#3450): a promoted note is a REWRITTEN
+                # overwrite of an existing note, so the seam requires the expected_version
+                # of the bytes we just read -- otherwise it refuses the write as a would-be
+                # silent overwrite and run_once() would promote zero items.
+                expected_version = hashlib.sha256(original_text.encode("utf-8")).hexdigest()
+                _write_note_via_port(
+                    p, updated_text, vault_root=vault_root, expected_version=expected_version
+                )
 
                 if uuid:
                     try:
