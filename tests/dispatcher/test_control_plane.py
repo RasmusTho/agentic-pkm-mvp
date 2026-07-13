@@ -106,13 +106,18 @@ def test_cli_status_reads_persisted_control_plane_state(tmp_path: Path, monkeypa
     assert '"mode": "recovery"' in capsys.readouterr().out
 
 
-def test_cli_status_emits_json_error_for_uninitialized_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_status_emits_fallback_payload_for_uninitialized_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     (state_dir / "dispatcher.sqlite3").touch()
     monkeypatch.setenv("DISPATCHER_STATE_DIR", str(state_dir))
-    assert main(["status", "--json"]) == 1
-    assert json.loads(capsys.readouterr().out)["ok"] is False
+    assert main(["status", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["coordination_mode"] == "github-label-only-fallback"
+    assert payload["fallback_reason"] == "dispatcher_db_uninitialized"
+    assert payload["control_plane"]["mode"] == "unavailable"
+    assert "no such table" in payload["control_plane"]["error"]
 
 
 def test_expired_lease_rejects_heartbeat_and_preserves_takeover(tmp_path: Path) -> None:

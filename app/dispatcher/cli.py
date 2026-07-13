@@ -97,7 +97,11 @@ def _emit_payload(data: dict[str, Any], as_json: bool, code: int) -> int:
     return code
 
 
-def _coordination_payload(db_exists: bool) -> dict[str, Any]:
+def _coordination_payload(
+    db_exists: bool,
+    *,
+    fallback_reason: str | None = None,
+) -> dict[str, Any]:
     if db_exists:
         return {
             "coordination_mode": "dispatcher-backed",
@@ -105,14 +109,15 @@ def _coordination_payload(db_exists: bool) -> dict[str, Any]:
             "setup_command": None,
             "fallback_command": None,
         }
+    reason = fallback_reason or "dispatcher_db_missing"
     return {
         "coordination_mode": "github-label-only-fallback",
-        "fallback_reason": "dispatcher_db_missing",
+        "fallback_reason": reason,
         "setup_command": "python -m app.dispatcher start --agent <agent_id> --json",
         "fallback_command": (
             "scripts/issue_pickup_claim.sh --issue <ISSUE_NUMBER> --agent <agent_id> "
             "--session <session_id> --coordination-mode github-label-only-fallback "
-            "--fallback-reason dispatcher_db_missing"
+            f"--fallback-reason {reason}"
         ),
     }
 
@@ -315,19 +320,28 @@ def _cmd_status(args: argparse.Namespace, store: SqliteStore) -> int:
     paths = load_paths()
     status = singleton_status(paths)
     control_plane: dict[str, Any]
+    fallback_reason: str | None = None
     if status["db_exists"]:
         from app.dispatcher.control_plane import state
         try:
             control_plane = state(store)
         except (ValueError, sqlite3.Error) as exc:
-            return _emit_error(str(exc), args.json)
+            control_plane = {
+                "mode": "unavailable",
+                "revision": None,
+                "error": str(exc),
+            }
+            fallback_reason = "dispatcher_db_uninitialized"
     else:
         control_plane = {"mode": "unavailable", "revision": None}
     _emit({
         "ok": True,
         **status,
         "control_plane": control_plane,
-        **_coordination_payload(bool(status["db_exists"])),
+        **_coordination_payload(
+            bool(status["db_exists"]) and fallback_reason is None,
+            fallback_reason=fallback_reason,
+        ),
     }, args.json)
     return 0
 
