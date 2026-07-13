@@ -523,6 +523,51 @@ def test_janitor_plan_skips_dirty_worktree(tmp_path, monkeypatch) -> None:
         item["artifact"] == "worktree" and item["reason"] == "dirty_worktree"
         for item in report["skipped"]
     )
+    assert report["preservation_receipts"] == [
+        {
+            "artifact": "worktree",
+            "path": str(dirty_worktree),
+            "branch": "codex/dirty",
+            "reason": "dirty_worktree",
+            "action": "preserve",
+            "next_action": "preserve local drift; inspect or commit it before any cleanup",
+        }
+    ]
+
+
+def test_janitor_plan_skips_locked_worktree(tmp_path, monkeypatch) -> None:
+    locked_worktree = tmp_path / "locked"
+    locked_worktree.mkdir()
+
+    def fake_run_git(args: list[str], _cwd: Path) -> str:
+        if args == ["branch", "--show-current"]:
+            return "main"
+        if args == ["rev-parse", "--show-toplevel"]:
+            return str(tmp_path)
+        if args == ["worktree", "list", "--porcelain"]:
+            return (
+                f"worktree {tmp_path}\nHEAD abc\nbranch refs/heads/main\n\n"
+                f"worktree {locked_worktree}\nHEAD def\nbranch refs/heads/codex/locked\nlocked active Claude session\n\n"
+            )
+        if args == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return "main\ncodex/locked"
+        if args == ["for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"]:
+            return ""
+        if args in (["stash", "list", "--date=unix"], ["worktree", "prune", "--dry-run"], ["remote", "prune", "origin", "--dry-run"]):
+            return ""
+        raise AssertionError(f"unexpected git command: {args}")
+
+    monkeypatch.setattr(git_hygiene, "run_git", fake_run_git)
+    monkeypatch.setattr(git_hygiene, "_is_ancestor", lambda *_args: True)
+    monkeypatch.setattr(git_hygiene, "_worktree_dirty", lambda _path: False)
+
+    report = git_hygiene.build_janitor_plan(
+        tmp_path, pr_states={"codex/locked": {"state": "MERGED"}}
+    )
+
+    assert report["reclaimable_worktrees"] == []
+    assert report["preservation_receipts"][0]["reason"] == "locked_worktree"
+    assert report["preservation_receipts"][0]["action"] == "preserve"
 
 
 def test_janitor_plan_remote_merged_branch_is_delete_candidate(
@@ -967,6 +1012,10 @@ def test_reclaimable_skips_dirty_lease_open_pr_and_root_with_reasons(
     assert reasons[str(dirty_wt)] == "dirty_worktree"
     assert reasons[str(leased_wt)] == "active_lease"
     assert reasons[str(openpr_wt)] == "open_or_draft_pr"
+    assert any(
+        item["path"] == str(leased_wt) and item["reason"] == "active_lease"
+        for item in report["preservation_receipts"]
+    )
     # None of the skipped worktrees leaked into reclaimable.
     reclaim_paths = {item["path"] for item in report["reclaimable_worktrees"]}
     assert reclaim_paths.isdisjoint(
