@@ -12,6 +12,13 @@ def test_openapi_yaml_change_selects_static_contract_validation() -> None:
     assert "tests/architecture/test_openapi_static_contract.py" in selection.targets
 
 
+def test_static_openapi_contract_test_path_is_owned() -> None:
+    selection = select_tests(["tests/architecture/test_openapi_static_contract.py"])
+
+    assert selection.unowned_paths == ()
+    assert "companion_ui" in selection.subsystems
+
+
 def test_companion_api_paths_select_api_targets() -> None:
     selection = select_tests(["companion-ui/companion-app/src/workspace.ts", "tests/api/test_status_api.py"])
 
