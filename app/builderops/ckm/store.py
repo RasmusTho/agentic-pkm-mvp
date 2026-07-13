@@ -466,7 +466,9 @@ class CkmStore:
             dimension: _loads(row[f"{dimension}_citations"]) for dimension in MATURITY_DIMENSIONS
         }
         watermark_set = _loads(row["watermark_set"])
-        return CkmAssessment.from_row(row, scores=scores, citations=citations, watermark_set=watermark_set)
+        return CkmAssessment.from_row(
+            dict(row), scores=scores, citations=citations, watermark_set=watermark_set
+        )
 
     # --- Finding -----------------------------------------------------------------
 

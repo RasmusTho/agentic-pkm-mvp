@@ -341,7 +341,14 @@ class CkmAssessment:
         return self
 
     @classmethod
-    def from_row(cls, row: Mapping[str, Any], *, scores, citations, watermark_set) -> "CkmAssessment":
+    def from_row(
+        cls,
+        row: Mapping[str, Any],
+        *,
+        scores: Mapping[str, float],
+        citations: Mapping[str, list[JsonDict]],
+        watermark_set: Mapping[str, str],
+    ) -> "CkmAssessment":
         return cls(
             id=row["id"],
             capability_id=row["capability_id"],
