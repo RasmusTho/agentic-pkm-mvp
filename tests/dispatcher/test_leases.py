@@ -8,7 +8,14 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.dispatcher.events import JsonlEventWriter
-from app.dispatcher.leases import claim, heartbeat, reclaim_expired_leases, release
+from app.dispatcher.leases import (
+    _observe_expired_leases,
+    _reclaim_observed_leases,
+    claim,
+    heartbeat,
+    reclaim_expired_leases,
+    release,
+)
 from app.dispatcher.models import TaskRecord
 from app.dispatcher.store import SqliteStore
 
@@ -322,3 +329,99 @@ def test_takeover_rejects_expired_blocked_task_without_mutation(store: SqliteSto
     assert unchanged_task.claimed_by == "departed-agent"
     assert unchanged_lease.released_at is None
     assert unchanged_lease.release_reason is None
+
+
+def test_gc_cannot_erase_replacement_lease_acquired_after_observation(
+    store: SqliteStore,
+) -> None:
+    """Deterministic interleaving regression for #3617.
+
+    GC observes an expired ``(task, old_lease)`` pair, then a stale takeover
+    installs a replacement active lease, then GC acts on its stale observation.
+    GC must no-op instead of clearing the replacement claim.
+    """
+    task = _task()
+    store.upsert_task(task)
+    _, old_lease = claim(store, "task-1", "departed-agent")
+    _expire_lease(store, old_lease.lease_id)
+
+    # 1. GC observes the expired lease (before any takeover).
+    observed = _observe_expired_leases(store)
+    assert ("task-1", old_lease.lease_id) in observed
+
+    # 2. A concurrent stale takeover releases the old lease and installs a new
+    #    active lease on the same task, after GC's observation.
+    _, new_lease = claim(store, "task-1", "replacement-agent", takeover_stale=True)
+    assert new_lease.lease_id != old_lease.lease_id
+
+    # 3. GC acts on its now-stale observation. It must not touch the replacement.
+    reclaimed = _reclaim_observed_leases(store, observed, actor="dispatcher-gc")
+
+    assert reclaimed == []
+    refetched = store.get_task("task-1")
+    assert refetched is not None
+    assert refetched.lease_id == new_lease.lease_id
+    assert refetched.claimed_by == "replacement-agent"
+    assert refetched.status == "claimed"
+
+    replacement_lease = store.get_lease(new_lease.lease_id)
+    assert replacement_lease is not None
+    assert replacement_lease.released_at is None
+
+
+def test_reclaim_noop_when_observed_lease_already_released(
+    store: SqliteStore,
+) -> None:
+    """A lease released between observation and mutation is not double-reclaimed."""
+    task = _task()
+    store.upsert_task(task)
+    _, old_lease = claim(store, "task-1", "departed-agent")
+    _expire_lease(store, old_lease.lease_id)
+
+    observed = _observe_expired_leases(store)
+    assert ("task-1", old_lease.lease_id) in observed
+
+    # The lease is released out-of-band (e.g. manual release) after observation.
+    released = store.get_lease(old_lease.lease_id)
+    assert released is not None
+    released.released_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+    released.release_reason = "manual"
+    store.upsert_lease(released)
+
+    reclaimed = _reclaim_observed_leases(store, observed, actor="dispatcher-gc")
+
+    assert reclaimed == []
+    lease_after = store.get_lease(old_lease.lease_id)
+    assert lease_after is not None
+    # The out-of-band release reason is preserved, not overwritten to "expired".
+    assert lease_after.release_reason == "manual"
+
+
+def test_ordinary_reclaim_returns_task_and_emits_released_expired_event(
+    store: SqliteStore,
+) -> None:
+    """Non-racy reclamation still returns the task id and emits task.released."""
+    task = _task()
+    store.upsert_task(task)
+    _, old_lease = claim(store, "task-1", "departed-agent")
+    _expire_lease(store, old_lease.lease_id)
+
+    reclaimed = reclaim_expired_leases(store, actor="dispatcher-gc")
+
+    assert reclaimed == ["task-1"]
+    refetched = store.get_task("task-1")
+    assert refetched is not None
+    assert refetched.lease_id is None
+    assert refetched.claimed_by is None
+    assert refetched.status == "ready"
+
+    released_lease = store.get_lease(old_lease.lease_id)
+    assert released_lease is not None
+    assert released_lease.released_at is not None
+    assert released_lease.release_reason == "expired"
+
+    event = store.list_events("task-1")[-1]
+    assert event.event_type == "task.released"
+    assert event.actor == "dispatcher-gc"
+    assert event.lease_id == old_lease.lease_id
+    assert event.payload == {"reason": "expired"}

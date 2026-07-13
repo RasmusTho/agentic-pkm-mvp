@@ -306,6 +306,164 @@ def release(
     return task
 
 
+def _observe_expired_leases(store: SqliteStore) -> list[tuple[str, str]]:
+    """Snapshot the ``(task_id, lease_id)`` pairs that currently look expired.
+
+    This is only an *observation*: the pairs it returns may already be stale by
+    the time the caller acts on them (a concurrent ``claim(..., takeover_stale=
+    True)`` can release the observed lease and install a replacement). The
+    authoritative expiry/ownership recheck happens later, under the write lock,
+    in :func:`_reclaim_one`. Kept as a separate function so the observe/reclaim
+    boundary is an explicit, deterministically testable interleaving point
+    (regression #3617).
+    """
+    now = _utc_now()
+    with store._connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT t.task_id, t.lease_id
+            FROM dispatcher_tasks t
+            JOIN dispatcher_leases l ON t.lease_id = l.lease_id
+            WHERE l.released_at IS NULL AND l.expires_at < ?
+            ORDER BY l.expires_at
+            """,
+            (now,),
+        ).fetchall()
+    return [(row["task_id"], row["lease_id"]) for row in rows]
+
+
+def _reclaim_one(
+    store: SqliteStore,
+    task_id: str,
+    lease_id: str,
+    actor: str,
+) -> EventRecord | None:
+    """Atomically reclaim a single observed expired lease, or no-op.
+
+    Everything — the expiry/ownership recheck, the lease release, the task
+    clear, and the release event — happens inside one ``BEGIN IMMEDIATE``
+    transaction so a concurrent stale takeover cannot slip between the checks
+    and the writes. The mutation is fenced on the *captured* ``lease_id``:
+
+    - the task must still reference the captured expired lease, and
+    - that lease must still be unreleased and still expired.
+
+    If a takeover already released the observed lease and moved the task onto a
+    replacement lease after :func:`_observe_expired_leases` sampled it, both
+    conditional updates match zero rows and the function returns ``None`` rather
+    than erasing the valid replacement claim (regression #3617).
+
+    Returns the emitted ``task.released`` event on success, else ``None``.
+    """
+    now = _utc_now()
+    with store._connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+
+        task_row = conn.execute(
+            "SELECT * FROM dispatcher_tasks WHERE task_id = ?", (task_id,)
+        ).fetchone()
+        # Only reclaim while the task still references the captured expired
+        # lease. A stale takeover repoints the task at a new lease, so this
+        # guard is what keeps GC from clobbering the replacement.
+        if task_row is None or task_row["lease_id"] != lease_id:
+            conn.rollback()
+            return None
+
+        lease_row = conn.execute(
+            "SELECT * FROM dispatcher_leases WHERE lease_id = ?", (lease_id,)
+        ).fetchone()
+        if lease_row is None:
+            conn.rollback()
+            return None
+        # Re-validate liveness under the write lock: a lease released or renewed
+        # since observation must not be reclaimed.
+        if lease_row["released_at"] is not None:
+            conn.rollback()
+            return None
+        if _parse_rfc3339(lease_row["expires_at"]) >= _parse_rfc3339(now):
+            conn.rollback()
+            return None
+
+        released = conn.execute(
+            """
+            UPDATE dispatcher_leases
+            SET released_at = ?, release_reason = 'expired'
+            WHERE lease_id = ? AND released_at IS NULL
+            """,
+            (now, lease_id),
+        )
+        if released.rowcount == 0:
+            conn.rollback()
+            return None
+
+        next_status = "blocked" if task_row["blocked_reason"] is not None else "ready"
+        cleared = conn.execute(
+            """
+            UPDATE dispatcher_tasks
+            SET lease_id = NULL,
+                claimed_by = NULL,
+                last_heartbeat_at = NULL,
+                lease_expires_at = NULL,
+                status = ?,
+                updated_at = ?
+            WHERE task_id = ? AND lease_id = ?
+            """,
+            (next_status, now, task_id, lease_id),
+        )
+        if cleared.rowcount == 0:
+            conn.rollback()
+            return None
+
+        event = EventRecord(
+            event_id=_make_event_id(),
+            timestamp=now,
+            task_id=task_id,
+            event_type="task.released",
+            actor=actor,
+            lease_id=lease_id,
+            payload={"reason": "expired"},
+        )
+        conn.execute(
+            """
+            INSERT INTO dispatcher_events (
+                event_id, timestamp, task_id, event_type, actor, lease_id, payload
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.event_id,
+                event.timestamp,
+                event.task_id,
+                event.event_type,
+                event.actor,
+                event.lease_id,
+                json.dumps(event.payload, sort_keys=True, ensure_ascii=False),
+            ),
+        )
+        conn.commit()
+
+    return event
+
+
+def _reclaim_observed_leases(
+    store: SqliteStore,
+    observed: list[tuple[str, str]],
+    actor: str,
+) -> list[str]:
+    """Reclaim each observed expired lease atomically; skip any that moved on."""
+    reclaimed: list[str] = []
+    for task_id, lease_id in observed:
+        try:
+            event = _reclaim_one(store, task_id, lease_id, actor)
+        except Exception:
+            continue
+        if event is None:
+            continue
+        if store._event_writer is not None:
+            store._event_writer.append(event)
+        reclaimed.append(task_id)
+    return reclaimed
+
+
 def reclaim_expired_leases(
     store: SqliteStore,
     actor: str = "dispatcher-gc",
@@ -313,61 +471,13 @@ def reclaim_expired_leases(
     """Find and release all expired leases.
 
     Reclaims expired leases with audit trail attribution to the specified actor.
+    Each reclamation rechecks the captured lease id, unreleased state, and expiry
+    inside a single write transaction and clears task ownership only when the task
+    still references the captured expired lease, so it can never erase a
+    replacement lease acquired through ``claim(..., takeover_stale=True)`` after
+    GC selected the old expired lease (#3617).
 
     Returns list of task_ids that had leases reclaimed.
     """
-    now = _utc_now()
-
-    with store._connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT t.task_id, t.lease_id, l.expires_at, l.holder
-            FROM dispatcher_tasks t
-            JOIN dispatcher_leases l ON t.lease_id = l.lease_id
-            WHERE l.released_at IS NULL AND l.expires_at < ?
-            ORDER BY l.expires_at
-            """,
-            (now,)
-        ).fetchall()
-
-    reclaimed = []
-    for row in rows:
-        task_id = row["task_id"]
-        lease_id = row["lease_id"]
-        try:
-            task = store.get_task(task_id)
-            lease = store.get_lease(lease_id)
-
-            if task is None or lease is None:
-                continue
-
-            lease.released_at = now
-            lease.release_reason = "expired"
-            store.upsert_lease(lease)
-
-            task.lease_id = None
-            task.claimed_by = None
-            task.last_heartbeat_at = None
-            if task.blocked_reason is None:
-                task.status = "ready"
-            else:
-                task.status = "blocked"
-            task.updated_at = now
-            store.upsert_task(task)
-
-            event = EventRecord(
-                event_id=_make_event_id(),
-                timestamp=now,
-                task_id=task_id,
-                event_type="task.released",
-                actor=actor,
-                lease_id=lease_id,
-                payload={"reason": "expired"},
-            )
-            store.append_event(event)
-
-            reclaimed.append(task_id)
-        except (ValueError, Exception):
-            pass
-
-    return reclaimed
+    observed = _observe_expired_leases(store)
+    return _reclaim_observed_leases(store, observed, actor)
