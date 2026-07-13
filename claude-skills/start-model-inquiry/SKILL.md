@@ -1,41 +1,54 @@
 ---
 name: start-model-inquiry
-description: Launch a durable pre-ticket Fable and GPT architecture inquiry from an accessible agentic-pkm-mvp checkout when a development question needs independent model review before ticket creation.
+description: Run a durable pre-ticket Fable and GPT/Codex model inquiry on the configured Mac mini through its subscription-authenticated launcher when a development question needs independent model review before ticket creation.
 ---
 
 # Start Model Inquiry
 
-Use this skill only when the operator asks to investigate a development question through the
-BuilderOps model-inquiry workflow before creating a ticket.
+Use this Builder System skill only when the operator asks to investigate one concrete development
+question before issue creation. Run the durable artifact-first workflow on the configured Mac mini;
+do not conduct the inquiry in chat history or in the local workspace.
 
 ## Launch
 
-1. Require an accessible `agentic-pkm-mvp` checkout. Resolve its root from the current workspace or
-   the operator-provided `AGENTIC_PKM_REPO_ROOT`, and set that resolved path as `REPO_ROOT`; never
-   guess a private application path.
-2. Write the question verbatim to a mode-`0600` temporary UTF-8 file. Do not interpolate it into a
-   shell command.
+1. Write the question verbatim to a local, temporary UTF-8 Markdown file with mode `0600`. Treat
+   the question as file content; never interpolate it into a shell command.
+2. Copy that file to the configured host:
+
+   ```bash
+   scp "$QUESTION_FILE" Tailscale_macmini:/tmp/model-inquiry-question.md
+   ```
+
 3. Run exactly:
 
    ```bash
-   "$REPO_ROOT/scripts/start_model_inquiry.sh" --question-file "$QUESTION_FILE"
+   ssh -T Tailscale_macmini '$HOME/.local/bin/yggdrasil-model-inquiry --question-file /tmp/model-inquiry-question.md'
    ```
 
-4. Delete the temporary input file.
-5. Return the JSON `inquiry_id`, `final_state`, `terminal_receipt_id`, and
-   `human_readable_report` to the operator. The last value is the Markdown file a human should
-   open; the adjacent JSON files remain the canonical audit trace.
+4. Delete the temporary question file locally and from `/tmp` on the Mac mini after the command
+   returns, including on failure. Do not delete durable inquiry artifacts.
+5. Require the launcher to return one non-empty JSON response on stdout. Return its `inquiry_id`,
+   `final_state`, `terminal_receipt_id`, and `human_readable_report` exactly as returned.
 
-The launcher performs vault and adapter preflight before writing the inquiry. Propagate any error
-verbatim enough to identify the missing dependency; do not fall back to chat-only orchestration.
+The Mac mini owns the existing Claude and Codex subscription sessions, BuilderOps configuration,
+and durable inquiry artifacts. `Tailscale_macmini` is an operator-configured SSH host alias, and
+the remote launcher is host-specific operator configuration outside Git.
+
+## Failure Handling
+
+- If `scp` or SSH fails, report the command's error text and stop.
+- Treat exit code zero with empty stdout, malformed JSON, or any missing required response field as
+  a launcher failure. Report the observed output and stop.
+- Do not re-run the inquiry to recover a missing response. It may already have durable artifacts on
+  the Mac mini.
+- Do not inspect or recover an inquiry from the vault as a substitute for the launcher's response.
+- Do not substitute an in-chat Fable/GPT exchange or silently use one model for both roles.
 
 ## Boundaries
 
-- Do not copy turns between desktop apps.
+- Do not run local BuilderOps, Python, Codex, or Claude commands for this inquiry.
+- Do not install dependencies, run vault-init, configure adapters, or use API keys.
+- Do not create a GitHub Issue; use the separate promotion path after a ready receipt exists.
 - Do not automate clicks, keystrokes, windows, tabs, or another desktop app.
-- Do not create a GitHub Issue; promotion is a separate governed step.
 - Do not write model transcripts to Companion UI or a human knowledge vault.
-
-If the Claude execution environment cannot access the checkout or its configured shared vault,
-stop and report that boundary. The portable package does not claim to provide a host-filesystem
-bridge.
+- Do not print subscription, adapter, or credential configuration while diagnosing a failure.

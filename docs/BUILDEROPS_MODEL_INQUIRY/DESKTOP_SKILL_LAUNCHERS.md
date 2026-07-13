@@ -1,6 +1,6 @@
 ---
 name: Desktop Skill Launchers
-description: Package thin Codex and Claude desktop launchers over the common BuilderOps inquiry command.
+description: Package thin Codex and Claude desktop launchers that delegate inquiries to the configured Mac mini runner.
 task_id: BMI-04
 source_anchor: docs/BUILDEROPS_MODEL_INQUIRY/README.md :: Scope
 parent_capability: BuilderOps Model Inquiry
@@ -14,22 +14,26 @@ can_parallelize_with: []
 ## Purpose
 
 Let an operator begin the same inquiry from Codex Desktop or Claude Desktop without putting the
-orchestrator inside either chat history.
+orchestrator inside either chat history or configuring providers in the local workspace.
 
 ## What This Task Does
 
-Create a repo-local `start-model-inquiry` skill and a portable Claude custom-skill package. Both call
-the repo-owned `scripts/start_model_inquiry.sh` entrypoint, which resolves the same canonical repo
-virtualenv as the BuilderOps CLI wrapper. Its Python launcher validates the shared vault and both
-explicit role adapters **before mutation**, calls the repo-supported
-`scripts/builderops_cli.sh builderops inquiry start` command, then calls the common `inquiry run`
-command. It displays the returned `inquiry_id` and terminal outcome; neither skill reimplements
+Create a repo-local `start-model-inquiry` skill and a portable Claude custom-skill package. Both
+write the question verbatim to a mode-`0600` local Markdown file, copy it to
+`Tailscale_macmini:/tmp/model-inquiry-question.md`, then run exactly:
+
+```bash
+ssh -T Tailscale_macmini '$HOME/.local/bin/yggdrasil-model-inquiry --question-file /tmp/model-inquiry-question.md'
+```
+
+The configured Mac mini owns the BuilderOps vault, adapters, durable artifacts, and the existing
+Claude and Codex subscription sessions. Its launcher is host-specific operator configuration and
+stays outside Git. Neither skill rebuilds that environment, configures providers, or reimplements
 orchestration in prompt prose.
 
-The portable Claude package is an instruction package, not a host-filesystem bridge. Its execution
-environment must already be able to access the repository checkout, shared vault, and configured
-adapters. If it cannot, preflight fails loudly. The package never guesses an application-private
-path or automates another desktop app.
+The operator machine needs the `Tailscale_macmini` SSH alias. A failed copy or SSH command, empty
+stdout, malformed JSON, or absent response field fails loudly: report the error and stop. Do not
+retry, inspect the vault for a substitute response, or fall back to an in-chat inquiry.
 
 ## Concretely
 
@@ -44,12 +48,15 @@ other.
 
 ## Acceptance Criteria
 
-- [x] The Codex skill invokes the common BuilderOps inquiry command and reports its inquiry ID.
-  Verify: `tests/governance/test_start_model_inquiry_skill.py::test_codex_skill_calls_common_command`.
-- [x] The Claude package contains the same launcher contract and no desktop-control automation.
-  Verify: `tests/governance/test_start_model_inquiry_skill.py::test_claude_package_uses_common_launcher_contract`.
-- [x] Launcher preflight fails loudly when the shared vault or required adapter is unavailable.
-  Verify: `tests/governance/test_start_model_inquiry_skill.py::test_skill_preflight_reports_missing_dependencies`.
+- [x] Both desktop skill packages use the exact Mac mini bridge command and report its inquiry
+  receipt fields. Verify:
+  `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
+- [x] Both packages reject local BuilderOps setup, provider configuration, API keys, and
+  desktop-control automation. Verify:
+  `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
+- [x] Both packages fail loudly for a copy/SSH failure, empty stdout, malformed JSON, or an absent
+  receipt field. Verify:
+  `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
 
 ## How to Verify (Pre-Merge)
 
@@ -64,6 +71,8 @@ the operator. Generated archives are release artifacts and remain outside Git so
 
 - automating clicks or keystrokes in the other desktop app;
 - storing model transcripts in Companion UI or a human knowledge vault.
+- installing Python, BuilderOps, Codex, or Claude on the local machine;
+- changing the Mac mini launcher or its authenticated subscription sessions.
 
 ## Related Docs
 

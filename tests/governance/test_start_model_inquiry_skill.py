@@ -77,7 +77,7 @@ def _configured_env(tmp_path: Path) -> dict[str, str]:
     }
 
 
-def test_codex_skill_calls_common_command(tmp_path: Path) -> None:
+def test_local_launcher_runs_common_command(tmp_path: Path) -> None:
     env = _configured_env(tmp_path)
     marker = tmp_path / "must-not-exist"
     question = f"Keep quotes ' and newlines safe\n$(touch {marker})"
@@ -112,29 +112,41 @@ def test_codex_skill_calls_common_command(tmp_path: Path) -> None:
     assert trace["question"]["source_refs"] == [
         {"ref_type": "desktop_skill", "ref": "start-model-inquiry"}
     ]
-    skill = (REPO_ROOT / ".codex/skills/start-model-inquiry/SKILL.md").read_text()
     launcher = PYTHON_LAUNCHER.read_text()
-    assert "scripts/start_model_inquiry.sh" in skill
     assert '"builderops",\n                "inquiry",\n                "start"' in launcher
 
 
-def test_claude_package_uses_common_launcher_contract(tmp_path: Path) -> None:
+def test_desktop_skills_route_to_macmini_launcher(tmp_path: Path) -> None:
     codex = (REPO_ROOT / ".codex/skills/start-model-inquiry/SKILL.md").read_text()
     claude = (REPO_ROOT / "claude-skills/start-model-inquiry/SKILL.md").read_text()
-    for contract_field in (
-        "scripts/start_model_inquiry.sh",
-        "inquiry_id",
-        "final_state",
-        "terminal_receipt_id",
-        "human_readable_report",
-    ):
-        assert contract_field in codex
-        assert contract_field in claude
-    for forbidden in ("osascript", "AppleScript", "pyautogui", "/Applications/"):
-        assert forbidden not in claude
-    assert "set that resolved path as `REPO_ROOT`" in claude
-    assert '"$REPO_ROOT/scripts/start_model_inquiry.sh"' in claude
-    assert '"$AGENTIC_PKM_REPO_ROOT/scripts/start_model_inquiry.sh"' not in claude
+    for skill in (codex, claude):
+        for contract_field in (
+            "mode `0600`",
+            "scp \"$QUESTION_FILE\" Tailscale_macmini:/tmp/model-inquiry-question.md",
+            "ssh -T Tailscale_macmini '$HOME/.local/bin/yggdrasil-model-inquiry --question-file /tmp/model-inquiry-question.md'",
+            "inquiry_id",
+            "final_state",
+            "terminal_receipt_id",
+            "human_readable_report",
+            "empty stdout",
+            "malformed JSON",
+            "Do not re-run the inquiry",
+        ):
+            assert contract_field in skill
+        for required_boundary in (
+            "Do not run local BuilderOps, Python, Codex, or Claude commands",
+            "Do not install dependencies, run vault-init, configure adapters, or use API keys.",
+        ):
+            assert required_boundary in skill
+        for forbidden in (
+            "scripts/start_model_inquiry.sh",
+            "BUILDEROPS_VAULT_ROOT",
+            "osascript",
+            "AppleScript",
+            "pyautogui",
+            "/Applications/",
+        ):
+            assert forbidden not in skill
 
     archive = tmp_path / "start-model-inquiry.zip"
     packaged = subprocess.run(

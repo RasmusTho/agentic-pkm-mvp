@@ -1,42 +1,55 @@
 ---
 name: start-model-inquiry
-description: "Launch a durable pre-ticket Fable and GPT architecture inquiry through the shared BuilderOps command when a development question needs independent model review before ticket creation."
+description: "Run a durable pre-ticket Fable and GPT/Codex model inquiry on the configured Mac mini through its subscription-authenticated launcher when a development question needs independent model review before ticket creation."
 ---
 
 # Start Model Inquiry
 
-Use this Builder System skill when the operator asks to investigate a concrete development question
-before issue creation. It starts and runs the durable artifact-first workflow; it does not conduct
-the inquiry in chat history.
+Use this Builder System skill when the operator asks to investigate one concrete development
+question before issue creation. Run the durable artifact-first workflow on the configured Mac mini;
+do not conduct the inquiry in chat history or in the local workspace.
 
 ## Launch
 
-1. Confirm the current workspace is the canonical `agentic-pkm-mvp` checkout or one of its Git
-   worktrees.
-2. Write the question verbatim to a mode-`0600` temporary UTF-8 file. Do not interpolate it into a
-   shell command.
-3. Run:
+1. Write the question verbatim to a local, temporary UTF-8 Markdown file with mode `0600`. Treat
+   the question as file content; never interpolate it into a shell command.
+2. Copy that file to the configured host:
 
    ```bash
-   scripts/start_model_inquiry.sh --question-file "$QUESTION_FILE"
+   scp "$QUESTION_FILE" Tailscale_macmini:/tmp/model-inquiry-question.md
    ```
 
-4. Delete the temporary input file.
-5. Report the returned `inquiry_id`, `final_state`, `terminal_receipt_id`, and
-   `human_readable_report`. The last value is the Markdown file a human should open; the adjacent
-   JSON files remain the canonical audit trace.
+3. Run exactly:
 
-The launcher validates the shared vault and both explicit role adapters before it writes an
-inquiry. If preflight fails, surface the error and stop. Never substitute an in-chat Fable/GPT
-exchange or silently use one model for both roles.
+   ```bash
+   ssh -T Tailscale_macmini '$HOME/.local/bin/yggdrasil-model-inquiry --question-file /tmp/model-inquiry-question.md'
+   ```
+
+4. Delete the temporary question file locally and from `/tmp` on the Mac mini after the command
+   returns, including on failure. Do not delete durable inquiry artifacts.
+5. Require the launcher to return one non-empty JSON response on stdout. Report its
+   `inquiry_id`, `final_state`, `terminal_receipt_id`, and `human_readable_report` exactly as
+   returned.
+
+The Mac mini owns the existing Claude and Codex subscription sessions, BuilderOps configuration,
+and durable inquiry artifacts. `Tailscale_macmini` is an operator-configured SSH host alias, and
+the remote launcher is host-specific operator configuration outside Git.
+
+## Failure Handling
+
+- If `scp` or SSH fails, report the command's error text and stop.
+- Treat exit code zero with empty stdout, malformed JSON, or any missing required response field as
+  a launcher failure. Report the observed output and stop.
+- Do not re-run the inquiry to recover a missing response. It may already have durable artifacts on
+  the Mac mini.
+- Do not inspect or recover an inquiry from the vault as a substitute for the launcher's response.
+- Do not substitute an in-chat Fable/GPT exchange or silently use one model for both roles.
 
 ## Boundaries
 
+- Do not run local BuilderOps, Python, Codex, or Claude commands for this inquiry.
+- Do not install dependencies, run vault-init, configure adapters, or use API keys.
 - Do not create a GitHub Issue; use the separate promotion path after a ready receipt exists.
 - Do not automate another desktop app or copy turns between apps.
 - Do not write inquiry artifacts to Companion UI or a human knowledge vault.
-- Do not print adapter configuration or credentials while diagnosing preflight.
-
-The shell entrypoint uses the same canonical/worktree virtualenv resolver as `builderops_cli.sh`.
-The common launcher invokes `scripts/builderops_cli.sh builderops inquiry start` and then the shared
-`inquiry run` command. It returns only after the runner records a terminal outcome.
+- Do not print subscription, adapter, or credential configuration while diagnosing a failure.
