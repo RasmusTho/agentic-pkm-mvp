@@ -7,7 +7,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, TypeGuard
 
 
 CONTRACT_VERSION = "verification_dispatch_request.v1"
@@ -35,6 +35,10 @@ def _nested_str(data: dict[str, object], *keys: str) -> str:
             return ""
         current = current.get(key)
     return current if isinstance(current, str) else ""
+
+
+def _is_positive_int(value: object) -> TypeGuard[int]:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
 def _idempotency_key(
@@ -68,7 +72,7 @@ def resolve_pr_number(
         if len(associations) != 1 or not isinstance(associations[0], dict):
             return None
         associated_number = associations[0].get("number")
-        return associated_number if isinstance(associated_number, int) else None
+        return associated_number if _is_positive_int(associated_number) else None
 
     run_head_sha = run.get("head_sha")
     if not isinstance(run_head_sha, str) or not run_head_sha:
@@ -79,7 +83,7 @@ def resolve_pr_number(
             continue
         number = candidate.get("number")
         if (
-            isinstance(number, int)
+            _is_positive_int(number)
             and candidate.get("state") == "open"
             and _nested_str(candidate, "head", "sha") == run_head_sha
         ):
@@ -116,7 +120,7 @@ def build_request(
     if not (
         repository
         and pr.get("state") == "open"
-        and isinstance(pr_number, int)
+        and _is_positive_int(pr_number)
         and isinstance(run_id, int)
         and isinstance(run_attempt, int)
         and isinstance(run_head_sha, str)

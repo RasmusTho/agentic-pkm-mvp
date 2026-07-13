@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from scripts.build_verification_dispatch_request import build_request, resolve_pr_number
 
 
@@ -184,3 +186,40 @@ def test_empty_association_ambiguous_or_no_match_is_noop() -> None:
     non_pr_event = _event(event_name="push")
     non_pr_event["workflow_run"]["pull_requests"] = []  # type: ignore[index]
     assert resolve_pr_number(event=non_pr_event, candidates=[matching]) is None
+
+
+@pytest.mark.parametrize("malformed_number", [True, 0, -1])
+def test_malformed_associated_pr_number_is_noop(malformed_number: object) -> None:
+    event = _event()
+    event["workflow_run"]["pull_requests"] = [  # type: ignore[index]
+        {"number": malformed_number}
+    ]
+
+    assert resolve_pr_number(event=event, candidates=[]) is None
+
+
+@pytest.mark.parametrize("malformed_number", [True, 0, -1])
+def test_malformed_fallback_candidate_number_is_noop(
+    malformed_number: object,
+) -> None:
+    event = _event()
+    event["workflow_run"]["pull_requests"] = []  # type: ignore[index]
+
+    assert resolve_pr_number(
+        event=event,
+        candidates=[
+            {
+                "number": malformed_number,
+                "state": "open",
+                "head": {"sha": HEAD_SHA},
+            }
+        ],
+    ) is None
+
+
+@pytest.mark.parametrize("malformed_number", [True, 0, -1])
+def test_malformed_builder_pr_number_is_noop(malformed_number: object) -> None:
+    pr = _pr()
+    pr["number"] = malformed_number
+
+    assert build_request(event=_event(), pr=pr, issue=_issue()) is None
