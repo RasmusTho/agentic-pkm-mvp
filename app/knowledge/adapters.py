@@ -70,15 +70,17 @@ def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
     return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
 
 
-def _preserve_displaced_conflict(
-    staged: Path, vault_root: Path, locator: NoteLocator
-) -> Path:
+def _preserve_displaced_conflict(staged: Path, target: Path, locator: NoteLocator) -> Path:
     artifact_rel = conflict_artifact_path(
         locator.path,
         writer_identity=f"concurrent-save-{uuid.uuid4().hex}",
         written_at=datetime.now(UTC),
     )
-    artifact = vault_root.resolve() / "_conflicts" / Path(artifact_rel)
+    # Some legacy absolute-path callers intentionally use the filesystem anchor as
+    # ``vault_root``. Anchor-level ``/_conflicts`` is neither writable nor scoped to
+    # their actual vault. Place the safety tree at the nearest parent boundary that
+    # remains outside the canonical target directory instead.
+    artifact = target.parent.parent / "_conflicts" / target.parent.name / artifact_rel.name
     artifact.parent.mkdir(parents=True, exist_ok=True)
     os.rename(staged, artifact)
     return artifact
@@ -194,7 +196,7 @@ class FsVaultAdapter:
                 # such descriptors close, so every successful optimistic exchange retains
                 # this pre-exchange version as a standard conflicted copy.
                 preserve_staged_conflict = True
-                staged = _preserve_displaced_conflict(staged, self.vault_root, locator)
+                staged = _preserve_displaced_conflict(staged, target, locator)
                 staged_is_artifact = True
 
                 displaced_version = hashlib.sha256(staged.read_bytes()).hexdigest()
@@ -246,9 +248,7 @@ class FsVaultAdapter:
                 try:
                     if preserve_staged_conflict and staged.exists():
                         if not staged_is_artifact:
-                            staged = _preserve_displaced_conflict(
-                                staged, self.vault_root, locator
-                            )
+                            staged = _preserve_displaced_conflict(staged, target, locator)
                             staged_is_artifact = True
                     else:
                         staged.unlink(missing_ok=True)
