@@ -172,6 +172,22 @@ def test_relevance_runtime_and_regression_changes_select_relevance_coverage() ->
     assert not selection.unowned_paths
 
 
+def test_curation_adapter_change_selects_curation_coverage() -> None:
+    selection = select_tests(
+        [
+            "app/curation/contradiction_triage.py",
+            "tests/curation/test_contradiction_triage_adapter.py",
+            "docs/CONTRADICTION_TRIAGE_BENCH/README.md",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("curation",)
+    assert selection.unowned_paths == ()
+    assert "tests/curation" in selection.targets
+    assert "tests/invariants" in selection.targets
+
+
 def test_journaling_change_has_a_ci_owner() -> None:
     selection = select_tests(
         ["app/journaling/day_context.py", "tests/journaling/test_assemble_day_context.py"]

@@ -172,6 +172,15 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/relevance",),
     ),
     (
+        "curation",
+        (
+            "app/curation/",
+            "tests/curation/",
+            "docs/CONTRADICTION_TRIAGE_BENCH/",
+        ),
+        ("tests/curation", "tests/invariants"),
+    ),
+    (
         "heimdal",
         ("app/heimdal/", "tests/heimdal/", "docs/HEIMDAL/", "docs/HEIMDAL_CAPTURE_CLIENT/"),
         ("tests/heimdal",),
