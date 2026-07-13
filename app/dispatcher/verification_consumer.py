@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import io
 import os
+import re
 import subprocess
 import threading
 import tomllib
@@ -367,6 +368,8 @@ def live_truth_rejection(
     run: VerificationRun,
     pr: Mapping[str, object],
     checks: Sequence[Mapping[str, object]],
+    *,
+    expected_head_sha: str | None = None,
 ) -> str | None:
     if not isinstance(pr.get("number"), int) or isinstance(pr.get("number"), bool):
         return "malformed_pr"
@@ -374,7 +377,7 @@ def live_truth_rejection(
         return "closed_unmerged_or_merged"
     if pr.get("draft") is True:
         return "draft"
-    if _nested(pr, "head", "sha") != run.head_sha:
+    if _nested(pr, "head", "sha") != (expected_head_sha or run.head_sha):
         return "stale_head"
     if not checks:
         return "missing_checks"
@@ -410,6 +413,7 @@ def context_pack(run: VerificationRun, pr: Mapping[str, object]) -> dict[str, ob
         "base_ref": _nested(pr, "base", "ref"),
         "head_ref": _nested(pr, "head", "ref"),
         "head_sha": run.head_sha,
+        "requested_head_sha": run.requested_head_sha,
         "stage": run.stage,
         "verification_skill": ".codex/skills/verification-and-closure/SKILL.md",
         "agent_adapter": ".codex/agents/verification-closer.toml",
@@ -465,7 +469,37 @@ class VerificationConsumer:
     @staticmethod
     def _rate_limited(receipt: Mapping[str, object]) -> bool:
         encoded = json.dumps(receipt, sort_keys=True).lower()
-        return any(token in encoded for token in ("rate limit", "rate_limit", "credit exhausted"))
+        return any(
+            token in encoded
+            for token in (
+                "rate limit",
+                "rate_limit",
+                "credit exhausted",
+                "credits exhausted",
+                "insufficient credit",
+                "insufficient_quota",
+                "credit balance",
+                "not enough credits",
+                "usage limit",
+                "usage_limit",
+                "quota exceeded",
+                "quota_exceeded",
+                "too many requests",
+            )
+        )
+
+    @staticmethod
+    def _retry_hint(receipt: Mapping[str, object]) -> object:
+        encoded = json.dumps(receipt, sort_keys=True).lower()
+        match = re.search(
+            r"(?:retry after|try again in)\s*[:=]?\s*(\d+(?:\.\d+)?)\s*"
+            r"(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)\b",
+            encoded,
+        )
+        if not match:
+            return receipt.get("retry_after")
+        unit = match.group(2)[0]
+        return f"{match.group(1)}{unit}"
 
     def consume(self, request: Mapping[str, object]) -> VerificationRun:
         run = self.ledger.ingest(request)
@@ -536,6 +570,7 @@ class VerificationConsumer:
             )
         except CodexExecFailure as exc:
             failed_session = exc.receipt.get("session_id")
+            rate_limited = self._rate_limited(exc.receipt)
             if isinstance(failed_session, str) and failed_session:
                 self.ledger.record_attempt(
                     claimed.run_id,
@@ -544,8 +579,22 @@ class VerificationConsumer:
                     self.launcher.config.model,
                     self.launcher.config.reasoning_effort,
                     pack,
-                    "launch_failed",
+                    "rate_limited" if rate_limited else "launch_failed",
                     exc.receipt,
+                    holder=self.holder,
+                    lease_id=lease_id,
+                )
+            if rate_limited:
+                retry_after = _retry_at(self._retry_hint(exc.receipt))
+                return self.ledger.backoff(
+                    claimed.run_id,
+                    {
+                        "outcome": "rate_limited",
+                        "api_fallback": False,
+                        "retry_after": retry_after,
+                        "failure_receipt": exc.receipt,
+                    },
+                    retry_after=retry_after,
                     holder=self.holder,
                     lease_id=lease_id,
                 )
@@ -581,27 +630,119 @@ class VerificationConsumer:
                 holder=self.holder,
                 lease_id=lease_id,
             )
-        if receipt.get("head_sha") != claimed.head_sha:
+        receipt_head = receipt.get("head_sha")
+        if not isinstance(receipt_head, str) or not re.fullmatch(
+            r"[0-9a-fA-F]{40}", receipt_head
+        ):
             return self.ledger.terminal(
-                claimed.run_id, "needs_human", dict(receipt),
-                reason="receipt_head_mismatch", holder=self.holder, lease_id=lease_id,
+                claimed.run_id,
+                "needs_human",
+                dict(receipt),
+                reason="receipt_head_mismatch",
+                holder=self.holder,
+                lease_id=lease_id,
             )
         verdict = receipt.get("verdict")
         if verdict == "retry":
+            if receipt_head != claimed.head_sha:
+                return self.ledger.terminal(
+                    claimed.run_id,
+                    "needs_human",
+                    dict(receipt),
+                    reason="receipt_head_mismatch",
+                    holder=self.holder,
+                    lease_id=lease_id,
+                )
             return self.ledger.backoff(
                 claimed.run_id, dict(receipt), _retry_at(receipt.get("retry_after")),
                 holder=self.holder, lease_id=lease_id,
             )
         review_events = receipt.get("review_events")
-        if isinstance(review_events, list):
+        events = review_events if isinstance(review_events, list) else []
+        changed_head = receipt_head != claimed.head_sha
+        if changed_head and not any(
+            isinstance(event, Mapping) and event.get("kind") == "repair"
+            for event in events
+        ):
+            return self.ledger.terminal(
+                claimed.run_id,
+                "needs_human",
+                dict(receipt),
+                reason="receipt_head_mismatch",
+                holder=self.holder,
+                lease_id=lease_id,
+            )
+
+        # Receipt acceptance is tied to a fresh authenticated GitHub read. A
+        # repair may advance only to the exact current PR head; arbitrary or
+        # stale receipt heads never reach the review ledger.
+        live_pr = self.truth.pull_request(claimed.repository, claimed.pr_number)
+        live_checks = self.truth.checks(claimed.repository, receipt_head)
+        rejection = live_truth_rejection(
+            claimed,
+            live_pr,
+            live_checks,
+            expected_head_sha=receipt_head,
+        )
+        transient = rejection in {"missing_checks", "checks_not_green"}
+        if changed_head and (rejection is None or transient):
+            live_pr_number = live_pr.get("number")
+            assert isinstance(live_pr_number, int) and not isinstance(live_pr_number, bool)
+            claimed = self.ledger.rebind_head(
+                claimed.run_id,
+                receipt_head,
+                expected_head_sha=claimed.head_sha,
+                observed_repository=claimed.repository,
+                observed_pr_number=live_pr_number,
+                observed_head_sha=str(_nested(live_pr, "head", "sha") or ""),
+                holder=self.holder,
+                lease_id=lease_id,
+            )
+        if rejection:
+            if transient:
+                return self.ledger.backoff(
+                    claimed.run_id,
+                    {
+                        "outcome": "deferred",
+                        "reason": rejection,
+                        "head_sha": claimed.head_sha,
+                    },
+                    _retry_at(),
+                    holder=self.holder,
+                    lease_id=lease_id,
+                )
+            reason = (
+                "receipt_head_mismatch"
+                if rejection == "stale_head"
+                else f"receipt_live_truth_{rejection}"
+            )
+            return self.ledger.terminal(
+                claimed.run_id,
+                "needs_human",
+                dict(receipt),
+                reason=reason,
+                holder=self.holder,
+                lease_id=lease_id,
+            )
+
+        pack = context_pack(claimed, live_pr)
+        if events:
             loop = VerificationAgentLoop(
                 self.ledger,
                 claimed.run_id,
                 holder=self.holder,
                 lease_id=lease_id,
             )
-            loop.apply_events(review_events, context=pack)
-        status = {"delivered": "completed", "blocked": "failed", "needs_human": "needs_human"}.get(verdict)
+            loop.apply_events(events, context=pack)
+        status = (
+            {
+                "delivered": "completed",
+                "blocked": "failed",
+                "needs_human": "needs_human",
+            }.get(verdict)
+            if isinstance(verdict, str)
+            else None
+        )
         if status is None:
             return self.ledger.terminal(
                 claimed.run_id, "needs_human", dict(receipt), reason="invalid_verdict",
@@ -626,8 +767,18 @@ class VerificationConsumer:
         if self._lease_is_live(run):
             return run
         pr = self.truth.pull_request(run.repository, run.pr_number)
-        checks = self.truth.checks(run.repository, run.head_sha)
-        rejection = live_truth_rejection(run, pr, checks)
+        observed_head = _nested(pr, "head", "sha")
+        if not isinstance(observed_head, str) or not re.fullmatch(
+            r"[0-9a-fA-F]{40}", observed_head
+        ):
+            raise ValueError("verification run is no longer resumable: malformed_pr")
+        checks = self.truth.checks(run.repository, observed_head)
+        rejection = live_truth_rejection(
+            run,
+            pr,
+            checks,
+            expected_head_sha=observed_head,
+        )
         if rejection:
             raise ValueError(f"verification run is no longer resumable: {rejection}")
         if not self.auth.check().ok:
