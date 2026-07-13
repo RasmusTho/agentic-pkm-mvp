@@ -16,6 +16,8 @@ Deterministic, stdlib-only, read-only. Catches the defect classes found by the
 5. No skill file contains the retired phrase "Do not batch to end of task"
    (regression guard for #1806).
 6. Frontmatter `description:` is non-empty and single-line.
+7. `feature-breakdown/SKILL.md`, when present, keeps its `docs/DOCS_INDEX.md`
+   registration instruction (regression guard for #3559).
 
 Exit 0 with no output when clean; exit 1 with one error per line otherwise.
 
@@ -233,16 +235,20 @@ def check_feature_breakdown_docs_index(skills_root: Path) -> list[str]:
     register it in `docs/DOCS_INDEX.md`. Anchoring on the stable path token
     keeps this non-brittle — it survives rewording but fails if the instruction
     is dropped.
+
+    Like the other per-skill checks, this tolerates the skill being absent
+    (e.g. synthetic trees seeded by the lint's own tests): it only asserts the
+    instruction when `feature-breakdown/SKILL.md` actually exists.
     """
     errors: list[str] = []
     skill = skills_root / "feature-breakdown" / "SKILL.md"
     if not skill.is_file():
-        errors.append("feature-breakdown/SKILL.md: missing")
         return errors
+    rel = skill.relative_to(skills_root.parent.parent)
     if "docs/DOCS_INDEX.md" not in skill.read_text(encoding="utf-8"):
         errors.append(
-            "feature-breakdown/SKILL.md: missing the DOCS_INDEX registration "
-            "instruction (must reference 'docs/DOCS_INDEX.md'; see #3559)"
+            f"{rel}: missing the DOCS_INDEX registration instruction "
+            "(must reference 'docs/DOCS_INDEX.md'; see #3559)"
         )
     return errors
 
