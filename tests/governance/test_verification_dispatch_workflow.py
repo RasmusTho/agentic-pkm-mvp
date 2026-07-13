@@ -20,6 +20,8 @@ def test_workflow_triggers_from_completed_ci_workflow_run() -> None:
     assert "github.event.workflow_run.event == 'pull_request'" in text
     assert "github.event.workflow_run.conclusion == 'success'" in text
     assert 'repos/${REPOSITORY}/pulls/${PR_NUMBER}' in text
+    assert 'repos/${REPOSITORY}/commits/${RUN_HEAD_SHA}/pulls' in text
+    assert "resolve_pr_number" in text
     assert "scripts/build_verification_dispatch_request.py" in text
 
 
@@ -39,7 +41,6 @@ def test_workflow_is_artifact_only_and_least_privilege() -> None:
     permissions = text.split("permissions:", 1)[1].split("\njobs:", 1)[0]
 
     assert "contents: read" in permissions
-    assert "actions: read" in permissions
     assert "pull-requests: read" in permissions
     assert "issues: read" in permissions
     assert "write" not in permissions
@@ -67,3 +68,16 @@ def test_workflow_is_artifact_only_and_least_privilege() -> None:
     assert "verification-dispatch/" not in upload_block.replace(
         "verification-dispatch/request.json", ""
     ).replace("verification-dispatch/request.md", "")
+
+
+def test_workflow_permissions_match_used_read_apis() -> None:
+    text = _workflow_text()
+    permissions = text.split("permissions:", 1)[1].split("\njobs:", 1)[0]
+
+    assert "contents: read" in permissions
+    assert "pull-requests: read" in permissions
+    assert "issues: read" in permissions
+    assert "actions: read" not in permissions
+    assert 'repos/${REPOSITORY}/commits/${RUN_HEAD_SHA}/pulls' in text
+    assert 'repos/${REPOSITORY}/pulls/${PR_NUMBER}' in text
+    assert 'repos/${REPOSITORY}/issues/${ISSUE_NUMBER}' in text

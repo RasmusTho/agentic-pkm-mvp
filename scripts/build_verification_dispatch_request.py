@@ -53,6 +53,42 @@ def _idempotency_key(
     return hashlib.sha256(encoded).hexdigest()
 
 
+def resolve_pr_number(
+    *, event: dict[str, object], candidates: Sequence[object]
+) -> int | None:
+    """Resolve one PR, falling back to unique open current-head candidates."""
+    run = _as_dict(event.get("workflow_run"))
+    if run.get("event") != "pull_request":
+        return None
+    associations = run.get("pull_requests")
+    if not isinstance(associations, list):
+        return None
+
+    if associations:
+        if len(associations) != 1 or not isinstance(associations[0], dict):
+            return None
+        associated_number = associations[0].get("number")
+        return associated_number if isinstance(associated_number, int) else None
+
+    run_head_sha = run.get("head_sha")
+    if not isinstance(run_head_sha, str) or not run_head_sha:
+        return None
+    matches: dict[int, dict[str, object]] = {}
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        number = candidate.get("number")
+        if (
+            isinstance(number, int)
+            and candidate.get("state") == "open"
+            and _nested_str(candidate, "head", "sha") == run_head_sha
+        ):
+            matches[number] = candidate
+    if len(matches) != 1:
+        return None
+    return next(iter(matches))
+
+
 def build_request(
     *,
     event: dict[str, object],

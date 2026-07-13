@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from scripts.build_verification_dispatch_request import build_request
+from scripts.build_verification_dispatch_request import build_request, resolve_pr_number
 
 
 REPOSITORY = "RasmusTho/agentic-pkm-mvp"
@@ -115,3 +115,60 @@ def test_request_links_pr_evidence_and_live_truth_identifiers() -> None:
         "current_head_sha": HEAD_SHA,
         "source_run_id": 987654,
     }
+
+
+def test_empty_association_resolves_unique_current_head_pr() -> None:
+    event = _event()
+    event["workflow_run"]["pull_requests"] = []  # type: ignore[index]
+
+    assert resolve_pr_number(
+        event=event,
+        candidates=[
+            {
+                "number": 3602,
+                "state": "open",
+                "head": {"sha": HEAD_SHA},
+            },
+            {
+                "number": 3599,
+                "state": "closed",
+                "head": {"sha": HEAD_SHA},
+            },
+            {
+                "number": 3598,
+                "state": "open",
+                "head": {"sha": "b" * 40},
+            },
+        ],
+    ) == 3602
+
+
+def test_empty_association_ambiguous_or_no_match_is_noop() -> None:
+    event = _event()
+    event["workflow_run"]["pull_requests"] = []  # type: ignore[index]
+    matching = {
+        "number": 3602,
+        "state": "open",
+        "head": {"sha": HEAD_SHA},
+    }
+
+    assert resolve_pr_number(event=event, candidates=[]) is None
+    assert resolve_pr_number(
+        event=event,
+        candidates=[matching, {**matching, "number": 3603}],
+    ) is None
+    assert resolve_pr_number(
+        event=event,
+        candidates=[{**matching, "head": {"sha": "b" * 40}}],
+    ) is None
+
+    ambiguous_association = _event()
+    ambiguous_association["workflow_run"]["pull_requests"] = [  # type: ignore[index]
+        {"number": 3602},
+        {"number": 3603},
+    ]
+    assert resolve_pr_number(event=ambiguous_association, candidates=[]) is None
+
+    non_pr_event = _event(event_name="push")
+    non_pr_event["workflow_run"]["pull_requests"] = []  # type: ignore[index]
+    assert resolve_pr_number(event=non_pr_event, candidates=[matching]) is None

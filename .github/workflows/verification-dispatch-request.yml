@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  actions: read
   pull-requests: read
   issues: read
 
@@ -24,19 +23,67 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Resolve triggering PR
-        id: resolve
+      - name: Inspect triggering PR association
+        id: inspect
         env:
           EVENT_PATH: ${{ github.event_path }}
         run: |
           python3 - <<'PY'
           import json
           import os
+          import re
           from pathlib import Path
 
           event = json.loads(Path(os.environ["EVENT_PATH"]).read_text())
-          pull_requests = event.get("workflow_run", {}).get("pull_requests", [])
-          number = pull_requests[0].get("number") if pull_requests else None
+          run = event.get("workflow_run", {})
+          pull_requests = run.get("pull_requests")
+          count = len(pull_requests) if isinstance(pull_requests, list) else "invalid"
+          head_sha = run.get("head_sha")
+          safe_head_sha = (
+              head_sha
+              if isinstance(head_sha, str) and re.fullmatch(r"[0-9a-fA-F]{40}", head_sha)
+              else ""
+          )
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write(f"association_count={count}\n")
+              output.write(f"run_head_sha={safe_head_sha}\n")
+          PY
+
+      - name: Fetch fallback PR candidates by run head
+        if: >-
+          steps.inspect.outputs.association_count == '0' &&
+          steps.inspect.outputs.run_head_sha != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_HEAD_SHA: ${{ steps.inspect.outputs.run_head_sha }}
+        run: |
+          set -o pipefail
+          mkdir -p verification-dispatch
+          gh api --paginate \
+            "repos/${REPOSITORY}/commits/${RUN_HEAD_SHA}/pulls?per_page=100" \
+            --jq '.[]' \
+            | jq -s '.' \
+            > verification-dispatch/pr-candidates.json
+
+      - name: Resolve triggering PR
+        id: resolve
+        if: steps.inspect.outputs.run_head_sha != ''
+        run: |
+          test -f verification-dispatch/pr-candidates.json || printf '[]\n' \
+            > verification-dispatch/pr-candidates.json
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from scripts.build_verification_dispatch_request import resolve_pr_number
+
+          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+          candidates = json.loads(
+              Path("verification-dispatch/pr-candidates.json").read_text()
+          )
+          number = resolve_pr_number(event=event, candidates=candidates)
           if isinstance(number, int):
               with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
                   output.write(f"pr_number={number}\n")
@@ -81,10 +128,7 @@ jobs:
 
       - name: Build bounded request
         id: build
-        env:
-          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          test -n "${RUN_HEAD_SHA}"
           test -f verification-dispatch/pr.json || printf '{}\n' \
             > verification-dispatch/pr.json
           test -f verification-dispatch/issue.json || printf '{}\n' \
