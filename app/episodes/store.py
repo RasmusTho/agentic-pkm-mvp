@@ -29,6 +29,10 @@ the CURRENT on-disk cut fields back unchanged (only ``segmentation`` differs), s
 check trivially; an attempt to mutate the cut of an already-terminal episode (e.g. new evidence
 trying to widen/edit it instead of becoming its own new proposal, AC3) is rejected here, not by a
 convention callers must remember.
+
+When an existing note has a human-authored Markdown body, rewrites preserve that body while
+updating validated frontmatter. The generated canonical body remains replaceable so derived
+headings can follow legitimate engine relabels without fabricating a human edit.
 """
 
 from __future__ import annotations
@@ -40,9 +44,14 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from app.episodes.ids import mint_episode_id, validate_fused_episode_id
-from app.episodes.notes import episode_note_rel_path, parse_episode_note, render_episode_note
+from app.episodes.notes import (
+    episode_note_rel_path,
+    parse_episode_note_document,
+    render_episode_note,
+)
 from app.episodes.schema import validate_episode_note_fields
 from app.knowledge.contracts import WriteReceipt
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.write_ops import write_note_relative
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
@@ -95,7 +104,7 @@ def cut_snapshot(fields: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _read_existing_episode_note(rel_path: str, vault_root: Path | str) -> str | None:
+def _read_existing_episode_note(rel_path: str, vault_root: Path | str) -> tuple[str, bytes] | None:
     """Best-effort read of the CURRENT on-disk text at ``rel_path``, or ``None`` when no note
     exists there yet (a brand-new episode_id, never terminal). Reads the filesystem directly
     (mirrors ``app.episodes.segmenter._emit_proposal``'s existence check) rather than through the
@@ -108,8 +117,9 @@ def _read_existing_episode_note(rel_path: str, vault_root: Path | str) -> str | 
     if not note_path.exists():
         return None
     try:
-        return note_path.read_text(encoding="utf-8")
-    except OSError:
+        raw_bytes = note_path.read_bytes()
+        return raw_bytes.decode("utf-8"), raw_bytes
+    except (OSError, UnicodeDecodeError):
         return None
 
 
@@ -141,12 +151,20 @@ def write_episode_note(
     episode_id: str | None = None,
     vault_root: Path | str,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+    preserve_existing_body: bool | None = None,
+    expected_existing_version: str | None = None,
 ) -> EpisodeWriteResult:
     """Write a vault-canonical episode note through the guarded seam.
 
     ``episode_id`` defaults to a freshly minted fused id (``ep-<uuid>``, disjoint-by-construction
     from Heimdal's per-session id space); an explicit ``episode_id`` is still validated against
     the same disjointness rule (AC4) so no caller can smuggle a raw Heimdal session id through.
+
+    ``preserve_existing_body`` is normally auto-detected. Re-cut reconciliation may pass an
+    explicit decision from its prior baseline, which is the only reliable way to distinguish an
+    untouched old generated body from a simultaneous frontmatter-and-body human edit.
+    ``expected_existing_version`` carries the scan-time version into this seam so that decision
+    cannot overwrite a concurrent editor save between scan and write.
     """
     if segmentation not in _ALLOWED_SEGMENTATIONS:
         raise EpisodeStoreError(
@@ -181,8 +199,36 @@ def write_episode_note(
     # accepted/re-cut has its cut frozen against machine mutation. A relabel that only changes
     # `segmentation` (echoing every cut field back unchanged) passes trivially; an attempted cut
     # mutation is rejected here and the note is left byte-for-byte untouched.
-    existing_text = _read_existing_episode_note(rel_path, vault_root)
-    existing_fields = parse_episode_note(existing_text) if existing_text is not None else None
+    existing_document = _read_existing_episode_note(rel_path, vault_root)
+    existing_text = existing_document[0] if existing_document is not None else None
+    current_version = (
+        hashlib.sha256(existing_document[1]).hexdigest()
+        if existing_document is not None
+        else None
+    )
+    if (
+        expected_existing_version is not None
+        and current_version != expected_existing_version
+    ):
+        raise KnowledgeWriteConflict(
+            f"version mismatch for episode note {rel_path}: scan-time content changed or vanished"
+        )
+    existing_fields: dict[str, Any] | None = None
+    preserved_body: str | None = None
+    if existing_text is not None:
+        existing_fields, existing_body = parse_episode_note_document(existing_text)
+        _, canonical_body = parse_episode_note_document(render_episode_note(existing_fields))
+        should_preserve_body = (
+            existing_body != canonical_body
+            if preserve_existing_body is None
+            else preserve_existing_body
+        )
+        if should_preserve_body:
+            # The markdown body has diverged from the generated template, so it belongs to the
+            # human edit surface. Every machine rewrite carries its content through unchanged
+            # instead of regenerating the canned body over it. A still-canonical body
+            # is regenerated from the new fields so derived headings remain current.
+            preserved_body = existing_body
     if existing_fields is not None and existing_fields.get("segmentation") in TERMINAL_SEGMENTATIONS:
         if cut_snapshot(existing_fields) != cut_snapshot(fields):
             logger.warning(
@@ -197,7 +243,7 @@ def write_episode_note(
                 "(machine-terminal); the write seam refuses to mutate its cut."
             )
 
-    content = render_episode_note(fields)
+    content = render_episode_note(fields, body=preserved_body)
 
     # Guard-at-seam (#2910 precedent): write_note_relative asserts
     # write_guard.assert_writes_allowed(EPISODE_WRITE_ACTION) itself, before any path
@@ -210,9 +256,9 @@ def write_episode_note(
     # above -- otherwise the seam refuses the write as a would-be silent overwrite. A
     # brand-new episode note (``existing_text is None``) needs no version.
     expected_version = (
-        hashlib.sha256(existing_text.encode("utf-8")).hexdigest()
-        if existing_text is not None
-        else None
+        expected_existing_version
+        if expected_existing_version is not None
+        else current_version
     )
     receipt = write_note_relative(
         rel_path,
