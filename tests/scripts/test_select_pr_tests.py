@@ -19,7 +19,7 @@ def test_companion_ui_change_selects_companion_and_api_targets() -> None:
     assert "companion_ui" in selection.subsystems
     assert "tests/companion_ui" in selection.targets
     assert "tests/api" in selection.targets
-    assert "tests/e2e/test_panel_to_promotion_consume.py" in selection.targets
+    assert "tests/e2e/test_panel_to_promotion_consume.py" not in selection.targets
     assert "tests/e2e" not in selection.targets
     assert selection.pytest_args.startswith('-q -m "not pg and not alpha_llm')
     assert "not panel_llm_e2e" in selection.pytest_args
@@ -130,15 +130,15 @@ def test_heimdal_mimer_contract_change_selects_its_owned_tests() -> None:
     assert "tests/knowledge_acquisition" in selection.targets
 
 
-def test_watcher_change_selects_only_watcher_owned_e2e_files() -> None:
+def test_watcher_change_defers_e2e_files_to_post_merge() -> None:
     selection = select_tests(["app/watcher/registry.py"])
 
     assert selection.full_suite is False
     assert selection.subsystems == ("watcher_sync",)
     assert "tests/watcher" in selection.targets
-    assert "tests/e2e/test_runtime_loop_vault_test.py" in selection.targets
-    assert "tests/e2e/test_watcher_registry_e2e.py" in selection.targets
-    assert "tests/e2e/test_panel_watcher_e2e.py" in selection.targets
+    assert "tests/e2e/test_runtime_loop_vault_test.py" not in selection.targets
+    assert "tests/e2e/test_watcher_registry_e2e.py" not in selection.targets
+    assert "tests/e2e/test_panel_watcher_e2e.py" not in selection.targets
     assert "tests/e2e/test_reality_mvp_pipeline.py" not in selection.targets
     assert "tests/e2e" not in selection.targets
 
@@ -222,22 +222,20 @@ def test_heimdal_capture_adapter_change_has_a_ci_owner() -> None:
     assert "tests/heimdal/test_capture_adapter.py" in selection.targets
 
 
-def test_shared_panel_watcher_e2e_file_selects_both_owning_subsystems() -> None:
+def test_shared_panel_watcher_e2e_file_is_deferred_to_post_merge() -> None:
     selection = select_tests(["tests/e2e/test_panel_watcher_e2e.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("watcher_sync", "promotion_panel")
-    assert "tests/watcher" in selection.targets
-    assert "tests/promotion" in selection.targets
-    assert selection.targets.count("tests/e2e/test_panel_watcher_e2e.py") == 1
+    assert selection.subsystems == ("e2e",)
+    assert selection.targets == ("tests/ci",)
 
 
-def test_unowned_e2e_file_fails_closed_until_it_has_an_owner() -> None:
+def test_unowned_e2e_file_is_deferred_to_post_merge() -> None:
     selection = select_tests(["tests/e2e/test_new_cross_system_flow.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("unowned",)
-    assert "unowned e2e" in selection.reason
+    assert selection.subsystems == ("e2e",)
+    assert "deferred" in selection.reason
 
 
 @pytest.mark.parametrize(
@@ -292,7 +290,7 @@ def test_docs_file_with_foreign_subsystem_test_still_gets_full_subsystem_coverag
     assert selection.full_suite is False
     assert selection.subsystems == ("watcher_sync",)
     assert "tests/watcher" in selection.targets
-    assert "tests/e2e/test_watcher_registry_e2e.py" in selection.targets
+    assert "tests/e2e/test_watcher_registry_e2e.py" not in selection.targets
 
 
 def test_docs_file_with_unmapped_test_fails_closed_until_it_has_an_owner() -> None:
@@ -316,7 +314,7 @@ def test_governance_file_with_foreign_subsystem_test_still_gets_full_subsystem_c
     assert selection.full_suite is False
     assert selection.subsystems == ("watcher_sync", "docs_authoring")
     assert "tests/watcher" in selection.targets
-    assert "tests/e2e/test_watcher_registry_e2e.py" in selection.targets
+    assert "tests/e2e/test_watcher_registry_e2e.py" not in selection.targets
     assert "tests/governance" in selection.targets
 
 
@@ -429,11 +427,12 @@ def test_cli_writes_github_output(tmp_path: Path) -> None:
     assert "tests/settings" in text
 
 
-def test_panel_live_e2e_is_owned_but_not_selected_by_generic_pr_pytest() -> None:
+def test_panel_live_e2e_is_deferred_to_post_merge() -> None:
     selection = select_tests(["tests/e2e/test_panel_llm_e2e.py"])
 
     assert selection.full_suite is False
-    assert selection.subsystems == ("llm_eval", "promotion_panel")
+    assert selection.subsystems == ("e2e",)
+    assert selection.targets == ("tests/ci",)
     assert "tests/e2e/test_panel_llm_e2e.py" not in selection.targets
     assert "not panel_llm_e2e" in selection.pytest_args
 
