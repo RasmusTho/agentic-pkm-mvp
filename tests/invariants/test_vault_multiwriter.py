@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from app.knowledge import adapters as adapters_module
 from app.knowledge.adapters import FsVaultAdapter
 from app.knowledge.contracts import NoteLocator
 from app.knowledge.errors import KnowledgeWriteConflict
@@ -206,7 +207,9 @@ def test_rewritten_write_rolls_back_same_inode_save_after_final_version_read(
     target.write_bytes(b"observed body")
     expected_version = hashlib.sha256(b"observed body").hexdigest()
     real_open = Path.open
+    real_exchange = adapters_module._atomic_exchange
     reads = 0
+    exchanges = 0
 
     class _SaveAfterFinalRead:
         def __init__(self, handle) -> None:  # type: ignore[no-untyped-def]
@@ -238,12 +241,36 @@ def test_rewritten_write_rolls_back_same_inode_save_after_final_version_read(
         mode = kwargs.get("mode", args[0] if args else "r")
         return _SaveAfterFinalRead(handle) if path == target and mode == "r+b" else handle
 
+    def racing_exchange(first: Path, second: Path) -> None:
+        nonlocal exchanges
+        exchanges += 1
+        if exchanges == 2:
+            target.write_bytes(b"THIRD-WRITER")
+        real_exchange(first, second)
+
     monkeypatch.setattr(Path, "open", racing_open)
+    monkeypatch.setattr(adapters_module, "_atomic_exchange", racing_exchange)
 
     with pytest.raises(KnowledgeWriteConflict, match="version mismatch"):
         adapter.write_note(locator, "ENGINE", expected_version=expected_version)
 
     assert target.read_bytes() == b"HUMAN-AFTER-FINAL-READ"
+    conflict_contents = [path.read_bytes() for path in target.parent.glob("*conflicted copy*")]
+    assert b"THIRD-WRITER" in conflict_contents
+
+
+def test_rewritten_write_preserves_existing_file_mode(tmp_path: Path) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/shared-mode.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    target.chmod(0o644)
+    expected_version = hashlib.sha256(b"observed body").hexdigest()
+
+    adapter.write_note(locator, "ENGINE", expected_version=expected_version)
+
+    assert target.stat().st_mode & 0o777 == 0o644
 
 
 def test_filesystem_write_receipt_carries_writer_provenance(tmp_path: Path) -> None:

@@ -3,9 +3,11 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 import os
+import stat
 import subprocess
 import sys
 import tempfile
+import uuid
 from datetime import UTC, datetime
 import hashlib
 from pathlib import Path
@@ -15,7 +17,12 @@ from app.knowledge.contracts import NoteLocator, SearchHit, WriteReceipt
 from app.knowledge.errors import KnowledgeCapabilityError, KnowledgeDependencyError, KnowledgeTransportError, KnowledgeWriteConflict
 from app.knowledge.locators import make_note_locator
 from app.knowledge.obsidian_cli_scope import scoped_cli_args
-from app.knowledge.multiwriter import NoteClass, WriteOperation, classify_note
+from app.knowledge.multiwriter import (
+    NoteClass,
+    WriteOperation,
+    classify_note,
+    conflict_artifact_path,
+)
 
 
 def _atomic_exchange(first: Path, second: Path) -> None:
@@ -58,6 +65,16 @@ def _atomic_exchange(first: Path, second: Path) -> None:
 
 def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
     return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+
+
+def _preserve_displaced_conflict(staged: Path, target: Path, locator: NoteLocator) -> None:
+    artifact_rel = conflict_artifact_path(
+        locator.path,
+        writer_identity=f"concurrent-save-{uuid.uuid4().hex}",
+        written_at=datetime.now(UTC),
+    )
+    artifact = target.with_name(artifact_rel.name)
+    os.rename(staged, artifact)
 
 
 class FsVaultAdapter:
@@ -112,6 +129,7 @@ class FsVaultAdapter:
                     f"version mismatch for rewritten note {locator.path}: target is missing"
                 ) from exc
             staged = Path(staged_name)
+            preserve_staged_conflict = False
             try:
                 payload = content.encode("utf-8")
                 with os.fdopen(staged_fd, "wb") as staged_handle:
@@ -151,6 +169,7 @@ class FsVaultAdapter:
                             f"version mismatch for rewritten note {locator.path}: "
                             "target changed during version check"
                         )
+                    os.chmod(staged, stat.S_IMODE(opened_stat.st_mode))
 
                 _atomic_exchange(target, staged)
 
@@ -159,6 +178,10 @@ class FsVaultAdapter:
                     path_stat = target.stat()
                     if _same_file_identity(path_stat, staged_stat):
                         _atomic_exchange(target, staged)
+                    if staged.exists() and hashlib.sha256(staged.read_bytes()).hexdigest() != (
+                        hashlib.sha256(payload).hexdigest()
+                    ):
+                        preserve_staged_conflict = True
                     raise KnowledgeWriteConflict(
                         f"version mismatch for rewritten note {locator.path}: "
                         "target changed at atomic exchange"
@@ -166,6 +189,7 @@ class FsVaultAdapter:
 
                 path_stat = target.stat()
                 if not _same_file_identity(path_stat, staged_stat):
+                    preserve_staged_conflict = True
                     raise KnowledgeWriteConflict(
                         f"version mismatch for rewritten note {locator.path}: "
                         "target changed after atomic exchange"
@@ -184,7 +208,10 @@ class FsVaultAdapter:
             finally:
                 if staged_fd >= 0:
                     os.close(staged_fd)
-                staged.unlink(missing_ok=True)
+                if preserve_staged_conflict and staged.exists():
+                    _preserve_displaced_conflict(staged, target, locator)
+                else:
+                    staged.unlink(missing_ok=True)
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
