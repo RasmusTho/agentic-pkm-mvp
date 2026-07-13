@@ -70,18 +70,33 @@ def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
     return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
 
 
-def _preserve_displaced_conflict(staged: Path, target: Path, locator: NoteLocator) -> Path:
+def _conflict_directory(vault_root: Path, target: Path) -> Path:
+    resolved_root = vault_root.resolve()
+    root_is_filesystem_anchor = resolved_root == Path(resolved_root.anchor)
+    boundary = target.parent.resolve() if root_is_filesystem_anchor else resolved_root
+    directory = boundary / "_conflicts"
+    if directory.is_symlink():
+        raise KnowledgeCapabilityError("conflict directory must not be a symlink")
+    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        directory.resolve().relative_to(boundary)
+    except ValueError as exc:
+        raise KnowledgeCapabilityError("conflict directory escapes write boundary") from exc
+    return directory
+
+
+def _preserve_displaced_conflict(
+    staged: Path, conflict_directory: Path, locator: NoteLocator
+) -> Path:
     artifact_rel = conflict_artifact_path(
         locator.path,
         writer_identity=f"concurrent-save-{uuid.uuid4().hex}",
         written_at=datetime.now(UTC),
     )
-    # Some legacy absolute-path callers intentionally use the filesystem anchor as
-    # ``vault_root``. Anchor-level ``/_conflicts`` is neither writable nor scoped to
-    # their actual vault. Place the safety tree at the nearest parent boundary that
-    # remains outside the canonical target directory instead.
-    artifact = target.parent.parent / "_conflicts" / target.parent.name / artifact_rel.name
-    artifact.parent.mkdir(parents=True, exist_ok=True)
+    # ``.md.conflict`` is intentionally not a markdown-indexable extension. The
+    # displaced inode remains durable and human-recoverable without becoming a
+    # second authority-like note in search, projection, or retrieval scans.
+    artifact = conflict_directory / f"{artifact_rel.name}.conflict"
     os.rename(staged, artifact)
     return artifact
 
@@ -129,6 +144,7 @@ class FsVaultAdapter:
         # longer match is refused with ``KnowledgeWriteConflict`` (INV-VW1: no silent
         # overwrite of a concurrently-changed note).
         if expected_version is not None and note_class is NoteClass.REWRITTEN:
+            conflict_directory = _conflict_directory(self.vault_root, target)
             try:
                 staged_fd, staged_name = tempfile.mkstemp(
                     prefix=f".{target.name}.", suffix=".rewrite-swap", dir=target.parent
@@ -196,7 +212,7 @@ class FsVaultAdapter:
                 # such descriptors close, so every successful optimistic exchange retains
                 # this pre-exchange version as a standard conflicted copy.
                 preserve_staged_conflict = True
-                staged = _preserve_displaced_conflict(staged, target, locator)
+                staged = _preserve_displaced_conflict(staged, conflict_directory, locator)
                 staged_is_artifact = True
 
                 displaced_version = hashlib.sha256(staged.read_bytes()).hexdigest()
@@ -248,7 +264,9 @@ class FsVaultAdapter:
                 try:
                     if preserve_staged_conflict and staged.exists():
                         if not staged_is_artifact:
-                            staged = _preserve_displaced_conflict(staged, target, locator)
+                            staged = _preserve_displaced_conflict(
+                                staged, conflict_directory, locator
+                            )
                             staged_is_artifact = True
                     else:
                         staged.unlink(missing_ok=True)

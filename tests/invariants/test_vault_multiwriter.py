@@ -9,7 +9,7 @@ import pytest
 from app.knowledge import adapters as adapters_module
 from app.knowledge.adapters import FsVaultAdapter
 from app.knowledge.contracts import NoteLocator
-from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.errors import KnowledgeCapabilityError, KnowledgeWriteConflict
 from app.knowledge.multiwriter import NoteClass, WriteOperation, classify_note, conflict_artifact_path, is_conflict_artifact
 from app.knowledge.write_ops import write_note_from_absolute
 
@@ -405,6 +405,74 @@ def test_rewritten_write_first_exchange_error_uses_knowledge_conflict(
         adapter.write_note(locator, "ENGINE", expected_version=expected_version)
 
     assert target.read_bytes() == b"observed body"
+
+
+def test_retained_displaced_inode_is_not_visible_to_markdown_search(tmp_path: Path) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/search-isolation.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"SECRET-OLD-ONLY")
+    expected_version = hashlib.sha256(b"SECRET-OLD-ONLY").hexdigest()
+
+    adapter.write_note(locator, "CURRENT", expected_version=expected_version)
+
+    assert adapter.search_notes("Vault", "SECRET-OLD-ONLY") == []
+    artifacts = list((tmp_path / "_conflicts").glob("*.md.conflict"))
+    assert len(artifacts) == 1
+    assert artifacts[0].read_bytes() == b"SECRET-OLD-ONLY"
+
+
+def test_top_level_note_conflict_artifact_stays_inside_normal_vault(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    adapter = FsVaultAdapter(vault_root)
+    locator = NoteLocator(vault="Vault", path="top.md")
+    target = vault_root / locator.path
+    target.write_bytes(b"old")
+
+    adapter.write_note(
+        locator, "new", expected_version=hashlib.sha256(b"old").hexdigest()
+    )
+
+    assert list((vault_root / "_conflicts").glob("*.md.conflict"))
+    assert not (tmp_path / "_conflicts").exists()
+
+
+def test_root_anchored_legacy_adapter_places_conflict_beside_actual_target(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "vault" / "Notes" / "legacy.md"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"old")
+    adapter = FsVaultAdapter(Path(target.anchor))
+    locator = NoteLocator(vault="Vault", path=target.as_posix().lstrip("/"))
+
+    adapter.write_note(
+        locator, "new", expected_version=hashlib.sha256(b"old").hexdigest()
+    )
+
+    assert list((target.parent / "_conflicts").glob("*.md.conflict"))
+
+
+def test_conflict_directory_symlink_escape_fails_before_exchange(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    outside = tmp_path / "outside"
+    vault_root.mkdir()
+    outside.mkdir()
+    (vault_root / "_conflicts").symlink_to(outside, target_is_directory=True)
+    adapter = FsVaultAdapter(vault_root)
+    locator = NoteLocator(vault="Vault", path="top.md")
+    target = vault_root / locator.path
+    target.write_bytes(b"old")
+
+    with pytest.raises(KnowledgeCapabilityError, match="must not be a symlink"):
+        adapter.write_note(
+            locator, "new", expected_version=hashlib.sha256(b"old").hexdigest()
+        )
+
+    assert target.read_bytes() == b"old"
+    assert list(outside.iterdir()) == []
 
 
 def test_filesystem_write_receipt_carries_writer_provenance(tmp_path: Path) -> None:
