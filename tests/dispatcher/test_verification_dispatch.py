@@ -36,6 +36,25 @@ def test_existing_schema_v2_upgrades_to_verification_schema_v3(tmp_path) -> None
     assert tables == {"verification_runs", "verification_attempts", "verification_exceptions"}
 
 
+def test_existing_schema_v3_backfills_current_head_without_losing_request_audit(
+    tmp_path,
+) -> None:
+    db = tmp_path / "dispatcher.sqlite3"
+    state = ledger(tmp_path)
+    original = state.ingest(request())
+    with sqlite3.connect(db) as conn:
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN verified_head_sha")
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN current_head_sha")
+        conn.commit()
+
+    migrated = ledger(tmp_path).get(original.run_id)
+
+    assert migrated is not None
+    assert migrated.requested_head_sha == original.requested_head_sha
+    assert migrated.head_sha == original.requested_head_sha
+    assert migrated.verified_head_sha is None
+
+
 def test_ingest_claim_and_terminal_lifecycle_is_idempotent(tmp_path) -> None:
     state = ledger(tmp_path)
     first = state.ingest(request())

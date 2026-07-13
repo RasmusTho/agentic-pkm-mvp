@@ -50,11 +50,22 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   after the final durable repair attempt. Standard and strongest-capability repair budgets are
   persisted across restart.
 - The schema-valid coordinator receipt carries ordered repair/review events into the same
-  lease-fenced ledger; a no-repair delivery still requires two distinct clean review sessions.
-  Check eligibility selects the latest GitHub rerun per check name. Schema-v3 health, backup, and
-  restore validation covers verification runs, attempts, exceptions, and their write-critical keys.
+  lease-fenced ledger as one atomic, deterministically identified batch. Exact receipt replay is a
+  no-op, and a later invalid/conflicting event rolls back the whole batch; a no-repair delivery still
+  requires two distinct clean review sessions. Check eligibility selects the latest GitHub rerun per
+  check name. Schema-v3 health, backup, and restore validation covers verification runs, attempts,
+  exceptions, head-audit fields, and their write-critical keys. A deployed pre-head-rebinding v3
+  backup may omit only the two additive current/verified-head columns: recovery preserves that
+  artifact, and the first normal store open atomically backfills the current head from the immutable
+  request head while retaining all prior audit rows. Missing older audit tables, columns, or unique
+  keys still fail closed before migration.
 - The Codex process boundary drains bounded stderr concurrently and rejects non-zero exits or
-  terminal error events even when stdout contained an otherwise valid receipt.
+  terminal error events even when stdout contained an otherwise valid receipt. A bounded rate-limit,
+  usage-limit, quota, or credit-exhaustion signal on that non-zero path remains a lease-fenced backoff
+  receipt with no repair-budget use or API-key fallback.
+- The immutable request head remains the run/idempotency audit identity. A repair receipt may advance
+  the separate current head only under the exact active lease after a fresh GitHub read proves that
+  exact live PR head; terminal delivery records the verified head only after two clean reviews on it.
 - `verification-ingest` and `verification-status` are host-neutral dispatcher CLI surfaces. The
   Demerzel enable/disable/poll wrapper and service configuration remain host-local outside Git.
 - GitHub Actions remains artifact-only. The consumer grants no mutation or merge authority beyond

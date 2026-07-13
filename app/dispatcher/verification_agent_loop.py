@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Mapping, Sequence
+import hashlib
+import json
+from typing import Callable, Mapping, Sequence
 
 from app.dispatcher.verification_dispatch import VerificationDispatchLedger
 
@@ -126,25 +128,154 @@ class VerificationAgentLoop:
         *,
         context: Mapping[str, object],
     ) -> None:
-        """Persist the coordinator's ordered, schema-validated repair/review receipt."""
-        for event in events:
-            common = {
-                "session_id": str(event["session_id"]),
-                "capability": str(event["capability"]),
-                "reasoning_effort": str(event["reasoning_effort"]),
-                "context": context,
-                "outcome": str(event["outcome"]),
-            }
-            if event.get("kind") == "repair":
-                self.repair(
-                    finding_id=str(event["finding_id"]),
-                    strongest=bool(event.get("strongest", False)),
-                    **common,
-                )
-            elif event.get("kind") == "review":
-                self.review(**common)
-            else:
-                raise ValueError("unknown verification review event kind")
+        """Atomically persist one replay-safe coordinator event batch."""
+        if not events:
+            return
+        head_sha = self._head()
+        context_hash = hashlib.sha256(
+            json.dumps(
+                dict(context),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode()
+        ).hexdigest()
+        batch_payload = {
+            "context_hash": context_hash,
+            "events": [dict(event) for event in events],
+            "head_sha": head_sha,
+        }
+        batch_id = hashlib.sha256(
+            json.dumps(
+                batch_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode()
+        ).hexdigest()
+
+        def plan(
+            attempts: list[dict[str, object]],
+            attempt_id_for: Callable[[int], str],
+        ) -> list[dict[str, object]]:
+            working = list(attempts)
+            planned: list[dict[str, object]] = []
+            for index, event in enumerate(events):
+                session_id = str(event["session_id"])
+                capability = str(event["capability"])
+                reasoning_effort = str(event["reasoning_effort"])
+                outcome = str(event["outcome"])
+                attempt_id = attempt_id_for(index)
+                event_kind = event.get("kind")
+                if event_kind == "repair":
+                    finding_id = str(event["finding_id"])
+                    if not finding_id:
+                        raise ValueError("repair requires a stable finding id")
+                    repairs = [
+                        row
+                        for row in working
+                        if row["kind"] in {"standard_repair", "escalated_repair"}
+                    ]
+                    if repairs:
+                        latest = repairs[-1]["attempt_id"]
+                        reviews = [
+                            row
+                            for row in working
+                            if row["kind"] == "review"
+                            and isinstance(row["receipt"], Mapping)
+                            and row["receipt"].get("reviewed_attempt_id") == latest
+                        ]
+                        if not reviews or reviews[-1]["outcome"] != "blocking":
+                            raise ValueError(
+                                "each additional repair requires a fresh blocking review"
+                            )
+                    strongest = bool(event.get("strongest", False))
+                    if strongest and (
+                        capability != self.strongest_capability
+                        or reasoning_effort not in {"high", "xhigh"}
+                    ):
+                        raise ValueError(
+                            "escalated repair must use the configured strongest capability"
+                        )
+                    kind = "escalated_repair" if strongest else "standard_repair"
+                    ordinal = sum(row["kind"] == kind for row in working) + 1
+                    if ordinal > 2:
+                        raise ValueError(f"{kind} budget exhausted")
+                    if strongest:
+                        standard = sum(
+                            row["kind"] == "standard_repair" for row in working
+                        )
+                        if standard < 2:
+                            raise ValueError(
+                                "strongest capability is only allowed after two standard attempts"
+                            )
+                    receipt: dict[str, object] = {
+                        "finding_id": finding_id,
+                        "head_sha": head_sha,
+                    }
+                elif event_kind == "review":
+                    normalized = outcome.lower()
+                    if normalized not in {"blocking", "clean"}:
+                        raise ValueError("review outcome must be blocking or clean")
+                    if any(row["session_id"] == session_id for row in working):
+                        raise ValueError("independent re-review requires a fresh session")
+                    repairs = [
+                        row
+                        for row in working
+                        if row["kind"] in {"standard_repair", "escalated_repair"}
+                    ]
+                    verifications = [
+                        row for row in working if row["kind"] == "verification"
+                    ]
+                    if not repairs and not verifications:
+                        raise ValueError("review requires a recorded verification or repair")
+                    latest = repairs[-1] if repairs else verifications[-1]
+                    reviews = [
+                        row
+                        for row in working
+                        if row["kind"] == "review"
+                        and isinstance(row["receipt"], Mapping)
+                        and row["receipt"].get("reviewed_attempt_id")
+                        == latest["attempt_id"]
+                    ]
+                    if reviews and reviews[-1]["outcome"] == "blocking":
+                        raise ValueError("blocking review requires repair before another review")
+                    if len(reviews) >= 2:
+                        raise ValueError("independent clean re-review budget is complete")
+                    kind = "review"
+                    outcome = normalized
+                    ordinal = sum(row["kind"] == kind for row in working) + 1
+                    receipt = {
+                        "reviewed_attempt_id": latest["attempt_id"],
+                        "head_sha": head_sha,
+                        "verdict": normalized,
+                    }
+                else:
+                    raise ValueError("unknown verification review event kind")
+                row = {
+                    "attempt_id": attempt_id,
+                    "kind": kind,
+                    "ordinal": ordinal,
+                    "session_id": session_id,
+                    "capability": capability,
+                    "reasoning_effort": reasoning_effort,
+                    "context_hash": context_hash,
+                    "outcome": outcome,
+                    "receipt": receipt,
+                }
+                working.append(row)
+                planned.append(row)
+            return planned
+
+        self.ledger.record_attempt_batch(
+            self.run_id,
+            batch_id,
+            len(events),
+            head_sha,
+            plan,
+            holder=self.holder,
+            lease_id=self.lease_id,
+        )
 
     def closure_ready(self) -> bool:
         return self.ledger.closure_ready(self.run_id)

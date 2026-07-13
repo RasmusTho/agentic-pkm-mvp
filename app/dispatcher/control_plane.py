@@ -11,7 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from app.dispatcher.config import DEFAULT_DB_NAME, DEFAULT_EVENTS_NAME, DispatcherPaths
-from app.dispatcher.schema import SCHEMA_VERSION
+from app.dispatcher.schema import (
+    SCHEMA_VERSION,
+    has_unique_key,
+    verification_v3_schema_error,
+)
 from app.dispatcher.store import SqliteStore
 
 STATE_KEY = "control_plane_state"
@@ -77,45 +81,6 @@ _REQUIRED_UNIQUE_KEYS = {
     "dispatcher_events": (("event_id",),),
     "dispatcher_meta": (("key",),),
 }
-_V3_REQUIRED_TABLES = frozenset(
-    {"verification_runs", "verification_attempts", "verification_exceptions"}
-)
-_V3_REQUIRED_COLUMNS = {
-    "verification_runs": frozenset(
-        {
-            "run_id", "idempotency_key", "contract_version", "repository",
-            "pr_number", "head_sha", "stage", "request_json", "status",
-            "claimed_by", "lease_id", "lease_expires_at", "last_heartbeat_at",
-            "coordinator_session_id", "context_pack_json", "terminal_receipt_json",
-            "stop_reason", "retry_after", "created_at", "updated_at",
-        }
-    ),
-    "verification_attempts": frozenset(
-        {
-            "attempt_id", "run_id", "attempt_kind", "ordinal", "session_id",
-            "capability", "reasoning_effort", "context_hash", "outcome",
-            "receipt_json", "created_at",
-        }
-    ),
-    "verification_exceptions": frozenset(
-        {
-            "exception_id", "run_id", "failure_class", "head_sha", "packet_json",
-            "created_at", "updated_at",
-        }
-    ),
-}
-_V3_REQUIRED_UNIQUE_KEYS = {
-    "verification_runs": (
-        ("run_id",), ("idempotency_key",),
-        ("repository", "pr_number", "head_sha", "stage"),
-    ),
-    "verification_attempts": (
-        ("attempt_id",), ("run_id", "attempt_kind", "ordinal"),
-    ),
-    "verification_exceptions": (
-        ("exception_id",), ("run_id", "failure_class", "head_sha"),
-    ),
-}
 _LEGACY_V1_TABLES = frozenset({"dispatcher_tasks", "dispatcher_events"})
 _LEGACY_V1_COLUMNS = {
     "dispatcher_tasks": _REQUIRED_COLUMNS["dispatcher_tasks"] - {"repo"},
@@ -168,20 +133,7 @@ def _dispatcher_schema_error(conn: sqlite3.Connection) -> str | None:
     if version not in {1, 2, SCHEMA_VERSION}:
         return f"unsupported dispatcher schema_version: {version}"
     if version == SCHEMA_VERSION:
-        missing_v3 = sorted(_V3_REQUIRED_TABLES - tables)
-        if missing_v3:
-            return f"missing dispatcher tables: {', '.join(missing_v3)}"
-        for table, required in _V3_REQUIRED_COLUMNS.items():
-            columns = {
-                str(row[1])
-                for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-            }
-            missing_columns = sorted(required - columns)
-            if missing_columns:
-                return f"missing dispatcher columns in {table}: {', '.join(missing_columns)}"
-        unique_error = _unique_key_error(conn, _V3_REQUIRED_UNIQUE_KEYS)
-        if unique_error:
-            return unique_error
+        return verification_v3_schema_error(conn, allow_additive_migration=True)
     return None
 
 
@@ -191,7 +143,7 @@ def _unique_key_error(
 ) -> str | None:
     for table, required_keys in requirements.items():
         for required_key in required_keys:
-            if not _has_unique_key(conn, table, required_key):
+            if not has_unique_key(conn, table, required_key):
                 return (
                     f"missing required unique key in {table}: "
                     f"{', '.join(required_key)}"
@@ -210,7 +162,7 @@ def _is_canonical_v1_schema(conn: sqlite3.Connection, tables: set[str]) -> bool:
         if columns != required:
             return False
     return all(
-        _has_unique_key(conn, table, required_key)
+        has_unique_key(conn, table, required_key)
         for table, required_key in _LEGACY_V1_UNIQUE_KEYS.items()
     )
 
@@ -223,43 +175,6 @@ def _is_canonical_v1(conn: sqlite3.Connection) -> bool:
         ).fetchall()
     }
     return _is_canonical_v1_schema(conn, tables)
-
-
-def _has_unique_key(
-    conn: sqlite3.Connection, table: str, required_key: tuple[str, ...]
-) -> bool:
-    """Return whether ``table`` enforces uniqueness for ``required_key``.
-
-    SQLite represents table primary keys and explicit ``UNIQUE`` constraints
-    through slightly different pragma surfaces.  Inspect both so recovery
-    commands accept compatible legacy databases without certifying a shape
-    that a normal dispatcher write cannot use.
-    """
-    columns = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    primary_key = tuple(
-        str(row[1])
-        for row in sorted(columns, key=lambda row: int(row[5]))
-        if int(row[5]) > 0
-    )
-    if primary_key == required_key:
-        return True
-
-    for index in conn.execute(f"PRAGMA index_list({table})").fetchall():
-        if not bool(index[2]):
-            continue
-        # A partial UNIQUE index cannot satisfy ``ON CONFLICT(column)``
-        # without the same WHERE clause.  Dispatcher writers use bare
-        # conflict targets, so accepting one here would certify a database
-        # that fails as soon as state is written.
-        if bool(index[4]):
-            continue
-        index_columns = tuple(
-            str(row[2])
-            for row in conn.execute(f"PRAGMA index_info({index[1]})").fetchall()
-        )
-        if index_columns == required_key:
-            return True
-    return False
 
 
 def state(store: SqliteStore) -> dict[str, Any]:

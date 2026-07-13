@@ -14,6 +14,8 @@ from app.dispatcher.events import JsonlEventWriter
 from app.dispatcher.models import TaskRecord
 from app.dispatcher.schema import DDL_STATEMENTS, SCHEMA_VERSION
 from app.dispatcher.store import SqliteStore
+from app.dispatcher.verification_dispatch import VerificationDispatchLedger
+from tests.dispatcher.verification_helpers import request as verification_request
 
 
 def _store(tmp_path: Path) -> tuple[SqliteStore, object]:
@@ -50,6 +52,42 @@ def _write_canonical_v1_db(db_path: Path) -> None:
         )
 
 
+def _write_pre_repair_v3_state(tmp_path: Path):
+    """Create deployed v3 state from before verification head rebinding."""
+    store, paths = _store(tmp_path)
+    store.upsert_task(_task())
+    run = VerificationDispatchLedger(store).ingest(verification_request())
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO verification_attempts (
+                attempt_id, run_id, attempt_kind, ordinal, session_id,
+                capability, reasoning_effort, context_hash, outcome,
+                receipt_json, created_at
+            ) VALUES (?, ?, 'review', 1, 'review-session', 'terra', 'high',
+                      'context-hash', 'clean', '{"legacy":true}',
+                      '2026-07-13T12:00:01+00:00')
+            """,
+            ("attempt-pre-repair", run.run_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO verification_exceptions (
+                exception_id, run_id, failure_class, head_sha, packet_json,
+                created_at, updated_at
+            ) VALUES (?, ?, 'review_blocked', ?, '{"legacy":true}',
+                      '2026-07-13T12:00:02+00:00',
+                      '2026-07-13T12:00:02+00:00')
+            """,
+            ("exception-pre-repair", run.run_id, run.requested_head_sha),
+        )
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN verified_head_sha")
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN current_head_sha")
+        conn.commit()
+    paths.events_path.touch()
+    return paths, run
+
+
 def test_recovery_accepts_and_restores_canonical_v1_until_store_migrates_it(
     tmp_path: Path,
 ) -> None:
@@ -67,6 +105,124 @@ def test_recovery_accepts_and_restores_canonical_v1_until_store_migrates_it(
     # Recovery preserves the v1 artifact; the normal store path owns its
     # atomic in-place migration once the restored dispatcher is opened.
     assert SqliteStore(restored.db_path).get_meta("schema_version") == str(SCHEMA_VERSION)
+
+
+def test_pre_repair_v3_backup_restore_self_migrates_without_data_loss(
+    tmp_path: Path,
+) -> None:
+    paths, original = _write_pre_repair_v3_state(tmp_path)
+
+    assert control_plane.health(paths)["ok"] is True
+    backup = tmp_path / "backup"
+    control_plane.backup(paths, backup)
+    restored = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "restored")})
+    assert control_plane.restore(backup, restored)["integrity"] == "ok"
+
+    with sqlite3.connect(restored.db_path) as conn:
+        columns_before = {
+            row[1] for row in conn.execute("PRAGMA table_info(verification_runs)")
+        }
+        run_before = conn.execute(
+            "SELECT run_id, head_sha, status FROM verification_runs"
+        ).fetchone()
+        attempt_before = conn.execute(
+            "SELECT attempt_id, run_id, receipt_json FROM verification_attempts"
+        ).fetchone()
+        exception_before = conn.execute(
+            "SELECT exception_id, run_id, packet_json FROM verification_exceptions"
+        ).fetchone()
+    assert {"current_head_sha", "verified_head_sha"}.isdisjoint(columns_before)
+
+    migrated = SqliteStore(restored.db_path)
+    assert migrated.get_meta("schema_version") == str(SCHEMA_VERSION)
+    with sqlite3.connect(restored.db_path) as conn:
+        columns_after = {
+            row[1] for row in conn.execute("PRAGMA table_info(verification_runs)")
+        }
+        run_after = conn.execute(
+            "SELECT run_id, head_sha, status FROM verification_runs"
+        ).fetchone()
+        rebound_heads = conn.execute(
+            "SELECT current_head_sha, verified_head_sha FROM verification_runs"
+        ).fetchone()
+        attempt_after = conn.execute(
+            "SELECT attempt_id, run_id, receipt_json FROM verification_attempts"
+        ).fetchone()
+        exception_after = conn.execute(
+            "SELECT exception_id, run_id, packet_json FROM verification_exceptions"
+        ).fetchone()
+
+    assert {"current_head_sha", "verified_head_sha"} <= columns_after
+    assert run_after == run_before == (original.run_id, original.requested_head_sha, "queued")
+    assert rebound_heads == (original.requested_head_sha, None)
+    assert attempt_after == attempt_before
+    assert exception_after == exception_before
+    assert migrated.get_task("task-1") is not None
+    assert control_plane.health(restored)["ok"] is True
+
+
+@pytest.mark.parametrize(
+    "corruption_sql, expected_error",
+    [
+        (
+            "DROP TABLE verification_attempts",
+            "missing dispatcher tables: verification_attempts",
+        ),
+        (
+            "ALTER TABLE verification_runs DROP COLUMN coordinator_session_id",
+            "missing dispatcher columns in verification_runs: coordinator_session_id",
+        ),
+        (
+            """
+            ALTER TABLE verification_exceptions RENAME TO verification_exceptions_old;
+            CREATE TABLE verification_exceptions (
+                exception_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                failure_class TEXT NOT NULL,
+                head_sha TEXT NOT NULL,
+                packet_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(run_id) REFERENCES verification_runs(run_id)
+            );
+            INSERT INTO verification_exceptions
+                SELECT * FROM verification_exceptions_old;
+            DROP TABLE verification_exceptions_old;
+            """,
+            "missing required unique key in verification_exceptions: "
+            "run_id, failure_class, head_sha",
+        ),
+    ],
+)
+def test_pre_repair_v3_corruption_still_fails_closed(
+    tmp_path: Path,
+    corruption_sql: str,
+    expected_error: str,
+) -> None:
+    paths, _ = _write_pre_repair_v3_state(tmp_path)
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.executescript(corruption_sql)
+    before = paths.db_path.read_bytes()
+
+    with pytest.raises(ValueError, match=expected_error):
+        SqliteStore(paths.db_path).get_meta("schema_version")
+    assert paths.db_path.read_bytes() == before
+
+    proof = control_plane.health(paths)
+    assert proof["ok"] is False
+    assert proof["db"]["error"] == expected_error
+    with pytest.raises(ValueError, match="unsafe"):
+        control_plane.backup(paths, tmp_path / "backup")
+    assert not (tmp_path / "backup").exists()
+
+    backup = tmp_path / "restore-source"
+    backup.mkdir()
+    (backup / paths.db_path.name).write_bytes(before)
+    (backup / paths.events_path.name).write_text("", encoding="utf-8")
+    restored = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "restored")})
+    with pytest.raises(ValueError, match=expected_error):
+        control_plane.restore(backup, restored)
+    assert not restored.state_dir.exists()
 
 
 def test_health_backup_and_restore_to_separate_root(tmp_path: Path) -> None:
