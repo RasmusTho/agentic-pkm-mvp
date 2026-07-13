@@ -97,6 +97,9 @@ def test_raw_frontmatter_validation_allows_renderer_metadata_only() -> None:
     with pytest.raises(EpisodeFrontmatterParseError):
         parse_validated_episode_note("---\nepisode_id: [unterminated\n---\n")
 
+    with pytest.raises(EpisodeFrontmatterParseError):
+        parse_validated_episode_note("---\nepisode_id: ep-truncated\n")
+
 
 def test_rebuild_does_not_truncate_when_a_vault_note_cannot_be_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -157,6 +160,31 @@ def test_rebuild_and_doctor_surface_malformed_yaml(
     report = episodes_projection.doctor_episodes_projection(tmp_path)
     assert report.ok is False
     assert report.unreadable_vault_notes[0]["note_path"] == "episodes/ep-malformed.md"
+
+
+def test_rebuild_and_doctor_surface_unterminated_frontmatter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A truncated delimiter is unreadable and must not shrink the projection."""
+    from app.episodes.notes import EpisodeFrontmatterParseError
+    from app.jobs import episodes_projection
+
+    broken = tmp_path / "episodes" / "ep-truncated.md"
+    broken.parent.mkdir()
+    broken.write_text("---\nepisode_id: ep-truncated\n", encoding="utf-8")
+    monkeypatch.setattr(
+        episodes_projection,
+        "conn_rw",
+        lambda: pytest.fail("rebuild must parse the vault before truncating the projection"),
+    )
+
+    with pytest.raises(EpisodeFrontmatterParseError):
+        episodes_projection.rebuild_episodes_projection(tmp_path)
+
+    monkeypatch.setattr(episodes_projection, "_db_projection_rows", lambda: [])
+    report = episodes_projection.doctor_episodes_projection(tmp_path)
+    assert report.ok is False
+    assert report.unreadable_vault_notes[0]["note_path"] == "episodes/ep-truncated.md"
 
 
 @pytest.fixture

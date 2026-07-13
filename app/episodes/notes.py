@@ -96,7 +96,7 @@ def _strict_episode_frontmatter(text: str) -> dict[str, Any]:
         return {}
     parts = text.split("---", 2)
     if len(parts) < 3:
-        return {}
+        raise EpisodeFrontmatterParseError("unterminated episode frontmatter")
     try:
         fields = yaml.safe_load(parts[1]) or {}
     except yaml.YAMLError as exc:
