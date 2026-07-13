@@ -39,7 +39,12 @@ from app.vault.layout import load_layout
 from app.watcher.events import emit_watcher_run_event
 from app.watcher.heartbeat import resolve_heartbeat_path, write_registry_heartbeat
 from app.watcher.scope import derive_scope_roots, matches_scope
-from app.watcher.settings_delta import handle_settings_local_delta
+from app.watcher.settings_delta import (
+    SETTINGS_SOURCE_DIR_NAME,
+    handle_settings_local_delta,
+    handle_settings_source_delta,
+    is_settings_source_path,
+)
 from app.watcher.state import WatcherState
 from app.write_guard import DEFAULT_WRITE_GUARD
 from scripts.yaml_roundtrip import load_frontmatter
@@ -123,7 +128,12 @@ def _scan_markdown_many(
                 continue
             if any(part.startswith(".") for part in rel.parts):
                 continue
-            if rel in seen or not _matches_scope(rel, scope_glob):
+            # Settings sources are a runtime control surface, not ordinary
+            # watcher content.  Always include them even when a user narrows
+            # the note scope, otherwise an edit silently cannot take effect.
+            if rel in seen or (
+                not _matches_scope(rel, scope_glob) and not is_settings_source_path(rel)
+            ):
                 continue
             try:
                 mtime = path.stat().st_mtime
@@ -986,6 +996,20 @@ def _collect_changed_entries(
             hashed = _hash_file(path)
             if hashed is not None:
                 digest = hashed[0]
+        source_delta = handle_settings_source_delta(
+            rel_path=rel,
+            vault_settings_dir=cfg.vault_path / SETTINGS_SOURCE_DIR_NAME,
+        )
+        if source_delta.is_source:
+            if source_delta.reloaded:
+                summary["settings_source_reloads_in_tick"] = (
+                    int(summary.get("settings_source_reloads_in_tick", 0)) + 1
+                )
+            if source_delta.errors:
+                state.errors += len(source_delta.errors)
+                summary["settings_source_errors_in_tick"] = int(
+                    summary.get("settings_source_errors_in_tick", 0)
+                ) + len(source_delta.errors)
         changed_entries.append(ChangedEntry(rel_path=rel, mtime=mtime, digest=digest))
         if settings_delta.values is not None:
             _sync_settings_local_state(states, rel_str=rel_str, values=settings_delta.values)
@@ -1245,6 +1269,9 @@ def _run_spec_tick(
 
     try:
         scan_roots = derive_scope_roots(cfg.vault_path, spec.scope_glob)
+        settings_sources_root = cfg.vault_path / SETTINGS_SOURCE_DIR_NAME
+        if settings_sources_root.exists():
+            scan_roots = [*scan_roots, settings_sources_root]
     except FileNotFoundError as exc:
         # Static scope-prefix directory does not exist under the bound vault
         # (e.g. an env scope glob naming a folder the vault does not have).
@@ -1380,6 +1407,18 @@ def run_registry_once(config_path: Path) -> dict[str, dict[str, object]]:
 
 def run_registry_forever(config_path: Path, *, max_ticks: int | None = None) -> None:
     cfg = load_registry_config(config_path)
+    # `watcher run` is the production entrypoint.  Compile its bound vault at
+    # boot just as API and worker do; the registry config is authoritative for
+    # this process and need not depend on VAULT_ROOT being set separately.
+    try:
+        from app.settings.ingestion import ingest_settings
+
+        ingest_settings(
+            reason="registry_watcher_startup",
+            vault_settings_dir=cfg.vault_path / SETTINGS_SOURCE_DIR_NAME,
+        )
+    except Exception as exc:  # pragma: no cover - defensive; ingestion degrades
+        logger.warning("Settings ingestion at registry watcher startup failed: %s", exc)
     states = {
         spec.name: WatcherState.load(_state_path(cfg.state_dir, spec.name))
         for spec in cfg.specs

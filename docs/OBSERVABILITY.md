@@ -40,6 +40,14 @@ actually took effect (SETTINGS-01 / audit F1). Fields: `state`, `source` (`vault
 
 This is a diagnostic surface only. Tests: `tests/settings/test_ingestion_startup.py`.
 
+The registry watcher publishes each settings-source result through the channel-scoped shared runtime
+artifact volume (`/app/tmp/settings-reload.json`; override only with
+`SETTINGS_RELOAD_SIGNAL_PATH`). API and worker treat that file as an invalidation signal and rebuild
+their own local `runtime/settings` projection from vault markdown on the next settings read. The
+signal is derived runtime state, not settings authority; the vault markdown remains the source of
+truth. An invalid watcher edit propagates the degraded health state without replacing a last-valid
+bundle in another process.
+
 ## Heartbeat locations and freshness
 - Watcher heartbeat default: `tmp/watcher_heartbeat.json` (override with `WATCHER_HEARTBEAT_PATH`).
 - Worker heartbeat default: `tmp/worker_heartbeat.json` (override with `WORKER_HEARTBEAT_PATH`).

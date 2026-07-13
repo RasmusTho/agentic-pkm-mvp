@@ -39,7 +39,11 @@ class SettingsSourceDeltaResult:
 
 def is_settings_source_path(rel_path: Path) -> bool:
     """True for a settings source markdown file (``@Settings/*.md``, incl. agents)."""
-    return rel_path.suffix == ".md" and SETTINGS_SOURCE_DIR_NAME in rel_path.parts
+    return (
+        rel_path.suffix == ".md"
+        and bool(rel_path.parts)
+        and rel_path.parts[0] == SETTINGS_SOURCE_DIR_NAME
+    )
 
 
 def handle_settings_source_delta(
@@ -57,7 +61,9 @@ def handle_settings_source_delta(
     from app.settings.ingestion import STATE_OK, ingest_settings
 
     state = ingest_settings(
-        reason="watcher_source_delta", vault_settings_dir=vault_settings_dir
+        reason="watcher_source_delta",
+        vault_settings_dir=vault_settings_dir,
+        publish_signal=True,
     )
     errors = (state.error,) if state.error else ()
     return SettingsSourceDeltaResult(
@@ -102,7 +108,9 @@ def handle_settings_local_delta(
         detail = f": {context.validation_error}" if context.validation_error else ""
         return SettingsDeltaResult(
             values=current_values,
-            errors=(f"settings/local.md delta requires selected vault; status={context.status}{detail}",),
+            errors=(
+                f"settings/local.md delta requires selected vault; status={context.status}{detail}",
+            ),
         )
 
     service = settings_service or SettingsService(markdown_store=store)

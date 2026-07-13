@@ -8,6 +8,7 @@ from typing import Callable, Dict, Any, List
 import yaml
 
 from .compiler import RUNTIME
+from .reload_signal import read_reload_signal
 from .models import (
     AskSettings,
     ClassifierSettings,
@@ -30,6 +31,7 @@ _LOCK = threading.RLock()
 _CURRENT: SettingsBundle | None = None
 _SUBSCRIBERS: List[Callable[[SettingsBundle], None]] = []
 _DEFAULT_RUNTIME = RUNTIME
+_LAST_EXTERNAL_SIGNAL_GENERATION: str | None = None
 
 AGENT_MODEL_MAP: Dict[str, Any] = {
     "classifier": ClassifierSettings,
@@ -87,7 +89,7 @@ def _build_bundle() -> SettingsBundle:
                 agents[file.stem] = model_cls(**agent_data)
             else:
                 agents[file.stem] = agent_data
-    
+
     embedding_profiles = EmbeddingProfiles()
     if embeddings_yaml:
         try:
@@ -140,11 +142,33 @@ def _notify(bundle: SettingsBundle) -> None:
 
 
 def get_settings_bundle() -> SettingsBundle:
+    _reload_after_external_signal()
     with _LOCK:
         global _CURRENT
         if _CURRENT is None:
             _CURRENT = _build_bundle()
         return _CURRENT
+
+
+def _reload_after_external_signal() -> None:
+    """Apply a watcher-produced generation in this process on its next read.
+
+    The shared signal is an invalidation only.  Each process recompiles from the
+    selected vault markdown into its own local projection, avoiding shared
+    `runtime/settings` files as authority or an assumption that the event bus
+    crosses container boundaries.
+    """
+    global _LAST_EXTERNAL_SIGNAL_GENERATION
+    signal = read_reload_signal()
+    if signal is None or signal.generation == _LAST_EXTERNAL_SIGNAL_GENERATION:
+        return
+    _LAST_EXTERNAL_SIGNAL_GENERATION = signal.generation
+    if signal.state != "ok":
+        return
+    # Delayed import avoids the ingestion -> runtime import cycle at module load.
+    from app.settings.ingestion import ingest_settings
+
+    ingest_settings(reason="cross_process_reload", publish_signal=False)
 
 
 def reload_settings_bundle(*, notify: bool = True) -> SettingsBundle:

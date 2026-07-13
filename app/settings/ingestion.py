@@ -26,8 +26,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.config.environment import active_environment
 from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.settings import compiler
+from app.settings.reload_signal import publish_reload_signal, read_reload_signal
 from app.settings.runtime import reload_settings_bundle
 
 # Vault-relative settings-source directory (compiled into the effective bundle).
@@ -67,7 +69,7 @@ def _now_iso() -> str:
 
 
 def _has_settings_sources(vault_settings_dir: Path) -> bool:
-    return vault_settings_dir.exists() and any(vault_settings_dir.glob("*.md"))
+    return vault_settings_dir.exists() and any(vault_settings_dir.rglob("*.md"))
 
 
 def _selected_settings_source_dir() -> Path | None:
@@ -78,7 +80,7 @@ def _selected_settings_source_dir() -> Path | None:
     is treated as no-vault here rather than raising — startup must never crash on a
     misconfigured root; the missing-vault posture is already surfaced elsewhere."""
     try:
-        vault_root = resolve_optional_vault_root()
+        vault_root = resolve_optional_vault_root(environment=active_environment())
     except VaultRootMisconfiguredError:
         return None
     if vault_root is None:
@@ -87,6 +89,18 @@ def _selected_settings_source_dir() -> Path | None:
 
 
 def get_settings_ingestion_state() -> SettingsIngestionState:
+    # A watcher reload runs in a different container.  Mirror its published
+    # result into this process so API health reports the same fail-loud state.
+    signal = read_reload_signal()
+    if signal is not None:
+        _set_state(
+            SettingsIngestionState(
+                state=signal.state,
+                source=signal.source,
+                loaded_at=signal.loaded_at,
+                error=signal.error,
+            )
+        )
     with _STATE_LOCK:
         return _STATE
 
@@ -97,13 +111,27 @@ def _set_state(state: SettingsIngestionState) -> None:
         _STATE = state
 
 
+def _get_local_ingestion_state() -> SettingsIngestionState:
+    """Return this process's state without importing a watcher's signal.
+
+    Degradation semantics depend on whether *this process* has a last-valid
+    bundle. A previous watcher generation must not make a fresh process claim
+    it has retained a bundle it never loaded.
+    """
+    with _STATE_LOCK:
+        return _STATE
+
+
 def reset_settings_ingestion_state() -> None:
     """Reset to the boot default. Test-support only — not used by production code."""
     _set_state(SettingsIngestionState(state=STATE_NO_VAULT, source="defaults"))
 
 
 def ingest_settings(
-    *, reason: str, vault_settings_dir: Path | None = None
+    *,
+    reason: str,
+    vault_settings_dir: Path | None = None,
+    publish_signal: bool = False,
 ) -> SettingsIngestionState:
     """Resolve vault-authored settings into the effective bundle.
 
@@ -118,11 +146,9 @@ def ingest_settings(
     # convention — so a test/boot with no selected settings sources stays on typed
     # defaults instead of silently compiling the repo fixture into the live bundle.
     sources_dir = (
-        vault_settings_dir
-        if vault_settings_dir is not None
-        else _selected_settings_source_dir()
+        vault_settings_dir if vault_settings_dir is not None else _selected_settings_source_dir()
     )
-    prior = get_settings_ingestion_state()
+    prior = _get_local_ingestion_state()
     had_valid = prior.state in _VALID_PRIOR_STATES
 
     if sources_dir is None or not _has_settings_sources(sources_dir):
@@ -135,7 +161,11 @@ def ingest_settings(
                     state=STATE_NO_VAULT, source="defaults", loaded_at=_now_iso()
                 )
             )
-        return get_settings_ingestion_state()
+        with _STATE_LOCK:
+            result = _STATE
+        if publish_signal:
+            publish_reload_signal(**result.to_payload())
+        return result
 
     try:
         # compile_all parses + hydrates every source before writing any yaml, so an
@@ -165,12 +195,15 @@ def ingest_settings(
                 error=str(exc),
             )
         _set_state(degraded)
+        if publish_signal:
+            publish_reload_signal(**degraded.to_payload())
         return degraded
 
-    _set_state(
-        SettingsIngestionState(state=STATE_OK, source="vault", loaded_at=_now_iso())
-    )
-    return get_settings_ingestion_state()
+    result = SettingsIngestionState(state=STATE_OK, source="vault", loaded_at=_now_iso())
+    _set_state(result)
+    if publish_signal:
+        publish_reload_signal(**result.to_payload())
+    return result
 
 
 __all__ = [
