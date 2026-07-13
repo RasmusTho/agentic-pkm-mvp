@@ -4,8 +4,17 @@ import importlib
 import subprocess
 from pathlib import Path
 
-from app.builderops.ckm.ingest_repo import ingest_repo, iter_docs, iter_git, iter_source, iter_tests
+from app.builderops.ckm.ingest_repo import (
+    _doc_kind,
+    ingest_repo,
+    iter_docs,
+    iter_git,
+    iter_source,
+    iter_tests,
+)
 from app.builderops.ckm.store import CkmStore
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _write(path: Path, text: str) -> None:
@@ -73,6 +82,12 @@ def test_kind_classification_for_adr_and_spec(tmp_path: Path) -> None:
     kinds = {artifact.natural_key: artifact.artifact_kind for artifact in iter_docs(root)}
     assert kinds["docs/adr/ADR-0001.md"] == "adr"
     assert kinds["docs/CAPABILITY_THING/TASK.md"] == "spec"
+
+    live_spec = REPO_ROOT / "docs/SETTINGS_SPINE/PROMPTS_AS_SETTINGS.md"
+    assert _doc_kind(
+        live_spec.relative_to(REPO_ROOT).as_posix(),
+        live_spec.read_text(encoding="utf-8"),
+    ) == "spec"
 
 
 def test_ingest_is_readonly_and_offline(tmp_path: Path) -> None:

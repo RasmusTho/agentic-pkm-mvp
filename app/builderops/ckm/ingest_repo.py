@@ -79,10 +79,23 @@ def _state_line(text: str) -> str:
     return "State: (not declared)"
 
 
+def _has_task_id_frontmatter(text: str) -> bool:
+    """Return whether the leading YAML frontmatter declares a task id."""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return False
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return False
+        if line.startswith("task_id:"):
+            return True
+    return False
+
+
 def _doc_kind(relative: str, text: str) -> str:
     if relative.startswith("docs/adr/"):
         return "adr"
-    if relative.startswith("docs/CAPABILITY_") and "task_id:" in text:
+    if _has_task_id_frontmatter(text):
         return "spec"
     return "document"
 
