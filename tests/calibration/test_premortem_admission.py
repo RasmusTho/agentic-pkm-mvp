@@ -79,6 +79,14 @@ def _admit(*, selection=None, candidates=None, receipts=None, citations=None):  
             [_candidate(), _candidate(title="duplicate")],
             "selected_identity_ambiguous",
         ),
+        (
+            [_identity()],
+            [
+                _candidate(),
+                {**_candidate(title="malformed duplicate"), "corpus": "invalid"},
+            ],
+            "selected_identity_ambiguous",
+        ),
     ],
 )
 def test_selected_decision_identity_fails_closed(selection, candidates, diagnostic) -> None:  # type: ignore[no-untyped-def]
@@ -134,6 +142,19 @@ def test_reuses_cal01_outcome_links_without_second_resolver() -> None:
     assert result.coverage.exclusions["duplicate_outcome_link"] == 2
     assert result.coverage.exclusions["malformed_outcome_link"] == 1
     assert result.coverage.status == "partial"
+
+    same_key_conflict = {
+        **selected_receipt,
+        "decision_object_id": str(HISTORY_OBJECT),
+        "outcome": "did_not_hold",
+    }
+    conflicted = _admit(
+        receipts=[selected_receipt, same_key_conflict],
+        citations={"decision:selected", f"decision-outcome:{SELECTED_UUID}:0"},
+    )
+    assert conflicted.outcomes == []
+    assert conflicted.coverage.exclusions["malformed_outcome_link"] == 1
+    assert conflicted.coverage.exclusions["conflicting_outcome_link"] == 1
 
 
 def test_admission_excludes_governance_and_denied_scope() -> None:

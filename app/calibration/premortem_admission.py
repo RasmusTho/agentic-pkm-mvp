@@ -103,6 +103,29 @@ def _receipt_citation(receipt: outcome_receipt_log.OutcomeReceipt) -> str:
     return f"decision-outcome:{receipt.decision_uuid}:{receipt.rung_index}"
 
 
+def _raw_candidate_identity(raw: object) -> DecisionIdentity | None:
+    if not isinstance(raw, Mapping):
+        return None
+    try:
+        return DecisionIdentity.model_validate(raw.get("identity"))
+    except (ValidationError, TypeError, ValueError):
+        return None
+
+
+def _raw_receipt_link(raw: object) -> tuple[UUID, int] | None:
+    """Extract only CAL-01's canonical key from an otherwise corrupt row."""
+    if not isinstance(raw, Mapping):
+        return None
+    try:
+        decision_uuid = UUID(str(raw.get("decision_uuid")))
+        rung_index = raw.get("rung_index")
+        if isinstance(rung_index, bool) or not isinstance(rung_index, int) or rung_index < 0:
+            return None
+        return decision_uuid, rung_index
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
 def _raw_receipt_touches_admitted(
     raw: object,
     admitted_object_ids: set[str],
@@ -145,6 +168,12 @@ def admit_decision_history(
     if not isinstance(current_scope_id, str) or not current_scope_id.strip():
         return _blocked("current_scope_invalid")
 
+    raw_selected_alias_count = sum(_raw_candidate_identity(raw) == selected for raw in candidates)
+    if raw_selected_alias_count == 0:
+        return _blocked("selected_identity_stale")
+    if raw_selected_alias_count != 1:
+        return _blocked("selected_identity_ambiguous")
+
     parsed: list[DecisionHistoryCandidate] = []
     exclusions: Counter[str] = Counter()
     for raw in candidates:
@@ -155,7 +184,7 @@ def admit_decision_history(
 
     selected_matches = [item for item in parsed if item.identity == selected]
     if not selected_matches:
-        return _blocked("selected_identity_stale")
+        return _blocked("selected_record_malformed")
     if len(selected_matches) != 1:
         return _blocked("selected_identity_ambiguous")
 
@@ -213,6 +242,7 @@ def admit_decision_history(
     admitted_object_ids = {str(pair[0]) for pair in admitted_pairs}
     admitted_uuids = {str(pair[1]) for pair in admitted_pairs}
     exact_receipts: list[outcome_receipt_log.OutcomeReceipt] = []
+    tainted_links: set[tuple[UUID, int]] = set()
     try:
         raw_receipts = outcome_reader()
     except Exception:
@@ -224,6 +254,9 @@ def admit_decision_history(
         except (ValidationError, TypeError, ValueError):
             if _raw_receipt_touches_admitted(raw, admitted_object_ids, admitted_uuids):
                 exclusions["malformed_outcome_link"] += 1
+                raw_link = _raw_receipt_link(raw)
+                if raw_link is not None and str(raw_link[0]) in admitted_uuids:
+                    tainted_links.add(raw_link)
             continue
         pair = (receipt.decision_object_id, receipt.decision_uuid)
         object_match = str(receipt.decision_object_id) in admitted_object_ids
@@ -232,6 +265,8 @@ def admit_decision_history(
             exact_receipts.append(receipt)
         elif object_match or uuid_match:
             exclusions["malformed_outcome_link"] += 1
+            if uuid_match:
+                tainted_links.add((receipt.decision_uuid, receipt.rung_index))
 
     by_link: dict[tuple[UUID, int], list[outcome_receipt_log.OutcomeReceipt]] = defaultdict(list)
     for receipt in exact_receipts:
@@ -240,6 +275,10 @@ def admit_decision_history(
     admitted_outcomes: list[AdmittedOutcome] = []
     for receipt in exact_receipts:
         link = (receipt.decision_uuid, receipt.rung_index)
+        if link in tainted_links:
+            if by_link[link][0] is receipt:
+                exclusions["conflicting_outcome_link"] += len(by_link[link])
+            continue
         if len(by_link[link]) > 1:
             # Count the corrupt canonical rows once per row while admitting none.
             if by_link[link][0] is receipt:
