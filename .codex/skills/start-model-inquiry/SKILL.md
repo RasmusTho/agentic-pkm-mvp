@@ -1,12 +1,12 @@
 ---
 name: start-model-inquiry
-description: "Run a durable pre-ticket Fable and GPT/Codex model inquiry on the configured Mac mini through its subscription-authenticated launcher when a development question needs independent model review before ticket creation."
+description: "Run a durable pre-ticket Fable and GPT/Codex model inquiry on the configured remote host through its subscription-authenticated launcher when a development question needs independent model review before ticket creation."
 ---
 
 # Start Model Inquiry
 
 Use this Builder System skill when the operator asks to investigate one concrete development
-question before issue creation. Run the durable artifact-first workflow on the configured Mac mini;
+question before issue creation. Run the durable artifact-first workflow on the configured remote host;
 do not conduct the inquiry in chat history or in the local workspace.
 
 ## Launch
@@ -25,13 +25,13 @@ do not conduct the inquiry in chat history or in the local workspace.
    ssh -T Tailscale_macmini '$HOME/.local/bin/yggdrasil-model-inquiry --question-file /tmp/model-inquiry-question.md'
    ```
 
-4. Delete the temporary question file locally and from `/tmp` on the Mac mini after the command
+4. Delete the temporary question file locally and from `/tmp` on the configured remote host after the command
    returns, including on failure. Do not delete durable inquiry artifacts.
 5. Require the launcher to return one non-empty JSON response on stdout. Report its
    `inquiry_id`, `final_state`, `terminal_receipt_id`, and `human_readable_report` exactly as
    returned.
 
-The Mac mini owns the existing Claude and Codex subscription sessions, BuilderOps configuration,
+The configured remote host owns the existing Claude and Codex subscription sessions, BuilderOps configuration,
 and durable inquiry artifacts. `Tailscale_macmini` is an operator-configured SSH host alias, and
 the remote launcher is host-specific operator configuration outside Git.
 
@@ -41,7 +41,7 @@ the remote launcher is host-specific operator configuration outside Git.
 - Treat exit code zero with empty stdout, malformed JSON, or any missing required response field as
   a launcher failure. Report the observed output and stop.
 - Do not re-run the inquiry to recover a missing response. It may already have durable artifacts on
-  the Mac mini.
+  the configured remote host.
 - Do not inspect or recover an inquiry from the vault as a substitute for the launcher's response.
 - Do not substitute an in-chat Fable/GPT exchange or silently use one model for both roles.
 

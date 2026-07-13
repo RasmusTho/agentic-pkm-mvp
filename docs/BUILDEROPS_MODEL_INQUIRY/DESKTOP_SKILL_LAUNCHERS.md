@@ -1,6 +1,6 @@
 ---
 name: Desktop Skill Launchers
-description: Package thin Codex and Claude desktop launchers that delegate inquiries to the configured Mac mini runner.
+description: Package thin Codex and Claude desktop launchers that delegate inquiries to the configured remote-host runner.
 task_id: BMI-04
 source_anchor: docs/BUILDEROPS_MODEL_INQUIRY/README.md :: Scope
 parent_capability: BuilderOps Model Inquiry
@@ -26,7 +26,7 @@ write the question verbatim to a mode-`0600` local Markdown file, copy it to
 ssh -T Tailscale_macmini '$HOME/.local/bin/yggdrasil-model-inquiry --question-file /tmp/model-inquiry-question.md'
 ```
 
-The configured Mac mini owns the BuilderOps vault, adapters, durable artifacts, and the existing
+The configured remote host owns the BuilderOps vault, adapters, durable artifacts, and the existing
 Claude and Codex subscription sessions. Its launcher is host-specific operator configuration and
 stays outside Git. Neither skill rebuilds that environment, configures providers, or reimplements
 orchestration in prompt prose.
@@ -48,7 +48,7 @@ other.
 
 ## Acceptance Criteria
 
-- [x] Both desktop skill packages use the exact Mac mini bridge command and report its inquiry
+- [x] Both desktop skill packages use the exact remote-host bridge command and report its inquiry
   receipt fields. Verify:
   `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
 - [x] Both packages reject local BuilderOps setup, provider configuration, API keys, and
@@ -72,7 +72,7 @@ the operator. Generated archives are release artifacts and remain outside Git so
 - automating clicks or keystrokes in the other desktop app;
 - storing model transcripts in Companion UI or a human knowledge vault.
 - installing Python, BuilderOps, Codex, or Claude on the local machine;
-- changing the Mac mini launcher or its authenticated subscription sessions.
+- changing the remote launcher or its authenticated subscription sessions.
 
 ## Related Docs
 
