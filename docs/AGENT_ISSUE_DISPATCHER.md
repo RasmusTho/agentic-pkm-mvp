@@ -151,7 +151,7 @@ Transition principles:
 - Only `ready` tasks are eligible for new claim.
 - Claim must atomically establish lease ownership (`ready -> claimed`).
 - Work starts under valid lease (`claimed -> in_progress`).
-- Heartbeat records current-holder activity before expiry; it does not renew the finite lease TTL.
+- Heartbeat records current-holder activity before expiry and atomically renews the lease for its granted TTL.
 - Completion is terminal for the local task run (`in_progress -> completed`).
 - Blocking is explicit and reasoned (`in_progress -> blocked`).
 - Release is explicit and reasoned (`claimed|in_progress -> released`), then task may re-enter `ready` if policy allows.
@@ -163,8 +163,8 @@ Normative behavior:
 - Lease is the concurrency primitive; claim without lease is invalid.
 - Lease scope is minimal and deterministic (`issue:<number>` at minimum).
 - TTL is mandatory.
-- Heartbeat requires the current holder and an unexpired lease, and updates only activity state;
-  the acquisition-time expiry remains fixed.
+- Heartbeat requires the current holder and an unexpired lease, and atomically renews both the
+  lease and task expiry for the granted TTL.
 - Release requires holder identity (or explicit operator override path in future work).
 - Dispatcher must provide deterministic conflict response for double-claim attempts.
 
@@ -199,8 +199,8 @@ Canonical loop:
 1. `next`: optional queue discovery only; it does not replace exact-task pickup verification.
 2. `claim`: performed by the pickup wrapper for the exact task. Default TTL: **90 minutes**.
 3. `work`: execute issue scope locally.
-4. `heartbeat/update` (every **~30 minutes** of active execution): record activity while the
-   90-minute lease remains valid; it does not extend that acquisition-time expiry.
+4. `heartbeat/update` (every **~30 minutes** of active execution): record activity and renew the
+   90-minute lease before its expiry.
 5. `link_pr`: attach PR reference when opened.
 6. `complete` or `block` or `release`: write terminal or transitional outcome.
 

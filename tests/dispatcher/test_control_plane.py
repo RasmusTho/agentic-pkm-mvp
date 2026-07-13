@@ -28,6 +28,47 @@ def _task() -> TaskRecord:
     return TaskRecord("task-1", 1, "task", "ready", "high", source_anchor_refs=[], created_at=now, updated_at=now)
 
 
+def _write_canonical_v1_db(db_path: Path) -> None:
+    """Create the exact pre-multi-repo dispatcher schema still supported by store."""
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE dispatcher_tasks (
+                task_id TEXT PRIMARY KEY, issue_number INTEGER NOT NULL,
+                title TEXT NOT NULL, status TEXT NOT NULL, priority TEXT NOT NULL,
+                source_anchor_refs TEXT NOT NULL, claimed_by TEXT, lease_id TEXT,
+                lease_expires_at TEXT, linked_pr TEXT, blocked_reason TEXT,
+                last_heartbeat_at TEXT, sync_state TEXT, created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE dispatcher_events (
+                event_id TEXT PRIMARY KEY, timestamp TEXT NOT NULL,
+                task_id TEXT NOT NULL, event_type TEXT NOT NULL, actor TEXT NOT NULL,
+                lease_id TEXT, payload TEXT
+            );
+            """
+        )
+
+
+def test_recovery_accepts_and_restores_canonical_v1_until_store_migrates_it(
+    tmp_path: Path,
+) -> None:
+    paths = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "state")})
+    paths.state_dir.mkdir()
+    _write_canonical_v1_db(paths.db_path)
+    paths.events_path.touch()
+
+    assert control_plane.health(paths)["ok"] is True
+    backup = tmp_path / "backup"
+    control_plane.backup(paths, backup)
+    restored = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "restored")})
+    assert control_plane.restore(backup, restored)["integrity"] == "ok"
+
+    # Recovery preserves the v1 artifact; the normal store path owns its
+    # atomic in-place migration once the restored dispatcher is opened.
+    assert SqliteStore(restored.db_path).get_meta("schema_version") == "2"
+
+
 def test_health_backup_and_restore_to_separate_root(tmp_path: Path) -> None:
     store, paths = _store(tmp_path)
     store.upsert_task(_task())

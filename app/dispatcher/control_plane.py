@@ -77,6 +77,15 @@ _REQUIRED_UNIQUE_KEYS = {
     "dispatcher_events": ("event_id",),
     "dispatcher_meta": ("key",),
 }
+_LEGACY_V1_TABLES = frozenset({"dispatcher_tasks", "dispatcher_events"})
+_LEGACY_V1_COLUMNS = {
+    "dispatcher_tasks": _REQUIRED_COLUMNS["dispatcher_tasks"] - {"repo"},
+    "dispatcher_events": _REQUIRED_COLUMNS["dispatcher_events"],
+}
+_LEGACY_V1_UNIQUE_KEYS = {
+    "dispatcher_tasks": ("task_id",),
+    "dispatcher_events": ("event_id",),
+}
 
 
 def _now() -> str:
@@ -90,6 +99,11 @@ def _dispatcher_schema_error(conn: sqlite3.Connection) -> str | None:
             "SELECT name FROM sqlite_master WHERE type = 'table'"
         ).fetchall()
     }
+    if _is_canonical_v1_schema(conn, tables):
+        # A normal writable SqliteStore transaction upgrades this shape to v2.
+        # Recovery commands are deliberately read-only until they publish a
+        # backup/restore artifact, so they must preserve and accept it here.
+        return None
     missing = sorted(_REQUIRED_TABLES - tables)
     if missing:
         return f"missing dispatcher tables: {', '.join(missing)}"
@@ -118,6 +132,32 @@ def _dispatcher_schema_error(conn: sqlite3.Connection) -> str | None:
     if version not in {1, SCHEMA_VERSION}:
         return f"unsupported dispatcher schema_version: {version}"
     return None
+
+
+def _is_canonical_v1_schema(conn: sqlite3.Connection, tables: set[str]) -> bool:
+    """Return whether ``conn`` has the shipped pre-multi-repo v1 layout."""
+    if tables != _LEGACY_V1_TABLES:
+        return False
+    for table, required in _LEGACY_V1_COLUMNS.items():
+        columns = {
+            str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if columns != required:
+            return False
+    return all(
+        _has_unique_key(conn, table, required_key)
+        for table, required_key in _LEGACY_V1_UNIQUE_KEYS.items()
+    )
+
+
+def _is_canonical_v1(conn: sqlite3.Connection) -> bool:
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    return _is_canonical_v1_schema(conn, tables)
 
 
 def _has_unique_key(
@@ -178,6 +218,8 @@ def readonly_state(db_path: Path) -> dict[str, Any]:
         schema_error = _dispatcher_schema_error(conn)
         if schema_error is not None:
             raise ValueError(schema_error)
+        if _is_canonical_v1(conn):
+            return _parse_state(None)
         row = conn.execute(
             "SELECT value FROM dispatcher_meta WHERE key = ?", (STATE_KEY,)
         ).fetchone()
