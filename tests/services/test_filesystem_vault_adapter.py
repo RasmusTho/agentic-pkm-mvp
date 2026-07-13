@@ -27,7 +27,7 @@ def test_ensure_uuid_writes_frontmatter_when_missing(monkeypatch, tmp_path: Path
     writes: list[str] = []
     monkeypatch.setattr(
         "app.ports.filesystem_vault_adapter.write_note_from_absolute",
-        lambda path, content, vault_root=None: writes.append(content),
+        lambda path, content, vault_root=None, **kwargs: writes.append(content),
     )
     monkeypatch.setattr("app.ports.filesystem_vault_adapter.append_change", lambda *a, **k: None)
 

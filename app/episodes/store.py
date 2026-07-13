@@ -33,6 +33,7 @@ convention callers must remember.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -94,19 +95,22 @@ def cut_snapshot(fields: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _read_existing_episode_fields(rel_path: str, vault_root: Path | str) -> dict[str, Any] | None:
-    """Best-effort read of the CURRENT on-disk fields at ``rel_path``, or ``None`` when no note
+def _read_existing_episode_note(rel_path: str, vault_root: Path | str) -> str | None:
+    """Best-effort read of the CURRENT on-disk text at ``rel_path``, or ``None`` when no note
     exists there yet (a brand-new episode_id, never terminal). Reads the filesystem directly
     (mirrors ``app.episodes.segmenter._emit_proposal``'s existence check) rather than through the
-    knowledge port -- this is a read-only pre-write check, not itself a guarded mutation."""
+    knowledge port -- this is a read-only pre-write check, not itself a guarded mutation.
+
+    Returning the raw text (not just parsed fields) lets the caller both apply the
+    machine-terminality freeze and compute the ``expected_version`` the shared knowledge-write
+    seam (#3450) requires before overwriting a REWRITTEN-classified episode note."""
     note_path = Path(vault_root) / rel_path
     if not note_path.exists():
         return None
     try:
-        text = note_path.read_text(encoding="utf-8")
+        return note_path.read_text(encoding="utf-8")
     except OSError:
         return None
-    return parse_episode_note(text)
 
 
 @dataclass(frozen=True)
@@ -177,7 +181,8 @@ def write_episode_note(
     # accepted/re-cut has its cut frozen against machine mutation. A relabel that only changes
     # `segmentation` (echoing every cut field back unchanged) passes trivially; an attempted cut
     # mutation is rejected here and the note is left byte-for-byte untouched.
-    existing_fields = _read_existing_episode_fields(rel_path, vault_root)
+    existing_text = _read_existing_episode_note(rel_path, vault_root)
+    existing_fields = parse_episode_note(existing_text) if existing_text is not None else None
     if existing_fields is not None and existing_fields.get("segmentation") in TERMINAL_SEGMENTATIONS:
         if cut_snapshot(existing_fields) != cut_snapshot(fields):
             logger.warning(
@@ -200,12 +205,22 @@ def write_episode_note(
     # not a caller-side check that could be bypassed by a different call path. No
     # governance import anywhere in this module: a proposal-class write reaches only this
     # seam and produces only a WriteReceipt (AC3).
+    # Shared knowledge-write seam (#3450): an episode note is REWRITTEN-classified, so a
+    # rewrite of an existing note requires the ``expected_version`` of the bytes we read
+    # above -- otherwise the seam refuses the write as a would-be silent overwrite. A
+    # brand-new episode note (``existing_text is None``) needs no version.
+    expected_version = (
+        hashlib.sha256(existing_text.encode("utf-8")).hexdigest()
+        if existing_text is not None
+        else None
+    )
     receipt = write_note_relative(
         rel_path,
         content,
         vault_root=vault_root,
         action=EPISODE_WRITE_ACTION,
         write_guard=write_guard,
+        expected_version=expected_version,
     )
     return EpisodeWriteResult(receipt=receipt, episode_id=eid, fields=fields)
 

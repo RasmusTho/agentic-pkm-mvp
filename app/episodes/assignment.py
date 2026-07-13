@@ -100,6 +100,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -705,12 +706,18 @@ def _transform_note_frontmatter_episode_ref(
 
     from app.knowledge.write_ops import write_note_from_absolute
 
+    # Shared knowledge-write seam (#3450): this vault note is REWRITTEN-
+    # classified, so it requires an expected_version. ``text`` was just read
+    # above, so its hash is the exact expected_version the filesystem seam
+    # recomputes.
+    expected_version = hashlib.sha256(text.encode("utf-8")).hexdigest()
     write_note_from_absolute(
         note_path,
         new_text,
         vault_root=vault_root,
         action=EPISODE_ASSIGNMENT_WRITE_ACTION,
         write_guard=write_guard,
+        expected_version=expected_version,
     )
 
 
