@@ -21,6 +21,10 @@ exclusive remote lock exactly once:
    If the lock command fails, report its error and stop. Do not remove an existing lock, reuse the
    fixed question path, or substitute a different remote path.
 
+   Immediately register step 4 as an unconditional `finally` action. It must run after every
+   subsequent outcome, including a local question-write failure or an `scp` failure before the
+   launcher starts.
+
 1. Write the question verbatim to a local, temporary UTF-8 Markdown file with mode `0600`. Treat
    the question as file content; never interpolate it into a shell command.
 2. Copy that file to the configured host:
@@ -35,8 +39,9 @@ exclusive remote lock exactly once:
    ssh -T Tailscale_macmini '$HOME/.local/bin/yggdrasil-model-inquiry --question-file /tmp/model-inquiry-question.md'
    ```
 
-4. After acquiring the lock, always delete the temporary question file locally and release the
-   remote staging path after the command returns, including on failure:
+4. Run this registered `finally` action after any result from steps 1–3; it is not conditional on
+   the launcher having started. Delete the temporary question file locally and release the remote
+   staging path:
 
    ```bash
    ssh -T Tailscale_macmini 'rm -f /tmp/model-inquiry-question.md; rmdir /tmp/yggdrasil-model-inquiry.lock'
@@ -55,6 +60,9 @@ the remote launcher is host-specific operator configuration outside Git.
 ## Failure Handling
 
 - If `scp` or SSH fails, report the command's error text and stop.
+- If the local question write or `scp` fails after acquiring the lock, run the registered cleanup
+  first, then report the original failure. Include any cleanup failure without masking the original
+  error.
 - Treat exit code zero with empty stdout, malformed JSON, or any missing required response field as
   a launcher failure. Report the observed output and stop.
 - Do not re-run the inquiry to recover a missing response. It may already have durable artifacts on

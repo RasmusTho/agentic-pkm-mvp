@@ -135,6 +135,8 @@ def test_desktop_skills_route_to_macmini_launcher(tmp_path: Path) -> None:
             "mkdir /tmp/yggdrasil-model-inquiry.lock",
             "rm -f /tmp/model-inquiry-question.md; rmdir /tmp/yggdrasil-model-inquiry.lock",
             "Do not remove an existing lock",
+            "unconditional `finally` action",
+            "local question-write failure or an `scp` failure",
         ):
             assert contract_field in skill
         for required_boundary in (

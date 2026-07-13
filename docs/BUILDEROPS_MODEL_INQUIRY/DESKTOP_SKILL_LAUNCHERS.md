@@ -42,6 +42,11 @@ removing the existing lock. After an acquired launch returns, each package remov
 question file and releases the lock with `rmdir`. This prevents one desktop session from overwriting
 another inquiry's question while retaining the required fixed copy and launcher commands.
 
+After lock acquisition, cleanup is a registered `finally` action rather than a post-launch success
+step. It removes the local temporary file, staged remote question, and acquired lock after every
+outcome, including local question-write and `scp` failure before the launcher starts. A cleanup
+failure is reported alongside, but never replaces, the original launch failure.
+
 ## Concretely
 
 ```text
@@ -66,6 +71,9 @@ other.
   `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
 - [x] Both packages atomically lock the fixed remote question path rather than silently overwriting
   a concurrent inquiry. Verify:
+  `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
+- [x] Both packages register cleanup immediately after lock acquisition, including for failures
+  before launcher start. Verify:
   `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
 
 ## How to Verify (Pre-Merge)
