@@ -44,8 +44,8 @@ boundary that prevents advisory findings from becoming architecture by accumulat
   - Verify: doc writeback at `docs/research/AI_CONVERSATION_INTELLIGENCE_RESEARCH_SUMMARY.md :: Future owner-doc impact`
 - [ ] The ADR gate records either a mature, authorized ADR with rationale or an advisory no-ADR outcome with the missing evidence/decision point.
   - Verify: doc writeback at `docs/research/AI_CONVERSATION_INTELLIGENCE_RESEARCH_SUMMARY.md :: ADR readiness decision`, plus any new ADR and `docs/DOCS_INDEX.md` registration
-- [ ] The final child provides a complete parent-closure handoff and creates no runtime implementation.
-  - Verify: parent #3194 contains the final child validation receipt and `PARENT CLOSURE RECEIPT`
+- [ ] The final child provides a complete, pre-merge-verifiable parent-closure handoff and creates no runtime implementation.
+  - Verify: doc writeback at `docs/research/AI_CONVERSATION_INTELLIGENCE_RESEARCH_SUMMARY.md :: Parent closure handoff`
 
 ## How to Verify (Pre-Merge)
 
@@ -53,6 +53,8 @@ boundary that prevents advisory findings from becoming architecture by accumulat
 - Trace each material recommendation to a prior child artifact or current owner doc.
 - Run docs-governance review on any ADR and confirm no owner ruling is inferred.
 - Confirm every executable future item is a bounded issue or explicitly deferred/discarded.
+- Confirm the `Parent closure handoff` names the post-merge validation, receipt, and lifecycle checks
+  that must run after this child merges; do not require their results before merge.
 
 ## Out of Scope
 
