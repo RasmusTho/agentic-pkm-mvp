@@ -102,3 +102,57 @@ def test_cold_git_ingest_pages_through_history_before_advancing_watermark(tmp_pa
         ["git", "-C", str(root), "rev-parse", "HEAD"], check=True, text=True, capture_output=True
     ).stdout.strip()
     assert [next(arg for arg in call if arg.startswith("--skip=")) for call in log_calls] == ["--skip=0", "--skip=2", "--skip=4"]
+
+
+def test_git_watermark_stays_on_snapshot_when_head_moves_during_ingest(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = _repo(tmp_path / "repo")
+    snapshot_head = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+    module = importlib.import_module("app.builderops.ckm.ingest_repo")
+    original_iter_git = module.iter_git
+
+    def moving_iter_git(*args, **kwargs):
+        yield from original_iter_git(*args, **kwargs)
+        _write(root / "docs/late.md", "# Late commit\n")
+        subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "-c",
+                "user.name=CKM",
+                "-c",
+                "user.email=ckm@example.test",
+                "commit",
+                "-qm",
+                "late commit",
+            ],
+            check=True,
+        )
+
+    monkeypatch.setattr(module, "iter_git", moving_iter_git)
+    store = _store(tmp_path)
+    ingest_repo(store, root, git_limit=2)
+
+    late_head = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.strip()
+    assert late_head != snapshot_head
+    assert store.get_watermark("git") == snapshot_head
+    assert store.get_artifact_by_source_ref(f"git:{late_head}") is None
+
+    monkeypatch.setattr(module, "iter_git", original_iter_git)
+    result = ingest_repo(store, root, git_limit=2)
+    assert result["git"]["changed"] == 1
+    assert store.get_watermark("git") == late_head
+    assert store.get_artifact_by_source_ref(f"git:{late_head}") is not None

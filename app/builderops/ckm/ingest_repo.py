@@ -127,7 +127,13 @@ def _git(root: Path, *args: str) -> str:
     ).stdout
 
 
-def iter_git(root: Path, previous_head: str | None, *, limit: int = 500) -> Iterable[RepoArtifact]:
+def iter_git(
+    root: Path,
+    previous_head: str | None,
+    *,
+    limit: int = 500,
+    current_head: str | None = None,
+) -> Iterable[RepoArtifact]:
     """Yield every commit since the git watermark in bounded local-git pages.
 
     ``limit`` is a page size, not a completeness cap.  Advancing the git
@@ -136,7 +142,7 @@ def iter_git(root: Path, previous_head: str | None, *, limit: int = 500) -> Iter
     """
     if limit < 1:
         raise ValueError("git_limit must be at least 1")
-    current_head = _git(root, "rev-parse", "HEAD").strip()
+    current_head = current_head or _git(root, "rev-parse", "HEAD").strip()
     revision = f"{previous_head}..{current_head}" if previous_head else current_head
     skip = 0
     while True:
@@ -201,13 +207,18 @@ def ingest_repo(store: CkmStore, root: Path, *, git_limit: int = 500) -> dict[st
         "source": _ingest_tree(store, "source", iter_source(root)),
     }
     previous_head = store.get_watermark("git")
-    commits = list(iter_git(root, previous_head, limit=git_limit))
+    # Bind both traversal and the persisted watermark to one immutable snapshot.
+    # A concurrent commit remains honestly pending for the next ingestion instead
+    # of being hidden behind a watermark that was never traversed.
+    head = _git(root, "rev-parse", "HEAD").strip()
+    commits = list(
+        iter_git(root, previous_head, limit=git_limit, current_head=head)
+    )
     changed = 0
     for artifact in commits:
         if store.get_artifact_by_source_ref(artifact.natural_key) is None:
             store.upsert_artifact(source_ref=artifact.natural_key, artifact_kind=artifact.artifact_kind, source=artifact.source, watermark=artifact.source_watermark, provenance=artifact.provenance)
             changed += 1
-    head = _git(root, "rev-parse", "HEAD").strip()
     if previous_head != head:
         store.set_watermark("git", head)
     result["git"] = {"artifacts": len(commits), "changed": changed, "watermark": head}
