@@ -247,6 +247,20 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/voice",),
     ),
     (
+        "standing_questions",
+        (
+            "app/standing_questions/",
+            # Deliberately NOT app/alembic/versions/4d1e0c9a3329_...: a migration
+            # touching the standing_questions schema has cross-cutting blast radius
+            # and must resolve to full-suite via the migration/schema full-suite rule
+            # above, never to this subsystem's narrower tests/standing_questions alone.
+            "schemas/question-note.schema.json",
+            "tests/standing_questions/",
+            "docs/STANDING_QUESTIONS/",
+        ),
+        ("tests/standing_questions",),
+    ),
+    (
         "media",
         ("app/media/",),
         ("tests/test_transcribe_smoke.py",),
@@ -433,7 +447,18 @@ def select_tests(changed_files: list[str]) -> Selection:
         unowned = tuple(path for path in paths if path.startswith("tests/e2e/") and path not in E2E_OWNER_BY_FILE)
         return Selection(False, ("unowned",), (), "unowned e2e test changed", unowned)
 
-    if any(path.startswith("alembic/") or path.startswith("tests/migrations/") for path in paths):
+    # "alembic/" never matches a real path in this repo -- migrations live under
+    # app/alembic/versions/ -- so that arm alone left every migration file routing
+    # through the subsystem loop (or unowned) instead of full-suite. A subsystem that
+    # happens to also list a migration path as one of its own prefixes (e.g.
+    # standing_questions and app/alembic/versions/4d1e0c9a3329_...) would otherwise
+    # "steal" the match and narrow a schema change no owner's suite alone can cover.
+    if any(
+        path.startswith("alembic/")
+        or path.startswith("app/alembic/versions/")
+        or path.startswith("tests/migrations/")
+        for path in paths
+    ):
         return Selection(True, (), (), FULL_SUITE_REASONS[1])
 
     changed_tests = _changed_test_targets(paths)

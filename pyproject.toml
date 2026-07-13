@@ -44,6 +44,9 @@ dependencies = [
     "python-dotenv>=1.0",
     "PyYAML>=6.0",
     "jsonschema>=4.23",
+    # jsonschema's "date-time" format checker is a no-op without this validator
+    # registered (app/standing_questions/question_store.py's format_checker).
+    "rfc3339-validator>=0.1.4",
     # LangGraph / LangChain
     "langchain-core>=0.3",
     "langgraph>=0.2",

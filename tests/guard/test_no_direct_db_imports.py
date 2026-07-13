@@ -89,6 +89,12 @@ ALLOW_FILES = (
     # path itself (_sync_new_episode_row) right after write_episode_note mints a brand-new
     # note; same bounded conn_rw pattern as app/episodes/closure.py / recut.py.
     'app/episodes/segmenter.py',
+    # Standing Questions rebuildable projection (#3329, SQ-02). projection.py owns the
+    # read (parse vault Question notes) and write (TRUNCATE + replay in one conn_rw
+    # transaction) sides inline -- the same non-deprecated pattern as
+    # app/jobs/episodes_projection.py / decisions_projection.py, rather than a separate
+    # module under the deprecated app.store package (ADR-0013). Bounded conn_rw use.
+    'app/standing_questions/projection.py',
     'app/store/relation_index.py',
     'app/memory_kv/store.py',
     'app/agent/repository.py',

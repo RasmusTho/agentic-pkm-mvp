@@ -501,6 +501,50 @@ def test_episodes_runtime_change_selects_episodes_coverage() -> None:
     assert "tests/invariants" in selection.targets
     assert "tests/episodes/test_stream_registry.py" in selection.targets
 
+def test_standing_questions_store_change_selects_owned_coverage() -> None:
+    selection = select_tests(
+        [
+            "app/standing_questions/projection.py",
+            "schemas/question-note.schema.json",
+            "tests/standing_questions/test_question_projection.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("standing_questions",)
+    assert selection.unowned_paths == ()
+    assert "tests/standing_questions" in selection.targets
+    assert "tests/standing_questions/test_question_projection.py" in selection.targets
+
+
+def test_standing_questions_migration_change_is_never_narrowed_to_its_owner() -> None:
+    # Review finding on PR #3481: the standing_questions migration used to be listed
+    # as one of the subsystem's own owned prefixes, which routed a schema change to
+    # only tests/standing_questions instead of the full suite -- a migration's blast
+    # radius is cross-cutting, not subsystem-local. Mixed with an unrelated owned
+    # file too, to prove the migration path forces full-suite rather than just
+    # widening the standing_questions selection.
+    selection = select_tests(
+        [
+            "app/standing_questions/projection.py",
+            "app/alembic/versions/4d1e0c9a3329_standing_questions_projection.py",
+        ]
+    )
+
+    assert selection.full_suite is True
+    assert selection.reason == "database migration or schema surface changed"
+
+
+def test_any_alembic_versions_migration_change_selects_full_suite() -> None:
+    # The general case behind the standing_questions-specific finding above:
+    # app/alembic/versions/ is the real migrations directory in this repo (there is
+    # no top-level alembic/), so any migration file -- not just standing_questions'
+    # -- must resolve to full-suite, never "unowned" or a narrow subsystem match.
+    selection = select_tests(["app/alembic/versions/1a739d9494af_decisions_fk_set_null.py"])
+
+    assert selection.full_suite is True
+    assert selection.reason == "database migration or schema surface changed"
+
 
 def test_bundle_schema_and_invariant_change_selects_episodes_coverage() -> None:
     selection = select_tests(
@@ -515,7 +559,6 @@ def test_bundle_schema_and_invariant_change_selects_episodes_coverage() -> None:
     assert selection.unowned_paths == ()
     assert "tests/invariants" in selection.targets
     assert "tests/invariants/test_episode_binding.py" in selection.targets
-
 
 def test_builder_system_change_selects_its_own_regression_tests() -> None:
     selection = select_tests(["app/builderops/cli.py"])
@@ -544,6 +587,24 @@ def test_import_linter_config_change_selects_builder_system_regressions() -> Non
     assert selection.unowned_paths == ()
     assert "tests/builderops" in selection.targets
     assert "tests/governance" in selection.targets
+
+
+def test_cli_standing_questions_migration_file_resolves_to_full_suite() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/select_pr_tests.py",
+            "--changed-file",
+            "app/alembic/versions/4d1e0c9a3329_standing_questions_projection.py",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "full_suite=true" in result.stdout
+    assert "reason=database migration or schema surface changed" in result.stdout
 
 
 def test_cli_rejects_an_unowned_path() -> None:
