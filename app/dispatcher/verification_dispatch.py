@@ -430,6 +430,9 @@ class VerificationDispatchLedger:
         context: Mapping[str, object],
         outcome: str,
         receipt: Mapping[str, object] | None = None,
+        *,
+        holder: str,
+        lease_id: str,
     ) -> int:
         limits = {"standard_repair": 2, "escalated_repair": 2}
         allowed = {*limits, "review", "verification"}
@@ -439,6 +442,16 @@ class VerificationDispatchLedger:
         attempt_id = f"vattempt-{uuid.uuid4().hex[:12]}"
         with self.store._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            owner = conn.execute(
+                """
+                SELECT 1 FROM verification_runs
+                WHERE run_id=? AND claimed_by=? AND lease_id=?
+                  AND status IN ('claimed','running')
+                """,
+                (run_id, holder, lease_id),
+            ).fetchone()
+            if owner is None:
+                raise ValueError("verification attempt ownership mismatch")
             if kind == "review":
                 reused = conn.execute(
                     "SELECT 1 FROM verification_attempts WHERE run_id=? AND session_id=? LIMIT 1",
@@ -504,21 +517,28 @@ class VerificationDispatchLedger:
         if run is None:
             return False
         repairs = [row for row in attempts if row["kind"] in {"standard_repair", "escalated_repair"}]
-        if not repairs:
+        verifications = [row for row in attempts if row["kind"] == "verification"]
+        if not repairs and not verifications:
             return False
-        final_repair = repairs[-1]["attempt_id"]
+        final_anchor = (repairs[-1] if repairs else verifications[-1])["attempt_id"]
         reviews = [
             row for row in attempts
             if row["kind"] == "review"
             and isinstance(row["receipt"], Mapping)
-            and row["receipt"].get("reviewed_attempt_id") == final_repair
+            and row["receipt"].get("reviewed_attempt_id") == final_anchor
             and row["receipt"].get("head_sha") == run.head_sha
             and row["outcome"] == "clean"
         ]
         return len(reviews) >= 2 and len({row["session_id"] for row in reviews[-2:]}) == 2
 
     def exception(
-        self, run_id: str, failure_class: str, packet: Mapping[str, object]
+        self,
+        run_id: str,
+        failure_class: str,
+        packet: Mapping[str, object],
+        *,
+        holder: str,
+        lease_id: str,
     ) -> str:
         run = self.get(run_id)
         if run is None:
@@ -526,6 +546,17 @@ class VerificationDispatchLedger:
         now = _now()
         exception_id = f"vexception-{hashlib.sha256(f'{run_id}:{failure_class}:{run.head_sha}'.encode()).hexdigest()[:16]}"
         with self.store._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            owner = conn.execute(
+                """
+                SELECT 1 FROM verification_runs
+                WHERE run_id=? AND claimed_by=? AND lease_id=?
+                  AND status IN ('claimed','running')
+                """,
+                (run_id, holder, lease_id),
+            ).fetchone()
+            if owner is None:
+                raise ValueError("verification exception ownership mismatch")
             conn.execute(
                 """
                 INSERT INTO verification_exceptions (
