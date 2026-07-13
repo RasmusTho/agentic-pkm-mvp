@@ -265,3 +265,209 @@ def test_sync_new_episode_row_logs_but_does_not_raise_on_db_failure(
         segmenter_module._sync_new_episode_row(fields, note_path)  # must not raise
 
     assert episode_id in caplog.text
+
+
+def test_sync_new_episode_row_bounds_best_effort_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Projection convergence cannot stall a segmentation tick on DB connect."""
+    observed_timeout: int | None = None
+
+    def _unreachable(*, connect_timeout: int) -> None:
+        nonlocal observed_timeout
+        observed_timeout = connect_timeout
+        raise RuntimeError("scratch: unreachable DB")
+
+    monkeypatch.setattr(segmenter_module, "conn_rw", _unreachable)
+
+    segmenter_module._sync_new_episode_row(
+        _episode_fields(mint_episode_id()), "episodes/ep-timeout.md"
+    )
+
+    assert observed_timeout == 1
+
+
+def test_emit_proposal_existing_note_retries_projection_sync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A redelivery backfills the projection from the vault-canonical note.
+
+    The first note write represents the already-completed durable half of a
+    previous attempt; only the projection sync is simulated as having failed.
+    """
+    from app.episodes.segmenter import ClosedSegment, _emit_proposal
+
+    closed = ClosedSegment(
+        scope="work",
+        start=datetime(2026, 7, 13, 9, 0, tzinfo=timezone.utc),
+        end=datetime(2026, 7, 13, 9, 10, tzinfo=timezone.utc),
+        heimdal_session_id=None,
+        protagonists=frozenset(),
+        goal=frozenset(),
+        derived_from=("heimdal.observations:retry-proposal",),
+    )
+    episode_id = segmenter_module._deterministic_episode_id(closed)
+    rel_path = episode_note_rel_path(episode_id)
+    write_result = segmenter_module.write_episode_note(
+        title="already durable",
+        scope="work",
+        start=closed.start.isoformat(),
+        end=closed.end.isoformat(),
+        closed=False,
+        segmentation="proposed",
+        episode_id=episode_id,
+        vault_root=tmp_path,
+        write_guard=_allow_guard(),
+        derived_from=list(closed.derived_from),
+    )
+    launches: list[tuple[Path, str]] = []
+    monkeypatch.setattr(
+        segmenter_module,
+        "conn_rw",
+        lambda *_args, **_kwargs: pytest.fail("retry tick must not open a database connection"),
+    )
+    monkeypatch.setattr(
+        segmenter_module,
+        "_launch_episode_projection_retry",
+        lambda *, vault_root, rel_path: launches.append((vault_root, rel_path)),
+    )
+
+    assert _emit_proposal(closed, vault_root=tmp_path, write_guard=_allow_guard()) is None
+    assert launches == [(tmp_path, rel_path)]
+    assert write_result.fields["episode_id"] == episode_id
+
+
+def test_existing_note_retry_launches_background_supervisor_without_db_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retry delegates all database work away from the segmentation tick."""
+    from app.episodes.segmenter import _retry_existing_episode_projection_sync
+
+    episode_id = mint_episode_id()
+    rel_path = episode_note_rel_path(episode_id)
+    segmenter_module.write_episode_note(
+        title="existing note",
+        scope="work",
+        start="2026-07-13T09:00:00+00:00",
+        end="2026-07-13T09:10:00+00:00",
+        closed=False,
+        segmentation="proposed",
+        episode_id=episode_id,
+        vault_root=tmp_path,
+        write_guard=_allow_guard(),
+        derived_from=["heimdal.observations:detached-retry"],
+    )
+    launches: list[tuple[Path, str]] = []
+    monkeypatch.setattr(
+        segmenter_module,
+        "conn_rw",
+        lambda *_args, **_kwargs: pytest.fail("retry tick must not open a database connection"),
+    )
+    monkeypatch.setattr(
+        segmenter_module,
+        "_launch_episode_projection_retry",
+        lambda *, vault_root, rel_path: launches.append((vault_root, rel_path)),
+    )
+
+    _retry_existing_episode_projection_sync(vault_root=tmp_path, rel_path=rel_path)
+
+    assert launches == [(tmp_path, rel_path)]
+
+
+def test_background_retry_launcher_detaches_supervisor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tick starts a separate supervisor process and does not wait for its I/O."""
+    launches: list[tuple[list[str], dict[str, object]]] = []
+
+    class FakePopen:
+        def __init__(self, command: list[str], **kwargs: object) -> None:
+            launches.append((command, kwargs))
+
+    monkeypatch.setattr(segmenter_module.subprocess, "Popen", FakePopen)
+
+    segmenter_module._launch_episode_projection_retry(
+        vault_root=tmp_path, rel_path="episodes/ep-detached.md"
+    )
+
+    assert launches == [
+        (
+            [
+                segmenter_module.sys.executable,
+                "-m",
+                "app.episodes.projection_retry",
+                "--vault-root",
+                str(tmp_path),
+                "--note-path",
+                "episodes/ep-detached.md",
+            ],
+            {
+                "stdin": segmenter_module.subprocess.DEVNULL,
+                "stdout": segmenter_module.subprocess.DEVNULL,
+                "stderr": segmenter_module.subprocess.DEVNULL,
+                "close_fds": True,
+                "start_new_session": True,
+            },
+        )
+    ]
+
+
+def test_existing_invalid_note_skips_projection_sync_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A parseable but schema-invalid note remains outside the derived projection."""
+    from app.episodes.segmenter import _retry_existing_episode_projection_sync
+
+    rel_path = "episodes/ep-invalid.md"
+    note_path = tmp_path / rel_path
+    note_path.parent.mkdir(parents=True)
+    note_path.write_text("---\nepisode_id: ep-invalid\n---\n", encoding="utf-8")
+    launches: list[tuple[Path, str]] = []
+    monkeypatch.setattr(
+        segmenter_module,
+        "_launch_episode_projection_retry",
+        lambda *, vault_root, rel_path: launches.append((vault_root, rel_path)),
+    )
+
+    _retry_existing_episode_projection_sync(vault_root=tmp_path, rel_path=rel_path)
+
+    assert launches == []
+
+
+def test_existing_note_with_unknown_frontmatter_skips_projection_sync_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Raw unknown frontmatter cannot bypass schema validation through parsing."""
+    from app.episodes.segmenter import _retry_existing_episode_projection_sync
+
+    episode_id = mint_episode_id()
+    rel_path = episode_note_rel_path(episode_id)
+    segmenter_module.write_episode_note(
+        title="existing note",
+        scope="work",
+        start="2026-07-13T09:00:00+00:00",
+        end="2026-07-13T09:10:00+00:00",
+        closed=False,
+        segmentation="proposed",
+        episode_id=episode_id,
+        vault_root=tmp_path,
+        write_guard=_allow_guard(),
+        derived_from=["heimdal.observations:unknown-frontmatter"],
+    )
+    note_path = tmp_path / rel_path
+    note_path.write_text(
+        note_path.read_text(encoding="utf-8").replace(
+            "artifact_class: episode_note\n", "artifact_class: episode_note\nunexpected: value\n"
+        ),
+        encoding="utf-8",
+    )
+    launches: list[tuple[Path, str]] = []
+    monkeypatch.setattr(
+        segmenter_module,
+        "_launch_episode_projection_retry",
+        lambda *, vault_root, rel_path: launches.append((vault_root, rel_path)),
+    )
+
+    _retry_existing_episode_projection_sync(vault_root=tmp_path, rel_path=rel_path)
+
+    assert launches == []

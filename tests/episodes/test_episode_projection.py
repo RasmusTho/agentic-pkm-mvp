@@ -79,6 +79,86 @@ def test_comparison_row_normalizes_z_suffixed_timestamps_instant_wise() -> None:
     assert _norm_ts(datetime(2026, 7, 11, 10, 0, 0, tzinfo=timezone.utc)) == z_row[3]
 
 
+def test_raw_frontmatter_validation_allows_renderer_metadata_only() -> None:
+    """Retry, rebuild, and doctor share the same unknown-field boundary."""
+    from app.episodes.notes import parse_validated_episode_note, render_episode_note
+    from app.episodes.notes import EpisodeFrontmatterParseError
+    from app.episodes.schema import EpisodeSchemaValidationError
+
+    text = render_episode_note(_fields())
+    assert parse_validated_episode_note(text)["episode_id"] == _fields()["episode_id"]
+
+    malformed = text.replace(
+        "artifact_class: episode_note\n", "artifact_class: episode_note\nunexpected: value\n"
+    )
+    with pytest.raises(EpisodeSchemaValidationError):
+        parse_validated_episode_note(malformed)
+
+    with pytest.raises(EpisodeFrontmatterParseError):
+        parse_validated_episode_note("---\nepisode_id: [unterminated\n---\n")
+
+
+def test_rebuild_does_not_truncate_when_a_vault_note_cannot_be_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """I/O/decode errors must preserve the prior projection, not become skipped notes."""
+    from app.jobs import episodes_projection
+
+    broken = tmp_path / "episodes" / "ep-unreadable.md"
+    broken.parent.mkdir()
+    broken.write_bytes(b"\xff")
+    monkeypatch.setattr(
+        episodes_projection,
+        "conn_rw",
+        lambda: pytest.fail("rebuild must read the vault before truncating the projection"),
+    )
+
+    with pytest.raises(UnicodeDecodeError):
+        episodes_projection.rebuild_episodes_projection(tmp_path)
+
+
+def test_doctor_reports_unreadable_vault_notes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Doctor cannot report convergence when it was unable to inspect a note."""
+    from app.jobs import episodes_projection
+
+    broken = tmp_path / "episodes" / "ep-unreadable.md"
+    broken.parent.mkdir()
+    broken.write_bytes(b"\xff")
+    monkeypatch.setattr(episodes_projection, "_db_projection_rows", lambda: [])
+
+    report = episodes_projection.doctor_episodes_projection(tmp_path)
+
+    assert report.ok is False
+    assert report.unreadable_vault_notes[0]["note_path"] == "episodes/ep-unreadable.md"
+
+
+def test_rebuild_and_doctor_surface_malformed_yaml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Malformed YAML is an operational failure, not a schema-invalid orphan."""
+    from app.episodes.notes import EpisodeFrontmatterParseError
+    from app.jobs import episodes_projection
+
+    broken = tmp_path / "episodes" / "ep-malformed.md"
+    broken.parent.mkdir()
+    broken.write_text("---\nepisode_id: [unterminated\n---\n", encoding="utf-8")
+    monkeypatch.setattr(
+        episodes_projection,
+        "conn_rw",
+        lambda: pytest.fail("rebuild must parse the vault before truncating the projection"),
+    )
+
+    with pytest.raises(EpisodeFrontmatterParseError):
+        episodes_projection.rebuild_episodes_projection(tmp_path)
+
+    monkeypatch.setattr(episodes_projection, "_db_projection_rows", lambda: [])
+    report = episodes_projection.doctor_episodes_projection(tmp_path)
+    assert report.ok is False
+    assert report.unreadable_vault_notes[0]["note_path"] == "episodes/ep-malformed.md"
+
+
 @pytest.fixture
 def scratch_db(monkeypatch: pytest.MonkeyPatch):
     """A throwaway database at ``alembic upgrade head``, mirroring

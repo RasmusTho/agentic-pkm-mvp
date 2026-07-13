@@ -382,6 +382,35 @@ def test_fused_emission_is_idempotent_on_retry(tmp_path: Path) -> None:
     assert len(receipts) == 1 and receipts[0].name == f"{fused_id}.md"
 
 
+def test_emit_fused_note_existing_note_retries_projection_sync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retry backfills a fused note's projection after an earlier sync failure."""
+    work = _segment(scope=_WORK, start_min=0, end_min=30, provenance="vault.activity:retry-work")
+    private = _segment(
+        scope=_PRIVATE, start_min=10, end_min=40, provenance="heimdal.observations:retry-private"
+    )
+    provider = _flow_for(_WORK, _PRIVATE)
+    first = segmenter._emit_proposals_with_fusion_gate(
+        [work, private], vault_root=tmp_path, write_guard=_allow_guard(), flow_provider=provider
+    )
+    fused_id = first["fused"][0]
+    rel_path = episode_note_rel_path(fused_id)
+    launches: list[tuple[Path, str]] = []
+    monkeypatch.setattr(
+        segmenter,
+        "_launch_episode_projection_retry",
+        lambda *, vault_root, rel_path: launches.append((vault_root, rel_path)),
+    )
+
+    second = segmenter._emit_proposals_with_fusion_gate(
+        [work, private], vault_root=tmp_path, write_guard=_allow_guard(), flow_provider=provider
+    )
+
+    assert second["fused"] == []
+    assert launches == [(tmp_path, rel_path)]
+
+
 # ---------------------------------------------------------------------------
 # AC5: closed-episode decay never crosses scopes
 # ---------------------------------------------------------------------------
