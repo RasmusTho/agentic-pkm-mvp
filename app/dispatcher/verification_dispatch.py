@@ -356,10 +356,25 @@ class VerificationDispatchLedger:
     ) -> VerificationRun:
         if status not in TERMINAL_STATES:
             raise ValueError("invalid verification terminal status")
-        if status == "completed" and not self.closure_ready(run_id):
-            raise ValueError("completed requires two fresh clean reviews after the final repair")
         with self.store._connect() as conn:
             now = _begin_immediate_now(conn)
+            owner = conn.execute(
+                """
+                SELECT current_head_sha FROM verification_runs
+                WHERE run_id=? AND claimed_by=? AND lease_id=?
+                  AND status IN ('claimed','running')
+                  AND lease_expires_at>?
+                """,
+                (run_id, holder, lease_id, now),
+            ).fetchone()
+            if owner is None:
+                raise ValueError("verification terminal ownership mismatch")
+            if status == "completed" and not self._closure_ready(
+                conn, run_id, owner["current_head_sha"]
+            ):
+                raise ValueError(
+                    "completed requires two fresh clean reviews after the final repair"
+                )
             result = conn.execute(
                 """
                 UPDATE verification_runs
@@ -386,10 +401,13 @@ class VerificationDispatchLedger:
             )
             if result.rowcount == 0:
                 raise ValueError("verification terminal ownership mismatch")
+            updated = conn.execute(
+                "SELECT * FROM verification_runs WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
             conn.commit()
-        run = self.get(run_id)
-        assert run is not None
-        return run
+        assert updated is not None
+        return _run(updated)
 
     def rebind_head(
         self,
@@ -720,19 +738,23 @@ class VerificationDispatchLedger:
             conn.commit()
         return len(planned)
 
-    def attempts(self, run_id: str) -> builtins.list[dict[str, object]]:
-        with self.store._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM verification_attempts WHERE run_id=? ORDER BY created_at, attempt_id",
-                (run_id,),
-            ).fetchall()
+    def _attempts(
+        self, conn: sqlite3.Connection, run_id: str
+    ) -> builtins.list[dict[str, object]]:
+        rows = conn.execute(
+            "SELECT * FROM verification_attempts WHERE run_id=? ORDER BY created_at, attempt_id",
+            (run_id,),
+        ).fetchall()
         return [_attempt(row) for row in rows]
 
-    def closure_ready(self, run_id: str) -> bool:
-        attempts = self.attempts(run_id)
-        run = self.get(run_id)
-        if run is None:
-            return False
+    def attempts(self, run_id: str) -> builtins.list[dict[str, object]]:
+        with self.store._connect() as conn:
+            return self._attempts(conn, run_id)
+
+    def _closure_ready(
+        self, conn: sqlite3.Connection, run_id: str, current_head_sha: str
+    ) -> bool:
+        attempts = self._attempts(conn, run_id)
         repairs = [row for row in attempts if row["kind"] in {"standard_repair", "escalated_repair"}]
         verifications = [row for row in attempts if row["kind"] == "verification"]
         if not repairs and not verifications:
@@ -743,10 +765,20 @@ class VerificationDispatchLedger:
             if row["kind"] == "review"
             and isinstance(row["receipt"], Mapping)
             and row["receipt"].get("reviewed_attempt_id") == final_anchor
-            and row["receipt"].get("head_sha") == run.head_sha
+            and row["receipt"].get("head_sha") == current_head_sha
             and row["outcome"] == "clean"
         ]
         return len(reviews) >= 2 and len({row["session_id"] for row in reviews[-2:]}) == 2
+
+    def closure_ready(self, run_id: str) -> bool:
+        with self.store._connect() as conn:
+            row = conn.execute(
+                "SELECT current_head_sha FROM verification_runs WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            return self._closure_ready(conn, run_id, row["current_head_sha"])
 
     def exception(
         self,
@@ -757,15 +789,11 @@ class VerificationDispatchLedger:
         holder: str,
         lease_id: str,
     ) -> str:
-        run = self.get(run_id)
-        if run is None:
-            raise ValueError("verification run not found")
-        exception_id = f"vexception-{hashlib.sha256(f'{run_id}:{failure_class}:{run.head_sha}'.encode()).hexdigest()[:16]}"
         with self.store._connect() as conn:
             now = _begin_immediate_now(conn)
             owner = conn.execute(
                 """
-                SELECT 1 FROM verification_runs
+                SELECT current_head_sha FROM verification_runs
                 WHERE run_id=? AND claimed_by=? AND lease_id=?
                   AND status IN ('claimed','running')
                   AND lease_expires_at>?
@@ -774,6 +802,10 @@ class VerificationDispatchLedger:
             ).fetchone()
             if owner is None:
                 raise ValueError("verification exception ownership mismatch")
+            head_sha = owner["current_head_sha"]
+            exception_id = "vexception-" + hashlib.sha256(
+                f"{run_id}:{failure_class}:{head_sha}".encode()
+            ).hexdigest()[:16]
             conn.execute(
                 """
                 INSERT INTO verification_exceptions (
@@ -783,7 +815,7 @@ class VerificationDispatchLedger:
                 ON CONFLICT(run_id, failure_class, head_sha)
                 DO UPDATE SET packet_json=excluded.packet_json, updated_at=excluded.updated_at
                 """,
-                (exception_id, run_id, failure_class, run.head_sha, _json(dict(packet)), now, now),
+                (exception_id, run_id, failure_class, head_sha, _json(dict(packet)), now, now),
             )
             conn.commit()
         return exception_id
