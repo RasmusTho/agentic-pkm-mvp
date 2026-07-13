@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from app.builderops.model_inquiry import ModelInquiryService
 from app.builderops.model_inquiry_adapters import (
+    ADAPTER_FAILURE_CLASSES,
     AdapterUnavailableError,
     LocalCommandAdapter,
     load_adapters,
@@ -133,7 +134,7 @@ def launch(
     outcome = completed.get("outcome")
     if not isinstance(outcome, str) or not outcome:
         raise LauncherError("BuilderOps run response omitted final outcome")
-    return {
+    result = {
         "schema": "builderops.model-inquiry-desktop-launch.v1",
         "inquiry_id": inquiry_id,
         "final_state": outcome,
@@ -141,6 +142,10 @@ def launch(
         "human_readable_report": completed.get("human_readable_report"),
         "preflight": preflight,
     }
+    diagnostic = _desktop_diagnostic(completed.get("details"))
+    if diagnostic is not None:
+        result["diagnostic"] = diagnostic
+    return result
 
 
 def _run_cli(
@@ -173,6 +178,32 @@ def _run_cli(
     return payload
 
 
+def _desktop_diagnostic(value: Any) -> dict[str, str | int] | None:
+    """Expose only the adapter diagnostic contract, never generic receipt details."""
+    if not isinstance(value, Mapping):
+        return None
+    candidate = value.get("diagnostic")
+    if not isinstance(candidate, Mapping):
+        return None
+    adapter_id = candidate.get("adapter_id")
+    failure_class = candidate.get("adapter_failure_class")
+    if (
+        not isinstance(adapter_id, str)
+        or not adapter_id
+        or not isinstance(failure_class, str)
+        or failure_class not in ADAPTER_FAILURE_CLASSES
+    ):
+        return None
+    result: dict[str, str | int] = {
+        "adapter_id": adapter_id,
+        "adapter_failure_class": failure_class,
+    }
+    exit_code = candidate.get("adapter_exit_code")
+    if isinstance(exit_code, int) and not isinstance(exit_code, bool) and 1 <= exit_code <= 255:
+        result["adapter_exit_code"] = exit_code
+    return result
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -198,7 +229,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (AdapterUnavailableError, BuilderOpsValidationError, LauncherError, OSError) as exc:
         print(f"ERROR: model inquiry preflight/launch failed: {exc}", file=sys.stderr)
         return 2
-    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True), flush=True)
     return 0
 
 
