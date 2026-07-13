@@ -43,6 +43,9 @@ def health(paths: DispatcherPaths) -> dict[str, Any]:
     if not paths.db_path.exists():
         result["db"]["error"] = "missing"
         return result
+    if not paths.events_path.exists():
+        result["events"]["error"] = "missing"
+        return result
     try:
         with sqlite3.connect(paths.db_path, timeout=0) as conn:
             integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
@@ -92,23 +95,29 @@ def transition(store: SqliteStore, paths: DispatcherPaths, mode: str, *, activat
 
 
 def backup(paths: DispatcherPaths, destination: Path) -> dict[str, str]:
-    if not paths.db_path.exists():
-        raise ValueError("Dispatcher database is missing")
+    proof = health(paths)
+    if not proof["ok"]:
+        raise ValueError("Dispatcher state is unsafe to back up")
     destination.mkdir(parents=True, exist_ok=True)
     target = destination / paths.db_path.name
     with sqlite3.connect(paths.db_path) as source, sqlite3.connect(target) as output:
         source.backup(output)
-    if paths.events_path.exists():
-        shutil.copy2(paths.events_path, destination / paths.events_path.name)
-    return {"db": str(target), "events": str(destination / paths.events_path.name), "created_at": _now()}
+    events_target = destination / paths.events_path.name
+    shutil.copy2(paths.events_path, events_target)
+    return {"db": str(target), "events": str(events_target), "created_at": _now()}
 
 
 def restore(backup_dir: Path, target: DispatcherPaths) -> dict[str, str]:
-    if target.db_path.exists() or backup_dir.resolve() == target.state_dir.resolve():
+    if backup_dir.resolve() == target.state_dir.resolve() or (
+        target.state_dir.exists() and any(target.state_dir.iterdir())
+    ):
         raise ValueError("Restore target must be a separate, empty state root")
     source = backup_dir / target.db_path.name
     if not source.exists():
         raise ValueError(f"Backup database missing: {source}")
+    events = backup_dir / target.events_path.name
+    if not events.exists():
+        raise ValueError(f"Backup events missing: {events}")
     target.state_dir.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(source) as input_db, sqlite3.connect(target.db_path) as output:
         input_db.backup(output)
@@ -116,7 +125,5 @@ def restore(backup_dir: Path, target: DispatcherPaths) -> dict[str, str]:
         integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
     if integrity != "ok":
         raise ValueError(f"Restored database integrity failed: {integrity}")
-    events = backup_dir / target.events_path.name
-    if events.exists():
-        shutil.copy2(events, target.events_path)
+    shutil.copy2(events, target.events_path)
     return {"db": str(target.db_path), "events": str(target.events_path), "integrity": integrity}

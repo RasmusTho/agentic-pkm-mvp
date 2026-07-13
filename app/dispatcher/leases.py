@@ -206,45 +206,42 @@ def heartbeat(
 
     Raises ValueError if task/lease not found or held by a different agent.
     """
-    task = store.get_task(task_id)
-    if task is None:
-        raise ValueError(f"Task {task_id} not found")
-
-    if task.lease_id is None:
-        raise ValueError(f"Task {task_id} has no active lease")
-
-    lease = store.get_lease(task.lease_id)
-    if lease is None:
-        raise ValueError(f"Lease {task.lease_id} not found")
-
-    if lease.holder != agent_id:
-        raise ValueError(
-            f"Cannot heartbeat lease {task.lease_id}: held by {lease.holder}, not {agent_id}"
-        )
-
     now = _utc_now()
-    if _parse_rfc3339(lease.expires_at) <= _parse_rfc3339(now):
-        raise ValueError(f"Cannot heartbeat lease {task.lease_id}: lease has expired")
-    lease.heartbeat_at = now
-    lease.expires_at = _expires_at(lease.ttl_seconds)
-    store.upsert_lease(lease)
-
-    task.last_heartbeat_at = now
-    task.lease_expires_at = lease.expires_at
-    task.updated_at = now
-    store.upsert_task(task)
-
-    event = EventRecord(
-        event_id=_make_event_id(),
-        timestamp=now,
-        task_id=task_id,
-        event_type="task.heartbeat",
-        actor=agent_id,
-        lease_id=lease.lease_id,
-    )
-    store.append_event(event)
-
-    return lease
+    with store._connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        task = conn.execute("SELECT * FROM dispatcher_tasks WHERE task_id = ?", (task_id,)).fetchone()
+        if task is None:
+            raise ValueError(f"Task {task_id} not found")
+        if task["lease_id"] is None:
+            raise ValueError(f"Task {task_id} has no active lease")
+        lease = conn.execute("SELECT * FROM dispatcher_leases WHERE lease_id = ?", (task["lease_id"],)).fetchone()
+        if lease is None:
+            raise ValueError(f"Lease {task['lease_id']} not found")
+        if lease["holder"] != agent_id:
+            raise ValueError(
+                f"Cannot heartbeat lease {task['lease_id']}: held by {lease['holder']}, not {agent_id}"
+            )
+        if lease["released_at"] is not None or _parse_rfc3339(lease["expires_at"]) <= _parse_rfc3339(now):
+            raise ValueError(f"Cannot heartbeat lease {task['lease_id']}: lease has expired")
+        expires = _expires_at(lease["ttl_seconds"])
+        updated = conn.execute(
+            "UPDATE dispatcher_leases SET heartbeat_at = ?, expires_at = ? WHERE lease_id = ? AND holder = ? AND released_at IS NULL AND expires_at > ?",
+            (now, expires, lease["lease_id"], agent_id, now),
+        )
+        if updated.rowcount != 1:
+            raise ValueError(f"Cannot heartbeat lease {task['lease_id']}: lease changed concurrently")
+        updated = conn.execute(
+            "UPDATE dispatcher_tasks SET last_heartbeat_at = ?, lease_expires_at = ?, updated_at = ? WHERE task_id = ? AND lease_id = ? AND claimed_by = ?",
+            (now, expires, now, task_id, lease["lease_id"], agent_id),
+        )
+        if updated.rowcount != 1:
+            raise ValueError(f"Cannot heartbeat lease {task['lease_id']}: task changed concurrently")
+        event = EventRecord(_make_event_id(), now, task_id, "task.heartbeat", agent_id, lease["lease_id"])
+        conn.execute("INSERT INTO dispatcher_events (event_id, timestamp, task_id, event_type, actor, lease_id, payload) VALUES (?, ?, ?, ?, ?, ?, ?)", (event.event_id, event.timestamp, event.task_id, event.event_type, event.actor, event.lease_id, None))
+        conn.commit()
+    if store._event_writer is not None:
+        store._event_writer.append(event)
+    return LeaseRecord(lease["lease_id"], lease["resource"], agent_id, lease["ttl_seconds"], lease["acquired_at"], expires, now)
 
 
 def release(

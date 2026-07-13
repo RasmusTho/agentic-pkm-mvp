@@ -28,6 +28,7 @@ def _task() -> TaskRecord:
 def test_health_backup_and_restore_to_separate_root(tmp_path: Path) -> None:
     store, paths = _store(tmp_path)
     store.upsert_task(_task())
+    paths.events_path.touch()
     receipt = control_plane.backup(paths, tmp_path / "backup")
     restored = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "restored")})
     result = control_plane.restore(tmp_path / "backup", restored)
@@ -36,6 +37,22 @@ def test_health_backup_and_restore_to_separate_root(tmp_path: Path) -> None:
     assert SqliteStore(restored.db_path).get_task("task-1") is not None
     with pytest.raises(ValueError, match="separate, empty"):
         control_plane.restore(tmp_path / "backup", paths)
+
+
+def test_control_plane_rejects_missing_events_and_nonempty_restore_target(tmp_path: Path) -> None:
+    store, paths = _store(tmp_path)
+    store.upsert_task(_task())
+    assert control_plane.health(paths)["ok"] is False
+    with pytest.raises(ValueError, match="unsafe"):
+        control_plane.backup(paths, tmp_path / "backup")
+
+    paths.events_path.touch()
+    control_plane.backup(paths, tmp_path / "backup")
+    restored = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "restored")})
+    restored.state_dir.mkdir()
+    restored.events_path.touch()
+    with pytest.raises(ValueError, match="separate, empty"):
+        control_plane.restore(tmp_path / "backup", restored)
 
 
 def test_mode_transition_rejects_stale_revision_without_losing_accepted_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -71,3 +88,7 @@ def test_expired_lease_rejects_heartbeat_and_preserves_takeover(tmp_path: Path) 
         leases.heartbeat(store, "task-1", "old")
     task, replacement = leases.claim(store, "task-1", "new", takeover_stale=True)
     assert task.lease_id == replacement.lease_id
+    with pytest.raises(ValueError, match="held by new"):
+        leases.heartbeat(store, "task-1", "old")
+    current = store.get_task("task-1")
+    assert current is not None and current.lease_id == replacement.lease_id
