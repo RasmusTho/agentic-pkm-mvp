@@ -75,6 +75,31 @@ def test_claim_plan_separates_required_reads_and_projection_writes() -> None:
     assert plan["summary"]["no_mutations_performed"] is True
 
 
+def test_claim_plan_allows_missing_optional_project_status() -> None:
+    plan = build_lifecycle_transition_plan(
+        transition="claim",
+        issue=_issue(project_status=None),
+        repo="RasmusTho/agentic-pkm-mvp",
+    )
+
+    assert plan["blocked_reasons"] == []
+    assert [
+        item["action"] for item in plan["proposed_writes"]["issue_project_status"]
+    ] == ["add_to_project", "set_status"]
+    assert plan["proposed_writes"]["issue_project_status"][-1]["value"] == "In Progress"
+
+
+def test_claim_plan_treats_stale_project_status_as_projection_drift() -> None:
+    plan = build_lifecycle_transition_plan(
+        transition="claim",
+        issue=_issue(project_status="Backlog"),
+        repo="RasmusTho/agentic-pkm-mvp",
+    )
+
+    assert plan["blocked_reasons"] == []
+    assert plan["proposed_writes"]["issue_project_status"][0]["value"] == "In Progress"
+
+
 def test_claim_plan_blocks_non_ready_issue_without_writes() -> None:
     plan = build_lifecycle_transition_plan(
         transition="claim",
@@ -83,10 +108,7 @@ def test_claim_plan_blocks_non_ready_issue_without_writes() -> None:
         repo="RasmusTho/agentic-pkm-mvp",
     )
 
-    assert plan["blocked_reasons"] == [
-        "missing-agent-ready-label",
-        "project-status-not-ready",
-    ]
+    assert plan["blocked_reasons"] == ["missing-agent-ready-label"]
     assert plan["proposed_writes"]["issue_labels"] == []
     assert plan["proposed_writes"]["issue_project_status"] == []
 
