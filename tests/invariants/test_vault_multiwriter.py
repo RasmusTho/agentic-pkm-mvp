@@ -273,6 +273,87 @@ def test_rewritten_write_preserves_existing_file_mode(tmp_path: Path) -> None:
     assert target.stat().st_mode & 0o777 == 0o644
 
 
+def test_rewritten_write_preserves_human_save_when_rollback_exchange_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/rollback-failure.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    expected_version = hashlib.sha256(b"observed body").hexdigest()
+    real_exchange = adapters_module._atomic_exchange
+    exchanges = 0
+
+    def failing_rollback(first: Path, second: Path) -> None:
+        nonlocal exchanges
+        exchanges += 1
+        if exchanges == 1:
+            target.write_bytes(b"HUMAN-BEFORE-EXCHANGE")
+            real_exchange(first, second)
+            return
+        raise OSError("simulated rollback exchange failure")
+
+    monkeypatch.setattr(adapters_module, "_atomic_exchange", failing_rollback)
+
+    with pytest.raises(KnowledgeWriteConflict, match="rollback"):
+        adapter.write_note(locator, "ENGINE", expected_version=expected_version)
+
+    assert target.read_bytes() == b"ENGINE"
+    conflict_contents = [path.read_bytes() for path in target.parent.glob("*conflicted copy*")]
+    assert b"HUMAN-BEFORE-EXCHANGE" in conflict_contents
+
+
+def test_rewritten_write_conflicts_on_mode_change_at_atomic_exchange(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/mode-race.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    target.chmod(0o644)
+    expected_version = hashlib.sha256(b"observed body").hexdigest()
+    real_exchange = adapters_module._atomic_exchange
+
+    def chmod_before_exchange(first: Path, second: Path) -> None:
+        target.chmod(0o600)
+        real_exchange(first, second)
+
+    monkeypatch.setattr(adapters_module, "_atomic_exchange", chmod_before_exchange)
+
+    with pytest.raises(KnowledgeWriteConflict, match="version mismatch"):
+        adapter.write_note(locator, "ENGINE", expected_version=expected_version)
+
+    assert target.read_bytes() == b"observed body"
+    assert target.stat().st_mode & 0o777 == 0o600
+
+
+def test_rewritten_write_cleanup_failure_does_not_mask_committed_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/cleanup-failure.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    expected_version = hashlib.sha256(b"observed body").hexdigest()
+    real_unlink = Path.unlink
+
+    def failing_cleanup(path: Path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if path.name.endswith(".rewrite-swap"):
+            raise PermissionError("simulated cleanup failure")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", failing_cleanup)
+
+    receipt = adapter.write_note(locator, "ENGINE", expected_version=expected_version)
+
+    assert receipt.operation == "write_note"
+    assert target.read_bytes() == b"ENGINE"
+    assert list(target.parent.glob("*.rewrite-swap"))
+
+
 def test_filesystem_write_receipt_carries_writer_provenance(tmp_path: Path) -> None:
     adapter = FsVaultAdapter(tmp_path)
     locator = NoteLocator(vault="Vault", path="Notes/provenance.md")

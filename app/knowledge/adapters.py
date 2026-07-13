@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
+import logging
 import os
 import stat
 import subprocess
@@ -23,6 +24,8 @@ from app.knowledge.multiwriter import (
     classify_note,
     conflict_artifact_path,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _atomic_exchange(first: Path, second: Path) -> None:
@@ -138,6 +141,7 @@ class FsVaultAdapter:
                     staged_handle.flush()
                     os.fsync(staged_handle.fileno())
                 staged_stat = staged.stat()
+                payload_version = hashlib.sha256(payload).hexdigest()
 
                 # Validate twice through one descriptor, then use an atomic path exchange
                 # as the linearization point. The displaced original remains addressable at
@@ -170,18 +174,27 @@ class FsVaultAdapter:
                             "target changed during version check"
                         )
                     os.chmod(staged, stat.S_IMODE(opened_stat.st_mode))
+                    opened_mode = stat.S_IMODE(opened_stat.st_mode)
 
                 _atomic_exchange(target, staged)
 
                 displaced_version = hashlib.sha256(staged.read_bytes()).hexdigest()
-                if displaced_version != expected_version:
+                displaced_mode = stat.S_IMODE(staged.stat().st_mode)
+                if displaced_version != expected_version or displaced_mode != opened_mode:
+                    preserve_staged_conflict = True
                     path_stat = target.stat()
                     if _same_file_identity(path_stat, staged_stat):
-                        _atomic_exchange(target, staged)
-                    if staged.exists() and hashlib.sha256(staged.read_bytes()).hexdigest() != (
-                        hashlib.sha256(payload).hexdigest()
+                        try:
+                            _atomic_exchange(target, staged)
+                        except OSError as exc:
+                            raise KnowledgeWriteConflict(
+                                f"version mismatch for rewritten note {locator.path}: "
+                                "atomic rollback failed; displaced content was preserved"
+                            ) from exc
+                    if staged.exists() and hashlib.sha256(staged.read_bytes()).hexdigest() == (
+                        payload_version
                     ):
-                        preserve_staged_conflict = True
+                        preserve_staged_conflict = False
                     raise KnowledgeWriteConflict(
                         f"version mismatch for rewritten note {locator.path}: "
                         "target changed at atomic exchange"
@@ -194,9 +207,7 @@ class FsVaultAdapter:
                         f"version mismatch for rewritten note {locator.path}: "
                         "target changed after atomic exchange"
                     )
-                if hashlib.sha256(target.read_bytes()).hexdigest() != hashlib.sha256(
-                    payload
-                ).hexdigest():
+                if hashlib.sha256(target.read_bytes()).hexdigest() != payload_version:
                         raise KnowledgeWriteConflict(
                             f"version mismatch for rewritten note {locator.path}: "
                             "target content changed after atomic exchange"
@@ -208,10 +219,16 @@ class FsVaultAdapter:
             finally:
                 if staged_fd >= 0:
                     os.close(staged_fd)
-                if preserve_staged_conflict and staged.exists():
-                    _preserve_displaced_conflict(staged, target, locator)
-                else:
-                    staged.unlink(missing_ok=True)
+                try:
+                    if preserve_staged_conflict and staged.exists():
+                        _preserve_displaced_conflict(staged, target, locator)
+                    else:
+                        staged.unlink(missing_ok=True)
+                except OSError:
+                    logger.exception(
+                        "rewritten-note swap cleanup failed; retained staged content at %s",
+                        staged,
+                    )
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
