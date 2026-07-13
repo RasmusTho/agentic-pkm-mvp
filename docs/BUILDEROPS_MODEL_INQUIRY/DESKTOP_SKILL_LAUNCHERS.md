@@ -38,14 +38,15 @@ retry, inspect the vault for a substitute response, or fall back to an in-chat i
 The established remote command has one fixed `/tmp/model-inquiry-question.md` input path. Before
 copying the question, both packages acquire the atomic remote lock with
 `mkdir /tmp/yggdrasil-model-inquiry.lock`. A failed lock acquisition stops the launch without
-removing the existing lock. After an acquired launch returns, each package removes only its staged
-question file and releases the lock with `rmdir`. This prevents one desktop session from overwriting
-another inquiry's question while retaining the required fixed copy and launcher commands.
+removing the existing lock. This prevents one desktop session from overwriting another inquiry's
+question while retaining the required fixed copy and launcher commands.
 
-After lock acquisition, cleanup is a registered `finally` action rather than a post-launch success
-step. It removes the local temporary file, staged remote question, and acquired lock after every
-outcome, including local question-write and `scp` failure before the launcher starts. A cleanup
-failure is reported alongside, but never replaces, the original launch failure.
+After lock acquisition, local temporary-file cleanup is a registered `finally` action. The remote
+question and lock are released only when the copy failed before the launcher began, or when the
+launcher returned a valid non-empty JSON receipt with every required field. A transport failure,
+empty stdout, malformed JSON, or missing field is ambiguous: the launcher may still run remotely,
+so the package leaves the remote lock and staged question in place, reports the error, and does not
+retry or infer completion.
 
 ## Concretely
 
@@ -72,8 +73,8 @@ other.
 - [x] Both packages atomically lock the fixed remote question path rather than silently overwriting
   a concurrent inquiry. Verify:
   `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
-- [x] Both packages register cleanup immediately after lock acquisition, including for failures
-  before launcher start. Verify:
+- [x] Both packages release the remote lock only after a pre-launch failure or a verified receipt,
+  preserving it after an ambiguous launcher result. Verify:
   `tests/governance/test_start_model_inquiry_skill.py::test_desktop_skills_route_to_macmini_launcher`.
 
 ## How to Verify (Pre-Merge)
