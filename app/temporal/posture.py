@@ -6,7 +6,15 @@ from collections import Counter
 from datetime import datetime, timedelta
 from typing import Any, Literal, Mapping, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 TRUTH_JUDGMENT_COPY = (
     "Temporal posture is a review-timing signal, not a truth judgment. "
@@ -22,7 +30,7 @@ class TemporalPolicyEntry(_StrictModel):
     kind: Literal["external_source", "external_projection", "historical_external_source"]
     mode: Literal["age_review", "historical"]
     permitted_timestamp_fields: tuple[str, ...] = ()
-    review_interval_days: int | None = None
+    review_interval_days: StrictInt | None = Field(default=None, ge=1, le=999_999_999)
     rationale: str = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -51,6 +59,13 @@ class TemporalPolicy(_StrictModel):
     owner: str = Field(min_length=1)
     effective_at: datetime
     allowlist: tuple[TemporalPolicyEntry, ...] = Field(min_length=1)
+
+    @field_validator("effective_at", mode="before")
+    @classmethod
+    def _explicit_effective_at(cls, value: object) -> object:
+        if not isinstance(value, (str, datetime)):
+            raise ValueError("effective_at must be an explicit ISO timestamp")
+        return value
 
     @model_validator(mode="after")
     def _policy_contract(self) -> "TemporalPolicy":

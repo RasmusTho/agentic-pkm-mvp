@@ -194,3 +194,26 @@ def test_invalid_policy_and_copy_fail_closed() -> None:
     )
     assert expanded.overlay is None
     assert expanded.diagnostic == "policy_invalid"
+
+    coercive_or_unrepresentable = (
+        ("effective_at", 0),
+        ("review_interval_days", True),
+        ("review_interval_days", 1.0),
+        ("review_interval_days", 1_000_000_000),
+    )
+    for field, value in coercive_or_unrepresentable:
+        malformed = copy.deepcopy(_policy())
+        if field == "effective_at":
+            malformed[field] = value
+        else:
+            malformed["allowlist"][0][field] = value
+        failed_closed = derive_temporal_posture(
+            artifact={
+                "kind": "external_source",
+                "source_updated_at": "2020-01-01T00:00:00Z",
+            },
+            policy=malformed,
+            evaluated_at=NOW,
+        )
+        assert failed_closed.overlay is None
+        assert failed_closed.diagnostic == "policy_invalid"
