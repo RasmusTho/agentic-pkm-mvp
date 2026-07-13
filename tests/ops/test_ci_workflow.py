@@ -86,7 +86,10 @@ def test_integration_nightly_installs_required_media_libraries() -> None:
 def test_integration_nightly_uses_collision_safe_test_imports() -> None:
     workflow = INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
 
-    assert "--import-mode=importlib" in workflow
+    full_suite = workflow[workflow.index("full-suite:") : workflow.index("pg-contracts:")]
+    assert "--import-mode=importlib" in full_suite
+    assert "-c /dev/null" not in full_suite
+    assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD" not in full_suite
 
 
 def test_integration_nightly_prepares_pgvector_before_migrations() -> None:
