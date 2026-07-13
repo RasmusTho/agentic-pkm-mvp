@@ -505,7 +505,6 @@ def test_standing_questions_store_change_selects_owned_coverage() -> None:
     selection = select_tests(
         [
             "app/standing_questions/projection.py",
-            "app/store/standing_questions_projection.py",
             "schemas/question-note.schema.json",
             "tests/standing_questions/test_question_projection.py",
         ]

@@ -250,7 +250,6 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         "standing_questions",
         (
             "app/standing_questions/",
-            "app/store/standing_questions_projection.py",
             # Deliberately NOT app/alembic/versions/4d1e0c9a3329_...: a migration
             # touching the standing_questions schema has cross-cutting blast radius
             # and must resolve to full-suite via the migration/schema full-suite rule

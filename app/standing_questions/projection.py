@@ -1,15 +1,27 @@
-"""Rebuild the derived ``standing_questions`` projection from vault Question notes."""
+"""Rebuild the derived ``standing_questions`` projection from vault Question notes.
+
+The ``standing_questions`` table is a rebuildable Postgres projection over the
+vault-canonical Question notes (DRI discipline). This module owns both the read
+(parse notes) and write (TRUNCATE + replay) sides, inlining the one-transaction DB
+write via ``app.db.db.conn_rw`` -- the same non-deprecated pattern the episodes and
+decisions projection jobs use (``app/jobs/episodes_projection.py``,
+``app/jobs/decisions_projection.py``), rather than a separate module under the
+deprecated ``app.store`` package (ADR-0013).
+"""
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from jsonschema import ValidationError
 
-from app.store.standing_questions_projection import replace_standing_questions_projection
+from app.db.db import conn_rw
 from app.standing_questions.question_store import QUESTION_DIRECTORY, parse_question_note
 from app.vault.manager import iter_vault_markdown_files
+
+STANDING_QUESTIONS_TABLE = "standing_questions"
 
 
 class QuestionsDirectoryMissingError(FileNotFoundError):
@@ -68,6 +80,42 @@ def iter_question_notes(vault_root: Path | str) -> list[tuple[str, dict[str, Any
     return notes
 
 
+def _replace_projection_rows(notes: list[tuple[str, dict[str, Any]]]) -> None:
+    """Replace every derived row from vault-canonical Question notes in one transaction.
+
+    The TRUNCATE and every replayed INSERT commit together, so a failure mid-replay
+    leaves the prior projection intact -- mirroring the episodes projection job's
+    single-transaction rebuild.
+    """
+    with conn_rw() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"TRUNCATE TABLE {STANDING_QUESTIONS_TABLE}")
+            for source_path, note in notes:
+                cur.execute(
+                    f"""
+                    INSERT INTO {STANDING_QUESTIONS_TABLE} (
+                        question_id, scope, text, status, created_at, registered_via,
+                        standing_answer_ref, candidate_answer_ref, evidence,
+                        last_matched_at, last_refreshed_at, source_path
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)
+                    """,
+                    (
+                        note["question_id"],
+                        note["scope"],
+                        note["text"],
+                        note["status"],
+                        note["created_at"],
+                        note["registered_via"],
+                        note.get("standing_answer_ref"),
+                        note.get("candidate_answer_ref"),
+                        json.dumps(note["evidence"]),
+                        note.get("last_matched_at"),
+                        note.get("last_refreshed_at"),
+                        source_path,
+                    ),
+                )
+
+
 def rebuild_standing_questions_projection(vault_root: Path | str) -> ProjectionRebuildSummary:
     """Replace every derived row with the canonical vault state in one transaction.
 
@@ -76,13 +124,14 @@ def rebuild_standing_questions_projection(vault_root: Path | str) -> ProjectionR
     projection down to nothing -- see :class:`QuestionsDirectoryMissingError`.
     """
     notes, skipped = _read_question_notes(vault_root)
-    replace_standing_questions_projection(notes)
+    _replace_projection_rows(notes)
     return ProjectionRebuildSummary(inserted=len(notes), skipped_invalid=tuple(skipped))
 
 
 __all__ = [
     "ProjectionRebuildSummary",
     "QuestionsDirectoryMissingError",
+    "STANDING_QUESTIONS_TABLE",
     "iter_question_notes",
     "rebuild_standing_questions_projection",
 ]
