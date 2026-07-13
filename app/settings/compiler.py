@@ -440,7 +440,11 @@ def compile_all(
 
     panel_actions_settings = load_panel_actions_settings()
     dump("panel_actions.yaml", _panel_actions_payload(panel_actions_settings))
-    watcher_settings = load_watcher_settings()
+    # Keep the watcher-specific settings loader on the same selected vault as
+    # the generic and agent source compilation above.  Otherwise a
+    # channel-scoped VAULT_ROOT_DEV/TEST could silently retain its default
+    # auto-exec policy while the rest of the bundle came from this vault.
+    watcher_settings = load_watcher_settings(vault_root=vault_root)
     dump("watchers.yaml", _watcher_settings_payload(watcher_settings))
 
     fingerprint = hashlib.sha256(

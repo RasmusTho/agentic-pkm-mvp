@@ -89,15 +89,18 @@ def _selected_settings_source_dir() -> Path | None:
 
 
 def get_settings_ingestion_state() -> SettingsIngestionState:
-    # A watcher reload runs in a different container.  Mirror its published
-    # result into this process so API health reports the same fail-loud state.
+    # A watcher reload runs in a different container.  Its signal carries
+    # error evidence, but not this process's in-memory bundle history: a fresh
+    # API must not claim ``degraded_last_valid`` when it actually booted on
+    # defaults against invalid sources.
     signal = read_reload_signal()
-    if signal is not None:
+    prior = _get_local_ingestion_state()
+    if signal is not None and signal.state != STATE_OK and prior.state in _VALID_PRIOR_STATES:
         _set_state(
             SettingsIngestionState(
-                state=signal.state,
-                source=signal.source,
-                loaded_at=signal.loaded_at,
+                state=STATE_DEGRADED,
+                source="vault",
+                loaded_at=prior.loaded_at,
                 error=signal.error,
             )
         )

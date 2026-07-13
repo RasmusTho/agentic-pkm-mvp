@@ -168,6 +168,47 @@ def test_invalid_settings_degrade_loud(sandbox_sources: Path) -> None:
     assert runtime.get_settings_bundle().global_.log_level == "DEBUG"
 
 
+def test_watcher_degraded_signal_does_not_give_fresh_process_a_last_valid_bundle(
+    sandbox_sources: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A shared watcher signal cannot manufacture this process's bundle history."""
+    source = sandbox_sources / "global.md"
+    source.write_text(_source_md("DEBUG"), encoding="utf-8")
+    ingest_settings(reason="watcher_valid")
+    source.write_text(_INVALID_SOURCE_MD, encoding="utf-8")
+    handle_settings_source_delta(rel_path=Path("@Settings/global.md"))
+
+    # Simulate an API restart: it has no last-valid projection and therefore
+    # correctly lands on invalid_sources/defaults for the broken source.
+    monkeypatch.setattr(runtime, "_CURRENT", None)
+    reset_settings_ingestion_state()
+    fresh = ingest_settings(reason="api_restart")
+
+    assert fresh.state == "invalid_sources"
+    assert get_settings_ingestion_state().state == "invalid_sources"
+
+
+def test_selected_vault_compiles_watcher_policy_from_that_same_vault(
+    sandbox_sources: Path, tmp_path: Path
+) -> None:
+    """Specialized watcher loading must not fall back to an unscoped vault."""
+    (sandbox_sources / "watchers.md").write_text(
+        "---\nauto_run:\n  auto_exec_default: false\n---\n# Watcher settings\n",
+        encoding="utf-8",
+    )
+    runtime_dir = tmp_path / "runtime" / "settings"
+    original_runtime = compiler.RUNTIME
+    try:
+        compiler.RUNTIME = runtime_dir
+        compiler.compile_all(vault_dir=sandbox_sources)
+    finally:
+        compiler.RUNTIME = original_runtime
+
+    assert "auto_exec_default: false" in (runtime_dir / "watchers.yaml").read_text(
+        encoding="utf-8"
+    )
+
+
 def test_non_source_delta_is_ignored(sandbox_sources: Path) -> None:
     """A non-settings file change is not treated as a settings source reload."""
     result = handle_settings_source_delta(rel_path=Path("notes/some-note.md"))
@@ -248,6 +289,8 @@ def test_registry_watcher_routes_settings_sources_outside_note_scope(
         "watchers:\n  - name: panel\n    scope_glob: 'Notes/**'\n    emit_event: false\n",
         encoding="utf-8",
     )
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
     monkeypatch.setenv("WATCHER_ENABLE", "1")
     monkeypatch.setenv("WATCHER_VAULT_PATH", str(sandbox_sources.parent))
     monkeypatch.setenv("WATCHER_SCOPE_GLOB", "Notes/**")
@@ -265,3 +308,31 @@ def test_registry_watcher_routes_settings_sources_outside_note_scope(
     registry._run_spec_tick(cfg, cfg.specs[0], state, now=time.time())
 
     assert runtime.get_settings_bundle().global_.log_level == "WARNING"
+
+
+def test_registry_watcher_does_not_emit_settings_sources_as_vault_content(
+    sandbox_sources: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Control markdown reloads once but never enters ingest/panel business flows."""
+    initialize_test_vault(sandbox_sources.parent)
+    (sandbox_sources / "global.md").write_text(_source_md("DEBUG"), encoding="utf-8")
+    config_path = tmp_path / "watchers.yaml"
+    config_path.write_text(
+        "watchers:\n  - name: ingest\n    scope_glob: '@Settings/**'\n"
+        "    emit_event: 'ingest.vault.changed'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setenv("PKM_SETTINGS_PROFILE", "lab")
+    monkeypatch.setenv("WATCHER_ENABLE", "1")
+    monkeypatch.setenv("WATCHER_VAULT_PATH", str(sandbox_sources.parent))
+    monkeypatch.setenv("WATCHER_SCOPE_GLOB", "@Settings/**")
+    monkeypatch.setenv("WATCHER_STATE_DIR", str(tmp_path / "watcher-state"))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
+
+    cfg = registry.load_registry_config(config_path)
+    summary = registry._run_spec_tick(cfg, cfg.specs[0], WatcherState(), now=time.time())
+
+    assert summary.get("settings_source_reloads_in_tick") == 1
+    assert summary["changed_in_tick"] == 0
+    assert summary["emitted_in_tick"] == 0

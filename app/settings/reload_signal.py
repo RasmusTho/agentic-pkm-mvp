@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from time import time_ns
@@ -17,7 +18,9 @@ from typing import Any
 
 
 _SIGNAL_ENV = "SETTINGS_RELOAD_SIGNAL_PATH"
-_DEFAULT_SIGNAL_PATH = Path("/app/tmp/settings-reload.json")
+_RUNTIME_ARTIFACT_ENV = "WATCHER_HEARTBEAT_PATH"
+_SIGNAL_FILENAME = "settings-reload.json"
+_LOCAL_FALLBACK_DIRECTORY = Path(tempfile.gettempdir()) / "agentic-pkm"
 
 
 @dataclass(frozen=True)
@@ -30,8 +33,26 @@ class ReloadSignal:
 
 
 def signal_path() -> Path:
+    """Resolve the shared signal location for this runtime topology.
+
+    Compose already supplies ``WATCHER_HEARTBEAT_PATH`` for every service and
+    mounts its parent as the channel-scoped shared runtime-artifact volume.  By
+    deriving the signal sibling from that path, the test channel naturally uses
+    ``/app/tmp-test`` rather than leaking into the dev/prod ``/app/tmp`` volume.
+    Bare local processes (including pytest) have no mounted runtime artifact
+    volume, so they use a writable OS-temp directory instead of assuming that
+    ``/app`` exists.  An explicit signal path remains available for isolated
+    tests and non-standard deployments.
+    """
     raw = os.getenv(_SIGNAL_ENV, "").strip()
-    return Path(raw).expanduser() if raw else _DEFAULT_SIGNAL_PATH
+    if raw:
+        return Path(raw).expanduser()
+
+    artifact_path = os.getenv(_RUNTIME_ARTIFACT_ENV, "").strip()
+    if artifact_path:
+        return Path(artifact_path).expanduser().parent / _SIGNAL_FILENAME
+
+    return _LOCAL_FALLBACK_DIRECTORY / _SIGNAL_FILENAME
 
 
 def publish_reload_signal(

@@ -954,6 +954,7 @@ def _collect_changed_entries(
     *,
     scan_roots: Iterable[Path],
     states: Mapping[str, WatcherState],
+    handled_settings_sources: set[Path] | None = None,
 ) -> tuple[list[ChangedEntry], list[str]]:
     changed_entries: list[ChangedEntry] = []
     scanned_paths: list[str] = []
@@ -996,11 +997,19 @@ def _collect_changed_entries(
             hashed = _hash_file(path)
             if hashed is not None:
                 digest = hashed[0]
-        source_delta = handle_settings_source_delta(
-            rel_path=rel,
-            vault_settings_dir=cfg.vault_path / SETTINGS_SOURCE_DIR_NAME,
-        )
-        if source_delta.is_source:
+        if is_settings_source_path(rel):
+            # Settings markdown is runtime control input, never ordinary vault
+            # content.  Record it as seen for every spec, reload it only once
+            # per registry tick, then keep it out of panel/ingest emissions.
+            state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
+            if handled_settings_sources is not None and rel in handled_settings_sources:
+                continue
+            if handled_settings_sources is not None:
+                handled_settings_sources.add(rel)
+            source_delta = handle_settings_source_delta(
+                rel_path=rel,
+                vault_settings_dir=cfg.vault_path / SETTINGS_SOURCE_DIR_NAME,
+            )
             if source_delta.reloaded:
                 summary["settings_source_reloads_in_tick"] = (
                     int(summary.get("settings_source_reloads_in_tick", 0)) + 1
@@ -1010,6 +1019,7 @@ def _collect_changed_entries(
                 summary["settings_source_errors_in_tick"] = int(
                     summary.get("settings_source_errors_in_tick", 0)
                 ) + len(source_delta.errors)
+            continue
         changed_entries.append(ChangedEntry(rel_path=rel, mtime=mtime, digest=digest))
         if settings_delta.values is not None:
             _sync_settings_local_state(states, rel_str=rel_str, values=settings_delta.values)
@@ -1222,6 +1232,7 @@ def _run_spec_tick(
     now: float,
     states: Mapping[str, WatcherState] | None = None,
     process_panel_notes_inline: bool = False,
+    handled_settings_sources: set[Path] | None = None,
 ) -> dict[str, object]:
     tick_start = now
     state.ticks_run += 1
@@ -1297,6 +1308,7 @@ def _run_spec_tick(
         summary,
         scan_roots=scan_roots,
         states=active_states,
+        handled_settings_sources=handled_settings_sources,
     )
 
     if int(summary.get("scanned_files", 0)) == 0:
@@ -1374,6 +1386,7 @@ def run_registry_once(config_path: Path) -> dict[str, dict[str, object]]:
         for spec in cfg.specs
     }
     now = time.time()
+    handled_settings_sources: set[Path] = set()
     summaries = {
         spec.name: _run_spec_tick(
             cfg,
@@ -1382,6 +1395,7 @@ def run_registry_once(config_path: Path) -> dict[str, dict[str, object]]:
             now=now,
             states=states,
             process_panel_notes_inline=True,
+            handled_settings_sources=handled_settings_sources,
         )
         for spec in cfg.specs
     }
@@ -1429,8 +1443,16 @@ def run_registry_forever(config_path: Path, *, max_ticks: int | None = None) -> 
     tick = 0
     while True:
         now = time.time()
+        handled_settings_sources: set[Path] = set()
         summaries = {
-            spec.name: _run_spec_tick(cfg, spec, states[spec.name], now=now, states=states)
+            spec.name: _run_spec_tick(
+                cfg,
+                spec,
+                states[spec.name],
+                now=now,
+                states=states,
+                handled_settings_sources=handled_settings_sources,
+            )
             for spec in cfg.specs
         }
         summaries["briefing"] = _run_briefing_tick(

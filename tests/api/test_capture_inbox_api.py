@@ -79,10 +79,6 @@ def test_capture_appends_to_inbox_through_governed_pipeline(
 
     def _spy(action: str) -> None:
         guard_actions.append(action)
-        if action.endswith("write_note"):  # DIAG-3518 (temporary)
-            import traceback
-
-            print("DIAG-3518 write_note stack:\n" + "".join(traceback.format_stack()[-9:-1]), flush=True)
         real_gate(action)
 
     monkeypatch.setattr(
@@ -93,17 +89,6 @@ def test_capture_appends_to_inbox_through_governed_pipeline(
         "/api/companion/capture",
         json={"text": "Call the bank\nabout the mortgage amortization"},
     )
-
-    # DIAG-3518 (temporary): identity of the guard object the spy patched vs the
-    # one append_note_relative lazily imports, plus the observed action sequence.
-    import app.write_guard as _wg  # noqa: E402
-
-    print(
-        f"DIAG-3518 ids capture_mod={id(capture_module.DEFAULT_WRITE_GUARD)} "
-        f"write_guard_mod={id(_wg.DEFAULT_WRITE_GUARD)} same={capture_module.DEFAULT_WRITE_GUARD is _wg.DEFAULT_WRITE_GUARD}",
-        flush=True,
-    )
-    print(f"DIAG-3518 guard_actions={guard_actions} status={resp.status_code}", flush=True)
 
     assert resp.status_code == 200, resp.text
     data = resp.json()
