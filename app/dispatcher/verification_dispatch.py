@@ -37,6 +37,12 @@ def _future(seconds: int) -> str:
     )
 
 
+def _begin_immediate_now(conn: sqlite3.Connection) -> str:
+    """Acquire SQLite's write lock before sampling mutation authority time."""
+    conn.execute("BEGIN IMMEDIATE")
+    return _now()
+
+
 def _parse_timestamp(value: str) -> datetime:
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -292,8 +298,9 @@ class VerificationDispatchLedger:
     def heartbeat(
         self, run_id: str, holder: str, lease_id: str, ttl_seconds: int = 900
     ) -> VerificationRun:
-        now, expires = _now(), _future(ttl_seconds)
         with self.store._connect() as conn:
+            now = _begin_immediate_now(conn)
+            expires = _future(ttl_seconds)
             result = conn.execute(
                 """
                 UPDATE verification_runs
@@ -319,8 +326,8 @@ class VerificationDispatchLedger:
         session_id: str,
         context_pack: Mapping[str, object],
     ) -> VerificationRun:
-        now = _now()
         with self.store._connect() as conn:
+            now = _begin_immediate_now(conn)
             result = conn.execute(
                 """
                 UPDATE verification_runs
@@ -351,8 +358,8 @@ class VerificationDispatchLedger:
             raise ValueError("invalid verification terminal status")
         if status == "completed" and not self.closure_ready(run_id):
             raise ValueError("completed requires two fresh clean reviews after the final repair")
-        now = _now()
         with self.store._connect() as conn:
+            now = _begin_immediate_now(conn)
             result = conn.execute(
                 """
                 UPDATE verification_runs
@@ -406,9 +413,8 @@ class VerificationDispatchLedger:
             raise ValueError("malformed verification rebind head")
         if new_head_sha != observed_head_sha:
             raise ValueError("verification rebind does not match live PR head")
-        now = _now()
         with self.store._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            now = _begin_immediate_now(conn)
             row = conn.execute(
                 "SELECT * FROM verification_runs WHERE run_id=?",
                 (run_id,),
@@ -459,8 +465,8 @@ class VerificationDispatchLedger:
         lease_id: str,
     ) -> VerificationRun:
         _parse_timestamp(retry_after)
-        now = _now()
         with self.store._connect() as conn:
+            now = _begin_immediate_now(conn)
             result = conn.execute(
                 """
                 UPDATE verification_runs
@@ -548,9 +554,8 @@ class VerificationDispatchLedger:
             raise ValueError("invalid verification attempt kind")
         context_hash = hashlib.sha256(_json(dict(context)).encode()).hexdigest()
         attempt_id = f"vattempt-{uuid.uuid4().hex[:12]}"
-        now = _now()
         with self.store._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            now = _begin_immediate_now(conn)
             owner = conn.execute(
                 """
                 SELECT 1 FROM verification_runs
@@ -628,9 +633,8 @@ class VerificationDispatchLedger:
             digest = hashlib.sha256(f"{run_id}:{batch_id}:{index}".encode()).hexdigest()
             return f"vattempt-{digest[:16]}"
 
-        now = _now()
         with self.store._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            now = _begin_immediate_now(conn)
             owner = conn.execute(
                 """
                 SELECT current_head_sha FROM verification_runs
@@ -756,10 +760,9 @@ class VerificationDispatchLedger:
         run = self.get(run_id)
         if run is None:
             raise ValueError("verification run not found")
-        now = _now()
         exception_id = f"vexception-{hashlib.sha256(f'{run_id}:{failure_class}:{run.head_sha}'.encode()).hexdigest()[:16]}"
         with self.store._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            now = _begin_immediate_now(conn)
             owner = conn.execute(
                 """
                 SELECT 1 FROM verification_runs
