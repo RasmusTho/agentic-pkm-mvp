@@ -142,6 +142,12 @@ def _has_unique_key(
     for index in conn.execute(f"PRAGMA index_list({table})").fetchall():
         if not bool(index[2]):
             continue
+        # A partial UNIQUE index cannot satisfy ``ON CONFLICT(column)``
+        # without the same WHERE clause.  Dispatcher writers use bare
+        # conflict targets, so accepting one here would certify a database
+        # that fails as soon as state is written.
+        if bool(index[4]):
+            continue
         index_columns = tuple(
             str(row[2])
             for row in conn.execute(f"PRAGMA index_info({index[1]})").fetchall()

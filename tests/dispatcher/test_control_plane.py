@@ -189,6 +189,53 @@ def test_recovery_rejects_column_compatible_schema_without_unique_keys(
     }
 
 
+def test_recovery_rejects_partial_unique_key_without_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A partial UNIQUE index does not support the dispatcher's bare UPSERT."""
+    paths = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "state")})
+    paths.state_dir.mkdir()
+    partial_meta_ddl = ";\n".join(DDL_STATEMENTS).replace(
+        "key TEXT PRIMARY KEY", "key TEXT NOT NULL"
+    )
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.executescript(partial_meta_ddl)
+        conn.execute(
+            "CREATE UNIQUE INDEX dispatcher_meta_key_partial "
+            "ON dispatcher_meta(key) WHERE key IS NOT NULL"
+        )
+        conn.execute(
+            "INSERT INTO dispatcher_meta(key, value) VALUES ('schema_version', '2')"
+        )
+    paths.events_path.touch()
+    before = paths.db_path.read_bytes()
+
+    proof = control_plane.health(paths)
+    assert proof["ok"] is False
+    assert proof["db"]["error"] == "missing required unique key in dispatcher_meta: key"
+    backup_dir = tmp_path / "backup"
+    with pytest.raises(ValueError, match="unsafe"):
+        control_plane.backup(paths, backup_dir)
+    assert not backup_dir.exists()
+
+    backup = tmp_path / "restore-source"
+    backup.mkdir()
+    (backup / paths.db_path.name).write_bytes(before)
+    (backup / paths.events_path.name).write_text("", encoding="utf-8")
+    restored = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "restored")})
+    with pytest.raises(ValueError, match="missing required unique key in dispatcher_meta"):
+        control_plane.restore(backup, restored)
+    assert not restored.state_dir.exists()
+
+    monkeypatch.setenv("DISPATCHER_STATE_DIR", str(paths.state_dir))
+    assert main(["status", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert paths.db_path.read_bytes() == before
+    assert payload["control_plane"]["error"] == (
+        "missing required unique key in dispatcher_meta: key"
+    )
+
+
 def test_backup_rejects_custom_events_target_equal_to_source_before_writing(
     tmp_path: Path,
 ) -> None:
