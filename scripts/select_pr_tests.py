@@ -195,6 +195,20 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ),
     ),
     (
+        "temporal_posture",
+        (
+            "app/temporal/",
+            "tests/temporal/",
+            "docs/TEMPORAL_POSTURE/",
+            "docs/CONCEPTS/TEMPORAL_VALIDITY_AND_STALENESS_CONTRACT.md",
+            "config/temporal_posture.",
+        ),
+        (
+            "tests/temporal",
+            "tests/retrieval/test_view_freshness_metadata.py",
+        ),
+    ),
+    (
         "heimdal",
         ("app/heimdal/", "tests/heimdal/", "docs/HEIMDAL/", "docs/HEIMDAL_CAPTURE_CLIENT/"),
         ("tests/heimdal",),
