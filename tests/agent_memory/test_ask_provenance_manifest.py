@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from app.agent_memory.ask_provenance_manifest import (
@@ -8,6 +12,7 @@ from app.agent_memory.ask_provenance_manifest import (
     capture_ask_provenance,
     compare_manifests,
     prune_expired_manifests,
+    schedule_ask_provenance_capture,
 )
 
 
@@ -24,6 +29,8 @@ def _snapshot(*, scope: str = "work", principal: str = "owner") -> Authorization
 def _capture(
     path: Path, *, source_hash: str = "hash-a", index_identity: str | None = "index-a"
 ) -> dict:
+    if "runtime" not in {part.casefold() for part in path.parts}:
+        path = path.parent / "runtime" / path.name
     manifest = capture_ask_provenance(
         answer="Grounded answer",
         query="private question",
@@ -62,7 +69,14 @@ def test_shadow_capture_preserves_ask_response_and_side_effects(
                     score=1.0,
                     snippet="literal",
                     source_ref="vault/private.md",
-                    payload={"content_hash": "hash-a", "domain": "work"},
+                    payload={
+                        "provenance": {
+                            "content_hash": "hash-a",
+                            "chunk_policy_version": "chunk-v1",
+                            "pipeline_version": "pipeline-v1",
+                        },
+                        "domain": "work",
+                    },
                 )
             ],
         )
@@ -81,6 +95,7 @@ def test_shadow_capture_preserves_ask_response_and_side_effects(
         str(tmp_path / "runtime" / "activation" / "ask_synthesis_receipts.jsonl"),
     )
     path = tmp_path / "runtime" / "ask_provenance.jsonl"
+    monkeypatch.setenv("ASK_PROVENANCE_RUNTIME_ROOT", str(tmp_path / "runtime"))
     monkeypatch.setenv("ASK_PROVENANCE_MANIFEST_PATH", str(path))
     monkeypatch.setattr("app.api.routes.ask._ensure_hybrid_store_loaded", lambda: None)
     ask_module._HYBRID_WARMED = True
@@ -98,7 +113,20 @@ def test_shadow_capture_preserves_ask_response_and_side_effects(
         assert enabled.json()["answer"] == disabled.json()["answer"] == "same answer"
         assert enabled.json()["sources"] == disabled.json()["sources"]
         assert enabled.json()["synthesis_source_ids"] == disabled.json()["synthesis_source_ids"]
+        deadline = time.monotonic() + 1
+        while not path.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
         assert path.exists()
+        record = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+        assert record["ordered_evidence"][0]["canonical_source_hash"] == {
+            "status": "available",
+            "value": "hash-a",
+        }
+        assert record["authorization"]["principal_hash"] is None
+        assert (
+            record["authorization"]["principal_unavailable_reason"]
+            == "caller_principal_not_observed"
+        )
         assert not (tmp_path / "vault").exists()
         assert not (tmp_path / "index").exists()
     finally:
@@ -112,6 +140,7 @@ def test_manifest_is_minimal_and_privacy_safe(tmp_path: Path) -> None:
 
     assert manifest["schema"] == "ask_provenance_manifest.v1"
     assert manifest["answer_hash"]
+    assert manifest["answer_hash"] != hashlib.sha256(b"Grounded answer").hexdigest()
     assert manifest["query_hash"]
     assert manifest["authorization"]["scope_id"] == "work"
     assert [item["position"] for item in manifest["ordered_evidence"]] == [0]
@@ -139,6 +168,15 @@ def test_comparison_classifies_only_supported_drift(tmp_path: Path) -> None:
         "classification": "indeterminate",
         "reason": "canonical_index_identity_unavailable",
     }
+
+    malformed = json.loads(json.dumps(left))
+    malformed["identities"]["canonical_index"] = {"status": "available"}
+    assert compare_manifests(
+        malformed,
+        left,
+        current_authorization=_snapshot(),
+        privacy_key=b"test-only-key",
+    ) == {"classification": "indeterminate", "reason": "manifest_invalid"}
 
 
 def test_scope_mismatch_redacts_evidence_details(tmp_path: Path) -> None:
@@ -197,7 +235,7 @@ def test_scope_mismatch_redacts_evidence_details(tmp_path: Path) -> None:
 def test_capture_failure_isolated_from_ask(tmp_path: Path, monkeypatch) -> None:
     from app.agent_memory import ask_provenance_manifest as module
 
-    path = tmp_path / "manifest.jsonl"
+    path = tmp_path / "runtime" / "manifest.jsonl"
     monkeypatch.setattr(
         module, "_append_manifest", lambda *_a, **_k: (_ for _ in ()).throw(OSError("disk full"))
     )
@@ -217,6 +255,7 @@ def test_manifest_retention_is_local_and_bounded(tmp_path: Path) -> None:
     path = tmp_path / "runtime" / "manifests.jsonl"
     expired = _capture(path)
     fresh = _capture(path)
+    expired["captured_at"] = "2019-01-01T00:00:00Z"
     expired["expires_at"] = "2020-01-01T00:00:00Z"
     fresh["expires_at"] = "2030-01-01T00:00:00Z"
     path.write_text(
@@ -228,18 +267,83 @@ def test_manifest_retention_is_local_and_bounded(tmp_path: Path) -> None:
     assert records == [fresh]
     assert not (tmp_path / "vault").exists()
 
+    expired_for_comparison = json.loads(json.dumps(fresh))
+    expired_for_comparison["captured_at"] = "2019-01-01T00:00:00Z"
+    expired_for_comparison["expires_at"] = "2020-01-01T00:00:00Z"
+    assert compare_manifests(
+        expired_for_comparison,
+        fresh,
+        current_authorization=_snapshot(),
+        privacy_key=b"test-only-key",
+    ) == {"classification": "indeterminate", "reason": "manifest_expired"}
 
-def test_shadow_capture_respects_latency_budget(tmp_path: Path) -> None:
-    ticks = iter((0.0, 0.050))
+
+def test_manifest_path_rejects_runtime_symlink_escape(tmp_path: Path) -> None:
+    outside = tmp_path / "Yggdrasil"
+    outside.mkdir()
+    runtime_link = tmp_path / "runtime"
+    runtime_link.symlink_to(outside, target_is_directory=True)
+
     result = capture_ask_provenance(
         answer="answer",
         query="q",
         evidence=[],
         authorization=_snapshot(),
-        path=tmp_path / "manifest.jsonl",
+        path=runtime_link / "manifest.jsonl",
         privacy_key=b"test-only-key",
-        latency_budget_ms=10,
-        clock=lambda: next(ticks),
     )
+
     assert result is None
-    assert not (tmp_path / "manifest.jsonl").exists()
+    assert not (outside / "manifest.jsonl").exists()
+
+
+def test_shadow_capture_respects_latency_budget(tmp_path: Path, monkeypatch) -> None:
+    from app.agent_memory import ask_provenance_manifest as module
+
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def slow_append(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        entered.set()
+        release.wait(timeout=1)
+        finished.set()
+
+    monkeypatch.setattr(module, "_append_manifest", slow_append)
+    started = time.monotonic()
+    schedule_ask_provenance_capture(
+        answer="answer",
+        query="q",
+        evidence=[],
+        authorization=_snapshot(),
+        path=tmp_path / "runtime" / "manifest.jsonl",
+        privacy_key=b"test-only-key",
+    )
+    elapsed = time.monotonic() - started
+
+    assert entered.wait(timeout=1)
+    assert elapsed < 0.1
+    release.set()
+    assert finished.wait(timeout=1)
+
+
+def test_concurrent_capture_does_not_drop_records(tmp_path: Path) -> None:
+    path = tmp_path / "runtime" / "manifests.jsonl"
+
+    def capture(position: int) -> None:
+        result = capture_ask_provenance(
+            answer=f"answer-{position}",
+            query="q",
+            evidence=[],
+            authorization=_snapshot(),
+            path=path,
+            privacy_key=b"test-only-key",
+        )
+        assert result is not None
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(capture, range(16)))
+
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert len(records) == 16
+    assert len({record["manifest_id"] for record in records}) == 16

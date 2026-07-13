@@ -22,7 +22,7 @@ from app.agent_memory.recall_explanation import (
 from app.agent_memory.recall_retrieval import RecallCandidate, retrieve_relevant_promoted
 from app.agent_memory.ask_provenance_manifest import (
     AuthorizationSnapshot,
-    capture_ask_provenance,
+    schedule_ask_provenance_capture,
     shadow_capture_enabled,
 )
 from app.agents.ask.state import AgentState, RetrievedHit
@@ -306,10 +306,18 @@ def _capture_provenance_shadow(
     evidence: list[dict[str, Any]] = []
     for source_id in admitted_source_ids:
         hit = hits.get(source_id)
+        provenance = hit.payload.get("provenance") if hit else None
+        canonical_source_hash = (
+            provenance.get("content_hash")
+            if isinstance(provenance, dict)
+            and provenance.get("chunk_policy_version")
+            and provenance.get("pipeline_version")
+            else None
+        )
         evidence.append(
             {
                 "source_id": source_id,
-                "canonical_source_hash": (hit.payload.get("content_hash") if hit else None),
+                "canonical_source_hash": canonical_source_hash,
             }
         )
     policy = {
@@ -319,16 +327,18 @@ def _capture_provenance_shadow(
     }
     authorization_context = {
         "access_mode": envelope.get("access_mode"),
-        "active_workspace_id": envelope.get("active_workspace_id"),
         "allowed_capabilities": envelope.get("allowed_capabilities") or [],
     }
-    capture_ask_provenance(
+    schedule_ask_provenance_capture(
         answer=state.answer,
         query=state.query,
         evidence=evidence,
         authorization=AuthorizationSnapshot(
             scope_id=str(envelope.get("active_scope_id") or "scope:unscoped"),
-            principal_id=str(envelope.get("principal_id") or "principal:unknown"),
+            # The current ASK route has no authenticated caller principal seam.
+            # Record that identity unavailable rather than hashing its historical
+            # placeholder ("principal:ask") as if it were authorization truth.
+            principal_id=None,
             authorization_context=authorization_context,
             policy=policy,
             authorized_source_ids=tuple(admitted_source_ids),

@@ -24,9 +24,14 @@ Manifest capture occurs after normal authorization, retrieval, ranking, and answ
 Runtime capture is enabled only with `ASK_PROVENANCE_MANIFEST_ENABLED=1` and
 requires a local `ASK_PROVENANCE_PRIVACY_KEY`. Records default to restricted
 `runtime/agent_memory/ask_provenance_manifests.jsonl`, expire after 14 days,
-and are capped at 256 entries. `ASK_PROVENANCE_MANIFEST_PATH` may relocate that
-local runtime file, but vault and index destinations are rejected. Capture is
-post-answer, bounded, and best-effort: its failure never changes the ASK result.
+and are capped at 256 entries. The answer, query, principal, source ids, and
+observed execution identities are hashed; correlation hashes use the local
+privacy key. `ASK_PROVENANCE_MANIFEST_PATH` may relocate the file only within
+the dedicated `ASK_PROVENANCE_RUNTIME_ROOT` (default:
+`runtime/agent_memory`); resolved/symlink escapes are rejected. Capture is
+post-answer and dispatched to a daemon worker, so locking, retention, and
+fsync never block the ASK response. A per-path hourly janitor enforces expiry
+even when no later ASK occurs.
 
 ## Cross-task invariants / interaction safety
 
