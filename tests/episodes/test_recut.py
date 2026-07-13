@@ -55,6 +55,7 @@ from app.episodes.store import (
     EpisodeCutTerminalError,
     write_episode_note,
 )
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.write_guard import WriteGuard
 
 pytestmark = pytest.mark.not_pg
@@ -363,6 +364,43 @@ def test_frontmatter_only_cut_edit_refreshes_untouched_generated_body(
     assert result["recut_detected"] == [episode_id]
     assert "# Episode: Retitled episode" in new_text
     assert "# Episode: Debugging session" not in new_text
+
+
+def test_concurrent_body_save_between_scan_and_relabel_is_not_overwritten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    _stub_bindings(monkeypatch)
+    _stub_projection_sync(monkeypatch)
+    _install_fake_engine_state(monkeypatch)
+
+    episode_id = "ep-22222222-5555-4555-8555-555555555555"
+    _write_initial(vault_root, episode_id=episode_id)
+    t0 = _dt(10, 0)
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=t0)
+
+    note_path = vault_root / episode_note_rel_path(episode_id)
+    real_write = recut_module.write_episode_note
+
+    def concurrent_editor_save(**kwargs: Any):
+        note_path.write_text(
+            note_path.read_text(encoding="utf-8") + "\n## Concurrent human save\n",
+            encoding="utf-8",
+        )
+        return real_write(**kwargs)
+
+    monkeypatch.setattr(recut_module, "write_episode_note", concurrent_editor_save)
+
+    with pytest.raises(KnowledgeWriteConflict):
+        run_recut_tick(
+            vault_root=vault_root,
+            write_guard=_allow_guard(),
+            now=t0 + timedelta(minutes=ACCEPTANCE_QUIET_WINDOW_MINUTES),
+        )
+
+    saved_text = note_path.read_text(encoding="utf-8")
+    assert "## Concurrent human save" in saved_text
+    assert parse_episode_note(saved_text)["segmentation"] == "proposed"
 
 
 # ---------------------------------------------------------------------------

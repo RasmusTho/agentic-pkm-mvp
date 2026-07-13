@@ -150,6 +150,7 @@ def write_episode_note(
     vault_root: Path | str,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     preserve_existing_body: bool | None = None,
+    expected_existing_version: str | None = None,
 ) -> EpisodeWriteResult:
     """Write a vault-canonical episode note through the guarded seam.
 
@@ -160,6 +161,8 @@ def write_episode_note(
     ``preserve_existing_body`` is normally auto-detected. Re-cut reconciliation may pass an
     explicit decision from its prior baseline, which is the only reliable way to distinguish an
     untouched old generated body from a simultaneous frontmatter-and-body human edit.
+    ``expected_existing_version`` carries the scan-time version into this seam so that decision
+    cannot overwrite a concurrent editor save between scan and write.
     """
     if segmentation not in _ALLOWED_SEGMENTATIONS:
         raise EpisodeStoreError(
@@ -237,11 +240,12 @@ def write_episode_note(
     # rewrite of an existing note requires the ``expected_version`` of the bytes we read
     # above -- otherwise the seam refuses the write as a would-be silent overwrite. A
     # brand-new episode note (``existing_text is None``) needs no version.
-    expected_version = (
+    current_version = (
         hashlib.sha256(existing_text.encode("utf-8")).hexdigest()
         if existing_text is not None
         else None
     )
+    expected_version = expected_existing_version or current_version
     receipt = write_note_relative(
         rel_path,
         content,

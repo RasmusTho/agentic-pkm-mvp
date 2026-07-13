@@ -305,6 +305,7 @@ def _episode_bounds(fields: Mapping[str, Any]) -> tuple[datetime, datetime | Non
 class _ScannedEpisodeNote:
     fields: dict[str, Any]
     body: str
+    version: str
 
 
 @dataclass(frozen=True)
@@ -345,7 +346,11 @@ def _scan_episode_notes(vault_root: Path) -> _EpisodeNoteScan:
             )
             continue
         present_ids.add(episode_id)
-        valid[episode_id] = _ScannedEpisodeNote(fields=fields, body=body)
+        valid[episode_id] = _ScannedEpisodeNote(
+            fields=fields,
+            body=body,
+            version=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        )
     return _EpisodeNoteScan(valid=valid, present_ids=frozenset(present_ids))
 
 
@@ -433,6 +438,7 @@ def _write_relabeled(
     write_guard: WriteGuard,
     body: str | None = None,
     preserve_existing_body: bool | None = None,
+    expected_existing_version: str | None = None,
 ) -> tuple[dict[str, Any], str]:
     source_body = body
     if source_body is None:
@@ -461,6 +467,7 @@ def _write_relabeled(
         vault_root=vault_root,
         write_guard=write_guard,
         preserve_existing_body=preserve_body,
+        expected_existing_version=expected_existing_version,
     )
     # #3182 review fix (mirrors #3181 P1-1): keep the `episodes` projection current from the
     # write path itself -- see _sync_projection_row's docstring for why this must never be partial.
@@ -513,6 +520,7 @@ def run_recut_tick(
     for episode_id, note in on_disk.items():
         fields = note.fields
         body = note.body
+        note_version = note.version
         state = tracked.get(episode_id)
         segmentation = str(fields.get("segmentation"))
 
@@ -581,6 +589,7 @@ def run_recut_tick(
                     write_guard=write_guard,
                     body=body,
                     preserve_existing_body=preserve_body,
+                    expected_existing_version=note_version,
                 )
                 logger.info("recut: operator edit detected for episode %s -- segmentation=re-cut", episode_id)
             else:
@@ -663,6 +672,7 @@ def run_recut_tick(
                 write_guard=write_guard,
                 body=body,
                 preserve_existing_body=not current_body_canonical,
+                expected_existing_version=note_version,
             )
             accepted.append(episode_id)
             _record_baseline(
