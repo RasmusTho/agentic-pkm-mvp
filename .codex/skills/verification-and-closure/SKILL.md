@@ -168,9 +168,21 @@ than independent re-review.
 - **Stop condition:** the gate passes once a round comes back clean (no new findings). For PRs touching
   security/data/migration/auth/concurrency/external-API surfaces (`AGENTS.md :: Total Cost of
   Development` escalation tier), require 2 consecutive clean rounds before passing.
-- If the same finding, or a new one at the same mechanism, reappears after 2 fix attempts, that is an
-  escalation trigger per `AGENTS.md :: Agency default` — stop looping and surface it to the owner rather
-  than attempting a third fix blind.
+- Once 2 standard fix attempts have been spent anywhere on the PR and a blocking finding remains or
+  reappears, treat that as a **capability-escalation trigger**, not an automatic owner escalation.
+  Start a fresh repair context at the strongest available capability selected through `AGENTS.md ::
+  Total Cost of Development` and the current platform configuration, and pass it all prior findings,
+  attempted fixes, changed mechanisms, and relevant evidence. Do not duplicate a provider/model
+  ladder here; the canonical policy and live configuration may select any available agent family.
+- Permit at most 2 additional capability-escalated fix attempts **across the whole PR**, not per
+  finding or mechanism. Independently re-review after each substantive attempt, and record the
+  selected model/agent family, reasoning level, prior context supplied, fallback (if any), and outcome
+  for every escalated round.
+- Stop and route through `owner-decision-brief` only when any blocking finding remains after the
+  PR-wide budget of 2 standard plus 2 escalated fix attempts is exhausted, the strongest available
+  capability cannot run or repeatedly fails, or a genuine authority/scope ambiguity appears. Do not
+  reset the budget when the finding or mechanism changes, and do not ask the owner merely because the
+  standard-capability attempts failed.
 - Record each round's outcome and the final round count in the delivery receipt so convergence is
   auditable after merge.
 
