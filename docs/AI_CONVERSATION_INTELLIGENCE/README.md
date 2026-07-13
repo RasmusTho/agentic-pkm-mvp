@@ -1,6 +1,6 @@
-State: Active advisory research specification for parent validation hub #3194. No runtime capability, adapter, ingestion path, schema, or product decision is enacted.
+State: Completed advisory research specification for parent validation hub #3194; parent closure remains a post-merge lifecycle action. No runtime capability, adapter, ingestion path, schema, ADR, or product decision is enacted.
 Doc role: Target-state research specification directory
-Authority: Owns the delivered research sequence through the zero-write feasibility scope and the remaining synthesis gate under #3194; subordinate to current Product owner docs, boundary charters, contracts, and any later accepted ADR.
+Authority: Owns the completed seven-child advisory research sequence and no-ADR outcome under #3194; subordinate to current Product owner docs, boundary charters, contracts, and any later accepted ADR.
 Owner: AI Conversation Intelligence research roadmap (#3194)
 Temporal class: strategic
 Review cadence: event-driven
@@ -24,15 +24,16 @@ The already delivered inputs are:
 - [privacy, security, and data-ownership baseline](../research/AI_CONVERSATION_INTELLIGENCE_PRIVACY_SECURITY_AND_DATA_OWNERSHIP.md) (#3595).
 - [adapter architecture options](../research/AI_CONVERSATION_INTELLIGENCE_ADAPTER_ARCHITECTURE_OPTIONS.md) (#3596).
 - [feasibility prototype scope](../research/AI_CONVERSATION_INTELLIGENCE_FEASIBILITY_PROTOTYPE_SCOPE.md) (#3597).
+- [research summary and decision gate](../research/AI_CONVERSATION_INTELLIGENCE_RESEARCH_SUMMARY.md) (#3598; no ADR authored).
 
-## Remaining research tasks and execution order
+## Completed research tasks and execution order
 
-1. [Research summary and decision gate](RESEARCH_SUMMARY_AND_DECISION_GATE.md) — reconcile all
-   research, publish the bounded implementation backlog, and author an ADR only if a real decision
-   is mature and authorized.
+The serial sequence is complete. The final [research summary and decision gate](RESEARCH_SUMMARY_AND_DECISION_GATE.md)
+reconciles all research, explicitly defers or discards future work, and records that no ADR is mature
+or authorized.
 
-The feasibility scope is delivered but no experiment has run. All six prior artifacts are required
-before synthesis or an ADR decision, and none grants runtime or acquisition authority.
+The feasibility scope is delivered but no experiment has run. None of the seven artifacts grants
+runtime or acquisition authority.
 
 ## Cross-task invariants / interaction safety
 
@@ -69,11 +70,12 @@ decision or evidence without inventing a ruling.
 
 ## Relationship to GitHub issues
 
-- Parent validation hub: #3194 (`agent:blocked` while children remain).
+- Parent validation hub: #3194 (remains blocked only until final post-merge receipts, run-state, and
+  parent-closure checks pass).
 - Delivered research: #3195, #3196, #3197, #3595 (privacy/security/data ownership), #3596
   (adapter architecture options), and #3597 (feasibility prototype scope; no experiment executed).
-- Remaining child: #3598 (research summary/ADR gate). It becomes eligible for strict readiness only
-  after #3597 is delivered and its parent receipt is verified.
+- Final delivered child: #3598 (research summary/ADR gate; advisory no-ADR outcome). Parent closure is
+  a separate post-merge lifecycle action and does not authorize any deferred capability.
 
 ## Non-goals
 
