@@ -449,7 +449,14 @@ def _reclaim_observed_leases(
     observed: list[tuple[str, str]],
     actor: str,
 ) -> list[str]:
-    """Reclaim each observed expired lease atomically; skip any that moved on."""
+    """Reclaim each observed expired lease atomically; skip any that moved on.
+
+    One lease's failure never aborts the sweep. Once ``_reclaim_one`` commits,
+    the release is durable (including the ``task.released`` row written inside
+    that transaction), so the task counts as reclaimed even if the best-effort
+    JSONL mirror append then fails — a mirror error must not strand the
+    remaining expired leases or drop the return list.
+    """
     reclaimed: list[str] = []
     for task_id, lease_id in observed:
         try:
@@ -458,9 +465,12 @@ def _reclaim_observed_leases(
             continue
         if event is None:
             continue
-        if store._event_writer is not None:
-            store._event_writer.append(event)
         reclaimed.append(task_id)
+        if store._event_writer is not None:
+            try:
+                store._event_writer.append(event)
+            except Exception:
+                pass
     return reclaimed
 
 
