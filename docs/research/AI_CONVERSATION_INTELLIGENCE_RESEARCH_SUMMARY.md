@@ -265,18 +265,22 @@ After #3598 merges, the closer must:
 
 1. verify the exact merge commit and that this artifact, `docs/DOCS_INDEX.md`, the source spec, and the
    roadmap status resolve on `origin/main`;
-2. post #3598's owner-doc receipt and child delivery receipt on #3194, then verify #3598 is closed and
-   its dispatcher lease/task is terminal;
+2. post #3598's owner-doc receipt on closed child #3598; then post/link the child delivery receipt on
+   parent #3194 and verify #3598 is closed and its dispatcher lease/task is terminal;
 3. re-read live parent #3194 and every formal sub-issue; verify all seven children are closed and their
    delivery/owner-doc/review/CI evidence is reachable;
 4. confirm there are no unresolved review findings, open executable follow-ups, unhandled owner-doc
    outcomes, transition-debt rows, fitness-rule claims, or Project/label lifecycle mismatches;
-5. update the local epic run state with all child PRs, merge SHAs, review/CI, receipts, no-ADR outcome,
-   deferred/discarded backlog, and any upstream blocker-bug learnings;
-6. apply `docs/development/PARENT_ISSUE_CLOSURE.md`: post one auditable parent closure receipt with
+5. perform the parent's required terminal learning/evaluation readback and verify that unresolved
+   learning candidates and unresolved evaluation candidates are both exactly zero; reconcile or route
+   any candidate before closure rather than hiding it in the receipt;
+6. update and re-read the local epic run state with all child PRs, merge SHAs, review/CI, receipts,
+   no-ADR outcome, deferred/discarded backlog, terminal zero learning/evaluation counts, and any upstream
+   blocker-bug learnings;
+7. apply `docs/development/PARENT_ISSUE_CLOSURE.md`: post one auditable parent closure receipt with
    acceptance/evidence mapping, bounded-future-work disposition, owner-doc/debt/fitness/run-state
    outcomes, and no-runtime-authority statement;
-7. close #3194 only after those checks pass, remove stale `agent:*` labels, verify formal sub-issue
+8. close #3194 only after those checks pass, remove stale `agent:*` labels, verify formal sub-issue
    closure and parent state, and emit the final TCD review.
 
 Parent closure should state clearly that the research roadmap completed while the capability remains

@@ -11,8 +11,8 @@ Last reviewed: 2026-07-13
 
 ## Capability boundary
 
-This directory specifies the remaining research needed to decide whether and how externally stored
-AI conversations may become provenance-bound candidate material in Yggdrasil. It does not authorize
+This directory records the completed research that was needed to decide whether and how externally
+stored AI conversations might become provenance-bound candidate material in Yggdrasil. It does not authorize
 acquisition, ingestion, normalization, memory promotion, HKA mutation, provider authentication, or
 runtime implementation.
 
