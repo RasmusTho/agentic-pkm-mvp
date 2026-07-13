@@ -125,6 +125,7 @@ jobs:
           set -o pipefail
           pytest -c /dev/null -q \
             -m "not pg and not alpha_llm" \
+            --import-mode=importlib \
             --durations=30 \
             | tee tmp/nightly-pytest.log
 
@@ -175,7 +176,7 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        image: postgres:16
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: app
           POSTGRES_PASSWORD: app
@@ -215,6 +216,10 @@ jobs:
           python -m pip install -U pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
+
+      - name: Enable pgvector extension
+        run: |
+          python -c "import os, psycopg; psycopg.connect(os.environ['DATABASE_URL'], autocommit=True).execute('CREATE EXTENSION IF NOT EXISTS vector')"
 
       - name: Upgrade database
         run: alembic upgrade head

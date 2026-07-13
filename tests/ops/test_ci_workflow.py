@@ -81,3 +81,18 @@ def test_integration_nightly_installs_required_media_libraries() -> None:
     assert "libavformat-dev" in workflow
     assert "libavcodec-dev" in workflow
     assert "pkg-config" in workflow
+
+
+def test_integration_nightly_uses_collision_safe_test_imports() -> None:
+    workflow = INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "--import-mode=importlib" in workflow
+
+
+def test_integration_nightly_prepares_pgvector_before_migrations() -> None:
+    workflow = INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "image: pgvector/pgvector:pg16" in workflow
+    extension = workflow.index("CREATE EXTENSION IF NOT EXISTS vector")
+    migration = workflow.index("alembic upgrade head")
+    assert extension < migration
