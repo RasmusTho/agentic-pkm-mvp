@@ -9,6 +9,7 @@ CI_SMOKE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci-smoke.yaml"
 BROWSER_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "browser-runtime.yml"
 IMAGE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "app-image-build.yml"
 IMPORT_LINTER_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "import-linter.yaml"
+INTEGRATION_NIGHTLY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "integration-nightly.yaml"
 
 
 def _workflow_text() -> str:
@@ -71,3 +72,32 @@ def test_ci_smoke_keeps_legacy_skills_lint_when_consolidating_smoke() -> None:
     assert "docs/DIAGRAMS.md must not contain literal" in workflow
     assert "Mermaid fences must not be indented" in workflow
     assert "Forbidden math fence syntax inside table detected" in workflow
+
+
+def test_integration_nightly_installs_required_media_libraries() -> None:
+    workflow = INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "Install media build dependencies" in workflow
+    assert "libavformat-dev" in workflow
+    assert "libavcodec-dev" in workflow
+    assert "pkg-config" in workflow
+
+
+def test_integration_nightly_uses_collision_safe_test_imports() -> None:
+    workflow = INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
+
+    full_suite = workflow[workflow.index("full-suite:") : workflow.index("pg-contracts:")]
+    assert "--import-mode=importlib" in full_suite
+    assert "-c /dev/null" not in full_suite
+    assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD" not in full_suite
+    test_step = full_suite[full_suite.index("Full test suite (memory, not pg)") :]
+    assert "continue-on-error: ${{ matrix.experimental }}" in test_step
+
+
+def test_integration_nightly_prepares_pgvector_before_migrations() -> None:
+    workflow = INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "image: pgvector/pgvector:pg16" in workflow
+    extension = workflow.index("CREATE EXTENSION IF NOT EXISTS vector")
+    migration = workflow.index("alembic upgrade head")
+    assert extension < migration

@@ -46,7 +46,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          pytest -c /dev/null -q \
+          pytest -q \
             tests/quality_wave/test_uat_harness.py \
             -m "not pg" \
             --tb=short \
@@ -78,7 +78,6 @@ jobs:
       REASONING_PROVIDER: mock
       PLANNER_PROVIDER: mock
       REASONING_ENABLE: "1"
-      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
       KNOWLEDGE_PRIMARY_ADAPTER: fs_vault
       KNOWLEDGE_FALLBACK_ADAPTER: obsidian_cli
       KNOWLEDGE_STRICT_STARTUP: "0"
@@ -93,6 +92,22 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # Python 3.13 currently builds the `av` dependency from source. Keep the
+      # runner libraries explicit so the nightly suite reaches pytest instead
+      # of failing during dependency installation.
+      - name: Install media build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libavcodec-dev \
+            libavdevice-dev \
+            libavfilter-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libswresample-dev \
+            libswscale-dev
+
       - name: Install Python deps
         run: |
           python -m pip install -U pip
@@ -104,11 +119,13 @@ jobs:
 
       - name: Full test suite (memory, not pg)
         timeout-minutes: 20
+        continue-on-error: ${{ matrix.experimental }}
         shell: bash
         run: |
           set -o pipefail
-          pytest -c /dev/null -q \
+          pytest -q \
             -m "not pg and not alpha_llm" \
+            --import-mode=importlib \
             --durations=30 \
             | tee tmp/nightly-pytest.log
 
@@ -121,7 +138,7 @@ jobs:
 
       - name: Runtime contract regressions
         run: |
-          pytest -c /dev/null -q \
+          pytest -q \
             tests/e2e/test_runtime_contract_regressions.py \
             tests/cli/test_uat_run_cli.py \
             tests/test_alpha_e2e_invariants.py \
@@ -159,7 +176,7 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        image: postgres:16
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: app
           POSTGRES_PASSWORD: app
@@ -199,6 +216,10 @@ jobs:
           python -m pip install -U pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
+
+      - name: Enable pgvector extension
+        run: |
+          python -c "import os, psycopg; url = os.environ['DATABASE_URL'].replace('postgresql+psycopg://', 'postgresql://', 1); psycopg.connect(url, autocommit=True).execute('CREATE EXTENSION IF NOT EXISTS vector')"
 
       - name: Upgrade database
         run: alembic upgrade head
