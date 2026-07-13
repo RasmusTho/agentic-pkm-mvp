@@ -555,6 +555,40 @@ def test_rewritten_write_fsyncs_anchored_directories(
     assert directory_fsyncs >= 4
 
 
+def test_rewritten_write_retains_displaced_inode_when_post_exchange_fsync_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = FsVaultAdapter(tmp_path)
+    locator = NoteLocator(vault="Vault", path="Notes/fsync-failure.md")
+    target = tmp_path / locator.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"observed body")
+    real_fsync = os.fsync
+    directory_fsyncs = 0
+
+    def failing_post_exchange_fsync(fd: int) -> None:
+        nonlocal directory_fsyncs
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            directory_fsyncs += 1
+            if directory_fsyncs == 2:
+                raise OSError("simulated post-exchange directory fsync failure")
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", failing_post_exchange_fsync)
+
+    with pytest.raises(KnowledgeWriteConflict, match="verification failed"):
+        adapter.write_note(
+            locator,
+            "ENGINE",
+            expected_version=hashlib.sha256(b"observed body").hexdigest(),
+        )
+
+    assert target.read_bytes() == b"ENGINE"
+    artifacts = list((target.parent / "_conflicts").glob("*.md.conflict"))
+    assert len(artifacts) == 1
+    assert artifacts[0].read_bytes() == b"observed body"
+
+
 def test_filesystem_write_receipt_carries_writer_provenance(tmp_path: Path) -> None:
     adapter = FsVaultAdapter(tmp_path)
     locator = NoteLocator(vault="Vault", path="Notes/provenance.md")

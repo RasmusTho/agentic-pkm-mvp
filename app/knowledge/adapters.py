@@ -252,7 +252,6 @@ class FsVaultAdapter:
                     _atomic_exchange_at(
                         parent_fd, target.name, parent_fd, staged_name
                     )
-                    os.fsync(parent_fd)
                 except OSError as exc:
                     raise KnowledgeWriteConflict(
                         f"version mismatch for rewritten note {locator.path}: "
@@ -264,6 +263,7 @@ class FsVaultAdapter:
                 # such descriptors close, so every successful optimistic exchange retains
                 # this pre-exchange version as a standard conflicted copy.
                 preserve_staged_conflict = True
+                os.fsync(parent_fd)
                 artifact_name = _conflict_artifact_name(locator)
                 os.rename(
                     staged_name,
@@ -271,11 +271,11 @@ class FsVaultAdapter:
                     src_dir_fd=parent_fd,
                     dst_dir_fd=conflict_fd,
                 )
-                os.fsync(parent_fd)
-                os.fsync(conflict_fd)
                 staged_name = artifact_name
                 staged_dir_fd = conflict_fd
                 staged_is_artifact = True
+                os.fsync(parent_fd)
+                os.fsync(conflict_fd)
 
                 displaced_version = hashlib.sha256(
                     _read_entry(conflict_fd, staged_name)
@@ -354,11 +354,11 @@ class FsVaultAdapter:
                                 src_dir_fd=staged_dir_fd,
                                 dst_dir_fd=conflict_fd,
                             )
-                            os.fsync(staged_dir_fd)
-                            os.fsync(conflict_fd)
                             staged_name = artifact_name
                             staged_dir_fd = conflict_fd
                             staged_is_artifact = True
+                            os.fsync(parent_fd)
+                            os.fsync(conflict_fd)
                     elif staged_dir_fd >= 0:
                         try:
                             os.unlink(staged_name, dir_fd=staged_dir_fd)
