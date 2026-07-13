@@ -10,6 +10,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "public_seam_lint.py"
+REGISTER = REPO_ROOT / "docs" / "architecture" / "inv-ef1-register.json"
 
 
 def _write_config(root: Path, rows: list[dict[str, str]]) -> None:
@@ -123,3 +124,18 @@ def test_doctor_mode_reconciliation(tmp_path: Path) -> None:
     assert report["uncovered_hits"]
     assert report["stale_rows"]
     assert report["migration_pending"]
+
+
+def test_verification_process_map_machine_reference_is_registered() -> None:
+    rows = json.loads(REGISTER.read_text(encoding="utf-8"))["rows"]
+
+    assert {
+        "artifact": "docs/development/BUILDER_SYSTEM_PROCESS_MAP.md",
+        "category": "iii",
+        "why_load_bearing": (
+            "The Builder System owner doc preserves the explicit machine boundary "
+            "required by the verification dispatch contract."
+        ),
+        "disposition": "stay",
+        "issue": "#3602",
+    } in rows
