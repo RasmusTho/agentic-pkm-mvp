@@ -198,6 +198,26 @@ def test_subscription_adapter_uses_safe_timeout_exit(monkeypatch) -> None:
     assert raised.value.code == module.TIMEOUT_EXIT_CODE
 
 
+def test_subscription_adapter_preserves_invalid_provider_fields_for_runner_validation() -> None:
+    spec = importlib.util.spec_from_file_location("model_inquiry_subscription_adapter", SUBSCRIPTION_ADAPTER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    response = {
+        "schema_version": "builderops.model-turn-response.v1",
+        "stance": "refuse",
+        "content": "I cannot complete this turn.",
+        "claims": [],
+        "risks": [],
+        "blocking_questions": [],
+        "reviewed_artifact_refs": ["forged-turn"],
+        "accepted_artifact_hash": None,
+        "unexpected_field": "runner must reject this rather than the adapter stripping it",
+    }
+
+    assert module._response_from_text(json.dumps(response)) == response
+
+
 def test_desktop_skills_route_to_macmini_launcher(tmp_path: Path) -> None:
     codex = (REPO_ROOT / ".codex/skills/start-model-inquiry/SKILL.md").read_text()
     claude = (REPO_ROOT / "claude-skills/start-model-inquiry/SKILL.md").read_text()

@@ -795,6 +795,12 @@ components are shipped under `app/builderops/` as build-plane infrastructure:
   GitHub authority surfaces.
 - **BuilderOps generated projections** — Markdown projection generator for `learning-summary`,
   `docs-freshness`, `roadmap-execution`, and `promotion-queue` views over BuilderOps Vault records.
+- **Model Inquiry bridge** — the repository provides a fail-closed remote launcher contract and a
+  versioned subscription-adapter profile for independent Fable and GPT/Codex turns. The profile
+  requires `xhigh` reasoning, a 540-second inner command bound, and secret-safe terminal receipts;
+  host credentials, CLI paths, the 600-second wrapper deadline, and deployment remain operator
+  configuration outside Git. See `docs/BUILDEROPS_MODEL_INQUIRY/`; the current remote-host deployment
+  is tracked separately in #3586.
 
 ### Authority boundary (BuilderOps non-authority rule)
 

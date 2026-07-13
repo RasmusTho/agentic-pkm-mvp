@@ -15,16 +15,6 @@ COMMAND_TIMEOUT_SECONDS = 540
 TIMEOUT_EXIT_CODE = 124
 FABLE_MODEL = "claude-fable-5"
 CODEX_MODEL = "gpt-5.6-sol"
-RESPONSE_FIELDS = (
-    "schema_version",
-    "stance",
-    "content",
-    "claims",
-    "risks",
-    "blocking_questions",
-    "reviewed_artifact_refs",
-    "accepted_artifact_hash",
-)
 
 
 def build_argv(role: str, strict_prompt: str) -> list[str]:
@@ -100,10 +90,10 @@ def run_role(request: Mapping[str, Any], role: str) -> dict[str, Any]:
         raise SystemExit(TIMEOUT_EXIT_CODE) from exc
     if result.returncode:
         raise SystemExit(result.returncode)
-    return _response_from_text(result.stdout, request)
+    return _response_from_text(result.stdout)
 
 
-def _response_from_text(text: str, request: Mapping[str, Any]) -> dict[str, Any]:
+def _response_from_text(text: str) -> dict[str, Any]:
     decoder = json.JSONDecoder()
     found: dict[str, Any] | None = None
     for match in re.finditer(r"\{", text.strip()):
@@ -115,23 +105,10 @@ def _response_from_text(text: str, request: Mapping[str, Any]) -> dict[str, Any]
             found = value
     if found is None:
         raise SystemExit("model did not return a schema-valid response")
-    response = {key: found.get(key) for key in RESPONSE_FIELDS}
-    for field in ("claims", "risks", "blocking_questions", "reviewed_artifact_refs"):
-        values = response.get(field)
-        if isinstance(values, list):
-            response[field] = [
-                item if isinstance(item, str) else json.dumps(item, ensure_ascii=False, sort_keys=True)
-                for item in values
-            ]
-        elif isinstance(values, str) and values.strip():
-            response[field] = [values]
-        else:
-            response[field] = []
-    response["reviewed_artifact_refs"] = request["reviewed_artifact_refs"]
-    if request["phase"] == "draft":
-        response["stance"] = "draft"
-        response["accepted_artifact_hash"] = None
-    return response
+    # Preserve the provider payload exactly. The runner owns all contract,
+    # phase, refusal, and reviewed-artifact validation; coercion here could
+    # make invalid output look valid and therefore persistable.
+    return found
 
 
 def main() -> int:
