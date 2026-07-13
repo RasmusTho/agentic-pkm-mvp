@@ -762,6 +762,23 @@ def janitor_apply(
         pr_states=pr_states,
     )
 
+    preservation_receipts = plan.get("preservation_receipts", [])
+    if preservation_receipts:
+        return {
+            **plan,
+            "mode": "apply",
+            "destructive_actions": actions,
+            "errors": [
+                {
+                    "artifact": "worktree",
+                    "action": "preserve",
+                    "reason": "preservation_evidence_present",
+                    "preservation_receipts": preservation_receipts,
+                }
+            ],
+            "ok": False,
+        }
+
     apply_git(["worktree", "prune"], {"artifact": "worktree", "action": "prune_metadata"})
     reclaimable = plan.get("reclaimable_worktrees", plan["candidates"]["worktrees"])
     for worktree in reclaimable:

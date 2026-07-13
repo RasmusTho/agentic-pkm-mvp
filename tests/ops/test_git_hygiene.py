@@ -1154,6 +1154,53 @@ def test_janitor_apply_skips_branch_delete_when_worktree_remove_fails(
     assert ["branch", "-d", "deliver/foo"] not in commands
 
 
+def test_janitor_apply_preserves_worktrees_when_receipts_exist(tmp_path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run_git_result(args: list[str], _cwd: Path):
+        commands.append(args)
+        return subprocess.CompletedProcess(["git", *args], 0, "", "")
+
+    monkeypatch.setattr(git_hygiene, "run_git_result", fake_run_git_result)
+    monkeypatch.setattr(
+        git_hygiene,
+        "build_janitor_plan",
+        lambda *args, **kwargs: {
+            "mode": "report",
+            "remote_policy": "merged-and-closed-with-rescue",
+            "destructive_actions": [],
+            "candidates": {
+                "local_branches": [{"branch": "merged-branch"}],
+                "worktrees": [],
+                "remote_branches": [{"branch": "merged-remote"}],
+                "remote_branches_requiring_rescue": [],
+                "old_stashes": [{"ref": "stash@{0}"}],
+            },
+            "reclaimable_worktrees": [{"path": str(tmp_path / "safe"), "branch": "safe"}],
+            "orphaned_worktrees": [],
+            "skipped": [],
+            "prune_candidates": {"worktree": [], "remote": []},
+            "active_leases_respected": [],
+            "preservation_receipts": [
+                {
+                    "artifact": "worktree",
+                    "path": str(tmp_path / "locked"),
+                    "branch": "locked",
+                    "reason": "locked_worktree",
+                    "action": "preserve",
+                    "next_action": "preserve the lock; verify the owning session before any cleanup",
+                }
+            ],
+        },
+    )
+
+    report = git_hygiene.janitor_apply(tmp_path, pr_states={})
+
+    assert report["ok"] is False
+    assert report["errors"][0]["reason"] == "preservation_evidence_present"
+    assert commands == [["fetch", "--prune", "origin"]]
+
+
 def test_janitor_apply_worktree_reclaim_is_idempotent(tmp_path) -> None:
     """AC3 idempotency: a second apply over an already-reclaimed worktree is a
     no-op (nothing left to remove)."""
