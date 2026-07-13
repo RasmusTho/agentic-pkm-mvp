@@ -149,12 +149,17 @@ def write_episode_note(
     episode_id: str | None = None,
     vault_root: Path | str,
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+    preserve_existing_body: bool | None = None,
 ) -> EpisodeWriteResult:
     """Write a vault-canonical episode note through the guarded seam.
 
     ``episode_id`` defaults to a freshly minted fused id (``ep-<uuid>``, disjoint-by-construction
     from Heimdal's per-session id space); an explicit ``episode_id`` is still validated against
     the same disjointness rule (AC4) so no caller can smuggle a raw Heimdal session id through.
+
+    ``preserve_existing_body`` is normally auto-detected. Re-cut reconciliation may pass an
+    explicit decision from its prior baseline, which is the only reliable way to distinguish an
+    untouched old generated body from a simultaneous frontmatter-and-body human edit.
     """
     if segmentation not in _ALLOWED_SEGMENTATIONS:
         raise EpisodeStoreError(
@@ -195,7 +200,12 @@ def write_episode_note(
     if existing_text is not None:
         existing_fields, existing_body = parse_episode_note_document(existing_text)
         _, canonical_body = parse_episode_note_document(render_episode_note(existing_fields))
-        if existing_body != canonical_body:
+        should_preserve_body = (
+            existing_body != canonical_body
+            if preserve_existing_body is None
+            else preserve_existing_body
+        )
+        if should_preserve_body:
             # The markdown body has diverged from the generated template, so it belongs to the
             # human edit surface. Every machine rewrite carries its content through unchanged
             # instead of regenerating the canned body over it. A still-canonical body

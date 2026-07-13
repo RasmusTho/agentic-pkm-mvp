@@ -68,10 +68,10 @@ path-typing). This module is the production tick (:func:`run_recut_tick`, wired 
    never reaches :func:`_write_relabeled` at all -- ``segmentation`` is already correct, so
    :func:`run_recut_tick` calls :func:`_sync_projection_row` directly from that branch instead, so
    this stays a re-cut-detection-wide invariant, not merely a `_write_relabeled`-scoped one.
-8. **Human body preservation** (#3561): body content has its own backward-compatible fingerprint.
-   A body-only edit is a re-cut, while generated lifecycle-label changes normalize to one canonical
-   sentinel so engine relabels cannot create false positives. The store seam preserves any body that
-   diverged from the generated template across the atomic relabel rewrite.
+8. **Human body preservation** (#3561): the exact raw body has its own backward-compatible
+   fingerprint and a separate generated-template flag. A body-only edit is a re-cut, while a body
+   that is canonical both before and after an engine lifecycle write cannot create a false positive.
+   The store seam preserves human body bytes across the atomic relabel rewrite.
 9. **Invalid is not deleted** (#3561): the scan retains canonical path identity even when parsing or
    schema validation fails. Only a genuinely absent path triggers binding withdrawal and baseline
    deletion; a repaired save resumes against the preserved baseline.
@@ -201,15 +201,11 @@ def compute_body_hash(body: str, *, fields: Mapping[str, Any] | None = None) -> 
     state record has no ``body_hash`` and can be migrated without making every existing Episode
     look like a human re-cut.
     """
-    # The generated body contains lifecycle labels such as ``segmentation``. Hash all canonical
-    # generated variants as one sentinel so an engine-authored relabel cannot manufacture a body
-    # re-cut. Once the body diverges from the template, hash its exact human-authored content.
-    material = (
-        "<canonical-episode-body>"
-        if fields is not None and _body_is_canonical(fields, body)
-        else body
-    )
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()
+    # ``fields`` remains accepted for API compatibility with the first #3561 repair revision;
+    # canonical/generated identity is persisted separately so this hash can retain formatting-only
+    # edits exactly.
+    del fields
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -222,12 +218,15 @@ class _RecutState:
     :func:`run_recut_tick` (round-1 review Finding 2/3): when the cut hash matches but this
     recorded label lags the on-disk one -- the signature of an engine lifecycle write whose
     ``set_state`` baseline record failed -- the baseline is refreshed to disk WITHOUT reporting a
-    re-cut. ``first_seen_at`` is the acceptance-by-silence aging clock."""
+    re-cut. ``body_hash`` fingerprints the exact raw body and ``body_canonical`` records whether
+    that body was the generated template, allowing later lifecycle rewrites to remain distinct from
+    human whitespace edits. ``first_seen_at`` is the acceptance-by-silence aging clock."""
 
     content_hash: str
     segmentation: str
     first_seen_at: datetime
     body_hash: str | None = None
+    body_canonical: bool | None = None
 
     def to_state(self) -> dict[str, Any]:
         value: dict[str, Any] = {
@@ -237,6 +236,8 @@ class _RecutState:
         }
         if self.body_hash is not None:
             value["body_hash"] = self.body_hash
+        if self.body_canonical is not None:
+            value["body_canonical"] = self.body_canonical
         return value
 
     @classmethod
@@ -246,6 +247,11 @@ class _RecutState:
             segmentation=str(value["segmentation"]),
             first_seen_at=_parse_dt(value["first_seen_at"]),
             body_hash=str(value["body_hash"]) if value.get("body_hash") is not None else None,
+            body_canonical=(
+                bool(value["body_canonical"])
+                if value.get("body_canonical") is not None
+                else None
+            ),
         )
 
 
@@ -270,6 +276,7 @@ def _record_baseline(
         segmentation=str(fields.get("segmentation")),
         first_seen_at=first_seen_at,
         body_hash=compute_body_hash(body, fields=fields),
+        body_canonical=_body_is_canonical(fields, body),
     )
     engine_state.set_state(_state_key(episode_id), state.to_state())
 
@@ -327,6 +334,15 @@ def _scan_episode_notes(vault_root: Path) -> _EpisodeNoteScan:
             continue
         episode_id = fields.get("episode_id")
         if not isinstance(episode_id, str) or not episode_id:
+            continue
+        if path.parent == subtree and path.stem != episode_id:
+            logger.warning(
+                "recut: skipping episode note whose canonical path id %s disagrees with "
+                "frontmatter episode_id %s: %s",
+                path.stem,
+                episode_id,
+                path,
+            )
             continue
         present_ids.add(episode_id)
         valid[episode_id] = _ScannedEpisodeNote(fields=fields, body=body)
@@ -416,12 +432,17 @@ def _write_relabeled(
     vault_root: Path,
     write_guard: WriteGuard,
     body: str | None = None,
+    preserve_existing_body: bool | None = None,
 ) -> tuple[dict[str, Any], str]:
     source_body = body
     if source_body is None:
         existing_text = (vault_root / episode_note_rel_path(episode_id)).read_text(encoding="utf-8")
         _existing_fields, source_body = parse_episode_note_document(existing_text)
-    body_was_canonical = _body_is_canonical(fields, source_body)
+    preserve_body = (
+        not _body_is_canonical(fields, source_body)
+        if preserve_existing_body is None
+        else preserve_existing_body
+    )
     time_fields = fields.get("time") or {}
     result = write_episode_note(
         title=fields["title"],
@@ -439,14 +460,15 @@ def _write_relabeled(
         episode_id=episode_id,
         vault_root=vault_root,
         write_guard=write_guard,
+        preserve_existing_body=preserve_body,
     )
     # #3182 review fix (mirrors #3181 P1-1): keep the `episodes` projection current from the
     # write path itself -- see _sync_projection_row's docstring for why this must never be partial.
     _sync_projection_row(episode_id, result.fields)
-    if body_was_canonical:
-        _rendered_fields, result_body = parse_episode_note_document(render_episode_note(result.fields))
-    else:
+    if preserve_body:
         result_body = source_body
+    else:
+        _rendered_fields, result_body = parse_episode_note_document(render_episode_note(result.fields))
     return result.fields, result_body
 
 
@@ -525,9 +547,15 @@ def run_recut_tick(
 
         current_hash = compute_fields_hash(fields)
         current_body_hash = compute_body_hash(body, fields=fields)
-        body_changed = (
-            state.body_hash is not None and current_body_hash != state.body_hash
-        ) or (state.body_hash is None and not _body_is_canonical(fields, body))
+        current_body_canonical = _body_is_canonical(fields, body)
+        if state.body_hash is None:
+            body_changed = not current_body_canonical
+        elif state.body_canonical is True and current_body_canonical:
+            # A lifecycle-only engine write can legitimately regenerate the canonical body after
+            # a failed baseline update. Canonical-before/canonical-now is still machine-authored.
+            body_changed = False
+        else:
+            body_changed = current_body_hash != state.body_hash
         if current_hash != state.content_hash or body_changed:
             # Writer-identity by elimination (AC1, see module docstring point 1): the engine is
             # the sole known machine writer of episode notes and always re-baselines on its own
@@ -540,6 +568,11 @@ def run_recut_tick(
             # terminal.
             recut_detected.append(episode_id)
             if segmentation != SEGMENTATION_RECUT:
+                preserve_body = not current_body_canonical
+                if state.body_canonical is True and current_body_hash == state.body_hash:
+                    # Frontmatter-only cut edit: the untouched old generated body is stale, not a
+                    # human body edit. Regenerate it from the edited fields during the relabel.
+                    preserve_body = False
                 fields, body = _write_relabeled(
                     episode_id,
                     fields,
@@ -547,6 +580,7 @@ def run_recut_tick(
                     vault_root=root,
                     write_guard=write_guard,
                     body=body,
+                    preserve_existing_body=preserve_body,
                 )
                 logger.info("recut: operator edit detected for episode %s -- segmentation=re-cut", episode_id)
             else:
@@ -628,6 +662,7 @@ def run_recut_tick(
                 vault_root=root,
                 write_guard=write_guard,
                 body=body,
+                preserve_existing_body=not current_body_canonical,
             )
             accepted.append(episode_id)
             _record_baseline(

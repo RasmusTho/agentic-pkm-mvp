@@ -318,6 +318,53 @@ def test_body_only_human_edit_survives_quiet_window_relabel(
     assert parse_episode_note(note_path.read_text(encoding="utf-8"))["segmentation"] == "re-cut"
 
 
+def test_whitespace_only_body_edit_survives_recut_relabel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    _stub_bindings(monkeypatch)
+    _stub_projection_sync(monkeypatch)
+    _install_fake_engine_state(monkeypatch)
+
+    episode_id = "ep-22222222-3333-4333-8333-333333333333"
+    _write_initial(vault_root, episode_id=episode_id)
+    t0 = _dt(10, 0)
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=t0)
+
+    note_path = vault_root / episode_note_rel_path(episode_id)
+    note_path.write_text(note_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+
+    result = run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 5))
+    assert result["recut_detected"] == [episode_id]
+    assert note_path.read_text(encoding="utf-8").endswith("\n\n")
+
+
+def test_frontmatter_only_cut_edit_refreshes_untouched_generated_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    _stub_bindings(monkeypatch)
+    _stub_projection_sync(monkeypatch)
+    _install_fake_engine_state(monkeypatch)
+
+    episode_id = "ep-22222222-4444-4444-8444-444444444444"
+    _write_initial(vault_root, episode_id=episode_id)
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 0))
+
+    note_path = vault_root / episode_note_rel_path(episode_id)
+    old_text = note_path.read_text(encoding="utf-8")
+    note_path.write_text(
+        old_text.replace("title: Debugging session", "title: Retitled episode", 1),
+        encoding="utf-8",
+    )
+
+    result = run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(10, 5))
+    new_text = note_path.read_text(encoding="utf-8")
+    assert result["recut_detected"] == [episode_id]
+    assert "# Episode: Retitled episode" in new_text
+    assert "# Episode: Debugging session" not in new_text
+
+
 # ---------------------------------------------------------------------------
 # AC2 (enforcement) -- terminality at the production write seam
 # ---------------------------------------------------------------------------
@@ -873,6 +920,33 @@ def test_invalid_but_present_episode_note_does_not_trigger_deletion_withdrawal(
     )
     assert repaired_result["recut_detected"] == [episode_id]
     assert not [args for kind, args in calls if kind == "withdraw"]
+
+
+def test_path_frontmatter_id_mismatch_is_not_adopted_or_treated_as_deletion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    calls = _stub_bindings(monkeypatch)
+    fake_state = _install_fake_engine_state(monkeypatch)
+
+    path_id = "ep-77777777-8888-4888-8888-888888888888"
+    foreign_id = "ep-77777777-9999-4999-8999-999999999999"
+    _write_initial(vault_root, episode_id=path_id)
+    run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(9, 0))
+    calls.clear()
+
+    note_path = vault_root / episode_note_rel_path(path_id)
+    note_path.write_text(
+        note_path.read_text(encoding="utf-8").replace(path_id, foreign_id, 1),
+        encoding="utf-8",
+    )
+
+    result = run_recut_tick(vault_root=vault_root, write_guard=_allow_guard(), now=_dt(9, 5))
+    assert result["bindings_corrected"] == 0
+    assert not [args for kind, args in calls if kind in {"withdraw", "reconcile"}]
+    states = fake_state.all_state_with_prefix("episode_recut_state:")
+    assert f"episode_recut_state:{path_id}" in states
+    assert f"episode_recut_state:{foreign_id}" not in states
 
 
 def test_split_and_merge_flows_consistent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

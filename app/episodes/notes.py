@@ -74,12 +74,21 @@ def render_episode_note(fields: dict[str, Any], *, body: str | None = None) -> s
         if name in fields:
             fm[name] = fields[name]
 
-    return dump_frontmatter(fm, _canonical_body(fields) if body is None else body)
+    if body is None:
+        return dump_frontmatter(fm, _canonical_body(fields))
+
+    # ``body`` is the exact suffix after the closing frontmatter delimiter, including its
+    # leading/trailing newlines. Rebuild only the YAML prefix so formatting-only human edits are
+    # not normalized away by ``dump_frontmatter``.
+    frontmatter_only = dump_frontmatter(fm, "").rstrip("\n")
+    return frontmatter_only + body
 
 
 def parse_episode_note_document(text: str) -> tuple[dict[str, Any], str]:
-    """Parse both the schema fields and markdown body from an Episode note."""
-    data, body = load_frontmatter(text)
+    """Parse schema fields and the exact raw suffix after the frontmatter delimiter."""
+    data, _normalized_body = load_frontmatter(text)
+    parts = text.split("---", 2) if text.startswith("---") else []
+    body = parts[2] if len(parts) == 3 else text
     fields = {name: data[name] for name in _FRONTMATTER_FIELDS if name in data}
     return fields, body
 
