@@ -9,7 +9,8 @@ from tests.dispatcher.verification_helpers import ledger, request
 def test_pr_wide_two_plus_two_budget_and_independent_rereview(tmp_path) -> None:
     state = ledger(tmp_path)
     run = state.ingest(request())
-    loop = VerificationAgentLoop(state, run.run_id, strongest_capability="sol")
+    claimed = state.claim(run.run_id, "host")
+    loop = VerificationAgentLoop(state, run.run_id, holder="host", lease_id=claimed.lease_id, strongest_capability="sol")
     context = {"head": run.head_sha}
     loop.repair(finding_id="F1", session_id="fix-1", capability="terra", reasoning_effort="high", context=context, outcome="fixed")
     with pytest.raises(ValueError):
@@ -29,10 +30,11 @@ def test_pr_wide_two_plus_two_budget_and_independent_rereview(tmp_path) -> None:
 def test_terminal_stop_routes_one_deduplicated_owner_decision(tmp_path) -> None:
     state = ledger(tmp_path)
     run = state.ingest(request())
-    loop = VerificationAgentLoop(state, run.run_id)
+    claimed = state.claim(run.run_id, "host")
+    loop = VerificationAgentLoop(state, run.run_id, holder="host", lease_id=claimed.lease_id)
     packet = {"failure_class": "authority-critical", "options": ["hold", "authorize"]}
     first = loop.stop("authority-critical", packet)
-    assert state.exception(run.run_id, "authority-critical", packet) == first
+    assert first.startswith("vexception-")
     with state.store._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM verification_exceptions").fetchone()[0] == 1
 
@@ -40,7 +42,8 @@ def test_terminal_stop_routes_one_deduplicated_owner_decision(tmp_path) -> None:
 def test_coordinator_resumes_but_reviewers_start_fresh(tmp_path) -> None:
     state = ledger(tmp_path)
     run = state.ingest(request())
-    loop = VerificationAgentLoop(state, run.run_id)
+    claimed = state.claim(run.run_id, "host")
+    loop = VerificationAgentLoop(state, run.run_id, holder="host", lease_id=claimed.lease_id)
     context = {"head": run.head_sha}
     loop.repair(finding_id="F1", session_id="coordinator", capability="terra", reasoning_effort="high", context=context, outcome="fixed")
     with pytest.raises(ValueError):

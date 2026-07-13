@@ -128,7 +128,10 @@ def test_old_lease_token_cannot_mutate_same_holder_takeover(tmp_path) -> None:
 def test_each_repair_requires_blocking_fresh_review_and_final_two_clean(tmp_path) -> None:
     state = ledger(tmp_path)
     run = state.ingest(request())
-    loop = VerificationAgentLoop(state, run.run_id)
+    claimed = state.claim(run.run_id, "host")
+    loop = VerificationAgentLoop(
+        state, run.run_id, holder="host", lease_id=claimed.lease_id
+    )
     context = {"head": run.head_sha}
     loop.repair(
         finding_id="F1",

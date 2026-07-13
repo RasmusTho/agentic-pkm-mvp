@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+from typing import Mapping, Sequence
 
 from app.dispatcher.verification_dispatch import VerificationDispatchLedger
 
@@ -14,10 +14,14 @@ class VerificationAgentLoop:
         ledger: VerificationDispatchLedger,
         run_id: str,
         *,
+        holder: str,
+        lease_id: str,
         strongest_capability: str = "gpt-5.6-sol",
     ) -> None:
         self.ledger = ledger
         self.run_id = run_id
+        self.holder = holder
+        self.lease_id = lease_id
         self.strongest_capability = strongest_capability
 
     def _head(self) -> str:
@@ -65,6 +69,8 @@ class VerificationAgentLoop:
             context,
             outcome,
             {"finding_id": finding_id, "head_sha": self._head()},
+            holder=self.holder,
+            lease_id=self.lease_id,
         )
         return ordinal
 
@@ -79,9 +85,10 @@ class VerificationAgentLoop:
     ) -> int:
         attempts = self.ledger.attempts(self.run_id)
         repairs = [row for row in attempts if row["kind"] in {"standard_repair", "escalated_repair"}]
-        if not repairs:
-            raise ValueError("review requires a recorded repair")
-        latest = repairs[-1]
+        verifications = [row for row in attempts if row["kind"] == "verification"]
+        if not repairs and not verifications:
+            raise ValueError("review requires a recorded verification or repair")
+        latest = repairs[-1] if repairs else verifications[-1]
         reviews = [
             row for row in attempts
             if row["kind"] == "review"
@@ -108,27 +115,54 @@ class VerificationAgentLoop:
                 "head_sha": self._head(),
                 "verdict": normalized,
             },
+            holder=self.holder,
+            lease_id=self.lease_id,
         )
         return ordinal
+
+    def apply_events(
+        self,
+        events: Sequence[Mapping[str, object]],
+        *,
+        context: Mapping[str, object],
+    ) -> None:
+        """Persist the coordinator's ordered, schema-validated repair/review receipt."""
+        for event in events:
+            common = {
+                "session_id": str(event["session_id"]),
+                "capability": str(event["capability"]),
+                "reasoning_effort": str(event["reasoning_effort"]),
+                "context": context,
+                "outcome": str(event["outcome"]),
+            }
+            if event.get("kind") == "repair":
+                self.repair(
+                    finding_id=str(event["finding_id"]),
+                    strongest=bool(event.get("strongest", False)),
+                    **common,
+                )
+            elif event.get("kind") == "review":
+                self.review(**common)
+            else:
+                raise ValueError("unknown verification review event kind")
 
     def closure_ready(self) -> bool:
         return self.ledger.closure_ready(self.run_id)
 
     def stop(self, failure_class: str, packet: Mapping[str, object]) -> str:
-        exception_id = self.ledger.exception(self.run_id, failure_class, packet)
-        run = self.ledger.get(self.run_id)
-        if run is None:
-            raise ValueError("verification run not found")
-        if run.status in {"claimed", "running"} and run.claimed_by and run.lease_id:
-            claimed = run
-        else:
-            claimed = self.ledger.claim(self.run_id, "verification-agent-loop")
+        exception_id = self.ledger.exception(
+            self.run_id,
+            failure_class,
+            packet,
+            holder=self.holder,
+            lease_id=self.lease_id,
+        )
         self.ledger.terminal(
             self.run_id,
             "needs_human",
             {"exception_id": exception_id, "failure_class": failure_class},
             reason=failure_class,
-            holder=claimed.claimed_by or "",
-            lease_id=claimed.lease_id or "",
+            holder=self.holder,
+            lease_id=self.lease_id,
         )
         return exception_id
