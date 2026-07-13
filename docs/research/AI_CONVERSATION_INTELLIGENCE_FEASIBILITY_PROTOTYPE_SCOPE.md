@@ -265,7 +265,7 @@ No mutable provider claim is necessary for this scope, so no provider documentat
 | R6 | `docs/research/AI_CONVERSATION_INTELLIGENCE_ADAPTER_ARCHITECTURE_OPTIONS.md` | Provider-shaped edge, neutral envelope, lifecycle/failure, and conformance questions |
 | R7 | `docs/boundaries/EBF.md`; `docs/boundaries/SIP.md`; `docs/boundaries/PDM.md` | External-boundary, projection, and persistence ownership constraints |
 | R8 | `docs/boundaries/HKA.md`; `docs/boundaries/MEM.md`; `docs/boundaries/GOV.md` | Human-knowledge, memory, and governance authority separation |
-| R9 | `docs/TESTING.md`; `docs/development/FEATURE_ACCEPTANCE.md` | Distinction between deterministic slice verification, feature validation, and acceptance |
+| R9 | `docs/TESTING.md`; `docs/development/DEV_WORKFLOW.md` | Distinction between deterministic slice verification, feature validation, and acceptance |
 
 ## Limitations
 
