@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import hashlib
 import json
 import re
@@ -9,7 +10,7 @@ import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from app.dispatcher.store import SqliteStore
 
@@ -114,7 +115,9 @@ class VerificationRun:
     idempotency_key: str
     repository: str
     pr_number: int
-    head_sha: str
+    requested_head_sha: str
+    current_head_sha: str
+    verified_head_sha: str | None
     stage: str
     status: str
     claimed_by: str | None
@@ -127,6 +130,11 @@ class VerificationRun:
     stop_reason: str | None
     retry_after: str | None
 
+    @property
+    def head_sha(self) -> str:
+        """Compatibility name for the lease-fenced current PR head."""
+        return self.current_head_sha
+
 
 def _run(row: sqlite3.Row) -> VerificationRun:
     return VerificationRun(
@@ -134,7 +142,9 @@ def _run(row: sqlite3.Row) -> VerificationRun:
         idempotency_key=row["idempotency_key"],
         repository=row["repository"],
         pr_number=row["pr_number"],
-        head_sha=row["head_sha"],
+        requested_head_sha=row["head_sha"],
+        current_head_sha=row["current_head_sha"],
+        verified_head_sha=row["verified_head_sha"],
         stage=row["stage"],
         status=row["status"],
         claimed_by=row["claimed_by"],
@@ -147,6 +157,19 @@ def _run(row: sqlite3.Row) -> VerificationRun:
         stop_reason=row["stop_reason"],
         retry_after=row["retry_after"],
     )
+
+
+def _attempt(row: sqlite3.Row) -> dict[str, object]:
+    return {
+        "attempt_id": row["attempt_id"],
+        "kind": row["attempt_kind"],
+        "ordinal": row["ordinal"],
+        "session_id": row["session_id"],
+        "capability": row["capability"],
+        "reasoning_effort": row["reasoning_effort"],
+        "outcome": row["outcome"],
+        "receipt": _load(row["receipt_json"]),
+    }
 
 
 class VerificationDispatchLedger:
@@ -166,9 +189,9 @@ class VerificationDispatchLedger:
                 """
                 INSERT OR IGNORE INTO verification_runs (
                     run_id, idempotency_key, contract_version, repository,
-                    pr_number, head_sha, stage, request_json, status,
+                    pr_number, head_sha, current_head_sha, stage, request_json, status,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
                 """,
                 (
                     run_id,
@@ -176,6 +199,7 @@ class VerificationDispatchLedger:
                     request["contract_version"],
                     request["repository"],
                     request["pr_number"],
+                    request["current_head_sha"],
                     request["current_head_sha"],
                     request["stage"],
                     _json(dict(request)),
@@ -330,11 +354,23 @@ class VerificationDispatchLedger:
                 """
                 UPDATE verification_runs
                 SET status=?, terminal_receipt_json=?, stop_reason=?, claimed_by=NULL,
-                    lease_id=NULL, lease_expires_at=NULL, updated_at=?
+                    lease_id=NULL, lease_expires_at=NULL,
+                    verified_head_sha=CASE WHEN ?='completed' THEN current_head_sha
+                                           ELSE verified_head_sha END,
+                    updated_at=?
                 WHERE run_id=? AND claimed_by=? AND lease_id=?
                   AND status IN ('claimed','running')
                 """,
-                (status, _json(dict(receipt)), reason, _now(), run_id, holder, lease_id),
+                (
+                    status,
+                    _json(dict(receipt)),
+                    reason,
+                    status,
+                    _now(),
+                    run_id,
+                    holder,
+                    lease_id,
+                ),
             )
             if result.rowcount == 0:
                 raise ValueError("verification terminal ownership mismatch")
@@ -342,6 +378,68 @@ class VerificationDispatchLedger:
         run = self.get(run_id)
         assert run is not None
         return run
+
+    def rebind_head(
+        self,
+        run_id: str,
+        new_head_sha: str,
+        *,
+        expected_head_sha: str,
+        observed_repository: str,
+        observed_pr_number: int,
+        observed_head_sha: str,
+        holder: str,
+        lease_id: str,
+    ) -> VerificationRun:
+        """Advance the active head only under the lease and exact live GitHub truth.
+
+        ``verification_runs.head_sha`` remains the immutable request identity used by
+        the idempotency/unique contract. Only ``current_head_sha`` advances, and any
+        prior verified-head marker is cleared until two clean reviews complete.
+        """
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", new_head_sha):
+            raise ValueError("malformed verification rebind head")
+        if new_head_sha != observed_head_sha:
+            raise ValueError("verification rebind does not match live PR head")
+        with self.store._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM verification_runs WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("verification run not found")
+            if (
+                row["repository"] != observed_repository
+                or row["pr_number"] != observed_pr_number
+            ):
+                raise ValueError("verification rebind live PR identity mismatch")
+            result = conn.execute(
+                """
+                UPDATE verification_runs
+                SET current_head_sha=?, verified_head_sha=NULL, updated_at=?
+                WHERE run_id=? AND current_head_sha=?
+                  AND claimed_by=? AND lease_id=?
+                  AND status IN ('claimed','running')
+                """,
+                (
+                    new_head_sha,
+                    _now(),
+                    run_id,
+                    expected_head_sha,
+                    holder,
+                    lease_id,
+                ),
+            )
+            if result.rowcount != 1:
+                raise ValueError("verification head rebind ownership or head mismatch")
+            updated = conn.execute(
+                "SELECT * FROM verification_runs WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            conn.commit()
+        assert updated is not None
+        return _run(updated)
 
     def backoff(
         self,
@@ -491,25 +589,126 @@ class VerificationDispatchLedger:
             conn.commit()
         return ordinal
 
-    def attempts(self, run_id: str) -> list[dict[str, object]]:
+    def record_attempt_batch(
+        self,
+        run_id: str,
+        batch_id: str,
+        batch_size: int,
+        expected_head_sha: str,
+        planner: Callable[
+            [builtins.list[dict[str, object]], Callable[[int], str]],
+            Sequence[Mapping[str, object]],
+        ],
+        *,
+        holder: str,
+        lease_id: str,
+    ) -> int:
+        """Validate and insert one coordinator event batch in one transaction.
+
+        The stable ``batch_id`` makes an exact replay a no-op. A planner error,
+        ownership loss, head change, or later insert conflict rolls the entire
+        batch back, so recovery never observes a prefix of the final receipt.
+        """
+        if not batch_id or batch_size <= 0:
+            raise ValueError("verification event batch identity is required")
+
+        def attempt_id(index: int) -> str:
+            digest = hashlib.sha256(f"{run_id}:{batch_id}:{index}".encode()).hexdigest()
+            return f"vattempt-{digest[:16]}"
+
+        with self.store._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            owner = conn.execute(
+                """
+                SELECT current_head_sha FROM verification_runs
+                WHERE run_id=? AND claimed_by=? AND lease_id=?
+                  AND status IN ('claimed','running')
+                """,
+                (run_id, holder, lease_id),
+            ).fetchone()
+            if owner is None:
+                raise ValueError("verification event batch ownership mismatch")
+            if owner["current_head_sha"] != expected_head_sha:
+                raise ValueError("verification event batch head changed")
+            rows = conn.execute(
+                "SELECT * FROM verification_attempts "
+                "WHERE run_id=? ORDER BY created_at, attempt_id",
+                (run_id,),
+            ).fetchall()
+            attempts = [_attempt(row) for row in rows]
+            replay_rows = [
+                row
+                for row in attempts
+                if isinstance(row["receipt"], Mapping)
+                and row["receipt"].get("event_batch_id") == batch_id
+            ]
+            if replay_rows:
+                indexes = {
+                    row["receipt"].get("event_batch_index")
+                    for row in replay_rows
+                    if isinstance(row["receipt"], Mapping)
+                }
+                sizes = {
+                    row["receipt"].get("event_batch_size")
+                    for row in replay_rows
+                    if isinstance(row["receipt"], Mapping)
+                }
+                expected_indexes = set(range(batch_size))
+                if indexes != expected_indexes or sizes != {batch_size}:
+                    raise ValueError("verification event batch is partially persisted")
+                conn.commit()
+                return 0
+
+            planned = list(planner(attempts, attempt_id))
+            if len(planned) != batch_size:
+                raise ValueError("verification event batch plan size mismatch")
+            batch_started = datetime.now(timezone.utc)
+            for index, item in enumerate(planned):
+                item_receipt = item["receipt"]
+                if not isinstance(item_receipt, Mapping):
+                    raise ValueError("verification event batch receipt is malformed")
+                receipt = dict(item_receipt)
+                receipt.update(
+                    {
+                        "event_batch_id": batch_id,
+                        "event_batch_index": index,
+                        "event_batch_size": batch_size,
+                    }
+                )
+                conn.execute(
+                    """
+                    INSERT INTO verification_attempts (
+                        attempt_id, run_id, attempt_kind, ordinal, session_id,
+                        capability, reasoning_effort, context_hash, outcome,
+                        receipt_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        item["attempt_id"],
+                        run_id,
+                        item["kind"],
+                        item["ordinal"],
+                        item["session_id"],
+                        item["capability"],
+                        item["reasoning_effort"],
+                        item["context_hash"],
+                        item["outcome"],
+                        _json(receipt),
+                        (batch_started + timedelta(microseconds=index)).isoformat(
+                            timespec="microseconds"
+                        ),
+                    ),
+                )
+            conn.commit()
+        return len(planned)
+
+    def attempts(self, run_id: str) -> builtins.list[dict[str, object]]:
         with self.store._connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM verification_attempts WHERE run_id=? ORDER BY created_at, attempt_id",
                 (run_id,),
             ).fetchall()
-        return [
-            {
-                "attempt_id": row["attempt_id"],
-                "kind": row["attempt_kind"],
-                "ordinal": row["ordinal"],
-                "session_id": row["session_id"],
-                "capability": row["capability"],
-                "reasoning_effort": row["reasoning_effort"],
-                "outcome": row["outcome"],
-                "receipt": _load(row["receipt_json"]),
-            }
-            for row in rows
-        ]
+        return [_attempt(row) for row in rows]
 
     def closure_ready(self, run_id: str) -> bool:
         attempts = self.attempts(run_id)

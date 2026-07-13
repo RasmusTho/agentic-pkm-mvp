@@ -15,7 +15,11 @@ from typing import Any, Protocol
 
 from app.dispatcher.events import JsonlEventWriter
 from app.dispatcher.models import EventRecord, LeaseRecord, TaskRecord
-from app.dispatcher.schema import DDL_STATEMENTS, SCHEMA_VERSION
+from app.dispatcher.schema import (
+    DDL_STATEMENTS,
+    SCHEMA_VERSION,
+    verification_v3_schema_error,
+)
 
 
 class DispatcherStore(Protocol):
@@ -116,8 +120,26 @@ class SqliteStore:
                 "SELECT value FROM dispatcher_meta WHERE key='schema_version'"
             ).fetchone()
             current_version = None if row is None else str(row["value"])
+        verification_columns: set[str] = set()
+        verification_runs_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='verification_runs'"
+        ).fetchone()
+        if verification_runs_exists is not None:
+            verification_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(verification_runs)")
+            }
+        verification_heads_complete = {
+            "current_head_sha",
+            "verified_head_sha",
+        }.issubset(verification_columns)
         if "repo" in columns and current_version == str(SCHEMA_VERSION):
-            return
+            schema_error = verification_v3_schema_error(
+                conn, allow_additive_migration=True
+            )
+            if schema_error is not None:
+                raise ValueError(schema_error)
+            if verification_heads_complete:
+                return
 
         # Only the original v1 layout is a supported migration source.  In
         # particular, do not turn a database written by a newer dispatcher
@@ -155,6 +177,31 @@ class SqliteStore:
                 version = "missing" if current_version is None else repr(current_version)
                 raise ValueError(f"unsupported dispatcher schema_version: {version}")
             if current_version == str(SCHEMA_VERSION) and "repo" in columns:
+                schema_error = verification_v3_schema_error(
+                    conn, allow_additive_migration=True
+                )
+                if schema_error is not None:
+                    raise ValueError(schema_error)
+                verification_columns = {
+                    row["name"]
+                    for row in conn.execute("PRAGMA table_info(verification_runs)")
+                }
+                if "current_head_sha" not in verification_columns:
+                    conn.execute(
+                        "ALTER TABLE verification_runs ADD COLUMN "
+                        "current_head_sha TEXT NOT NULL DEFAULT ''"
+                    )
+                    conn.execute(
+                        "UPDATE verification_runs SET current_head_sha=head_sha "
+                        "WHERE current_head_sha=''"
+                    )
+                if "verified_head_sha" not in verification_columns:
+                    conn.execute(
+                        "ALTER TABLE verification_runs ADD COLUMN verified_head_sha TEXT"
+                    )
+                schema_error = verification_v3_schema_error(conn)
+                if schema_error is not None:
+                    raise ValueError(schema_error)
                 conn.commit()
                 return
             if current_version == str(SCHEMA_VERSION):
