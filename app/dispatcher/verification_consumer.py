@@ -11,14 +11,22 @@ import json
 import io
 import os
 import subprocess
+import threading
 import tomllib
 import zipfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Mapping, Protocol, Sequence
+from typing import Callable, Mapping, Protocol, Sequence
 
-from app.dispatcher.verification_dispatch import VerificationDispatchLedger, VerificationRun
+import jsonschema
+
+from app.dispatcher.verification_dispatch import (
+    VerificationBackoffPending,
+    VerificationDispatchLedger,
+    VerificationRun,
+    VerificationSubscriptionBusy,
+)
 
 
 @dataclass(frozen=True)
@@ -112,8 +120,15 @@ class GhCliVerificationSource:
 
 
 class CoordinatorLauncher(Protocol):
+    config: "LaunchConfig"
+
     def launch(
-        self, context_pack: Mapping[str, object], *, resume_session_id: str | None = None
+        self,
+        context_pack: Mapping[str, object],
+        *,
+        resume_session_id: str | None = None,
+        on_thread_started: Callable[[str], None] | None = None,
+        on_heartbeat: Callable[[], None] | None = None,
     ) -> tuple[str, Mapping[str, object]]: ...
 
 
@@ -151,6 +166,15 @@ class CodexChatGPTAuthPreflight:
         return AuthReceipt(True, "chatgpt", "keyring")
 
 
+@dataclass(frozen=True)
+class LaunchConfig:
+    adapter_name: str
+    model: str
+    reasoning_effort: str
+    sandbox: str
+    developer_instructions: str
+
+
 class CodexExecLauncher:
     """Explicit least-privilege non-interactive verification coordinator."""
 
@@ -159,12 +183,36 @@ class CodexExecLauncher:
         worktree: Path,
         receipt_schema: Path,
         context_path: Path,
+        adapter_path: Path | None = None,
         runner=subprocess.run,
     ) -> None:
         self.worktree = worktree
         self.receipt_schema = receipt_schema
         self.context_path = context_path
         self.runner = runner
+        self.adapter_path = adapter_path or worktree / ".codex/agents/verification-closer.toml"
+        try:
+            adapter = tomllib.loads(self.adapter_path.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            raise ValueError("verification closer adapter is unavailable") from exc
+        required = {
+            "name": "verification_closer",
+            "model": "gpt-5.6-terra",
+            "model_reasoning_effort": "high",
+            "sandbox_mode": "workspace-write",
+        }
+        if any(adapter.get(key) != value for key, value in required.items()):
+            raise ValueError("verification closer adapter contract mismatch")
+        instructions = adapter.get("developer_instructions")
+        if not isinstance(instructions, str) or not instructions.strip():
+            raise ValueError("verification closer developer instructions are missing")
+        self.config = LaunchConfig(
+            adapter_name="verification_closer",
+            model="gpt-5.6-terra",
+            reasoning_effort="high",
+            sandbox="workspace-write",
+            developer_instructions=instructions.strip(),
+        )
 
     def command(self, resume_session_id: str | None = None) -> list[str]:
         command = [
@@ -172,20 +220,31 @@ class CodexExecLauncher:
             "exec",
             "--json",
             "--sandbox",
-            "workspace-write",
+            self.config.sandbox,
+            "--model",
+            self.config.model,
+            "-c",
+            f'model_reasoning_effort="{self.config.reasoning_effort}"',
             "--output-schema",
             str(self.receipt_schema),
         ]
         if resume_session_id:
             command += ["resume", resume_session_id]
         return command + [
-            "Use the registered verification_closer adapter. Read the immutable "
+            f"Use the registered {self.config.adapter_name} adapter.\n"
+            f"{self.config.developer_instructions}\n"
+            "Read the immutable "
             f"dispatch context at {self.context_path}; load and obey "
             ".codex/skills/verification-and-closure/SKILL.md."
         ]
 
     def launch(
-        self, context_pack: Mapping[str, object], *, resume_session_id: str | None = None
+        self,
+        context_pack: Mapping[str, object],
+        *,
+        resume_session_id: str | None = None,
+        on_thread_started: Callable[[str], None] | None = None,
+        on_heartbeat: Callable[[], None] | None = None,
     ) -> tuple[str, Mapping[str, object]]:
         # This generic launcher writes only non-secret request identity into its
         # isolated worktree. Host service configuration stays outside Git.
@@ -193,27 +252,61 @@ class CodexExecLauncher:
             json.dumps(context_pack, sort_keys=True, indent=2) + "\n", encoding="utf-8"
         )
         env = {k: v for k, v in os.environ.items() if k not in {"OPENAI_API_KEY", "CODEX_API_KEY"}}
-        result = self.runner(
-            self.command(resume_session_id),
-            cwd=self.worktree,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        stop_heartbeat = threading.Event()
+        heartbeat_thread: threading.Thread | None = None
+        if self.runner is subprocess.run:
+            process = subprocess.Popen(
+                self.command(resume_session_id), cwd=self.worktree, env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            assert process.stdout is not None
+            lines = process.stdout
+            if on_heartbeat:
+                def pulse() -> None:
+                    while not stop_heartbeat.wait(30):
+                        on_heartbeat()
+                heartbeat_thread = threading.Thread(target=pulse, daemon=True)
+                heartbeat_thread.start()
+        else:
+            result = self.runner(
+                self.command(resume_session_id), cwd=self.worktree, env=env,
+                capture_output=True, text=True, check=False,
+            )
+            lines = result.stdout.splitlines()
         thread_id: str | None = resume_session_id
-        terminal: dict[str, object] = {"returncode": result.returncode}
-        for line in result.stdout.splitlines():
+        terminal: dict[str, object] | None = None
+        schema = json.loads(self.receipt_schema.read_text(encoding="utf-8"))
+        for line in lines:
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
             if event.get("type") == "thread.started" and isinstance(event.get("thread_id"), str):
                 thread_id = event["thread_id"]
-            if event.get("type") in {"turn.completed", "turn.failed", "error"}:
-                terminal = event
+                if on_thread_started:
+                    on_thread_started(thread_id)
+            if on_heartbeat:
+                on_heartbeat()
+            if event.get("type") == "item.completed":
+                item = event.get("item")
+                if isinstance(item, Mapping) and item.get("type") == "agent_message":
+                    text = item.get("text")
+                    if isinstance(text, str):
+                        try:
+                            candidate = json.loads(text)
+                            jsonschema.validate(candidate, schema)
+                        except (json.JSONDecodeError, jsonschema.ValidationError):
+                            continue
+                        terminal = candidate
+        if self.runner is subprocess.run:
+            process.wait()
+            stop_heartbeat.set()
+            if heartbeat_thread:
+                heartbeat_thread.join(timeout=1)
         if not thread_id:
             raise RuntimeError("codex exec produced no thread identity")
+        if terminal is None:
+            raise RuntimeError("codex exec produced no schema-valid final agent receipt")
         return thread_id, terminal
 
 
@@ -268,6 +361,30 @@ def context_pack(run: VerificationRun, pr: Mapping[str, object]) -> dict[str, ob
     }
 
 
+def _retry_at(value: object = None) -> str:
+    now = datetime.now(timezone.utc)
+    delay = timedelta(minutes=15)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        delay = timedelta(seconds=max(1, min(float(value), 3600)))
+    elif isinstance(value, str):
+        stripped = value.strip().lower()
+        try:
+            parsed = datetime.fromisoformat(stripped.replace("z", "+00:00"))
+            if parsed.tzinfo is not None:
+                bounded = min(max(parsed.astimezone(timezone.utc), now + timedelta(seconds=1)), now + timedelta(hours=1))
+                return bounded.isoformat(timespec="microseconds")
+        except ValueError:
+            pass
+        if stripped.endswith(("s", "m", "h")):
+            try:
+                amount = float(stripped[:-1])
+                multiplier = {"s": 1, "m": 60, "h": 3600}[stripped[-1]]
+                delay = timedelta(seconds=max(1, min(amount * multiplier, 3600)))
+            except ValueError:
+                pass
+    return (now + delay).isoformat(timespec="microseconds")
+
+
 class VerificationConsumer:
     def __init__(
         self,
@@ -276,14 +393,10 @@ class VerificationConsumer:
         auth: AuthPreflight,
         launcher: CoordinatorLauncher,
         holder: str,
-        capability: str = "verification_closer_adapter",
-        reasoning_effort: str = "configured",
     ) -> None:
         self.ledger, self.truth, self.auth, self.launcher, self.holder = (
             ledger, truth, auth, launcher, holder
         )
-        self.capability = capability
-        self.reasoning_effort = reasoning_effort
 
     @staticmethod
     def _lease_is_live(run: VerificationRun) -> bool:
@@ -310,28 +423,70 @@ class VerificationConsumer:
         checks = self.truth.checks(run.repository, run.head_sha)
         rejection = live_truth_rejection(run, pr, checks)
         if rejection:
-            return self.ledger.terminal(
-                run.run_id, "superseded", {"outcome": "noop", "reason": rejection}, reason=rejection
+            if rejection in {"missing_checks", "checks_not_green"}:
+                return self.ledger.defer_unclaimed(
+                    run.run_id,
+                    {"outcome": "deferred", "reason": rejection},
+                    _retry_at(),
+                )
+            return self.ledger.supersede_unclaimed(
+                run.run_id, {"outcome": "noop", "reason": rejection}, reason=rejection
             )
         auth = self.auth.check()
         if not auth.ok:
-            claimed = self.ledger.claim(run.run_id, self.holder)
+            try:
+                claimed = self.ledger.claim(run.run_id, self.holder)
+            except (VerificationSubscriptionBusy, VerificationBackoffPending):
+                current = self.ledger.get(run.run_id)
+                assert current is not None
+                return current
             return self.ledger.backoff(
                 claimed.run_id,
                 {"outcome": "blocked", "reason": auth.reason, "auth_mode": auth.auth_mode},
-                retry_after="auth_required",
+                retry_after=_retry_at(),
+                holder=self.holder,
+                lease_id=claimed.lease_id or "",
             )
-        claimed = self.ledger.claim(run.run_id, self.holder)
+        try:
+            claimed = self.ledger.claim(run.run_id, self.holder)
+        except (VerificationSubscriptionBusy, VerificationBackoffPending):
+            current = self.ledger.get(run.run_id)
+            assert current is not None
+            return current
+        return self._launch(claimed, pr)
+
+    def _launch(
+        self, claimed: VerificationRun, pr: Mapping[str, object]
+    ) -> VerificationRun:
+        lease_id = claimed.lease_id
+        if not lease_id:
+            raise RuntimeError("claimed verification run has no lease token")
         pack = context_pack(claimed, pr)
+
+        def started(session_id: str) -> None:
+            current = self.ledger.get(claimed.run_id)
+            if current is not None and current.status == "claimed":
+                self.ledger.start(claimed.run_id, self.holder, lease_id, session_id, pack)
+
+        def heartbeat() -> None:
+            self.ledger.heartbeat(claimed.run_id, self.holder, lease_id)
+
         session_id, receipt = self.launcher.launch(
-            pack, resume_session_id=claimed.coordinator_session_id
+            pack,
+            resume_session_id=claimed.coordinator_session_id,
+            on_thread_started=started,
+            on_heartbeat=heartbeat,
         )
+        current = self.ledger.get(claimed.run_id)
+        if current is not None and current.status == "claimed":
+            started(session_id)
+        config = self.launcher.config
         self.ledger.record_attempt(
             claimed.run_id,
             "verification",
             session_id,
-            self.capability,
-            self.reasoning_effort,
+            config.model,
+            config.reasoning_effort,
             pack,
             "rate_limited" if self._rate_limited(receipt) else "launched",
             receipt,
@@ -340,17 +495,51 @@ class VerificationConsumer:
             return self.ledger.backoff(
                 claimed.run_id,
                 {"outcome": "rate_limited", "api_fallback": False, "receipt": dict(receipt)},
-                retry_after=str(receipt.get("retry_after") or "bounded_backoff"),
+                retry_after=_retry_at(receipt.get("retry_after")),
+                holder=self.holder,
+                lease_id=lease_id,
             )
-        return self.ledger.start(claimed.run_id, self.holder, session_id, pack)
+        if receipt.get("head_sha") != claimed.head_sha:
+            return self.ledger.terminal(
+                claimed.run_id, "needs_human", dict(receipt),
+                reason="receipt_head_mismatch", holder=self.holder, lease_id=lease_id,
+            )
+        verdict = receipt.get("verdict")
+        if verdict == "retry":
+            return self.ledger.backoff(
+                claimed.run_id, dict(receipt), _retry_at(receipt.get("retry_after")),
+                holder=self.holder, lease_id=lease_id,
+            )
+        status = {"delivered": "completed", "blocked": "failed", "needs_human": "needs_human"}.get(verdict)
+        if status is None:
+            return self.ledger.terminal(
+                claimed.run_id, "needs_human", dict(receipt), reason="invalid_verdict",
+                holder=self.holder, lease_id=lease_id,
+            )
+        try:
+            return self.ledger.terminal(
+                claimed.run_id, status, dict(receipt), holder=self.holder, lease_id=lease_id
+            )
+        except ValueError as exc:
+            if status != "completed" or "two fresh clean reviews" not in str(exc):
+                raise
+            return self.ledger.terminal(
+                claimed.run_id, "needs_human", dict(receipt), reason="closure_gate_not_proven",
+                holder=self.holder, lease_id=lease_id,
+            )
 
     def recover(self, run_id: str) -> VerificationRun:
         run = self.ledger.get(run_id)
         if run is None or run.status != "running" or not run.coordinator_session_id or not run.context_pack:
             raise ValueError("verification run is not resumable")
-        session_id, _ = self.launcher.launch(
-            run.context_pack, resume_session_id=run.coordinator_session_id
-        )
-        if session_id != run.coordinator_session_id:
-            raise RuntimeError("resume changed coordinator session identity")
-        return run
+        if self._lease_is_live(run):
+            return run
+        pr = self.truth.pull_request(run.repository, run.pr_number)
+        checks = self.truth.checks(run.repository, run.head_sha)
+        rejection = live_truth_rejection(run, pr, checks)
+        if rejection:
+            raise ValueError(f"verification run is no longer resumable: {rejection}")
+        if not self.auth.check().ok:
+            raise ValueError("verification auth preflight failed")
+        claimed = self.ledger.claim(run.run_id, self.holder)
+        return self._launch(claimed, pr)

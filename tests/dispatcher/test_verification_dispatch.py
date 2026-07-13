@@ -41,16 +41,17 @@ def test_ingest_claim_and_terminal_lifecycle_is_idempotent(tmp_path) -> None:
     first = state.ingest(request())
     assert state.ingest(request()).run_id == first.run_id
     claimed = state.claim(first.run_id, "coordinator")
-    assert state.heartbeat(first.run_id, "coordinator").lease_id == claimed.lease_id
-    running = state.start(first.run_id, "coordinator", "thread-1", {"head": first.head_sha})
+    assert state.heartbeat(first.run_id, "coordinator", claimed.lease_id).lease_id == claimed.lease_id
+    running = state.start(first.run_id, "coordinator", claimed.lease_id, "thread-1", {"head": first.head_sha})
     assert running.status == "running"
-    done = state.terminal(first.run_id, "completed", {"outcome": "merged"})
-    assert state.terminal(first.run_id, "completed", {"outcome": "merged"}) == done
+    done = state.terminal(first.run_id, "failed", {"outcome": "blocked"}, holder="coordinator", lease_id=claimed.lease_id)
+    assert done.status == "failed"
     with pytest.raises(ValueError):
-        state.terminal(first.run_id, "failed", {"outcome": "other"})
+        state.terminal(first.run_id, "failed", {"outcome": "other"}, holder="coordinator", lease_id=claimed.lease_id)
 
     second = state.ingest(request("b" * 40))
-    failed = state.terminal(second.run_id, "failed", {"outcome": "launch_failed"})
+    second_claim = state.claim(second.run_id, "coordinator")
+    failed = state.terminal(second.run_id, "failed", {"outcome": "launch_failed"}, holder="coordinator", lease_id=second_claim.lease_id)
     assert failed.status == "failed"
 
 
