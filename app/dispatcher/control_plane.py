@@ -67,6 +67,16 @@ _REQUIRED_COLUMNS = {
     ),
     "dispatcher_meta": frozenset({"key", "value"}),
 }
+# Every dispatcher write path uses an identifier as an ``ON CONFLICT`` target
+# (or relies on it being unique).  Column presence alone is therefore not a
+# usable-schema check: a hand-created table can have the right columns but no
+# primary key or UNIQUE index, and will only fail later when a writer runs.
+_REQUIRED_UNIQUE_KEYS = {
+    "dispatcher_tasks": ("task_id",),
+    "dispatcher_leases": ("lease_id",),
+    "dispatcher_events": ("event_id",),
+    "dispatcher_meta": ("key",),
+}
 
 
 def _now() -> str:
@@ -90,6 +100,12 @@ def _dispatcher_schema_error(conn: sqlite3.Connection) -> str | None:
         missing_columns = sorted(required - columns)
         if missing_columns:
             return f"missing dispatcher columns in {table}: {', '.join(missing_columns)}"
+    for table, required_key in _REQUIRED_UNIQUE_KEYS.items():
+        if not _has_unique_key(conn, table, required_key):
+            return (
+                f"missing required unique key in {table}: "
+                f"{', '.join(required_key)}"
+            )
     row = conn.execute(
         "SELECT value FROM dispatcher_meta WHERE key = 'schema_version'"
     ).fetchone()
@@ -102,6 +118,37 @@ def _dispatcher_schema_error(conn: sqlite3.Connection) -> str | None:
     if version not in {1, SCHEMA_VERSION}:
         return f"unsupported dispatcher schema_version: {version}"
     return None
+
+
+def _has_unique_key(
+    conn: sqlite3.Connection, table: str, required_key: tuple[str, ...]
+) -> bool:
+    """Return whether ``table`` enforces uniqueness for ``required_key``.
+
+    SQLite represents table primary keys and explicit ``UNIQUE`` constraints
+    through slightly different pragma surfaces.  Inspect both so recovery
+    commands accept compatible legacy databases without certifying a shape
+    that a normal dispatcher write cannot use.
+    """
+    columns = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    primary_key = tuple(
+        str(row[1])
+        for row in sorted(columns, key=lambda row: int(row[5]))
+        if int(row[5]) > 0
+    )
+    if primary_key == required_key:
+        return True
+
+    for index in conn.execute(f"PRAGMA index_list({table})").fetchall():
+        if not bool(index[2]):
+            continue
+        index_columns = tuple(
+            str(row[2])
+            for row in conn.execute(f"PRAGMA index_info({index[1]})").fetchall()
+        )
+        if index_columns == required_key:
+            return True
+    return False
 
 
 def state(store: SqliteStore) -> dict[str, Any]:

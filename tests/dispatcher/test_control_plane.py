@@ -12,6 +12,7 @@ from app.dispatcher.cli import main
 from app.dispatcher.config import load_paths
 from app.dispatcher.events import JsonlEventWriter
 from app.dispatcher.models import TaskRecord
+from app.dispatcher.schema import DDL_STATEMENTS
 from app.dispatcher.store import SqliteStore
 
 
@@ -142,6 +143,50 @@ def test_health_rejects_unsupported_dispatcher_schema_version(tmp_path: Path) ->
     proof = control_plane.health(paths)
     assert proof["ok"] is False
     assert "unsupported dispatcher schema_version" in proof["db"]["error"]
+
+
+def test_recovery_rejects_column_compatible_schema_without_unique_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Recovery observation must not certify a DB that later rejects UPSERTs."""
+    paths = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "state")})
+    paths.state_dir.mkdir()
+    constraint_free_ddl = ";\n".join(DDL_STATEMENTS).replace(
+        " TEXT PRIMARY KEY", " TEXT NOT NULL"
+    )
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.executescript(constraint_free_ddl)
+        conn.execute(
+            "INSERT INTO dispatcher_meta(key, value) VALUES ('schema_version', '2')"
+        )
+    paths.events_path.touch()
+    before = paths.db_path.read_bytes()
+
+    proof = control_plane.health(paths)
+    assert proof["ok"] is False
+    assert proof["db"]["error"] == "missing required unique key in dispatcher_tasks: task_id"
+    with pytest.raises(ValueError, match="unsafe"):
+        control_plane.backup(paths, tmp_path / "backup")
+
+    backup = tmp_path / "restore-source"
+    backup.mkdir()
+    (backup / paths.db_path.name).write_bytes(before)
+    (backup / paths.events_path.name).write_text("", encoding="utf-8")
+    restored = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "restored")})
+    with pytest.raises(ValueError, match="missing required unique key"):
+        control_plane.restore(backup, restored)
+    assert not restored.state_dir.exists()
+
+    monkeypatch.setenv("DISPATCHER_STATE_DIR", str(paths.state_dir))
+    assert main(["status", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert paths.db_path.read_bytes() == before
+    assert payload["coordination_mode"] == "github-label-only-fallback"
+    assert payload["control_plane"] == {
+        "mode": "unavailable",
+        "revision": None,
+        "error": "missing required unique key in dispatcher_tasks: task_id",
+    }
 
 
 def test_backup_rejects_custom_events_target_equal_to_source_before_writing(
