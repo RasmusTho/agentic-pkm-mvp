@@ -156,11 +156,16 @@ def test_process_note_update_adds_uuid_without_frontmatter(
     generated = uuid.UUID("00000000-0000-0000-0000-00000000A001")
     calls: list[str] = []
 
-    def fake_uuid4() -> uuid.UUID:
+    def fake_new_note_uuid() -> str:
+        # Count only note-identity allocations. Patching the single-purpose
+        # seam (not the global ``uuid.uuid4``) keeps this assertion immune to
+        # the write adapter's infrastructure UUIDs (``.rewrite-swap`` staging
+        # name, ``concurrent-save-*`` conflict-artifact identity), which are a
+        # separate concern and must not be conflated with note identity (#3622).
         calls.append("called")
-        return generated
+        return str(generated)
 
-    monkeypatch.setattr("app.services.note_uuid.uuid.uuid4", fake_uuid4)
+    monkeypatch.setattr("app.services.note_uuid._new_note_uuid", fake_new_note_uuid)
     monkeypatch.setattr("app.settings.panel_actions.load_panel_action_mappings", lambda: _mapping())
     note_path = tmp_path / "note.md"
     note_path.write_text("Just content\n", encoding="utf-8")

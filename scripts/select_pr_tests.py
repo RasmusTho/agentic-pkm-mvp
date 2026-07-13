@@ -356,10 +356,16 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/agents/panel/",
             "app/promotion/",
             "app/panel/",
+            # The note-update service is the panel-driven note-body write path
+            # (handle_panel_update / upsert_executed_ids); its regression suite
+            # is tests/services/test_note_update_service.py.
+            "app/services/note_update.py",
+            "app/services/note_uuid.py",
             "tests/agents/panel_agent/",
             "tests/agents/test_panel",
             "tests/promotion/",
             "tests/panel/",
+            "tests/services/test_note_update_service.py",
             "tests/e2e/test_panel_to_promotion_consume.py",
             "tests/e2e/test_panel_watcher_e2e.py",
             "tests/e2e/test_promotion_intent_to_index.py",
@@ -376,6 +382,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/agents/test_panel_pipeline_integration.py",
             "tests/agents/test_panel_receipts.py",
             "tests/agents/test_panel_writeback_guard.py",
+            "tests/services/test_note_update_service.py",
             "tests/promotion",
             "tests/panel",
             *E2E_TARGETS["promotion_panel"],
