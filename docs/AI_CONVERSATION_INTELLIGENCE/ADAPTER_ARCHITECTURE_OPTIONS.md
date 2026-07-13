@@ -66,6 +66,7 @@ drift while preserving source truth, lineage, deletion semantics, and legible fa
 - `docs/AI_CONVERSATION_INTELLIGENCE/PRIVACY_SECURITY_AND_DATA_OWNERSHIP.md`
 - `docs/boundaries/EBF.md`
 - `docs/boundaries/SIP.md`
+- `docs/boundaries/PDM.md`
 
 ## Related GitHub Issues
 

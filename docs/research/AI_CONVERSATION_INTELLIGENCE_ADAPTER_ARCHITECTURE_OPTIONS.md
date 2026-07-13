@@ -1,7 +1,7 @@
 State: Advisory architecture research (docs-only; no adapter, port, schema, provider selection, acquisition authority, or runtime behavior enacted).
 Doc role: Research
 Authority: Evidence and recommendations for issue #3596 under parent #3194. Provider facts are bounded to the cited primary sources as accessed on 2026-07-13; the architecture is conceptual and subordinate to current EBF/SIP/HKA/MEM/GOV owner contracts.
-Owner: AI Conversation Intelligence research roadmap (#3194), downstream of EBF/SIP and the privacy baseline delivered by #3595
+Owner: AI Conversation Intelligence research roadmap (#3194), downstream of EBF/SIP/PDM and the privacy baseline delivered by #3595
 Temporal class: snapshot
 Review cadence: event-driven
 Source of truth: mixed
@@ -82,8 +82,9 @@ The terms below describe responsibility boundaries, not a proposed class hierarc
 | Layer | Responsibility | May contain | Must not do |
 | --- | --- | --- | --- |
 | **Source authority** | Provider/user/workspace remains authority for what the source exposed and its native lifecycle | Provider records, export archive, API/CLI event, source deletion/retention state | Become Yggdrasil truth merely because acquired |
-| **Provider acquisition edge (EBF)** | Authenticate through an approved seam; discover capabilities; enumerate/fetch; preserve source bytes/records and acquisition receipts; expose provider failures faithfully | Provider-specific IDs, cursors, archive/job states, versions, rate-limit/request IDs, feature flags | Translate provider roles into HKA/MEM authority; hide unsupported fields/failures; retain credentials in payloads |
+| **Provider acquisition edge (EBF)** | Authenticate through an approved seam; discover capabilities; enumerate/fetch; produce source observations and acquisition receipts; expose provider failures faithfully | Provider-specific IDs, cursors, archive/job states, versions, rate-limit/request IDs, feature flags | Own durable/quarantine storage or checkpoints; translate provider roles into HKA/MEM authority; hide unsupported fields/failures; retain credentials in payloads |
 | **Provider-neutral acquisition envelope (EBF-facing)** | Describe source binding, declared scope, acquisition/run identity, capability snapshot, raw artifact locator/hash, item locators, checkpoint, completeness/gaps, and deletion posture | Opaque provider locators and bounded common metadata | Promise a universal conversation schema or erase provider identity |
+| **Storage mechanics (PDM)** | If separately authorized, persist quarantine/raw observations, receipts, and checkpoints through governed `StorePort` bindings; carry source/provenance/sensitivity metadata; apply storage lifecycle mechanics | Encrypted staging, durable or rebuildable classification, storage locators, checkpoint commits, deletion/tombstone mechanics | Define source meaning/authority/retention policy; let EBF/SIP construct a private store or DSN; treat persistence as acceptance |
 | **Normalization projection (SIP)** | Produce rebuildable conversation/item representations with explicit mapping/version, unknowns, loss notes, and exact lineage | Provider-neutral conceptual records plus provider-extension references | Mutate raw evidence; invent timestamps/order/identity; own acquisition/authentication |
 | **Derivation/candidate layer (SIP → review)** | Chunk, classify, summarize, or propose knowledge/memory candidates with source-span and transformation lineage | Rebuildable outputs, confidence/evidence roles, correction/supersession relations | Promote to HKA/MEM, execute transcript instructions, or obscure source standing |
 | **Human authority lifecycles (HKA/MEM/GOV)** | Accept/reject/correct/promote under existing owner contracts and receipts | Governed accepted knowledge or memory only after explicit authority | Treat provider content, normalized records, or model output as implicitly accepted |
@@ -120,14 +121,15 @@ does not name or adopt an interface:
 1. **Describe source/capabilities** — identify provider/product/version/account/workspace posture and
    supported enumeration, item kinds, attachment/citation/tool/branch/edit/deletion features.
 2. **Plan acquisition** — resolve a human-approved bounded scope into a dry-run manifest and estimated counts/bytes.
-3. **Acquire page/artifact** — return immutable source observations plus opaque next checkpoint and request receipt.
+3. **Acquire page/artifact** — return immutable source observations plus an opaque proposed next checkpoint and request receipt; any authorized persistence/commit is performed through PDM/`StorePort`.
 4. **Normalize selected observation** — produce a versioned projection and loss/unknown report with exact lineage.
 5. **Reconcile/correct/delete** — observe source changes where supported and propagate explicit statuses through controlled copies.
 6. **Diagnose/conform** — expose capability drift, unsupported variants, fixture version, and content-free failure evidence.
 
 Separating planning from acquisition is critical: a human must be able to inspect scope before bytes
-move. Separating acquisition from normalization makes raw preservation and parser replay possible
-without another provider call.
+move. Separating acquisition from normalization makes authorized raw preservation and parser replay
+possible without another provider call, while PDM/`StorePort`—not EBF or SIP—owns any durable or
+quarantine storage mechanism.
 
 ## Adapter lifecycle and failure semantics
 
@@ -138,8 +140,8 @@ without another provider call.
 | Register | Bind provider/product/account or workspace pseudonym, acquisition class, and approved scope | Source binding, authority receipt, privacy-baseline version; no secret |
 | Discover | Read supported endpoint/export/tool version and capability posture without content where possible | Dated capability snapshot with supported/unsupported/unknown fields |
 | Plan | Enumerate or preview intended range/count/bytes and exclusions | Human-readable manifest, approval, limits, expiry; no wildcard default |
-| Acquire | Fetch one archive/page/event stream into quarantine; preserve bytes/records immutably | Run/page ID, raw hash/locator, provider request/job ID, time, cursor, item count |
-| Validate | Check media/schema/version, integrity, archive safety, scope, duplicates, and required identifiers | Accepted/quarantined/rejected disposition and structured non-content errors |
+| Acquire | EBF fetches one archive/page/event stream and emits source observations; when separately authorized, PDM places bytes/records in quarantine through `StorePort` | Run/page ID, raw hash/locator, provider request/job ID, time, proposed cursor, item count, storage receipt if persisted |
+| Validate | EBF/SIP checks media/schema/version, integrity, archive safety, scope, duplicates, and required identifiers; PDM applies storage mechanics without interpreting meaning | Accepted/quarantined/rejected disposition and structured non-content errors |
 | Normalize | Apply pinned mapping to selected observations | Mapper version, per-item result, exact lineage, loss/unknown report |
 | Reconcile | Compare repeated source observations without rewriting history | New acquisition, equivalence/supersession/correction relations, drift report |
 | Derive/review | Create candidates/projections under no-write analysis and human review | Derivation receipt, exact spans, authority remains candidate-only |
@@ -180,14 +182,16 @@ and call the result complete.
 - **Deduplication:** distinguish byte equality, source-object equality, repeated observation, and
   semantic similarity. Only the first two can support deterministic collapse, while retaining all
   acquisition receipts. Similarity produces a review relation, not deletion.
-- **Checkpoint commit:** advance a cursor only after raw preservation and per-page receipt are
-  durable. Normalization failure must not lose the acquisition checkpoint or silently skip the item.
+- **Checkpoint commit:** advance a cursor only after any authorized raw preservation and per-page
+  receipt have committed through PDM/`StorePort`. EBF proposes opaque provider checkpoint state; it
+  does not own the durable checkpoint. Normalization failure must not lose the committed acquisition
+  checkpoint or silently skip the item.
 
 ### Partial failure and legible completeness
 
 An acquisition result is one of `complete within declared scope`, `partial`, `cancelled`, `failed`,
 or `unknown`; “success” alone is insufficient. A partial result lists requested and observed scope,
-pages/artifacts/items accepted or quarantined, missing/unsupported variants, last durable checkpoint,
+pages/artifacts/items accepted or quarantined, missing/unsupported variants, last PDM-committed checkpoint,
 retry safety, and whether deletion/cleanup is complete. One malformed item must not corrupt other raw
 records, but it blocks a completeness claim.
 
@@ -243,14 +247,16 @@ are re-checked before each real experiment and on any observed shape or policy c
 
 ### Recommended conceptual architecture
 
-Recommend a future **two-stage EBF edge plus SIP projection**:
+Recommend a future **EBF acquisition edge, PDM storage seam, and SIP projection**:
 
-1. A provider/acquisition-class-specific edge performs capability discovery, scope planning,
-   authenticated acquisition, raw preservation, and provider-faithful lifecycle/failure reporting.
+1. A provider/acquisition-class-specific EBF edge performs capability discovery, scope planning,
+   authenticated acquisition, source-observation production, and provider-faithful lifecycle/failure reporting.
 2. A small provider-neutral acquisition envelope carries source binding, raw locator/hash,
    capability/version snapshot, checkpoint, gaps, and copy/deletion posture without claiming a
    universal transcript schema.
-3. SIP builds a pinned, rebuildable normalized projection and exact derivation lineage. HKA/MEM/GOV
+3. When separately authorized, PDM persists quarantine/raw observations, receipts, and committed
+   checkpoints only through governed `StorePort` bindings; neither EBF nor SIP owns a private store.
+4. SIP builds a pinned, rebuildable normalized projection and exact derivation lineage. HKA/MEM/GOV
    remain human-authorized destinations, never adapter outputs.
 
 For sequencing, use synthetic human-selected fixtures first; characterize official exports only
@@ -269,7 +275,7 @@ provider fixtures. All committed fixtures must be synthetic.
 | Source/scope | correct and wrong account/workspace; bounded time/item range; over-broad archive; explicit cancellation; no credential leakage |
 | Shape/capability | known and unknown version; text; branches; edits; regenerations; tools; citations; missing/redacted attachments; unknown item type; absent timestamps/IDs |
 | Integrity/safety | path traversal; decompression bomb; malformed encoding/JSON; duplicate entry; active content; secret patterns; hash mismatch |
-| Pagination/checkpoint | empty/single/multiple pages; repeated/looping/expired cursor; insert/update during pagination; crash before/after raw commit; resumable checkpoint |
+| Pagination/checkpoint | empty/single/multiple pages; repeated/looping/expired cursor; insert/update during pagination; crash before/after PDM raw/checkpoint commit; resumable checkpoint; no EBF/SIP private store |
 | Retry/rate limit | timeout, connection failure, 429 with/without retry hint, 5xx, auth/scope/tenant failure, cancellation during backoff, bounded retry exhaustion |
 | Identity/dedup | same bytes/new acquisition; same native ID/changed version; missing native ID; content collision fixture; semantically similar but distinct records |
 | Partial failure | one bad item among valid items; lost attachment; truncated stream; unsupported field; status/count/gap receipt; no false completeness |
@@ -278,7 +284,8 @@ provider fixtures. All committed fixtures must be synthetic.
 | Authority | provider roles/model output stay source evidence; no HKA/MEM/GOV write; transcript instructions cannot invoke tools or widen scope |
 
 Minimum go evidence for a later implementation proposal: deterministic fixture results; zero silent
-loss; explicit unsupported/gap states; raw replay without provider access; safe retry/checkpoint
+loss; explicit unsupported/gap states; raw replay through an authorized PDM-backed locator without
+provider access; safe retry/checkpoint
 behavior; no secrets/content in logs; verified synthetic deletion cascade; and human review of
 authority boundaries. Any false completeness, cross-tenant access, ambiguous write retry, content
 leak, or authority escalation is a stop condition.
@@ -365,6 +372,7 @@ specific available seams and failure/lifecycle facts, not Yggdrasil authority or
 - `docs/research/AI_CONVERSATION_INTELLIGENCE_KNOWLEDGE_TAXONOMY.md` — candidate functions remain independent of authority and provenance axes.
 - `docs/research/AI_CONVERSATION_INTELLIGENCE_PRIVACY_SECURITY_AND_DATA_OWNERSHIP.md` — explicit selection, local-first staging, minimization, copy/deletion graph, and external-processing gates.
 - `docs/boundaries/EBF.md` and `docs/boundaries/SIP.md` — provider/source binding at the edge and provenance-preserving normalization.
+- `docs/boundaries/PDM.md` and `docs/contracts/STORE_PORT.md` — storage mechanics, quarantine/raw/checkpoint persistence, and store resolution stay behind PDM-owned ports without defining meaning or authority.
 - `docs/boundaries/HKA.md`, `docs/boundaries/MEM.md`, and `docs/boundaries/GOV.md` — human knowledge, memory, and governance authority remain owner-controlled.
 
 ## Non-claims
