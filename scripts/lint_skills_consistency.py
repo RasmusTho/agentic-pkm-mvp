@@ -225,6 +225,28 @@ def check_retired_phrases(skills_root: Path) -> list[str]:
     return errors
 
 
+def check_feature_breakdown_docs_index(skills_root: Path) -> list[str]:
+    """Check 7: feature-breakdown must keep its DOCS_INDEX registration rule.
+
+    Regression guard for #3559 (from the PR #3154 / #3167 / #3193 miss): when a
+    breakdown creates a `docs/<CAPABILITY>/` specification directory it must
+    register it in `docs/DOCS_INDEX.md`. Anchoring on the stable path token
+    keeps this non-brittle — it survives rewording but fails if the instruction
+    is dropped.
+    """
+    errors: list[str] = []
+    skill = skills_root / "feature-breakdown" / "SKILL.md"
+    if not skill.is_file():
+        errors.append("feature-breakdown/SKILL.md: missing")
+        return errors
+    if "docs/DOCS_INDEX.md" not in skill.read_text(encoding="utf-8"):
+        errors.append(
+            "feature-breakdown/SKILL.md: missing the DOCS_INDEX registration "
+            "instruction (must reference 'docs/DOCS_INDEX.md'; see #3559)"
+        )
+    return errors
+
+
 def run_lint(repo_root: Path) -> list[str]:
     skills_root = repo_root / ".codex" / "skills"
     if not skills_root.is_dir():
@@ -235,6 +257,7 @@ def run_lint(repo_root: Path) -> list[str]:
     errors += check_readme_routing_complete(skills_root)
     errors += check_label_taxonomy(skills_root)
     errors += check_retired_phrases(skills_root)
+    errors += check_feature_breakdown_docs_index(skills_root)
     return errors
 
 
