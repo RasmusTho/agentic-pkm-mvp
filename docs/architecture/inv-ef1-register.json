@@ -1878,6 +1878,20 @@
       "issue": "#2892"
     },
     {
+      "artifact": "docker-compose.prod.yml",
+      "category": "iii",
+      "why_load_bearing": "Production Compose documents the operator-bound host capacity constraint needed to avoid an unsafe Ollama topology.",
+      "disposition": "stay",
+      "issue": "#3462"
+    },
+    {
+      "artifact": "docs/ENVIRONMENTS.md",
+      "category": "iii",
+      "why_load_bearing": "The production topology runbook documents the operator-bound Mac mini capacity constraint needed for a safe redeploy.",
+      "disposition": "stay",
+      "issue": "#3462"
+    },
+    {
       "artifact": "vault/_system/events/ingest.log.jsonl",
       "category": "ii",
       "why_load_bearing": "Existing repository artifact retains an operator-bound reference pending its scoped migration review.",
