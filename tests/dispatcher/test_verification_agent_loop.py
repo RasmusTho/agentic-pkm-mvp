@@ -9,20 +9,21 @@ from tests.dispatcher.verification_helpers import ledger, request
 def test_pr_wide_two_plus_two_budget_and_independent_rereview(tmp_path) -> None:
     state = ledger(tmp_path)
     run = state.ingest(request())
-    loop = VerificationAgentLoop(state, run.run_id)
+    loop = VerificationAgentLoop(state, run.run_id, strongest_capability="sol")
     context = {"head": run.head_sha}
-    loop.repair(session_id="fix-1", capability="terra", reasoning_effort="high", context=context, outcome="fixed")
+    loop.repair(finding_id="F1", session_id="fix-1", capability="terra", reasoning_effort="high", context=context, outcome="fixed")
     with pytest.raises(ValueError):
         loop.review(session_id="fix-1", capability="terra", reasoning_effort="high", context=context, outcome="clean")
     loop.review(session_id="review-1", capability="terra", reasoning_effort="high", context=context, outcome="blocking")
-    loop.repair(session_id="fix-2", capability="terra", reasoning_effort="high", context=context, outcome="fixed")
+    loop.repair(finding_id="F2", session_id="fix-2", capability="terra", reasoning_effort="high", context=context, outcome="fixed")
     with pytest.raises(ValueError):
-        loop.repair(session_id="fix-3", capability="terra", reasoning_effort="high", context=context, outcome="fixed")
-    loop.repair(session_id="fix-3", capability="sol", reasoning_effort="xhigh", context=context, outcome="fixed", strongest=True)
-    loop.review(session_id="review-2", capability="sol", reasoning_effort="xhigh", context=context, outcome="blocking")
-    loop.repair(session_id="fix-4", capability="sol", reasoning_effort="xhigh", context=context, outcome="fixed", strongest=True)
+        loop.repair(finding_id="F3", session_id="fix-3", capability="terra", reasoning_effort="high", context=context, outcome="fixed")
+    loop.review(session_id="review-2", capability="terra", reasoning_effort="high", context=context, outcome="blocking")
+    loop.repair(finding_id="F3", session_id="fix-3", capability="sol", reasoning_effort="xhigh", context=context, outcome="fixed", strongest=True)
+    loop.review(session_id="review-3", capability="sol", reasoning_effort="xhigh", context=context, outcome="blocking")
+    loop.repair(finding_id="F4", session_id="fix-4", capability="sol", reasoning_effort="xhigh", context=context, outcome="fixed", strongest=True)
     with pytest.raises(ValueError):
-        loop.repair(session_id="fix-5", capability="sol", reasoning_effort="xhigh", context=context, outcome="fixed", strongest=True)
+        loop.repair(finding_id="F5", session_id="fix-5", capability="sol", reasoning_effort="xhigh", context=context, outcome="fixed", strongest=True)
 
 
 def test_terminal_stop_routes_one_deduplicated_owner_decision(tmp_path) -> None:
@@ -41,7 +42,7 @@ def test_coordinator_resumes_but_reviewers_start_fresh(tmp_path) -> None:
     run = state.ingest(request())
     loop = VerificationAgentLoop(state, run.run_id)
     context = {"head": run.head_sha}
-    loop.repair(session_id="coordinator", capability="terra", reasoning_effort="high", context=context, outcome="fixed")
+    loop.repair(finding_id="F1", session_id="coordinator", capability="terra", reasoning_effort="high", context=context, outcome="fixed")
     with pytest.raises(ValueError):
         loop.review(session_id="coordinator", capability="terra", reasoning_effort="high", context=context, outcome="clean")
     assert loop.review(session_id="fresh-review", capability="terra", reasoning_effort="high", context=context, outcome="clean") == 1

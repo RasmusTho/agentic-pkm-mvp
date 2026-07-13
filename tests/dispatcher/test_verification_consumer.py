@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import io
 import json
+from pathlib import Path
 import zipfile
 
 import pytest
@@ -12,6 +13,7 @@ from app.dispatcher.verification_consumer import (
     CodexChatGPTAuthPreflight,
     CodexExecLauncher,
     GhCliVerificationSource,
+    LaunchConfig,
     VerificationConsumer,
 )
 from tests.dispatcher.verification_helpers import HEAD, ledger, request
@@ -35,17 +37,23 @@ class Auth:
 
 
 class Launcher:
+    config = LaunchConfig("verification_closer", "gpt-5.6-terra", "high", "workspace-write", "instructions")
     def __init__(self): self.calls = []
-    def launch(self, context_pack, *, resume_session_id=None):
+    def launch(self, context_pack, *, resume_session_id=None, on_thread_started=None, on_heartbeat=None):
         self.calls.append((context_pack, resume_session_id))
-        return resume_session_id or "thread-new", {"type": "turn.completed"}
+        session = resume_session_id or "thread-new"
+        if on_thread_started: on_thread_started(session)
+        if on_heartbeat: on_heartbeat()
+        return session, {"verdict": "needs_human", "head_sha": HEAD, "summary": "test", "receipt_ids": []}
 
 
 class RateLimitedLauncher(Launcher):
-    def launch(self, context_pack, *, resume_session_id=None):
+    def launch(self, context_pack, *, resume_session_id=None, on_thread_started=None, on_heartbeat=None):
         self.calls.append((context_pack, resume_session_id))
-        return resume_session_id or "thread-rate", {
-            "type": "error", "message": "rate limit exhausted", "retry_after": "1h"
+        session = resume_session_id or "thread-rate"
+        if on_thread_started: on_thread_started(session)
+        return session, {
+            "verdict": "retry", "head_sha": HEAD, "summary": "rate limit exhausted", "receipt_ids": [], "retry_after": "1h"
         }
 
 
@@ -101,8 +109,8 @@ def test_gh_source_fetches_bounded_artifact_and_live_truth_without_shell(tmp_pat
 def test_live_truth_gate_rejects_ineligible_requests(tmp_path, pr, checks, reason) -> None:
     launcher = Launcher()
     result = VerificationConsumer(ledger(tmp_path), Truth(pr, checks), Auth(), launcher, "host").consume(request())
-    assert result.status == "superseded"
-    assert result.stop_reason == reason
+    assert result.status == ("backoff" if reason == "missing_checks" else "superseded")
+    assert result.stop_reason == (None if reason == "missing_checks" else reason)
     assert launcher.calls == []
 
 
@@ -111,7 +119,7 @@ def test_eligible_request_invokes_registered_verification_closer_with_minimal_co
     result = VerificationConsumer(
         ledger(tmp_path), Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
     ).consume(request())
-    assert result.status == "running"
+    assert result.status == "needs_human"
     pack, resumed = launcher.calls[0]
     assert resumed is None
     assert pack["agent_adapter"] == ".codex/agents/verification-closer.toml"
@@ -124,7 +132,7 @@ def test_codex_launcher_uses_explicit_noninteractive_flags_and_no_api_env(tmp_pa
 
     class Result:
         returncode = 0
-        stdout = '{"type":"thread.started","thread_id":"thread-1"}\n{"type":"turn.completed"}\n'
+        stdout = '{"type":"thread.started","thread_id":"thread-1"}\n{"type":"item.completed","item":{"type":"agent_message","text":"{\\"verdict\\":\\"needs_human\\",\\"head_sha\\":\\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\",\\"summary\\":\\"test\\",\\"receipt_ids\\":[]}"}}\n'
 
     def runner(command, **kwargs):
         calls.append((command, kwargs))
@@ -134,19 +142,17 @@ def test_codex_launcher_uses_explicit_noninteractive_flags_and_no_api_env(tmp_pa
     monkeypatch.setenv("CODEX_API_KEY", "must-not-pass")
     schema = tmp_path / "receipt.schema.json"
     schema.write_text("{}", encoding="utf-8")
-    launcher = CodexExecLauncher(tmp_path, schema, tmp_path / "context.json", runner=runner)
+    launcher = CodexExecLauncher(tmp_path, schema, tmp_path / "context.json", adapter_path=Path(__file__).resolve().parents[2] / ".codex/agents/verification-closer.toml", runner=runner)
     session, _ = launcher.launch({"head_sha": HEAD})
     command, kwargs = calls[0]
     assert session == "thread-1"
     assert command[:2] == ["codex", "exec"]
-    assert ["--json", "--sandbox", "workspace-write", "--output-schema"] == [
-        command[2], command[3], command[4], command[5]
-    ]
+    assert command[2:5] == ["--json", "--sandbox", "workspace-write"]
     assert "OPENAI_API_KEY" not in kwargs["env"]
     assert "CODEX_API_KEY" not in kwargs["env"]
     resumed = launcher.command("thread-1")
-    assert resumed[:7] == command[:7]
-    assert resumed[7:9] == ["resume", "thread-1"]
+    assert resumed[:11] == command[:11]
+    assert "resume" in resumed and resumed[resumed.index("resume") + 1] == "thread-1"
 
 
 def test_auth_preflight_requires_chatgpt_keyring_and_login_status(tmp_path) -> None:
@@ -171,12 +177,13 @@ def test_auth_preflight_requires_chatgpt_keyring_and_login_status(tmp_path) -> N
 
 def test_restart_recovers_without_duplicate_agent_or_mutation(tmp_path) -> None:
     launcher = Launcher()
-    consumer = VerificationConsumer(ledger(tmp_path), Truth(eligible_pr(), GREEN), Auth(), launcher, "host")
-    running = consumer.consume(request())
+    state = ledger(tmp_path)
+    consumer = VerificationConsumer(state, Truth(eligible_pr(), GREEN), Auth(), launcher, "host")
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "original")
+    running = state.start(run.run_id, "original", claimed.lease_id, "thread-new", {"head_sha": HEAD})
     assert consumer.recover(running.run_id).run_id == running.run_id
-    assert launcher.calls[-1][1] == "thread-new"
-    assert consumer.consume(request()).run_id == running.run_id
-    assert len(launcher.calls) == 2
+    assert launcher.calls == []
 
     with consumer.ledger.store._connect() as conn:
         conn.execute(
@@ -185,8 +192,8 @@ def test_restart_recovers_without_duplicate_agent_or_mutation(tmp_path) -> None:
             (running.run_id,),
         )
         conn.commit()
-    resumed = consumer.consume(request())
-    assert resumed.status == "running"
+    resumed = consumer.recover(running.run_id)
+    assert resumed.status == "needs_human"
     assert launcher.calls[-1][1] == "thread-new"
 
 
