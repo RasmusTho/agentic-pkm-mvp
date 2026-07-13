@@ -78,10 +78,10 @@ def test_rewritten_write_requires_expected_version_at_filesystem_seam(tmp_path: 
 def test_filesystem_write_receipt_carries_writer_provenance(tmp_path: Path) -> None:
     adapter = FsVaultAdapter(tmp_path)
     locator = NoteLocator(vault="Vault", path="Notes/provenance.md")
-    receipt = adapter.write_note(locator, "body", writer_identity="bifrost-phone")
+    receipt = adapter.write_note(locator, "body", writer_identity="mobile-runtime")
     append_receipt = adapter.append_note(locator, "\nappend")
 
-    assert receipt.writer_identity == "bifrost-phone"
+    assert receipt.writer_identity == "mobile-runtime"
     assert append_receipt.writer_identity
     assert datetime.fromisoformat(receipt.written_at or "").tzinfo is UTC
     assert datetime.fromisoformat(append_receipt.written_at or "").tzinfo is UTC
