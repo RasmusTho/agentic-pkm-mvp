@@ -20,6 +20,7 @@ _BOUNDARY_RE = re.compile(r"\b(HIX|WSP|HKA|SIP|GOV|EBF|PDM|DRI|RCA|MEM|CAO|EXE|S
 _PARENT_RE = re.compile(r"^parent_capability:\s*(.+?)\s*$", re.MULTILINE)
 _LINKER_BASIS_PREFIXES = (
     "matrix:",
+    "matrix-test-source:",
     "spec-directory:",
     "spec-source:",
     "adr-reference:",
@@ -58,6 +59,76 @@ def _seed_path(capability: CkmCapability) -> str | None:
 def _contains_phrase(text: str, phrase: str, *, case_sensitive: bool = False) -> bool:
     flags = 0 if case_sensitive else re.IGNORECASE
     return bool(re.search(rf"(?<![\w-]){re.escape(phrase)}(?![\w-])", text, flags))
+
+
+def _name_selectors(
+    text: str,
+    capabilities: list[CkmCapability],
+) -> set[str]:
+    """Return capability ids explicitly named in *text* without substring bleed.
+
+    Longer capability names reserve their matching spans first, so ``Retrieval``
+    is not selected merely because the text says ``Retrieval & Context
+    Assembly``. A separate occurrence of ``Retrieval`` still selects the leaf.
+    """
+    occupied: list[tuple[int, int]] = []
+    selected: set[str] = set()
+    for capability in sorted(capabilities, key=lambda item: len(item.name), reverse=True):
+        matches = list(
+            re.finditer(
+                rf"(?<![\w-]){re.escape(capability.name)}(?![\w-])",
+                text,
+                re.IGNORECASE,
+            )
+        )
+        unclaimed = [
+            match for match in matches
+            if not any(
+                start <= match.start() and match.end() <= end
+                for start, end in occupied
+            )
+        ]
+        if not unclaimed:
+            continue
+        selected.add(capability.id)
+        occupied.extend((match.start(), match.end()) for match in unclaimed)
+    return selected
+
+
+def _artifact_source_text(root: Path, artifact: CkmArtifact) -> str:
+    path = root / artifact.source_ref
+    if path.is_file():
+        try:
+            return path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return ""
+    provenance = _provenance(artifact)
+    return "\n".join(
+        str(provenance.get(key, "")) for key in ("title", "payload_summary")
+    )
+
+
+def _matrix_selectors(
+    root: Path,
+    line: str,
+    artifact: CkmArtifact,
+    candidates: list[CkmCapability],
+) -> dict[str, str | None]:
+    """Resolve a boundary candidate pool to source-backed capability selectors."""
+    if len(candidates) == 1:
+        return {candidates[0].id: None}
+    row_names = _name_selectors(line, candidates)
+    source_names = _name_selectors(_artifact_source_text(root, artifact), candidates)
+    selectors: dict[str, str | None] = {}
+    for capability in candidates:
+        seed_path = _seed_path(capability)
+        if seed_path == artifact.source_ref:
+            selectors[capability.id] = f"seed-source:{seed_path}"
+        elif capability.id in row_names:
+            selectors[capability.id] = f"row-name:{capability.name}"
+        elif capability.id in source_names:
+            selectors[capability.id] = f"source-name:{capability.name}"
+    return selectors
 
 
 def _adr_disambiguator(
@@ -168,11 +239,7 @@ def _matrix_links(
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not line.startswith("|") or not re.match(r"^\|\s*\d+\s*\|", line):
             continue
-        row_capabilities = [
-            capability
-            for key in sorted(set(_BOUNDARY_RE.findall(line)))
-            for capability in boundaries.get(key, [])
-        ]
+        row_boundaries = sorted(set(_BOUNDARY_RE.findall(line)))
         refs = {match.replace("../", "") for match in _PATH_RE.findall(line)}
         for target in _LINK_RE.findall(line):
             normalized = posixpath.normpath(posixpath.join("docs/architecture", target))
@@ -186,15 +253,43 @@ def _matrix_links(
             artifact = artifacts.get(ref)
             if artifact is None:
                 continue
-            for capability in row_capabilities:
+            selected: dict[str, tuple[CkmCapability, str | None]] = {}
+            for boundary in row_boundaries:
+                candidates = boundaries.get(boundary, [])
+                selectors = _matrix_selectors(root, line, artifact, candidates)
+                for capability in candidates:
+                    if capability.id in selectors:
+                        selected[capability.id] = (capability, selectors[capability.id])
+            for capability, selector in selected.values():
+                detail = f"row:{line_number}|citation:{ref}"
+                if selector is not None:
+                    detail = f"{detail}|selector:{selector}"
                 changed += _emit(
                     store,
                     artifact,
                     capability,
                     rule="matrix",
-                    detail=f"row:{line_number}",
+                    detail=detail,
                     desired_edges=desired_edges,
                 )
+                if artifact.artifact_kind != "test":
+                    continue
+                for module in sorted(_imported_modules(root / artifact.source_ref)):
+                    if not module.startswith("app."):
+                        continue
+                    source_ref = module.replace(".", "/") + ".py"
+                    source = artifacts.get(source_ref)
+                    if source is None:
+                        continue
+                    changed += _emit(
+                        store,
+                        source,
+                        capability,
+                        rule="matrix-test-source",
+                        detail=detail,
+                        desired_edges=desired_edges,
+                        maturity_dimension="functional_completeness",
+                    )
     return changed
 
 

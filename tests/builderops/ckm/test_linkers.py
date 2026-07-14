@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 import json
-import posixpath
 import re
 from pathlib import Path
 
 from click.testing import CliRunner
 
 from app.builderops.cli import builderops
-from app.builderops.ckm.ingest_repo import iter_docs, iter_schemas, iter_tests
+from app.builderops.ckm.ingest_repo import iter_docs, iter_schemas, iter_source, iter_tests
 from app.builderops.ckm.linkers import link_deterministic
 from app.builderops.ckm.seed import seed_capabilities
 from app.builderops.ckm.store import CkmStore
@@ -34,10 +33,13 @@ def _ingest_docs(store: CkmStore) -> None:
         )
 
 
-def test_matrix_rows_become_edges_on_live_matrix(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+def _ingest_matrix_inputs(store: CkmStore) -> None:
     _ingest_docs(store)
-    for artifact in (*iter_tests(REPO_ROOT), *iter_schemas(REPO_ROOT)):
+    for artifact in (
+        *iter_tests(REPO_ROOT),
+        *iter_source(REPO_ROOT),
+        *iter_schemas(REPO_ROOT),
+    ):
         store.upsert_artifact(
             source_ref=artifact.natural_key,
             artifact_kind=artifact.artifact_kind,
@@ -45,8 +47,9 @@ def test_matrix_rows_become_edges_on_live_matrix(tmp_path: Path) -> None:
             watermark=artifact.source_watermark,
             provenance=artifact.provenance,
         )
-    matrix_path = REPO_ROOT / "docs/architecture/traceability-matrix.md"
-    matrix_lines = matrix_path.read_text(encoding="utf-8").splitlines()
+    matrix_lines = (
+        REPO_ROOT / "docs/architecture/traceability-matrix.md"
+    ).read_text(encoding="utf-8").splitlines()
     issue_numbers = {
         number
         for line in matrix_lines
@@ -59,8 +62,13 @@ def test_matrix_rows_become_edges_on_live_matrix(tmp_path: Path) -> None:
             artifact_kind="issue",
             source="fixture",
             watermark="one",
-            provenance=json.dumps({"references": []}),
+            provenance=json.dumps({"title": f"Issue {number}", "references": []}),
         )
+
+
+def test_matrix_rows_become_edges_on_live_matrix(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _ingest_matrix_inputs(store)
     result = link_deterministic(store, REPO_ROOT)
     matrix_edges = [
         edge for edge in store.list_evidence_edges()
@@ -72,45 +80,93 @@ def test_matrix_rows_become_edges_on_live_matrix(tmp_path: Path) -> None:
     assert {
         capability_by_id[edge.capability_id].boundary_ref for edge in matrix_edges
     } >= {"RCA", "GOV", "SIP"}
-    rca_ids = {
-        capability.id
-        for capability in capability_by_id.values()
-        if capability.boundary_ref == "RCA"
-    }
-    assert rca_ids <= {edge.capability_id for edge in matrix_edges}
     artifact_by_id = {item.id: item for item in store.list_artifacts()}
     assert any(artifact_by_id[edge.artifact_id].artifact_kind == "adr" for edge in matrix_edges)
-    edge_keys = {
-        (artifact_by_id[edge.artifact_id].source_ref, edge.capability_id, edge.basis)
-        for edge in matrix_edges
+    assert any(edge.basis.startswith("matrix:row:43|") for edge in matrix_edges)
+
+
+def test_live_retrieval_has_capability_specific_functional_evidence(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    _ingest_matrix_inputs(store)
+
+    link_deterministic(store, REPO_ROOT)
+
+    capabilities = {item.id: item for item in store.list_capabilities()}
+    functional_edges = [
+        edge for edge in store.list_evidence_edges()
+        if edge.maturity_dimension == "functional_completeness"
+        and edge.basis.startswith(("matrix:", "matrix-test-source:"))
+    ]
+    retrieval = next(item for item in capabilities.values() if item.name == "Retrieval")
+    context = next(item for item in capabilities.values() if item.name == "Context building")
+
+    retrieval_edges = [
+        edge for edge in functional_edges if edge.capability_id == retrieval.id
+    ]
+    context_edges = [
+        edge for edge in functional_edges if edge.capability_id == context.id
+    ]
+    assert retrieval_edges
+    assert len(retrieval_edges) > len(context_edges)
+    assert {edge.artifact_id for edge in retrieval_edges} != {
+        edge.artifact_id for edge in context_edges
     }
-    artifacts = {item.source_ref for item in artifact_by_id.values()}
-    capabilities_by_boundary: dict[str, set[str]] = {}
-    for capability in capability_by_id.values():
+
+
+def test_shared_boundary_evidence_is_capability_specific(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _ingest_matrix_inputs(store)
+
+    link_deterministic(store, REPO_ROOT)
+
+    capabilities = {item.id: item for item in store.list_capabilities()}
+    artifacts = {item.id: item for item in store.list_artifacts()}
+    artifacts_by_ref = {item.source_ref: item for item in artifacts.values()}
+    matrix_lines = (
+        REPO_ROOT / "docs/architecture/traceability-matrix.md"
+    ).read_text(encoding="utf-8").splitlines()
+    boundary_counts: dict[str, int] = {}
+    for capability in capabilities.values():
         if capability.boundary_ref:
-            capabilities_by_boundary.setdefault(capability.boundary_ref, set()).add(capability.id)
-    for line_number, line in enumerate(matrix_lines, 1):
-        if not re.match(r"^\|\s*\d+\s*\|", line):
-            continue
-        boundaries = set(re.findall(r"\b(?:HIX|WSP|HKA|SIP|GOV|EBF|PDM|DRI|RCA|MEM|CAO|EXE|SFC|OEF|CES)\b", line))
-        references = {
-            match.replace("../", "")
-            for match in re.findall(
-                r"(?:\.\./)*(?:app|docs|tests|schemas)/[A-Za-z0-9_./-]+(?:\.md|\.py|\.json)?",
-                line,
+            boundary_counts[capability.boundary_ref] = (
+                boundary_counts.get(capability.boundary_ref, 0) + 1
             )
-        }
-        references.update(
-            posixpath.normpath(posixpath.join("docs/architecture", target))
-            for target in re.findall(r"\]\(([^)#]+(?:\.md|\.py|\.json))\)", line)
+    matrix_edges = [
+        edge for edge in store.list_evidence_edges()
+        if edge.basis.startswith(("matrix:", "matrix-test-source:"))
+        and (
+            boundary := capabilities[edge.capability_id].boundary_ref
+        ) is not None
+        and boundary_counts[boundary] > 1
+    ]
+    assert matrix_edges
+
+    for edge in matrix_edges:
+        basis = edge.basis
+        assert "|selector:" in basis
+        row_number = int(re.search(r"(?:^|:)row:(\d+)", basis).group(1))
+        citation_ref = basis.split("|citation:", 1)[1].split("|", 1)[0]
+        selector_kind, selector_value = basis.split("|selector:", 1)[1].split(":", 1)
+        row = matrix_lines[row_number - 1]
+        citation = artifacts_by_ref[citation_ref]
+        artifact_path = REPO_ROOT / citation.source_ref
+        provenance = json.loads(citation.provenance)
+        source_text = (
+            artifact_path.read_text(encoding="utf-8")
+            if artifact_path.is_file()
+            else "\n".join(
+                str(provenance.get(key, "")) for key in ("title", "payload_summary")
+            )
         )
-        references.update(f"github:issue:{number}" for number in re.findall(r"(?<![\w/])#(\d+)\b", line))
-        for number in re.findall(r"\bADR-(\d{4})\b", line):
-            references.update(ref for ref in artifacts if ref.startswith(f"docs/adr/ADR-{number}"))
-        for reference in references & artifacts:
-            for boundary in boundaries:
-                for capability_id in capabilities_by_boundary.get(boundary, set()):
-                    assert (reference, capability_id, f"matrix:row:{line_number}") in edge_keys
+        assert selector_kind in {"row-name", "source-name", "seed-source"}
+        if selector_kind == "row-name":
+            assert re.search(re.escape(selector_value), row, re.IGNORECASE)
+        elif selector_kind == "source-name":
+            assert re.search(re.escape(selector_value), source_text, re.IGNORECASE)
+        else:
+            assert citation.source_ref == selector_value
 
 
 def test_edges_carry_method_lifecycle_basis(tmp_path: Path) -> None:
