@@ -535,6 +535,12 @@ def ckm_gaps(
         f"{result.uncovered_boundaries} uncovered-boundary, "
         f"{result.claim_exceeds_evidence} claim-exceeds-evidence"
     )
+    if result.stale_assessments:
+        click.echo(
+            f"warning: {result.stale_assessments} assessment(s) are stale relative to the "
+            "global evidence watermark but remain current for their unchanged evidence fingerprint",
+            err=True,
+        )
 
 
 @builderops.group("inquiry", help="Persist and inspect pre-ticket model inquiry artifacts.")

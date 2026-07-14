@@ -7,7 +7,7 @@ import pytest
 from click.testing import CliRunner
 
 from app.builderops.cli import builderops
-from app.builderops.ckm.assess import assessment_fingerprint
+from app.builderops.ckm.assess import assess_capabilities, assessment_fingerprint
 from app.builderops.ckm.gaps import GapDetectionConfig, detect_gaps
 from app.builderops.ckm.models import MATURITY_DIMENSIONS, CkmValidationError
 from app.builderops.ckm.store import CkmStore
@@ -455,3 +455,104 @@ def test_stale_assessment_leaves_existing_findings_untouched(store: CkmStore) ->
         detect_gaps(store)
 
     assert [finding.to_dict() for finding in store.list_findings()] == before
+
+
+@pytest.mark.parametrize(
+    "state",
+    (
+        "not live",
+        "not shipped",
+        "future baseline target",
+        "does not claim shipped runtime behavior",
+    ),
+)
+def test_negative_or_future_state_does_not_claim_delivery(
+    store: CkmStore,
+    state: str,
+) -> None:
+    capability = _capability(store, "Explicit non-claim")
+    artifact, edge = _edge(
+        store,
+        capability.id,
+        source_ref="docs/NON_CLAIM.md",
+        artifact_kind="document",
+        evidence_kind="doc",
+        dimension="documentation_quality",
+        payload_summary=f"Explicit non-claim — State: {state}",
+    )
+    citations = {dimension: [] for dimension in MATURITY_DIMENSIONS}
+    citations["documentation_quality"] = [_citation(artifact, edge)]
+    _assessment(
+        store,
+        capability.id,
+        _score_map(0.1),
+        citations,
+        asserted_at="2026-07-14T11:04:00Z",
+    )
+
+    result = detect_gaps(store)
+
+    assert result.claim_exceeds_evidence == 0
+
+
+def test_open_pr_does_not_satisfy_missing_functional_evidence(store: CkmStore) -> None:
+    capability = _capability(store, "Open PR claim")
+    claim_artifact, claim_edge = _edge(
+        store,
+        capability.id,
+        source_ref="docs/OPEN_PR_CLAIM.md",
+        artifact_kind="document",
+        evidence_kind="doc",
+        dimension="documentation_quality",
+        payload_summary="Open PR claim — State: delivered",
+    )
+    _edge(
+        store,
+        capability.id,
+        source_ref="github:pull_request:9999",
+        artifact_kind="pull_request",
+        evidence_kind="pull_request",
+        dimension="functional_completeness",
+        payload_summary="Open PR",
+    )
+    citations = {dimension: [] for dimension in MATURITY_DIMENSIONS}
+    citations["documentation_quality"] = [_citation(claim_artifact, claim_edge)]
+    _assessment(
+        store,
+        capability.id,
+        _score_map(0.1, functional_completeness=0.2, test_completeness=0.9),
+        citations,
+        asserted_at="2026-07-14T11:05:00Z",
+    )
+
+    detect_gaps(store)
+    tension = next(finding for finding in store.list_findings() if finding.kind == "missing_evidence")
+    missing_class = next(
+        citation
+        for citation in tension.citations
+        if citation.get("role") == "missing_evidence_class"
+    )
+
+    assert missing_class["observed_edge_count"] == 0
+
+
+def test_watermark_only_lag_is_recoverable_and_explicit(store: CkmStore) -> None:
+    _three_family_fixture(store)
+    first = detect_gaps(store)
+    store.set_watermark("fixture", "two")
+
+    assessment_run = assess_capabilities(store)
+    second = detect_gaps(store)
+
+    assert assessment_run.assessed == 0
+    assert assessment_run.skipped == 3
+    assert first.findings == second.findings == 3
+    assert second.stale_assessments == 3
+    assert all(
+        any(
+            citation.get("role") == "assessment"
+            and citation.get("stale_relative_to_global_evidence") is True
+            for citation in finding.citations
+        )
+        for finding in store.list_findings()
+    )

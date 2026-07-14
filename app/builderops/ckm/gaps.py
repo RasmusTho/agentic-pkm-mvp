@@ -21,7 +21,9 @@ from app.builderops.ckm.store import CkmStore
 
 _DELIVERED_STATE = re.compile(r"\b(delivered|implemented|shipped|live|baseline)\b", re.I)
 _NON_CURRENT_STATE = re.compile(
-    r"\b(not implemented|not yet|planned|target[- ]state|draft|candidate|historical|superseded|advisory)\b",
+    r"\b(?:future|planned|target(?:[- ]state)?|draft|candidate|historical|superseded|advisory|not yet|unimplemented)\b"
+    r"|\b(?:does\s+not|doesn't|not|no|never|without)\s+(?:\w+\s+){0,3}"
+    r"(?:delivered|implemented|shipped|live|baseline)\b",
     re.I,
 )
 
@@ -48,6 +50,7 @@ class GapDetectionResult:
     starved_dimensions: int
     uncovered_boundaries: int
     claim_exceeds_evidence: int
+    stale_assessments: int = 0
 
 
 def _artifact_payload(artifact: CkmArtifact) -> Mapping[str, object]:
@@ -122,16 +125,29 @@ def _is_merged_pr(edge: CkmEvidenceEdge, artifact: CkmArtifact) -> bool:
     )
 
 
+def _counts_as_missing_class_evidence(
+    edge: CkmEvidenceEdge,
+    artifact: CkmArtifact,
+    dimension: str,
+) -> bool:
+    if edge.lifecycle != "confirmed" or edge.polarity != "supports":
+        return False
+    if dimension == "functional_completeness":
+        return edge.evidence_kind == "source" or _is_merged_pr(edge, artifact)
+    return edge.evidence_kind in {"benchmark", "ci_result", "coverage", "test"}
+
+
 def _validate_assessment_snapshot(
     store: CkmStore,
     capabilities: Sequence[CkmCapability],
     artifacts: Mapping[str, CkmArtifact],
     edges_by_capability: Mapping[str, list[CkmEvidenceEdge]],
-) -> dict[str, CkmAssessment]:
+) -> tuple[dict[str, CkmAssessment], set[str], dict[str, str]]:
     current_watermarks = store.current_watermark_set()
     if not current_watermarks:
         raise CkmValidationError("cannot detect gaps before ingestion records a watermark")
     latest: dict[str, CkmAssessment] = {}
+    stale_assessments: set[str] = set()
     for capability in capabilities:
         if capability.lifecycle != "confirmed" or _seed_source_ref(capability) is None:
             continue
@@ -141,9 +157,7 @@ def _validate_assessment_snapshot(
                 f"cannot detect gaps before assessing seeded capability: {capability.name}"
             )
         if dict(assessment.watermark_set) != current_watermarks:
-            raise CkmValidationError(
-                f"assessment is stale relative to evidence for capability: {capability.name}"
-            )
+            stale_assessments.add(capability.id)
         current_fingerprint = assessment_fingerprint(
             edges_by_capability.get(capability.id, []), artifacts
         )
@@ -152,7 +166,26 @@ def _validate_assessment_snapshot(
                 f"assessment does not match current evidence for capability: {capability.name}"
             )
         latest[capability.id] = assessment
-    return latest
+    return latest, stale_assessments, current_watermarks
+
+
+def _assessment_citation(
+    assessment: CkmAssessment,
+    *,
+    detector: str,
+    stale: bool,
+    current_watermarks: Mapping[str, str],
+    **details: object,
+) -> dict[str, object]:
+    return {
+        "role": "assessment",
+        "detector": detector,
+        "assessment_id": assessment.id,
+        "assessment_watermark_set": dict(assessment.watermark_set),
+        "current_watermark_set": dict(current_watermarks),
+        "stale_relative_to_global_evidence": stale,
+        **details,
+    }
 
 
 def detect_gaps(
@@ -171,7 +204,7 @@ def detect_gaps(
     edges_by_capability: dict[str, list[CkmEvidenceEdge]] = {}
     for edge in edges:
         edges_by_capability.setdefault(edge.capability_id, []).append(edge)
-    assessments = _validate_assessment_snapshot(
+    assessments, stale_assessments, current_watermarks = _validate_assessment_snapshot(
         store, capabilities, artifacts, edges_by_capability
     )
     findings: dict[tuple[str, str, str], dict[str, Any]] = {}
@@ -208,13 +241,13 @@ def detect_gaps(
             citations = _dedupe_citations(
                 [
                     *evidence,
-                    {
-                        "role": "assessment",
-                        "detector": "starved_dimension",
-                        "assessment_id": assessment.id,
-                        "formula_id": assessment.formula_ids[dimension],
-                        "watermark_set": dict(assessment.watermark_set),
-                    },
+                    _assessment_citation(
+                        assessment,
+                        detector="starved_dimension",
+                        stale=capability.id in stale_assessments,
+                        current_watermarks=current_watermarks,
+                        formula_id=assessment.formula_ids[dimension],
+                    ),
                 ]
             )
             statement = (
@@ -271,13 +304,16 @@ def detect_gaps(
         citations = [_artifact_citation(seed_artifact, role="seed_artifact")]
         if prior is not None:
             citations.extend(prior["citations"])
+        anchor_assessment = assessments[anchor.id]
         citations.append(
-            {
-                "role": "assessment",
-                "detector": "uncovered_boundary",
-                "boundary_ref": boundary_ref,
-                "mapped_capability_ids": sorted(member_ids),
-            }
+            _assessment_citation(
+                anchor_assessment,
+                detector="uncovered_boundary",
+                stale=anchor.id in stale_assessments,
+                current_watermarks=current_watermarks,
+                boundary_ref=boundary_ref,
+                mapped_capability_ids=sorted(member_ids),
+            )
         )
         findings[key] = {
             "kind": "gap",
@@ -322,9 +358,9 @@ def detect_gaps(
         observed = sum(
             1
             for edge in edges_by_capability.get(capability_id, [])
-            if edge.lifecycle == "confirmed"
-            and edge.polarity == "supports"
-            and edge.evidence_kind in evidence_kinds
+            if _counts_as_missing_class_evidence(
+                edge, artifacts[edge.artifact_id], dimension
+            )
         )
         unique_claims = {
             (artifact.id, edge.id): (artifact, edge, claim)
@@ -343,6 +379,15 @@ def detect_gaps(
                 "evidence_kinds": evidence_kinds,
                 "observed_edge_count": observed,
             }
+        )
+        citations.append(
+            _assessment_citation(
+                assessment,
+                detector="claim_exceeds_evidence",
+                stale=capability_id in stale_assessments,
+                current_watermarks=current_watermarks,
+                formula_id=assessment.formula_ids[dimension],
+            )
         )
         source_refs = sorted({artifact.source_ref for artifact, _edge, _claim in claims})
         findings[("missing_evidence", capability_id, dimension)] = {
@@ -371,4 +416,5 @@ def detect_gaps(
         starved_dimensions=detectors.count("starved_dimension"),
         uncovered_boundaries=detectors.count("uncovered_boundary"),
         claim_exceeds_evidence=detectors.count("claim_exceeds_evidence"),
+        stale_assessments=len(stale_assessments),
     )
