@@ -23,6 +23,33 @@ For adjacent operational surfaces:
 
 The `/api/health` response now includes an `authority_spine` key with bounded operator-visible status strings for the runtime governance spine (`write_guard`, `authority_non_upgrade`, `provenance_required_for_mutations`, `read_projection_isolation`). This is a diagnostic surface only — it does not grant or deny authority and is not a semantic authority source. See `docs/HEALTH.md#authority-spine-diagnostic` for field descriptions and the non-authority boundary.
 
+## Settings ingestion state in health API
+
+The `/api/health` response includes a `settings` key reporting whether vault-authored settings
+actually took effect (SETTINGS-01 / audit F1). Fields: `state`, `source` (`vault` | `defaults`),
+`loaded_at`, and `error`. `state` is one of:
+
+- `ok` — vault settings sources compiled and are the effective bundle (`source: vault`).
+- `degraded_last_valid` — a settings edit was invalid; the last-valid bundle is retained and the edit
+  is **not** live. Code defaults are never substituted while a last-valid bundle exists. Does not
+  survive restart.
+- `invalid_sources` — startup found invalid sources with no last-valid bundle to fall back to; the
+  service boots on defaults but says so loudly (distinct from `ok`).
+- `no_vault` — no settings sources selected; the bundle builds from typed defaults with no error and
+  no `./vault` fallback (a truthful state, not degradation).
+
+This is a diagnostic surface only. Tests: `tests/settings/test_ingestion_startup.py`.
+
+The registry watcher publishes each settings-source result through the channel-scoped shared runtime
+artifact volume. The signal is a sibling of `WATCHER_HEARTBEAT_PATH` (normally
+`/app/tmp/settings-reload.json`, or `/app/tmp-test/settings-reload.json` in the test channel); use
+`SETTINGS_RELOAD_SIGNAL_PATH` only for a non-standard topology. API and worker treat that file as an
+invalidation signal and rebuild their own local `runtime/settings` projection from vault markdown on
+the next settings read. Bare local processes use a writable OS-temp fallback. The signal is derived
+runtime state, not settings authority; the vault markdown remains the source of truth. An invalid
+watcher edit propagates the degraded health state without replacing a last-valid bundle in another
+process.
+
 ## Heartbeat locations and freshness
 - Watcher heartbeat default: `tmp/watcher_heartbeat.json` (override with `WATCHER_HEARTBEAT_PATH`).
 - Worker heartbeat default: `tmp/worker_heartbeat.json` (override with `WORKER_HEARTBEAT_PATH`).
