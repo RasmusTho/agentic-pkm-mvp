@@ -470,6 +470,23 @@ def test_projector_does_not_acknowledge_invalid_existing_candidate(tmp_path: Pat
     assert get_cursor(CANDIDATE_CONSUMER_ID) == 0
 
 
+def test_projector_does_not_acknowledge_candidate_with_tampered_provenance(tmp_path: Path) -> None:
+    _publish("obs-tampered", episode_id="ep-tampered", raw_ref="raw-original")
+    vault = _vault(tmp_path / "vault")
+    first = project_pending_candidates(vault_context=vault, write_guard=_allowing_guard())
+    note_path = Path(vault.active_vault_path) / first[0].artifact_path
+    note_path.write_text(
+        note_path.read_text(encoding="utf-8").replace("raw_ref: raw-original", "raw_ref: tampered"),
+        encoding="utf-8",
+    )
+    reset_memory_cursor_store()
+
+    results = project_pending_candidates(vault_context=vault, write_guard=_allowing_guard())
+
+    assert results[0].status == "blocked"
+    assert get_cursor(CANDIDATE_CONSUMER_ID) == 0
+
+
 def test_already_exists_is_idempotent_no_overwrite(tmp_path: Path) -> None:
     """Re-running the same candidate never overwrites an existing note."""
     _publish("obs-idem", content="original")

@@ -468,8 +468,11 @@ def _is_durable_candidate(path: Path, candidate: HeimdalCandidate) -> bool:
     return (
         isinstance(provenance, Mapping)
         and provenance.get("observation_id") == candidate.observation_id
+        and provenance.get("episode_id") == candidate.episode_id
         and provenance.get("derived_from") == candidate.derived_from
         and provenance.get("content_identity") == candidate.content_identity
+        and provenance.get("raw_ref") == candidate.raw_ref
+        and provenance.get("capture_chain") == list(candidate.capture_chain)
     )
 
 
