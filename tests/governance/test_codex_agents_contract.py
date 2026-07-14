@@ -76,3 +76,12 @@ def test_codex_subagent_config_limits_fanout() -> None:
     data = tomllib.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     assert data["agents"]["max_threads"] == 3
     assert data["agents"]["max_depth"] == 2
+
+
+def test_autonomous_runner_prompt_guards_epic_run_state_by_parent() -> None:
+    prompt = (REPO_ROOT / "companion-ui/prompts/codex/deliver-epic-autonomous-runner.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "If a real parent/epic issue is resolved" in prompt
+    assert "never fabricate an issue number just to invoke epic run-state" in prompt

@@ -169,9 +169,11 @@ safe; do not make every worker reload the entire epic history.
    numbers, and linked PRs. Current GitHub and `origin/main` truth wins over prompt assumptions.
 3. Classify the set as Product/Runtime, Builder System, or boundary work before dispatch. For Builder
    or boundary work, include the required D11/D12 transition-debt outcome.
-4. Create an epic run-state v0 record using the exact helper contract in `deliver-issue-set`. Use a
-   stable safe run id. Dry-run and inspect before the first write.
-5. Treat run-state as discardable coordination evidence. Rebuild it from repository/GitHub facts on
+4. If a real parent/epic issue is resolved, create its epic run-state v0 record using the exact
+   helper contract in `deliver-issue-set`. Use a stable safe run id. Dry-run and inspect before the
+   first write. For a project/lane or explicit issue set without a parent, use normal live-GitHub
+   coordination; never fabricate an issue number just to invoke epic run-state.
+5. Treat any parent run-state as discardable coordination evidence. Rebuild it from repository/GitHub facts on
    resume; never use it to overrule issue, PR, CI, merge, or owner-doc truth.
 6. Produce a compact scope ledger: parent/hub, child, dependency, priority, classification, live
    labels/state, linked PR, readiness verdict, owner docs, likely touch surface, and verification target.
@@ -220,7 +222,7 @@ Before every wave:
 - fetch/reconcile `origin/main`;
 - re-read issue state, labels, latest claim/release receipts, linked PRs, and shipped code;
 - discard stale, duplicate, superseded, already-delivered, or newly foreign-claimed work;
-- use `epic-run-state dispatch-plan` when candidate data is available;
+- use `epic-run-state dispatch-plan` when a resolved parent/epic run-state exists and candidate data is available;
 - cap the wave at immediately active isolated worker capacity; and
 - persist only evidence permitted by the run-state contract.
 
