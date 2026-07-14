@@ -408,6 +408,10 @@ def project_pending_candidates(
     this consumer's cursor is independent of A3's quarantine-proving
     consumer, so replay/rewind here never affects the other.
     """
+    # The cursor is a durability acknowledgement: do not begin a batch unless
+    # a selected, existing vault can hold its candidates. This happens before
+    # writes so a restart can replay the complete unread batch safely.
+    _vault_root(vault_context)
     rows = read_observations_for_consumer(consumer_id, limit=limit)
     candidates = fold_observations(rows)
     results = [
@@ -419,15 +423,21 @@ def project_pending_candidates(
         )
         for candidate in candidates
     ]
-    if advance and rows:
+    # A cursor may acknowledge a batch only after every candidate is durable.
+    # Replays are safe because a prior successful write is ``already_exists``
+    # at its deterministic path.
+    if advance and rows and all(result.status in {"written", "already_exists"} for result in results):
         advance_cursor_for_consumer(consumer_id, rows)
     return results
 
 
 def _vault_root(context: VaultContext) -> Path:
-    if not context.active_vault_path:
-        raise CandidateProjectionError("vault_context.active_vault_path is required")
-    return Path(context.active_vault_path).expanduser().resolve()
+    if not context.is_selected:
+        raise CandidateProjectionError("candidate projection requires a selected vault")
+    root = Path(context.active_vault_path).expanduser().resolve()
+    if not root.is_dir():
+        raise CandidateProjectionError("candidate projection requires an existing vault directory")
+    return root
 
 
 def _slug(value: str) -> str:

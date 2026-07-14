@@ -21,16 +21,18 @@ from pathlib import Path
 import pytest
 import yaml
 
+from app.heimdal import candidate_projection
 from app.heimdal.candidate_projection import (
     ARTIFACT_CLASS,
     CANDIDATE_CONSUMER_ID,
     CandidateProjectionError,
+    CandidateWriteResult,
     HeimdalCandidate,
     candidate_note_path,
     fold_observations,
     project_pending_candidates,
 )
-from app.heimdal.cursor_store import reset_memory_cursor_store
+from app.heimdal.cursor_store import get_cursor, reset_memory_cursor_store
 from app.heimdal.observation_log import reset_memory_observation_log
 from app.heimdal.publish import publish_observation
 from app.heimdal.quarantine import FENCE_CLOSE, FENCE_OPEN
@@ -379,14 +381,79 @@ def test_blocked_write_is_loud_and_retryable(tmp_path: Path) -> None:
     results = project_pending_candidates(
         vault_context=vault,
         write_guard=_blocking_guard(),
-        # Do not advance the cursor on a blocked write's caller-driven retry
-        # test -- this call still advances per production default, but the
-        # important assertion is the *result* is loud and item-scoped.
     )
     assert len(results) == 1
     assert results[0].status == "blocked"
     assert results[0].artifact_path is None
     assert results[0].reason
+
+
+def test_cursor_does_not_advance_when_candidate_write_is_blocked(tmp_path: Path) -> None:
+    _publish("obs-blocked-cursor")
+    vault = _vault(tmp_path / "vault")
+
+    blocked = project_pending_candidates(vault_context=vault, write_guard=_blocking_guard())
+
+    assert blocked[0].status == "blocked"
+    assert get_cursor(CANDIDATE_CONSUMER_ID) == 0
+
+    retried = project_pending_candidates(vault_context=vault, write_guard=_allowing_guard())
+    assert retried[0].status == "written"
+    assert get_cursor(CANDIDATE_CONSUMER_ID) == 1
+
+
+def test_projector_replay_is_idempotent_after_partial_write(tmp_path: Path, monkeypatch) -> None:
+    _publish("obs-blocked", episode_id="ep-blocked")
+    _publish("obs-written", episode_id="ep-written")
+    vault = _vault(tmp_path / "vault")
+    original_write = candidate_projection.write_candidate_note
+
+    def block_one_candidate(candidate, **kwargs):
+        if candidate.observation_id == "obs-blocked":
+            return CandidateWriteResult(
+                status="blocked",
+                artifact_path=None,
+                observation_id=candidate.observation_id,
+                reason="test-induced partial write",
+            )
+        return original_write(candidate, **kwargs)
+
+    monkeypatch.setattr(candidate_projection, "write_candidate_note", block_one_candidate)
+    partial = project_pending_candidates(vault_context=vault, write_guard=_allowing_guard())
+
+    assert [result.status for result in partial] == ["blocked", "written"]
+    assert get_cursor(CANDIDATE_CONSUMER_ID) == 0
+
+    monkeypatch.setattr(candidate_projection, "write_candidate_note", original_write)
+    replayed = project_pending_candidates(vault_context=vault, write_guard=_allowing_guard())
+
+    assert [result.status for result in replayed] == ["written", "already_exists"]
+    assert get_cursor(CANDIDATE_CONSUMER_ID) == 2
+
+
+def test_projector_restart_resumes_unpersisted_observation(tmp_path: Path) -> None:
+    _publish("obs-retry-a", episode_id="ep-retry-a")
+    _publish("obs-retry-b", episode_id="ep-retry-b")
+    vault = _vault(tmp_path / "vault")
+
+    blocked = project_pending_candidates(vault_context=vault, write_guard=_blocking_guard())
+    assert [result.status for result in blocked] == ["blocked", "blocked"]
+    assert get_cursor(CANDIDATE_CONSUMER_ID) == 0
+
+    resumed = project_pending_candidates(vault_context=vault, write_guard=_allowing_guard())
+    assert [result.observation_id for result in resumed] == ["obs-retry-a", "obs-retry-b"]
+    assert [result.status for result in resumed] == ["written", "written"]
+    assert get_cursor(CANDIDATE_CONSUMER_ID) == 2
+
+
+def test_projector_preflight_rejects_missing_durable_intake_state() -> None:
+    _publish("obs-missing-vault")
+    missing_vault = VaultContext(status="uninitialized")
+
+    with pytest.raises(CandidateProjectionError, match="selected vault"):
+        project_pending_candidates(vault_context=missing_vault, write_guard=_allowing_guard())
+
+    assert get_cursor(CANDIDATE_CONSUMER_ID) == 0
 
 
 def test_already_exists_is_idempotent_no_overwrite(tmp_path: Path) -> None:
@@ -410,8 +477,8 @@ def test_already_exists_is_idempotent_no_overwrite(tmp_path: Path) -> None:
     assert note_path.stat().st_mtime_ns == original_mtime
 
 
-def test_empty_batch_projects_nothing() -> None:
-    vault_context = VaultContext(status="selected", active_vault_path="/does/not/matter")
+def test_empty_batch_projects_nothing(tmp_path: Path) -> None:
+    vault_context = _vault(tmp_path / "vault")
     results = project_pending_candidates(vault_context=vault_context, write_guard=_allowing_guard())
     assert results == []
 
