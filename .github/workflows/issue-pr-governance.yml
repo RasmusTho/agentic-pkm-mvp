@@ -245,7 +245,7 @@ jobs:
               ".github/ISSUE_TEMPLATE/",
               ".codex/skills/",
               ".codex/agents/",
-              "companion-ui/prompts/codex/",
+              "companion-ui/prompts/codex/deliver-epic-autonomous-runner.md",
               "tests/fixtures/issue_readiness/",
               "tests/fixtures/pr_body_generator/",
             ];

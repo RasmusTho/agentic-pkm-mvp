@@ -85,3 +85,4 @@ def test_autonomous_runner_prompt_guards_epic_run_state_by_parent() -> None:
 
     assert "If a real parent/epic issue is resolved" in prompt
     assert "never fabricate an issue number just to invoke epic run-state" in prompt
+    assert "when a resolved parent/epic exists, update its parent/hub evidence and epic run-state" in prompt

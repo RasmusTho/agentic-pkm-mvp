@@ -288,7 +288,8 @@ does not risk conflicting writes.
 After every merge/closure:
 
 1. fetch and re-read `origin/main`;
-2. update parent/hub evidence and epic run-state;
+2. when a resolved parent/epic exists, update its parent/hub evidence and epic run-state; otherwise
+   retain normal live-GitHub coordination evidence only;
 3. re-evaluate dependencies and ready labels;
 4. determine whether the accepted change made another issue stale, ready, smaller, or unnecessary;
 5. process learning/evaluation candidates to terminal outcomes;

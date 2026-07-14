@@ -143,7 +143,8 @@ def test_pr_body_generator_fixtures_are_governance_lane_allowed() -> None:
 def test_autonomous_runner_prompt_is_governance_lane_allowed() -> None:
     text = _read_workflow()
 
-    assert '"companion-ui/prompts/codex/"' in text
+    assert '"companion-ui/prompts/codex/deliver-epic-autonomous-runner.md"' in text
+    assert '"companion-ui/prompts/codex/"' not in text
 
 
 def test_review_before_ci_gate_is_governance_lane_allowed() -> None:
