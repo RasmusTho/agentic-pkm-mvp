@@ -43,6 +43,7 @@ to "get the capture done anyway."
 | Surface | Why |
 | --- | --- |
 | The capture inbox note (the vault's `inbox.md` or its configured override) | Actively-appended governed target; a rewrite races the governed append and last-write-wins can silently drop a capture. Intake goes through the capture skill's governed call only. |
+| The Sources zone (`<sources_dir_rel>/`, default `Sources/`) — never a direct app-agent write target | The zone and all descendants (`Sources/**` by default) are reserved for Heimdal-side sensor/acquisition writers; they are not an alternate app-agent workspace or capture target. |
 | Companion notes (the vault's `⚙️ System/companions/` tree, and its legacy location) | KnowledgePort-only, system-owned. |
 | System-plane settings/bootstrap notes and other system-owned paths | Runtime-owned; a direct edit forks runtime state. |
 | The `_heimdal` control tree | Bifrost's/the runtime's control seam; app agents have no role there. |
