@@ -1156,12 +1156,14 @@ class VerificationConsumer:
             r"[0-9a-fA-F]{40}", observed_head
         ):
             raise ValueError("verification run is no longer resumable: malformed_pr")
-        checks = self.truth.checks(run.repository, observed_head)
+        if observed_head != run.head_sha:
+            raise ValueError("verification run is no longer resumable: stale_head")
+        checks = self.truth.checks(run.repository, run.head_sha)
         rejection = live_truth_rejection(
             run,
             pr,
             checks,
-            expected_head_sha=observed_head,
+            expected_head_sha=run.head_sha,
         )
         if rejection:
             raise ValueError(f"verification run is no longer resumable: {rejection}")

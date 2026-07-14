@@ -1114,6 +1114,66 @@ def test_restart_recovers_without_duplicate_agent_or_mutation(tmp_path) -> None:
     assert launcher.calls[-1][1] == "thread-new"
 
 
+def test_recover_rejects_live_head_movement_before_resume(tmp_path) -> None:
+    moved_head = "b" * 40
+
+    class MovingTruth:
+        def __init__(self) -> None:
+            self.pull_calls = 0
+            self.check_calls = 0
+
+        def pull_request(self, repository, pr_number):
+            self.pull_calls += 1
+            return eligible_pr(head={"ref": "branch", "sha": moved_head})
+
+        def checks(self, repository, head_sha):
+            self.check_calls += 1
+            raise AssertionError("stale recovery must not fetch replacement-head checks")
+
+    class UnreachedAuth:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def check(self):
+            self.calls += 1
+            raise AssertionError("stale recovery must not run auth preflight")
+
+    state = ledger(tmp_path)
+    launcher = Launcher()
+    truth = MovingTruth()
+    auth = UnreachedAuth()
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "original")
+    running = state.start(
+        run.run_id,
+        "original",
+        claimed.lease_id,
+        "old-session",
+        {"head_sha": HEAD},
+    )
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET lease_expires_at='2000-01-01T00:00:00+00:00' "
+            "WHERE run_id=?",
+            (running.run_id,),
+        )
+        conn.commit()
+
+    consumer = VerificationConsumer(state, truth, auth, launcher, "replacement")
+    with pytest.raises(ValueError, match="no longer resumable: stale_head"):
+        consumer.recover(running.run_id)
+
+    current = state.get(running.run_id)
+    assert current is not None
+    assert current.status == "running"
+    assert current.head_sha == HEAD
+    assert current.coordinator_session_id == "old-session"
+    assert truth.pull_calls == 1
+    assert truth.check_calls == 0
+    assert auth.calls == 0
+    assert launcher.calls == []
+
+
 def test_rate_limit_queues_without_api_fallback_or_duplicate(tmp_path) -> None:
     state = ledger(tmp_path)
     launcher = RateLimitedLauncher()
