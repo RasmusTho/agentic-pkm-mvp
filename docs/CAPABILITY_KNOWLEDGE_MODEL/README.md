@@ -5,7 +5,7 @@ Owner: BuilderOps governance
 Temporal class: operational (active delivery lane)
 Review cadence: event-driven
 Source of truth: mixed (this directory for task shape; ADR-0057 for decisions)
-Last reviewed: 2026-07-07
+Last reviewed: 2026-07-14
 
 # Capability Knowledge Model (CKM / Kvasir) — MVP Specification
 
@@ -29,6 +29,8 @@ The CKM is the Builder System subsystem that continuously constructs and maintai
 | [GAP_AND_MISSING_EVIDENCE_DETECTION.md](GAP_AND_MISSING_EVIDENCE_DETECTION.md) | CKM-08 | Gap findings (starved dimensions, uncovered boundaries) + claim-exceeds-evidence tensions |
 | [CKM_PROJECTIONS_AND_QUERY.md](CKM_PROJECTIONS_AND_QUERY.md) | CKM-09 | BuilderOps Markdown projections + CLI query surface, watermark + self-identification |
 | [DEV_OVERVIEW_HTML_PROJECTION.md](DEV_OVERVIEW_HTML_PROJECTION.md) | CKM-10 | Static-HTML Development Overview (capability map + maturity heatmap) + parent-closure handoff |
+
+Post-MVP presentation refinement: [DEV_OVERVIEW_DIRECTION_A.md](DEV_OVERVIEW_DIRECTION_A.md) defines the implementation-ready CKM-11 redesign contract. It preserves CKM-10's static, self-contained projection boundary and remains pending until delivered through a verified issue and PR.
 
 ## Execution order
 
@@ -66,7 +68,7 @@ Partial-failure walk: seed applied but ingestion fails → registry exists with 
 
 ## Relationship to GitHub issues
 
-Parent feature issue: [#3138](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3138) — the live validation hub (blocked, not directly picked up); draft archived in [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md). Children: CKM-01 #3139, CKM-02 #3140, CKM-03 #3141, CKM-04 #3142, CKM-05 #3143, CKM-06 #3144, CKM-07 #3145, CKM-08 #3146, CKM-09 #3147, CKM-10 #3148. The spec is authoritative; issues track backlog state.
+Parent feature issue: [#3138](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3138) — the live validation hub (blocked, not directly picked up); draft archived in [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md). Children: CKM-01 #3139, CKM-02 #3140, CKM-03 #3141, CKM-04 #3142, CKM-05 #3143, CKM-06 #3144, CKM-07 #3145, CKM-08 #3146, CKM-09 #3147, CKM-10 #3148. CKM-11 is filed only after the Direction A specification merges. The spec is authoritative; issues track backlog state.
 
 ## Verification path
 
