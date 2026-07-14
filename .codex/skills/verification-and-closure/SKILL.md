@@ -150,9 +150,11 @@ Resolve the verdict:
 - Record the run's outcome (clean / findings-fixed / owner-waived) in the delivery receipt so the gate
   is auditable after merge.
 - Do not block indefinitely on a stalled or failed review run: if the reviewer subagent cannot complete
-  (tool failure, timeout, repeated crash), surface the stall to the owner as a merge-gate decision
-  rather than retrying forever. A demonstrable tooling outage is input, not an absolute block — but the
-  waiver is the owner's call, not a silent default.
+  (tool failure, timeout, repeated crash), preserve the merge block and classify the outage under
+  `AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier`. Use bounded backoff or a
+  `blocked_technical` receipt first; surface a merge-gate waiver only when the classifier identifies
+  an explicit `needs_owner` authority category. A demonstrable tooling outage is input, not a silent
+  default.
 
 #### Re-triggering after a fix
 
@@ -213,9 +215,11 @@ Rules:
 
 - A 👍/`+1` reaction is a sufficient Codex pass even when there is no formal review or comment.
 - Do not block indefinitely on a missing verdict: if Codex has posted no reaction, review, or comment
-  and recent sibling PRs show the same silence (a repo-wide Codex stall), surface the stall to the
-  owner as a merge-gate decision rather than waiting forever. A demonstrable outage is input, not an
-  absolute block — but the waiver is the owner's call, not a silent default.
+  and recent sibling PRs show the same silence (a repo-wide Codex stall), preserve the merge block
+  and classify the outage under `AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier`.
+  Use bounded backoff or a `blocked_technical` receipt first; surface a merge-gate waiver only when
+  the classifier identifies an explicit `needs_owner` authority category. A demonstrable outage is
+  input, not a silent default.
 
 When all prerequisites are met:
 

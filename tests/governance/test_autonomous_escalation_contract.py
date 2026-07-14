@@ -50,6 +50,8 @@ def test_no_legacy_route_sends_technical_stops_directly_to_owner() -> None:
     assert 'Classify -->|unresolved| Human["Human exception/block"]' not in process_map
     assert 'Stop["Stop condition"] --> Packet["Human Exception packet"]' not in process_map
     assert "classify the stop under" in closure_skill
+    assert "surface the stall to the owner as a merge-gate decision" not in closure_skill
+    assert "surface a merge-gate waiver only when" in closure_skill
 
 
 def test_agent_policy_reserves_owner_interruptions_for_authority() -> None:
