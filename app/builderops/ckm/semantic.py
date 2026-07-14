@@ -303,7 +303,7 @@ def _canonical_json(value: Any) -> str:
 
 
 def _confirmation_payload(store: CkmStore, edge_id: str) -> tuple[dict[str, Any], str, str]:
-    edge = store.get_evidence_edge_by_id(edge_id)
+    edge = store.get_active_evidence_edge_by_id(edge_id)
     if edge is None:
         raise CkmValidationError(f"evidence edge not found: {edge_id}")
     if edge.extraction_method != "inferred":
@@ -442,7 +442,7 @@ def _validated_confirmation_receipt(
     if not hmac.compare_digest(payload["binding"], expected_binding):
         raise CkmValidationError("confirmation receipt trusted binding is invalid")
 
-    current = store.get_evidence_edge_by_id(edge_id)
+    current = store.get_active_evidence_edge_by_id(edge_id)
     if current is not None:
         expected_payload, _, _ = _confirmation_payload(store, current.id)
         for field, value in expected_payload.items():
@@ -509,6 +509,13 @@ def reapply_confirmation_receipts(store: CkmStore) -> int:
             artifact = artifacts[artifact.source_ref]
             capability = capabilities[capability.name]
         except (CkmValidationError, KeyError, TypeError, ValueError):
+            continue
+        active = store.get_active_evidence_edge_by_id(payload["edge_id"])
+        if active is None and store.has_retired_evidence_edge(payload["edge_id"]):
+            # Explicit retirement in the current derived graph is not a partial
+            # rebuild. Replaying the older confirmation would resurrect evidence
+            # that cleanup intentionally removed. A true rebuild drops both the
+            # active and history tables, so the normal restoration path remains.
             continue
         edge = store.upsert_evidence_edge(
             artifact_id=artifact.id,

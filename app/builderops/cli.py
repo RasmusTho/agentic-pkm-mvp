@@ -25,7 +25,9 @@ from app.builderops.ckm_reevaluation import (
     CkmReevaluationError,
     build_ckm_reevaluation_report,
 )
-from app.builderops.ckm.models import CkmValidationError
+from app.builderops.ckm.models import MATURITY_DIMENSIONS, CkmValidationError
+from app.builderops.ckm.assess import assess_capabilities
+from app.builderops.ckm.gaps import GapDetectionConfig, detect_gaps
 from app.builderops.ckm.ingest_github import ingest_github
 from app.builderops.ckm.ingest_repo import ingest_repo
 from app.builderops.ckm.linkers import link_deterministic
@@ -480,6 +482,65 @@ def ckm_confirm_edge(ctx: click.Context, edge_id: str) -> None:
     except (CkmValidationError, sqlite3.Error) as exc:
         raise click.ClickException(f"ckm edge confirmation failed: {exc}") from exc
     click.echo(f"edge {edge_id} confirmed; receipt builderops://receipts/{receipt['id']}")
+
+
+@ckm.command("assess", help="Append explainable maturity assessments for changed capabilities.")
+@click.pass_context
+def ckm_assess(ctx: click.Context) -> None:
+    try:
+        result = assess_capabilities(_ckm_store(ctx))
+    except (CkmValidationError, sqlite3.Error) as exc:
+        raise click.ClickException(f"ckm assessment failed: {exc}") from exc
+    click.echo(
+        f"assessed {result.assessed} capabilities "
+        f"({result.skipped} unchanged, skipped)"
+    )
+
+
+@ckm.command("gaps", help="Regenerate cited CKM gap and missing-evidence findings.")
+@click.option("--floor", type=click.FloatRange(0.0, 1.0), default=0.5, show_default=True)
+@click.option(
+    "--healthy-floor",
+    type=click.FloatRange(0.0, 1.0),
+    default=0.75,
+    show_default=True,
+)
+@click.option(
+    "--healthy-sibling-count",
+    type=click.IntRange(1, len(MATURITY_DIMENSIONS) - 1),
+    default=2,
+    show_default=True,
+)
+@click.pass_context
+def ckm_gaps(
+    ctx: click.Context,
+    floor: float,
+    healthy_floor: float,
+    healthy_sibling_count: int,
+) -> None:
+    try:
+        result = detect_gaps(
+            _ckm_store(ctx),
+            config=GapDetectionConfig(
+                floor=floor,
+                healthy_floor=healthy_floor,
+                healthy_sibling_count=healthy_sibling_count,
+            ),
+        )
+    except (CkmValidationError, sqlite3.Error) as exc:
+        raise click.ClickException(f"ckm gap detection failed: {exc}") from exc
+    click.echo(
+        f"{result.findings} findings: "
+        f"{result.starved_dimensions} starved-dimension, "
+        f"{result.uncovered_boundaries} uncovered-boundary, "
+        f"{result.claim_exceeds_evidence} claim-exceeds-evidence"
+    )
+    if result.stale_assessments:
+        click.echo(
+            f"warning: {result.stale_assessments} assessment(s) are stale relative to the "
+            "global evidence watermark but remain current for their unchanged evidence fingerprint",
+            err=True,
+        )
 
 
 @builderops.group("inquiry", help="Persist and inspect pre-ticket model inquiry artifacts.")
