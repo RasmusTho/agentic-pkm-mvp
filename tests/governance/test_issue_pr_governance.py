@@ -30,6 +30,12 @@ def _read_workflow() -> str:
     )
 
 
+def _read_development_workflow() -> str:
+    return (REPO_ROOT / "docs/development/DEV_WORKFLOW.md").read_text(
+        encoding="utf-8"
+    )
+
+
 def _has_builderops_routing(body: str) -> bool:
     match = _BUILDEROPS_ROUTING_REGEX.search(body)
     if not match:
@@ -147,6 +153,18 @@ def test_autonomous_runner_prompt_is_governance_lane_allowed() -> None:
 
     assert '"companion-ui/prompts/codex/deliver-epic-autonomous-runner.md"' in exact
     assert '"companion-ui/prompts/codex/deliver-epic-autonomous-runner.md"' not in prefixes
+
+
+def test_governance_lane_companion_prompt_surface_matches_owner_doc() -> None:
+    workflow = _read_development_workflow()
+    governance_lane = workflow.split("## Governance lane", 1)[1].split(
+        "## Runtime separation", 1
+    )[0]
+
+    assert (
+        "`companion-ui/prompts/codex/deliver-epic-autonomous-runner.md`"
+        in governance_lane
+    )
 
 
 def test_review_before_ci_gate_is_governance_lane_allowed() -> None:
