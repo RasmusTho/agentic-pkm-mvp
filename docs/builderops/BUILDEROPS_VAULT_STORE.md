@@ -93,11 +93,16 @@ Override mechanisms:
 The default path is machine-local operating-plane state outside repository checkouts. It is not
 `$CODEX_HOME`, not runtime/user memory, not repo authority, and not a reviewed docs surface.
 Existing legacy stores under `<checkout>/runtime/builderops/` are not migrated, merged, deleted, or
-silently treated as the consolidated store by this code change. Before activating the new default
-on a host that has legacy per-worktree stores, the operator must stop BuilderOps writers, reconcile
-those stores, and select the consolidated database explicitly during the cutover. The existing
-`BUILDEROPS_DB_PATH` and `BUILDEROPS_STATE_DIR` overrides remain the supported way to pin that
-operator-selected path.
+silently treated as the consolidated store by this code change. With neither store override set,
+path loading scans the current Git repository's worktrees for the legacy database location and
+fails before opening or initializing the host-stable database when any legacy store exists. The
+error reports the number of stores without exposing host paths and directs the operator to stop
+writers, reconcile the stores, and pin the approved database using `BUILDEROPS_DB_PATH` or
+`BUILDEROPS_STATE_DIR`. Those explicit overrides bypass the legacy-store guard so the operator can
+keep the current store pinned before cutover and select the reconciled store during cutover.
+
+Default home-directory resolution is lazy. An absolute explicit DB/state/CLI override therefore
+continues to work in hostless automation where no user home can be resolved.
 
 ### Shared artifact vault and advisory claim signals
 

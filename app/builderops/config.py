@@ -3,14 +3,23 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-# The BuilderOps store coordinates every agent running as this user on one
-# host. Keep its implicit location outside repository checkouts so separate
-# worktrees cannot accidentally create independent lease tables.
-DEFAULT_STATE_DIR = Path.home() / ".local" / "state" / "builderops"
 DEFAULT_DB_NAME = "builderops.sqlite3"
+LEGACY_STATE_DIR = Path("runtime/builderops")
+
+
+def default_state_dir() -> Path:
+    """Return the implicit same-user, same-host state home lazily.
+
+    Home resolution must not run at import time: hostless automation can still
+    use an explicit absolute DB/state override even when ``Path.home()`` is not
+    available.
+    """
+
+    return Path.home() / ".local" / "state" / "builderops"
 
 
 @dataclass(frozen=True)
@@ -30,12 +39,25 @@ def load_paths(
     db_path_override: Path | None = None,
 ) -> BuilderOpsPaths:
     src = env if env is not None else os.environ
-    state_dir = Path(src.get("BUILDEROPS_STATE_DIR", str(DEFAULT_STATE_DIR))).expanduser()
+    configured_state_dir = src.get("BUILDEROPS_STATE_DIR")
+    configured_db_path = src.get("BUILDEROPS_DB_PATH")
+    exact_db_path = (
+        db_path_override if db_path_override is not None else configured_db_path
+    )
+    if configured_state_dir is not None:
+        state_dir = Path(configured_state_dir).expanduser()
+    elif exact_db_path is not None:
+        state_dir = Path(exact_db_path).expanduser().parent
+    else:
+        _fail_if_legacy_stores_exist()
+        state_dir = default_state_dir()
     db_path = (
         db_path_override.expanduser()
         if db_path_override is not None
         else Path(
-            src.get("BUILDEROPS_DB_PATH", str(state_dir / DEFAULT_DB_NAME))
+            configured_db_path
+            if configured_db_path is not None
+            else state_dir / DEFAULT_DB_NAME
         ).expanduser()
     )
     vault_value = src.get("BUILDEROPS_VAULT_ROOT", "").strip()
@@ -47,6 +69,58 @@ def load_paths(
     )
     _validate_separation(paths)
     return paths
+
+
+def _fail_if_legacy_stores_exist() -> None:
+    legacy_paths = _legacy_store_paths()
+    if not legacy_paths:
+        return
+    raise ValueError(
+        "Refusing implicit host-stable BuilderOps store selection: found "
+        f"{len(legacy_paths)} legacy per-worktree store(s). Stop BuilderOps writers, "
+        "reconcile the legacy stores, then set BUILDEROPS_DB_PATH or "
+        "BUILDEROPS_STATE_DIR explicitly for the operator-approved cutover."
+    )
+
+
+def _legacy_store_paths() -> tuple[Path, ...]:
+    """Return existing legacy stores for the current repo without exposing paths."""
+
+    roots = _git_worktree_roots()
+    if not roots:
+        current = Path.cwd()
+        repo_root = next(
+            (p for p in (current, *current.parents) if (p / ".git").exists()),
+            current,
+        )
+        roots = (repo_root,)
+    paths = {
+        (root / LEGACY_STATE_DIR / DEFAULT_DB_NAME).resolve(strict=False)
+        for root in roots
+        if (root / LEGACY_STATE_DIR / DEFAULT_DB_NAME).is_file()
+    }
+    return tuple(sorted(paths))
+
+
+def _git_worktree_roots() -> tuple[Path, ...]:
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=Path.cwd(),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    if result.returncode != 0:
+        return ()
+    return tuple(
+        Path(line.removeprefix("worktree "))
+        for line in result.stdout.splitlines()
+        if line.startswith("worktree ")
+    )
 
 
 def _validate_separation(paths: BuilderOpsPaths) -> None:

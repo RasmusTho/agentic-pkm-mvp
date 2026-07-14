@@ -76,6 +76,7 @@ def _configured_env(tmp_path: Path) -> dict[str, str]:
         **os.environ,
         "PATH": "/usr/bin:/bin",
         "BUILDEROPS_PYTHON": sys.executable,
+        "BUILDEROPS_DB_PATH": str(tmp_path / "builderops.sqlite3"),
         "BUILDEROPS_VAULT_ROOT": str(vault),
         "BUILDEROPS_INQUIRY_ADAPTERS_JSON": json.dumps(config),
     }
@@ -277,7 +278,11 @@ def test_desktop_skills_route_to_macmini_launcher(tmp_path: Path) -> None:
 
 
 def test_skill_preflight_reports_missing_dependencies(tmp_path: Path) -> None:
-    clean_env = {"PATH": os.environ["PATH"], "BUILDEROPS_PYTHON": sys.executable}
+    clean_env = {
+        "PATH": os.environ["PATH"],
+        "BUILDEROPS_PYTHON": sys.executable,
+        "BUILDEROPS_DB_PATH": str(tmp_path / "builderops.sqlite3"),
+    }
     missing_vault = subprocess.run(
         [str(LAUNCHER), "Question"],
         cwd=REPO_ROOT,

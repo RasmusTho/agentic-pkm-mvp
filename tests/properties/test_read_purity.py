@@ -118,6 +118,7 @@ def _write_note(path: Path, *, with_uuid: bool) -> None:
 @pytest.fixture()
 def vault_with_uuid_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     bind_initialized_vault(monkeypatch, tmp_path)
+    monkeypatch.setenv("BUILDEROPS_DB_PATH", str(tmp_path / "builderops.sqlite3"))
     note = tmp_path / "notes" / "note.md"
     _write_note(note, with_uuid=True)
     return tmp_path
@@ -126,6 +127,7 @@ def vault_with_uuid_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
 @pytest.fixture()
 def vault_missing_uuid_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     bind_initialized_vault(monkeypatch, tmp_path)
+    monkeypatch.setenv("BUILDEROPS_DB_PATH", str(tmp_path / "builderops.sqlite3"))
     note = tmp_path / "notes" / "note.md"
     _write_note(note, with_uuid=False)
     return tmp_path

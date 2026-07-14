@@ -15,8 +15,8 @@ def test_default_store_leases_coordinate_across_cwd(
 ) -> None:
     monkeypatch.setattr(
         builderops_config,
-        "DEFAULT_STATE_DIR",
-        tmp_path / "host-state" / "builderops",
+        "default_state_dir",
+        lambda: tmp_path / "host-state" / "builderops",
     )
     first_cwd = tmp_path / "worktree-a"
     second_cwd = tmp_path / "worktree-b"
