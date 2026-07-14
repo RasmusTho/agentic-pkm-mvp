@@ -10,6 +10,7 @@ from typing import Iterable, Mapping, Sequence
 from app.builderops.ckm.models import (
     MATURITY_DIMENSIONS,
     CkmAssessmentProjection,
+    CkmArtifact,
     CkmCapability,
     CkmEvidenceEdge,
     CkmFinding,
@@ -264,16 +265,28 @@ def _render_gaps(store: CkmStore) -> list[str]:
     return lines
 
 
-def _refs_for_kind(edges: Sequence[CkmEvidenceEdge], kinds: set[str]) -> str:
+def _refs_for_kind(
+    edges: Sequence[CkmEvidenceEdge],
+    artifacts: Mapping[str, CkmArtifact],
+    *,
+    evidence_kinds: set[str],
+    artifact_kinds: set[str] | None = None,
+    excluded_artifact_kinds: set[str] | None = None,
+) -> str:
+    included_artifact_kinds = artifact_kinds or set()
+    excluded = excluded_artifact_kinds or set()
     values = [
         f"{edge.source_ref} ({edge.lifecycle})"
         for edge in edges
-        if edge.evidence_kind in kinds
+        if artifacts[edge.artifact_id].artifact_kind not in excluded
+        if edge.evidence_kind in evidence_kinds
+        or artifacts[edge.artifact_id].artifact_kind in included_artifact_kinds
     ]
     return ", ".join(sorted(set(values))) or "—"
 
 
 def _render_traceability_matrix(store: CkmStore) -> list[str]:
+    artifacts = {item.id: item for item in store.list_artifacts()}
     lines = [
         "# Generated CKM Traceability Matrix",
         "",
@@ -289,13 +302,34 @@ def _render_traceability_matrix(store: CkmStore) -> list[str]:
             str(index),
             f"{capability.name} ({capability.lifecycle})",
             capability.existence_provenance,
-            _refs_for_kind(edges, {"adr"}),
+            _refs_for_kind(
+                edges,
+                artifacts,
+                evidence_kinds={"adr"},
+                artifact_kinds={"adr"},
+            ),
             capability.name,
             "candidate evidence distinguished from confirmed evidence",
             capability.boundary_ref or "—",
-            _refs_for_kind(edges, {"spec", "requirement", "design_doc"}),
-            _refs_for_kind(edges, {"test", "coverage", "benchmark", "ci_result"}),
-            _refs_for_kind(edges, {"issue", "pull_request", "commit", "source"}),
+            _refs_for_kind(
+                edges,
+                artifacts,
+                evidence_kinds={"spec", "requirement", "design_doc"},
+                artifact_kinds={"spec", "requirement"},
+                excluded_artifact_kinds={"issue"},
+            ),
+            _refs_for_kind(
+                edges,
+                artifacts,
+                evidence_kinds={"test", "coverage", "benchmark", "ci_result"},
+                artifact_kinds={"test", "coverage", "benchmark", "ci_result"},
+            ),
+            _refs_for_kind(
+                edges,
+                artifacts,
+                evidence_kinds={"pull_request", "commit", "source"},
+                artifact_kinds={"issue", "pull_request", "commit", "source_file"},
+            ),
         )
         lines.append("| " + " | ".join(_markdown(value) for value in row) + " |")
     return lines

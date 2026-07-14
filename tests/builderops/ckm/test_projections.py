@@ -72,6 +72,25 @@ def populated_store(tmp_path: Path) -> CkmStore:
         model="fixture-model",
         provider="fixture-provider",
     )
+    issue_artifact = store.upsert_artifact(
+        source_ref="github:issue:42",
+        artifact_kind="issue",
+        source="github",
+        watermark="2026-07-14T12:00:00Z",
+        provenance='{"number":42,"state":"closed"}',
+    )
+    store.upsert_evidence_edge(
+        artifact_id=issue_artifact.id,
+        capability_id=capability.id,
+        evidence_kind="requirement",
+        polarity="supports",
+        maturity_dimension="requirement_coverage",
+        confidence=1.0,
+        extraction_method="deterministic",
+        lifecycle="confirmed",
+        source_ref=issue_artifact.source_ref,
+        basis="fixture:implementation-issue",
+    )
     store.upsert_artifact(
         source_ref="docs/unlinked.md",
         artifact_kind="document",
@@ -140,10 +159,10 @@ def test_candidate_confirmed_distinction_rendered(populated_store: CkmStore) -> 
     maturity = render_projection(populated_store, "ckm-maturity")
     shown = render_capability_show(populated_store, "retrieval")
 
-    assert "| Retrieval | confirmed | RCA | 1 | 1 |" in capability_map
-    assert "Evidence: **1 confirmed / 1 candidate**" in maturity
+    assert "| Retrieval | confirmed | RCA | 2 | 1 |" in capability_map
+    assert "Evidence: **2 confirmed / 1 candidate**" in maturity
     assert "Candidate share" in maturity
-    assert "Evidence: **1 confirmed / 1 candidate**" in shown
+    assert "Evidence: **2 confirmed / 1 candidate**" in shown
     assert "**candidate** `doc`" in shown
     assert "**confirmed** `source`" in shown
     assert "basis: semantic:retrieval-doc" in shown
@@ -173,6 +192,14 @@ def test_generated_matrix_shape_and_never_overwrites_canonical(
     assert canonical_columns == TRACEABILITY_COLUMNS == generated_columns
     assert result.path == tmp_path / "generated" / "ckm-traceability-matrix.md"
     assert canonical.read_bytes() == before
+    retrieval_row = next(
+        line
+        for line in result.path.read_text(encoding="utf-8").splitlines()
+        if "| Retrieval (confirmed) |" in line
+    )
+    cells = [part.strip() for part in retrieval_row.strip("|").split("|")]
+    assert "github:issue:42 (confirmed)" not in cells[7]
+    assert "github:issue:42 (confirmed)" in cells[9]
 
 
 def test_cli_project_and_show(populated_store: CkmStore, tmp_path: Path) -> None:
