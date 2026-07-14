@@ -90,21 +90,37 @@ def _get_state_by_uuid(conn: psycopg.Connection, uuid_value: str) -> Optional[di
 def _object_materialization_state(
     conn: psycopg.Connection,
     uuid_value: str,
-) -> tuple[bool, bool]:
-    """Return canonical-parent and retained-mirror presence for watcher sync."""
+    expected_source_ref: str,
+) -> tuple[bool, bool, bool]:
+    """Return parent/mirror presence plus canonical locator completeness."""
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT
               EXISTS(SELECT 1 FROM store_objects WHERE object_id = %s) AS canonical_exists,
-              EXISTS(SELECT 1 FROM objects WHERE id = %s OR uuid = %s) AS mirror_exists
+              EXISTS(SELECT 1 FROM objects WHERE id = %s OR uuid = %s) AS mirror_exists,
+              COALESCE((
+                SELECT source_ref IS NOT DISTINCT FROM %s
+                FROM store_objects
+                WHERE object_id = %s
+              ), FALSE) AS locator_complete
             """,
-            (uuid_value, uuid_value, uuid_value),
+            (
+                uuid_value,
+                uuid_value,
+                uuid_value,
+                expected_source_ref,
+                uuid_value,
+            ),
         )
         row = cur.fetchone()
     if isinstance(row, dict):
-        return bool(row["canonical_exists"]), bool(row["mirror_exists"])
-    return (bool(row[0]), bool(row[1])) if row else (False, False)
+        return (
+            bool(row["canonical_exists"]),
+            bool(row["mirror_exists"]),
+            bool(row["locator_complete"]),
+        )
+    return (bool(row[0]), bool(row[1]), bool(row[2])) if row else (False, False, False)
 
 
 def _upsert_file_state(
@@ -520,8 +536,14 @@ def sync_markdown(path: str) -> dict[str, Any]:
             conn.commit()
             return result
 
-        canonical_exists, mirror_exists = _object_materialization_state(conn, uuid_value)
-        materialization_missing = not (canonical_exists and mirror_exists)
+        canonical_exists, mirror_exists, locator_complete = _object_materialization_state(
+            conn,
+            uuid_value,
+            str(note_path),
+        )
+        materialization_missing = not (
+            canonical_exists and mirror_exists and locator_complete
+        )
         changed = state is None or materialization_missing
         if state:
             if state["uuid"] and state["uuid"] != uuid_value:

@@ -79,6 +79,19 @@ def upgrade() -> None:
                 SELECT 1 FROM information_schema.columns
                 WHERE table_schema = 'public' AND table_name = 'objects'
                   AND column_name = 'source_ref'
+            ) AND EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'objects'
+                  AND column_name = 'path'
+            ) THEN
+                -- Reviewed row-level precedence: an explicit source_ref wins;
+                -- the watcher path supplies the locator when source_ref is NULL.
+                -- If both are NULL the canonical locator remains NULL.
+                source_expression := 'COALESCE(source_ref, path)';
+            ELSIF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'objects'
+                  AND column_name = 'source_ref'
             ) THEN
                 source_expression := 'source_ref';
             ELSIF EXISTS (

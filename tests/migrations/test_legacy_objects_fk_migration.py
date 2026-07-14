@@ -104,6 +104,153 @@ def test_legacy_objects_fk_migration_backfills_existing_parents(scratch_dsn: str
     assert fk_target == ("store_objects",)
 
 
+def test_legacy_objects_fk_migration_preserves_row_level_locator_and_payload(
+    scratch_dsn: str,
+) -> None:
+    """Backfill uses source_ref first, then watcher path, without payload loss."""
+    _upgrade(PRE_CUTOVER_REVISION)
+    path_only_id = uuid.uuid4()
+    explicit_source_id = uuid.uuid4()
+    null_locator_id = uuid.uuid4()
+    with psycopg.connect(scratch_dsn) as conn:
+        from app.db.db import ensure_schema
+
+        ensure_schema(conn)
+        conn.execute("ALTER TABLE objects ADD COLUMN IF NOT EXISTS source_ref text")
+        conn.execute("ALTER TABLE objects ADD COLUMN IF NOT EXISTS path text")
+        with conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO objects (id, uuid, kind, payload, source_ref, path) "
+                "VALUES (%s, %s, %s, %s::jsonb, %s, %s)",
+                [
+                    (
+                        path_only_id,
+                        path_only_id,
+                        "note",
+                        '{"title":"Watcher","nested":{"kept":true}}',
+                        None,
+                        "/vault/retained-watcher-note.md",
+                    ),
+                    (
+                        explicit_source_id,
+                        explicit_source_id,
+                        "artifact",
+                        '{"title":"Explicit"}',
+                        "/source/explicit.md",
+                        "/vault/different.md",
+                    ),
+                    (
+                        null_locator_id,
+                        null_locator_id,
+                        "note",
+                        '{}',
+                        None,
+                        None,
+                    ),
+                ],
+            )
+
+    _upgrade("head")
+
+    with psycopg.connect(scratch_dsn) as conn:
+        path_only = conn.execute(
+            "SELECT kind, source_ref, payload FROM store_objects WHERE object_id = %s",
+            (path_only_id,),
+        ).fetchone()
+        explicit = conn.execute(
+            "SELECT kind, source_ref, payload FROM store_objects WHERE object_id = %s",
+            (explicit_source_id,),
+        ).fetchone()
+        null_locator = conn.execute(
+            "SELECT source_ref FROM store_objects WHERE object_id = %s",
+            (null_locator_id,),
+        ).fetchone()
+
+    assert path_only == (
+        "note",
+        "/vault/retained-watcher-note.md",
+        {"title": "Watcher", "nested": {"kept": True}},
+    )
+    assert explicit == ("artifact", "/source/explicit.md", {"title": "Explicit"})
+    assert null_locator == (None,)
+
+
+def test_unchanged_post_migration_sync_heals_incomplete_canonical_locator(
+    scratch_dsn: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Presence alone cannot cement a NULL canonical watcher locator."""
+    _upgrade(PRE_CUTOVER_REVISION)
+    object_id = uuid.uuid4()
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "retained-watcher-note.md"
+    frontmatter = {"uuid": str(object_id), "title": "Retained watcher note"}
+    body = "unchanged body\n"
+    note.write_text(
+        f"---\nuuid: {object_id}\ntitle: Retained watcher note\n---\n\n{body}",
+        encoding="utf-8",
+    )
+
+    from app.services import vault_sync
+
+    with psycopg.connect(scratch_dsn) as conn:
+        from app.db.db import ensure_schema
+
+        ensure_schema(conn)
+        conn.execute("ALTER TABLE objects ADD COLUMN IF NOT EXISTS source_ref text")
+        conn.execute("ALTER TABLE objects ADD COLUMN IF NOT EXISTS path text")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS file_state ("
+            "path text PRIMARY KEY, uuid text, fm_hash text, body_hash text, "
+            "mtime timestamptz, last_seen timestamptz DEFAULT now())"
+        )
+        conn.execute(
+            "INSERT INTO objects (id, uuid, kind, payload, source_ref, path) "
+            "VALUES (%s, %s, 'note', '{}'::jsonb, NULL, %s)",
+            (object_id, object_id, str(note.resolve())),
+        )
+        conn.execute(
+            "INSERT INTO file_state (path, uuid, fm_hash, body_hash, mtime, last_seen) "
+            "VALUES (%s, %s, %s, %s, now(), now())",
+            (
+                str(note.resolve()),
+                str(object_id),
+                vault_sync._hash_dict(frontmatter),
+                vault_sync._hash_text(body),
+            ),
+        )
+
+    _upgrade("head")
+    with psycopg.connect(scratch_dsn) as conn:
+        assert conn.execute(
+            "SELECT source_ref FROM store_objects WHERE object_id = %s", (object_id,)
+        ).fetchone() == (str(note.resolve()),)
+        conn.execute(
+            "UPDATE store_objects SET source_ref = NULL WHERE object_id = %s",
+            (object_id,),
+        )
+
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.setattr(vault_sync, "active_edit", lambda path: False)
+    result = vault_sync.sync_markdown(str(note))
+    assert result["status"] == "ok"
+
+    with psycopg.connect(scratch_dsn) as conn:
+        healed = conn.execute(
+            "SELECT source_ref, payload->>'content' "
+            "FROM store_objects WHERE object_id = %s",
+            (object_id,),
+        ).fetchone()
+        metadata_events = conn.execute(
+            "SELECT count(*) FROM outbox WHERE topic = 'ingest.object.metadata'"
+        ).fetchone()
+    assert healed == (str(note.resolve()), body)
+    assert metadata_events == (1,)
+
+
 def test_active_decision_writer_preflights_before_receipt_on_pre_cutover_schema(
     scratch_dsn: str,
     tmp_path: Path,
