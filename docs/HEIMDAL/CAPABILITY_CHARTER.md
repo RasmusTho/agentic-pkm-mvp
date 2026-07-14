@@ -1,4 +1,4 @@
-State: Draft (advisory groundwork, 2026-07-04). The capability charter for Heimdal (Event Capture & Attribution) and the entry point for the Fable-5 architecture window. Separates FIXED constraints Fable may not touch from OPEN problems Fable must solve. Advisory until enacted through CES/ADR; creates no runtime behavior and no GitHub work.
+State: Enacted charter with a shipped v1 baseline. This 2026-07-04 Fable entry contract remains the design record for Heimdal's fixed constraints and originally open problems; the v1 capture-to-projection pipeline is implemented in `app/heimdal/`, while later modalities and named follow-ons remain target-state work.
 Doc role: Capability charter (Draft) — Fable entry point
 Authority: Authoritative for the *scope contract* of the Heimdal architecture window: what is fixed, what is open, and the proposed fitness invariants. Subordinate to `ECOSYSTEM_SOS_MODEL.md` (where Heimdal sits) and `OWNER_DECISIONS.md` (owner-reserved calls). Claims no shipped reality.
 Owner: Architecture / CES stewardship (Rasmus)

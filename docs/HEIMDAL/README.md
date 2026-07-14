@@ -1,4 +1,4 @@
-State: Draft (advisory groundwork, 2026-07-04). Index for the Heimdal "A" artifacts — the docs-only groundwork that unlocks a Fable-5 architecture window for the Heimdal (Event Capture & Attribution) capability. Advisory until enacted through CES/ADR; no runtime behavior, no GitHub work created.
+State: Mixed-status index. The original Heimdal "A" artifacts remain advisory design history, but their architecture window has been enacted and Heimdal's v1 capture-to-projection pipeline is shipped in `app/heimdal/`; use `docs/STATUS.md` and `docs/ARCHITECTURE.md` for current runtime truth.
 Doc role: Directory index (Draft)
 Authority: Index/entry point for the Heimdal groundwork docs. Subordinate to the docs it points at. Claims no shipped reality.
 Owner: Architecture / CES stewardship (Rasmus)
