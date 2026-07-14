@@ -256,6 +256,73 @@ def test_matrix_test_imports_do_not_manufacture_unrelated_source_edges(
     )
 
 
+def test_stale_source_and_dependent_test_edges_converge_in_one_run(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo"
+    source_path = root / "app/bad.py"
+    test_path = root / "tests/test_bad.py"
+    source_path.parent.mkdir(parents=True)
+    test_path.parent.mkdir(parents=True)
+    source_path.write_text("def bad() -> None:\n    pass\n", encoding="utf-8")
+    test_path.write_text("from app.bad import bad\n", encoding="utf-8")
+
+    store = CkmStore(tmp_path / "builderops.sqlite3")
+    store.ensure_schema()
+    capability = store.upsert_capability(
+        name="Retrieval",
+        definition="Fixture",
+        existence_provenance="seeded:docs/retrieval.md :: retrieval",
+        lifecycle="confirmed",
+        boundary_ref="RCA",
+    )
+    source = store.upsert_artifact(
+        source_ref="app/bad.py",
+        artifact_kind="source_file",
+        source="fixture",
+        watermark="one",
+        provenance='{"source_ref":"app/bad.py"}',
+    )
+    test = store.upsert_artifact(
+        source_ref="tests/test_bad.py",
+        artifact_kind="test",
+        source="fixture",
+        watermark="one",
+        provenance='{"source_ref":"tests/test_bad.py"}',
+    )
+    for basis in ("matrix-test-source:legacy", "matrix:stale-row"):
+        store.upsert_evidence_edge(
+            artifact_id=source.id,
+            capability_id=capability.id,
+            evidence_kind="source",
+            polarity="supports",
+            maturity_dimension="functional_completeness",
+            confidence=1.0,
+            extraction_method="deterministic",
+            lifecycle="confirmed",
+            source_ref=source.source_ref,
+            basis=basis,
+        )
+    store.upsert_evidence_edge(
+        artifact_id=test.id,
+        capability_id=capability.id,
+        evidence_kind="test",
+        polarity="supports",
+        maturity_dimension="test_completeness",
+        confidence=1.0,
+        extraction_method="deterministic",
+        lifecycle="confirmed",
+        source_ref=test.source_ref,
+        basis="test-code:app/bad.py",
+    )
+
+    result = link_deterministic(store, root)
+
+    assert result["test_code"] == 0
+    assert result["removed"] == 3
+    assert store.list_evidence_edges() == []
+
+
 def test_edges_carry_method_lifecycle_basis(tmp_path: Path) -> None:
     store = _store(tmp_path)
     _ingest_docs(store)

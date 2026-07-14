@@ -20,6 +20,9 @@ _BOUNDARY_RE = re.compile(r"\b(HIX|WSP|HKA|SIP|GOV|EBF|PDM|DRI|RCA|MEM|CAO|EXE|S
 _PARENT_RE = re.compile(r"^parent_capability:\s*(.+?)\s*$", re.MULTILINE)
 _LINKER_BASIS_PREFIXES = (
     "matrix:",
+    # Deprecated rule retained as cleanup ownership for databases produced by
+    # the first capability-specific evidence implementation.
+    "matrix-test-source:",
     "spec-directory:",
     "spec-source:",
     "adr-reference:",
@@ -403,6 +406,7 @@ def _test_links(
             and linked_artifact is not None
             and linked_artifact.artifact_kind == "source_file"
             and edge.evidence_kind == "source"
+            and (edge.artifact_id, edge.capability_id, edge.basis) in desired_edges
         ):
             artifact_edges.setdefault(edge.artifact_id, set()).add(edge.capability_id)
     capabilities = {capability.id: capability for capability in store.list_capabilities()}
