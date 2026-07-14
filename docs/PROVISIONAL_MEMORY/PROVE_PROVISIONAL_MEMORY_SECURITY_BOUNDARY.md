@@ -77,5 +77,5 @@ Attach the deterministic scorecard/summary to the PR and parent receipt.
 
 ## Related GitHub Issues
 
-Final implementation Issue under #2314. TCD hint: Sol/high-xhigh because this is the security and
+Filed as #3721, blocked by #3719/#3720. TCD hint: Sol/high-xhigh because this is the security and
 cross-system acceptance gate.

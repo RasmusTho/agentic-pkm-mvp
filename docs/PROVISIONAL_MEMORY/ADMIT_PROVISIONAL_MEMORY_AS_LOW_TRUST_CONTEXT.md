@@ -79,5 +79,5 @@ The action-tier assertion must exercise the real consumer entry point.
 
 ## Related GitHub Issues
 
-Create after PROVISIONAL-MEMORY-02 merges. TCD hint: Sol/high due to retrieval/context authority and
-production consumer enforcement.
+Filed as #3720, blocked by #3719. TCD hint: Sol/high due to retrieval/context authority and production
+consumer enforcement.
