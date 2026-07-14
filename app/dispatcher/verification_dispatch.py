@@ -84,6 +84,17 @@ def _validate_request(request: Mapping[str, object]) -> None:
         raise ValueError("malformed verification dispatch request")
     if request["contract_version"] != CONTRACT_VERSION or request["stage"] != "verification":
         raise ValueError("unsupported verification dispatch request")
+    linked_issue = request.get("linked_issue")
+    supporting_issues = request.get("supporting_issues")
+    if not _positive_int(linked_issue):
+        raise ValueError("verification request requires one governing issue")
+    if (
+        not isinstance(supporting_issues, list)
+        or any(not _positive_int(value) for value in supporting_issues)
+        or len(set(supporting_issues)) != len(supporting_issues)
+        or linked_issue in supporting_issues
+    ):
+        raise ValueError("verification request supporting issues are malformed")
     repository = str(request["repository"])
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or any(
         component in {".", ".."} for component in repository.split("/")

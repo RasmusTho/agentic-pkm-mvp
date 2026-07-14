@@ -6,21 +6,16 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import re
 from pathlib import Path
 from typing import Sequence, TypeGuard
+
+from app.dispatcher.verification_contract import resolve_issue_contract
 
 
 CONTRACT_VERSION = "verification_dispatch_request.v1"
 STAGE = "verification"
 SOURCE_WORKFLOW = "CI"
 EVIDENCE_WORKFLOW = "PR Evidence Pack"
-GOVERNING_ISSUE_PATTERN = re.compile(
-    r"(?im)^\s*Governing-Issue:\s*#([1-9][0-9]*)\s*$"
-)
-SUPPORTING_ISSUE_PATTERN = re.compile(
-    r"\b(?:Fixes|Closes|Resolves|Refs)\s+#([1-9][0-9]*)\b", re.I
-)
 
 
 def _as_dict(value: object) -> dict[str, object]:
@@ -98,26 +93,6 @@ def resolve_pr_number(
     if len(matches) != 1:
         return None
     return next(iter(matches))
-
-
-def resolve_issue_contract(pr_body: object) -> tuple[int, tuple[int, ...]] | None:
-    """Resolve one explicit governing issue and bounded supporting evidence."""
-    if not isinstance(pr_body, str):
-        return None
-    governing_matches = GOVERNING_ISSUE_PATTERN.findall(pr_body)
-    if len(governing_matches) != 1:
-        return None
-    governing_issue = int(governing_matches[0])
-    supporting_issues = tuple(
-        sorted(
-            {
-                int(match)
-                for match in SUPPORTING_ISSUE_PATTERN.findall(pr_body)
-                if int(match) != governing_issue
-            }
-        )
-    )
-    return governing_issue, supporting_issues
 
 
 def build_request(

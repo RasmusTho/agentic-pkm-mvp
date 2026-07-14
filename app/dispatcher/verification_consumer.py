@@ -31,6 +31,7 @@ from app.dispatcher.verification_dispatch import (
     VerificationSubscriptionBusy,
 )
 from app.dispatcher.verification_agent_loop import VerificationAgentLoop
+from app.dispatcher.verification_contract import resolve_issue_contract
 
 
 @dataclass(frozen=True)
@@ -679,6 +680,15 @@ def live_truth_rejection(
         return "draft"
     if _nested(pr, "head", "sha") != (expected_head_sha or run.head_sha):
         return "stale_head"
+    issue_contract = resolve_issue_contract(pr.get("body"))
+    linked_issue = run.request.get("linked_issue")
+    supporting_issues = run.request.get("supporting_issues")
+    if (
+        issue_contract is None
+        or issue_contract[0] != linked_issue
+        or list(issue_contract[1]) != supporting_issues
+    ):
+        return "governing_issue_mismatch"
     return _checks_rejection(checks)
 
 
@@ -700,6 +710,13 @@ def delivered_live_truth_rejection(
         return "repository_mismatch"
     if _nested(pr, "head", "sha") != expected_head_sha:
         return "stale_head"
+    issue_contract = resolve_issue_contract(pr.get("body"))
+    if (
+        issue_contract is None
+        or issue_contract[0] != run.request.get("linked_issue")
+        or list(issue_contract[1]) != run.request.get("supporting_issues")
+    ):
+        return "governing_issue_mismatch"
     if (
         pr.get("state") != "closed"
         or pr.get("merged") is not True

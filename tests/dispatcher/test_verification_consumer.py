@@ -113,10 +113,24 @@ class TransitionTruth:
 def eligible_pr(**updates):
     value = {
         "number": 3603, "state": "open", "draft": False, "merged_at": None,
+        "body": "Governing-Issue: #3603\n\nRefs #3603",
         "base": {"ref": "main"}, "head": {"ref": "branch", "sha": HEAD},
     }
     value.update(updates)
     return value
+
+
+def test_live_governing_issue_drift_fails_closed_before_launch(tmp_path) -> None:
+    launcher = Launcher()
+    pr = eligible_pr(body="Governing-Issue: #3626\n\nFixes #3626")
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(pr, GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "superseded"
+    assert result.stop_reason == "governing_issue_mismatch"
+    assert launcher.calls == []
 
 
 def merged_pr(**updates: object) -> dict[str, object]:
