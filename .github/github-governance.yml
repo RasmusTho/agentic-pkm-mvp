@@ -47,7 +47,7 @@ project:
     - name: Kanban
       group_by: Status
     - name: Agent Queue
-      filter: "label:agent:ready"
+      filter: "label:agent:ready status:Ready"
   automation:
     - event: issue_opened
       set_status: Backlog
