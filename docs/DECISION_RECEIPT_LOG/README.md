@@ -39,10 +39,16 @@ index; the in-memory store is a cache-through), applied to the judgment log.
   `app/jobs/backfill.py` existence-checks (`NOT EXISTS … FROM decisions`). Two of these are scans, not
   point lookups — so a **DB index/projection must remain** for them; text-only would be slow. This is
   why the design keeps Postgres as a projection rather than deleting it.
-- **Identity coupling (the bonus fix):** `decisions.object_id` → `objects.id` (runtime-assigned
-  UUID), *not* the vault `uuid`; no `object_id↔uuid` map exists. On a DB rebuild from the vault,
-  object ids are re-minted and every surviving decision orphans (`formal-model.md :: 5` coupling
-  caveat). Carrying the vault `uuid` in the receipt lets the projection re-link on rebuild.
+- **Identity coupling (shipped contract):** `decisions.object_id` is a canonical FK to
+  `store_objects.object_id` (revision `7e4f2a1c9d30`), not to the retained `objects` compatibility
+  table. Receipt writes still preserve continuity where that retained table has useful history:
+  `resolve_vault_uuid()` uses the matching `objects.uuid` for a canonical object id when present,
+  and otherwise uses the canonical `store_objects.object_id` itself for fresh canonical-only
+  objects. Rebuild first keeps a receipt's `object_id` when it is an existing canonical id; only
+  otherwise does it attempt to re-link through the receipt's `vault_uuid` using the same retained
+  UUID/canonical-id mapping. A receipt is an unresolved orphan only when neither route resolves.
+  This keeps the compatibility mapping available for continuity without making `objects` the FK
+  parent or claiming that every historical compatibility surface has been removed.
 - **Volume:** low — one row per governance action, event-driven (not per-turn). JSONL-append is
   comfortably within budget.
 - **Precedent to extend:** `app/services/companion_note.py` (WriteGuard-gated atomic markdown at
@@ -73,7 +79,9 @@ index; the in-memory store is a cache-through), applied to the judgment log.
 
 - The `decisions` table stays, serving `latest_decision()`, the SQL view, and backfill scans as the
   fast index — but it is now **derived**: `rebuild_decisions_projection()` replays the JSONL log into
-  the table (re-linking `object_id`, re-resolving via `vault_uuid` when ids were re-minted). A doctor
+  the table. Replay accepts an existing `store_objects.object_id` directly; when that id no longer
+  exists, it re-links via the receipt's `vault_uuid` against retained `objects.uuid` continuity,
+  with canonical ids also serving as the fallback UUID for fresh canonical-only objects. A doctor
   check asserts the projection matches the log (verify-the-verifier).
 - This flips `runtime-semantics.md` row 12 canonicality: canonical = the vault receipt log; DB =
   projection. That doc update *resolves* the rule-4 tension the recon found (it aligns the advisory
