@@ -360,11 +360,19 @@ def write_candidate_note(
     vault_root = _vault_root(vault_context)
     artifact_path = candidate_note_path(candidate, candidates_dir=candidates_dir)
 
-    if (vault_root / artifact_path).exists():
+    candidate_path = vault_root / artifact_path
+    if candidate_path.exists() or candidate_path.is_symlink():
+        if _is_durable_candidate(candidate_path, candidate):
+            return CandidateWriteResult(
+                status="already_exists",
+                artifact_path=artifact_path,
+                observation_id=candidate.observation_id,
+            )
         return CandidateWriteResult(
-            status="already_exists",
-            artifact_path=artifact_path,
+            status="blocked",
+            artifact_path=None,
             observation_id=candidate.observation_id,
+            reason=f"candidate path is occupied by a non-durable artifact: {artifact_path}",
         )
 
     content = render_candidate_note(candidate)
@@ -408,6 +416,10 @@ def project_pending_candidates(
     this consumer's cursor is independent of A3's quarantine-proving
     consumer, so replay/rewind here never affects the other.
     """
+    # The cursor is a durability acknowledgement: do not begin a batch unless
+    # a selected, existing vault can hold its candidates. This happens before
+    # writes so a restart can replay the complete unread batch safely.
+    _vault_root(vault_context)
     rows = read_observations_for_consumer(consumer_id, limit=limit)
     candidates = fold_observations(rows)
     results = [
@@ -419,15 +431,63 @@ def project_pending_candidates(
         )
         for candidate in candidates
     ]
-    if advance and rows:
+    # A cursor may acknowledge a batch only after every candidate is durable.
+    # Replays are safe because a prior successful write is ``already_exists``
+    # at its deterministic path.
+    if advance and rows and all(result.status in {"written", "already_exists"} for result in results):
         advance_cursor_for_consumer(consumer_id, rows)
     return results
 
 
 def _vault_root(context: VaultContext) -> Path:
-    if not context.active_vault_path:
-        raise CandidateProjectionError("vault_context.active_vault_path is required")
-    return Path(context.active_vault_path).expanduser().resolve()
+    if not context.is_selected:
+        raise CandidateProjectionError("candidate projection requires a selected vault")
+    root = Path(context.active_vault_path).expanduser().resolve()
+    if not root.is_dir():
+        raise CandidateProjectionError("candidate projection requires an existing vault directory")
+    return root
+
+
+def _is_durable_candidate(path: Path, candidate: HeimdalCandidate) -> bool:
+    """Return whether an existing path is this candidate's durable replay result."""
+    if not path.is_file() or path.is_symlink():
+        return False
+    try:
+        raw = path.read_text(encoding="utf-8")
+        if not raw.startswith("---\n"):
+            return False
+        frontmatter, separator, body = raw.removeprefix("---\n").partition("\n---\n")
+        if not separator:
+            return False
+        parsed = yaml.safe_load(frontmatter)
+    except (OSError, yaml.YAMLError):
+        return False
+    if not isinstance(parsed, Mapping) or parsed.get("artifact_class") != ARTIFACT_CLASS:
+        return False
+    provenance = parsed.get("provenance")
+    authority = parsed.get("authority")
+    return (
+        isinstance(provenance, Mapping)
+        and isinstance(authority, Mapping)
+        and provenance.get("observation_id") == candidate.observation_id
+        and provenance.get("episode_id") == candidate.episode_id
+        and provenance.get("derived_from") == candidate.derived_from
+        and provenance.get("content_identity") == candidate.content_identity
+        and provenance.get("raw_ref") == candidate.raw_ref
+        and provenance.get("capture_chain") == list(candidate.capture_chain)
+        and parsed.get("scope_hint") == candidate.scope_hint
+        and parsed.get("superseded_observation_ids") == list(candidate.superseded_observation_ids)
+        and parsed.get("lifecycle") == "active"
+        and parsed.get("work_relation") == "learn"
+        and authority.get("source_authoritative") is False
+        and authority.get("ai_generated") is True
+        and authority.get("requires_review") is True
+        and parsed.get("review_state") == REVIEW_STATE_DRAFT
+        and parsed.get("triage_state") == TRIAGE_STATE_CAPTURED
+        and body.startswith(
+            f"\n## Observed evidence\n\n{candidate.evidence_text}\n\n## Human takeaways\n"
+        )
+    )
 
 
 def _slug(value: str) -> str:

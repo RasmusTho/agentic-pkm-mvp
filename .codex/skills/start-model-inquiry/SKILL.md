@@ -62,6 +62,12 @@ The configured remote host owns the existing Claude and Codex subscription sessi
 and durable inquiry artifacts. `Tailscale_macmini` is an operator-configured SSH host alias, and
 the remote launcher is host-specific operator configuration outside Git.
 
+On the configured host, the Fable command may be mediated by a host-local, GUI-session proxy so a
+non-interactive SSH launch does not need direct login-keychain access. This is an internal remote-host
+authentication path, not a desktop-skill capability: do not configure it, read or copy its credentials
+or certificates, invoke it directly, or substitute a different provider path. If that host path is
+unavailable, preserve the established ambiguous-launcher failure handling below.
+
 The configured remote launcher owns the high-reasoning profile and extended per-role deadline for
 both independent roles. Do not lower or override that profile from the desktop skill, and do not
 move its model or adapter configuration into the local workspace.
@@ -88,6 +94,7 @@ move its model or adapter configuration into the local workspace.
 
 - Do not run local BuilderOps, Python, Codex, or Claude commands for this inquiry.
 - Do not install dependencies, run vault-init, configure adapters, or use API keys.
+- Do not configure, inspect, copy, or print remote-host proxy credentials, certificates, or endpoints.
 - Do not create a GitHub Issue; use the separate promotion path after a ready receipt exists.
 - Do not automate another desktop app or copy turns between apps.
 - Do not write inquiry artifacts to Companion UI or a human knowledge vault.

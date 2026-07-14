@@ -205,6 +205,21 @@ def _warm_retrieval_cache() -> None:
         logger.warning("Retrieval cache warm from durable index failed: %s", exc)
 
 
+def _ingest_settings_at_startup() -> None:
+    """Resolve vault-authored settings at API startup (SETTINGS-01 / F1).
+
+    Without this, a container that never ran ``settings compile`` silently serves
+    pydantic code defaults. Invalid sources degrade loudly (health
+    ``settings.state``) rather than crashing startup, so this never raises.
+    """
+    from app.settings.ingestion import ingest_settings
+
+    try:
+        ingest_settings(reason="api_startup")
+    except Exception as exc:  # pragma: no cover - defensive; ingest already degrades
+        logger.warning("Settings ingestion at API startup failed: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app.agent_memory.ask_provenance_manifest import start_ask_provenance_runtime
@@ -212,6 +227,7 @@ async def lifespan(app: FastAPI):
     start_ask_provenance_runtime()
     await _run_index_preflight()
     _log_v6_seam_status()
+    _ingest_settings_at_startup()
     _warm_retrieval_cache()
     yield
 

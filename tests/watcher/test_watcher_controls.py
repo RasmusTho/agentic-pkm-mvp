@@ -8,7 +8,9 @@ import pytest
 
 from app.vault.paths import get_vault_inbox_dir_rel
 from app.watcher.config import WatcherConfig
+from app.watcher.settings_delta import SettingsSourceDeltaResult
 from app.watcher.state import WatcherState
+import app.watcher.watcher as watcher
 from app.watcher.watcher import run_tick
 
 pytestmark = pytest.mark.watcher_controls
@@ -66,6 +68,35 @@ def test_scope_glob_limits_to_inbox(tmp_path: Path) -> None:
     payload = entries[0].get("payload") or {}
     assert payload.get("relative_path") == str(Path(_inbox_dir(tmp_path)) / inbox_note.name)
     assert other_note.name not in cfg.outbox_path.read_text(encoding="utf-8")
+
+
+def test_settings_source_uses_configured_vault_and_is_not_emitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Legacy watcher treats @Settings as bound control input, outside note scope."""
+    cfg = _config(tmp_path)
+    (cfg.vault_path / _inbox_dir(tmp_path)).mkdir(parents=True)
+    source = cfg.vault_path / "@Settings" / "global.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("```yaml settings\nlog_level: DEBUG\n```\n", encoding="utf-8")
+    observed: dict[str, Path] = {}
+
+    def reload_source(*, rel_path: Path, vault_settings_dir: Path | None = None):
+        observed["rel_path"] = rel_path
+        observed["vault_settings_dir"] = vault_settings_dir
+        return SettingsSourceDeltaResult(is_source=True, reloaded=True)
+
+    monkeypatch.setattr(watcher, "handle_settings_source_delta", reload_source)
+
+    summary = run_tick(cfg, WatcherState(), now=0.0)
+
+    assert observed == {
+        "rel_path": Path("@Settings/global.md"),
+        "vault_settings_dir": cfg.vault_path / "@Settings",
+    }
+    assert summary["settings_source_reloads_in_tick"] == 1
+    assert summary["emitted_in_tick"] == 0
+    assert not cfg.outbox_path.exists()
 
 
 def test_debounce_blocks_rapid_retriggers(tmp_path: Path) -> None:

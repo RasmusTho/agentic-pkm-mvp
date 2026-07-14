@@ -17,7 +17,7 @@ Compute the load-bearing output of the CKM: an explainable maturity assessment p
 
 ## What This Task Does
 
-- Implements `app/builderops/ckm/assess.py` computing, per capability, seven dimension scores in [0,1] from evidence edges — **pure transparent functions over edge counts/kinds/polarity, no LLM**:
+- Implements `app/builderops/ckm/assess.py` computing, per capability, seven dimension scores in [0,1] from capability-specific evidence edges — **pure transparent functions over edge counts/kinds/polarity, no LLM**. A shared SBS boundary is only a linker candidate pool: it never causes sibling capabilities to inherit the same evidence. Functional source evidence requires an exact capability-selected source citation; incidental imports in a cited test are not evidence. The assessment layer does not use capability names or planned maturity labels as hidden priors.
   1. functional completeness (merged PRs + source edges vs. spec/requirement edges; weakened by `weakens` edges)
   2. test completeness (test edges + invariant-registry citations)
   3. documentation quality (doc edges whose artifacts carry a current `State:` header)
@@ -59,7 +59,7 @@ Critical Review §8.1: an opaque maturity number that reads as truth is the subs
 ## How to Verify (Pre-Merge)
 
 - `python -m pytest tests/builderops/ckm/test_assessment_engine.py -q`
-- Live run over the seeded+linked repo; sanity-eyeball 3 known capabilities (e.g. Retrieval should out-score Context building on functional completeness, matching their contract-model maturity labels).
+- Live run over the seeded+linked repo; sanity-eyeball 3 known capabilities. Retrieval must out-score Context building on functional completeness because its cited, capability-specific source/PR evidence is stronger — never because the formula reads either capability's name or contract-model maturity label.
 - Full `pytest -m "not pg"` before PR.
 
 ## Out of Scope

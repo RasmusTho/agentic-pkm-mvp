@@ -25,10 +25,24 @@ from app.builderops.ckm_reevaluation import (
     CkmReevaluationError,
     build_ckm_reevaluation_report,
 )
-from app.builderops.ckm.models import CkmValidationError
+from app.builderops.ckm.models import MATURITY_DIMENSIONS, CkmValidationError
+from app.builderops.ckm.assess import assess_capabilities
+from app.builderops.ckm.gaps import GapDetectionConfig, detect_gaps
 from app.builderops.ckm.ingest_github import ingest_github
 from app.builderops.ckm.ingest_repo import ingest_repo
 from app.builderops.ckm.linkers import link_deterministic
+from app.builderops.ckm.overview_html import write_overview_html
+from app.builderops.ckm.projections import (
+    PROJECTION_FILENAMES as CKM_PROJECTION_FILENAMES,
+    render_capability_show,
+    write_projection as write_ckm_projection,
+)
+from app.builderops.ckm.semantic import (
+    SemanticAssociationError,
+    _confirm_edge_from_cli,
+    associate_unlinked_artifacts,
+    reapply_confirmation_receipts,
+)
 from app.builderops.ckm.seed import SeedManifestError, seed_capabilities
 from app.builderops.ckm.store import CkmStore
 from app.builderops.config import BuilderOpsPaths, load_paths
@@ -424,15 +438,167 @@ def ckm_ingest(ctx: click.Context, source: str, repo_root: Path, git_limit: int)
 @click.pass_context
 def ckm_link(ctx: click.Context, repo_root: Path) -> None:
     try:
-        result = link_deterministic(_ckm_store(ctx), repo_root)
+        store = _ckm_store(ctx)
+        result = link_deterministic(store, repo_root)
+        confirmations_reapplied = reapply_confirmation_receipts(store)
     except (OSError, ValueError, sqlite3.Error) as exc:
         raise click.ClickException(f"ckm linking failed: {exc}") from exc
     click.echo(
         "; ".join(
             [f"{name}: {result[name]} new" for name in ("matrix", "spec", "adr", "test_code", "github_ref")]
-            + [f"unlinked artifacts: {result['unlinked_artifacts']}"]
+            + [
+                f"confirmations reapplied: {confirmations_reapplied}",
+                f"unlinked artifacts: {result['unlinked_artifacts']}",
+            ]
         )
     )
+
+
+@ckm.command("associate", help="Propose fenced inferred edges for unlinked CKM artifacts.")
+@click.option("--limit", type=click.IntRange(1, 1000), default=200, show_default=True)
+@click.option(
+    "--confidence-floor", type=click.FloatRange(0.0, 1.0), default=0.6, show_default=True
+)
+@click.pass_context
+def ckm_associate(ctx: click.Context, limit: int, confidence_floor: float) -> None:
+    try:
+        result = associate_unlinked_artifacts(
+            _ckm_store(ctx), limit=limit, confidence_floor=confidence_floor
+        )
+    except (SemanticAssociationError, CkmValidationError, sqlite3.Error) as exc:
+        raise click.ClickException(f"ckm semantic association failed: {exc}") from exc
+    if result.status != "ok":
+        click.echo(result.status)
+        return
+    provider_model = (
+        f"; model={result.provider}:{result.model}" if result.provider and result.model else ""
+    )
+    click.echo(
+        f"proposed {result.proposed} candidate edges; discarded {result.discarded} below floor; "
+        f"{result.no_match} no-match{provider_model}"
+    )
+
+
+@ckm.command("confirm-edge", help="Confirm one inferred candidate edge with a durable receipt.")
+@click.argument("edge_id")
+@click.pass_context
+def ckm_confirm_edge(ctx: click.Context, edge_id: str) -> None:
+    try:
+        receipt = _confirm_edge_from_cli(_ckm_store(ctx), edge_id)
+    except (CkmValidationError, sqlite3.Error) as exc:
+        raise click.ClickException(f"ckm edge confirmation failed: {exc}") from exc
+    click.echo(f"edge {edge_id} confirmed; receipt builderops://receipts/{receipt['id']}")
+
+
+@ckm.command("assess", help="Append explainable maturity assessments for changed capabilities.")
+@click.pass_context
+def ckm_assess(ctx: click.Context) -> None:
+    try:
+        result = assess_capabilities(_ckm_store(ctx))
+    except (CkmValidationError, sqlite3.Error) as exc:
+        raise click.ClickException(f"ckm assessment failed: {exc}") from exc
+    click.echo(
+        f"assessed {result.assessed} capabilities "
+        f"({result.skipped} unchanged, skipped)"
+    )
+
+
+@ckm.command("gaps", help="Regenerate cited CKM gap and missing-evidence findings.")
+@click.option("--floor", type=click.FloatRange(0.0, 1.0), default=0.5, show_default=True)
+@click.option(
+    "--healthy-floor",
+    type=click.FloatRange(0.0, 1.0),
+    default=0.75,
+    show_default=True,
+)
+@click.option(
+    "--healthy-sibling-count",
+    type=click.IntRange(1, len(MATURITY_DIMENSIONS) - 1),
+    default=2,
+    show_default=True,
+)
+@click.pass_context
+def ckm_gaps(
+    ctx: click.Context,
+    floor: float,
+    healthy_floor: float,
+    healthy_sibling_count: int,
+) -> None:
+    try:
+        result = detect_gaps(
+            _ckm_store(ctx),
+            config=GapDetectionConfig(
+                floor=floor,
+                healthy_floor=healthy_floor,
+                healthy_sibling_count=healthy_sibling_count,
+            ),
+        )
+    except (CkmValidationError, sqlite3.Error) as exc:
+        raise click.ClickException(f"ckm gap detection failed: {exc}") from exc
+    click.echo(
+        f"{result.findings} findings: "
+        f"{result.starved_dimensions} starved-dimension, "
+        f"{result.uncovered_boundaries} uncovered-boundary, "
+        f"{result.claim_exceeds_evidence} claim-exceeds-evidence"
+    )
+    if result.stale_assessments:
+        click.echo(
+            f"warning: {result.stale_assessments} assessment(s) are stale relative to the "
+            "global evidence watermark but remain current for their unchanged evidence fingerprint",
+            err=True,
+        )
+
+
+@ckm.command("show", help="Render one capability as a non-authoritative CKM projection.")
+@click.argument("capability_slug")
+@click.pass_context
+def ckm_show(ctx: click.Context, capability_slug: str) -> None:
+    try:
+        output = render_capability_show(_ckm_store(ctx), capability_slug)
+    except (CkmValidationError, sqlite3.Error) as exc:
+        raise click.ClickException(f"ckm show failed: {exc}") from exc
+    click.echo(output, nl=False)
+
+
+@ckm.command("project", help="Write one non-authoritative CKM Markdown projection.")
+@click.option(
+    "--type",
+    "projection_type",
+    type=click.Choice(sorted(CKM_PROJECTION_FILENAMES)),
+    required=True,
+)
+@click.option(
+    "--out",
+    "output_dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    required=True,
+)
+@click.pass_context
+def ckm_project(ctx: click.Context, projection_type: str, output_dir: Path) -> None:
+    try:
+        result = write_ckm_projection(_ckm_store(ctx), projection_type, output_dir)
+    except (CkmValidationError, OSError, sqlite3.Error) as exc:
+        raise click.ClickException(f"ckm projection failed: {exc}") from exc
+    click.echo(f"{result.projection_type}\t{result.path}")
+
+
+@ckm.command("overview", help="Write the self-contained CKM Development Overview HTML.")
+@click.option(
+    "--out",
+    "output_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    required=True,
+)
+@click.pass_context
+def ckm_overview(ctx: click.Context, output_path: Path) -> None:
+    try:
+        store = _ckm_store(ctx)
+        if not store.db_path.is_file():
+            raise CkmValidationError(f"CKM database does not exist: {store.db_path}")
+        result = write_overview_html(store, output_path)
+    except (CkmValidationError, OSError, sqlite3.Error) as exc:
+        raise click.ClickException(f"ckm overview failed: {exc}") from exc
+    click.echo(result)
 
 
 @builderops.group("inquiry", help="Persist and inspect pre-ticket model inquiry artifacts.")
