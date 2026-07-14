@@ -468,7 +468,7 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "call (#2910 identity-heal fix); a denying/raising guard raises before "
         "reaching this line."
     ),
-    ("app/vault/settings_service.py", 362): (
+    ("app/vault/settings_service.py", 422): (
         "guarded: SettingsService.set_effective_setting asserts "
         "DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_WRITE_ACTION) "
         "earlier in the same method before persist=True reaches this write."

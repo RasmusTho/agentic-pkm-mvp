@@ -54,6 +54,7 @@ class _FakeClient:
         self._get_error = get_error
         self.get_calls: list[tuple[str, dict]] = []
         self.get_headers: list[dict[str, str]] = []
+        self.post_calls: list[tuple[str, dict[str, Any]]] = []
 
     def get(
         self, url: str, *, params: dict[str, Any], headers: dict[str, str] | None = None
@@ -67,6 +68,14 @@ class _FakeClient:
     def post(
         self, url: str, *, json: dict[str, Any], headers: dict[str, str] | None = None
     ) -> dict[str, Any]:
+        self.post_calls.append((url, json))
+        if url == "/api/companion/journaling/reflection/start":
+            return {
+                "state": "started",
+                "note_path": str(json.get("note_path") or ""),
+                "session_id": "reflection-session-1",
+                "opening_turn": "What stood out today?",
+            }
         return {}
 
 
@@ -659,6 +668,41 @@ class TestHandleGet:
         assert "art-123" in html
         assert "sha256-deadbeef" in html
         assert "This is the note body." in html
+
+    def test_reflection_offer_reaches_explicit_same_origin_action(self) -> None:
+        payload = _note_payload()
+        payload["reflection_offer"] = {
+            "label": "Reflect on today?",
+            "action": "journaling.reflection.begin",
+            "tap_required": True,
+        }
+        client = _FakeClient(get_result=payload)
+        server, port = _start_server(client, "http://127.0.0.1:18001")
+        try:
+            page = httpx.get(
+                f"http://127.0.0.1:{port}/?note_path=Some%2FNote.md",
+                timeout=5.0,
+            )
+            assert page.status_code == 200
+            assert 'data-testid="evening-reflection-offer"' in page.text
+            assert 'data-action="journaling.reflection.begin"' in page.text
+            assert "/api/companion/journaling/reflection/start" in page.text
+
+            started = httpx.post(
+                f"http://127.0.0.1:{port}/api/companion/journaling/reflection/start",
+                json={"note_path": "Some/Note.md", "for_date": "2026-07-15"},
+                timeout=5.0,
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        assert started.status_code == 200
+        assert started.json()["state"] == "started"
+        assert client.post_calls[-1] == (
+            "/api/companion/journaling/reflection/start",
+            {"note_path": "Some/Note.md", "for_date": "2026-07-15"},
+        )
 
     def test_client_error_renders_error_state(self) -> None:
         from companion_ui.workspace.serve_dev_page import handle_get

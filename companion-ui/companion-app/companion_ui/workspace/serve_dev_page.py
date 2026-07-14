@@ -92,6 +92,7 @@ from companion_ui.workspace.entry_state import (
     entry_state_attributes,
     resolve_entry_state,
 )
+from companion_ui.workspace.reflection_offer import render_evening_reflection_offer_html
 from companion_ui.workspace.guidance_layer import (
     guidance_callout_markup,
     guidance_layer_script,
@@ -1825,6 +1826,54 @@ def _note_chrome_script() -> str:
   </script>"""
 
 
+def _reflection_offer_script() -> str:
+    """Dispatch the inert reflection offer only after an explicit button tap."""
+    return """
+  <script>
+  (function () {
+    document.addEventListener('click', function (event) {
+      var button = event.target && event.target.closest
+        ? event.target.closest('button[data-action="journaling.reflection.begin"]')
+        : null;
+      if (!button) return;
+      event.preventDefault();
+      if (button.getAttribute('data-submitting') === 'true') return;
+      var offer = button.closest('[data-testid="evening-reflection-offer"]');
+      if (!offer) return;
+      var notePath = offer.getAttribute('data-note-path') || '';
+      var status = offer.querySelector('[data-testid="evening-reflection-status"]');
+      var endpoint = button.getAttribute('data-api-path')
+        || '/api/companion/journaling/reflection/start';
+      button.setAttribute('data-submitting', 'true');
+      if (status) status.textContent = 'Opening reflection…';
+      fetch(endpoint, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({note_path: notePath})
+      }).then(function (response) {
+        return response.json().then(function (data) {
+          return {ok: response.ok, data: data};
+        });
+      }).then(function (result) {
+        if (!result.ok || !result.data || result.data.state !== 'started') {
+          var detail = result.data && result.data.detail;
+          throw new Error((detail && (detail.message || detail.error)) || 'Reflection could not start.');
+        }
+        offer.setAttribute('data-offer-state', 'started');
+        offer.setAttribute('data-session-id', result.data.session_id || '');
+        button.disabled = true;
+        button.removeAttribute('data-submitting');
+        if (status) status.textContent = result.data.opening_turn || 'Reflection started.';
+      }).catch(function (error) {
+        button.removeAttribute('data-submitting');
+        offer.setAttribute('data-offer-state', 'error');
+        if (status) status.textContent = error.message || 'Reflection could not start.';
+      });
+    });
+  }());
+  </script>"""
+
+
 def _note_readback_script() -> str:
     """Local-first TTS/read-back controls for the rendered note surface."""
 
@@ -2558,6 +2607,12 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
         if isinstance(day_start_payload, dict)
         else ""
     )
+    reflection_offer_html = render_evening_reflection_offer_html(
+        fields.get("reflection_offer")
+        if isinstance(fields.get("reflection_offer"), dict)
+        else None,
+        note_path=str(fields.get("note_path") or ""),
+    )
     raw_note_path = str(fields.get("note_path", "") or "")
     note_path_val = _e(raw_note_path)
     artifact_id = _e(fields.get("artifact_id", ""))
@@ -3185,6 +3240,7 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
     # four #3362 audit lanes — they render unconditionally.
     rail_cards_inner = f"""
         {day_start_card_html}
+        {reflection_offer_html}
         {canvas_lane_html}
         {active_note_body_update_html}
         {suggestion_flow_html}
@@ -15425,6 +15481,7 @@ def render_index_html(
   {_note_editor_script()}
   {_refused_write_draft_restore_boot_script()}
   {_note_chrome_script()}
+  {_reflection_offer_script()}
   {settings_drawer_script()}
   {vault_settings_panel_js}
   {_canvas_coauthor_script(canvas_enabled)}
@@ -16134,6 +16191,7 @@ def make_handler(
             {
                 "/api/companion/workspace/body",
                 "/api/companion/workspace/update",
+                "/api/companion/journaling/reflection/start",
                 "/api/companion/capture",
                 "/api/companion/note/save",  # direct human note edit
                 "/api/companion/tts/plan",
@@ -16164,6 +16222,7 @@ def make_handler(
             {
                 "/api/companion/workspace/body",
                 "/api/companion/workspace/update",
+                "/api/companion/journaling/reflection/start",
                 "/api/companion/capture",
                 "/api/companion/note/save",
                 "/api/companion/vault-browser/actions/queue-review",
