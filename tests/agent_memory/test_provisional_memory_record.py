@@ -42,7 +42,7 @@ def _created_receipt(artifact: ProvisionalMarkdownArtifact) -> ProvisionalLifecy
         transition=ProvisionalLifecycleTransition.CREATED,
         actor_ref="agent://mimer",
         occurred_at=NOW,
-        artifact_digest=artifact.content_digest,
+        artifact_digest=artifact.artifact_digest,
     )
 
 
@@ -148,6 +148,14 @@ def test_lifecycle_receipts_are_content_free_and_distinguish_retryable_state() -
         ProvisionalLifecycleReceipt.model_validate(
             {**failed.model_dump(), "content": "must not persist"}
         )
+    for field in ("receipt_id", "memory_id", "artifact_ref", "actor_ref"):
+        with pytest.raises(ValidationError):
+            ProvisionalLifecycleReceipt.model_validate(
+                {
+                    **failed.model_dump(),
+                    field: "The user prefers explicit verification.",
+                }
+            )
     with pytest.raises(ValidationError):
         ProvisionalLifecycleReceipt.model_validate(
             {
@@ -201,6 +209,59 @@ def test_terminal_delete_cannot_be_reversed_by_later_created_receipt() -> None:
     assert result.record is None
 
 
+def test_conflicting_receipt_identity_and_order_fail_closed() -> None:
+    artifact = _artifact()
+    created = _created_receipt(artifact)
+    conflicting = ProvisionalLifecycleReceipt(
+        receipt_id=created.receipt_id,
+        memory_id=artifact.memory_id,
+        artifact_ref=artifact.artifact_ref,
+        transition=ProvisionalLifecycleTransition.WRITE_FAILED,
+        actor_ref="agent://mimer",
+        occurred_at=NOW,
+        error_code="vault_write_failed",
+    )
+    conflict = rebuild_provisional_memory(
+        memory_id=artifact.memory_id,
+        artifact_ref=artifact.artifact_ref,
+        artifact=artifact,
+        receipts=(created, conflicting),
+    )
+    same_time = rebuild_provisional_memory(
+        memory_id=artifact.memory_id,
+        artifact_ref=artifact.artifact_ref,
+        artifact=artifact,
+        receipts=(
+            created,
+            conflicting.model_copy(update={"receipt_id": "receipt-failed"}),
+        ),
+    )
+
+    assert conflict.state is ProvisionalReconciliationState.INCONSISTENT
+    assert conflict.record is None
+    assert same_time.state is ProvisionalReconciliationState.INCONSISTENT
+    assert same_time.record is None
+
+
+def test_reconciliation_envelope_cannot_resurrect_excluded_record() -> None:
+    artifact = _artifact()
+    ready = rebuild_provisional_memory(
+        memory_id=artifact.memory_id,
+        artifact_ref=artifact.artifact_ref,
+        artifact=artifact,
+        receipts=(_created_receipt(artifact),),
+    )
+    payload = ready.model_dump()
+    payload["state"] = ProvisionalReconciliationState.MISSING
+    with pytest.raises(ValidationError):
+        type(ready).model_validate(payload)
+
+    assert ready.record is not None
+    mismatched = ready.record.model_copy(update={"memory_id": "memory-other"})
+    with pytest.raises(ValidationError):
+        type(ready).model_validate({**ready.model_dump(), "record": mismatched})
+
+
 def test_record_rebuild_follows_markdown_and_never_resurrects_missing_content() -> None:
     original = _artifact("Original Markdown claim")
     receipt = _created_receipt(original)
@@ -225,3 +286,12 @@ def test_record_rebuild_follows_markdown_and_never_resurrects_missing_content() 
     assert missing.state is ProvisionalReconciliationState.MISSING
     assert missing.record is None
     assert "Original Markdown claim" not in str(missing.model_dump())
+
+    metadata_edited = original.model_copy(update={"scope_id": "scope-work"})
+    metadata_result = rebuild_provisional_memory(
+        memory_id=metadata_edited.memory_id,
+        artifact_ref=metadata_edited.artifact_ref,
+        artifact=metadata_edited,
+        receipts=(receipt,),
+    )
+    assert metadata_result.state is ProvisionalReconciliationState.EDITED

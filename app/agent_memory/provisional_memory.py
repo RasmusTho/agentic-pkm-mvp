@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 from hashlib import sha256
+import json
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -16,6 +17,26 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.agent_memory.candidate import MemoryType, ReviewState
 
 NonEmptyRef = Annotated[str, Field(min_length=1)]
+OpaqueId = Annotated[
+    str,
+    Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"),
+]
+ArtifactRef = Annotated[
+    str,
+    Field(
+        min_length=12,
+        max_length=256,
+        pattern=r"^vault://[A-Za-z0-9._~!$&'()*+,;=:@%/-]+\.md$",
+    ),
+]
+ActorRef = Annotated[
+    str,
+    Field(
+        min_length=9,
+        max_length=80,
+        pattern=r"^(agent|human|system)://[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    ),
+]
 
 
 class ProvisionalEvidenceRole(str, Enum):
@@ -57,20 +78,34 @@ class ProvisionalReconciliationState(str, Enum):
     INCONSISTENT = "inconsistent"
 
 
+class ProvisionalDiagnostic(str, Enum):
+    RECEIPT_IDENTITY_MISMATCH = "receipt_identity_mismatch"
+    ARTIFACT_IDENTITY_MISMATCH = "artifact_identity_mismatch"
+    CONFLICTING_RECEIPT_ID = "conflicting_receipt_id"
+    AMBIGUOUS_RECEIPT_ORDER = "ambiguous_receipt_order"
+    TERMINAL_DELETE_RECEIPT = "terminal_delete_receipt"
+    ARTIFACT_ABSENT_RETRYABLE = "artifact_absent_retryable"
+    ARTIFACT_MISSING_AFTER_SUCCESS = "artifact_missing_after_success"
+    ARTIFACT_WITHOUT_SUCCESS = "artifact_without_terminal_success_receipt"
+    UNSUPPORTED_TERMINAL = "unsupported_terminal_transition"
+    RECEIPT_MATCHES_MARKDOWN = "receipt_matches_markdown"
+    MARKDOWN_EDITED_AFTER_RECEIPT = "markdown_edited_after_receipt"
+
+
 class ProvisionalMarkdownArtifact(BaseModel):
     """Metadata parsed with the current content of one Markdown artifact."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    memory_id: str = Field(min_length=1)
-    artifact_ref: str = Field(min_length=1)
-    scope_id: str = Field(min_length=1)
-    principal_id: str = Field(min_length=1)
+    memory_id: OpaqueId
+    artifact_ref: ArtifactRef
+    scope_id: OpaqueId
+    principal_id: OpaqueId
     memory_type: MemoryType
     evidence_role: ProvisionalEvidenceRole = ProvisionalEvidenceRole.BACKGROUND
     sensitivity: ProvisionalSensitivity
     content: str = Field(min_length=1)
-    created_by: str = Field(min_length=1)
+    created_by: ActorRef
     created_at: datetime
     provenance_event_ids: tuple[NonEmptyRef, ...] = Field(min_length=1)
     source_role: Literal["agent_memory"] = "agent_memory"
@@ -85,8 +120,14 @@ class ProvisionalMarkdownArtifact(BaseModel):
         return value
 
     @property
-    def content_digest(self) -> str:
-        return sha256(self.content.encode("utf-8")).hexdigest()
+    def artifact_digest(self) -> str:
+        canonical = json.dumps(
+            self.model_dump(mode="json"),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return sha256(canonical.encode("utf-8")).hexdigest()
 
 
 class ProvisionalLifecycleReceipt(BaseModel):
@@ -94,11 +135,11 @@ class ProvisionalLifecycleReceipt(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    receipt_id: str = Field(min_length=1)
-    memory_id: str = Field(min_length=1)
-    artifact_ref: str = Field(min_length=1)
+    receipt_id: OpaqueId
+    memory_id: OpaqueId
+    artifact_ref: ArtifactRef
     transition: ProvisionalLifecycleTransition
-    actor_ref: str = Field(min_length=1)
+    actor_ref: ActorRef
     occurred_at: datetime
     artifact_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     error_code: ProvisionalFailureCode | None = None
@@ -150,18 +191,18 @@ class ProvisionalMemoryRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    memory_id: str = Field(min_length=1)
-    artifact_ref: str = Field(min_length=1)
-    scope_id: str = Field(min_length=1)
-    principal_id: str = Field(min_length=1)
+    memory_id: OpaqueId
+    artifact_ref: ArtifactRef
+    scope_id: OpaqueId
+    principal_id: OpaqueId
     memory_type: MemoryType
     evidence_role: ProvisionalEvidenceRole
     sensitivity: ProvisionalSensitivity
     content: str = Field(min_length=1)
-    created_by: str = Field(min_length=1)
+    created_by: ActorRef
     created_at: datetime
     provenance_event_ids: tuple[NonEmptyRef, ...] = Field(min_length=1)
-    lifecycle_receipt_refs: tuple[NonEmptyRef, ...] = Field(min_length=1)
+    lifecycle_receipt_refs: tuple[OpaqueId, ...] = Field(min_length=1)
     source_role: Literal["agent_memory"] = "agent_memory"
     authority_state: Literal["noncanonical"] = "noncanonical"
     review_state: Literal[ReviewState.UNREVIEWED] = ReviewState.UNREVIEWED
@@ -181,12 +222,32 @@ class ProvisionalMemoryRecord(BaseModel):
 class ProvisionalMemoryReconciliation(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    memory_id: str
-    artifact_ref: str
+    memory_id: OpaqueId
+    artifact_ref: ArtifactRef
     state: ProvisionalReconciliationState
     record: ProvisionalMemoryRecord | None = None
-    receipt_refs: tuple[str, ...] = ()
-    diagnostic: str
+    receipt_refs: tuple[OpaqueId, ...] = ()
+    diagnostic: ProvisionalDiagnostic
+
+    @model_validator(mode="after")
+    def _enforce_record_posture(self) -> "ProvisionalMemoryReconciliation":
+        readable = self.state in {
+            ProvisionalReconciliationState.READY,
+            ProvisionalReconciliationState.EDITED,
+        }
+        if readable and self.record is None:
+            raise ValueError("readable reconciliation state requires record")
+        if not readable and self.record is not None:
+            raise ValueError("excluded reconciliation state cannot carry record")
+        if self.record is not None:
+            if (
+                self.record.memory_id != self.memory_id
+                or self.record.artifact_ref != self.artifact_ref
+            ):
+                raise ValueError("record identity must match reconciliation envelope")
+            if self.record.lifecycle_receipt_refs != self.receipt_refs:
+                raise ValueError("record receipt refs must match reconciliation envelope")
+        return self
 
 
 def rebuild_provisional_memory(
@@ -202,7 +263,10 @@ def rebuild_provisional_memory(
     human edit, but its state exposes that the receipt digest describes an
     earlier revision. Missing Markdown always produces ``record=None``.
     """
-    ordered = tuple(sorted(receipts, key=lambda item: (item.occurred_at, item.receipt_id)))
+    normalized, conflict = _normalize_receipts(receipts)
+    if conflict is not None:
+        return _reconciliation(memory_id, artifact_ref, conflict[0], (), conflict[1])
+    ordered = tuple(sorted(normalized, key=lambda item: (item.occurred_at, item.receipt_id)))
     refs = tuple(receipt.receipt_id for receipt in ordered)
     if any(
         receipt.memory_id != memory_id or receipt.artifact_ref != artifact_ref
@@ -210,14 +274,14 @@ def rebuild_provisional_memory(
     ):
         return _reconciliation(
             memory_id, artifact_ref, ProvisionalReconciliationState.INCONSISTENT,
-            refs, "receipt_identity_mismatch",
+            refs, ProvisionalDiagnostic.RECEIPT_IDENTITY_MISMATCH,
         )
     if artifact is not None and (
         artifact.memory_id != memory_id or artifact.artifact_ref != artifact_ref
     ):
         return _reconciliation(
             memory_id, artifact_ref, ProvisionalReconciliationState.INCONSISTENT,
-            refs, "artifact_identity_mismatch",
+            refs, ProvisionalDiagnostic.ARTIFACT_IDENTITY_MISMATCH,
         )
 
     latest = ordered[-1] if ordered else None
@@ -227,7 +291,7 @@ def rebuild_provisional_memory(
     ):
         return _reconciliation(
             memory_id, artifact_ref, ProvisionalReconciliationState.TERMINAL_DELETED,
-            refs, "terminal_delete_receipt",
+            refs, ProvisionalDiagnostic.TERMINAL_DELETE_RECEIPT,
         )
     if artifact is None:
         state = (
@@ -236,25 +300,25 @@ def rebuild_provisional_memory(
             else ProvisionalReconciliationState.MISSING
         )
         diagnostic = (
-            "artifact_absent_retryable"
+            ProvisionalDiagnostic.ARTIFACT_ABSENT_RETRYABLE
             if state is ProvisionalReconciliationState.RETRYABLE_PARTIAL
-            else "artifact_missing_after_success"
+            else ProvisionalDiagnostic.ARTIFACT_MISSING_AFTER_SUCCESS
         )
         return _reconciliation(memory_id, artifact_ref, state, refs, diagnostic)
     if latest is None or latest.retryable:
         return _reconciliation(
             memory_id, artifact_ref, ProvisionalReconciliationState.RETRYABLE_PARTIAL,
-            refs, "artifact_without_terminal_success_receipt",
+            refs, ProvisionalDiagnostic.ARTIFACT_WITHOUT_SUCCESS,
         )
     if latest.transition is not ProvisionalLifecycleTransition.CREATED:
         return _reconciliation(
             memory_id, artifact_ref, ProvisionalReconciliationState.INCONSISTENT,
-            refs, "unsupported_terminal_transition",
+            refs, ProvisionalDiagnostic.UNSUPPORTED_TERMINAL,
         )
 
     state = (
         ProvisionalReconciliationState.READY
-        if latest.artifact_digest == artifact.content_digest
+        if latest.artifact_digest == artifact.artifact_digest
         else ProvisionalReconciliationState.EDITED
     )
     record = ProvisionalMemoryRecord(
@@ -267,7 +331,11 @@ def rebuild_provisional_memory(
         state=state,
         record=record,
         receipt_refs=refs,
-        diagnostic="receipt_matches_markdown" if state is ProvisionalReconciliationState.READY else "markdown_edited_after_receipt",
+        diagnostic=(
+            ProvisionalDiagnostic.RECEIPT_MATCHES_MARKDOWN
+            if state is ProvisionalReconciliationState.READY
+            else ProvisionalDiagnostic.MARKDOWN_EDITED_AFTER_RECEIPT
+        ),
     )
 
 
@@ -276,7 +344,7 @@ def _reconciliation(
     artifact_ref: str,
     state: ProvisionalReconciliationState,
     receipt_refs: tuple[str, ...],
-    diagnostic: str,
+    diagnostic: ProvisionalDiagnostic,
 ) -> ProvisionalMemoryReconciliation:
     return ProvisionalMemoryReconciliation(
         memory_id=memory_id,
@@ -287,8 +355,34 @@ def _reconciliation(
     )
 
 
+def _normalize_receipts(
+    receipts: tuple[ProvisionalLifecycleReceipt, ...],
+) -> tuple[
+    tuple[ProvisionalLifecycleReceipt, ...],
+    tuple[ProvisionalReconciliationState, ProvisionalDiagnostic] | None,
+]:
+    by_id: dict[str, ProvisionalLifecycleReceipt] = {}
+    for receipt in receipts:
+        existing = by_id.get(receipt.receipt_id)
+        if existing is not None and existing != receipt:
+            return (), (
+                ProvisionalReconciliationState.INCONSISTENT,
+                ProvisionalDiagnostic.CONFLICTING_RECEIPT_ID,
+            )
+        by_id[receipt.receipt_id] = receipt
+    normalized = tuple(by_id.values())
+    timestamps = [receipt.occurred_at for receipt in normalized]
+    if len(timestamps) != len(set(timestamps)):
+        return (), (
+            ProvisionalReconciliationState.INCONSISTENT,
+            ProvisionalDiagnostic.AMBIGUOUS_RECEIPT_ORDER,
+        )
+    return normalized, None
+
+
 __all__ = [
     "ProvisionalEvidenceRole",
+    "ProvisionalDiagnostic",
     "ProvisionalFailureCode",
     "ProvisionalLifecycleReceipt",
     "ProvisionalLifecycleTransition",
