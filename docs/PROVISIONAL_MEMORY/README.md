@@ -114,5 +114,12 @@ replace deterministic call-site proof.
 
 ## Relationship to GitHub Issues
 
-Parent validation hub: #2314. Task Issues are filed from these specs after this directory merges and
-passes strict readiness validation. No task may claim #2314 itself.
+Parent validation hub: #2314. Strictly validated task Issues:
+
+1. #3718 — PROVISIONAL-MEMORY-01 (`agent:ready`)
+2. #3719 — PROVISIONAL-MEMORY-02 (`agent:blocked` by #3718)
+3. #3720 — PROVISIONAL-MEMORY-03 (`agent:blocked` by #3719)
+4. #3721 — PROVISIONAL-MEMORY-04 (`agent:blocked` by #3719/#3720)
+
+No task may claim #2314 itself. After each merge, the coordinator updates the validation ledger on
+#2314 and recalculates which single dependent Issue can truthfully become ready.
