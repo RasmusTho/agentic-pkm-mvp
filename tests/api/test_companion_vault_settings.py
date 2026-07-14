@@ -9,6 +9,7 @@ import app.api.routes.companion as companion_module
 from app.api.app import app
 from app.vault.app_local import AppLocalSettingsStore
 from app.vault.manager import VaultManager
+from companion_ui.workspace.vault_settings_panel import vault_settings_panel_fragment
 
 pytestmark = pytest.mark.not_pg
 
@@ -85,6 +86,38 @@ def test_remembered_selection_restored_after_manager_restart(
     assert body["context"]["status"] == "selected"
     assert body["context"]["active_vault_path"] == str(vault_root)
     assert body["context"]["permissions"]["allowWritesToVault"] is True
+
+
+def test_journaling_numeric_tunables_are_truthfully_read_only_in_companion(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The out-of-scope settings UI must not advertise unsaveable number editors."""
+    vault_root = tmp_path / "Niflheim"
+    _, manager = _initialized_remembered_vault(tmp_path, vault_root)
+    monkeypatch.setattr(companion_module, "get_vault_manager", lambda: manager)
+
+    response = client.get("/api/companion/vault/settings")
+
+    assert response.status_code == 200, response.text
+    projection = response.json()
+    definitions = {item["key"]: item for item in projection["definitions"]}
+    numeric_keys = (
+        "journalingEveningNudgeStartHour",
+        "journalingEveningNudgeEndHour",
+        "journalingReflectionIdleTimeoutSeconds",
+        "journalingReflectionMaxOwnerTurns",
+    )
+    fragment = vault_settings_panel_fragment(projection, settings_only=True)
+    for key in numeric_keys:
+        assert definitions[key]["type"] == "number"
+        assert definitions[key]["editable"] is False
+        row_start = fragment.index(f'data-setting-key="{key}"')
+        row_end = fragment.index("</form>", row_start)
+        row = fragment[row_start:row_end]
+        assert 'data-editable="false"' in row
+        assert f'data-testid="vault-setting-save-{key}" disabled' in row
 
 
 def test_settings_restart_uses_remembered_selection_not_cwd_or_env_vault(

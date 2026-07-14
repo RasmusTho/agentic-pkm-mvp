@@ -157,6 +157,7 @@ class DevPageState:
     resurface_scarce_count: int | None = None
     resurface_more_held_back: bool = False
     commitments_surface: dict[str, Any] | None = None
+    reflection_offer: dict[str, Any] | None = None
     suggestion_cards: list[dict[str, Any]] | None = None
     suggested_insertions: list[dict[str, Any]] | None = None
     guard_writeguard_status: str = "ok"
@@ -514,6 +515,11 @@ class RealNoteWorkspaceDevPage:
             resurface_scarce_count=_resurface_scarce_count_from_payload(resurface_payload),
             resurface_more_held_back=_resurface_more_held_back_from_payload(resurface_payload),
             commitments_surface=_commitment_surface_from_payload(commitments_payload),
+            reflection_offer=(
+                dict(raw["reflection_offer"])
+                if isinstance(raw.get("reflection_offer"), dict)
+                else None
+            ),
             suggested_insertions=_suggested_insertions_from_payload(suggestions),
             guard_writeguard_status=guards.get("writeguard_status") or "ok",
             guard_canvas_enabled=bool(guards.get("canvas_enabled", True)),
@@ -1028,6 +1034,7 @@ class RealNoteWorkspaceDevPage:
             "resurface_scarce_count": self.state.resurface_scarce_count,
             "resurface_more_held_back": self.state.resurface_more_held_back,
             "commitments_surface": self.state.commitments_surface,
+            "reflection_offer": self.state.reflection_offer,
             "suggestion_cards": self.state.suggestion_cards or [],
             "suggested_insertions": self.state.suggested_insertions or [],
             "guard_writeguard_status": self.state.guard_writeguard_status,
