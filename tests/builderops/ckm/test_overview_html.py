@@ -80,10 +80,14 @@ def overview_store(tmp_path: Path) -> CkmStore:
         "edge": confirmed_edge.to_dict(),
         "artifact": confirmed_artifact.to_dict(),
     }
+    scores = {dimension: 0.8 for dimension in MATURITY_DIMENSIONS}
+    citations = {dimension: [citation] for dimension in MATURITY_DIMENSIONS}
+    scores["operational_readiness"] = 0.0
+    citations["operational_readiness"] = []
     store.append_assessment(
         capability_id=parent.id,
-        scores={dimension: 0.8 for dimension in MATURITY_DIMENSIONS},
-        citations={dimension: [citation] for dimension in MATURITY_DIMENSIONS},
+        scores=scores,
+        citations=citations,
         candidate_shares={dimension: 0.75 for dimension in MATURITY_DIMENSIONS},
         formula_ids={dimension: "fixture-formula" for dimension in MATURITY_DIMENSIONS},
         aggregate=0.8,
@@ -130,7 +134,7 @@ def test_pure_render_over_fixture_graph(overview_store: CkmStore) -> None:
     assert 'data-aggregate-band="healthy"' in first
     assert first.count('class="dimension-bar"') == len(MATURITY_DIMENSIONS)
     summary = first.split("</summary>", maxsplit=1)[0]
-    assert summary.count('class="mini-dimension"') == len(MATURITY_DIMENSIONS)
+    assert summary.count('class="mini-dimension ') == len(MATURITY_DIMENSIONS)
     assert '<details class="drilldown"><summary>Evidence and basis</summary>' in first
     assert "Retrieval needs stronger test evidence." in first
 
@@ -142,14 +146,126 @@ def test_honesty_markers_render(overview_store: CkmStore) -> None:
     assert "LOW CONFIDENCE" in rendered
     assert "candidate share 75.0%" in rendered
     assert "candidate share unavailable" in rendered
-    assert rendered.count('mini-dimension mini-unknown') == len(MATURITY_DIMENSIONS)
+    assert rendered.count('mini-dimension mini-unassessed') == len(MATURITY_DIMENSIONS)
     assert "2 confirmed / 1 candidate" not in rendered
     assert "1 confirmed / 1 candidate" in rendered
-    assert '<span class="badge">candidate</span>' in rendered
+    assert '<span class="badge evidence-status">candidate</span>' in rendered
     assert "Basis: semantic:retrieval-draft" in rendered
 
+    retrieval_summary = rendered.split('<article id="cap-', maxsplit=1)[1].split(
+        "</summary>", maxsplit=1
+    )[0]
+    assert "STALE" in retrieval_summary
+    assert "LOW CONF" in retrieval_summary
 
-def test_projection_footer_always_present(tmp_path: Path, overview_store: CkmStore) -> None:
+
+def test_dimension_cells_render_three_states_and_proportional_fill(
+    overview_store: CkmStore,
+) -> None:
+    rendered = render_overview_html(overview_store)
+
+    assert rendered.count('class="mini-dimension ') == 2 * len(MATURITY_DIMENSIONS)
+    assert 'class="mini-dimension mini-scored"' in rendered
+    assert 'style="--score:80.0%"' in rendered
+    assert 'class="mini-dimension mini-starved"' in rendered
+    unknown_cells = re.findall(
+        r'<span class="mini-dimension mini-unassessed"[^>]*>—</span>', rendered
+    )
+    assert len(unknown_cells) == len(MATURITY_DIMENSIONS)
+    assert all("--score" not in cell for cell in unknown_cells)
+
+
+def test_candidate_chip_conditional(overview_store: CkmStore) -> None:
+    rendered = render_overview_html(overview_store)
+    summaries = re.findall(r"<summary class=\"capability-summary\">(.*?)</summary>", rendered, re.S)
+
+    assert "CAND 75.0%" in summaries[0]
+    assert "CAND" not in summaries[1]
+
+
+def test_gap_capability_crosslinks(overview_store: CkmStore) -> None:
+    rendered = render_overview_html(overview_store)
+
+    assert 'id="cap-' in rendered
+    assert re.search(r'href="#gaps-[^"]+"[^>]*>1 gap', rendered)
+    gap_ids = set(re.findall(r'id="gaps-([^"]+)" class="gap-group"', rendered))
+    capability_links = set(re.findall(r'href="#cap-([^"]+)"', rendered))
+    assert gap_ids == capability_links
+
+
+def test_aggregate_demoted_label(overview_store: CkmStore) -> None:
+    rendered = render_overview_html(overview_store)
+
+    assert '<span class="aggregate" title="Minimum of seven maturity dimensions">min 0.80</span>' in rendered
+    assert '<span class="aggregate" title="Minimum of seven maturity dimensions">min —</span>' in rendered
+
+
+def test_legend_dimension_mapping(overview_store: CkmStore) -> None:
+    rendered = render_overview_html(overview_store)
+
+    for dimension in MATURITY_DIMENSIONS:
+        assert dimension.replace("_", " ") in rendered
+    for state in ("scored", "evidence-starved", "unassessed"):
+        assert f'data-cell-state="{state}"' in rendered
+
+
+def test_no_scripts_or_external_references(overview_store: CkmStore) -> None:
+    rendered = render_overview_html(overview_store)
+
+    assert not re.search(r"<(?:script|link|img|iframe|object|embed)\b", rendered, re.I)
+    assert not re.search(r"\bon[a-z]+\s*=", rendered, re.I)
+    assert not re.search(r"(?:https?:)?//", rendered, re.I)
+    assert "url(" not in rendered.lower()
+
+
+def test_empty_store_page_state(tmp_path: Path) -> None:
+    store = CkmStore(tmp_path / "empty.sqlite3")
+    store.ensure_schema()
+    rendered = render_overview_html(store, generated_at="2026-07-14T15:00:00Z")
+
+    assert "Generated projection — not source of truth" in rendered
+    assert "0 capabilities" in rendered
+    assert "No capabilities in the CKM store." in rendered
+    assert "No current findings." in rendered
+    assert '<footer class="projection-footer">' in rendered
+
+
+def test_accessibility_and_responsive_contract(overview_store: CkmStore) -> None:
+    rendered = render_overview_html(overview_store)
+
+    assert '<details class="capability-details">' in rendered
+    assert '<summary class="capability-summary">' in rendered
+    assert ':focus-visible' in rendered
+    assert 'summary::before' in rendered and 'details[open] > summary::before' in rendered
+    assert '@media (max-width:680px)' in rendered
+    assert 'font-size:1rem' in rendered
+    assert 'role="img"' in rendered
+    assert "Citations — operational readiness (0)" in rendered
+    assert '<span class="band-dot" aria-hidden="true"></span>' in rendered
+
+
+def test_node_lifecycle_and_evidence_confirmation_are_distinct(
+    overview_store: CkmStore,
+) -> None:
+    rendered = render_overview_html(overview_store)
+
+    assert "node: confirmed" in rendered
+    assert 'class="badge evidence-status">confirmed</span>' in rendered
+    assert 'class="badge evidence-status">candidate</span>' in rendered
+
+
+def test_expanded_honesty_prose_names_trust_state(overview_store: CkmStore) -> None:
+    rendered = render_overview_html(overview_store)
+
+    assert "Assessment is available." in rendered
+    assert "Assessment is stale relative to current evidence." in rendered
+    assert "Maximum candidate-evidence share is 75.0%." in rendered
+    assert "Assessment is unavailable; unavailable is not a zero score." in rendered
+
+
+def test_provenance_banner_precedes_map_and_footer_remains(
+    tmp_path: Path, overview_store: CkmStore
+) -> None:
     empty = CkmStore(tmp_path / "empty.sqlite3")
     empty.ensure_schema()
 
@@ -163,6 +279,9 @@ def test_projection_footer_always_present(tmp_path: Path, overview_store: CkmSto
         assert "Generated: 2026-07-14T15:00:00Z" in rendered
         assert "Watermarks:" in rendered
         assert "Candidate and confirmed evidence remain distinct." in rendered
+        assert rendered.index("Generated projection — not source of truth") < rendered.index(
+            'id="map-heading"'
+        )
 
 def test_no_external_references(overview_store: CkmStore) -> None:
     rendered = render_overview_html(overview_store)

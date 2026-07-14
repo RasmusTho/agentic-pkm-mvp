@@ -30,7 +30,7 @@ The CKM is the Builder System subsystem that continuously constructs and maintai
 | [CKM_PROJECTIONS_AND_QUERY.md](CKM_PROJECTIONS_AND_QUERY.md) | CKM-09 | BuilderOps Markdown projections + CLI query surface, watermark + self-identification |
 | [DEV_OVERVIEW_HTML_PROJECTION.md](DEV_OVERVIEW_HTML_PROJECTION.md) | CKM-10 | Static-HTML Development Overview (capability map + maturity heatmap) + parent-closure handoff |
 
-Post-MVP presentation refinement: [DEV_OVERVIEW_DIRECTION_A.md](DEV_OVERVIEW_DIRECTION_A.md) defines the implementation-ready CKM-11 redesign contract. It preserves CKM-10's static, self-contained projection boundary and remains pending until delivered through a verified issue and PR.
+Post-MVP presentation refinement: [DEV_OVERVIEW_DIRECTION_A.md](DEV_OVERVIEW_DIRECTION_A.md) defines the CKM-11 redesign contract implemented by issue #3689. It preserves CKM-10's static, self-contained projection boundary; owner visual acceptance remains on parent #3138.
 
 ## Execution order
 
@@ -68,7 +68,7 @@ Partial-failure walk: seed applied but ingestion fails → registry exists with 
 
 ## Relationship to GitHub issues
 
-Parent feature issue: [#3138](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3138) — the live validation hub (blocked, not directly picked up); draft archived in [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md). Children: CKM-01 #3139, CKM-02 #3140, CKM-03 #3141, CKM-04 #3142, CKM-05 #3143, CKM-06 #3144, CKM-07 #3145, CKM-08 #3146, CKM-09 #3147, CKM-10 #3148. CKM-11 is filed only after the Direction A specification merges. The spec is authoritative; issues track backlog state.
+Parent feature issue: [#3138](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3138) — the live validation hub (blocked, not directly picked up); draft archived in [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md). Children: CKM-01 #3139, CKM-02 #3140, CKM-03 #3141, CKM-04 #3142, CKM-05 #3143, CKM-06 #3144, CKM-07 #3145, CKM-08 #3146, CKM-09 #3147, CKM-10 #3148, and presentation refinement CKM-11 #3689. The spec is authoritative; issues track backlog state.
 
 ## Verification path
 
