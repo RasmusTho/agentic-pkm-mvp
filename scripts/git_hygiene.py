@@ -602,10 +602,11 @@ def build_janitor_plan(
         leased = f"worktree:{path}" in active_resources or _branch_has_active_lease(
             branch, active_resources
         )
+        locked = "locked" in worktree
         # A missing worktree is an orphan (its metadata is pruned, not reclaimed)
-        # — but the root is never missing, and an active lease still wins so we
-        # never touch leased work even if its checkout has gone.
-        if not is_root and not leased and not Path(path).exists():
+        # — but the root is never missing, and active leases or locks still win
+        # so we never touch protected work even if its checkout has gone.
+        if not is_root and not leased and not locked and not Path(path).exists():
             orphaned_worktrees.append({"path": path, "branch": branch})
             continue
         # Candidacy gates on merge state, not branch prefix.
@@ -617,7 +618,7 @@ def build_janitor_plan(
             protected_branches=protected,
             pr_states=pr_states,
             cwd=cwd,
-            locked="locked" in worktree,
+            locked=locked,
         )
         if reason:
             item = {"artifact": "worktree", "path": path, "branch": branch, "reason": reason}
