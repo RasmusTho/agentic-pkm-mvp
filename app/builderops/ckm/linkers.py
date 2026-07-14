@@ -21,6 +21,7 @@ _PARENT_RE = re.compile(r"^parent_capability:\s*(.+?)\s*$", re.MULTILINE)
 _LINKER_BASIS_PREFIXES = (
     "matrix:",
     "spec-directory:",
+    "spec-source:",
     "adr-reference:",
     "test-code:",
     "github-spec-ref:",
@@ -70,9 +71,10 @@ def _emit(
     rule: str,
     detail: str,
     desired_edges: set[tuple[str, str, str]],
+    maturity_dimension: str | None = None,
 ) -> int:
     evidence_kind = _kind(artifact)
-    dimension = _dimension(artifact)
+    dimension = maturity_dimension or _dimension(artifact)
     basis = f"{rule}:{detail}"
     desired_edges.add((artifact.id, capability.id, basis))
     existing = store.get_evidence_edge(
@@ -157,7 +159,8 @@ def _spec_links(
         path = root / artifact.source_ref
         if not path.is_file():
             continue
-        match = _PARENT_RE.search(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+        match = _PARENT_RE.search(text)
         if not match:
             continue
         parent = match.group(1).strip().strip('"\'').casefold()
@@ -171,6 +174,18 @@ def _spec_links(
                 detail=artifact.source_ref,
                 desired_edges=desired_edges,
             )
+            for source_ref in sorted(set(_PATH_RE.findall(text))):
+                normalized = source_ref.replace("../", "")
+                source = artifacts.get(normalized)
+                if source is not None and source.artifact_kind == "source_file":
+                    changed += _emit(
+                        store,
+                        source,
+                        capability,
+                        rule="spec-source",
+                        detail=artifact.source_ref,
+                        desired_edges=desired_edges,
+                    )
     return changed
 
 
@@ -245,7 +260,7 @@ def _test_links(
             source = artifacts.get(source_ref)
             if source is None:
                 continue
-            capability_ids = artifact_edges.get(source.id, set()) or artifact_edges.get(test.id, set())
+            capability_ids = artifact_edges.get(source.id, set())
             for capability_id in sorted(capability_ids):
                 capability = capabilities.get(capability_id)
                 if capability:
@@ -278,9 +293,29 @@ def _github_links(
     for artifact in artifacts.values():
         if artifact.artifact_kind not in {"issue", "pull_request"}:
             continue
-        references = _provenance(artifact).get("references", [])
+        provenance = _provenance(artifact)
+        references = provenance.get("references", [])
         if not isinstance(references, list):
             continue
+        labels = provenance.get("labels", [])
+        is_closed_task = (
+            artifact.artifact_kind == "issue"
+            and provenance.get("state") == "closed"
+            and isinstance(labels, list)
+            and "type:task" in labels
+        )
+        is_merged_pr = (
+            artifact.artifact_kind == "pull_request"
+            and isinstance(provenance.get("merged_at"), str)
+            and bool(provenance["merged_at"])
+        )
+        dimension = (
+            "requirement_coverage"
+            if is_closed_task
+            else "functional_completeness"
+            if is_merged_pr
+            else "integration_completeness"
+        )
         emitted: set[str] = set()
         for reference in (str(value) for value in references):
             for spec_path, capability in spec_capabilities.items():
@@ -292,6 +327,7 @@ def _github_links(
                         rule="github-spec-ref",
                         detail=reference,
                         desired_edges=desired_edges,
+                        maturity_dimension=dimension,
                     )
                     emitted.add(capability.id)
         for capability in capabilities:
@@ -306,6 +342,7 @@ def _github_links(
                     rule="github-ref",
                     detail=seed_path,
                     desired_edges=desired_edges,
+                    maturity_dimension=dimension,
                 )
     return changed
 

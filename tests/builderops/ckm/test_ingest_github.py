@@ -31,6 +31,7 @@ def _pull(updated_at: str = "2026-07-01T10:01:00Z") -> dict[str, object]:
         "number": 77,
         "title": "Add CKM adapter",
         "state": "closed",
+        "merged_at": "2026-07-01T10:00:30Z",
         "updated_at": updated_at,
         "body": "Fixes #42; see docs/CAPABILITY_KNOWLEDGE_MODEL/GITHUB_ARTIFACT_INGESTION.md",
         "changed_files": ["app/builderops/ckm/ingest_github.py"],
@@ -44,6 +45,11 @@ def test_rest_payload_normalization_with_refs() -> None:
     assert record.artifact_kind == "issue"
     assert payload["references"] == ["#3138", "docs/CAPABILITY_KNOWLEDGE_MODEL/README.md"]
     assert payload["labels"] == ["type:task"]
+
+    pull_payload = json.loads(
+        normalize_github_payload(_pull(), artifact_kind="pull_request").provenance
+    )
+    assert pull_payload["merged_at"] == "2026-07-01T10:00:30Z"
 
 
 def test_updated_at_cursor_incremental(tmp_path: Path) -> None:

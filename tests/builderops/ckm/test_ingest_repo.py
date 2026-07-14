@@ -9,6 +9,7 @@ from app.builderops.ckm.ingest_repo import (
     ingest_repo,
     iter_docs,
     iter_git,
+    iter_schemas,
     iter_source,
     iter_tests,
 )
@@ -28,6 +29,7 @@ def _repo(tmp_path: Path) -> Path:
     _write(tmp_path / "docs/guide.md", "State: Draft\n\n# A guide\n")
     _write(tmp_path / "tests/unit/test_example.py", "def test_one():\n    pass\n")
     _write(tmp_path / "app/example.py", '\"\"\"Example module.\"\"\"\n')
+    _write(tmp_path / "schemas/example.schema.json", '{"type":"object"}\n')
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
     subprocess.run(
@@ -43,10 +45,17 @@ def _store(tmp_path: Path) -> CkmStore:
 
 def test_adapters_yield_typed_provenanced_records(tmp_path: Path) -> None:
     root = _repo(tmp_path / "repo")
-    artifacts = [*iter_docs(root), *iter_tests(root), *iter_source(root), *iter_git(root, None)]
+    artifacts = [
+        *iter_docs(root),
+        *iter_tests(root),
+        *iter_source(root),
+        *iter_schemas(root),
+        *iter_git(root, None),
+    ]
     assert artifacts
     assert {artifact.artifact_kind for artifact in artifacts} >= {"adr", "spec", "document", "test", "source_file", "commit"}
     assert all(artifact.natural_key and artifact.provenance and artifact.payload_summary for artifact in artifacts)
+    assert next(item for item in artifacts if item.natural_key == "schemas/example.schema.json").artifact_kind == "document"
 
 
 def test_incremental_watermark_semantics(tmp_path: Path) -> None:
@@ -54,6 +63,7 @@ def test_incremental_watermark_semantics(tmp_path: Path) -> None:
     store = _store(tmp_path)
     first = ingest_repo(store, root)
     assert first["docs"]["changed"] == 3
+    assert first["schemas"]["changed"] == 1
     with store._connect() as conn:
         rows_before = {
             table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
