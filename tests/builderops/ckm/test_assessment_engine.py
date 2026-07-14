@@ -18,7 +18,11 @@ from app.builderops.ckm.assess import (
 )
 from app.builderops.ckm.ingest_repo import iter_docs, iter_schemas, iter_source, iter_tests
 from app.builderops.ckm.linkers import link_deterministic
-from app.builderops.ckm.models import MATURITY_DIMENSIONS
+from app.builderops.ckm.models import (
+    MATURITY_DIMENSIONS,
+    CkmArtifact,
+    CkmEvidenceEdge,
+)
 from app.builderops.ckm.seed import seed_capabilities
 from app.builderops.ckm.store import CkmStore
 
@@ -121,6 +125,9 @@ def test_every_dimension_cites_evidence(store: CkmStore) -> None:
     for dimension in MATURITY_DIMENSIONS:
         assert isinstance(assessment.citations[dimension], list)
         assert all(citation["edge_id"] in edge_ids for citation in assessment.citations[dimension])
+        for citation in assessment.citations[dimension]:
+            assert CkmEvidenceEdge.from_row(citation["edge"]).validate().id == citation["edge_id"]
+            assert CkmArtifact.from_row(citation["artifact"]).validate().id == citation["artifact_id"]
 
 
 def test_aggregate_transparent_and_min_capped(store: CkmStore) -> None:
@@ -304,6 +311,57 @@ def test_artifact_or_watermark_change_reassesses(store: CkmStore) -> None:
     assert len(history) == 2
     assert history[0].edge_fingerprint != history[1].edge_fingerprint
     assert store.assessment_for_projection(capability.id).stale_relative_to_evidence is False
+
+
+def test_historical_citations_survive_edge_change_and_artifact_cleanup(
+    store: CkmStore,
+) -> None:
+    capability = _capability(store)
+    edge = _edge(
+        store,
+        capability.id,
+        source_ref="app/retrieval.py",
+        artifact_kind="source_file",
+        evidence_kind="source",
+        dimension="functional_completeness",
+    )
+    assess_capabilities(store)
+    first = store.latest_assessment_for_capability(capability.id)
+    assert first is not None
+    first_citation = first.citations["functional_completeness"][0]
+
+    store.upsert_evidence_edge(
+        artifact_id=edge.artifact_id,
+        capability_id=edge.capability_id,
+        evidence_kind=edge.evidence_kind,
+        polarity=edge.polarity,
+        maturity_dimension=edge.maturity_dimension,
+        confidence=0.25,
+        extraction_method=edge.extraction_method,
+        lifecycle=edge.lifecycle,
+        source_ref=edge.source_ref,
+        basis=edge.basis,
+    )
+    assess_capabilities(store)
+    second = store.latest_assessment_for_capability(capability.id)
+    assert second is not None
+    second_citation = second.citations["functional_completeness"][0]
+
+    assert first_citation["edge"]["confidence"] == 1.0
+    assert second_citation["edge"]["confidence"] == 0.25
+    assert first_citation["artifact"]["provenance"] == "{}"
+    assert store.delete_artifacts_not_in("fixture", set()) == 1
+    assess_capabilities(store)
+
+    history = store.list_assessments_for_capability(capability.id)
+    assert len(history) == 3
+    for assessment in history[:2]:
+        citation = assessment.citations["functional_completeness"][0]
+        assert store.get_evidence_edge_by_id(citation["edge_id"]) is not None
+        assert CkmEvidenceEdge.from_row(citation["edge"]).validate()
+        assert CkmArtifact.from_row(citation["artifact"]).validate()
+    assert store.list_evidence_edges() == []
+    assert store.list_artifacts() == []
 
 
 def test_formula_version_change_reassesses(store: CkmStore, monkeypatch: pytest.MonkeyPatch) -> None:

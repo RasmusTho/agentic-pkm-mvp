@@ -13,12 +13,13 @@ schema level, not only in application code.
 
 from __future__ import annotations
 
-CKM_SCHEMA_VERSION = 3
+CKM_SCHEMA_VERSION = 4
 
 CKM_TABLE_NAMES = (
     "ckm_capability",
     "ckm_artifact",
     "ckm_evidence_edge",
+    "ckm_evidence_edge_history",
     "ckm_assessment",
     "ckm_finding",
     "ckm_watermark",
@@ -85,6 +86,31 @@ CKM_DDL_STATEMENTS = [
     """
     CREATE INDEX IF NOT EXISTS idx_ckm_evidence_edge_artifact
     ON ckm_evidence_edge(artifact_id)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ckm_evidence_edge_history (
+        history_id TEXT PRIMARY KEY,
+        edge_id TEXT NOT NULL,
+        artifact_id TEXT NOT NULL,
+        capability_id TEXT NOT NULL,
+        evidence_kind TEXT NOT NULL,
+        polarity TEXT NOT NULL,
+        maturity_dimension TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        extraction_method TEXT NOT NULL,
+        model TEXT,
+        provider TEXT,
+        lifecycle TEXT NOT NULL,
+        source_ref TEXT NOT NULL,
+        basis TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        retired_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_ckm_evidence_edge_history_edge
+    ON ckm_evidence_edge_history(edge_id, retired_at)
     """,
     """
     CREATE TABLE IF NOT EXISTS ckm_assessment (

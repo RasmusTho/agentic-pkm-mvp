@@ -376,6 +376,28 @@ def test_confirmation_receipt_survives_rebuild(
     assert restored[0].basis == original.basis
 
 
+def test_retired_inferred_edge_cannot_be_confirmed(store: CkmStore) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    associate_unlinked_artifacts(
+        store,
+        client=StubAssociator([_proposal(artifact.id, capability.id)]),
+    )
+    edge = store.list_evidence_edges()[0]
+    store.delete_evidence_edge(edge.id)
+
+    result = CliRunner().invoke(
+        builderops,
+        ["--db-path", str(store.db_path), "ckm", "confirm-edge", edge.id],
+    )
+
+    assert result.exit_code != 0
+    assert "evidence edge not found" in result.output
+    assert store.get_active_evidence_edge_by_id(edge.id) is None
+    assert store.get_evidence_edge_by_id(edge.id) is not None
+    assert store.list_builderops_receipts("ckm_edge_confirmed") == []
+
+
 @pytest.mark.parametrize("field", ["actor", "confidence", "model", "basis"])
 def test_trusted_confirmation_rejects_tampering_before_and_after_rebuild(
     tmp_path: Path, field: str

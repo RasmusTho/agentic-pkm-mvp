@@ -328,6 +328,10 @@ class CkmStore:
             ).fetchall()
             stale = [row for row in rows if row["source_ref"] not in source_refs]
             for row in stale:
+                edge_rows = conn.execute(
+                    "SELECT * FROM ckm_evidence_edge WHERE artifact_id = ?", (row["id"],)
+                ).fetchall()
+                self._archive_evidence_edges(conn, edge_rows)
                 conn.execute("DELETE FROM ckm_evidence_edge WHERE artifact_id = ?", (row["id"],))
                 conn.execute("DELETE FROM ckm_artifact WHERE id = ?", (row["id"],))
             conn.commit()
@@ -359,6 +363,44 @@ class CkmStore:
         return {str(row["source"]): str(row["value"]) for row in rows}
 
     # --- Evidence edge ---------------------------------------------------------
+
+    @staticmethod
+    def _archive_evidence_edges(
+        conn: sqlite3.Connection, rows: list[sqlite3.Row]
+    ) -> None:
+        """Preserve superseded edge versions outside the active CEG projection."""
+
+        retired_at = utc_now()
+        for row in rows:
+            conn.execute(
+                """
+                INSERT INTO ckm_evidence_edge_history (
+                    history_id, edge_id, artifact_id, capability_id,
+                    evidence_kind, polarity, maturity_dimension, confidence,
+                    extraction_method, model, provider, lifecycle, source_ref,
+                    basis, created_at, updated_at, retired_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    new_id("edge_history"),
+                    row["id"],
+                    row["artifact_id"],
+                    row["capability_id"],
+                    row["evidence_kind"],
+                    row["polarity"],
+                    row["maturity_dimension"],
+                    row["confidence"],
+                    row["extraction_method"],
+                    row["model"],
+                    row["provider"],
+                    row["lifecycle"],
+                    row["source_ref"],
+                    row["basis"],
+                    row["created_at"],
+                    row["updated_at"],
+                    retired_at,
+                ),
+            )
 
     def upsert_evidence_edge(
         self,
@@ -408,6 +450,54 @@ class CkmStore:
             )
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            existing_row = conn.execute(
+                """
+                SELECT * FROM ckm_evidence_edge
+                WHERE artifact_id = ? AND capability_id = ? AND basis = ?
+                """,
+                (artifact_id, capability_id, resolved_basis),
+            ).fetchone()
+            desired_lifecycle = lifecycle
+            if (
+                existing_row is not None
+                and existing_row["extraction_method"] == "inferred"
+                and existing_row["lifecycle"] == "confirmed"
+                and extraction_method == "inferred"
+            ):
+                desired_lifecycle = "confirmed"
+            if existing_row is not None:
+                material_fields = (
+                    "artifact_id",
+                    "capability_id",
+                    "evidence_kind",
+                    "polarity",
+                    "maturity_dimension",
+                    "confidence",
+                    "extraction_method",
+                    "model",
+                    "provider",
+                    "source_ref",
+                    "basis",
+                )
+                desired = {
+                    "artifact_id": artifact_id,
+                    "capability_id": capability_id,
+                    "evidence_kind": evidence_kind,
+                    "polarity": polarity,
+                    "maturity_dimension": maturity_dimension,
+                    "confidence": confidence,
+                    "extraction_method": extraction_method,
+                    "model": model,
+                    "provider": provider,
+                    "source_ref": source_ref,
+                    "basis": resolved_basis,
+                }
+                unchanged = all(existing_row[field] == desired[field] for field in material_fields)
+                unchanged = unchanged and existing_row["lifecycle"] == desired_lifecycle
+                if unchanged:
+                    conn.commit()
+                    return CkmEvidenceEdge.from_row(existing_row)
+                self._archive_evidence_edges(conn, [existing_row])
             conn.execute(
                 """
                 INSERT INTO ckm_evidence_edge (
@@ -494,10 +584,31 @@ class CkmStore:
                 ).fetchone()
         return CkmEvidenceEdge.from_row(row) if row is not None else None
 
-    def get_evidence_edge_by_id(self, edge_id: str) -> CkmEvidenceEdge | None:
+    def get_active_evidence_edge_by_id(self, edge_id: str) -> CkmEvidenceEdge | None:
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM ckm_evidence_edge WHERE id = ?", (edge_id,)
+            ).fetchone()
+        return CkmEvidenceEdge.from_row(row) if row is not None else None
+
+    def get_evidence_edge_by_id(self, edge_id: str) -> CkmEvidenceEdge | None:
+        """Resolve an edge citation from the active graph or retired history."""
+
+        active = self.get_active_evidence_edge_by_id(edge_id)
+        if active is not None:
+            return active
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT edge_id AS id, artifact_id, capability_id,
+                       evidence_kind, polarity, maturity_dimension,
+                       confidence, extraction_method, model, provider,
+                       lifecycle, source_ref, basis, created_at, updated_at
+                FROM ckm_evidence_edge_history
+                WHERE edge_id = ?
+                ORDER BY retired_at DESC LIMIT 1
+                """,
+                (edge_id,),
             ).fetchone()
         return CkmEvidenceEdge.from_row(row) if row is not None else None
 
@@ -508,18 +619,25 @@ class CkmStore:
         receipt-validating confirmation boundary in ``semantic.py``.
         """
 
-        edge = self.get_evidence_edge_by_id(edge_id)
+        edge = self.get_active_evidence_edge_by_id(edge_id)
         if edge is None:
             raise CkmValidationError(f"evidence edge not found: {edge_id}")
         if edge.extraction_method != "inferred":
             raise CkmValidationError("only inferred evidence edges require confirmation")
+        if edge.lifecycle == "confirmed":
+            return edge
         with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM ckm_evidence_edge WHERE id = ?", (edge_id,)
+            ).fetchone()
+            if row is not None:
+                self._archive_evidence_edges(conn, [row])
             conn.execute(
                 "UPDATE ckm_evidence_edge SET lifecycle = 'confirmed', updated_at = ? WHERE id = ?",
                 (utc_now(), edge_id),
             )
             conn.commit()
-        confirmed = self.get_evidence_edge_by_id(edge_id)
+        confirmed = self.get_active_evidence_edge_by_id(edge_id)
         if confirmed is None:  # pragma: no cover - defensive
             raise CkmValidationError(f"confirmed edge disappeared: {edge_id}")
         return confirmed
@@ -594,19 +712,32 @@ class CkmStore:
                 """
             ).fetchall()
             stale = [
-                row["id"]
+                row
                 for row in rows
                 if str(row["basis"]).startswith(owned_basis_prefixes)
                 if (row["artifact_id"], row["capability_id"], row["basis"])
                 not in edge_keys
             ]
-            for edge_id in stale:
-                conn.execute("DELETE FROM ckm_evidence_edge WHERE id = ?", (edge_id,))
+            archived = []
+            for row in stale:
+                archived.append(
+                    conn.execute(
+                        "SELECT * FROM ckm_evidence_edge WHERE id = ?", (row["id"],)
+                    ).fetchone()
+                )
+            self._archive_evidence_edges(conn, [row for row in archived if row is not None])
+            for row in stale:
+                conn.execute("DELETE FROM ckm_evidence_edge WHERE id = ?", (row["id"],))
             conn.commit()
         return len(stale)
 
     def delete_evidence_edge(self, edge_id: str) -> None:
         with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM ckm_evidence_edge WHERE id = ?", (edge_id,)
+            ).fetchone()
+            if row is not None:
+                self._archive_evidence_edges(conn, [row])
             conn.execute("DELETE FROM ckm_evidence_edge WHERE id = ?", (edge_id,))
             conn.commit()
 

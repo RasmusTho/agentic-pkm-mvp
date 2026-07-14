@@ -382,7 +382,9 @@ def _fingerprint(
     ).hexdigest()
 
 
-def _citation(edge: CkmEvidenceEdge) -> dict[str, object]:
+def _citation(edge: CkmEvidenceEdge, artifact: CkmArtifact) -> dict[str, object]:
+    """Freeze the complete evidence input behind one historical score."""
+
     return {
         "edge_id": edge.id,
         "artifact_id": edge.artifact_id,
@@ -390,6 +392,8 @@ def _citation(edge: CkmEvidenceEdge) -> dict[str, object]:
         "evidence_kind": edge.evidence_kind,
         "polarity": edge.polarity,
         "lifecycle": edge.lifecycle,
+        "edge": edge.to_dict(),
+        "artifact": artifact.to_dict(),
     }
 
 
@@ -418,7 +422,9 @@ def assess_capabilities(store: CkmStore) -> AssessmentRunResult:
         for dimension in MATURITY_DIMENSIONS:
             result = _SCORERS[dimension](edges, artifacts)
             scores[dimension] = max(0.0, min(1.0, result.score))
-            citations[dimension] = [_citation(edge) for edge in result.edges]
+            citations[dimension] = [
+                _citation(edge, artifacts[edge.artifact_id]) for edge in result.edges
+            ]
             supporting = [edge for edge in result.edges if edge.polarity == "supports"]
             candidates = [edge for edge in supporting if edge.lifecycle == "candidate"]
             candidate_shares[dimension] = (

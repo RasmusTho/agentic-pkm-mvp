@@ -303,7 +303,7 @@ def _canonical_json(value: Any) -> str:
 
 
 def _confirmation_payload(store: CkmStore, edge_id: str) -> tuple[dict[str, Any], str, str]:
-    edge = store.get_evidence_edge_by_id(edge_id)
+    edge = store.get_active_evidence_edge_by_id(edge_id)
     if edge is None:
         raise CkmValidationError(f"evidence edge not found: {edge_id}")
     if edge.extraction_method != "inferred":
@@ -442,7 +442,7 @@ def _validated_confirmation_receipt(
     if not hmac.compare_digest(payload["binding"], expected_binding):
         raise CkmValidationError("confirmation receipt trusted binding is invalid")
 
-    current = store.get_evidence_edge_by_id(edge_id)
+    current = store.get_active_evidence_edge_by_id(edge_id)
     if current is not None:
         expected_payload, _, _ = _confirmation_payload(store, current.id)
         for field, value in expected_payload.items():
