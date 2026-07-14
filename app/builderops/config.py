@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import os
-import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 DEFAULT_DB_NAME = "builderops.sqlite3"
-LEGACY_STATE_DIR = Path("runtime/builderops")
+CUTOVER_ACK_NAME = "host-store-cutover-v1.json"
+CUTOVER_ACK_SCHEMA = "builderops.host-store-cutover.v1"
 
 
 def default_state_dir() -> Path:
@@ -49,8 +52,8 @@ def load_paths(
     elif exact_db_path is not None:
         state_dir = Path(exact_db_path).expanduser().parent
     else:
-        _fail_if_legacy_stores_exist()
         state_dir = default_state_dir()
+        _validate_host_cutover_ack(state_dir)
     db_path = (
         db_path_override.expanduser()
         if db_path_override is not None
@@ -71,55 +74,44 @@ def load_paths(
     return paths
 
 
-def _fail_if_legacy_stores_exist() -> None:
-    legacy_paths = _legacy_store_paths()
-    if not legacy_paths:
+def host_cutover_ack_path(state_dir: Path | None = None) -> Path:
+    return (state_dir if state_dir is not None else default_state_dir()) / CUTOVER_ACK_NAME
+
+
+def _validate_host_cutover_ack(state_dir: Path) -> None:
+    """Require bounded host-global evidence before implicit store selection."""
+
+    path = host_cutover_ack_path(state_dir)
+    try:
+        if path.is_symlink():
+            raise ValueError
+        payload: Any = json.loads(path.read_text(encoding="utf-8"))
+        acknowledged_at = datetime.fromisoformat(
+            str(payload["acknowledged_at"]).replace("Z", "+00:00")
+        )
+        participating_repos = payload["participating_repos"]
+        valid = (
+            isinstance(payload, dict)
+            and payload.get("schema_version") == CUTOVER_ACK_SCHEMA
+            and payload.get("scope") == "same-user-same-host"
+            and payload.get("legacy_stores_reconciled") is True
+            and isinstance(payload.get("actor"), str)
+            and bool(payload["actor"].strip())
+            and acknowledged_at.tzinfo is not None
+            and isinstance(participating_repos, list)
+            and all(isinstance(repo, str) and repo.strip() for repo in participating_repos)
+            and len(set(participating_repos)) == len(participating_repos)
+        )
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        valid = False
+    if valid:
         return
     raise ValueError(
-        "Refusing implicit host-stable BuilderOps store selection: found "
-        f"{len(legacy_paths)} legacy per-worktree store(s). Stop BuilderOps writers, "
-        "reconcile the legacy stores, then set BUILDEROPS_DB_PATH or "
-        "BUILDEROPS_STATE_DIR explicitly for the operator-approved cutover."
-    )
-
-
-def _legacy_store_paths() -> tuple[Path, ...]:
-    """Return existing legacy stores for the current repo without exposing paths."""
-
-    roots = _git_worktree_roots()
-    if not roots:
-        current = Path.cwd()
-        repo_root = next(
-            (p for p in (current, *current.parents) if (p / ".git").exists()),
-            current,
-        )
-        roots = (repo_root,)
-    paths = {
-        (root / LEGACY_STATE_DIR / DEFAULT_DB_NAME).resolve(strict=False)
-        for root in roots
-        if (root / LEGACY_STATE_DIR / DEFAULT_DB_NAME).is_file()
-    }
-    return tuple(sorted(paths))
-
-
-def _git_worktree_roots() -> tuple[Path, ...]:
-    try:
-        result = subprocess.run(
-            ["git", "worktree", "list", "--porcelain"],
-            cwd=Path.cwd(),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return ()
-    if result.returncode != 0:
-        return ()
-    return tuple(
-        Path(line.removeprefix("worktree "))
-        for line in result.stdout.splitlines()
-        if line.startswith("worktree ")
+        "Refusing implicit host-stable BuilderOps store selection: a valid "
+        "same-user/same-host cutover acknowledgement is required. Stop BuilderOps "
+        "writers, reconcile legacy stores across every participating repository, "
+        "then install the documented host-store-cutover-v1 acknowledgement or set "
+        "BUILDEROPS_DB_PATH / BUILDEROPS_STATE_DIR explicitly."
     )
 
 

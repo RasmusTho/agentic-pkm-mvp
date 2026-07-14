@@ -93,13 +93,37 @@ Override mechanisms:
 The default path is machine-local operating-plane state outside repository checkouts. It is not
 `$CODEX_HOME`, not runtime/user memory, not repo authority, and not a reviewed docs surface.
 Existing legacy stores under `<checkout>/runtime/builderops/` are not migrated, merged, deleted, or
-silently treated as the consolidated store by this code change. With neither store override set,
-path loading scans the current Git repository's worktrees for the legacy database location and
-fails before opening or initializing the host-stable database when any legacy store exists. The
-error reports the number of stores without exposing host paths and directs the operator to stop
-writers, reconcile the stores, and pin the approved database using `BUILDEROPS_DB_PATH` or
-`BUILDEROPS_STATE_DIR`. Those explicit overrides bypass the legacy-store guard so the operator can
-keep the current store pinned before cutover and select the reconciled store during cutover.
+silently treated as the consolidated store by this code change. Absence of a legacy store in the
+current repository is not evidence that other participating repositories have no legacy state.
+With neither store override set, path loading therefore fails before opening or initializing the
+host-stable database unless the operator has installed this host-level acknowledgement:
+
+```text
+~/.local/state/builderops/host-store-cutover-v1.json
+```
+
+```json
+{
+  "schema_version": "builderops.host-store-cutover.v1",
+  "scope": "same-user-same-host",
+  "legacy_stores_reconciled": true,
+  "participating_repos": ["owner/repo-a", "owner/repo-b"],
+  "actor": "operator identity",
+  "acknowledged_at": "2026-07-15T00:00:00Z"
+}
+```
+
+The operator creates this non-symlink marker only after stopping BuilderOps writers, inventorying
+every participating repository on the host, and reconciling or explicitly retaining its legacy
+stores. `participating_repos` is that bounded inventory (an empty list is valid for a verified new
+host). The timestamp must be timezone-aware, the actor must be non-empty, and every listed repo
+must be a unique non-empty string. Missing or malformed evidence produces the same privacy-safe
+fail-loud error; host paths and store contents are never printed.
+
+`BUILDEROPS_DB_PATH`, `BUILDEROPS_STATE_DIR`, and CLI `--db-path` bypass the acknowledgement gate.
+They remain the operator path for keeping the current store pinned before cutover and selecting the
+reconciled store during cutover. This PR does not create the acknowledgement, inventory repos,
+reconcile records, migrate data, stop writers, or perform the live cutover.
 
 Default home-directory resolution is lazy. An absolute explicit DB/state/CLI override therefore
 continues to work in hostless automation where no user home can be resolved.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -13,10 +14,25 @@ def test_default_store_leases_coordinate_across_cwd(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    state_dir = tmp_path / "host-state" / "builderops"
     monkeypatch.setattr(
         builderops_config,
         "default_state_dir",
-        lambda: tmp_path / "host-state" / "builderops",
+        lambda: state_dir,
+    )
+    state_dir.mkdir(parents=True)
+    builderops_config.host_cutover_ack_path(state_dir).write_text(
+        json.dumps(
+            {
+                "schema_version": builderops_config.CUTOVER_ACK_SCHEMA,
+                "scope": "same-user-same-host",
+                "legacy_stores_reconciled": True,
+                "participating_repos": ["repo-a", "repo-b"],
+                "actor": "operator-test",
+                "acknowledged_at": "2026-07-15T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
     )
     first_cwd = tmp_path / "worktree-a"
     second_cwd = tmp_path / "worktree-b"

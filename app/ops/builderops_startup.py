@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from app.builderops.config import DEFAULT_DB_NAME, default_state_dir
+from app.builderops.config import DEFAULT_DB_NAME, default_state_dir, load_paths
 
 DEFAULT_REPOS = ("RasmusTho/agentic-pkm-mvp", "RasmusTho/bifrost")
 DEFAULT_RATE_LIMIT_MIN = 25
@@ -220,8 +220,17 @@ def _builderops_readiness(*, root: Path, env: dict[str, str], result: dict[str, 
     builderops: dict[str, Any] = {
         "status": "ok",
         "wrapper": str(wrapper.relative_to(root)),
-        "db_path": _builderops_db_path(root, env),
+        "db_path": None,
     }
+    try:
+        load_paths(env)
+    except ValueError as exc:
+        builderops["status"] = "degraded"
+        builderops["reason"] = "builderops_path_preflight_failed"
+        builderops["detail"] = str(exc)
+        _append_reason(result, "builderops_path_preflight_failed")
+        return builderops
+    builderops["db_path"] = _builderops_db_path(root, env)
     if not wrapper.exists():
         builderops["status"] = "degraded"
         builderops["reason"] = "builderops_wrapper_missing"

@@ -61,6 +61,28 @@ def test_builderops_bootstrap_environment_guard_covers_dev_and_prod_only() -> No
     assert "scripts/start_builderops_services.sh" in guard
 
 
+def test_builderops_readiness_degrades_before_implicit_cutover_without_host_ack(
+    tmp_path: Path,
+) -> None:
+    from app.ops.builderops_startup import _builderops_readiness
+
+    result: dict[str, object] = {"reasons": []}
+    receipt = _builderops_readiness(
+        root=REPO_ROOT,
+        env={"HOME": str(tmp_path / "home")},
+        result=result,
+    )
+
+    assert receipt["status"] == "degraded"
+    assert receipt["reason"] == "builderops_path_preflight_failed"
+    assert receipt["db_path"] is None
+    assert "same-user/same-host cutover acknowledgement is required" in str(
+        receipt["detail"]
+    )
+    assert result["reasons"] == ["builderops_path_preflight_failed"]
+    assert not (tmp_path / "home" / ".local" / "state" / "builderops").exists()
+
+
 def test_builderops_bootstrap_degrades_without_github_access(tmp_path: Path) -> None:
     startup_status = tmp_path / "startup_status.json"
     builderops_status = tmp_path / "builderops_status.json"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -14,10 +15,46 @@ from app.builderops.store import SqliteBuilderOpsStore
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _write_cutover_ack(state_dir: Path, repos: list[str] | None = None) -> None:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    builderops_config.host_cutover_ack_path(state_dir).write_text(
+        json.dumps(
+            {
+                "schema_version": builderops_config.CUTOVER_ACK_SCHEMA,
+                "scope": "same-user-same-host",
+                "legacy_stores_reconciled": True,
+                "participating_repos": repos or [],
+                "actor": "operator-test",
+                "acknowledged_at": "2026-07-15T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _run_implicit_cli(*, cwd: Path, home: Path) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["HOME"] = str(home)
+    env["PYTHONPATH"] = str(REPO_ROOT)
+    for key in ("BUILDEROPS_DB_PATH", "BUILDEROPS_STATE_DIR", "BUILDEROPS_VAULT_ROOT"):
+        env.pop(key, None)
+    return subprocess.run(
+        [sys.executable, "-m", "app.builderops", "builderops", "list", "--json"],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def test_default_db_path_is_host_stable_and_cwd_independent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    state_dir = tmp_path / "host-state" / "builderops"
+    monkeypatch.setattr(builderops_config, "default_state_dir", lambda: state_dir)
+    _write_cutover_ack(state_dir, ["repo-a", "repo-b"])
     first_cwd = tmp_path / "worktree-a"
     second_cwd = tmp_path / "worktree-b"
     first_cwd.mkdir()
@@ -38,12 +75,13 @@ def test_host_stable_default_still_confined_outside_vault(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     vault = tmp_path / "shared-vault"
+    state_dir = vault / "builderops"
     monkeypatch.setattr(
         builderops_config,
         "default_state_dir",
-        lambda: vault / "builderops",
+        lambda: state_dir,
     )
-    monkeypatch.setattr(builderops_config, "_legacy_store_paths", lambda: ())
+    _write_cutover_ack(state_dir)
 
     with pytest.raises(ValueError, match="outside BUILDEROPS_VAULT_ROOT"):
         builderops_config.load_paths({"BUILDEROPS_VAULT_ROOT": str(vault)})
@@ -106,10 +144,14 @@ with patch.object(Path, "home", side_effect=RuntimeError("home unavailable")):
     assert result.returncode == 0, result.stderr
 
 
-def test_implicit_cli_fails_before_initializing_when_legacy_store_exists(
+def test_implicit_cli_requires_host_ack_when_legacy_store_is_in_another_repo(
     tmp_path: Path,
 ) -> None:
-    legacy_db = tmp_path / "runtime" / "builderops" / "builderops.sqlite3"
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    (repo_a / ".git").mkdir(parents=True)
+    (repo_b / ".git").mkdir(parents=True)
+    legacy_db = repo_b / "runtime" / "builderops" / "builderops.sqlite3"
     legacy_store = SqliteBuilderOpsStore(legacy_db)
     legacy_store.initialize()
     legacy_store.create_agent_worklog(
@@ -120,28 +162,44 @@ def test_implicit_cli_fails_before_initializing_when_legacy_store_exists(
         source_refs=[{"ref_type": "github_issue", "ref": "#3686"}],
         created_by={"actor_type": "agent", "id": "cutover-test"},
     )
-    home = tmp_path / "home"
+    home = tmp_path / "cross-repo-home"
     consolidated_db = home / ".local" / "state" / "builderops" / "builderops.sqlite3"
-    env = os.environ.copy()
-    env["HOME"] = str(home)
-    env["PYTHONPATH"] = str(REPO_ROOT)
-    for key in ("BUILDEROPS_DB_PATH", "BUILDEROPS_STATE_DIR", "BUILDEROPS_VAULT_ROOT"):
-        env.pop(key, None)
-
-    result = subprocess.run(
-        [sys.executable, "-m", "app.builderops", "builderops", "list", "--json"],
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _run_implicit_cli(cwd=repo_a, home=home)
 
     assert result.returncode != 0
     assert "Refusing implicit host-stable BuilderOps store selection" in (
         result.stderr + result.stdout
     )
-    assert "set BUILDEROPS_DB_PATH or BUILDEROPS_STATE_DIR explicitly" in (
+    assert "BUILDEROPS_DB_PATH / BUILDEROPS_STATE_DIR explicitly" in (
         result.stderr + result.stdout
     )
     assert not consolidated_db.exists()
+
+
+def test_implicit_cli_requires_host_ack_outside_git(tmp_path: Path) -> None:
+    outside_git = tmp_path / "outside-git"
+    outside_git.mkdir()
+    home = tmp_path / "outside-git-home"
+    consolidated_db = home / ".local" / "state" / "builderops" / "builderops.sqlite3"
+
+    result = _run_implicit_cli(cwd=outside_git, home=home)
+
+    assert result.returncode != 0
+    assert "same-user/same-host cutover acknowledgement is required" in (
+        result.stderr + result.stdout
+    )
+    assert not consolidated_db.exists()
+
+
+def test_valid_host_ack_allows_implicit_cli_outside_git(tmp_path: Path) -> None:
+    outside_git = tmp_path / "outside-git"
+    outside_git.mkdir()
+    home = tmp_path / "acknowledged-home"
+    state_dir = home / ".local" / "state" / "builderops"
+    consolidated_db = state_dir / "builderops.sqlite3"
+    _write_cutover_ack(state_dir, ["owner/repo-a", "owner/repo-b"])
+
+    result = _run_implicit_cli(cwd=outside_git, home=home)
+
+    assert result.returncode == 0, result.stderr
+    assert consolidated_db.exists()
