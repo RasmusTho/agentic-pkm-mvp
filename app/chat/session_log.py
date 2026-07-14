@@ -83,6 +83,27 @@ class SessionLogWriter:
             vault_root=self._vault_root,
         )
 
+    def append_message(self, session: SessionLog, role: str, content: str) -> None:
+        """Append one conversational message to the existing chat artifact.
+
+        Canvas turns retain their historical ``User``/``Change`` shape through
+        :meth:`append_turn`; non-editing chat flows can use explicit speaker
+        roles without inventing another session transport or artifact class.
+        """
+        normalized_role = role.strip().lower()
+        labels = {"agent": "Agent", "owner": "Owner"}
+        if normalized_role not in labels:
+            raise ValueError("chat message role must be 'agent' or 'owner'")
+        normalized_content = content.strip()
+        if not normalized_content:
+            raise ValueError("chat message content must not be empty")
+        DEFAULT_WRITE_GUARD.assert_writes_allowed(CHAT_SESSION_PERSIST_ACTION)
+        append_note_relative(
+            _session_log_relative_path(session),
+            f"**{labels[normalized_role]}:** {normalized_content}\n\n",
+            vault_root=self._vault_root,
+        )
+
     def close_session(self, session: SessionLog, total_summary: str) -> None:
         DEFAULT_WRITE_GUARD.assert_writes_allowed(CHAT_SESSION_PERSIST_ACTION)
         append_note_relative(
