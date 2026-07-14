@@ -31,6 +31,7 @@ from app.builderops.ckm.gaps import GapDetectionConfig, detect_gaps
 from app.builderops.ckm.ingest_github import ingest_github
 from app.builderops.ckm.ingest_repo import ingest_repo
 from app.builderops.ckm.linkers import link_deterministic
+from app.builderops.ckm.overview_html import write_overview_html
 from app.builderops.ckm.projections import (
     PROJECTION_FILENAMES as CKM_PROJECTION_FILENAMES,
     render_capability_show,
@@ -579,6 +580,24 @@ def ckm_project(ctx: click.Context, projection_type: str, output_dir: Path) -> N
     except (CkmValidationError, OSError, sqlite3.Error) as exc:
         raise click.ClickException(f"ckm projection failed: {exc}") from exc
     click.echo(f"{result.projection_type}\t{result.path}")
+
+
+@ckm.command("overview", help="Write the self-contained CKM Development Overview HTML.")
+@click.option(
+    "--out",
+    "output_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    required=True,
+)
+@click.pass_context
+def ckm_overview(ctx: click.Context, output_path: Path) -> None:
+    try:
+        store = _ckm_store(ctx)
+        store.ensure_schema()
+        result = write_overview_html(store, output_path)
+    except (OSError, sqlite3.Error) as exc:
+        raise click.ClickException(f"ckm overview failed: {exc}") from exc
+    click.echo(result)
 
 
 @builderops.group("inquiry", help="Persist and inspect pre-ticket model inquiry artifacts.")
