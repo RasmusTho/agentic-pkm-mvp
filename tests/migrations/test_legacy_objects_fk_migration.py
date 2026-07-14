@@ -152,3 +152,67 @@ def test_active_decision_writer_preflights_before_receipt_on_pre_cutover_schema(
     assert receipt_log.iter_decision_receipts(vault) == []
     with psycopg.connect(scratch_dsn) as conn:
         assert conn.execute("SELECT count(*) FROM decisions").fetchone() == (0,)
+
+
+def test_deferred_then_unchanged_sync_materializes_canonical_parent(
+    scratch_dsn: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An active-edit baseline cannot bypass the watcher object producer."""
+    _upgrade("head")
+    object_id = uuid.uuid4()
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    note = vault / "deferred-note.md"
+    note.write_text(
+        f"---\nuuid: {object_id}\ntitle: Deferred note\n---\n\nunchanged body\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+
+    from app.services import vault_sync
+
+    active_states = iter((True, False))
+    monkeypatch.setattr(vault_sync, "active_edit", lambda path: next(active_states))
+
+    first = vault_sync.sync_markdown(str(note))
+    assert first["status"] == "deferred"
+    with psycopg.connect(scratch_dsn) as conn:
+        assert conn.execute("SELECT count(*) FROM file_state").fetchone() == (1,)
+        assert conn.execute("SELECT count(*) FROM objects").fetchone() == (0,)
+        assert conn.execute("SELECT count(*) FROM store_objects").fetchone() == (0,)
+
+    second = vault_sync.sync_markdown(str(note))
+    assert second["status"] == "ok"
+    with psycopg.connect(scratch_dsn) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM objects WHERE id = %s", (object_id,)
+        ).fetchone() == (1,)
+        assert conn.execute(
+            "SELECT count(*) FROM store_objects WHERE object_id = %s", (object_id,)
+        ).fetchone() == (1,)
+        assert conn.execute(
+            "SELECT count(*) FROM outbox WHERE topic = 'ingest.object.created'"
+        ).fetchone() == (1,)
+
+    import app.receipts.decision_receipt_log as receipt_log
+    from app.services.decisions import _resolved_backend, insert_decision
+
+    monkeypatch.setattr(
+        receipt_log.DEFAULT_WRITE_GUARD,
+        "assert_writes_allowed",
+        lambda action: None,
+    )
+    _resolved_backend.cache_clear()
+    insert_decision(
+        str(object_id),
+        "classification",
+        {"type": "note"},
+        trace_id="deferred-then-unchanged",
+    )
+    with psycopg.connect(scratch_dsn) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM decisions WHERE object_id = %s", (object_id,)
+        ).fetchone() == (1,)

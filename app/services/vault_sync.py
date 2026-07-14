@@ -87,6 +87,26 @@ def _get_state_by_uuid(conn: psycopg.Connection, uuid_value: str) -> Optional[di
         return row if isinstance(row, dict) else (dict(row) if row else None)
 
 
+def _object_materialization_state(
+    conn: psycopg.Connection,
+    uuid_value: str,
+) -> tuple[bool, bool]:
+    """Return canonical-parent and retained-mirror presence for watcher sync."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+              EXISTS(SELECT 1 FROM store_objects WHERE object_id = %s) AS canonical_exists,
+              EXISTS(SELECT 1 FROM objects WHERE id = %s OR uuid = %s) AS mirror_exists
+            """,
+            (uuid_value, uuid_value, uuid_value),
+        )
+        row = cur.fetchone()
+    if isinstance(row, dict):
+        return bool(row["canonical_exists"]), bool(row["mirror_exists"])
+    return (bool(row[0]), bool(row[1])) if row else (False, False)
+
+
 def _upsert_file_state(
     conn: psycopg.Connection, *, path: str, uuid_value: str, fm_hash: str, body_hash: str, mtime: datetime
 ) -> None:
@@ -471,6 +491,10 @@ def sync_markdown(path: str) -> dict[str, Any]:
             )
             append_change(f"Skipped sync for active edit: {note_path}", vault_path=note_path)
             conn.commit()
+            # This is the only early return allowed before object materialization:
+            # its explicit `deferred` status is not a completed sync. The next
+            # non-active pass checks both producer rows below even when hashes
+            # are unchanged, so this baseline cannot become a permanent bypass.
             result["status"] = "deferred"
             return result
 
@@ -496,7 +520,9 @@ def sync_markdown(path: str) -> dict[str, Any]:
             conn.commit()
             return result
 
-        changed = state is None
+        canonical_exists, mirror_exists = _object_materialization_state(conn, uuid_value)
+        materialization_missing = not (canonical_exists and mirror_exists)
+        changed = state is None or materialization_missing
         if state:
             if state["uuid"] and state["uuid"] != uuid_value:
                 append_conflict(f"UUID mismatch for {note_path}", vault_path=note_path)
@@ -504,6 +530,8 @@ def sync_markdown(path: str) -> dict[str, Any]:
                 changed = True
 
         if not changed:
+            # Reaching this return proves both the canonical parent and retained
+            # watcher mirror exist; missing producer rows force `changed=True`.
             _upsert_file_state(
                 conn,
                 path=str(note_path),
@@ -524,8 +552,12 @@ def sync_markdown(path: str) -> dict[str, Any]:
             "path": str(note_path),
         }
 
-        topic = INGEST_OBJECT_CREATED if state is None else INGEST_OBJECT_UPDATED
-        if state is not None and state.get("body_hash") == body_hash:
+        topic = (
+            INGEST_OBJECT_CREATED
+            if state is None or not canonical_exists
+            else INGEST_OBJECT_UPDATED
+        )
+        if canonical_exists and state is not None and state.get("body_hash") == body_hash:
             topic = INGEST_OBJECT_METADATA
 
         # Mark for re-embed if body changed
