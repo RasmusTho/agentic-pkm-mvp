@@ -110,8 +110,7 @@ The output must include:
 A `pass` verdict is valid only when:
 
 - The reviewed head SHA matches the current PR head.
-- Required CI and governance checks are current and successful, or an explicit
-  human waiver is present and allowed by the governing skill.
+- Required CI and governance checks are current and successful.
 - Every issue acceptance criterion and `Verify:` marker has evidence.
 - No unresolved blocking review thread or machine finding remains.
 - No forbidden mutation or out-of-scope behavior is present in the diff.
@@ -129,8 +128,9 @@ A `blocking` verdict is required when:
 
 An `inconclusive` verdict is required when required context is unavailable and
 the missing context could change the result. Inconclusive review is not a pass.
-It routes to Human Exception unless the governing workflow allows a bounded
-retry or a human waiver.
+It routes through the escalation classifier: use bounded evidence recovery or
+`blocked_technical` when the missing context is technical, and Human Exception
+only when resolving it needs an explicit `needs_owner` authority category.
 
 ### Actionable Finding Criteria
 
@@ -221,8 +221,9 @@ Frontier-rescue stop conditions:
   production configuration, or high-risk runtime behavior without explicit
   authorization.
 
-When a stop condition triggers, the gate must route a Human Exception packet or
-leave a blocked follow-up issue, depending on the owning workflow.
+When a stop condition triggers, classify it through [Escalation classifier](#escalation-classifier).
+Only an explicit authority category may route to Human Exception; safe technical
+stops remain blocked while their bounded recovery path proceeds autonomously.
 
 ## Review Repair Loop
 
@@ -240,7 +241,8 @@ Required loop:
 Maximum attempts:
 
 - Two substantive fix attempts are allowed for the same blocking finding or
-  failure mechanism before escalation.
+  failure mechanism before capability escalation and classifier-based repair
+  triage; retry exhaustion alone is not a Human Exception.
 - A high-risk PR needs two clean review rounds only when the governing
   verification skill or human reviewer requires it.
 - Cosmetic or receipt-only corrections do not reset the substantive attempt
@@ -251,19 +253,46 @@ Stop conditions:
 - The blocking finding is not specific enough to fix or disprove.
 - The fix requires scope expansion not authorized by the issue.
 - Required source docs or authority boundaries conflict.
-- Required validation cannot run and no allowed waiver exists.
+- Required validation cannot run.
 - The PR branch drifts, the head SHA changes unexpectedly, or branch truth
   cannot be proven.
 - The repair would mutate GitHub state, protected branches, workflows, labels,
   Project fields, or runtime/product behavior outside issue scope.
 
-Stopping is not failure. It is the safe transition from autonomous action to
-Human Exception routing.
+Stopping is not failure. It is the safe transition to the escalation classifier:
+continue with stronger autonomous diagnosis or a bounded recovery slice when
+safe, and enter Human Exception routing only if an explicit authority category
+blocks that recovery.
 
 ## Human Exception Router
 
 Human Exception is the path for decisions that need owner judgment or unsafe
 authority expansion. It must be sparse, deduplicated, and evidence-backed.
+
+## Escalation Classifier
+
+Every terminal or retryable stop is classified before any label, owner packet, or
+repair counter is updated. A retry counter alone must never select
+`needs_owner`.
+
+| Route | Use when | Autonomous next action |
+| --- | --- | --- |
+| `auto_repair` | The failure is repo-local, reversible, inside the issue's declared scope, and has a deterministic validation target. | Create or continue the bounded repair path, then run fresh validation/review. |
+| `auto_backoff` | Authentication, rate limit, or an external tool is temporarily unavailable and no mutation has occurred. | Retain the request, record a receipt, and retry with bounded backoff. |
+| `blocked_technical` | The system failed closed, a dependency is unavailable, or the cause needs stronger diagnosis; no authority is missing. | Keep the affected service/merge path disabled or blocked, collect evidence, and create a linked bounded recovery slice when needed. |
+| `needs_owner` | Continuing needs an unapproved irreversible/external effect, a security/privacy/cost commitment, a production/release operator action, or resolution of contradictory source authority. | Emit one deduplicated Human Exception packet while preserving all CI/review/merge gates. |
+
+Repair accounting is partitioned by failure domain: review/code correctness,
+static-quality, lease/concurrency, and deployment/model-schema compatibility.
+A failure in one domain does not consume another domain's budget. Repeatedly
+identical findings still hit a circuit breaker: it triggers stronger autonomous
+diagnosis and a bounded replan, not an owner interruption, unless that replan
+crosses a `needs_owner` authority category.
+
+Deployment/model-schema compatibility is a control-plane concern. It must be
+checked in a non-mutating preflight before a dispatcher claim or pilot; a
+mismatch is `blocked_technical`, leaves the host disabled, and must not consume
+the PR's review/code repair budget.
 
 ### Packet Schema
 
@@ -303,7 +332,9 @@ Each packet must include:
 - `intent-critical`: the requested behavior conflicts with owner intent,
   product/runtime boundaries, or the issue's non-goals.
 - `autonomous-failure-critical`: the autonomous loop exhausted its attempt
-  budget, cannot classify the failure, or cannot prove branch/head truth.
+  budget, cannot classify the failure after bounded diagnosis, or cannot prove
+  branch/head truth **and** a safe recovery would require one of the explicit
+  `needs_owner` authority categories above.
 
 ## Closure Eligibility
 
@@ -316,8 +347,7 @@ Closure prerequisites:
 - #3215 branch-protection and branch-guardrail contract is implemented and
   enforced for protected branches and PR branches.
 - The PR head SHA is current and all required checks are green for that SHA.
-- Machine review gate passes for the current head SHA, or an allowed human
-  waiver explicitly replaces it.
+- Machine review gate passes for the current head SHA.
 - All issue acceptance criteria and `Verify:` markers have evidence.
 - Required owner-doc writeback is complete, or a no-owner-doc-change receipt is
   present and justified.
