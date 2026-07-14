@@ -241,7 +241,8 @@ Required loop:
 Maximum attempts:
 
 - Two substantive fix attempts are allowed for the same blocking finding or
-  failure mechanism before escalation.
+  failure mechanism before capability escalation and classifier-based repair
+  triage; retry exhaustion alone is not a Human Exception.
 - A high-risk PR needs two clean review rounds only when the governing
   verification skill or human reviewer requires it.
 - Cosmetic or receipt-only corrections do not reset the substantive attempt
@@ -258,8 +259,10 @@ Stop conditions:
 - The repair would mutate GitHub state, protected branches, workflows, labels,
   Project fields, or runtime/product behavior outside issue scope.
 
-Stopping is not failure. It is the safe transition from autonomous action to
-Human Exception routing.
+Stopping is not failure. It is the safe transition to the escalation classifier:
+continue with stronger autonomous diagnosis or a bounded recovery slice when
+safe, and enter Human Exception routing only if an explicit authority category
+blocks that recovery.
 
 ## Human Exception Router
 

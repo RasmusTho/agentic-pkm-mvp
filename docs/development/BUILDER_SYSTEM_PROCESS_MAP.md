@@ -471,10 +471,13 @@ flowchart TD
   Findings -->|blocking| Fix["Fix"]
   Fix --> ReReview["Re-review"]
   ReReview --> Findings
-  Findings -->|repeats after 2 attempts| Human["Human exception"]
+  Findings -->|repeats after 2 attempts| Triage["Capability escalation + classifier triage"]
+  Triage -->|safe bounded path| Fix
+  Triage -->|technical pause| Block["blocked_technical"]
+  Triage -->|explicit authority category| Human["Human exception"]
 ```
 
-Review repair loop: re-run after substantive fixes; stop after a clean round, two clean rounds for high-risk surfaces, or repeated same mechanism after two attempts [`.codex/skills/verification-and-closure/SKILL.md`:145-163].
+Review repair loop: re-run after substantive fixes; stop after a clean round or two clean rounds for high-risk surfaces. A repeated mechanism after two attempts enters capability escalation plus classifier triage, not an automatic owner interrupt [`.codex/skills/verification-and-closure/SKILL.md`:145-163].
 
 Frontier rescue loop: triggered by repeated failure, feature-level issue, hidden invariants, or route ambiguity; actor is agent; state moves to issue maintenance, feature-breakdown, or `agent:needs-human`; evidence is blocker receipt or follow-up issue [`.codex/skills/issue-to-code/SKILL.md`:121-124], [AGENTS.md:142-149].
 
@@ -788,7 +791,10 @@ flowchart TD
   Blocking -->|yes| Fix["Fix"]
   Fix --> Reverify["Re-review/reverify"]
   Reverify --> Review
-  Blocking -->|repeated| Exception["Human exception"]
+  Blocking -->|repeated| Triage["Capability escalation + classifier triage"]
+  Triage -->|safe bounded path| Fix
+  Triage -->|technical pause| Block["blocked_technical"]
+  Triage -->|explicit authority category| Exception["Human exception"]
 ```
 
 ### Post-Merge Docs/Spec Feedback Loop
