@@ -38,16 +38,22 @@ channel-bootstrap/configuration problem, not an owner decision.
 1. Inspect the deploy environment files selected for the target channel and identify the variables
    that supply the vault source and target. Check presence and resolved path shape only; never copy
    secret values into chat, Issues, PRs, or receipts.
-2. Inspect the effective Compose file and overlays for the target service, including the resolved
-   mount/bind source and container target. Confirm that the deploy environment and Compose wiring
-   agree.
+2. Inspect only the target service's mount/bind fields in the effective Compose file and overlays.
+   Use source inspection or a redacted, non-interpolating view; never render or retain the full
+   effective configuration, environment values, or unrelated service fields. Confirm that the deploy
+   environment and Compose wiring agree.
 3. Check the configured source path and the standard local Obsidian locations, including
    `~/Library/Mobile Documents/iCloud~md~obsidian/Documents` and `~/Documents/Obsidian`, then the
-   intended vault subdirectory. Confirm that a candidate is readable, not merely present.
-4. If these checks expose a source-authorized, reversible repair, create or repair the bounded Issue
-   and continue delivery; do not ask the owner for confirmation. If the source is absent or several
-   legitimate vaults remain and the owner must choose one, retain the command/path evidence in the
-   durable record and proceed to Step 1.
+   intended vault subdirectory. Confirm that a candidate is readable, not merely present; use this
+   only as diagnostic evidence, never as a channel-binding selection.
+4. Only when the target channel's deploy environment, Compose wiring, or canonical bootstrap/doctor
+   output already identifies a channel-owned source may the agent create or repair the resulting
+   bounded, reversible configuration Issue and continue delivery. A generic iCloud/Obsidian discovery
+   must never be used to create or rewrite a dev/test/prod binding. If the channel-owned source is
+   absent, or several legitimate vaults remain and the owner must choose one, retain the command/path
+   outcome only as redacted boolean/path-class evidence (for example, `channel source: absent` or
+   `configured path: unreadable`), never as full commands, raw environment values, vault names, or
+   absolute private paths; then proceed to Step 1.
 
 This preflight is inspection-only unless the governing issue or source authority already permits the
 resulting bounded repair. It does not authorize a real-vault write, a deployment, or disclosure of
