@@ -11,37 +11,39 @@ Last reviewed: 2026-06-21
 
 ## Purpose
 
-Ensure every authority-bearing durable mutation is admissible before mutation and accountable after mutation.
+Ensure every authority-bearing durable mutation and every authority-bearing external/tool effect is
+admissible before it occurs and accountable after its outcome is known.
 
 ## Inputs
 
 - Actor/principal.
 - Resource/artifact/memory/execution target.
 - ActiveContextSet reference.
-- Requested write class.
+- Requested write/effect class.
 - Evidence/proposal/context references.
 - Policy profile and delegation state.
 
 ## Outputs
 
 - PolicyDecision.
-- DecisionToken for approved authority-bearing durable mutations.
-- AuthorityReceipt after mutation outcome.
+- DecisionToken for approved authority-bearing durable mutations or authority-bearing external/tool
+  effects.
+- AuthorityReceipt after the state-owner mutation or EXE effect outcome.
 - Denial or review-required reason.
 
 ## Commands
 
 - Evaluate policy.
 - Issue DecisionToken.
-- Validate DecisionToken before mutation.
-- Record AuthorityReceipt after mutation.
+- Validate DecisionToken before state-owner mutation or EXE effect.
+- Record AuthorityReceipt after the mutation/effect outcome and its mutation/effect receipt are known.
 - Revoke delegation or token when required.
 
 ## Queries
 
 - Is this actor/action/resource/context admissible?
 - Which review class applies?
-- Which receipts exist for this mutation?
+- Which mutation/effect receipt and AuthorityReceipt exist for this mutation/effect?
 - Is the token still valid?
 
 ## Events
@@ -53,18 +55,20 @@ Ensure every authority-bearing durable mutation is admissible before mutation an
 
 ## Invariants
 
-- Authority-bearing durable writes require pre-mutation DecisionToken validation.
-- Authority-bearing durable writes emit post-mutation AuthorityReceipt.
+- Authority-bearing durable writes and authority-bearing external/tool effects require DecisionToken
+  validation before the state-owner mutation or EXE effect.
+- Authority-bearing durable writes and authority-bearing external/tool effects emit an
+  AuthorityReceipt after the mutation/effect outcome and mutation/effect receipt are known.
 - Rebuildable projection writes may use lighter policy if they do not carry irreplaceable meaning or accountability.
-- GOV owns admissibility and accountability, not state-owner mutation mechanics.
+- GOV owns admissibility and accountability, not state-owner mutation or EXE effect mechanics.
 - The logical effect chain is ordered and non-collapsible:
   `evidence/proposal -> PolicyDecision -> DecisionToken -> state-owner mutation or EXE effect ->
   state-owner mutation receipt or EXE effect receipt -> AuthorityReceipt -> downstream effect
   notification / derived repair`.
   A producer may prepare evidence or a proposal, but it must not skip, combine, or reorder the
-  governance and mutation stages.
+  governance and mutation/effect stages.
 - Chain ownership stays separated:
-  - the initiating producer owns the evidence/proposal and requested write class;
+  - the initiating producer owns the evidence/proposal and requested write/effect class;
   - GOV owns policy evaluation, DecisionToken issuance/validation, and AuthorityReceipt recording;
   - the state-owning subsystem owns mutation mechanics and its mutation receipt;
   - EXE is the effect owner for authorized external/tool effects and owns the corresponding effect
@@ -72,7 +76,7 @@ Ensure every authority-bearing durable mutation is admissible before mutation an
   - SIP owns identity and provenance continuity;
   - DRI owns rebuildable projection repair or suppression after source correction; and
   - OEF observes and evaluates the chain but does not authorize, mutate, or close recovery state.
-- A DecisionToken is bound to the actor, action, write class, resource, and decision that produced
+- A DecisionToken is bound to the actor, action, write/effect class, resource, and decision that produced
   it. A state owner or EXE must reject a missing, invalid, expired, revoked, mismatched, or
   already-consumed token before mutation or effect.
 - Success is not acknowledged until the state-owner mutation or EXE effect result, its corresponding
@@ -122,21 +126,24 @@ that the transitional runtime already enforces the whole chain.
 
 - Do not use GOV as a storage, execution, rendering, or adapter god-core.
 - Do not treat warning-only policy output as authorization.
-- Do not emit receipts before the mutation result is known.
+- Do not emit an AuthorityReceipt before the state-owner mutation or EXE effect result and its
+  mutation/effect receipt are known.
 
 ## Failure Modes
 
 - Advisory governance.
 - Governance god-core.
-- Durable writes with no accountability.
+- Authority-bearing durable writes or authority-bearing external/tool effects with no accountability.
 
 ## Transitional Implementation Notes
 
-Existing WriteGuard, APPLY gates, receipts, and policy surfaces are transitional evidence. They should be mapped to PolicyDecision, DecisionToken, and AuthorityReceipt before widening write authority.
+Existing WriteGuard, APPLY gates, receipts, and policy surfaces are transitional evidence. They
+should be mapped to PolicyDecision, DecisionToken, mutation/effect receipt, and AuthorityReceipt
+before widening write or effect authority.
 
 ## Open Questions
 
-- Which write classes are token-required in V1?
+- Which write/effect classes are authority-bearing and token-required in V1?
 - Which rebuildable projection writes need receipts for audit even when not authority-bearing?
 
 ## Linked Source-Of-Truth Docs
