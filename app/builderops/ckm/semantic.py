@@ -510,6 +510,13 @@ def reapply_confirmation_receipts(store: CkmStore) -> int:
             capability = capabilities[capability.name]
         except (CkmValidationError, KeyError, TypeError, ValueError):
             continue
+        active = store.get_active_evidence_edge_by_id(payload["edge_id"])
+        if active is None and store.has_retired_evidence_edge(payload["edge_id"]):
+            # Explicit retirement in the current derived graph is not a partial
+            # rebuild. Replaying the older confirmation would resurrect evidence
+            # that cleanup intentionally removed. A true rebuild drops both the
+            # active and history tables, so the normal restoration path remains.
+            continue
         edge = store.upsert_evidence_edge(
             artifact_id=artifact.id,
             capability_id=capability.id,

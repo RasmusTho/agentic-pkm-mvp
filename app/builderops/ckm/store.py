@@ -612,6 +612,16 @@ class CkmStore:
             ).fetchone()
         return CkmEvidenceEdge.from_row(row) if row is not None else None
 
+    def has_retired_evidence_edge(self, edge_id: str) -> bool:
+        """Return whether the current graph explicitly retired this edge id."""
+
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM ckm_evidence_edge_history WHERE edge_id = ? LIMIT 1",
+                (edge_id,),
+            ).fetchone()
+        return row is not None
+
     def _set_inferred_edge_confirmed(self, edge_id: str) -> CkmEvidenceEdge:
         """Apply a confirmation already authorized by semantic receipt validation.
 
