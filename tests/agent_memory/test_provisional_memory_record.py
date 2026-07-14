@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -10,6 +10,7 @@ from app.agent_memory.provisional_memory import (
     ProvisionalLifecycleReceipt,
     ProvisionalLifecycleTransition,
     ProvisionalMarkdownArtifact,
+    ProvisionalMemoryRecord,
     ProvisionalReconciliationState,
     ProvisionalSensitivity,
     rebuild_provisional_memory,
@@ -89,6 +90,35 @@ def test_record_rejects_authority_escalation(field: str, value: str) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("scope_id", ""),
+        ("principal_id", ""),
+        ("content", ""),
+        ("provenance_event_ids", ()),
+        ("lifecycle_receipt_refs", ()),
+        ("created_at", datetime(2026, 7, 15)),
+        ("may_apply", True),
+    ],
+)
+def test_direct_record_construction_cannot_bypass_invariants(
+    field: str, value: object
+) -> None:
+    artifact = _artifact()
+    result = rebuild_provisional_memory(
+        memory_id=artifact.memory_id,
+        artifact_ref=artifact.artifact_ref,
+        artifact=artifact,
+        receipts=(_created_receipt(artifact),),
+    )
+    assert result.record is not None
+    payload = result.record.model_dump()
+    payload[field] = value
+    with pytest.raises(ValidationError):
+        ProvisionalMemoryRecord.model_validate(payload)
+
+
 def test_lifecycle_receipts_are_content_free_and_distinguish_retryable_state() -> None:
     artifact = _artifact()
     failed = ProvisionalLifecycleReceipt(
@@ -118,6 +148,13 @@ def test_lifecycle_receipts_are_content_free_and_distinguish_retryable_state() -
         ProvisionalLifecycleReceipt.model_validate(
             {**failed.model_dump(), "content": "must not persist"}
         )
+    with pytest.raises(ValidationError):
+        ProvisionalLifecycleReceipt.model_validate(
+            {
+                **failed.model_dump(),
+                "error_code": "The user prefers explicit verification.",
+            }
+        )
     partial = rebuild_provisional_memory(
         memory_id=artifact.memory_id,
         artifact_ref=artifact.artifact_ref,
@@ -134,6 +171,34 @@ def test_lifecycle_receipts_are_content_free_and_distinguish_retryable_state() -
     assert partial.record is None
     assert terminal.state is ProvisionalReconciliationState.TERMINAL_DELETED
     assert terminal.record is None
+
+
+def test_terminal_delete_cannot_be_reversed_by_later_created_receipt() -> None:
+    artifact = _artifact()
+    deleted = ProvisionalLifecycleReceipt(
+        receipt_id="receipt-deleted",
+        memory_id=artifact.memory_id,
+        artifact_ref=artifact.artifact_ref,
+        transition=ProvisionalLifecycleTransition.DELETED,
+        actor_ref="human://owner",
+        occurred_at=NOW,
+    )
+    later_created = _created_receipt(artifact).model_copy(
+        update={
+            "receipt_id": "receipt-created-later",
+            "occurred_at": NOW + timedelta(seconds=1),
+        }
+    )
+
+    result = rebuild_provisional_memory(
+        memory_id=artifact.memory_id,
+        artifact_ref=artifact.artifact_ref,
+        artifact=artifact,
+        receipts=(deleted, later_created),
+    )
+
+    assert result.state is ProvisionalReconciliationState.TERMINAL_DELETED
+    assert result.record is None
 
 
 def test_record_rebuild_follows_markdown_and_never_resurrects_missing_content() -> None:

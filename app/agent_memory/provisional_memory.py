@@ -40,6 +40,14 @@ class ProvisionalLifecycleTransition(str, Enum):
     DELETED = "deleted"
 
 
+class ProvisionalFailureCode(str, Enum):
+    VAULT_WRITE_FAILED = "vault_write_failed"
+    RECEIPT_PERSIST_FAILED = "receipt_persist_failed"
+    VALIDATION_FAILED = "validation_failed"
+    WRITE_CONFLICT = "write_conflict"
+    PERMISSION_DENIED = "permission_denied"
+
+
 class ProvisionalReconciliationState(str, Enum):
     READY = "ready"
     EDITED = "edited"
@@ -93,7 +101,7 @@ class ProvisionalLifecycleReceipt(BaseModel):
     actor_ref: str = Field(min_length=1)
     occurred_at: datetime
     artifact_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    error_code: str | None = None
+    error_code: ProvisionalFailureCode | None = None
 
     @field_validator("occurred_at")
     @classmethod
@@ -142,18 +150,18 @@ class ProvisionalMemoryRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    memory_id: str
-    artifact_ref: str
-    scope_id: str
-    principal_id: str
+    memory_id: str = Field(min_length=1)
+    artifact_ref: str = Field(min_length=1)
+    scope_id: str = Field(min_length=1)
+    principal_id: str = Field(min_length=1)
     memory_type: MemoryType
     evidence_role: ProvisionalEvidenceRole
     sensitivity: ProvisionalSensitivity
-    content: str
-    created_by: str
+    content: str = Field(min_length=1)
+    created_by: str = Field(min_length=1)
     created_at: datetime
-    provenance_event_ids: tuple[NonEmptyRef, ...]
-    lifecycle_receipt_refs: tuple[NonEmptyRef, ...]
+    provenance_event_ids: tuple[NonEmptyRef, ...] = Field(min_length=1)
+    lifecycle_receipt_refs: tuple[NonEmptyRef, ...] = Field(min_length=1)
     source_role: Literal["agent_memory"] = "agent_memory"
     authority_state: Literal["noncanonical"] = "noncanonical"
     review_state: Literal[ReviewState.UNREVIEWED] = ReviewState.UNREVIEWED
@@ -161,6 +169,13 @@ class ProvisionalMemoryRecord(BaseModel):
     may_support_cited_proposal: Literal[True] = True
     may_apply: Literal[False] = False
     may_write: Literal[False] = False
+
+    @field_validator("created_at")
+    @classmethod
+    def _require_aware_created_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("created_at must be timezone-aware")
+        return value
 
 
 class ProvisionalMemoryReconciliation(BaseModel):
@@ -206,7 +221,10 @@ def rebuild_provisional_memory(
         )
 
     latest = ordered[-1] if ordered else None
-    if latest is not None and latest.transition is ProvisionalLifecycleTransition.DELETED:
+    if any(
+        receipt.transition is ProvisionalLifecycleTransition.DELETED
+        for receipt in ordered
+    ):
         return _reconciliation(
             memory_id, artifact_ref, ProvisionalReconciliationState.TERMINAL_DELETED,
             refs, "terminal_delete_receipt",
@@ -271,6 +289,7 @@ def _reconciliation(
 
 __all__ = [
     "ProvisionalEvidenceRole",
+    "ProvisionalFailureCode",
     "ProvisionalLifecycleReceipt",
     "ProvisionalLifecycleTransition",
     "ProvisionalMarkdownArtifact",
