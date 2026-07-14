@@ -487,6 +487,27 @@ def test_projector_does_not_acknowledge_candidate_with_tampered_provenance(tmp_p
     assert get_cursor(CANDIDATE_CONSUMER_ID) == 0
 
 
+def test_projector_does_not_acknowledge_tampered_correction_lineage(tmp_path: Path) -> None:
+    _publish("obs-lineage-v1", episode_id="ep-lineage")
+    _publish("obs-lineage-v2", episode_id="ep-lineage", revision_of="obs-lineage-v1")
+    vault = _vault(tmp_path / "vault")
+    first = project_pending_candidates(vault_context=vault, write_guard=_allowing_guard())
+    note_path = Path(vault.active_vault_path) / first[0].artifact_path
+    original = note_path.read_text(encoding="utf-8")
+    tampered = original.replace(
+        "superseded_observation_ids:\n- obs-lineage-v1",
+        "superseded_observation_ids: []",
+    )
+    assert tampered != original
+    note_path.write_text(tampered, encoding="utf-8")
+    reset_memory_cursor_store()
+
+    results = project_pending_candidates(vault_context=vault, write_guard=_allowing_guard())
+
+    assert results[0].status == "blocked"
+    assert get_cursor(CANDIDATE_CONSUMER_ID) == 0
+
+
 def test_already_exists_is_idempotent_no_overwrite(tmp_path: Path) -> None:
     """Re-running the same candidate never overwrites an existing note."""
     _publish("obs-idem", content="original")

@@ -456,7 +456,7 @@ def _is_durable_candidate(path: Path, candidate: HeimdalCandidate) -> bool:
         raw = path.read_text(encoding="utf-8")
         if not raw.startswith("---\n"):
             return False
-        frontmatter, separator, _body = raw.removeprefix("---\n").partition("\n---\n")
+        frontmatter, separator, body = raw.removeprefix("---\n").partition("\n---\n")
         if not separator:
             return False
         parsed = yaml.safe_load(frontmatter)
@@ -465,14 +465,26 @@ def _is_durable_candidate(path: Path, candidate: HeimdalCandidate) -> bool:
     if not isinstance(parsed, Mapping) or parsed.get("artifact_class") != ARTIFACT_CLASS:
         return False
     provenance = parsed.get("provenance")
+    authority = parsed.get("authority")
     return (
         isinstance(provenance, Mapping)
+        and isinstance(authority, Mapping)
         and provenance.get("observation_id") == candidate.observation_id
         and provenance.get("episode_id") == candidate.episode_id
         and provenance.get("derived_from") == candidate.derived_from
         and provenance.get("content_identity") == candidate.content_identity
         and provenance.get("raw_ref") == candidate.raw_ref
         and provenance.get("capture_chain") == list(candidate.capture_chain)
+        and parsed.get("scope_hint") == candidate.scope_hint
+        and parsed.get("superseded_observation_ids") == list(candidate.superseded_observation_ids)
+        and parsed.get("lifecycle") == "active"
+        and parsed.get("work_relation") == "learn"
+        and authority.get("source_authoritative") is False
+        and authority.get("ai_generated") is True
+        and authority.get("requires_review") is True
+        and parsed.get("review_state") == REVIEW_STATE_DRAFT
+        and parsed.get("triage_state") == TRIAGE_STATE_CAPTURED
+        and candidate.evidence_text in body
     )
 
 
