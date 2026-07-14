@@ -2,7 +2,7 @@
 name: Reconcile and close multiwriter enactment
 description: Verify the delivered mechanism, update invariant truth, and close the parent feature hub.
 task_id: VMW-04
-source_anchor: docs/testing/invariant-tests.md :: INV-VW1, INV-VW3
+source_anchor: "docs/testing/invariant-tests.md :: INV-VW1, INV-VW3"
 parent_capability: VAULT_MULTIWRITER_ENACTMENT
 prerequisites: [VMW-02, VMW-03]
 depends_on: [REWRITTEN_NOTE_CONFLICT_STAGING.md, ICLOUD_CONFLICT_QUARANTINE.md]

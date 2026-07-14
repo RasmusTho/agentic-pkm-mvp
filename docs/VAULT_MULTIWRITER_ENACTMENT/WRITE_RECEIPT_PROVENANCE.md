@@ -2,7 +2,7 @@
 name: Write receipt provenance and note classification
 description: Centralize ADR-0055 note-class execution policy and enrich filesystem write receipts.
 task_id: VMW-01
-source_anchor: docs/adr/ADR-0055-vault-multiwriter-consistency-model.md :: items 1, 4, 6
+source_anchor: "docs/adr/ADR-0055-vault-multiwriter-consistency-model.md :: items 1, 4, 6"
 parent_capability: VAULT_MULTIWRITER_ENACTMENT
 prerequisites: []
 depends_on: []
