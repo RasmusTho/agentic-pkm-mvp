@@ -62,7 +62,7 @@ Safe now: inventory counts, current coverage/composition, seven-dimensional late
 
 ### RQ3 — Observation
 
-The minimum loop is: capture a versioned snapshot → compute named measures from that snapshot → retain the measure definition and source watermark → compare only compatible definitions → publish an observation receipt → use observations to propose, never automatically enact, feature/backlog changes. A 4–6 week observation window or a minimum number of materially distinct snapshots is more informative than adding interactive features immediately; event-based snapshots should supplement, not be replaced by, a calendar cadence.
+The minimum loop is: capture a versioned snapshot → compute named measures from that snapshot → retain the measure definition and source watermark → compare only compatible definitions → publish an observation receipt → use observations to propose, never automatically enact, feature/backlog changes. The current evidence does not determine an honest calendar duration or snapshot count. “Four to six weeks” and “a minimum number of materially distinct snapshots” are inquiry hypotheses to test against change frequency and owner usage, not accepted thresholds; event-triggered and calendar sampling should be compared before a cadence is contracted.
 
 ### RQ4 — Correctness
 
@@ -92,7 +92,7 @@ Defense in depth:
 
 ## 6. SBS reconciliation
 
-All claims **conform to** the current SBS operating model: CKM is Builder System analysis, not a Product/Runtime SBS subsystem. A read/measurement layer extends the BuilderOps CKM physical surface without reshaping the Product SBS. OEF may consume observations and evaluate trends, but it does not gain policy or control authority (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:103,1321,1351`). Any automated action, federation topology, or Product contract write would **propose reshaping** and must route through CES/ADR/owner decision; this audit enacts none.
+All claims **conform to** the current SBS operating model: CKM is Builder System analysis, not a Product/Runtime SBS subsystem. A read/measurement layer extends the BuilderOps CKM physical surface without reshaping the Product SBS. OEF may consume observations and evaluate trends, but it does not gain policy or control authority (`docs/SYSTEM_BREAKDOWN_STRUCTURE.md:103,1321,1351`). Governed BuilderOps automation can remain within existing promotion paths, and federation remains SFC-owned. Only a proposal that changes an SBS owner, dependency/authority boundary, or accepted federation topology **proposes reshaping** and must route through CES/ADR/owner decision; this audit enacts none.
 
 ## 7. Dependency-ordered advisory backlog
 
