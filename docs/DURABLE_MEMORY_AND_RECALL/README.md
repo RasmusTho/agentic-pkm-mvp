@@ -31,7 +31,7 @@ This capability closes that gap. Its shipped boundary is:
 
 `docs/adr/ADR-0025-memory-authority-direct-write-policy.md` extends this boundary for the
 provisional/low-trust direct-write tier as **target-state** policy. ADR-0025 specifies
-(target-state, enforcement deferred to **W7-MEM-02**, #2354) that provisional memory will persist
+(target-state, enforcement specified in `docs/PROVISIONAL_MEMORY/`) that provisional memory will persist
 through a human-readable, editable, provenance-bound Markdown **provisional memory note** (a primary
 artifact, deliberately **not** a rebuildable mirror/projection), **distinct from the materialized
 promoted notes** produced by the governed `proposal → WriteGuard → receipt → artifact` path above —
@@ -42,7 +42,8 @@ records that the receipt ledger is **authoritative for lifecycle state, not clai
 memory can still be wrong; promotion records that a transition occurred, not that the content is
 correct). WriteGuard is **health-state-only** today (`app/write_guard.py` gates on the health
 contract, not on a memory trust tier), so the trust-tier guard that enforces the provisional
-read/cited-proposal ceiling is a **W7-MEM-02** deliverable (#2354) — words only here.
+read/cited-proposal ceiling is specified by the `docs/PROVISIONAL_MEMORY/` implementation chain
+under epic #2314 and remains undelivered until that chain is merged and accepted — words only here.
 
 ## Owner decision basis
 

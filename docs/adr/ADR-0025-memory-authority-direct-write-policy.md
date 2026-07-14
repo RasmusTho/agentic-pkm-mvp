@@ -1,4 +1,4 @@
-State: Accepted (target-state governance decision, 2026-06-22). Re-affirms — does not relax — the existing non-authoritative agent-memory posture and names a quarantined provisional/low-trust tier for direct writes. Enforcement of the trust-tier guard is a future W7 deliverable (W7-MEM-02, #2354); this ADR is words only and changes no runtime code.
+State: Accepted (target-state governance decision, 2026-06-22). Re-affirms — does not relax — the existing non-authoritative agent-memory posture and names a quarantined provisional/low-trust tier for direct writes. Enforcement is specified in `docs/PROVISIONAL_MEMORY/`; this ADR is words only and changes no runtime code. The historical #2354 tracking reference was invalid and is superseded by that specification directory plus epic #2314's live validation ledger.
 Doc role: Decision record (ADR)
 Authority: Authoritative for the *decision* that direct-write memory is provisional/low-trust and non-authoritative by default, that lifecycle escalation requires governance or human, and that provisional memory persists through a human-readable provenance-bound provisional memory note (the human-editable primary artifact, not a rebuildable mirror). Semantic authority for memory remains in `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md`; the inbound admit-by predicate remains owned by `docs/CONCEPTS/CONTEXT_ADMISSIBILITY_CONTRACT.md`; per-entity authority flags remain owned by `docs/SEMANTIC_AUTHORITY_MATRIX.md`. This ADR consolidates and re-affirms those owners; it does not redefine them.
 Owner: Agent memory / Architecture spine
@@ -145,15 +145,17 @@ enforcement of this ADR's provisional ceiling today**; the policy is binding on 
 normative constraint, not by any running guard.
 
 A **trust-tier guard** that enforces this ADR's provisional read/cited-proposal ceiling at the write
-boundary is the required future deliverable — **W7-MEM-02**, tracked by **#2354**. This ADR is **words
-only**: it sets the policy and the admission ceiling but adds no enforcement code. W7-MEM-02 is
+boundary is the required future deliverable — specified by
+`docs/PROVISIONAL_MEMORY/README.md`. This ADR is **words
+only**: it sets the policy and the admission ceiling but adds no enforcement code. The
+`docs/PROVISIONAL_MEMORY/` implementation chain is
 **required before any provisional direct-write producer or reader lands**, so that the first code path
 that creates or consumes provisional memory is gated rather than relying on this normative text alone.
 
 ## Constraints honored
 
 - Doc/ADR-only. No `app/agent_memory/*`, `app/write_guard.py`, or other code change — enforcement is
-  W7 (#2354).
+  the `docs/PROVISIONAL_MEMORY/` implementation chain.
 - No APPLY / tool-use / write authority is granted to provisional or low-trust memory.
 - The ledger is not made authoritative for claim truth — only for lifecycle state.
 - The existing memory owner docs are extended by pointer paragraph, not forked into a parallel
@@ -172,14 +174,15 @@ that creates or consumes provisional memory is gated rather than relying on this
   explicit rule that the sync substrate is never an execution bus.
 - Every lifecycle transition is receipt-bearing, with the ledger authoritative for lifecycle state
   and never for claim truth.
-- Enforcement of the trust-tier ceiling at the write boundary is deferred to W7-MEM-02 (#2354);
+- Enforcement of the trust-tier ceiling at the write boundary is deferred to the
+  `docs/PROVISIONAL_MEMORY/` implementation chain under epic #2314;
   WriteGuard remains health-state-only until then. No runtime behavior changes in this ADR.
 
 ## When to revisit
 
 Reopen and re-decide (a new ADR) if any of these change:
 
-- W7-MEM-02 (#2354) ships a trust-tier guard whose enforced semantics need to be reconciled with or
+- The `docs/PROVISIONAL_MEMORY/` implementation chain ships a trust-tier guard whose enforced semantics need to be reconciled with or
   to tighten this policy.
 - A future governed owner contract explicitly widens the reserved `may_write` slot in
   `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` for provisional or low-trust memory (this ADR
@@ -192,7 +195,7 @@ Reopen and re-decide (a new ADR) if any of these change:
 - Epic #2314 — RAG/memory decomposition.
 - #2318 — governing issue for this ADR (labeled "ADR-0017"; renumbered to ADR-0025 here).
 - #2317 — sibling decision issue (ADR-0023 / ADR-0024 reserved).
-- #2354 — W7-MEM-02, the trust-tier guard enforcement deliverable (enforcement deferred there).
+- `docs/PROVISIONAL_MEMORY/README.md` — execution source for the trust-tier guard and provisional-memory runtime.
 - #1903 — Durable Memory and Recall validation hub.
 - `docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md` :: Authority rules — non-authoritative
   posture and no-silent-escalation (re-affirmed, pointer paragraph added).
@@ -205,4 +208,5 @@ Reopen and re-decide (a new ADR) if any of these change:
   `proposal → WriteGuard → receipt → artifact` materialization (pointer paragraph added).
 - `app/agent_memory/authority_guard.py` (`evaluate_memory_authority` — the re-affirmed conjunction).
 - `app/agent_memory/candidate.py` (unreviewed candidates blocked from working context).
-- `app/write_guard.py` (health-state-only today; trust-tier guard is W7-MEM-02).
+- `app/write_guard.py` (health-state-only today; trust-tier guard is specified under
+  `docs/PROVISIONAL_MEMORY/`).
