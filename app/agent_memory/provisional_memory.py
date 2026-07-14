@@ -12,29 +12,25 @@ from hashlib import sha256
 import json
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import UUID4, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.agent_memory.candidate import MemoryType, ReviewState
 
 NonEmptyRef = Annotated[str, Field(min_length=1)]
-OpaqueId = Annotated[
+EntityId = Annotated[
     str,
     Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"),
 ]
 ArtifactRef = Annotated[
     str,
     Field(
-        min_length=12,
-        max_length=256,
-        pattern=r"^vault://[A-Za-z0-9._~!$&'()*+,;=:@%/-]+\.md$",
-    ),
-]
-ActorRef = Annotated[
-    str,
-    Field(
-        min_length=9,
-        max_length=80,
-        pattern=r"^(agent|human|system)://[A-Za-z0-9][A-Za-z0-9._:-]*$",
+        min_length=66,
+        max_length=66,
+        pattern=(
+            r"^vault://Memory/Provisional/"
+            r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-"
+            r"[0-9a-f]{12}\.md$"
+        ),
     ),
 ]
 
@@ -69,6 +65,12 @@ class ProvisionalFailureCode(str, Enum):
     PERMISSION_DENIED = "permission_denied"
 
 
+class ProvisionalActor(str, Enum):
+    AGENT = "agent"
+    HUMAN = "human"
+    SYSTEM = "system"
+
+
 class ProvisionalReconciliationState(str, Enum):
     READY = "ready"
     EDITED = "edited"
@@ -97,20 +99,26 @@ class ProvisionalMarkdownArtifact(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    memory_id: OpaqueId
+    memory_id: UUID4
     artifact_ref: ArtifactRef
-    scope_id: OpaqueId
-    principal_id: OpaqueId
+    scope_id: EntityId
+    principal_id: EntityId
     memory_type: MemoryType
     evidence_role: ProvisionalEvidenceRole = ProvisionalEvidenceRole.BACKGROUND
     sensitivity: ProvisionalSensitivity
     content: str = Field(min_length=1)
-    created_by: ActorRef
+    created_by: NonEmptyRef
     created_at: datetime
     provenance_event_ids: tuple[NonEmptyRef, ...] = Field(min_length=1)
     source_role: Literal["agent_memory"] = "agent_memory"
     authority_state: Literal["noncanonical"] = "noncanonical"
     review_state: Literal[ReviewState.UNREVIEWED] = ReviewState.UNREVIEWED
+
+    @model_validator(mode="after")
+    def _require_canonical_artifact_ref(self) -> "ProvisionalMarkdownArtifact":
+        if self.artifact_ref != _artifact_ref_for(self.memory_id):
+            raise ValueError("artifact_ref must be canonical for memory_id")
+        return self
 
     @field_validator("created_at")
     @classmethod
@@ -135,11 +143,11 @@ class ProvisionalLifecycleReceipt(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    receipt_id: OpaqueId
-    memory_id: OpaqueId
+    receipt_id: UUID4
+    memory_id: UUID4
     artifact_ref: ArtifactRef
     transition: ProvisionalLifecycleTransition
-    actor_ref: ActorRef
+    actor_ref: ProvisionalActor
     occurred_at: datetime
     artifact_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     error_code: ProvisionalFailureCode | None = None
@@ -153,6 +161,8 @@ class ProvisionalLifecycleReceipt(BaseModel):
 
     @model_validator(mode="after")
     def _validate_transition_metadata(self) -> "ProvisionalLifecycleReceipt":
+        if self.artifact_ref != _artifact_ref_for(self.memory_id):
+            raise ValueError("artifact_ref must be canonical for memory_id")
         if self.transition is ProvisionalLifecycleTransition.CREATED:
             if self.artifact_digest is None:
                 raise ValueError("created receipt requires artifact_digest")
@@ -191,18 +201,18 @@ class ProvisionalMemoryRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    memory_id: OpaqueId
+    memory_id: UUID4
     artifact_ref: ArtifactRef
-    scope_id: OpaqueId
-    principal_id: OpaqueId
+    scope_id: EntityId
+    principal_id: EntityId
     memory_type: MemoryType
     evidence_role: ProvisionalEvidenceRole
     sensitivity: ProvisionalSensitivity
     content: str = Field(min_length=1)
-    created_by: ActorRef
+    created_by: NonEmptyRef
     created_at: datetime
     provenance_event_ids: tuple[NonEmptyRef, ...] = Field(min_length=1)
-    lifecycle_receipt_refs: tuple[OpaqueId, ...] = Field(min_length=1)
+    lifecycle_receipt_refs: tuple[UUID4, ...] = Field(min_length=1)
     source_role: Literal["agent_memory"] = "agent_memory"
     authority_state: Literal["noncanonical"] = "noncanonical"
     review_state: Literal[ReviewState.UNREVIEWED] = ReviewState.UNREVIEWED
@@ -222,15 +232,17 @@ class ProvisionalMemoryRecord(BaseModel):
 class ProvisionalMemoryReconciliation(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    memory_id: OpaqueId
+    memory_id: UUID4
     artifact_ref: ArtifactRef
     state: ProvisionalReconciliationState
     record: ProvisionalMemoryRecord | None = None
-    receipt_refs: tuple[OpaqueId, ...] = ()
+    receipt_refs: tuple[UUID4, ...] = ()
     diagnostic: ProvisionalDiagnostic
 
     @model_validator(mode="after")
     def _enforce_record_posture(self) -> "ProvisionalMemoryReconciliation":
+        if self.artifact_ref != _artifact_ref_for(self.memory_id):
+            raise ValueError("artifact_ref must be canonical for memory_id")
         readable = self.state in {
             ProvisionalReconciliationState.READY,
             ProvisionalReconciliationState.EDITED,
@@ -252,7 +264,7 @@ class ProvisionalMemoryReconciliation(BaseModel):
 
 def rebuild_provisional_memory(
     *,
-    memory_id: str,
+    memory_id: UUID4,
     artifact_ref: str,
     artifact: ProvisionalMarkdownArtifact | None,
     receipts: tuple[ProvisionalLifecycleReceipt, ...] = (),
@@ -340,10 +352,10 @@ def rebuild_provisional_memory(
 
 
 def _reconciliation(
-    memory_id: str,
+    memory_id: UUID4,
     artifact_ref: str,
     state: ProvisionalReconciliationState,
-    receipt_refs: tuple[str, ...],
+    receipt_refs: tuple[UUID4, ...],
     diagnostic: ProvisionalDiagnostic,
 ) -> ProvisionalMemoryReconciliation:
     return ProvisionalMemoryReconciliation(
@@ -361,7 +373,7 @@ def _normalize_receipts(
     tuple[ProvisionalLifecycleReceipt, ...],
     tuple[ProvisionalReconciliationState, ProvisionalDiagnostic] | None,
 ]:
-    by_id: dict[str, ProvisionalLifecycleReceipt] = {}
+    by_id: dict[UUID4, ProvisionalLifecycleReceipt] = {}
     for receipt in receipts:
         existing = by_id.get(receipt.receipt_id)
         if existing is not None and existing != receipt:
@@ -380,9 +392,14 @@ def _normalize_receipts(
     return normalized, None
 
 
+def _artifact_ref_for(memory_id: UUID4) -> str:
+    return f"vault://Memory/Provisional/{memory_id}.md"
+
+
 __all__ = [
     "ProvisionalEvidenceRole",
     "ProvisionalDiagnostic",
+    "ProvisionalActor",
     "ProvisionalFailureCode",
     "ProvisionalLifecycleReceipt",
     "ProvisionalLifecycleTransition",

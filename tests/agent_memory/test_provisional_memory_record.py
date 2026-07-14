@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
@@ -17,12 +18,17 @@ from app.agent_memory.provisional_memory import (
 )
 
 NOW = datetime(2026, 7, 15, tzinfo=timezone.utc)
+MEMORY_ID = UUID("12345678-1234-4abc-8def-1234567890ab")
+OTHER_MEMORY_ID = UUID("22345678-1234-4abc-8def-1234567890ab")
+CREATED_RECEIPT_ID = UUID("32345678-1234-4abc-8def-1234567890ab")
+FAILED_RECEIPT_ID = UUID("42345678-1234-4abc-8def-1234567890ab")
+DELETED_RECEIPT_ID = UUID("52345678-1234-4abc-8def-1234567890ab")
 
 
 def _artifact(content: str = "The user prefers explicit verification.") -> ProvisionalMarkdownArtifact:
     return ProvisionalMarkdownArtifact(
-        memory_id="memory-1",
-        artifact_ref="vault://Memory/Provisional/memory-1.md",
+        memory_id=MEMORY_ID,
+        artifact_ref=f"vault://Memory/Provisional/{MEMORY_ID}.md",
         scope_id="scope-personal",
         principal_id="principal-1",
         memory_type=MemoryType.PREFERENCE_MEMORY,
@@ -36,11 +42,11 @@ def _artifact(content: str = "The user prefers explicit verification.") -> Provi
 
 def _created_receipt(artifact: ProvisionalMarkdownArtifact) -> ProvisionalLifecycleReceipt:
     return ProvisionalLifecycleReceipt(
-        receipt_id="receipt-created",
+        receipt_id=CREATED_RECEIPT_ID,
         memory_id=artifact.memory_id,
         artifact_ref=artifact.artifact_ref,
         transition=ProvisionalLifecycleTransition.CREATED,
-        actor_ref="agent://mimer",
+        actor_ref="agent",
         occurred_at=NOW,
         artifact_digest=artifact.artifact_digest,
     )
@@ -122,20 +128,20 @@ def test_direct_record_construction_cannot_bypass_invariants(
 def test_lifecycle_receipts_are_content_free_and_distinguish_retryable_state() -> None:
     artifact = _artifact()
     failed = ProvisionalLifecycleReceipt(
-        receipt_id="receipt-failed",
+        receipt_id=FAILED_RECEIPT_ID,
         memory_id=artifact.memory_id,
         artifact_ref=artifact.artifact_ref,
         transition=ProvisionalLifecycleTransition.WRITE_FAILED,
-        actor_ref="agent://mimer",
+        actor_ref="agent",
         occurred_at=NOW,
         error_code="vault_write_failed",
     )
     deleted = ProvisionalLifecycleReceipt(
-        receipt_id="receipt-deleted",
+        receipt_id=DELETED_RECEIPT_ID,
         memory_id=artifact.memory_id,
         artifact_ref=artifact.artifact_ref,
         transition=ProvisionalLifecycleTransition.DELETED,
-        actor_ref="human://owner",
+        actor_ref="human",
         occurred_at=NOW,
     )
 
@@ -184,16 +190,16 @@ def test_lifecycle_receipts_are_content_free_and_distinguish_retryable_state() -
 def test_terminal_delete_cannot_be_reversed_by_later_created_receipt() -> None:
     artifact = _artifact()
     deleted = ProvisionalLifecycleReceipt(
-        receipt_id="receipt-deleted",
+        receipt_id=DELETED_RECEIPT_ID,
         memory_id=artifact.memory_id,
         artifact_ref=artifact.artifact_ref,
         transition=ProvisionalLifecycleTransition.DELETED,
-        actor_ref="human://owner",
+        actor_ref="human",
         occurred_at=NOW,
     )
     later_created = _created_receipt(artifact).model_copy(
         update={
-            "receipt_id": "receipt-created-later",
+            "receipt_id": UUID("62345678-1234-4abc-8def-1234567890ab"),
             "occurred_at": NOW + timedelta(seconds=1),
         }
     )
@@ -217,7 +223,7 @@ def test_conflicting_receipt_identity_and_order_fail_closed() -> None:
         memory_id=artifact.memory_id,
         artifact_ref=artifact.artifact_ref,
         transition=ProvisionalLifecycleTransition.WRITE_FAILED,
-        actor_ref="agent://mimer",
+        actor_ref="agent",
         occurred_at=NOW,
         error_code="vault_write_failed",
     )
@@ -233,7 +239,7 @@ def test_conflicting_receipt_identity_and_order_fail_closed() -> None:
         artifact=artifact,
         receipts=(
             created,
-            conflicting.model_copy(update={"receipt_id": "receipt-failed"}),
+            conflicting.model_copy(update={"receipt_id": FAILED_RECEIPT_ID}),
         ),
     )
 
@@ -257,7 +263,7 @@ def test_reconciliation_envelope_cannot_resurrect_excluded_record() -> None:
         type(ready).model_validate(payload)
 
     assert ready.record is not None
-    mismatched = ready.record.model_copy(update={"memory_id": "memory-other"})
+    mismatched = ready.record.model_copy(update={"memory_id": OTHER_MEMORY_ID})
     with pytest.raises(ValidationError):
         type(ready).model_validate({**ready.model_dump(), "record": mismatched})
 
@@ -295,3 +301,21 @@ def test_record_rebuild_follows_markdown_and_never_resurrects_missing_content() 
         receipts=(receipt,),
     )
     assert metadata_result.state is ProvisionalReconciliationState.EDITED
+
+
+@pytest.mark.parametrize(
+    "artifact_ref",
+    [
+        "vault://Private/user%20has%20cancer.md",
+        "vault://Memory/Provisional/../secret.md",
+        "vault://Memory/Provisional/%2e%2e/secret.md",
+        f"vault://Memory/Provisional/{OTHER_MEMORY_ID}.md",
+    ],
+)
+def test_artifact_reference_is_canonical_and_bound_to_memory_id(
+    artifact_ref: str,
+) -> None:
+    with pytest.raises(ValidationError):
+        ProvisionalMarkdownArtifact.model_validate(
+            {**_artifact().model_dump(), "artifact_ref": artifact_ref}
+        )
