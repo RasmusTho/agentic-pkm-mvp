@@ -1,6 +1,6 @@
 ---
 name: Repo Artifact Ingestion
-description: Deterministic local adapters that normalize docs, ADRs, spec directories, tests, and git history into CKM artifact records with watermarks
+description: Deterministic local adapters that normalize docs, ADRs, spec directories, tests, schemas, source, and git history into CKM artifact records with watermarks
 task_id: CKM-03
 source_anchor: docs/research/DEVELOPMENT_KNOWLEDGE_MODEL.md :: 5.14 Data Sources
 parent_capability: Capability Knowledge Model
@@ -21,15 +21,16 @@ Turn the repository's local artifact surfaces into normalized `ckm_artifact` rec
   - **docs adapter** — walks `docs/**/*.md`; `artifact_kind` from location/header (`adr` for `docs/adr/`, `spec` for spec directories with task frontmatter, `doc` otherwise); captures the `State:` header line and title as the payload summary.
   - **test adapter** — walks `tests/**/test_*.py`; records module path + test names (AST-level listing, no execution).
   - **source adapter** — walks `app/**/*.py`; records module path + top-level docstring first line.
+  - **schema adapter** — walks `schemas/**/*.json`; records each JSON schema as a provenance-bearing document artifact so deterministic matrix citations have a resolvable producer.
   - **git adapter** — `git log` over a bounded window (configurable, default: since last watermark) yielding commit records (sha, subject, changed paths).
-- Watermarking per source (`docs`, `tests`, `source`, `git`): stores the last-ingested state (HEAD sha for git; content hash set for tree walks) in a `ckm_watermark` helper table; re-runs ingest only what changed (INV-CKM-5, INV-CKM-7).
+- Watermarking per source (`docs`, `tests`, `source`, `schemas`, `git`): stores the last-ingested state (HEAD sha for git; content hash set for tree walks) in a `ckm_watermark` helper table; re-runs ingest only what changed (INV-CKM-5, INV-CKM-7).
 - CLI: `python -m app.builderops ckm ingest --source repo`.
 
 ## Concretely
 
 ```bash
 python -m app.builderops ckm ingest --source repo
-# → "docs: 412 artifacts (+3), tests: 388 (+1), source: 290 (0), git: 5210 commits (+17); watermark advanced to <sha>"
+# → "docs: 412 artifacts (+3), tests: 388 (+1), source: 290 (0), schemas: 27 (0), git: 5210 commits (+17)"
 ```
 
 ## Why This Matters
@@ -38,7 +39,7 @@ Everything downstream is only as honest as ingestion: a missed artifact class sh
 
 ## Acceptance Criteria
 
-- [ ] All four adapters produce records with non-null natural keys, kinds, and provenance, over a fixture tree.
+- [ ] All five tree adapters plus git produce records with non-null natural keys, kinds, and provenance over a fixture tree, including JSON schemas required by the traceability matrix.
   - Verify: `tests/builderops/ckm/test_ingest_repo.py::test_adapters_yield_typed_provenanced_records`
 - [ ] Re-ingestion over an unchanged tree inserts zero new rows; touching one doc re-ingests exactly that artifact and advances the watermark.
   - Verify: `tests/builderops/ckm/test_ingest_repo.py::test_incremental_watermark_semantics`

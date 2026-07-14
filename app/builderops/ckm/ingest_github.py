@@ -63,6 +63,7 @@ def normalize_github_payload(payload: Mapping[str, Any], *, artifact_kind: str) 
         "number": number,
         "title": str(payload.get("title", "")),
         "state": str(payload.get("state", "")),
+        "merged_at": payload.get("merged_at"),
         "labels": _labels(payload),
         "references": _references(payload),
         "linked_pull_request": payload.get("pull_request"),

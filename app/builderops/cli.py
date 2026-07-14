@@ -28,6 +28,7 @@ from app.builderops.ckm_reevaluation import (
 from app.builderops.ckm.models import CkmValidationError
 from app.builderops.ckm.ingest_github import ingest_github
 from app.builderops.ckm.ingest_repo import ingest_repo
+from app.builderops.ckm.linkers import link_deterministic
 from app.builderops.ckm.seed import SeedManifestError, seed_capabilities
 from app.builderops.ckm.store import CkmStore
 from app.builderops.config import BuilderOpsPaths, load_paths
@@ -416,6 +417,22 @@ def ckm_ingest(ctx: click.Context, source: str, repo_root: Path, git_limit: int)
                 for name, data in (("issues", github["issues"]), ("pull_requests", github["pull_requests"]))
             )
     click.echo("; ".join(segments))
+
+
+@ckm.command("link", help="Create confirmed deterministic CKM evidence edges.")
+@click.option("--repo-root", type=click.Path(file_okay=False, path_type=Path), default=Path.cwd)
+@click.pass_context
+def ckm_link(ctx: click.Context, repo_root: Path) -> None:
+    try:
+        result = link_deterministic(_ckm_store(ctx), repo_root)
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        raise click.ClickException(f"ckm linking failed: {exc}") from exc
+    click.echo(
+        "; ".join(
+            [f"{name}: {result[name]} new" for name in ("matrix", "spec", "adr", "test_code", "github_ref")]
+            + [f"unlinked artifacts: {result['unlinked_artifacts']}"]
+        )
+    )
 
 
 @builderops.group("inquiry", help="Persist and inspect pre-ticket model inquiry artifacts.")
