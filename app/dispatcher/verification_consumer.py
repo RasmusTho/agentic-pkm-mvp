@@ -58,7 +58,7 @@ class GhCliVerificationSource:
     """Read request artifacts and live truth with the host's authenticated gh CLI."""
 
     def __init__(self, runner: ProcessRunner | None = None) -> None:
-        self.runner = runner or cast(ProcessRunner, subprocess.run)
+        self.runner = runner if runner is not None else cast(ProcessRunner, subprocess.run)
 
     def _json(self, endpoint: str) -> object:
         result = self.runner(
@@ -154,7 +154,7 @@ class CodexChatGPTAuthPreflight:
 
     def __init__(self, config_path: Path, runner: ProcessRunner | None = None) -> None:
         self.config_path = config_path
-        self.runner = runner or cast(ProcessRunner, subprocess.run)
+        self.runner = runner if runner is not None else cast(ProcessRunner, subprocess.run)
 
     def check(self) -> AuthReceipt:
         try:
@@ -211,7 +211,7 @@ class CodexExecLauncher:
         self.worktree = worktree
         self.receipt_schema = receipt_schema
         self.context_path = context_path
-        self.runner = runner or cast(ProcessRunner, subprocess.run)
+        self.runner = runner if runner is not None else cast(ProcessRunner, subprocess.run)
         self.adapter_path = adapter_path or worktree / ".codex/agents/verification-closer.toml"
         try:
             adapter = tomllib.loads(self.adapter_path.read_text(encoding="utf-8"))

@@ -175,6 +175,33 @@ def test_auth_preflight_requires_chatgpt_keyring_and_login_status(tmp_path) -> N
     assert calls[0][0] == ["codex", "login", "status"]
 
 
+def test_process_runner_injection_preserves_falsey_callable(tmp_path) -> None:
+    class FalseRunner:
+        def __bool__(self) -> bool:
+            return False
+
+        def __call__(self, *args, **kwargs):
+            raise AssertionError("the injected runner should not be called by construction")
+
+    runner = FalseRunner()
+    config = tmp_path / "config.toml"
+    config.write_text(
+        'forced_login_method = "chatgpt"\ncli_auth_credentials_store = "keyring"\n',
+        encoding="utf-8",
+    )
+    launcher = CodexExecLauncher(
+        tmp_path,
+        tmp_path / "receipt.schema.json",
+        tmp_path / "context.json",
+        adapter_path=Path(__file__).resolve().parents[2] / ".codex/agents/verification-closer.toml",
+        runner=runner,
+    )
+
+    assert GhCliVerificationSource(runner=runner).runner is runner
+    assert CodexChatGPTAuthPreflight(config, runner=runner).runner is runner
+    assert launcher.runner is runner
+
+
 def test_restart_recovers_without_duplicate_agent_or_mutation(tmp_path) -> None:
     launcher = Launcher()
     state = ledger(tmp_path)
