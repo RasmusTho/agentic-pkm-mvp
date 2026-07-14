@@ -96,19 +96,18 @@ def _gh_fetch(repository: str) -> Callable[[str, str | None], list[dict[str, Any
 
     def fetch(kind: str, since: str | None) -> list[dict[str, Any]]:
         endpoint = f"repos/{repository}/issues?state=all&per_page=100"
-        if kind == "pulls":
-            endpoint = f"repos/{repository}/pulls?state=all&per_page=100"
         if since:
             endpoint = f"{endpoint}&since={since}"
         decoded = request_list(endpoint)
         if kind == "issues":
             return [item for item in decoded if "pull_request" not in item]
-        for item in decoded:
+        pulls = [item for item in decoded if "pull_request" in item]
+        for item in pulls:
             number = item.get("number")
             if isinstance(number, int):
                 files = request_list(f"repos/{repository}/pulls/{number}/files?per_page=100")
                 item["changed_files"] = [str(file["filename"]) for file in files if "filename" in file]
-        return decoded
+        return pulls
 
     return fetch
 
