@@ -458,13 +458,23 @@ class CodexExecLauncher:
         process_lock = threading.Lock()
         lines: Iterable[str | bytes]
 
-        def terminate_child() -> None:
+        def terminate_and_reap_child() -> None:
             with process_lock:
-                if process is not None and process.poll() is None:
+                if process is None:
+                    return
+                if process.poll() is None:
                     try:
                         process.terminate()
                     except ProcessLookupError:
                         pass
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+                    process.wait(timeout=5)
 
         def record_authority_loss(
             exc: Exception, *, outcome: str = "heartbeat_authority_lost"
@@ -474,7 +484,11 @@ class CodexExecLauncher:
                 heartbeat_failures.append(exc)
                 authority_loss_outcome = outcome
                 authority_lost.set()
-            terminate_child()
+            # Cleanup must progress in the authority-losing thread.  The
+            # foreground reader may still be blocked in stdout until the child
+            # exits and closes its pipe, so deferring wait/kill until after the
+            # event loop would leave the old coordinator alive indefinitely.
+            terminate_and_reap_child()
 
         if self.runner is subprocess.run:
             process = subprocess.Popen(
@@ -556,12 +570,7 @@ class CodexExecLauncher:
             assert process is not None
             if authority_lost.is_set():
                 stop_heartbeat.set()
-                terminate_child()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=5)
+                terminate_and_reap_child()
             else:
                 process.wait()
             if stderr_thread:

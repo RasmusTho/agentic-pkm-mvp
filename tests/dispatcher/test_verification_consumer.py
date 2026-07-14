@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import io
 import json
 from pathlib import Path
+from threading import Condition, Thread
 import zipfile
 
 import pytest
@@ -549,6 +550,60 @@ class _AuthorityLossProcess:
         return self.returncode
 
 
+class _BlockedAuthorityLossOutput:
+    def __init__(
+        self, process: _IgnoringTerminateProcess, lines: list[str]
+    ) -> None:
+        self.process = process
+        self.lines = iter(lines)
+        self.reads = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> str:
+        with self.process.condition:
+            while not self.process.stdout_released:
+                self.process.condition.wait()
+        line = next(self.lines)
+        self.reads += 1
+        return line
+
+
+class _IgnoringTerminateProcess:
+    def __init__(self, lines: list[str]) -> None:
+        self.condition = Condition()
+        self.stdout_released = False
+        self.stdout = _BlockedAuthorityLossOutput(self, lines)
+        self.stderr = io.StringIO("")
+        self.returncode: int | None = None
+        self.terminate_calls = 0
+        self.kill_calls = 0
+        self.wait_calls = 0
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.terminate_calls += 1
+
+    def kill(self) -> None:
+        self.kill_calls += 1
+        self.returncode = -9
+        self.release_stdout()
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.wait_calls += 1
+        if self.returncode is None:
+            raise verification_consumer.subprocess.TimeoutExpired("codex", timeout)
+        return self.returncode
+
+    def release_stdout(self) -> None:
+        with self.condition:
+            self.stdout_released = True
+            self.condition.notify_all()
+
+
 def _authority_loss_launcher(tmp_path: Path) -> CodexExecLauncher:
     return CodexExecLauncher(
         tmp_path,
@@ -597,6 +652,75 @@ def test_heartbeat_authority_loss_terminates_codex_child(tmp_path, monkeypatch) 
     assert process.terminate_calls == 1
     assert process.wait_calls >= 1
     assert process.poll() is not None
+
+
+def _background_authority_loss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[_IgnoringTerminateProcess, CodexExecFailure]:
+    process = _IgnoringTerminateProcess(_late_terminal_lines())
+    monkeypatch.setattr(
+        verification_consumer.subprocess, "Popen", lambda *args, **kwargs: process
+    )
+    event_wait = verification_consumer.threading.Event.wait
+
+    def accelerated_wait(event, timeout=None):
+        if timeout is not None:
+            timeout = min(timeout, 0.01)
+        return event_wait(event, timeout)
+
+    monkeypatch.setattr(
+        verification_consumer.threading.Event, "wait", accelerated_wait
+    )
+    outcome: dict[str, BaseException] = {}
+
+    def launch() -> None:
+        try:
+            _authority_loss_launcher(tmp_path).launch(
+                {"head_sha": HEAD},
+                on_heartbeat=lambda: (_ for _ in ()).throw(
+                    RuntimeError("verification lease heartbeat rejected")
+                ),
+            )
+        except BaseException as exc:  # noqa: BLE001 - asserted thread outcome
+            outcome["error"] = exc
+
+    worker = Thread(target=launch, daemon=True)
+    worker.start()
+    try:
+        worker.join(timeout=0.5)
+        assert not worker.is_alive(), {
+            "launcher_still_blocked": True,
+            "terminate_calls": process.terminate_calls,
+            "wait_calls": process.wait_calls,
+        }
+    finally:
+        process.release_stdout()
+        worker.join(timeout=1)
+
+    error = outcome.get("error")
+    assert isinstance(error, CodexExecFailure), outcome
+    return process, error
+
+
+def test_background_heartbeat_authority_loss_kills_blocked_codex_child(
+    tmp_path, monkeypatch
+) -> None:
+    process, error = _background_authority_loss(tmp_path, monkeypatch)
+
+    assert error.receipt["outcome"] == "heartbeat_authority_lost"
+    assert process.terminate_calls == 1
+    assert process.kill_calls == 1
+    assert process.wait_calls >= 2
+    assert process.poll() == -9
+
+
+def test_background_authority_loss_rejects_late_stdout(
+    tmp_path, monkeypatch
+) -> None:
+    process, error = _background_authority_loss(tmp_path, monkeypatch)
+
+    assert error.receipt["session_id"] is None
+    assert process.stdout.reads == 1
 
 
 def test_thread_start_authority_loss_terminates_codex_child(
