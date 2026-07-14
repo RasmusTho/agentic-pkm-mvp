@@ -29,7 +29,7 @@ The Builder System has these layers:
    rules, transition debt, and bounded issues improve and reevaluate the Builder System without
    contaminating Product/Runtime memory [docs/architecture/SBS_OPERATING_MODEL.md:194-261],
    [docs/development/DELIVERY_FEEDBACK_LOOP.md:1-220].
-9. Exception layer: `agent:needs-human`, blocker receipts, owner waivers, release operator acknowledgements, and Human Exception packets stop autonomous continuation when authority is missing [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27], [docs/architecture/SBS_OPERATING_MODEL.md §12].
+9. Exception layer: `agent:needs-human`, blocker receipts, release operator acknowledgements, and Human Exception packets stop autonomous continuation when authority is missing; CI/review/merge gates remain non-waivable [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27], [docs/architecture/SBS_OPERATING_MODEL.md §12].
 
 ## Evidence Legend
 
@@ -84,7 +84,7 @@ Read-only GitHub evidence used:
 | CI repair orchestrator | implicit | `pr-integration`, escalation docs | Repair CI when triggered | CI failure | Fix or block | Agent PR commits | [`.codex/skills/pr-integration/SKILL.md`:50-67] |
 | PR publisher | implemented | `publish-pr` skill | Branch, commit, push, PR | Local validated diff | PR | Git/GitHub | [`.codex/skills/publish-pr/SKILL.md`:29-37], [`.codex/skills/publish-pr/SKILL.md`:53-159] |
 | PR contract validator | implemented | `issue-pr-governance.yml` | Check PR body lane/issue/paths/BuilderOps routing | PR body/files | Failed or passed check | GitHub Action | [`.github/workflows/issue-pr-governance.yml`:79-218] |
-| review gate | partially_implemented | Local `/code-review` skill in `verification-and-closure`, optional Codex verdict resolver | Independent review before merge | PR diff | Findings/pass | Agent comments; owner waiver | [`.codex/skills/verification-and-closure/SKILL.md`:116-163], [app/dispatcher/poll_backoff.py:21] |
+| review gate | partially_implemented | Local `/code-review` skill in `verification-and-closure`, optional Codex verdict resolver | Independent review before merge | PR diff | Findings/pass | Agent comments; blocked-technical receipt | [`.codex/skills/verification-and-closure/SKILL.md`:116-163], [app/dispatcher/poll_backoff.py:21] |
 | merge gate | partially_implemented | `verification-and-closure`, `scripts/await_pr_checks.sh`, branch protection on `stable` only | Decide merge eligibility | CI/review/ACs | Merge or block | `gh pr merge`; platform on `stable` | [`.codex/skills/verification-and-closure/SKILL.md`:95-115], `gh api main protection -> 404`, `gh api stable protection -> required checks` |
 | issue closure worker | partially_implemented | `verification-and-closure` | Close issues and set Done | Merged PR | Closed issue, labels removed, receipts | GitHub | [`.codex/skills/verification-and-closure/SKILL.md`:194-208] |
 | post-merge docs/spec classifier | partially_implemented | `post-merge-owner-doc` skill, watchdog workflow | Decide owner-doc update/follow-up/no-change | Merged PR diff | Docs PR, follow-up issue, or receipt | Agent/GitHub Action nudge | [`.codex/skills/post-merge-owner-doc/SKILL.md`:44-68], [`.github/workflows/post-merge-owner-doc-watchdog.yml`:1-83] |
@@ -174,11 +174,11 @@ flowchart TD
 | local validation | Before PR | Agent | changed files | `DEV_WORKFLOW` | issue-to-code | pytest/ruff/mypy | validation log | none | checks pass | required checks | local repair | fix or block | cannot verify | [docs/development/DEV_WORKFLOW.md:60-83] |
 | PR publication | Local diff ready | Agent | validated diff | publish-pr | publish-pr | git/gh | branch/commit/PR | GitHub | branch-truth gate | lane? file set? | PR repair | stop on drift | publication ambiguity | [`.codex/skills/publish-pr/SKILL.md`:53-159] |
 | PR contract validation | PR opened/edited | GitHub Action | PR body/files | PR template/governance | none | `issue-pr-governance.yml` | pass/fail check | none | pr-contract | issue link? lane? | body repair | check failure | none unless authority needed | [`.github/workflows/issue-pr-governance.yml`:79-218] |
-| CI | PR/push/schedule/manual | GitHub Actions | PR head | workflows | none | `.github/workflows/**` | checks/artifacts | none | check status | failure? stale? | CI repair | block | persistent outage waiver | `gh workflow list`; [`.github/workflows/ci.yml`:3-65] |
+| CI | PR/push/schedule/manual | GitHub Actions | PR head | workflows | none | `.github/workflows/**` | checks/artifacts | none | check status | failure? stale? | CI repair | block | blocked-technical/backoff | `gh workflow list`; [`.github/workflows/ci.yml`:3-65] |
 | CI triage | CI fail/stale | Agent | check logs | PR escalation | pr-integration | `await_pr_checks.sh`, gh api | failure class | PR commits if caused | re-run/recheck | caused-by-PR? | CI repair loop | block | unresolved residual risk | [docs/development/PR_ESCALATION_PATHS.md:12-20] |
 | PR integration / repair | Triggered by CI/review/drift | Agent | PR | PR hot/escalation | pr-integration | git/gh/tests | ready-for-verification or blocked | PR commits/comments | current SHA + checks | blocking? | repair loops | blocked-* | repeated failure | [`.codex/skills/pr-integration/SKILL.md`:38-67] |
-| machine review | CI green before merge | Agent/subagent | PR diff | verification-and-closure | code-review via verification | local subagent | findings/pass | comments | review gate | blocking finding? | review repair | stop after repeated failure | owner waiver | [`.codex/skills/verification-and-closure/SKILL.md`:116-163] |
-| merge gate | Verification complete | Agent | PR + issue + CI | verification-and-closure | verification-and-closure | `await_pr_checks.sh`, gh | merge/block | GitHub | CI/review/ACs | eligible? | repair loops | no merge | unsafe waiver needed | [`.codex/skills/verification-and-closure/SKILL.md`:95-115] |
+| machine review | CI green before merge | Agent/subagent | PR diff | verification-and-closure | code-review via verification | local subagent | findings/pass | comments | review gate | blocking finding? | review repair | stop after repeated failure | blocked-technical/capability triage | [`.codex/skills/verification-and-closure/SKILL.md`:116-163] |
+| merge gate | Verification complete | Agent | PR + issue + CI | verification-and-closure | verification-and-closure | `await_pr_checks.sh`, gh | merge/block | GitHub | CI/review/ACs | eligible? | repair loops | no merge | non-waivable gate | [`.codex/skills/verification-and-closure/SKILL.md`:95-115] |
 | issue closure | After merge | Agent + automation | merged PR | lifecycle matrix | verification-and-closure | gh/Project ops | closed issue, Done | GitHub | readback | partial? | closure loop | follow-up issue | closure ambiguity | [`.codex/skills/verification-and-closure/SKILL.md`:194-208] |
 | post-merge docs/spec feedback | After merge | Agent + watchdog | merged diff | post-merge-owner-doc | post-merge-owner-doc | watchdog workflow | docs PR/follow-up/no-change | GitHub/PR | receipt exists | owner doc changed? | docs loop | nudge | wording judgment | [`.codex/skills/post-merge-owner-doc/SKILL.md`:44-68], [`.github/workflows/post-merge-owner-doc-watchdog.yml`:47-83] |
 | promotion/release | Test/prod promotion | Agent + operator | candidate ref/plan | release docs/skills | promote-* | release workflows/scripts | promotion receipt | operator + PR to stable | health/smoke | reversible? | rollback loop | rollback/block | prod/stable authority | [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113], `gh api stable protection` |
@@ -280,11 +280,11 @@ stateDiagram-v2
   CI --> ReviewGate: green
   ReviewGate --> ReviewRepair: blocking findings
   ReviewRepair --> CI
-  ReviewGate --> MergeEligible: clean/fixed/waived
+  ReviewGate --> MergeEligible: clean/fixed
   MergeEligible --> Merged
   Merged --> OwnerDocReceipt
   OwnerDocReceipt --> Done
-  MergeEligible --> HumanException: gate unavailable/unsafe waiver
+  ReviewGate --> Blocked: gate unavailable
 ```
 
 ### Epic PR Batching Policy
@@ -415,8 +415,8 @@ Human Exception merely because a retry budget is exhausted. The only route to
 | Can implementation proceed? | issue-to-code stop conditions | partial | yes | if unclear | issue/docs/env | proceed/block | scope drift | [`.codex/skills/issue-to-code/SKILL.md`:62-72] |
 | Which tests/checks required? | `DEV_WORKFLOW`, issue `Verify:` | partial | yes | no | touched files/ACs | validation plan | missing coverage | [docs/development/DEV_WORKFLOW.md:60-83] |
 | Can CI failure be auto-repaired? | PR escalation | no | yes | if unresolved | logs/checks | fix/follow-up/block | blind retry | [docs/development/PR_ESCALATION_PATHS.md:12-20] |
-| Is review finding blocking? | review gate rules | no | yes | waiver only | findings | fix/waive/block | unresolved finding merged | [`.codex/skills/verification-and-closure/SKILL.md`:131-163] |
-| PR eligible for auto-merge? | verification prerequisites | partial | yes | waiver only | CI/review/ACs | merge/block | main unprotected | [`.codex/skills/verification-and-closure/SKILL.md`:103-115], `gh api main protection -> 404` |
+| Is review finding blocking? | review gate rules | no | yes | no | findings | fix/block | unresolved finding merged | [`.codex/skills/verification-and-closure/SKILL.md`:131-163] |
+| PR eligible for auto-merge? | verification prerequisites | partial | yes | no | CI/review/ACs | merge/block | main unprotected | [`.codex/skills/verification-and-closure/SKILL.md`:103-115], `gh api main protection -> 404` |
 | Can issue be closed? | verification/closure | partial | yes | if partial/ambiguous | merge/ACs | close/follow-up | false done | [`.codex/skills/verification-and-closure/SKILL.md`:209-217] |
 | Owner doc/spec update needed? | PR template + post-merge skill | partial | yes | if wording judgment | diff | docs PR/follow-up/no-change | drift | [`.github/pull_request_template.md`:34-39], [`.codex/skills/post-merge-owner-doc/SKILL.md`:76-85] |
 | Promotion needs operator authority? | release skills | yes | yes | yes | plan | execute/stop | prod mutation without ack | [`.codex/skills/promote-test-to-prod/SKILL.md`:109-113] |
@@ -637,7 +637,7 @@ safety-critical / authority-critical / intent-critical / autonomous-failure-crit
 Where to store/post:
 
 - Issue-backed work: post on the governing issue and apply `agent:needs-human`; Status should be Backlog according to the label taxonomy and lifecycle matrix [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27], [`.codex/skills/_shared/LIFECYCLE_TRUTH_MATRIX.md`:18-20].
-- PR-blocked work: post on the PR and link the governing issue; do not merge without explicit owner waiver when a required review gate is unavailable [docs/architecture/SBS_OPERATING_MODEL.md §12].
+- PR-blocked work: post on the PR and link the governing issue; do not merge when a required review gate is unavailable, and retain a blocked-technical receipt until the gate can run [docs/architecture/SBS_OPERATING_MODEL.md §12].
 - BuilderOps material: create `PromotionIntent` or `LearningSignal` only when crossing authority or learning conditions are met; BuilderOps records do not themselves authorize Product/Runtime mutation [docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md:40-81].
 
 ## 15. Gaps And Missing Components
