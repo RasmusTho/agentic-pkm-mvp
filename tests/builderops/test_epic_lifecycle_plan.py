@@ -184,6 +184,34 @@ def test_done_plan_blocks_terminal_projection_when_ci_is_not_green() -> None:
     assert plan["proposed_writes"]["pr_project_status"] == []
 
 
+def test_done_plan_reports_only_ci_blocker_for_terminal_states() -> None:
+    plan = build_lifecycle_transition_plan(
+        transition="done",
+        issue=_issue(state="CLOSED", labels=["type:task"], project_status="Review"),
+        pull_request=_pr(state="CLOSED", merged=True, project_status="Review"),
+        checks=[{"name": "unit", "status": "completed", "conclusion": "failure"}],
+        repo="RasmusTho/agentic-pkm-mvp",
+    )
+
+    assert plan["blocked_reasons"] == ["ci-checks-not-green"]
+    assert plan["proposed_writes"]["issue_project_status"] == []
+    assert plan["proposed_writes"]["pr_project_status"] == []
+
+
+def test_done_plan_reports_actual_non_terminal_states() -> None:
+    plan = build_lifecycle_transition_plan(
+        transition="done",
+        issue=_issue(labels=["type:task"], project_status="In Progress"),
+        pull_request=_pr(project_status="In Progress"),
+        checks=[{"name": "unit", "status": "completed", "conclusion": "success"}],
+        repo="RasmusTho/agentic-pkm-mvp",
+    )
+
+    assert plan["blocked_reasons"] == ["issue-not-closed", "pr-not-terminal"]
+    assert plan["proposed_writes"]["issue_project_status"] == []
+    assert plan["proposed_writes"]["pr_project_status"] == []
+
+
 def test_done_plan_uses_latest_check_run_per_name() -> None:
     plan = build_lifecycle_transition_plan(
         transition="done",
