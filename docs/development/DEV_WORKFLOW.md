@@ -154,6 +154,7 @@ Use this lane only when:
   - `.github/workflows/issue-pr-governance.yml`
   - `scripts/docs_guard.py`
   - `scripts/await_pr_checks.sh`
+  - `companion-ui/prompts/codex/deliver-epic-autonomous-runner.md`
   - `tests/architecture/test_agent_skill_entrypoints.py`
   - `tests/governance/test_codex_agents_contract.py`
 - the PR is limited to repo governance, agent workflow, or lightweight enforcement
