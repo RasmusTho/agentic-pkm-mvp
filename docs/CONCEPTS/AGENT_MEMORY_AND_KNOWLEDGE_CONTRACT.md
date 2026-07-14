@@ -238,7 +238,9 @@ tool-use / APPLY. No-silent-escalation is codified there — promotion, deprecat
 deletion all require a governance transition or human review — re-affirming the `authority_guard`
 conjunction in `app/agent_memory/authority_guard.py` and the unreviewed-memory-never-hidden-authority
 rule (`docs/SEMANTIC_AUTHORITY_MATRIX.md` reading rule 3). Enforcement of the trust-tier ceiling at
-the write boundary is the W7-MEM-02 deliverable (#2354); WriteGuard is health-state-only today.
+the write boundary is the `docs/PROVISIONAL_MEMORY/` implementation chain under epic #2314;
+WriteGuard is health-state-only today. The former #2354 reference was invalid and is superseded by
+that specification directory.
 
 ## Review and promotion rules
 
