@@ -37,6 +37,12 @@ def _future(seconds: int) -> str:
     )
 
 
+def _future_from(now: str, seconds: int) -> str:
+    return (datetime.fromisoformat(now) + timedelta(seconds=seconds)).isoformat(
+        timespec="microseconds"
+    )
+
+
 def _begin_immediate_now(conn: sqlite3.Connection) -> str:
     """Acquire SQLite's write lock before sampling mutation authority time."""
     conn.execute("BEGIN IMMEDIATE")
@@ -254,10 +260,10 @@ class VerificationDispatchLedger:
     def claim(self, run_id: str, holder: str, ttl_seconds: int = 900) -> VerificationRun:
         if ttl_seconds <= 0 or not holder:
             raise ValueError("holder and positive ttl are required")
-        now, expires = _now(), _future(ttl_seconds)
         lease_id = f"vlease-{uuid.uuid4().hex[:12]}"
         with self.store._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            now = _begin_immediate_now(conn)
+            expires = _future_from(now, ttl_seconds)
             row = conn.execute(
                 "SELECT * FROM verification_runs WHERE run_id = ?", (run_id,)
             ).fetchone()

@@ -40,6 +40,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - `app.dispatcher.verification_dispatch` extends the same SQLite control plane with versioned,
   idempotent PR/head verification runs, one global active subscription slot, exact lease-token
   fencing, durable retry timestamps, attempts, receipts, and deduplicated Human Exception packets.
+- Initial verification claims acquire the authoritative SQLite write lock before sampling both
+  eligibility time and lease expiry. Token-authorized mutations use the same post-lock authority
+  clock, so lock waits cannot create already-expired leases or revive expired coordinators.
 - `app.dispatcher.verification_consumer` re-fetches live PR/check truth, requires a successful
   ChatGPT/keyring auth preflight, builds a minimal immutable context pack, and launches only the
   registered `verification_closer` adapter with its pinned model, reasoning, sandbox, and developer
