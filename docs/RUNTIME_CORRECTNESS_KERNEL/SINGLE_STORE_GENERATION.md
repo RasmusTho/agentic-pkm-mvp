@@ -82,3 +82,11 @@ retrieval-truth split that KERNEL-05 removes.
 One bounded issue (a follow-up delete issue is acceptable if shims are kept one release). TCD hint:
 Sonnet / high effort (multi-file caller migration; blast radius is the whole persistence layer, but
 verification is mechanical).
+
+## Legacy FK compatibility removal
+
+Issue #3510 completes the deferred parent-row cutover: Alembic revision `7e4f2a1c9d30` inventories
+and moves supported legacy `objects(id)` foreign keys to canonical `store_objects(object_id)`.
+`PgObjects.upsert` therefore delegates only to `PgObjectStore` and no longer fabricates an empty
+legacy `objects` row. The migration is forward-only and fails loud on unknown FK consumers or
+orphaned ids, with reconciliation guidance in `docs/DB_SCHEMA.md :: Explicit Deltas / Known Gaps`.

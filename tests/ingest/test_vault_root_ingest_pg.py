@@ -33,7 +33,7 @@ def migrated_runtime_db(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.pg
-def test_ingest_vault_root_persists_decisions_with_legacy_fk_parent(
+def test_ingest_persists_decisions_without_legacy_objects_parent_after_migration(
     tmp_path: Path, monkeypatch, migrated_runtime_db: str
 ) -> None:
     if not _pg_available():
@@ -72,8 +72,7 @@ def test_ingest_vault_root_persists_decisions_with_legacy_fk_parent(
             parent = cur.fetchone()
             cur.execute("SELECT object_id FROM store_objects WHERE object_id = %s", (object_id,))
             stored_object = cur.fetchone()
-    assert parent is not None, "decisions needs its retained legacy FK parent"
-    assert parent["payload"] == {}, "legacy parent must not become a second object writer"
+    assert parent is None, "canonical ingest must not recreate the legacy compatibility parent"
     assert stored_object is not None, "canonical store_objects should contain the ingested id"
 
 
@@ -95,7 +94,7 @@ def test_ingest_vault_root_unmigrated_db_fails_with_migration_hint(
     pg_store._TABLES_READY = False
     try:
         with psycopg.connect(dsn, autocommit=True) as conn:
-            conn.execute("DROP TABLE store_objects")
+            conn.execute("DROP TABLE store_vector_index")
 
         assert ingest_vault_root(vault_root, limit=1) == 0
         assert "run 'alembic upgrade head'" in caplog.text
@@ -158,5 +157,5 @@ def test_ingest_vault_root_skips_classification_when_vault_root_unset(
             legacy_parent = cur.fetchone()
             cur.execute("SELECT object_id FROM store_objects")
             stored_object = cur.fetchone()
-    assert legacy_parent is not None, "the object upsert still runs before classification"
+    assert legacy_parent is None, "classification failure must not recreate a legacy parent"
     assert stored_object is not None, "canonical store_objects should still contain the ingested id"

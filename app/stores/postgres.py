@@ -56,6 +56,9 @@ def _ensure_decisions(conn) -> None:
                 JOIN information_schema.referential_constraints AS rc
                   ON rc.constraint_name = tc.constraint_name
                  AND rc.constraint_schema = tc.table_schema
+                JOIN information_schema.constraint_column_usage ccu
+                  ON ccu.constraint_name = tc.constraint_name
+                 AND ccu.constraint_schema = tc.table_schema
                 WHERE tc.table_schema = 'public'
                   AND tc.table_name = 'decisions'
                   AND tc.constraint_type = 'FOREIGN KEY'
@@ -63,8 +66,8 @@ def _ensure_decisions(conn) -> None:
                 LIMIT 1
             ) AS fk ON TRUE
             WHERE object_id_column.table_schema = 'public'
-              AND object_id_column.table_name = 'decisions'
-              AND object_id_column.column_name = 'object_id'
+            AND object_id_column.table_name = 'decisions'
+            AND object_id_column.column_name = 'object_id'
             """
         )
         shape_row = cur.fetchone()
@@ -84,21 +87,6 @@ class PgObjects:
         # migration preflight and migration hint remain the single contract.
         str_id = id or str(uuid4())
         canonical_store = PgObjectStore()
-
-        # ``decisions.object_id`` still has a live FK to the legacy ``objects``
-        # table.  Keep the smallest possible parent row until #3510 migrates
-        # that FK; ``store_objects`` remains exclusively canonical-owned.
-        conn = psycopg.connect(_dsn())
-        try:
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "INSERT INTO objects (id, kind, payload) VALUES (%s, %s, '{}'::jsonb) "
-                        "ON CONFLICT (id) DO NOTHING",
-                        (str_id, kind),
-                    )
-        finally:
-            conn.close()
 
         canonical_store.put(
             object_id=UUID(str_id),

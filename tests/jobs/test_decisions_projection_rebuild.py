@@ -113,6 +113,11 @@ def _insert_object(dsn: str, *, object_id: str | None = None, obj_uuid: str | No
     ouuid = obj_uuid or oid
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute(
+            "INSERT INTO store_objects (object_id, kind, source_ref, payload) "
+            "VALUES (%s, 'note', 'test://decision-projection', '{}'::jsonb)",
+            (oid,),
+        )
+        conn.execute(
             "INSERT INTO objects (id, uuid, kind, payload) VALUES (%s, %s, %s, %s::jsonb)",
             (oid, ouuid, "note", "{}"),
         )

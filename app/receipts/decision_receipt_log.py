@@ -17,9 +17,8 @@ Design (from the spec):
 - Receipt-before-ack (C-5/P-5): the durable log append is the commit point;
   ``insert_decision`` writes the log *first*, then the DB projection.
 - ``vault_uuid`` resolution: best-effort at write time. ``decisions.object_id`` is the
-  runtime ``objects.id``; the vault frontmatter uuid is ``objects.uuid`` (unique index
-  ``objects_uuid_idx``; seeded ``uuid = id`` on migration). We resolve the vault uuid by
-  looking up ``objects.uuid`` for the runtime ``object_id``. When it cannot be resolved
+  canonical ``store_objects.object_id``. Retained rows may still carry an older continuity UUID
+  in ``objects.uuid``; fresh ingest uses the canonical id itself. When neither resolves
   (no row, or the durable lookup is unavailable) we write ``vault_uuid: null`` — honest,
   never invented. Carrying it lets the projection rebuild re-link a decision whose
   ``object_id`` was re-minted (§5 decoupling payoff, Slice 2).
@@ -103,9 +102,9 @@ def decisions_receipts_dir(vault_root: Path | None = None) -> Path:
 def resolve_vault_uuid(object_id: str) -> str | None:
     """Best-effort resolve the vault frontmatter uuid for a runtime ``object_id``.
 
-    ``decisions.object_id`` references ``objects.id`` (the runtime-assigned UUID).
-    The vault frontmatter uuid is carried on ``objects.uuid`` (seeded ``uuid = id``
-    on migration; unique index ``objects_uuid_idx``). Returns the resolved uuid,
+    ``decisions.object_id`` references ``store_objects.object_id``. Prefer the retained
+    ``objects.uuid`` continuity mapping when present; otherwise fresh vault ingest uses
+    the canonical object id itself. Returns the resolved uuid,
     or ``None`` when it cannot be resolved (no matching object row, or the durable
     lookup is unavailable). Never invents a mapping — ``None`` is honest.
     """
@@ -113,7 +112,12 @@ def resolve_vault_uuid(object_id: str) -> str | None:
         with conn_rw() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT uuid FROM objects WHERE id = %s",
+                    """
+                    SELECT COALESCE(legacy.uuid, canonical.object_id) AS vault_uuid
+                    FROM store_objects canonical
+                    LEFT JOIN objects legacy ON legacy.id = canonical.object_id
+                    WHERE canonical.object_id = %s
+                    """,
                     (object_id,),
                 )
                 row = cur.fetchone()
@@ -121,7 +125,7 @@ def resolve_vault_uuid(object_id: str) -> str | None:
         return None
     if not row:
         return None
-    value = row["uuid"] if isinstance(row, dict) else row[0]
+    value = row["vault_uuid"] if isinstance(row, dict) else row[0]
     return str(value) if value is not None else None
 
 

@@ -9,8 +9,8 @@ judgment record; the ``decisions`` table is a rebuildable projection index over 
 - ``rebuild_decisions_projection()`` — truncate the ``decisions`` table and replay every
   JSONL receipt (all shards, ordered by ``created_at``) back into it. It re-links each
   receipt's runtime ``object_id`` when the DB was rebuilt and ids were re-minted: if the
-  receipt's ``object_id`` is no longer a current ``objects.id`` but its ``vault_uuid``
-  resolves to a current ``objects.uuid``, the row is re-linked to that object's new id
+  receipt's ``object_id`` is no longer a current ``store_objects.object_id`` but its
+  ``vault_uuid`` resolves to a canonical object identity, the row is re-linked
   (the §5 identity-decoupling payoff).
 - ``doctor_decisions_projection()`` — assert the DB projection equals the log row-for-row
   on ``(object_id, key, created_at, value)`` (verify-the-verifier). Returns a structured
@@ -62,18 +62,24 @@ def _parse_ts(raw: Any) -> datetime | None:
 
 
 def _existing_object_ids(cur) -> set[str]:
-    cur.execute("SELECT id FROM objects")
-    return {str(r["id"] if isinstance(r, dict) else r[0]) for r in cur.fetchall()}
+    cur.execute("SELECT object_id FROM store_objects")
+    return {str(r["object_id"] if isinstance(r, dict) else r[0]) for r in cur.fetchall()}
 
 
 def _uuid_to_id_map(cur) -> dict[str, str]:
-    cur.execute("SELECT id, uuid FROM objects WHERE uuid IS NOT NULL")
+    cur.execute(
+        """
+        SELECT canonical.object_id,
+               COALESCE(legacy.uuid, canonical.object_id) AS vault_uuid
+        FROM store_objects canonical
+        LEFT JOIN objects legacy ON legacy.id = canonical.object_id
+        """
+    )
     out: dict[str, str] = {}
     for r in cur.fetchall():
-        rid = str(r["id"] if isinstance(r, dict) else r[0])
-        ruuid = r["uuid"] if isinstance(r, dict) else r[1]
-        if ruuid is not None:
-            out[str(ruuid)] = rid
+        rid = str(r["object_id"] if isinstance(r, dict) else r[0])
+        ruuid = r["vault_uuid"] if isinstance(r, dict) else r[1]
+        out[str(ruuid)] = rid
     return out
 
 
