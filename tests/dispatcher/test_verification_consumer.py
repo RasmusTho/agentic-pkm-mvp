@@ -478,6 +478,29 @@ def test_heartbeat_authority_loss_terminates_codex_child(tmp_path, monkeypatch) 
     assert process.poll() is not None
 
 
+def test_thread_start_authority_loss_terminates_codex_child(
+    tmp_path, monkeypatch
+) -> None:
+    process = _AuthorityLossProcess(_late_terminal_lines())
+    monkeypatch.setattr(
+        verification_consumer.subprocess, "Popen", lambda *args, **kwargs: process
+    )
+
+    def reject_thread_start(_session_id: str) -> None:
+        raise ValueError("verification start ownership mismatch")
+
+    with pytest.raises(CodexExecFailure) as exc_info:
+        _authority_loss_launcher(tmp_path).launch(
+            {"head_sha": HEAD}, on_thread_started=reject_thread_start
+        )
+
+    assert exc_info.value.receipt["outcome"] == "thread_start_authority_lost"
+    assert process.terminate_calls == 1
+    assert process.wait_calls >= 1
+    assert process.poll() is not None
+    assert process.stdout.reads == 1
+
+
 def test_authority_lost_child_output_is_rejected(tmp_path, monkeypatch) -> None:
     process = _AuthorityLossProcess(_late_terminal_lines())
     monkeypatch.setattr(verification_consumer.subprocess, "Popen", lambda *args, **kwargs: process)

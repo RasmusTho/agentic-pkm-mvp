@@ -383,6 +383,7 @@ class CodexExecLauncher:
         stop_heartbeat = threading.Event()
         authority_lost = threading.Event()
         heartbeat_failures: list[Exception] = []
+        authority_loss_outcome = "heartbeat_authority_lost"
         heartbeat_thread: threading.Thread | None = None
         stderr_thread: threading.Thread | None = None
         stderr_chunks: list[str] = []
@@ -398,9 +399,13 @@ class CodexExecLauncher:
                     except ProcessLookupError:
                         pass
 
-        def record_authority_loss(exc: Exception) -> None:
+        def record_authority_loss(
+            exc: Exception, *, outcome: str = "heartbeat_authority_lost"
+        ) -> None:
+            nonlocal authority_loss_outcome
             if not authority_lost.is_set():
                 heartbeat_failures.append(exc)
+                authority_loss_outcome = outcome
                 authority_lost.set()
             terminate_child()
 
@@ -454,7 +459,13 @@ class CodexExecLauncher:
             if event.get("type") == "thread.started" and isinstance(event.get("thread_id"), str):
                 thread_id = event["thread_id"]
                 if on_thread_started:
-                    on_thread_started(event["thread_id"])
+                    try:
+                        on_thread_started(event["thread_id"])
+                    except Exception as exc:
+                        record_authority_loss(
+                            exc, outcome="thread_start_authority_lost"
+                        )
+                        break
             if on_heartbeat:
                 try:
                     on_heartbeat()
@@ -500,9 +511,9 @@ class CodexExecLauncher:
             )
             raise CodexExecFailure(
                 {
-                    "outcome": "heartbeat_authority_lost",
+                    "outcome": authority_loss_outcome,
                     "returncode": returncode,
-                    "stderr": "heartbeat authority lost",
+                    "stderr": authority_loss_outcome.replace("_", " "),
                     "terminal_error": f"{type(failure).__name__}: {failure}",
                     "session_id": thread_id,
                 }
@@ -777,7 +788,7 @@ class VerificationConsumer:
             )
         except CodexExecFailure as exc:
             failed_session = exc.receipt.get("session_id")
-            if exc.receipt.get("outcome") == "heartbeat_authority_lost":
+            if str(exc.receipt.get("outcome", "")).endswith("_authority_lost"):
                 retry_after = _retry_at()
                 failure_receipt = {
                     **exc.receipt,
