@@ -122,9 +122,10 @@ class CkmStore:
                    CASE WHEN json_valid(source_ref)
                         THEN COALESCE(json_extract(source_ref, '$.artifact_source_ref'), source_ref)
                         ELSE source_ref END,
-                   CASE WHEN json_valid(source_ref)
-                        THEN COALESCE(json_extract(source_ref, '$.basis'), source_ref)
-                        ELSE source_ref END,
+                   (CASE WHEN json_valid(source_ref)
+                         THEN COALESCE(json_extract(source_ref, '$.basis'), source_ref)
+                         ELSE 'legacy:' || source_ref END)
+                   || ':legacy:' || evidence_kind || ':' || maturity_dimension,
                    created_at, updated_at
             FROM ckm_evidence_edge_v1
             """
@@ -350,7 +351,9 @@ class CkmStore:
                 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(artifact_id, capability_id, basis)
                 DO UPDATE SET
+                    evidence_kind = excluded.evidence_kind,
                     polarity = excluded.polarity,
+                    maturity_dimension = excluded.maturity_dimension,
                     confidence = excluded.confidence,
                     extraction_method = excluded.extraction_method,
                     model = excluded.model,

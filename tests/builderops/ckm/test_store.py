@@ -122,14 +122,22 @@ def test_schema_migrates_edge_basis_without_losing_rows(tmp_path: Path) -> None:
             """,
             ("edge_legacy", artifact.id, capability.id, artifact.source_ref),
         )
+        conn.execute(
+            """
+            INSERT INTO ckm_evidence_edge VALUES
+            (?, ?, ?, 'doc', 'supports', 'documentation_quality', 0.8,
+             'deterministic', NULL, NULL, 'confirmed', ?, 't', 't')
+            """,
+            ("edge_legacy_second", artifact.id, capability.id, artifact.source_ref),
+        )
         conn.commit()
 
     store.ensure_schema()
 
     edges = store.list_evidence_edges()
-    assert len(edges) == 1
-    assert edges[0].id == "edge_legacy"
-    assert edges[0].basis == artifact.source_ref
+    assert {edge.id for edge in edges} == {"edge_legacy", "edge_legacy_second"}
+    assert len({edge.basis for edge in edges}) == 2
+    assert all(edge.source_ref == artifact.source_ref for edge in edges)
     with sqlite3.connect(store.db_path) as conn:
         indexes = {
             row[0]

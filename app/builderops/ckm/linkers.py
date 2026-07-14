@@ -84,6 +84,19 @@ def _emit(
         maturity_dimension=dimension,
         basis=basis,
     )
+    if (
+        existing is not None
+        and existing.evidence_kind == evidence_kind
+        and existing.polarity == "supports"
+        and existing.maturity_dimension == dimension
+        and existing.confidence == 1.0
+        and existing.extraction_method == "deterministic"
+        and existing.lifecycle == "confirmed"
+        and existing.source_ref == artifact.source_ref
+        and existing.model is None
+        and existing.provider is None
+    ):
+        return 0
     store.upsert_evidence_edge(
         artifact_id=artifact.id,
         capability_id=capability.id,
@@ -241,7 +254,12 @@ def _test_links(
     changed = 0
     artifact_edges: dict[str, set[str]] = {}
     for edge in store.list_evidence_edges():
-        artifact_edges.setdefault(edge.artifact_id, set()).add(edge.capability_id)
+        if (
+            edge.extraction_method == "deterministic"
+            and edge.lifecycle == "confirmed"
+            and edge.basis.startswith(("seed-source:", "spec-source:"))
+        ):
+            artifact_edges.setdefault(edge.artifact_id, set()).add(edge.capability_id)
     capabilities = {capability.id: capability for capability in store.list_capabilities()}
     for test in artifacts.values():
         if test.artifact_kind != "test":
@@ -288,7 +306,14 @@ def _github_links(
     for edge in store.list_evidence_edges():
         linked_artifact = artifact_by_id.get(edge.artifact_id)
         linked_capability = capability_by_id.get(edge.capability_id)
-        if linked_artifact and linked_capability and linked_artifact.artifact_kind == "spec":
+        if (
+            linked_artifact
+            and linked_capability
+            and linked_artifact.artifact_kind == "spec"
+            and edge.extraction_method == "deterministic"
+            and edge.lifecycle == "confirmed"
+            and edge.basis.startswith("spec-directory:")
+        ):
             spec_capabilities[linked_artifact.source_ref] = linked_capability
     for artifact in artifacts.values():
         if artifact.artifact_kind not in {"issue", "pull_request"}:

@@ -260,6 +260,79 @@ def test_spec_test_code_and_github_linker_families(tmp_path: Path) -> None:
     assert dimensions["github:issue:3"] == "requirement_coverage"
     assert dimensions["github:pull:4"] == "functional_completeness"
 
+    artifact(
+        "github:issue:1",
+        "issue",
+        ["docs/CAP/TASK.md"],
+        state="closed",
+        labels=["type:task"],
+    )
+    artifact(
+        "github:pull:2",
+        "pull_request",
+        ["docs/owner.md"],
+        state="closed",
+        merged_at="2026-07-02T00:00:00Z",
+    )
+    transition = link_deterministic(store, root)
+    transitioned = {
+        by_artifact[edge.artifact_id].source_ref: edge.maturity_dimension
+        for edge in store.list_evidence_edges()
+        if edge.artifact_id in {issue.id, pull_request.id}
+        and edge.basis.startswith("github")
+    }
+    assert transition["github_ref"] == 0
+    assert transitioned["github:issue:1"] == "requirement_coverage"
+    assert transitioned["github:pull:2"] == "functional_completeness"
+
+
+def test_candidate_inference_never_promotes_to_confirmed_test_edge(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    (root / "app").mkdir(parents=True)
+    (root / "tests").mkdir()
+    (root / "app/foo.py").write_text("def value() -> int:\n    return 1\n", encoding="utf-8")
+    (root / "tests/test_foo.py").write_text("from app.foo import value\n", encoding="utf-8")
+    store = CkmStore(tmp_path / "builderops.sqlite3")
+    store.ensure_schema()
+    capability = store.upsert_capability(
+        name="Inferred Capability",
+        definition="Fixture",
+        existence_provenance="seeded:docs/owner.md :: inferred",
+    )
+    source = store.upsert_artifact(
+        source_ref="app/foo.py",
+        artifact_kind="source_file",
+        source="fixture",
+        watermark="one",
+        provenance='{"source_ref":"app/foo.py"}',
+    )
+    store.upsert_artifact(
+        source_ref="tests/test_foo.py",
+        artifact_kind="test",
+        source="fixture",
+        watermark="one",
+        provenance='{"source_ref":"tests/test_foo.py"}',
+    )
+    store.upsert_evidence_edge(
+        artifact_id=source.id,
+        capability_id=capability.id,
+        evidence_kind="source",
+        polarity="supports",
+        maturity_dimension="functional_completeness",
+        confidence=0.5,
+        extraction_method="inferred",
+        lifecycle="candidate",
+        source_ref=source.source_ref,
+        basis="inferred:fixture",
+        model="fixture-model",
+        provider="fixture-provider",
+    )
+
+    result = link_deterministic(store, root)
+
+    assert result["test_code"] == 0
+    assert not any(edge.basis.startswith("test-code:") for edge in store.list_evidence_edges())
+
 
 def test_unlinked_backlog_reported(tmp_path: Path) -> None:
     store = _store(tmp_path)
