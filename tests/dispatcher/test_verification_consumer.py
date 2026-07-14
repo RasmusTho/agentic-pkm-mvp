@@ -14,6 +14,7 @@ import app.dispatcher.verification_consumer as verification_consumer
 from app.dispatcher.verification_consumer import (
     AuthReceipt,
     CodexChatGPTAuthPreflight,
+    CodexExecFailure,
     CodexExecLauncher,
     GhCliVerificationSource,
     LaunchConfig,
@@ -180,6 +181,154 @@ def test_codex_launcher_uses_explicit_noninteractive_flags_and_no_api_env(tmp_pa
     resumed = launcher.command("thread-1")
     assert resumed[:11] == command[:11]
     assert "resume" in resumed and resumed[resumed.index("resume") + 1] == "thread-1"
+
+
+class _AuthorityLossOutput:
+    def __init__(self, lines: list[str]) -> None:
+        self.lines = iter(lines)
+        self.reads = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> str:
+        line = next(self.lines)
+        self.reads += 1
+        return line
+
+
+class _AuthorityLossProcess:
+    def __init__(self, lines: list[str]) -> None:
+        self.stdout = _AuthorityLossOutput(lines)
+        self.stderr = io.StringIO("")
+        self.returncode: int | None = None
+        self.terminate_calls = 0
+        self.kill_calls = 0
+        self.wait_calls = 0
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.terminate_calls += 1
+        self.returncode = -15
+
+    def kill(self) -> None:
+        self.kill_calls += 1
+        self.returncode = -9
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.wait_calls += 1
+        if self.returncode is None:
+            self.returncode = 0
+        return self.returncode
+
+
+def _authority_loss_launcher(tmp_path: Path) -> CodexExecLauncher:
+    return CodexExecLauncher(
+        tmp_path,
+        Path(__file__).resolve().parents[2]
+        / "app/dispatcher/schemas/verification_closer_receipt.schema.json",
+        tmp_path / "context.json",
+        adapter_path=Path(__file__).resolve().parents[2]
+        / ".codex/agents/verification-closer.toml",
+    )
+
+
+def _late_terminal_lines() -> list[str]:
+    receipt = {
+        "verdict": "needs_human",
+        "head_sha": HEAD,
+        "summary": "must not be accepted after authority loss",
+        "receipt_ids": [],
+        "retry_after": None,
+        "review_events": None,
+    }
+    return [
+        json.dumps({"type": "thread.started", "thread_id": "thread-lost"}) + "\n",
+        json.dumps(
+            {
+                "type": "item.completed",
+                "item": {"type": "agent_message", "text": json.dumps(receipt)},
+            }
+        )
+        + "\n",
+    ]
+
+
+def test_heartbeat_authority_loss_terminates_codex_child(tmp_path, monkeypatch) -> None:
+    process = _AuthorityLossProcess(_late_terminal_lines())
+    monkeypatch.setattr(verification_consumer.subprocess, "Popen", lambda *args, **kwargs: process)
+
+    def lose_authority() -> None:
+        raise RuntimeError("verification lease heartbeat rejected")
+
+    with pytest.raises(CodexExecFailure) as exc_info:
+        _authority_loss_launcher(tmp_path).launch(
+            {"head_sha": HEAD}, on_heartbeat=lose_authority
+        )
+
+    assert exc_info.value.receipt["outcome"] == "heartbeat_authority_lost"
+    assert process.terminate_calls == 1
+    assert process.wait_calls >= 1
+    assert process.poll() is not None
+
+
+def test_authority_lost_child_output_is_rejected(tmp_path, monkeypatch) -> None:
+    process = _AuthorityLossProcess(_late_terminal_lines())
+    monkeypatch.setattr(verification_consumer.subprocess, "Popen", lambda *args, **kwargs: process)
+
+    with pytest.raises(CodexExecFailure, match="heartbeat authority lost"):
+        _authority_loss_launcher(tmp_path).launch(
+            {"head_sha": HEAD},
+            on_heartbeat=lambda: (_ for _ in ()).throw(RuntimeError("lease lost")),
+        )
+
+    assert process.stdout.reads == 1
+
+
+def test_heartbeat_authority_loss_persists_one_backoff_receipt(tmp_path) -> None:
+    state = ledger(tmp_path)
+
+    class AuthorityLostLauncher(Launcher):
+        def launch(
+            self,
+            context_pack,
+            *,
+            resume_session_id=None,
+            on_thread_started=None,
+            on_heartbeat=None,
+        ):
+            if on_thread_started:
+                on_thread_started("thread-lost")
+            with state.store._connect() as conn:
+                conn.execute(
+                    "UPDATE verification_runs "
+                    "SET lease_expires_at='2000-01-01T00:00:00+00:00'"
+                )
+                conn.commit()
+            raise CodexExecFailure(
+                {
+                    "outcome": "heartbeat_authority_lost",
+                    "returncode": -15,
+                    "stderr": "heartbeat authority lost",
+                    "terminal_error": "ValueError: verification heartbeat ownership mismatch",
+                    "session_id": "thread-lost",
+                }
+            )
+
+    result = VerificationConsumer(
+        state,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        AuthorityLostLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "backoff"
+    assert result.terminal_receipt["outcome"] == "heartbeat_authority_lost"
+    with state.store._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM verification_attempts").fetchone()[0] == 0
 
 
 def test_auth_preflight_requires_chatgpt_keyring_and_login_status(tmp_path) -> None:

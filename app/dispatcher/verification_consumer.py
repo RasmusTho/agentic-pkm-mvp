@@ -364,10 +364,29 @@ class CodexExecLauncher:
         )
         env = {k: v for k, v in os.environ.items() if k not in {"OPENAI_API_KEY", "CODEX_API_KEY"}}
         stop_heartbeat = threading.Event()
+        authority_lost = threading.Event()
+        heartbeat_failures: list[Exception] = []
         heartbeat_thread: threading.Thread | None = None
         stderr_thread: threading.Thread | None = None
         stderr_chunks: list[str] = []
+        process: subprocess.Popen[str] | None = None
+        process_lock = threading.Lock()
         lines: Iterable[str | bytes]
+
+        def terminate_child() -> None:
+            with process_lock:
+                if process is not None and process.poll() is None:
+                    try:
+                        process.terminate()
+                    except ProcessLookupError:
+                        pass
+
+        def record_authority_loss(exc: Exception) -> None:
+            if not authority_lost.is_set():
+                heartbeat_failures.append(exc)
+                authority_lost.set()
+            terminate_child()
+
         if self.runner is subprocess.run:
             process = subprocess.Popen(
                 self.command(resume_session_id), cwd=self.worktree, env=env,
@@ -389,7 +408,11 @@ class CodexExecLauncher:
             if on_heartbeat:
                 def pulse() -> None:
                     while not stop_heartbeat.wait(30):
-                        on_heartbeat()
+                        try:
+                            on_heartbeat()
+                        except Exception as exc:
+                            record_authority_loss(exc)
+                            return
                 heartbeat_thread = threading.Thread(target=pulse, daemon=True)
                 heartbeat_thread.start()
         else:
@@ -403,6 +426,8 @@ class CodexExecLauncher:
         terminal: dict[str, object] | None = None
         terminal_error: str | None = None
         for line in lines:
+            if authority_lost.is_set():
+                break
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
@@ -414,7 +439,13 @@ class CodexExecLauncher:
                 if on_thread_started:
                     on_thread_started(event["thread_id"])
             if on_heartbeat:
-                on_heartbeat()
+                try:
+                    on_heartbeat()
+                except Exception as exc:
+                    record_authority_loss(exc)
+                    break
+            if authority_lost.is_set():
+                break
             if event.get("type") == "item.completed":
                 item = event.get("item")
                 if isinstance(item, Mapping) and item.get("type") == "agent_message":
@@ -427,17 +458,38 @@ class CodexExecLauncher:
                             continue
                         terminal = candidate
         if self.runner is subprocess.run:
+            assert process is not None
+            if authority_lost.is_set():
+                stop_heartbeat.set()
+                terminate_child()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+            else:
+                process.wait()
             if stderr_thread:
                 stderr_thread.join(timeout=1)
-            process.wait()
             returncode = process.returncode
-            if stderr_thread:
-                stderr_thread.join(timeout=1)
             stop_heartbeat.set()
             if heartbeat_thread:
                 heartbeat_thread.join(timeout=1)
         else:
             returncode = result.returncode
+        if authority_lost.is_set():
+            failure = heartbeat_failures[0] if heartbeat_failures else RuntimeError(
+                "unknown heartbeat failure"
+            )
+            raise CodexExecFailure(
+                {
+                    "outcome": "heartbeat_authority_lost",
+                    "returncode": returncode,
+                    "stderr": "heartbeat authority lost",
+                    "terminal_error": f"{type(failure).__name__}: {failure}",
+                    "session_id": thread_id,
+                }
+            )
         if returncode != 0 or terminal_error is not None:
             detail = "".join(stderr_chunks).strip() or terminal_error or "no stderr"
             raise CodexExecFailure(
@@ -671,6 +723,31 @@ class VerificationConsumer:
             )
         except CodexExecFailure as exc:
             failed_session = exc.receipt.get("session_id")
+            if exc.receipt.get("outcome") == "heartbeat_authority_lost":
+                retry_after = _retry_at()
+                failure_receipt = {
+                    **exc.receipt,
+                    "api_fallback": False,
+                    "retry_after": retry_after,
+                }
+                try:
+                    return self.ledger.backoff(
+                        claimed.run_id,
+                        failure_receipt,
+                        retry_after=retry_after,
+                        holder=self.holder,
+                        lease_id=lease_id,
+                    )
+                except ValueError:
+                    try:
+                        return self.ledger.defer_unclaimed(
+                            claimed.run_id, failure_receipt, retry_after
+                        )
+                    except ValueError:
+                        current = self.ledger.get(claimed.run_id)
+                        if current is not None:
+                            return current
+                        raise
             rate_limited = self._rate_limited(exc.receipt)
             if isinstance(failed_session, str) and failed_session:
                 self.ledger.record_attempt(

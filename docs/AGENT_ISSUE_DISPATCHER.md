@@ -67,6 +67,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   terminal error events even when stdout contained an otherwise valid receipt. A bounded rate-limit,
   usage-limit, quota, or credit-exhaustion signal on that non-zero path remains a lease-fenced backoff
   receipt with no repair-budget use or API-key fallback.
+- Heartbeat rejection is immediate loss of coordinator authority: the consumer terminates and reaps
+  the active Codex child, rejects any later stdout, and records one bounded backoff receipt without
+  accepting a terminal result from the authority-lost process.
 - The immutable request head remains the run/idempotency audit identity. A repair receipt may advance
   the separate current head only under the exact active lease after a fresh GitHub read proves that
   exact live PR head; terminal delivery records the verified head only after two clean reviews on it.
