@@ -340,6 +340,27 @@ class CkmStore:
         now = utc_now()
         candidate_id = new_id("edge")
         resolved_basis = basis or source_ref
+        candidate = CkmEvidenceEdge(
+            id=candidate_id,
+            artifact_id=artifact_id,
+            capability_id=capability_id,
+            evidence_kind=evidence_kind,
+            polarity=polarity,
+            maturity_dimension=maturity_dimension,
+            confidence=confidence,
+            extraction_method=extraction_method,
+            model=model,
+            provider=provider,
+            lifecycle=lifecycle,
+            source_ref=source_ref,
+            basis=resolved_basis,
+            created_at=now,
+            updated_at=now,
+        ).validate()
+        if candidate.extraction_method == "inferred" and candidate.lifecycle != "candidate":
+            raise CkmValidationError(
+                "inferred evidence edges must enter as candidate; use a confirmation receipt"
+            )
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
@@ -358,7 +379,13 @@ class CkmStore:
                     extraction_method = excluded.extraction_method,
                     model = excluded.model,
                     provider = excluded.provider,
-                    lifecycle = excluded.lifecycle,
+                    lifecycle = CASE
+                        WHEN ckm_evidence_edge.extraction_method = 'inferred'
+                         AND ckm_evidence_edge.lifecycle = 'confirmed'
+                         AND excluded.extraction_method = 'inferred'
+                        THEN 'confirmed'
+                        ELSE excluded.lifecycle
+                    END,
                     source_ref = excluded.source_ref,
                     updated_at = excluded.updated_at
                 """,
@@ -421,6 +448,39 @@ class CkmStore:
                     (artifact_id, capability_id, basis),
                 ).fetchone()
         return CkmEvidenceEdge.from_row(row) if row is not None else None
+
+    def get_evidence_edge_by_id(self, edge_id: str) -> CkmEvidenceEdge | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM ckm_evidence_edge WHERE id = ?", (edge_id,)
+            ).fetchone()
+        return CkmEvidenceEdge.from_row(row) if row is not None else None
+
+    def confirm_inferred_edge(self, edge_id: str) -> CkmEvidenceEdge:
+        edge = self.get_evidence_edge_by_id(edge_id)
+        if edge is None:
+            raise CkmValidationError(f"evidence edge not found: {edge_id}")
+        if edge.extraction_method != "inferred":
+            raise CkmValidationError("only inferred evidence edges require confirmation")
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE ckm_evidence_edge SET lifecycle = 'confirmed', updated_at = ? WHERE id = ?",
+                (utc_now(), edge_id),
+            )
+            conn.commit()
+        confirmed = self.get_evidence_edge_by_id(edge_id)
+        if confirmed is None:  # pragma: no cover - defensive
+            raise CkmValidationError(f"confirmed edge disappeared: {edge_id}")
+        return confirmed
+
+    def list_builderops_receipts(self, event_type: str | None = None) -> list[JsonDict]:
+        receipts = self._receipt_store.list_records("BuilderOpsReceipt")
+        if event_type is None:
+            return receipts
+        return [receipt for receipt in receipts if receipt.get("event_type") == event_type]
+
+    def append_builderops_receipt(self, **fields: Any) -> JsonDict:
+        return self._receipt_store.append_receipt(**fields)
 
     def list_evidence_edges_for_capability(self, capability_id: str) -> list[CkmEvidenceEdge]:
         with self._connect() as conn:
