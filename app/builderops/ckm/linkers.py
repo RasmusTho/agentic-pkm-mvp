@@ -1,0 +1,270 @@
+"""Deterministic evidence linkers for the Capability Evidence Graph."""
+
+from __future__ import annotations
+
+import ast
+import hashlib
+import json
+import posixpath
+import re
+from pathlib import Path
+
+from app.builderops.ckm.models import CkmArtifact, CkmCapability
+from app.builderops.ckm.store import CkmStore
+
+_PATH_RE = re.compile(r"(?:\.\./)*(?:app|docs|tests|schemas)/[A-Za-z0-9_./-]+(?:\.md|\.py|\.json)?")
+_LINK_RE = re.compile(r"\]\(([^)#]+(?:\.md|\.py|\.json))\)")
+_ISSUE_RE = re.compile(r"(?<![\w/])#(\d+)\b")
+_BOUNDARY_RE = re.compile(r"\b(HIX|WSP|HKA|SIP|GOV|EBF|PDM|DRI|RCA|MEM|CAO|EXE|SFC|OEF|CES)\b")
+_PARENT_RE = re.compile(r"^parent_capability:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def _provenance(artifact: CkmArtifact) -> dict[str, object]:
+    try:
+        value = json.loads(artifact.provenance)
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _seed_path(capability: CkmCapability) -> str | None:
+    marker = "seeded:"
+    if not capability.existence_provenance.startswith(marker):
+        return None
+    return capability.existence_provenance[len(marker) :].split("::", 1)[0].strip()
+
+
+def _kind(artifact: CkmArtifact) -> str:
+    return {
+        "document": "doc",
+        "source_file": "source",
+        "issue": "requirement",
+    }.get(artifact.artifact_kind, artifact.artifact_kind)
+
+
+def _dimension(artifact: CkmArtifact) -> str:
+    return {
+        "test": "test_completeness",
+        "pull_request": "functional_completeness",
+        "issue": "requirement_coverage",
+        "adr": "architectural_stability",
+        "spec": "requirement_coverage",
+        "document": "documentation_quality",
+    }.get(artifact.artifact_kind, "functional_completeness")
+
+
+def _basis(rule: str, artifact: CkmArtifact, detail: str) -> str:
+    return json.dumps(
+        {"artifact_source_ref": artifact.source_ref, "basis": f"{rule}:{detail}"},
+        sort_keys=True,
+    )
+
+
+def _emit(
+    store: CkmStore,
+    artifact: CkmArtifact,
+    capability: CkmCapability,
+    *,
+    rule: str,
+    detail: str,
+) -> int:
+    evidence_kind = _kind(artifact)
+    dimension = _dimension(artifact)
+    existing = store.get_evidence_edge(
+        artifact_id=artifact.id,
+        capability_id=capability.id,
+        evidence_kind=evidence_kind,
+        maturity_dimension=dimension,
+    )
+    store.upsert_evidence_edge(
+        artifact_id=artifact.id,
+        capability_id=capability.id,
+        evidence_kind=evidence_kind,
+        polarity="supports",
+        maturity_dimension=dimension,
+        confidence=1.0,
+        extraction_method="deterministic",
+        lifecycle="confirmed",
+        source_ref=_basis(rule, artifact, detail),
+    )
+    return int(existing is None)
+
+
+def _matrix_links(
+    store: CkmStore,
+    root: Path,
+    artifacts: dict[str, CkmArtifact],
+    boundaries: dict[str, CkmCapability],
+) -> int:
+    path = root / "docs/architecture/traceability-matrix.md"
+    if not path.is_file():
+        return 0
+    changed = 0
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.startswith("|") or not re.match(r"^\|\s*\d+\s*\|", line):
+            continue
+        row_capabilities = [boundaries[key] for key in sorted(set(_BOUNDARY_RE.findall(line))) if key in boundaries]
+        refs = {match.replace("../", "") for match in _PATH_RE.findall(line)}
+        for target in _LINK_RE.findall(line):
+            normalized = posixpath.normpath(posixpath.join("docs/architecture", target))
+            if not normalized.startswith("../"):
+                refs.add(normalized)
+        refs.update(f"github:issue:{number}" for number in _ISSUE_RE.findall(line))
+        for ref in sorted(refs):
+            artifact = artifacts.get(ref)
+            if artifact is None:
+                continue
+            for capability in row_capabilities:
+                changed += _emit(store, artifact, capability, rule="matrix", detail=f"row:{line_number}")
+    return changed
+
+
+def _spec_links(
+    store: CkmStore,
+    root: Path,
+    artifacts: dict[str, CkmArtifact],
+    capabilities: list[CkmCapability],
+) -> int:
+    by_name = {capability.name.casefold(): capability for capability in capabilities}
+    by_slug = {capability.name.casefold().replace(" ", "-"): capability for capability in capabilities}
+    changed = 0
+    for artifact in artifacts.values():
+        if artifact.artifact_kind != "spec":
+            continue
+        path = root / artifact.source_ref
+        if not path.is_file():
+            continue
+        match = _PARENT_RE.search(path.read_text(encoding="utf-8"))
+        if not match:
+            continue
+        parent = match.group(1).strip().strip('"\'').casefold()
+        capability = by_name.get(parent) or by_slug.get(parent.replace(" ", "-"))
+        if capability:
+            changed += _emit(store, artifact, capability, rule="spec-directory", detail=artifact.source_ref)
+    return changed
+
+
+def _adr_links(
+    store: CkmStore,
+    root: Path,
+    artifacts: dict[str, CkmArtifact],
+    capabilities: list[CkmCapability],
+) -> int:
+    changed = 0
+    for artifact in artifacts.values():
+        if artifact.artifact_kind != "adr":
+            continue
+        path = root / artifact.source_ref
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for capability in capabilities:
+            seed_path = _seed_path(capability)
+            if seed_path and seed_path in text:
+                changed += _emit(store, artifact, capability, rule="adr-reference", detail=seed_path)
+    return changed
+
+
+def _imported_modules(path: Path) -> set[str]:
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except (OSError, SyntaxError, UnicodeDecodeError):
+        return set()
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            modules.add(node.module)
+    return modules
+
+
+def _test_links(store: CkmStore, root: Path, artifacts: dict[str, CkmArtifact]) -> int:
+    changed = 0
+    source_edges = {edge.artifact_id: edge.capability_id for edge in store.list_evidence_edges()}
+    capabilities = {capability.id: capability for capability in store.list_capabilities()}
+    for test in artifacts.values():
+        if test.artifact_kind != "test":
+            continue
+        candidates: set[str] = set()
+        relative = test.source_ref
+        if relative.startswith("tests/"):
+            tail = relative.removeprefix("tests/")
+            name = Path(tail).name
+            mirrored = str(Path("app") / Path(tail).parent / name.removeprefix("test_"))
+            candidates.add(mirrored)
+        for module in _imported_modules(root / relative):
+            if module.startswith("app."):
+                candidates.add(module.replace(".", "/") + ".py")
+        for source_ref in candidates:
+            source = artifacts.get(source_ref)
+            if source is None or source.id not in source_edges:
+                continue
+            capability = capabilities.get(source_edges[source.id])
+            if capability:
+                changed += _emit(store, test, capability, rule="test-code", detail=source_ref)
+    return changed
+
+
+def _github_links(
+    store: CkmStore,
+    artifacts: dict[str, CkmArtifact],
+    capabilities: list[CkmCapability],
+) -> int:
+    changed = 0
+    spec_capabilities: dict[str, CkmCapability] = {}
+    capability_by_id = {capability.id: capability for capability in capabilities}
+    artifact_by_id = {artifact.id: artifact for artifact in artifacts.values()}
+    for edge in store.list_evidence_edges():
+        linked_artifact = artifact_by_id.get(edge.artifact_id)
+        linked_capability = capability_by_id.get(edge.capability_id)
+        if linked_artifact and linked_capability and linked_artifact.artifact_kind == "spec":
+            spec_capabilities[linked_artifact.source_ref] = linked_capability
+    for artifact in artifacts.values():
+        if artifact.artifact_kind not in {"issue", "pull_request"}:
+            continue
+        references = _provenance(artifact).get("references", [])
+        if not isinstance(references, list):
+            continue
+        emitted: set[str] = set()
+        for reference in (str(value) for value in references):
+            for spec_path, capability in spec_capabilities.items():
+                if reference == spec_path or reference.startswith(str(Path(spec_path).parent) + "/"):
+                    changed += _emit(
+                        store,
+                        artifact,
+                        capability,
+                        rule="github-spec-ref",
+                        detail=reference,
+                    )
+                    emitted.add(capability.id)
+        for capability in capabilities:
+            seed_path = _seed_path(capability)
+            if capability.id not in emitted and seed_path and any(
+                str(ref).startswith(seed_path) for ref in references
+            ):
+                changed += _emit(store, artifact, capability, rule="github-ref", detail=seed_path)
+    return changed
+
+
+def link_deterministic(store: CkmStore, root: Path) -> dict[str, int | str]:
+    """Run every mechanical linker and report the honest unlinked backlog."""
+    store.ensure_schema()
+    root = root.resolve()
+    artifacts = {artifact.source_ref: artifact for artifact in store.list_artifacts()}
+    capabilities = store.list_capabilities()
+    boundaries = {capability.boundary_ref: capability for capability in capabilities if capability.boundary_ref}
+    results = {
+        "matrix": _matrix_links(store, root, artifacts, boundaries),
+        "spec": _spec_links(store, root, artifacts, capabilities),
+        "adr": _adr_links(store, root, artifacts, capabilities),
+        "test_code": _test_links(store, root, artifacts),
+        "github_ref": _github_links(store, artifacts, capabilities),
+    }
+    linked_ids = {edge.artifact_id for edge in store.list_evidence_edges()}
+    results["unlinked_artifacts"] = sum(artifact.id not in linked_ids for artifact in artifacts.values())
+    watermark = hashlib.sha256(
+        "\n".join(f"{item.source_ref}:{item.watermark}" for item in sorted(artifacts.values(), key=lambda value: value.source_ref)).encode()
+    ).hexdigest()
+    store.set_watermark("deterministic_linkers", watermark)
+    return {**results, "watermark": watermark}

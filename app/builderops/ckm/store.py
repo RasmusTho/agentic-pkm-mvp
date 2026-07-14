@@ -378,6 +378,13 @@ class CkmStore:
             ).fetchall()
         return [CkmEvidenceEdge.from_row(row) for row in rows]
 
+    def list_evidence_edges(self) -> list[CkmEvidenceEdge]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM ckm_evidence_edge ORDER BY artifact_id, capability_id"
+            ).fetchall()
+        return [CkmEvidenceEdge.from_row(row) for row in rows]
+
     # --- Assessment (append-only, bitemporal) -----------------------------------
 
     def append_assessment(
