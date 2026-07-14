@@ -18,6 +18,7 @@ These tests lock in two guarantees for #2407:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -257,6 +258,72 @@ def test_schema_violation_dead_letters_at_dispatch(monkeypatch: pytest.MonkeyPat
     assert dead_letters[0]["reason"] == "schema_violation"
     assert dead_letters[0]["message_id"] == "row-schema-violation"
     assert acked == ["row-schema-violation"]
+
+
+def test_run_dead_letters_malformed_panel_note_uuid_without_worker_exit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A malformed stored panel UUID is poison for one row, not the worker.
+
+    Exercise the production ``run()`` consume path rather than the UUID helper
+    in isolation: the worker must keep running long enough to write a heartbeat
+    after it has recorded and acknowledged the malformed event.
+    """
+    vault = tmp_path / "selected-vault"
+    note = vault / "Inbox" / "malformed-panel.md"
+    note.parent.mkdir(parents=True)
+    source = "---\ntitle: Broken panel\nuuid: not-a-uuid\n---\n\n- [ ] Keep this source unchanged\n"
+    note.write_text(source, encoding="utf-8")
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    monkeypatch.delenv("WATCHER_VAULT_PATH", raising=False)
+    audit_path = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(audit_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+
+    message = {
+        "id": "row-panel-bad-uuid",
+        "topic": outbox_worker.PANEL_SCAN_REQUESTED,
+        "payload": {
+            "vault_path": str(note),
+            "relative_path": "Inbox/malformed-panel.md",
+            "trace_id": "trace-panel-bad-uuid",
+        },
+    }
+    polled = False
+
+    def poll_once():
+        nonlocal polled
+        if polled:
+            return None
+        polled = True
+        return message
+
+    monkeypatch.setattr(outbox_worker, "poll_outbox_one", poll_once)
+    monkeypatch.setattr(outbox_worker, "bootstrap", lambda: None)
+    monkeypatch.setenv("WORKER_HEARTBEAT_INTERVAL", "0")
+
+    acked: list[str] = []
+    monkeypatch.setattr(outbox_worker, "ack_outbox", lambda mid: acked.append(str(mid)))
+    heartbeats: list[dict[str, object]] = []
+    monkeypatch.setattr(outbox_worker, "write_worker_heartbeat", lambda **kwargs: heartbeats.append(kwargs))
+
+    outbox_worker.run(interval=0.0, heartbeat_interval=0, log_heartbeat_interval=None, stop_after_ticks=2)
+
+    assert acked == ["row-panel-bad-uuid"]
+    receipt = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert receipt["event"] == outbox_worker.OUTBOX_EVENT_DEAD_LETTERED
+    assert receipt["payload"] == {
+        "original_topic": outbox_worker.PANEL_SCAN_REQUESTED,
+        "original_event_id": "",
+        "outbox_id": "row-panel-bad-uuid",
+        "reason": "invalid_note_uuid",
+        "attempts": 0,
+        "error": "invalid panel note uuid: not-a-uuid",
+    }
+    assert heartbeats and heartbeats[-1]["processed_total"] == 1
+    assert note.read_text(encoding="utf-8") == source
 
 
 def test_schema_violation_on_grandfathered_row_is_log_only_never_dead_lettered(
