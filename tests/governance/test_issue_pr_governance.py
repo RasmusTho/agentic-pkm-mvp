@@ -47,6 +47,9 @@ def _companion_design_audit_path(filename: str) -> Path:
 def test_companion_design_audit_handoff_has_durable_sources() -> None:
     readme = _companion_design_audit_path("README.md").read_text(encoding="utf-8")
     audit = _companion_design_audit_path("DESIGN_AUDIT.md").read_text(encoding="utf-8")
+    archive = (REPO_ROOT / "companion-ui/design_handoff/README.md").read_text(
+        encoding="utf-8"
+    )
     sources_path = _companion_design_audit_path("SOURCES.md")
     sources = sources_path.read_text(encoding="utf-8")
 
@@ -57,6 +60,14 @@ def test_companion_design_audit_handoff_has_durable_sources() -> None:
         assert f"issues/{issue_number}" in sources
     assert "not retained as durable evidence" in sources.lower()
     assert "not reproducible repo evidence" in readme.lower()
+    archive_row = next(
+        line
+        for line in archive.splitlines()
+        if "`2026-07-07-uat-design-audit/`" in line
+    )
+    assert "not retained as reproducible repo evidence" in archive_row.lower()
+    assert "2026-07-07-uat-design-audit/SOURCES.md" in archive_row
+    assert "#3360–#3364" in archive_row
     for missing_input in (
         "CLAUDE_DESIGN_AUDIT_PROMPT.md",
         "UAT_REPORT.md",
