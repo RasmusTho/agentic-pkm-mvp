@@ -1,6 +1,6 @@
-State: Draft (advisory groundwork, 2026-07-04). Index for the Heimdal "A" artifacts — the docs-only groundwork that unlocks a Fable-5 architecture window for the Heimdal (Event Capture & Attribution) capability. Advisory until enacted through CES/ADR; no runtime behavior, no GitHub work created.
-Doc role: Directory index (Draft)
-Authority: Index/entry point for the Heimdal groundwork docs. Subordinate to the docs it points at. Claims no shipped reality.
+State: Mixed-status index. The original Heimdal "A" artifacts remain advisory design history, but their architecture window has been enacted and Heimdal's v1 capture-to-projection pipeline is shipped in `app/heimdal/`; use `docs/STATUS.md` and `docs/ARCHITECTURE.md` for current runtime truth.
+Doc role: Directory index (mixed current-state routing and advisory design history)
+Authority: Index/entry point for the Heimdal document set. The A-artifact descriptions preserve their original advisory scope; current shipped reality is owned by `docs/STATUS.md` and `docs/ARCHITECTURE.md`.
 Owner: Architecture / CES stewardship (Rasmus)
 Temporal class: strategic
 Review cadence: event-driven
@@ -13,9 +13,11 @@ of reality, converted into **attributed, timestamped events** with **confidence*
 Its responsibility ends at a **published event**; downstream constituents (Munin = knowledge/memory,
 Hugin = agent-runtime) are read-models of that stream.
 
-This directory holds the **"A" artifacts** — docs-only groundwork that fixes the container and hands
-a Fable-5 architecture window a bounded problem. **Everything here is advisory** until enacted through
-CES/ADR. Nothing here is shipped, and no GitHub work is created by it.
+This directory began as the **"A" artifacts** — docs-only groundwork that fixed the container and
+handed a Fable-5 architecture window a bounded problem. Those original briefs remain advisory design
+history; the resulting architecture decisions and Heimdal v1 capture-to-projection pipeline have since
+been enacted. Use `docs/STATUS.md` and `docs/ARCHITECTURE.md` for current runtime truth, and treat only
+items still explicitly marked as future work as unshipped.
 
 ## The artifacts
 
@@ -48,9 +50,7 @@ Read order: **A1 → A2 → A4 → A3 → A5 → FABLE_COMPANION** (container �
 
 ## Status
 
-Docs-only groundwork, delivered via the docs-authoring lane. Owner decisions captured 2026-07-04.
-The **Fable-5 architecture window has now run** (2026-07-05): its design output is
-[FABLE_COMPANION.md](FABLE_COMPANION.md) — advisory, surfacing owner decisions a–i and a build-blocking
-red-team verdict (close F2 + F5 before the v1 vertical). Enactment (glossary/Mimer reconciliation,
-contracts, and building the vertical via Issue-first) is deferred to later, owner-initiated work;
-nothing here changes shipped reality.
+The docs-only groundwork and owner decisions were delivered in July 2026, and the **Fable-5
+architecture window has run**. Its design output is [FABLE_COMPANION.md](FABLE_COMPANION.md). The
+Mimer/glossary reconciliation, contracts, and Heimdal v1 vertical were subsequently enacted through
+Issue-first delivery; later modalities and explicitly named follow-ons remain future work.
