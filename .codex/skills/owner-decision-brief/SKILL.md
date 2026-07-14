@@ -29,6 +29,42 @@ Two failure modes motivate this skill, and it must close both:
 2. **Escalations in project jargon.** When a decision *is* the owner's, it arrives wrapped
    in internal terminology, so he must first decode the question before he can decide.
 
+## Local vault-binding preflight
+
+When the apparent blocker is a missing local vault binding, mount, or path, complete this preflight
+before adding `agent:needs-human` or asking the owner. A missing binding is often a reparable
+channel-bootstrap/configuration problem, not an owner decision.
+
+1. Inspect the deploy environment files selected for the target channel and identify the variables
+   that supply the vault source and target. Use a non-emitting parser or check that returns only
+   presence/path-class results; do not `cat`, source, echo, or otherwise print the file or its values.
+2. Run the same non-emitting, structured check across every write-capable service and watcher binding
+   for the target channel, not just the first failing service. It must exclude ambient/plain vault
+   selectors and confirm that deploy environment and Compose wiring resolve to the same channel-owned
+   source. Never run raw Compose config, doctor, startup, environment, or directory-listing commands
+   during this preflight: those outputs can expose private paths, vault names, or secrets.
+3. Check the configured source path and the standard local Obsidian locations, including
+   `~/Library/Mobile Documents/iCloud~md~obsidian/Documents` and `~/Documents/Obsidian`, then the
+   intended vault subdirectory. Test only the exact candidate path silently, without enumerating its
+   contents. Use the result only as diagnostic evidence, never as a channel-binding selection.
+4. Create or repair a bounded, reversible configuration Issue only when the non-emitting check
+   independently proves a channel-owned canonical source and matching bindings for every
+   write-capable service, or proves that the bounded repair will restore a single missing/divergent
+   binding to that already-proven source. A generic iCloud/Obsidian discovery must never be used to
+   create or rewrite a dev/test/prod binding. If channel ownership or matching bindings cannot be
+   independently established, do not repair the binding: retain only redacted boolean/path-class
+   evidence (for example, `channel source: absent` or `configured path: unreadable`) and proceed to
+   Step 1.
+
+This preflight is inspection-only unless the governing issue or source authority already permits the
+resulting bounded repair. It does not authorize a real-vault write, a deployment, or disclosure of
+environment-file contents.
+
+This redaction discipline applies to every preflight outcome, including a repair that can continue:
+Issue, PR, BuilderOps, and maintenance receipts may contain only variable names and redacted
+boolean/path-class results. They must never contain raw paths, vault names, environment values, DSNs,
+secrets, or raw startup/Compose output.
+
 ## Step 1 — The filter: is this discretionary decision the owner's at all?
 
 Before writing anything owner-facing, test the decision against the escalation gate of
