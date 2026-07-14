@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import json
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 from uuid import uuid4
@@ -142,9 +143,11 @@ class ReflectionConversationService:
         if not resolved_note.is_file():
             raise ValueError("reflection requires an existing vault note as its chat anchor")
         now = self._now()
+        # Complete provider cognition before creating the durable artifact.  A
+        # failed/empty opening must leave no header-only chat session behind.
+        opening = self._opening_turn(day_context)
         label = f"evening-reflection-{day_context.for_date.isoformat()}-{uuid4().hex[:8]}"
         session = self._writer.open_session(resolved_note, label)
-        opening = self._opening_turn(day_context)
         self._writer.append_message(session, "agent", opening)
         return ReflectionConversation(
             session=session,
@@ -209,14 +212,18 @@ class ReflectionConversationService:
     def _opening_turn(self, day_context: DayContextBundle) -> str:
         anchor = _first_concrete_item(day_context)
         gaps = [name.replace("_", " ") for name in day_context.degraded_sources]
+        user_payload = {
+            "day_context": day_context.model_dump(mode="json"),
+            "concrete_anchor": anchor,
+            "degraded_sources": gaps,
+            "instruction": "Ask one short open reflective question grounded in the anchor.",
+        }
         response = self._llm(
             "journaling.reflection.opening",
             {
                 "system": _SYSTEM_PROMPT,
-                "day_context": day_context.model_dump(mode="json"),
-                "concrete_anchor": anchor,
-                "degraded_sources": gaps,
-                "instruction": "Ask one short open reflective question grounded in the anchor.",
+                "user": json.dumps(user_payload, ensure_ascii=False, sort_keys=True),
+                **user_payload,
             },
         ).strip()
         if not response:
@@ -232,19 +239,23 @@ class ReflectionConversationService:
         return " ".join(parts)
 
     def _followup_turn(self, conversation: ReflectionConversation) -> str:
+        user_payload = {
+            "day_context": conversation.day_context.model_dump(mode="json"),
+            "transcript": [
+                {"role": role, "content": content}
+                for role, content in conversation.messages
+            ],
+            "remaining_owner_turns": (
+                conversation.settings.max_owner_turns - conversation.owner_turn_count
+            ),
+            "instruction": "Ask one short open follow-up in the owner's current language.",
+        }
         response = self._llm(
             "journaling.reflection.followup",
             {
                 "system": _SYSTEM_PROMPT,
-                "day_context": conversation.day_context.model_dump(mode="json"),
-                "transcript": [
-                    {"role": role, "content": content}
-                    for role, content in conversation.messages
-                ],
-                "remaining_owner_turns": (
-                    conversation.settings.max_owner_turns - conversation.owner_turn_count
-                ),
-                "instruction": "Ask one short open follow-up in the owner's current language.",
+                "user": json.dumps(user_payload, ensure_ascii=False, sort_keys=True),
+                **user_payload,
             },
         ).strip()
         if not response:

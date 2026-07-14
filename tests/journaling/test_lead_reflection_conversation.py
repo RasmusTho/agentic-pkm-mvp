@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+import json
 from pathlib import Path
 
 import pytest
@@ -152,3 +153,82 @@ def test_reflection_session_uses_existing_chat_surface(tmp_path: Path) -> None:
     sessions = load_chat_sessions_for_note("reflection-anchor", vault_context=context)
     assert [session.session_id for session in sessions] == [conversation.session.session_id]
     assert conversation.session.log_path.is_relative_to(root / ".chats")
+
+
+def test_real_provider_receives_day_context_and_transcript_in_user_messages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exercise the provider boundary, not the injected whole-pack test seam."""
+    from app.services import llm as llm_module
+
+    root, context, note = _vault(tmp_path)
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+    provider_messages: list[list[dict[str, str]]] = []
+
+    def fake_http_chat(**kwargs: object) -> tuple[str, dict[str, str]]:
+        messages = kwargs["messages"]
+        assert isinstance(messages, list)
+        provider_messages.append(messages)
+        response = (
+            "What felt most important about that capture?"
+            if len(provider_messages) == 1
+            else "What made those loose ends connect?"
+        )
+        return response, {"content": response}
+
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_BASE", "http://provider.test/chat/completions")
+    monkeypatch.setattr(llm_module, "_http_chat", fake_http_chat)
+    settings = ReflectionSettings(
+        evening_nudge_enabled=False,
+        evening_nudge_start_hour=20,
+        evening_nudge_end_hour=22,
+        idle_timeout_seconds=900,
+        max_owner_turns=5,
+    )
+    service = ReflectionConversationService(
+        vault_root=root,
+        now_fn=lambda: NOW,
+        settings=settings,
+    )
+
+    conversation = service.start(note_path=note, day_context=bundle)
+    service.submit_owner_turn(conversation, "It connected several loose ends.")
+
+    opening_user = json.loads(provider_messages[0][1]["content"])
+    assert opening_user["day_context"]["for_date"] == "2026-07-15"
+    assert opening_user["concrete_anchor"] == "capture-1"
+    assert "grounded" in opening_user["instruction"]
+    followup_user = json.loads(provider_messages[1][1]["content"])
+    assert followup_user["transcript"][-1] == {
+        "role": "owner",
+        "content": "It connected several loose ends.",
+    }
+    assert followup_user["remaining_owner_turns"] == 4
+
+
+def test_opening_provider_failure_leaves_no_empty_chat_session(tmp_path: Path) -> None:
+    root, context, note = _vault(tmp_path)
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+
+    def failing_llm(_kind: str, _pack: dict[str, object]) -> str:
+        raise RuntimeError("provider unavailable")
+
+    service = ReflectionConversationService(
+        vault_root=root,
+        llm_fn=failing_llm,
+        now_fn=lambda: NOW,
+        settings=ReflectionSettings(
+            evening_nudge_enabled=False,
+            evening_nudge_start_hour=20,
+            evening_nudge_end_hour=22,
+            idle_timeout_seconds=900,
+            max_owner_turns=5,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        service.start(note_path=note, day_context=bundle)
+
+    assert not list((root / ".chats").rglob("*.md"))

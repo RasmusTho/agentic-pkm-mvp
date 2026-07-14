@@ -8,6 +8,8 @@ from typing import Mapping
 
 def render_evening_reflection_offer_html(
     offer: Mapping[str, object] | None,
+    *,
+    note_path: str = "",
 ) -> str:
     """Render a tap affordance only for the server-declared inert offer.
 
@@ -21,11 +23,16 @@ def render_evening_reflection_offer_html(
     if offer.get("tap_required") is not True or action != "journaling.reflection.begin":
         return ""
     label = escape(str(offer.get("label") or "Reflect on today?"))
+    safe_note_path = escape(note_path, quote=True)
     return (
         '<section class="evening-reflection-offer" '
-        'data-testid="evening-reflection-offer" data-offer-only="true">'
+        'data-testid="evening-reflection-offer" data-offer-only="true" '
+        f'data-note-path="{safe_note_path}">'
         f'<button type="button" data-action="{escape(action, quote=True)}" '
-        f'data-requires-explicit-tap="true">{label}</button></section>'
+        'data-api-path="/api/companion/journaling/reflection/start" '
+        f'data-requires-explicit-tap="true">{label}</button>'
+        '<span data-testid="evening-reflection-status" role="status" '
+        'aria-live="polite"></span></section>'
     )
 
 
