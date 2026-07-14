@@ -221,8 +221,9 @@ Frontier-rescue stop conditions:
   production configuration, or high-risk runtime behavior without explicit
   authorization.
 
-When a stop condition triggers, the gate must route a Human Exception packet or
-leave a blocked follow-up issue, depending on the owning workflow.
+When a stop condition triggers, classify it through [Escalation classifier](#escalation-classifier).
+Only an explicit authority category may route to Human Exception; safe technical
+stops remain blocked while their bounded recovery path proceeds autonomously.
 
 ## Review Repair Loop
 
@@ -265,6 +266,31 @@ Human Exception routing.
 Human Exception is the path for decisions that need owner judgment or unsafe
 authority expansion. It must be sparse, deduplicated, and evidence-backed.
 
+## Escalation Classifier
+
+Every terminal or retryable stop is classified before any label, owner packet, or
+repair counter is updated. A retry counter alone must never select
+`needs_owner`.
+
+| Route | Use when | Autonomous next action |
+| --- | --- | --- |
+| `auto_repair` | The failure is repo-local, reversible, inside the issue's declared scope, and has a deterministic validation target. | Create or continue the bounded repair path, then run fresh validation/review. |
+| `auto_backoff` | Authentication, rate limit, or an external tool is temporarily unavailable and no mutation has occurred. | Retain the request, record a receipt, and retry with bounded backoff. |
+| `blocked_technical` | The system failed closed, a dependency is unavailable, or the cause needs stronger diagnosis; no authority is missing. | Keep the affected service/merge path disabled or blocked, collect evidence, and create a linked bounded recovery slice when needed. |
+| `needs_owner` | Continuing needs an unapproved irreversible/external effect, a security/privacy/cost commitment, a production/release operator action, a policy waiver, or resolution of contradictory source authority. | Emit one deduplicated Human Exception packet. |
+
+Repair accounting is partitioned by failure domain: review/code correctness,
+static-quality, lease/concurrency, and deployment/model-schema compatibility.
+A failure in one domain does not consume another domain's budget. Repeatedly
+identical findings still hit a circuit breaker: it triggers stronger autonomous
+diagnosis and a bounded replan, not an owner interruption, unless that replan
+crosses a `needs_owner` authority category.
+
+Deployment/model-schema compatibility is a control-plane concern. It must be
+checked in a non-mutating preflight before a dispatcher claim or pilot; a
+mismatch is `blocked_technical`, leaves the host disabled, and must not consume
+the PR's review/code repair budget.
+
 ### Packet Schema
 
 Each packet must include:
@@ -303,7 +329,9 @@ Each packet must include:
 - `intent-critical`: the requested behavior conflicts with owner intent,
   product/runtime boundaries, or the issue's non-goals.
 - `autonomous-failure-critical`: the autonomous loop exhausted its attempt
-  budget, cannot classify the failure, or cannot prove branch/head truth.
+  budget, cannot classify the failure after bounded diagnosis, or cannot prove
+  branch/head truth **and** a safe recovery would require one of the explicit
+  `needs_owner` authority categories above.
 
 ## Closure Eligibility
 
