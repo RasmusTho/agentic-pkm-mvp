@@ -2,7 +2,7 @@
 name: Rewritten note conflict staging
 description: Atomically detect stale rewritten writes and preserve losing content as a conflict artifact.
 task_id: VMW-02
-source_anchor: docs/adr/ADR-0055-vault-multiwriter-consistency-model.md :: items 1-2, 6
+source_anchor: "docs/adr/ADR-0055-vault-multiwriter-consistency-model.md :: items 1-2, 6"
 parent_capability: VAULT_MULTIWRITER_ENACTMENT
 prerequisites: [VMW-01]
 depends_on: [WRITE_RECEIPT_PROVENANCE.md]
