@@ -132,7 +132,7 @@ Delivery rules:
 - When coordinating autonomous delivery, do not treat an unprotected branch or absent required-status-check rule as permission to skip the process gate. `verification-and-closure` still owns the current CI/checks plus local-review-gate prerequisites before merge.
 - A coordinator waits on many PRs at once — the worst case for the shared API budget. Poll per `_shared/CI_WAIT_CONTRACT.md` (REST check-runs only, ≥60–120s backoff, `scripts/await_pr_checks.sh`); never run concurrent `gh pr checks` loops, which drain the shared GraphQL bucket to zero and stall every sub-agent.
 - After every delivered issue, re-read the parent feature issue / Project state and recompute the next pickup target.
-- Stop instead of forcing delivery when an issue is blocked, malformed, stale, already delivered, missing `Verify:` targets, missing authority, or needs human input.
+- Stop forcing the current issue when it is blocked, malformed, stale, already delivered, missing `Verify:` targets, missing authority, or needs human input. Apply the [no-progress final gate](#no-progress-final-gate) before treating that stop as a delivery conclusion.
 
 Parallel claim is allowed only when all are true:
 
@@ -163,9 +163,40 @@ conflicts, the coordinator must reconcile, release, or choose a different issue 
 Delivery mode is complete only when every in-scope issue is either:
 
 - delivered and verified through `verification-and-closure`, or
-- explicitly classified as non-executable with a maintenance receipt, blocker reason, and next action
+- explicitly classified as non-executable only after the no-progress final gate establishes that no small, source-authorized remediation can be created, repaired, claimed, or continued; the maintenance receipt must name the blocker, next action, and verified human-authority need when one remains
 
 Do not report the whole epic or Kanban scope as delivered while blocked or non-executable issues are silently left behind.
+
+### No-progress final gate
+
+This gate applies whenever Delivery Mode encounters a blocker. It prevents a delivery agent from
+ending a turn with a blocker report while the delivery loop still has a small, evidence-backed next
+move.
+
+Before a final delivery update, determine from the current issue, owner docs, Source Anchors, and
+live repository/GitHub state whether a small, source-authorized remediation can be created, repaired,
+claimed, or continued. Typical examples include a malformed configuration issue, an omitted channel
+binding, or a validation precondition whose owning source already identifies the intended repair.
+
+If such remediation exists, the agent must not conclude delivery with the blocker report. It must:
+
+1. repair an existing Issue contract through `issue-maintenance-change-control`, or create a bounded
+   remediation Issue through `docs-to-issue` or `feature-breakdown`, as the source authority requires;
+2. make the Issue strict before pickup: bounded Scope, resolving Source Anchors, complete constraints,
+   and an Acceptance Criterion with a concrete `Verify:` target for every claimed outcome;
+3. select it as the next pickup, claim it through `issue-to-code` when it is ready, or continue the
+   already-claimed remediation; and
+4. resume the Delivery Procedure from the resulting next pickup.
+
+Escalate through `owner-decision-brief` only when the evidence verifies that a human authority,
+choice, credential, or external action is genuinely required. Record that authority need and the
+evidence in the maintenance receipt. A blocked slice may pause while that decision is pending, but a
+plain “reported the blocker” update is not delivery completion.
+
+The only valid final states for a reparable blocker are an active/next claimed remediation, a strict
+ready Issue with an explicit next pickup owner when a claim cannot yet run, or a verified
+human-authority stop. Do not use this gate to invent scope: if source authority cannot support a
+bounded remediation, record that fact and follow the normal maintenance or Human Exception route.
 
 ## Scope Resolution
 

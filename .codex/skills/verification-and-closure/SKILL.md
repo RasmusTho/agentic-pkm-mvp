@@ -43,6 +43,25 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 - merge state if already merged
 - current `origin/main` / target-base reachability for any resumed, chained, or review-repair work
 
+## Pre-API startup failure classification
+
+When a validation attempt fails before the API starts accepting requests (for example, before the
+service listens, reports ready, or can answer its first API health check), classify the failure first
+as **channel-bootstrap/configuration work**, not as a verified feature failure. Preserve the concrete
+startup evidence and determine whether the failure is in deploy environment selection, Compose
+wiring, mounts, channel binding, or another bootstrap prerequisite.
+
+- Do not mark the feature acceptance criterion failed, delivered, or impossible solely from a
+  pre-API startup failure. Its feature proof is still unverified.
+- If the startup evidence implicates the changed feature path after bootstrap/configuration is known
+  good, reclassify it as a feature failure and repair it through the governing Issue.
+- If a small, source-authorized bootstrap/configuration remediation exists, route it through
+  `deliver-issue-set :: No-progress final gate`: create or repair a strict Issue with `Verify:`
+  targets, claim or continue that next pickup, and resume delivery. Do not end with a blocker report.
+- Escalate only when the bootstrap evidence establishes a genuine human-authority need; otherwise use
+  the existing issue-maintenance and delivery paths. This classification does not authorize deploy,
+  image, pin, or runtime changes by itself.
+
 ## Validation Rules
 
 - Compare code and docs to the governing issue's `Scope`, `Source Anchors`, `Constraints`, `Acceptance Criteria`, and `Suggested Validation`
