@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, Tuple
@@ -87,11 +89,57 @@ def _merge_sections(sections: Dict[str, Any]) -> Dict[str, Any]:
     return merged
 
 
-def dump(relative: str, payload: Dict[str, Any]) -> None:
-    target = RUNTIME / relative
+def dump(runtime_dir: Path, relative: str, payload: Dict[str, Any]) -> None:
+    target = runtime_dir / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("w", encoding="utf-8") as handle:
         yaml.safe_dump(payload, handle, allow_unicode=True, sort_keys=True)
+
+
+def _new_staged_runtime_dir() -> Path:
+    """Create a sibling directory so its symlink can be published atomically."""
+    RUNTIME.parent.mkdir(parents=True, exist_ok=True)
+    return Path(
+        tempfile.mkdtemp(prefix=f".{RUNTIME.name}.staged-", dir=RUNTIME.parent)
+    )
+
+
+def _publish_staged_runtime(staged_dir: Path) -> None:
+    """Atomically switch a complete staged projection into place.
+
+    The stable runtime path is a symlink after its first successful publish.  A
+    later publish replaces that symlink in one ``os.replace`` call, so readers
+    observe either the old complete projection or the new complete projection,
+    never a mixture.  A legacy real directory is converted only after all
+    compilation and specialised validation succeeded.
+    """
+    link = RUNTIME.parent / f".{RUNTIME.name}.next"
+    link.unlink(missing_ok=True)
+    link.symlink_to(staged_dir.name)
+
+    if RUNTIME.is_symlink():
+        previous_dir = RUNTIME.resolve()
+        os.replace(link, RUNTIME)
+        if previous_dir != staged_dir:
+            shutil.rmtree(previous_dir, ignore_errors=True)
+        return
+
+    # Existing checkouts may still hold a real runtime/settings directory.  Do
+    # not touch it until a complete replacement has been staged and validated.
+    # The first conversion needs two filesystem operations because POSIX cannot
+    # atomically replace a non-empty directory with a symlink; all subsequent
+    # publications use the atomic path above.
+    previous = RUNTIME.parent / f".{RUNTIME.name}.previous"
+    previous.unlink(missing_ok=True)
+    if RUNTIME.exists():
+        os.replace(RUNTIME, previous)
+    try:
+        os.replace(link, RUNTIME)
+    except Exception:
+        if previous.exists():
+            os.replace(previous, RUNTIME)
+        raise
+    shutil.rmtree(previous, ignore_errors=True)
 
 def _auto_heal_enabled(auto_heal: bool | None) -> bool:
     if auto_heal is not None:
@@ -315,7 +363,6 @@ def compile_all(
     # ``vault/@Settings`` convention; callers that omit it keep the existing default.
     settings_dir = vault_dir if vault_dir is not None else VAULT
     auto_heal_enabled = _auto_heal_enabled(auto_heal)
-    RUNTIME.mkdir(parents=True, exist_ok=True)
     vault_root = settings_dir.parent
     file_sections: Dict[str, Dict[str, Any]] = {}
     file_paths: Dict[str, Path] = {}
@@ -414,38 +461,37 @@ def compile_all(
             agents_cfg[agent_name] = resolve_secret(merged)
     bundle.agents = agents_cfg
 
-    dump("global.yaml", bundle.global_.model_dump())
-    dump("providers.yaml", bundle.providers.model_dump())
-    dump("llm_routing.yaml", bundle.llm_routing.model_dump())
-    dump("instance.yaml", bundle.instance.model_dump())
-    if bundle.yggdrasil_paths is not None:
-        dump("yggdrasil.yaml", bundle.yggdrasil_paths.model_dump())
-
-    agents_output_dir = RUNTIME / "agents"
-    existing_agent_files = {
-        path.stem: path for path in agents_output_dir.glob("*.yaml")
-    } if agents_output_dir.exists() else {}
-    stale_files = [
-        path for stem, path in existing_agent_files.items() if stem not in bundle.agents
-    ]
-    for stale in stale_files:
-        try:
-            stale.unlink()
-        except FileNotFoundError:
-            pass
-
-    for name, settings in bundle.agents.items():
-        payload = settings.model_dump() if hasattr(settings, "model_dump") else settings
-        dump(f"agents/{name}.yaml", payload)
-
+    # Validate every specialised source before creating or replacing any runtime
+    # projection.  A bad watcher/panel source must leave the last valid files
+    # readable by a fresh process as well as by the current in-memory process.
     panel_actions_settings = load_panel_actions_settings()
-    dump("panel_actions.yaml", _panel_actions_payload(panel_actions_settings))
     # Keep the watcher-specific settings loader on the same selected vault as
     # the generic and agent source compilation above.  Otherwise a
     # channel-scoped VAULT_ROOT_DEV/TEST could silently retain its default
     # auto-exec policy while the rest of the bundle came from this vault.
     watcher_settings = load_watcher_settings(vault_root=vault_root)
-    dump("watchers.yaml", _watcher_settings_payload(watcher_settings))
+
+    staged_runtime = _new_staged_runtime_dir()
+    try:
+        dump(staged_runtime, "global.yaml", bundle.global_.model_dump())
+        dump(staged_runtime, "providers.yaml", bundle.providers.model_dump())
+        dump(staged_runtime, "llm_routing.yaml", bundle.llm_routing.model_dump())
+        dump(staged_runtime, "instance.yaml", bundle.instance.model_dump())
+        if bundle.yggdrasil_paths is not None:
+            dump(staged_runtime, "yggdrasil.yaml", bundle.yggdrasil_paths.model_dump())
+        for name, settings in bundle.agents.items():
+            payload = settings.model_dump() if hasattr(settings, "model_dump") else settings
+            dump(staged_runtime, f"agents/{name}.yaml", payload)
+        dump(
+            staged_runtime,
+            "panel_actions.yaml",
+            _panel_actions_payload(panel_actions_settings),
+        )
+        dump(staged_runtime, "watchers.yaml", _watcher_settings_payload(watcher_settings))
+        _publish_staged_runtime(staged_runtime)
+    except Exception:
+        shutil.rmtree(staged_runtime, ignore_errors=True)
+        raise
 
     fingerprint = hashlib.sha256(
         yaml.safe_dump(bundle.model_dump(), sort_keys=True).encode("utf-8")

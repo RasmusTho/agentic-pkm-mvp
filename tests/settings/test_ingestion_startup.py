@@ -168,6 +168,32 @@ def test_invalid_settings_degrade_loud(sandbox_sources: Path) -> None:
     assert runtime.get_settings_bundle().global_.log_level == "DEBUG"
 
 
+def test_late_specialized_validation_keeps_prior_projection_for_fresh_process(
+    sandbox_sources: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bad specialised source cannot publish a partial generic projection."""
+    global_source = sandbox_sources / "global.md"
+    global_source.write_text(_source_md("DEBUG"), encoding="utf-8")
+    assert ingest_settings(reason="valid_projection").state == STATE_OK
+
+    # ``global.md`` would compile to WARNING, but malformed watcher frontmatter
+    # fails only in the specialised loader, after generic settings are hydrated.
+    global_source.write_text(_source_md("WARNING"), encoding="utf-8")
+    (sandbox_sources / "watchers.md").write_text(
+        "---\nauto_run: [unterminated\n---\n# Watcher settings\n",
+        encoding="utf-8",
+    )
+    result = handle_settings_source_delta(rel_path=Path("@Settings/watchers.md"))
+
+    assert result.reloaded is False
+    assert get_settings_ingestion_state().state == STATE_DEGRADED
+    # Simulate a fresh service process with no in-memory last-valid bundle.  It
+    # reads the previously published complete projection, not the partial WARNING
+    # generic file from the failed compilation attempt.
+    monkeypatch.setattr(runtime, "_CURRENT", None)
+    assert runtime.get_settings_bundle().global_.log_level == "DEBUG"
+
+
 def test_watcher_degraded_signal_does_not_give_fresh_process_a_last_valid_bundle(
     sandbox_sources: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
