@@ -5,8 +5,8 @@ Owner: BuilderOps governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: app/builderops, app/cli/builderops.py, ADR-0010, BuilderOps object model
-Last reviewed: 2026-06-01
-Last verified against: issues #1501/#1502/#1507/#1508
+Last reviewed: 2026-07-14
+Last verified against: issues #1501/#1502/#1507/#1508/#3686
 
 # BuilderOps Vault Store and CLI
 
@@ -72,8 +72,13 @@ or transitioned.
 Default state path:
 
 ```text
-runtime/builderops/builderops.sqlite3
+~/.local/state/builderops/builderops.sqlite3
 ```
+
+The default expands to an absolute, host-stable path in the current user's home directory. It is
+independent of the process working directory, so agents launched from separate checkouts or
+worktrees on the same host share one SQLite database and one lease table. The store remains
+single-host; this default does not add cross-host coordination.
 
 Override mechanisms:
 
@@ -85,8 +90,14 @@ Override mechanisms:
 - API/tool callers may set `builderops_db_path` through tool settings or `BUILDEROPS_DB_PATH`
   through the environment; see `docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md`.
 
-The default path is repo-local runtime state and is ignored by Git via `runtime/builderops/`. It is
-not `$CODEX_HOME`, not local hidden memory, not repo authority, and not a reviewed docs surface.
+The default path is machine-local operating-plane state outside repository checkouts. It is not
+`$CODEX_HOME`, not runtime/user memory, not repo authority, and not a reviewed docs surface.
+Existing legacy stores under `<checkout>/runtime/builderops/` are not migrated, merged, deleted, or
+silently treated as the consolidated store by this code change. Before activating the new default
+on a host that has legacy per-worktree stores, the operator must stop BuilderOps writers, reconcile
+those stores, and select the consolidated database explicitly during the cutover. The existing
+`BUILDEROPS_DB_PATH` and `BUILDEROPS_STATE_DIR` overrides remain the supported way to pin that
+operator-selected path.
 
 ### Shared artifact vault and advisory claim signals
 
@@ -182,9 +193,10 @@ worktrees that regenerate checked-in projection views should set the intended st
 generator may fail loud before overwriting existing generated projections with records from an empty
 or incomplete worktree-local store.
 
-**Store durability and regen diff expectations:** The default store at `runtime/builderops/` is
-gitignored, machine-local, and mutable. It is not shared across devices, not preserved across
-worktree pruning, and not reproducible over time. Checked-in projections under
+**Store durability and regen diff expectations:** The default store at
+`~/.local/state/builderops/builderops.sqlite3` is machine-local and mutable. It is not shared across
+devices and is not reproducible over time. Unlike the former worktree-local default, worktree
+pruning does not remove it. Checked-in projections under
 `docs/generated/builderops/` are non-authoritative views over this ephemeral store; records that
 appear in a checked-in projection may be absent in the current local store after any store rotation,
 device change, or worktree lifecycle event. A regen diff — records appearing or disappearing between

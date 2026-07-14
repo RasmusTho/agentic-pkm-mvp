@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from app.builderops.config import DEFAULT_DB_NAME, DEFAULT_STATE_DIR
+
 DEFAULT_REPOS = ("RasmusTho/agentic-pkm-mvp", "RasmusTho/bifrost")
 DEFAULT_RATE_LIMIT_MIN = 25
 
@@ -283,10 +285,13 @@ def _signboard_export(
 def _builderops_db_path(root: Path, env: dict[str, str]) -> str:
     if env.get("BUILDEROPS_DB_PATH"):
         return env["BUILDEROPS_DB_PATH"]
-    state_dir = Path(env.get("BUILDEROPS_STATE_DIR", "runtime/builderops")).expanduser()
+    configured_state_dir = env.get("BUILDEROPS_STATE_DIR")
+    if configured_state_dir is None:
+        return str(DEFAULT_STATE_DIR / DEFAULT_DB_NAME)
+    state_dir = Path(configured_state_dir).expanduser()
     if not state_dir.is_absolute():
         state_dir = root / state_dir
-    return str(state_dir / "builderops.sqlite3")
+    return str(state_dir / DEFAULT_DB_NAME)
 
 
 def _project_reconciliation() -> dict[str, Any]:

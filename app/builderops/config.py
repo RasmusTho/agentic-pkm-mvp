@@ -6,7 +6,10 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_STATE_DIR = Path("runtime/builderops")
+# The BuilderOps store coordinates every agent running as this user on one
+# host. Keep its implicit location outside repository checkouts so separate
+# worktrees cannot accidentally create independent lease tables.
+DEFAULT_STATE_DIR = Path.home() / ".local" / "state" / "builderops"
 DEFAULT_DB_NAME = "builderops.sqlite3"
 
 

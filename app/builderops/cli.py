@@ -273,7 +273,10 @@ def _handle_create(
     "--db-path",
     type=click.Path(dir_okay=False, path_type=Path),
     default=None,
-    help="Override BuilderOps SQLite DB path. Defaults to BUILDEROPS_DB_PATH or runtime/builderops/builderops.sqlite3.",
+    help=(
+        "Override BuilderOps SQLite DB path. Defaults to BUILDEROPS_DB_PATH "
+        "or the host-stable ~/.local/state/builderops/builderops.sqlite3."
+    ),
 )
 @click.pass_context
 def builderops(ctx: click.Context, db_path: Path | None) -> None:
