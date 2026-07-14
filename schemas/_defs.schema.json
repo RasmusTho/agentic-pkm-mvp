@@ -167,7 +167,8 @@
         "remember",
         "mutate",
         "execute",
-        "export"
+        "export",
+        "episode_fuse"
       ]
     },
     "admissibility_status": {

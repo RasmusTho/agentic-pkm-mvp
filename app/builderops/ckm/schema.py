@@ -13,7 +13,7 @@ schema level, not only in application code.
 
 from __future__ import annotations
 
-CKM_SCHEMA_VERSION = 1
+CKM_SCHEMA_VERSION = 2
 
 CKM_TABLE_NAMES = (
     "ckm_capability",
@@ -21,6 +21,7 @@ CKM_TABLE_NAMES = (
     "ckm_evidence_edge",
     "ckm_assessment",
     "ckm_finding",
+    "ckm_watermark",
 )
 
 CKM_DDL_STATEMENTS = [
@@ -71,9 +72,10 @@ CKM_DDL_STATEMENTS = [
         provider TEXT,
         lifecycle TEXT NOT NULL CHECK (lifecycle IN ('candidate', 'confirmed')),
         source_ref TEXT NOT NULL,
+        basis TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        UNIQUE (artifact_id, capability_id, evidence_kind, maturity_dimension)
+        UNIQUE (artifact_id, capability_id, basis)
     )
     """,
     """
@@ -128,5 +130,12 @@ CKM_DDL_STATEMENTS = [
     """
     CREATE INDEX IF NOT EXISTS idx_ckm_finding_capability
     ON ckm_finding(capability_id)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ckm_watermark (
+        source TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
     """,
 ]

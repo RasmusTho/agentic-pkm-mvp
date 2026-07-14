@@ -13,7 +13,7 @@ from typing import Any
 import yaml
 
 from app.episodes.schema import validate_episode_note_fields
-from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
+from scripts.yaml_roundtrip import dump_frontmatter
 
 ARTIFACT_CLASS = "episode_note"
 
@@ -44,14 +44,7 @@ def episode_note_rel_path(episode_id: str) -> str:
     return f"{EPISODE_NOTES_DIR}/{episode_id}.md"
 
 
-def render_episode_note(fields: dict[str, Any]) -> str:
-    """Render an episode note: YAML frontmatter (the schema-validated source of truth)
-    plus a short human-readable body."""
-    fm: dict[str, Any] = {"artifact_class": ARTIFACT_CLASS}
-    for name in _FRONTMATTER_FIELDS:
-        if name in fields:
-            fm[name] = fields[name]
-
+def _canonical_body(fields: dict[str, Any]) -> str:
     time_fields = fields.get("time") or {}
     lines: list[str] = [
         f"# Episode: {fields.get('title', '')}",
@@ -66,14 +59,58 @@ def render_episode_note(fields: dict[str, Any]) -> str:
         "rebuildable query index only, never authoritative.",
         "",
     ]
-    body = "\n".join(lines).rstrip() + "\n"
-    return dump_frontmatter(fm, body)
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_episode_note(fields: dict[str, Any], *, body: str | None = None) -> str:
+    """Render an episode note: YAML frontmatter (the schema-validated source of truth)
+    plus a short human-readable body.
+
+    ``body`` is an explicit preservation path for an existing human-edited body. New notes and
+    notes whose body is still machine-generated use the canonical body derived from ``fields``.
+    """
+    fm: dict[str, Any] = {"artifact_class": ARTIFACT_CLASS}
+    for name in _FRONTMATTER_FIELDS:
+        if name in fields:
+            fm[name] = fields[name]
+
+    if body is None:
+        return dump_frontmatter(fm, _canonical_body(fields))
+
+    # ``body`` is the exact suffix after the closing frontmatter delimiter, including its
+    # leading/trailing newlines. Rebuild only the YAML prefix so formatting-only human edits are
+    # not normalized away by ``dump_frontmatter``.
+    frontmatter_only = dump_frontmatter(fm, "").rstrip("\n")
+    return frontmatter_only + body
+
+
+def parse_episode_note_document(text: str) -> tuple[dict[str, Any], str]:
+    """Parse schema fields and the exact raw suffix after the frontmatter delimiter."""
+    data = _strict_episode_frontmatter(text)
+    body = _raw_episode_body(text)
+    fields = {name: data[name] for name in _FRONTMATTER_FIELDS if name in data}
+    return fields, body
+
+
+def _raw_episode_body(text: str) -> str:
+    """Return the exact suffix after a standalone closing delimiter line."""
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].rstrip("\r\n") != "---":
+        return text
+    offset = len(lines[0])
+    for line in lines[1:]:
+        if line.rstrip("\r\n") == "---":
+            # Preserve the delimiter line ending as the body's leading separator so
+            # render_episode_note can concatenate it to its frontmatter-only prefix.
+            return text[offset + 3 :]
+        offset += len(line)
+    raise EpisodeFrontmatterParseError("unterminated episode frontmatter")
 
 
 def parse_episode_note(text: str) -> dict[str, Any]:
     """Parse an episode note's frontmatter back into its situation-model fields."""
-    data, _body = load_frontmatter(text)
-    return {name: data[name] for name in _FRONTMATTER_FIELDS if name in data}
+    fields, _body = parse_episode_note_document(text)
+    return fields
 
 
 def parse_validated_episode_note(text: str) -> dict[str, Any]:
@@ -114,6 +151,7 @@ __all__ = [
     "EPISODE_NOTES_DIR",
     "episode_note_rel_path",
     "parse_episode_note",
+    "parse_episode_note_document",
     "parse_validated_episode_note",
     "render_episode_note",
 ]

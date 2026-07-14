@@ -570,6 +570,48 @@ def test_janitor_plan_skips_locked_worktree(tmp_path, monkeypatch) -> None:
     assert report["preservation_receipts"][0]["action"] == "preserve"
 
 
+def test_janitor_plan_preserves_locked_missing_worktree(tmp_path, monkeypatch) -> None:
+    missing_locked_worktree = tmp_path / "missing-locked"
+
+    def fake_run_git(args: list[str], _cwd: Path) -> str:
+        if args == ["branch", "--show-current"]:
+            return "main"
+        if args == ["rev-parse", "--show-toplevel"]:
+            return str(tmp_path)
+        if args == ["worktree", "list", "--porcelain"]:
+            return (
+                f"worktree {tmp_path}\nHEAD abc\nbranch refs/heads/main\n\n"
+                f"worktree {missing_locked_worktree}\nHEAD def\nbranch refs/heads/codex/locked-missing\nlocked active Claude session\n\n"
+            )
+        if args == ["for-each-ref", "--format=%(refname:short)", "refs/heads"]:
+            return "main\ncodex/locked-missing"
+        if args == ["for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"]:
+            return ""
+        if args in (["stash", "list", "--date=unix"], ["worktree", "prune", "--dry-run"], ["remote", "prune", "origin", "--dry-run"]):
+            return ""
+        raise AssertionError(f"unexpected git command: {args}")
+
+    monkeypatch.setattr(git_hygiene, "run_git", fake_run_git)
+    monkeypatch.setattr(git_hygiene, "_is_ancestor", lambda *_args: True)
+
+    report = git_hygiene.build_janitor_plan(
+        tmp_path, pr_states={"codex/locked-missing": {"state": "MERGED"}}
+    )
+
+    assert report["orphaned_worktrees"] == []
+    assert report["reclaimable_worktrees"] == []
+    assert report["preservation_receipts"] == [
+        {
+            "artifact": "worktree",
+            "path": str(missing_locked_worktree),
+            "branch": "codex/locked-missing",
+            "reason": "locked_worktree",
+            "action": "preserve",
+            "next_action": "preserve the lock; verify the owning session before any cleanup",
+        }
+    ]
+
+
 def test_janitor_plan_remote_merged_branch_is_delete_candidate(
     tmp_path, monkeypatch
 ) -> None:

@@ -86,6 +86,68 @@ def test_upsert_idempotent_and_rebuild(store: CkmStore) -> None:
     assert store.list_artifacts() == []
 
 
+def test_schema_migrates_edge_basis_without_losing_rows(tmp_path: Path) -> None:
+    store = CkmStore(tmp_path / "builderops.sqlite3")
+    store.ensure_schema()
+    capability = _upsert_capability(store)
+    artifact = _upsert_artifact(store)
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute("DROP TABLE ckm_evidence_edge")
+        conn.execute(
+            """
+            CREATE TABLE ckm_evidence_edge (
+                id TEXT PRIMARY KEY,
+                artifact_id TEXT NOT NULL REFERENCES ckm_artifact(id),
+                capability_id TEXT NOT NULL REFERENCES ckm_capability(id),
+                evidence_kind TEXT NOT NULL,
+                polarity TEXT NOT NULL,
+                maturity_dimension TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                extraction_method TEXT NOT NULL,
+                model TEXT,
+                provider TEXT,
+                lifecycle TEXT NOT NULL,
+                source_ref TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (artifact_id, capability_id, evidence_kind, maturity_dimension)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO ckm_evidence_edge VALUES
+            (?, ?, ?, 'adr', 'supports', 'requirement_coverage', 0.9,
+             'deterministic', NULL, NULL, 'confirmed', ?, 't', 't')
+            """,
+            ("edge_legacy", artifact.id, capability.id, artifact.source_ref),
+        )
+        conn.execute(
+            """
+            INSERT INTO ckm_evidence_edge VALUES
+            (?, ?, ?, 'doc', 'supports', 'documentation_quality', 0.8,
+             'deterministic', NULL, NULL, 'confirmed', ?, 't', 't')
+            """,
+            ("edge_legacy_second", artifact.id, capability.id, artifact.source_ref),
+        )
+        conn.commit()
+
+    store.ensure_schema()
+
+    edges = store.list_evidence_edges()
+    assert {edge.id for edge in edges} == {"edge_legacy", "edge_legacy_second"}
+    assert len({edge.basis for edge in edges}) == 2
+    assert all(edge.source_ref == artifact.source_ref for edge in edges)
+    with sqlite3.connect(store.db_path) as conn:
+        indexes = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ckm_evidence_edge'"
+            )
+        }
+    assert {"idx_ckm_evidence_edge_capability", "idx_ckm_evidence_edge_artifact"} <= indexes
+
+
 # --- AC: provenance-bearing NOT NULL columns ---------------------------------
 
 

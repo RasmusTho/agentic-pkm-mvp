@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
-import requests
+import requests  # type: ignore[import-untyped]  # third-party lib ships no type stubs
 
 from app.builderops.model_inquiry_contract import canonical_hash, canonical_json
 from app.builderops.models import BuilderOpsValidationError

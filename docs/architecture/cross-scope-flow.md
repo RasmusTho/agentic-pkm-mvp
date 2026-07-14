@@ -5,8 +5,8 @@ Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: canonical (CrossScopeFlow model); subordinate to doctrine, ontology, semantic dimensions
-Last reviewed: 2026-06-26
-Last verified against: docs/foundation/00-yggdrasil-doctrine.md, docs/architecture/functional-ontology.md, docs/architecture/semantic-dimensions.md, docs/foundation/yggdrasil-architecture-context-packet.md
+Last reviewed: 2026-07-13
+Last verified against: schemas/_defs.schema.json, app/episodes/cross_scope_fusion.py, docs/EPISODE_RESOLUTION_ENGINE/GATE_CROSS_SCOPE_FUSION.md
 
 # Mimer CrossScopeFlow
 
@@ -59,7 +59,7 @@ constitute governed transitions.
 
 Cross-scope use is **not** one permission. Each operation is separately granted. In particular:
 
-> `retrieve` ≠ `surface` ≠ `cite` ≠ `import` ≠ `remember` ≠ `mutate` ≠ `execute` ≠ `export`
+> `retrieve` ≠ `surface` ≠ `cite` ≠ `import` ≠ `remember` ≠ `mutate` ≠ `execute` ≠ `export` ≠ `episode_fuse`
 
 | Operation | Meaning | Granting one does NOT grant |
 | --- | --- | --- |
@@ -71,9 +71,10 @@ Cross-scope use is **not** one permission. Each operation is separately granted.
 | `mutate` | Change accepted durable knowledge in the target scope. | self-authorization — requires a governed Authority Transition. |
 | `execute` | Perform an authorized side effect informed by cross-scope material. | authorization — execution cannot authorize itself. |
 | `export` | Send material outside the system/scope boundary entirely. | any of the above; export is its own high-sensitivity grant. |
+| `episode_fuse` | Construct one Episode spanning the source and target scopes under an explicit episode-fusion grant. | automatic fusion or any other cross-scope operation; absent an explicit directional grant, Episodes remain split per scope. |
 
 Because the operations are independent, a flow that allows `retrieve` + `surface` as `background`
-does **not** permit `cite`, `import`, `remember`, `mutate`, `execute`, or `export`.
+does **not** permit `cite`, `import`, `remember`, `mutate`, `execute`, `export`, or `episode_fuse`.
 
 ## 3. The general_knowledge anti-bypass rule
 

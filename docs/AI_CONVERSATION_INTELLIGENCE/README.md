@@ -1,6 +1,6 @@
-State: Active advisory research specification for parent validation hub #3194. No runtime capability, adapter, ingestion path, schema, or product decision is enacted.
+State: Completed advisory research specification for parent validation hub #3194; parent closure remains a post-merge lifecycle action. No runtime capability, adapter, ingestion path, schema, ADR, or product decision is enacted.
 Doc role: Target-state research specification directory
-Authority: Owns the delivered privacy and adapter-research baselines and the remaining bounded research sequence under #3194; subordinate to current Product owner docs, boundary charters, contracts, and any later accepted ADR.
+Authority: Owns the completed seven-child advisory research sequence and no-ADR outcome under #3194; subordinate to current Product owner docs, boundary charters, contracts, and any later accepted ADR.
 Owner: AI Conversation Intelligence research roadmap (#3194)
 Temporal class: strategic
 Review cadence: event-driven
@@ -11,8 +11,8 @@ Last reviewed: 2026-07-13
 
 ## Capability boundary
 
-This directory specifies the remaining research needed to decide whether and how externally stored
-AI conversations may become provenance-bound candidate material in Yggdrasil. It does not authorize
+This directory records the completed research that was needed to decide whether and how externally
+stored AI conversations might become provenance-bound candidate material in Yggdrasil. It does not authorize
 acquisition, ingestion, normalization, memory promotion, HKA mutation, provider authentication, or
 runtime implementation.
 
@@ -23,17 +23,17 @@ The already delivered inputs are:
 - [knowledge taxonomy](../research/AI_CONVERSATION_INTELLIGENCE_KNOWLEDGE_TAXONOMY.md) (#3197).
 - [privacy, security, and data-ownership baseline](../research/AI_CONVERSATION_INTELLIGENCE_PRIVACY_SECURITY_AND_DATA_OWNERSHIP.md) (#3595).
 - [adapter architecture options](../research/AI_CONVERSATION_INTELLIGENCE_ADAPTER_ARCHITECTURE_OPTIONS.md) (#3596).
+- [feasibility prototype scope](../research/AI_CONVERSATION_INTELLIGENCE_FEASIBILITY_PROTOTYPE_SCOPE.md) (#3597).
+- [research summary and decision gate](../research/AI_CONVERSATION_INTELLIGENCE_RESEARCH_SUMMARY.md) (#3598; no ADR authored).
 
-## Remaining research tasks and execution order
+## Completed research tasks and execution order
 
-1. [Feasibility prototype scope](FEASIBILITY_PROTOTYPE_SCOPE.md) — define a docs-only, zero-write
-   experiment with measurable stop/go criteria.
-2. [Research summary and decision gate](RESEARCH_SUMMARY_AND_DECISION_GATE.md) — reconcile all
-   research, publish the bounded implementation backlog, and author an ADR only if a real decision
-   is mature and authorized.
+The serial sequence is complete. The final [research summary and decision gate](RESEARCH_SUMMARY_AND_DECISION_GATE.md)
+reconciles all research, explicitly defers or discards future work, and records that no ADR is mature
+or authorized.
 
-The remaining tasks are serial. The delivered privacy/ownership and adapter-research baselines
-constrain the prototype; all prior evidence is required before synthesis or an ADR decision.
+The feasibility scope is delivered but no experiment has run. None of the seven artifacts grants
+runtime or acquisition authority.
 
 ## Cross-task invariants / interaction safety
 
@@ -70,12 +70,12 @@ decision or evidence without inventing a ruling.
 
 ## Relationship to GitHub issues
 
-- Parent validation hub: #3194 (`agent:blocked` while children remain).
-- Delivered research: #3195, #3196, #3197, #3595 (privacy/security/data ownership), and #3596
-  (adapter architecture options).
-- Remaining children: #3597 (feasibility prototype scope) and #3598 (research summary/ADR gate).
-  They proceed serially; each becomes eligible for strict readiness
-  only after its predecessor is delivered and its parent receipt is verified.
+- Parent validation hub: #3194 (remains blocked only until final post-merge receipts, run-state, and
+  parent-closure checks pass).
+- Delivered research: #3195, #3196, #3197, #3595 (privacy/security/data ownership), #3596
+  (adapter architecture options), and #3597 (feasibility prototype scope; no experiment executed).
+- Final delivered child: #3598 (research summary/ADR gate; advisory no-ADR outcome). Parent closure is
+  a separate post-merge lifecycle action and does not authorize any deferred capability.
 
 ## Non-goals
 

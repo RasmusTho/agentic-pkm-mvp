@@ -9,6 +9,19 @@ from app.write_guard import DEFAULT_WRITE_GUARD
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 
+def _new_note_uuid() -> str:
+    """Allocate a fresh note-identity UUID.
+
+    This is the single, single-purpose allocation seam for a *note's* identity
+    (#3622). Infrastructure UUIDs generated elsewhere on the write path — e.g.
+    the knowledge adapter's ``.rewrite-swap`` staging name and the
+    ``concurrent-save-*`` conflict-artifact writer identity — are a separate
+    concern and are deliberately not routed through here, so a test that counts
+    note-identity allocations by patching this seam is not confounded by them.
+    """
+    return str(uuid.uuid4())
+
+
 def ensure_note_uuid(path: Path, *, vault_root: Path | str, preferred_uuid: str | None = None) -> str:
     resolved = Path(path).resolve()
     root = Path(vault_root).expanduser().resolve()
@@ -21,7 +34,7 @@ def ensure_note_uuid(path: Path, *, vault_root: Path | str, preferred_uuid: str 
 
     candidate = str(preferred_uuid or "").strip()
     if not candidate:
-        candidate = str(uuid.uuid4())
+        candidate = _new_note_uuid()
     frontmatter["uuid"] = candidate
     DEFAULT_WRITE_GUARD.assert_writes_allowed("ensure uuid")
     write_note_from_absolute(

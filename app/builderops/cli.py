@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, cast
 
@@ -25,6 +26,15 @@ from app.builderops.ckm_reevaluation import (
     build_ckm_reevaluation_report,
 )
 from app.builderops.ckm.models import CkmValidationError
+from app.builderops.ckm.ingest_github import ingest_github
+from app.builderops.ckm.ingest_repo import ingest_repo
+from app.builderops.ckm.linkers import link_deterministic
+from app.builderops.ckm.semantic import (
+    SemanticAssociationError,
+    _confirm_edge_from_cli,
+    associate_unlinked_artifacts,
+    reapply_confirmation_receipts,
+)
 from app.builderops.ckm.seed import SeedManifestError, seed_capabilities
 from app.builderops.ckm.store import CkmStore
 from app.builderops.config import BuilderOpsPaths, load_paths
@@ -380,6 +390,96 @@ def ckm_seed(ctx: click.Context) -> None:
             "Seeding is idempotent; re-run `ckm seed` to resume from where it stopped."
         ) from exc
     click.echo(f"seeded {result['seeded']} capabilities, {result['changed']} changed")
+
+
+@ckm.command("ingest", help="Ingest repository and GitHub delivery artifacts into the CEG.")
+@click.option("--source", type=click.Choice(["repo", "github", "all"]), required=True)
+@click.option("--repo-root", type=click.Path(file_okay=False, path_type=Path), default=Path.cwd)
+@click.option("--git-limit", type=click.IntRange(1, 5000), default=500, show_default=True)
+@click.pass_context
+def ckm_ingest(ctx: click.Context, source: str, repo_root: Path, git_limit: int) -> None:
+    try:
+        store = _ckm_store(ctx)
+        result: dict[str, Any] = {}
+        if source in {"repo", "all"}:
+            result["repo"] = ingest_repo(store, repo_root, git_limit=git_limit)
+        if source in {"github", "all"}:
+            result["github"] = ingest_github(store)
+    except (OSError, ValueError, sqlite3.Error, subprocess.CalledProcessError) as exc:
+        raise click.ClickException(f"ckm ingestion failed: {exc}") from exc
+    if source == "github" and result["github"]["status"] != "ok":
+        click.echo(result["github"]["status"])
+        return
+    segments: list[str] = []
+    for name, data in result.get("repo", {}).items():
+        segments.append(f"{name}: {data['artifacts']} artifacts (+{data['changed']})")
+    github = result.get("github")
+    if github:
+        if github["status"] != "ok":
+            segments.append(github["status"])
+        else:
+            segments.extend(
+                f"github {name}: {data['artifacts']} artifacts (+{data['changed']})"
+                for name, data in (("issues", github["issues"]), ("pull_requests", github["pull_requests"]))
+            )
+    click.echo("; ".join(segments))
+
+
+@ckm.command("link", help="Create confirmed deterministic CKM evidence edges.")
+@click.option("--repo-root", type=click.Path(file_okay=False, path_type=Path), default=Path.cwd)
+@click.pass_context
+def ckm_link(ctx: click.Context, repo_root: Path) -> None:
+    try:
+        store = _ckm_store(ctx)
+        result = link_deterministic(store, repo_root)
+        confirmations_reapplied = reapply_confirmation_receipts(store)
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        raise click.ClickException(f"ckm linking failed: {exc}") from exc
+    click.echo(
+        "; ".join(
+            [f"{name}: {result[name]} new" for name in ("matrix", "spec", "adr", "test_code", "github_ref")]
+            + [
+                f"confirmations reapplied: {confirmations_reapplied}",
+                f"unlinked artifacts: {result['unlinked_artifacts']}",
+            ]
+        )
+    )
+
+
+@ckm.command("associate", help="Propose fenced inferred edges for unlinked CKM artifacts.")
+@click.option("--limit", type=click.IntRange(1, 1000), default=200, show_default=True)
+@click.option(
+    "--confidence-floor", type=click.FloatRange(0.0, 1.0), default=0.6, show_default=True
+)
+@click.pass_context
+def ckm_associate(ctx: click.Context, limit: int, confidence_floor: float) -> None:
+    try:
+        result = associate_unlinked_artifacts(
+            _ckm_store(ctx), limit=limit, confidence_floor=confidence_floor
+        )
+    except (SemanticAssociationError, CkmValidationError, sqlite3.Error) as exc:
+        raise click.ClickException(f"ckm semantic association failed: {exc}") from exc
+    if result.status != "ok":
+        click.echo(result.status)
+        return
+    provider_model = (
+        f"; model={result.provider}:{result.model}" if result.provider and result.model else ""
+    )
+    click.echo(
+        f"proposed {result.proposed} candidate edges; discarded {result.discarded} below floor; "
+        f"{result.no_match} no-match{provider_model}"
+    )
+
+
+@ckm.command("confirm-edge", help="Confirm one inferred candidate edge with a durable receipt.")
+@click.argument("edge_id")
+@click.pass_context
+def ckm_confirm_edge(ctx: click.Context, edge_id: str) -> None:
+    try:
+        receipt = _confirm_edge_from_cli(_ckm_store(ctx), edge_id)
+    except (CkmValidationError, sqlite3.Error) as exc:
+        raise click.ClickException(f"ckm edge confirmation failed: {exc}") from exc
+    click.echo(f"edge {edge_id} confirmed; receipt builderops://receipts/{receipt['id']}")
 
 
 @builderops.group("inquiry", help="Persist and inspect pre-ticket model inquiry artifacts.")

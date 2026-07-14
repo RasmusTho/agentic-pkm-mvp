@@ -35,6 +35,7 @@ CAPABILITY_LIFECYCLE_STATES = frozenset({"candidate", "confirmed", "deprecated"}
 ARTIFACT_KINDS = frozenset({
     "requirement",
     "adr",
+    "spec",
     "document",
     "source_file",
     "test",
@@ -241,6 +242,7 @@ class CkmEvidenceEdge:
     extraction_method: str
     lifecycle: str
     source_ref: str
+    basis: str
     created_at: str
     updated_at: str
     model: str | None = None
@@ -260,6 +262,7 @@ class CkmEvidenceEdge:
         if self.extraction_method == "inferred" and not (self.model and self.provider):
             raise CkmValidationError("inferred evidence edges require model and provider")
         _require_nonempty_str(self.source_ref, "source_ref")
+        _require_nonempty_str(self.basis, "basis")
         _require_nonempty_str(self.created_at, "created_at")
         _require_nonempty_str(self.updated_at, "updated_at")
         return self
@@ -279,6 +282,7 @@ class CkmEvidenceEdge:
             provider=row["provider"],
             lifecycle=row["lifecycle"],
             source_ref=row["source_ref"],
+            basis=row["basis"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -297,6 +301,7 @@ class CkmEvidenceEdge:
             "provider": self.provider,
             "lifecycle": self.lifecycle,
             "source_ref": self.source_ref,
+            "basis": self.basis,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -340,7 +345,14 @@ class CkmAssessment:
         return self
 
     @classmethod
-    def from_row(cls, row: Mapping[str, Any], *, scores, citations, watermark_set) -> "CkmAssessment":
+    def from_row(
+        cls,
+        row: Mapping[str, Any],
+        *,
+        scores: Mapping[str, float],
+        citations: Mapping[str, list[JsonDict]],
+        watermark_set: Mapping[str, str],
+    ) -> "CkmAssessment":
         return cls(
             id=row["id"],
             capability_id=row["capability_id"],

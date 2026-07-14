@@ -46,10 +46,11 @@ def ingest_screen_bundle(bundle: Mapping[str, Any], *, key: bytes | None = None)
     if shape not in {RAW_CAPTURE_BUNDLE, DERIVED_OBSERVATION}:
         raise ValueError("bundle_shape must be raw_capture_bundle or derived_observation")
     derived_payload = bundle.get("derived_observation")
-    if shape == DERIVED_OBSERVATION and not isinstance(derived_payload, Mapping):
-        raise ValueError("derived_observation bundles require a derived_observation mapping")
-    if shape == DERIVED_OBSERVATION and derived_payload.get("modality") != "screen":
-        raise ValueError("derived_observation modality must be screen")
+    if shape == DERIVED_OBSERVATION:
+        if not isinstance(derived_payload, Mapping):
+            raise ValueError("derived_observation bundles require a derived_observation mapping")
+        if derived_payload.get("modality") != "screen":
+            raise ValueError("derived_observation modality must be screen")
     sensor_data = bundle.get("sensor")
     if not isinstance(sensor_data, Mapping):
         raise ValueError("screen bundle requires sensor {adapter, version, machine}")
@@ -91,6 +92,7 @@ def ingest_screen_bundle(bundle: Mapping[str, Any], *, key: bytes | None = None)
         # The declared on-device path is still admitted through the same
         # guards, then handed directly to the canonical validated publish
         # seam.  It is not a second raw-store or observation writer.
+        assert isinstance(derived_payload, Mapping)  # guaranteed by the shape guard above
         payload = dict(derived_payload)
         provenance = dict(payload.get("provenance") or {})
         provenance.setdefault("content_identity", identity)

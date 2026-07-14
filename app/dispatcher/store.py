@@ -29,6 +29,8 @@ class DispatcherStore(Protocol):
         self, status: str | None = None, repo: str | None = None
     ) -> list[TaskRecord]: ...
     def list_events(self, task_id: str | None = None) -> list[EventRecord]: ...
+    def get_meta(self, key: str) -> str | None: ...
+    def set_meta(self, key: str, value: str) -> None: ...
 
 
 def _dumps(value: Any) -> str | None:
@@ -104,8 +106,34 @@ class SqliteStore:
             # Fresh DB: initialize() will create the table via DDL_STATEMENTS,
             # which already includes the repo column — nothing to migrate.
             return
-        if "repo" in {row["name"] for row in conn.execute("PRAGMA table_info(dispatcher_tasks)")}:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(dispatcher_tasks)")}
+        meta_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='dispatcher_meta'"
+        ).fetchone()
+        current_version = None
+        if meta_exists is not None:
+            row = conn.execute(
+                "SELECT value FROM dispatcher_meta WHERE key='schema_version'"
+            ).fetchone()
+            current_version = None if row is None else str(row["value"])
+        if "repo" in columns and current_version == str(SCHEMA_VERSION):
             return
+
+        # Only the original v1 layout is a supported migration source.  In
+        # particular, do not turn a database written by a newer dispatcher
+        # into the current schema merely because its version differs from
+        # ours: opening a future database must fail loudly and leave its
+        # recovery evidence untouched.  The first v1 release predated
+        # dispatcher_meta, so its absence is recognized only together with
+        # the v1-specific missing ``repo`` column.
+        is_unversioned_v1 = current_version is None and "repo" not in columns
+        if current_version not in {"1", str(SCHEMA_VERSION)} and not is_unversioned_v1:
+            version = "missing" if current_version is None else repr(current_version)
+            raise ValueError(f"unsupported dispatcher schema_version: {version}")
+        if current_version == str(SCHEMA_VERSION):
+            raise ValueError(
+                "dispatcher schema_version 2 is incompatible with the on-disk schema"
+            )
 
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -113,6 +141,28 @@ class SqliteStore:
             # completed this same migration between our check above and
             # acquiring the lock here.
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(dispatcher_tasks)")}
+            # The database may have changed while waiting for the write lock.
+            # Re-read its version under that lock before performing any DDL.
+            meta_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='dispatcher_meta'"
+            ).fetchone()
+            current_version = None
+            if meta_exists is not None:
+                row = conn.execute(
+                    "SELECT value FROM dispatcher_meta WHERE key='schema_version'"
+                ).fetchone()
+                current_version = None if row is None else str(row["value"])
+            is_unversioned_v1 = current_version is None and "repo" not in columns
+            if current_version not in {"1", str(SCHEMA_VERSION)} and not is_unversioned_v1:
+                version = "missing" if current_version is None else repr(current_version)
+                raise ValueError(f"unsupported dispatcher schema_version: {version}")
+            if current_version == str(SCHEMA_VERSION) and "repo" in columns:
+                conn.commit()
+                return
+            if current_version == str(SCHEMA_VERSION):
+                raise ValueError(
+                    "dispatcher schema_version 2 is incompatible with the on-disk schema"
+                )
             if "repo" not in columns:
                 conn.execute("ALTER TABLE dispatcher_tasks ADD COLUMN repo TEXT NOT NULL DEFAULT ''")
                 # The legacy task_id format (pre-multi-repo) had no repo
@@ -138,6 +188,12 @@ class SqliteStore:
                     WHERE task_id LIKE 'github-issue-%'
                     """
                 )
+            for stmt in DDL_STATEMENTS:
+                conn.execute(stmt)
+            conn.execute(
+                "INSERT OR REPLACE INTO dispatcher_meta(key, value) VALUES (?, ?)",
+                ("schema_version", str(SCHEMA_VERSION)),
+            )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -150,6 +206,24 @@ class SqliteStore:
             conn.execute(
                 "INSERT OR REPLACE INTO dispatcher_meta(key, value) VALUES (?, ?)",
                 ("schema_version", str(SCHEMA_VERSION)),
+            )
+            conn.commit()
+
+    # ----- coordination metadata -----
+
+    def get_meta(self, key: str) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM dispatcher_meta WHERE key = ?", (key,)
+            ).fetchone()
+        return None if row is None else str(row["value"])
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO dispatcher_meta(key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
             )
             conn.commit()
 
