@@ -2,18 +2,32 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from html import escape
 from pathlib import Path
 from typing import Mapping, Sequence
 
 from app.builderops.ckm.models import (
     MATURITY_DIMENSIONS,
+    CkmAssessment,
     CkmCapability,
     CkmEvidenceEdge,
     CkmFinding,
+    CkmAssessmentProjection,
     utc_now,
 )
 from app.builderops.ckm.store import CkmStore
+
+
+DIMENSION_LABELS = {
+    "functional_completeness": ("FUN", "functional completeness"),
+    "test_completeness": ("TST", "test completeness"),
+    "documentation_quality": ("DOC", "documentation quality"),
+    "integration_completeness": ("INT", "integration completeness"),
+    "operational_readiness": ("OPS", "operational readiness"),
+    "architectural_stability": ("ARC", "architectural stability"),
+    "requirement_coverage": ("REQ", "requirement coverage"),
+}
 
 
 def _e(value: object) -> str:
@@ -89,40 +103,53 @@ def _dimension_markup(
     candidate_share: float,
 ) -> str:
     percent = max(0.0, min(100.0, score * 100.0))
+    _, label = DIMENSION_LABELS[dimension]
+    starved = score == 0 and not citations
     citation_items = "".join(
         f"<li>{_e(_citation_source(citation))}</li>" for citation in citations
     ) or "<li>No selected citations.</li>"
+    low_conf = (
+        '<span class="flag flag-low">LOW CONF</span>' if candidate_share > 0.5 else ""
+    )
     return f"""
-      <section class="dimension" data-dimension="{_e(dimension)}">
-        <div class="dimension-label"><span>{_e(dimension.replace('_', ' '))}</span><strong>{score:.2f}</strong></div>
-        <div class="dimension-track" role="progressbar" aria-label="{_e(dimension)}" aria-valuemin="0" aria-valuemax="1" aria-valuenow="{score:.3f}">
+      <section class="dimension{' dimension-starved' if starved else ''}" data-dimension="{_e(dimension)}">
+        <div class="dimension-label"><span>{_e(label)}</span><strong>{score:.2f}</strong>{low_conf}</div>
+        <div class="dimension-track" role="progressbar" aria-label="{_e(label)}" aria-valuemin="0" aria-valuemax="1" aria-valuenow="{score:.3f}">
           <span class="dimension-bar" style="width:{percent:.1f}%"></span>
         </div>
         <small>{len(citations)} citation(s) · candidate share {candidate_share:.1%}</small>
-        <details class="citations"><summary>Citations</summary><ul>{citation_items}</ul></details>
+        <details class="citations"><summary>Citations — {_e(label)} ({len(citations)})</summary><ul>{citation_items}</ul></details>
       </section>"""
 
 
-def _mini_dimensions_markup(scores: Mapping[str, float] | None) -> str:
-    """Render the seven maturity dimensions in the always-visible card summary."""
-
-    bars = []
+def _mini_dimensions_markup(assessment: CkmAssessment | None) -> str:
+    cells: list[str] = []
+    aria_parts: list[str] = []
     for dimension in MATURITY_DIMENSIONS:
-        score = float(scores[dimension]) if scores is not None else None
-        percent = max(0.0, min(100.0, score * 100.0)) if score is not None else 0.0
-        label = (
-            f"{dimension.replace('_', ' ')}: {score:.2f}"
-            if score is not None
-            else f"{dimension.replace('_', ' ')}: not assessed"
-        )
-        bars.append(
-            f'<span class="mini-dimension{" mini-unknown" if score is None else ""}" '
-            f'title="{_e(label)}" aria-label="{_e(label)}" '
-            f'style="--score:{percent:.1f}%"></span>'
+        abbreviation, label = DIMENSION_LABELS[dimension]
+        if assessment is None:
+            aria_parts.append(f"{label} not assessed")
+            cells.append(
+                f'<span class="mini-dimension mini-unassessed" data-cell-state="unassessed" data-abbr="{abbreviation}" title="{_e(label)}: not assessed">—</span>'
+            )
+            continue
+        score = float(assessment.scores[dimension])
+        citations = assessment.citations[dimension]
+        percent = max(0.0, min(100.0, score * 100.0))
+        starved = score == 0 and not citations
+        state = "starved" if starved else "scored"
+        state_label = "evidence-starved" if starved else "scored"
+        aria_parts.append(f"{label} {score:.2f}, {len(citations)} citations")
+        cells.append(
+            f'<span class="mini-dimension mini-{state}" data-cell-state="{state_label}" '
+            f'title="{_e(label)}: {score:.2f}, {len(citations)} citations" '
+            f'data-abbr="{abbreviation}" style="--score:{percent:.1f}%"></span>'
         )
     return (
-        '<span class="mini-dimensions" aria-label="Seven-dimension maturity">'
-        + "".join(bars)
+        '<span class="mini-dimensions" role="img" aria-label="Seven-dimension maturity: '
+        + _e(", ".join(aria_parts))
+        + '">'
+        + "".join(cells)
         + "</span>"
     )
 
@@ -131,26 +158,47 @@ def _evidence_markup(edges: Sequence[CkmEvidenceEdge]) -> str:
     if not edges:
         return '<p class="empty">No linked evidence.</p>'
     items = []
-    for edge in sorted(edges, key=lambda item: (item.lifecycle, item.source_ref, item.id)):
+    order = {"candidate": 0, "confirmed": 1}
+    for edge in sorted(
+        edges, key=lambda item: (order.get(item.lifecycle, 2), item.source_ref, item.id)
+    ):
         items.append(
             f"""<li class="evidence evidence-{_e(edge.lifecycle)}">
-              <span class="badge">{_e(edge.lifecycle)}</span>
+              <span class="badge evidence-status">{_e(edge.lifecycle)}</span>
               <code>{_e(edge.evidence_kind)}</code> · {_e(edge.source_ref)}
               <div class="basis">Basis: {_e(edge.basis)}</div>
             </li>"""
         )
-    return f"<ul class=\"evidence-list\">{''.join(items)}</ul>"
+    return f'<ul class="evidence-list">{"".join(items)}</ul>'
 
 
 def _finding_markup(findings: Sequence[CkmFinding]) -> str:
     if not findings:
         return '<p class="empty">No current findings.</p>'
-    return "<ul class=\"finding-list\">" + "".join(
-        f"<li><span class=\"badge\">{_e(item.kind)}</span> "
-        f"<strong>{_e(item.dimension.replace('_', ' '))}</strong>: {_e(item.statement)} "
-        f"<small>({len(item.citations)} citation(s))</small></li>"
+    return '<ul class="finding-list">' + "".join(
+        f'<li><span class="badge">{_e(item.kind)}</span> '
+        f'<strong>{_e(item.dimension.replace("_", " "))}</strong>: {_e(item.statement)} '
+        f'<small>({len(item.citations)} citation(s))</small></li>'
         for item in findings
     ) + "</ul>"
+
+
+def _honesty_markup(
+    assessment: CkmAssessment | None,
+    projection: CkmAssessmentProjection | None,
+) -> str:
+    if assessment is None:
+        return (
+            '<aside class="honesty"><p>Assessment is unavailable; unavailable is not a zero score.</p>'
+            '<p>candidate share unavailable.</p></aside>'
+        )
+    stale = bool(projection and projection.stale_relative_to_evidence)
+    max_share = max(float(value) for value in assessment.candidate_shares.values())
+    return (
+        '<aside class="honesty"><p>Assessment is available.</p><p>Assessment is '
+        + ("stale relative to current evidence." if stale else "current with known evidence.")
+        + f"</p><p>Maximum candidate-evidence share is {max_share:.1%}.</p></aside>"
+    )
 
 
 def _capability_markup(
@@ -166,21 +214,25 @@ def _capability_markup(
     projection = store.assessment_for_projection(capability.id) if assessment else None
     aggregate = float(assessment.aggregate) if assessment else None
     band = _band(aggregate)
-    flags: list[str] = []
+    summary_flags: list[str] = []
     if projection and projection.stale_relative_to_evidence:
-        flags.append('<span class="flag flag-stale">STALE relative to evidence</span>')
-    if assessment and assessment.low_confidence:
-        flags.append('<span class="flag flag-low">LOW CONFIDENCE</span>')
-    if assessment:
-        max_candidate_share = max(assessment.candidate_shares.values())
-        flags.append(
-            f'<span class="flag flag-candidate">candidate share {max_candidate_share:.1%}</span>'
+        summary_flags.append(
+            '<span class="flag flag-stale">STALE relative to evidence</span>'
         )
-    else:
-        flags.append('<span class="flag flag-candidate">candidate share unavailable</span>')
-    dimensions = ""
+    if assessment and assessment.low_confidence:
+        summary_flags.append('<span class="flag flag-low">LOW CONFIDENCE</span>')
     if assessment:
-        dimensions = "".join(
+        max_candidate_share = max(float(v) for v in assessment.candidate_shares.values())
+        if max_candidate_share > 0:
+            summary_flags.append(
+                f'<span class="flag flag-candidate">CAND {max_candidate_share:.1%}</span>'
+            )
+    if findings:
+        summary_flags.append(
+            f'<a class="flag gap-link" href="#gaps-{_e(capability.id)}">{len(findings)} gap{"s" if len(findings) != 1 else ""}</a>'
+        )
+    dimensions = (
+        "".join(
             _dimension_markup(
                 dimension,
                 float(assessment.scores[dimension]),
@@ -189,28 +241,63 @@ def _capability_markup(
             )
             for dimension in MATURITY_DIMENSIONS
         )
-    else:
-        dimensions = '<p class="empty">Assessment missing.</p>'
-    aggregate_text = f"{aggregate:.2f}" if aggregate is not None else "not assessed"
+        if assessment
+        else '<p class="empty">Assessment missing.</p>'
+    )
+    aggregate_text = f"{aggregate:.2f}" if aggregate is not None else "—"
     return f"""
-    <article class="capability band-{band}" data-capability-id="{_e(capability.id)}" data-aggregate-band="{band}" style="--depth:{depth}">
-      <details>
-        <summary>
+    <article id="cap-{_e(capability.id)}" class="capability band-{band}" data-capability-id="{_e(capability.id)}" data-aggregate-band="{band}" style="--depth:{depth}" aria-label="{_e(capability.name)}, depth {depth}">
+      <details class="capability-details">
+        <summary class="capability-summary">
           <span class="tree-name">{_e(capability.name)}</span>
-          {_mini_dimensions_markup(assessment.scores if assessment else None)}
-          <span class="aggregate">{_e(aggregate_text)}</span>
-          <span class="lifecycle">{_e(capability.lifecycle)}</span>
+          <span class="summary-flags">{"".join(summary_flags)}</span>
+          {_mini_dimensions_markup(assessment)}
+          <span class="aggregate" title="Minimum of seven maturity dimensions">min {_e(aggregate_text)}</span>
+          <span class="band-label"><span class="band-dot" aria-hidden="true"></span>{band}</span>
+          <span class="lifecycle">node: {_e(capability.lifecycle)}</span>
         </summary>
         <div class="capability-body">
           <p>{_e(capability.definition)}</p>
-          <p>Boundary: <strong>{_e(capability.boundary_ref or '—')}</strong> · Evidence: <strong>{confirmed} confirmed / {candidate} candidate</strong></p>
-          <div class="flags">{''.join(flags)}</div>
+          <p class="meta">ID: <code>{_e(capability.id)}</code> · Boundary: <strong>{_e(capability.boundary_ref or '—')}</strong> · Evidence: <strong>{confirmed} confirmed / {candidate} candidate</strong></p>
+          {_honesty_markup(assessment, projection)}
           <div class="dimensions">{dimensions}</div>
           <details class="drilldown"><summary>Evidence and basis</summary>{_evidence_markup(edges)}</details>
           <details class="drilldown"><summary>Findings</summary>{_finding_markup(findings)}</details>
         </div>
       </details>
     </article>"""
+
+
+def _legend() -> str:
+    dimensions = "".join(
+        f"<li><code>{abbr}</code> {_e(label)}</li>"
+        for abbr, label in DIMENSION_LABELS.values()
+    )
+    return f"""<aside class="legend" aria-label="Maturity legend">
+      <div><strong>Dimensions</strong><ul>{dimensions}</ul></div>
+      <div><strong>Cell states</strong><ul>
+        <li data-cell-state="scored"><span class="legend-cell scored"></span>scored — proportional fill</li>
+        <li data-cell-state="evidence-starved"><span class="legend-cell starved"></span>evidence-starved — zero with no citations</li>
+        <li data-cell-state="unassessed"><span class="legend-cell unassessed">—</span>unassessed — unavailable, not zero</li>
+      </ul></div>
+    </aside>"""
+
+
+def _trust_strip(
+    capabilities: Sequence[CkmCapability],
+    assessments: Mapping[str, tuple[CkmAssessment | None, CkmAssessmentProjection | None]],
+    finding_count: int,
+) -> str:
+    assessed = sum(assessment is not None for assessment, _ in assessments.values())
+    stale = sum(bool(projection and projection.stale_relative_to_evidence) for _, projection in assessments.values())
+    low = sum(bool(assessment and assessment.low_confidence) for assessment, _ in assessments.values())
+    return f"""<nav class="trust-strip" aria-label="Projection trust summary">
+      <a href="#map-heading">{len(capabilities)} capabilities</a>
+      <a href="#map-heading">{assessed} assessed</a>
+      <a href="#map-heading">{stale} stale</a>
+      <a href="#map-heading">{low} low confidence</a>
+      <a href="#gaps-heading">{finding_count} gaps</a>
+    </nav>"""
 
 
 def render_overview_html(
@@ -224,15 +311,26 @@ def render_overview_html(
     capabilities = store.list_capabilities()
     capability_by_id = {item.id: item for item in capabilities}
     all_findings = store.list_findings()
+    assessments = {
+        capability.id: (
+            assessment := store.latest_assessment_for_capability(capability.id),
+            store.assessment_for_projection(capability.id) if assessment else None,
+        )
+        for capability in capabilities
+    }
     cards = "".join(
         _capability_markup(store, capability, depth=depth)
         for depth, capability in _forest(capabilities)
     ) or '<p class="empty">No capabilities in the CKM store.</p>'
-    gap_items = "".join(
-        f"<li><span class=\"badge\">{_e(item.kind)}</span> "
-        f"<strong>{_e(capability_by_id[item.capability_id].name if item.capability_id in capability_by_id else item.capability_id)}</strong> · "
-        f"{_e(item.dimension.replace('_', ' '))}: {_e(item.statement)}</li>"
-        for item in all_findings
+    grouped: dict[str, list[CkmFinding]] = defaultdict(list)
+    for finding in all_findings:
+        grouped[finding.capability_id].append(finding)
+    gap_groups = "".join(
+        f'<li id="gaps-{_e(capability_id)}" class="gap-group"><a href="#cap-{_e(capability_id)}"><strong>{_e(capability_by_id[capability_id].name)}</strong></a>'
+        + _finding_markup(findings)
+        + "</li>"
+        for capability_id, findings in sorted(grouped.items())
+        if capability_id in capability_by_id
     ) or "<li>No current findings.</li>"
     watermark_text = _watermarks(store.current_watermark_set())
     return f"""<!doctype html>
@@ -242,39 +340,36 @@ def render_overview_html(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CKM Development Overview</title>
   <style>
-    :root {{ color-scheme: light dark; --bg:#0b1020; --panel:#141b2d; --text:#eef2ff; --muted:#a9b4ca; --line:#33405d; --critical:#ef4444; --watch:#f59e0b; --healthy:#22c55e; --unknown:#64748b; }}
-    * {{ box-sizing:border-box; }}
-    body {{ margin:0; background:var(--bg); color:var(--text); font:15px/1.5 ui-sans-serif,system-ui,sans-serif; }}
-    main, footer {{ width:min(1180px,calc(100% - 32px)); margin:0 auto; }}
-    header {{ padding:38px 0 20px; }} h1,h2 {{ margin:.2em 0; }} .subtitle,.empty,small {{ color:var(--muted); }}
-    .legend,.flags {{ display:flex; gap:8px; flex-wrap:wrap; margin:10px 0; }}
-    .legend span,.flag,.badge,.lifecycle,.aggregate {{ border:1px solid var(--line); border-radius:999px; padding:2px 8px; font-size:12px; }}
-    .capability {{ margin:8px 0 8px calc(var(--depth) * 22px); border:1px solid var(--line); border-left:5px solid var(--unknown); border-radius:10px; background:var(--panel); }}
-    .band-critical {{ border-left-color:var(--critical); }} .band-watch {{ border-left-color:var(--watch); }} .band-healthy {{ border-left-color:var(--healthy); }}
-    summary {{ cursor:pointer; }} .capability > details > summary {{ display:flex; gap:10px; align-items:center; padding:12px 14px; }}
-    .tree-name {{ flex:1; font-weight:700; }} .capability-body {{ border-top:1px solid var(--line); padding:14px; }}
-    .mini-dimensions {{ display:grid; grid-template-columns:repeat(7,18px); gap:3px; }}
-    .mini-dimension {{ width:18px; height:8px; border-radius:8px; background:linear-gradient(to right,#60a5fa var(--score),#25304a var(--score)); }}
-    .mini-unknown {{ background:var(--unknown); opacity:.55; }}
-    .dimensions {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px; margin:14px 0; }}
-    .dimension {{ border:1px solid var(--line); border-radius:8px; padding:10px; }} .dimension-label {{ display:flex; justify-content:space-between; gap:8px; }}
-    .dimension-track {{ height:8px; margin:7px 0; border-radius:8px; background:#25304a; overflow:hidden; }} .dimension-bar {{ display:block; height:100%; background:#60a5fa; }}
-    .flag-stale,.flag-low {{ border-color:var(--watch); color:#fbbf24; }} .flag-candidate {{ border-color:#60a5fa; }}
-    .drilldown,.citations {{ margin-top:10px; }} .evidence-list,.finding-list {{ padding-left:20px; }} .evidence-list li,.finding-list li {{ margin:7px 0; }} .basis {{ color:var(--muted); margin-left:8px; }}
-    .gaps-panel {{ margin:24px 0; padding:16px; border:1px solid var(--line); border-radius:10px; background:var(--panel); }}
-    footer {{ margin-top:28px; padding:18px 0 36px; border-top:1px solid var(--line); color:var(--muted); overflow-wrap:anywhere; }}
-    @media (max-width:650px) {{ .capability {{ margin-left:calc(var(--depth) * 8px); }} .capability > details > summary {{ align-items:flex-start; flex-wrap:wrap; }} .mini-dimensions {{ order:4; width:100%; }} }}
+    :root {{ --bg-base:#070b12; --bg-surface:#0c1220; --bg-raised:#111a2e; --bg-overlay:#162038; --fg-1:#dce8f0; --fg-2:#7a9ab8; --fg-3:#527190; --border:#152030; --border-strong:#1e3050; --accent:#d4a843; --agent:#4a9eff; --amber:#f09030; --destructive:#ff3d3d; --healthy:#39e87d; --unknown:#527190; }}
+    * {{ box-sizing:border-box; }} html {{ font-size:1rem; }} body {{ margin:0; background:var(--bg-base); color:var(--fg-1); font:0.875rem/1.5 ui-sans-serif,system-ui,sans-serif; }}
+    main,footer {{ width:min(74rem,calc(100% - 2rem)); margin:0 auto; }} a {{ color:inherit; }} summary:focus-visible,a:focus-visible {{ outline:2px solid var(--accent); outline-offset:2px; }}
+    .projection-banner {{ border-left:0.25rem solid var(--amber); background:var(--bg-raised); padding:0.75rem 1rem; color:var(--fg-2); }} header {{ padding:1.75rem 0 0.75rem; }} h1 {{ font:400 1.75rem/1.2 ui-serif,Georgia,serif; }} h2 {{ margin-top:1.5rem; }} .subtitle,.empty,small,.meta {{ color:var(--fg-2); }}
+    .trust-strip {{ display:grid; grid-template-columns:repeat(5,1fr); border:1px solid var(--border-strong); background:var(--bg-surface); }} .trust-strip a {{ padding:0.625rem; text-decoration:none; border-right:1px solid var(--border); }}
+    .legend {{ display:grid; grid-template-columns:2fr 1fr; gap:1rem; margin:1rem 0; padding:0.75rem; border:1px solid var(--border); background:var(--bg-surface); }} .legend ul {{ display:flex; gap:0.5rem 1rem; flex-wrap:wrap; list-style:none; padding:0; margin:0.35rem 0 0; }} .legend-cell {{ display:inline-block; width:1.5rem; height:0.5rem; margin-right:0.3rem; background:var(--agent); }} .legend-cell.starved {{ border:1px dotted var(--amber); background:transparent; }} .legend-cell.unassessed {{ height:auto; background:none; color:var(--fg-3); }}
+    .dimension-rail {{ position:sticky; top:0; z-index:2; display:grid; grid-template-columns:repeat(7,1fr); gap:0.25rem; margin-left:auto; width:13rem; padding:0.25rem; background:var(--bg-base); color:var(--fg-2); font:0.7rem ui-monospace,monospace; text-align:center; }}
+    .capability {{ margin:0.5rem 0 0.5rem calc(var(--depth) * 1.375rem); border:1px solid var(--border); border-left:0.25rem solid var(--unknown); border-radius:0.25rem; background:var(--bg-surface); }} .band-critical {{ border-left-color:var(--destructive); }} .band-watch {{ border-left-color:var(--amber); }} .band-healthy {{ border-left-color:var(--healthy); }}
+    summary {{ cursor:pointer; }} summary::before {{ content:"+"; color:var(--fg-2); font-family:ui-monospace,monospace; }} details[open] > summary::before {{ content:"−"; }} .capability-summary {{ min-height:2.75rem; display:flex; gap:0.5rem; align-items:center; padding:0.625rem 0.75rem; }} .capability-summary:hover {{ background:var(--bg-overlay); }} .tree-name {{ flex:1; font-weight:600; }}
+    .summary-flags {{ display:flex; gap:0.25rem; }} .flag,.badge,.lifecycle,.aggregate,.band-label {{ border:1px solid var(--border-strong); border-radius:0.1875rem; padding:0.125rem 0.375rem; font:0.7rem ui-monospace,monospace; white-space:nowrap; }} .flag-stale {{ background:var(--amber); color:var(--bg-base); }} .flag-low {{ border-color:var(--amber); color:var(--amber); }} .flag-candidate {{ border-color:var(--agent); color:var(--agent); }} .gap-link {{ color:var(--accent); text-decoration:none; }}
+    .mini-dimensions {{ display:grid; grid-template-columns:repeat(7,1.625rem); gap:0.25rem; }} .mini-dimension {{ position:relative; width:1.625rem; height:0.75rem; border:1px solid var(--border-strong); overflow:hidden; }} .mini-scored {{ background:linear-gradient(to right,var(--agent) var(--score),var(--bg-overlay) var(--score)); }} .mini-starved {{ border:1px dotted var(--amber); background:transparent; }} .mini-unassessed {{ color:var(--fg-3); text-align:center; line-height:0.55rem; }}
+    .aggregate {{ color:var(--fg-2); }} .band-dot {{ display:inline-block; width:0.45rem; height:0.45rem; border-radius:50%; margin-right:0.3rem; background:var(--unknown); }} .band-critical .band-dot {{ background:var(--destructive); }} .band-watch .band-dot {{ background:var(--amber); }} .band-healthy .band-dot {{ background:var(--healthy); }}
+    .capability-body {{ border-top:1px solid var(--border); padding:1rem; background:var(--bg-raised); }} .honesty {{ border-left:0.2rem solid var(--amber); padding-left:0.75rem; color:var(--fg-2); }} .honesty p {{ margin:0.2rem 0; }} .dimensions {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(14rem,1fr)); gap:0.625rem; margin:0.875rem 0; }} .dimension {{ border:1px solid var(--border-strong); padding:0.625rem; }} .dimension-label {{ display:flex; gap:0.5rem; justify-content:space-between; }} .dimension-label span {{ flex:1; }} .dimension-track {{ height:0.5rem; margin:0.4rem 0; background:var(--bg-overlay); overflow:hidden; }} .dimension-starved .dimension-track {{ border:1px dotted var(--amber); background:none; }} .dimension-bar {{ display:block; height:100%; background:var(--agent); }}
+    .drilldown,.citations {{ margin-top:0.625rem; }} .evidence-list,.finding-list {{ padding-left:1.25rem; }} .evidence-list li,.finding-list li {{ margin:0.45rem 0; }} .evidence-candidate {{ border-left:0.15rem solid var(--agent); padding-left:0.5rem; }} .basis {{ color:var(--fg-2); margin-left:0.5rem; }} .gaps-panel {{ margin:1.5rem 0; padding:1rem; border:1px solid var(--border); background:var(--bg-surface); }} .gap-group {{ margin:0.75rem 0; }}
+    footer {{ margin-top:1.75rem; padding:1rem 0 2.25rem; border-top:1px solid var(--border); color:var(--fg-2); overflow-wrap:anywhere; }}
+    @media (max-width:680px) {{ main,footer {{ width:min(100% - 1rem,74rem); }} .trust-strip {{ grid-template-columns:1fr 1fr; }} .legend {{ grid-template-columns:1fr; }} .dimension-rail {{ display:none; }} .capability {{ margin-left:calc(var(--depth) * 0.5rem); }} .capability-summary {{ flex-wrap:wrap; align-items:flex-start; }} .tree-name {{ min-width:65%; }} .summary-flags {{ flex-wrap:wrap; }} .mini-dimensions {{ order:6; width:100%; grid-template-columns:repeat(7,minmax(1.5rem,1fr)); }} .mini-dimension {{ width:auto; min-height:1.5rem; }} .mini-dimension::before {{ content:attr(data-abbr); display:block; font:0.55rem ui-monospace,monospace; color:var(--fg-2); }} }}
   </style>
 </head>
 <body>
+  <div class="projection-banner"><strong>Generated projection — not source of truth.</strong> Read watermarks and trust states before maturity values.</div>
   <main>
-    <header><h1>Development Overview</h1><p class="subtitle">Capability Knowledge Model maturity heatmap and cited drill-down.</p></header>
+    <header><h1>Development Overview</h1><p class="subtitle">Capability Knowledge Model maturity, trust, and cited drill-down.</p></header>
+    {_trust_strip(capabilities, assessments, len(all_findings))}
     <section aria-labelledby="map-heading">
       <h2 id="map-heading">Capability map</h2>
-      <div class="legend"><span>healthy ≥ 0.70</span><span>watch 0.40–0.69</span><span>critical &lt; 0.40</span><span>unknown</span></div>
+      {_legend()}
+      <div class="dimension-rail" aria-hidden="true">{"".join(f"<span>{abbr}</span>" for abbr, _ in DIMENSION_LABELS.values())}</div>
       <div class="capability-tree">{cards}</div>
     </section>
-    <section class="gaps-panel" aria-labelledby="gaps-heading"><h2 id="gaps-heading">Current gaps</h2><ul>{gap_items}</ul></section>
+    <section class="gaps-panel" aria-labelledby="gaps-heading"><h2 id="gaps-heading">Current gaps</h2><ul>{gap_groups}</ul></section>
   </main>
   <footer class="projection-footer">
     <strong>Generated projection (BuilderOps CKM). Not source of truth.</strong><br>

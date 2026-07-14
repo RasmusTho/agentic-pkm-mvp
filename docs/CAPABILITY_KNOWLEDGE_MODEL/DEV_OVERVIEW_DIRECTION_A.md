@@ -1,4 +1,4 @@
-State: Target-state presentation specification for the CKM Development Overview; not yet implemented.
+State: Implemented by issue #3689; delivery tracked by its implementation PR.
 Doc role: Design specification
 Authority: Owns the bounded Direction A presentation contract for the generated CKM overview. Subordinate to ADR-0057 and `DEV_OVERVIEW_HTML_PROJECTION.md`; it changes no CKM data, scoring, or authority semantics.
 Owner: BuilderOps governance
