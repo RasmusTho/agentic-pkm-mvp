@@ -124,6 +124,109 @@ def test_edges_carry_method_lifecycle_basis(tmp_path: Path) -> None:
     assert all(edge.basis for edge in edges)
 
 
+def test_adr_shared_seed_path_requires_capability_specific_selector(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    adr_path = root / "docs/adr/ADR-9000-shared-seed.md"
+    adr_path.parent.mkdir(parents=True)
+    adr_path.write_text(
+        "# ADR-9000\n\nSee docs/shared-owner.md for the taxonomy.\n",
+        encoding="utf-8",
+    )
+    store = CkmStore(tmp_path / "builderops.sqlite3")
+    store.ensure_schema()
+    capabilities = {
+        name: store.upsert_capability(
+            name=name,
+            definition="Fixture capability",
+            existence_provenance="seeded:docs/shared-owner.md :: Shared taxonomy",
+            boundary_ref=boundary,
+        )
+        for name, boundary in (
+            ("Human Authority Kernel", None),
+            ("Retrieval & Context Assembly", "RCA"),
+            ("Machine Memory & Learning", "MEM"),
+        )
+    }
+    adr = store.upsert_artifact(
+        source_ref="docs/adr/ADR-9000-shared-seed.md",
+        artifact_kind="adr",
+        source="repo_docs",
+        watermark="one",
+        provenance='{"source_ref":"docs/adr/ADR-9000-shared-seed.md"}',
+    )
+
+    path_only = link_deterministic(store, root)
+
+    assert path_only["adr"] == 0
+    assert not [edge for edge in store.list_evidence_edges() if edge.artifact_id == adr.id]
+
+    adr_path.write_text(
+        "# ADR-9000\n\nSee docs/shared-owner.md. This decision covers RCA and "
+        "the Human Authority Kernel.\n",
+        encoding="utf-8",
+    )
+    selected = link_deterministic(store, root)
+    adr_edges = [
+        edge for edge in store.list_evidence_edges() if edge.artifact_id == adr.id
+    ]
+
+    assert selected["adr"] == 2
+    assert {edge.capability_id for edge in adr_edges} == {
+        capabilities["Human Authority Kernel"].id,
+        capabilities["Retrieval & Context Assembly"].id,
+    }
+    assert {edge.basis for edge in adr_edges} == {
+        "adr-reference:docs/shared-owner.md|selector:name:Human Authority Kernel",
+        "adr-reference:docs/shared-owner.md|selector:boundary:RCA",
+    }
+
+
+def test_live_adr_shared_seed_associations_name_their_selector(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _ingest_docs(store)
+
+    link_deterministic(store, REPO_ROOT)
+
+    artifacts = {artifact.id: artifact for artifact in store.list_artifacts()}
+    capabilities = {capability.id: capability for capability in store.list_capabilities()}
+    shared_edges = [
+        edge
+        for edge in store.list_evidence_edges()
+        if edge.basis.startswith(
+            "adr-reference:docs/SYSTEM_BREAKDOWN_STRUCTURE.md|selector:"
+        )
+    ]
+    assert shared_edges
+    assert not any(
+        artifacts[edge.artifact_id].source_ref
+        in {
+            "docs/adr/ADR-0015-authority-first-target-sbs.md",
+            "docs/adr/ADR-0016-contract-first-module-lazy-sbs.md",
+        }
+        for edge in shared_edges
+    )
+    for edge in shared_edges:
+        artifact = artifacts[edge.artifact_id]
+        capability = capabilities[edge.capability_id]
+        text = (REPO_ROOT / artifact.source_ref).read_text(encoding="utf-8")
+        selector = edge.basis.split("|selector:", 1)[1]
+        selector_kind, selector_value = selector.split(":", 1)
+        if selector_kind == "boundary":
+            assert capability.boundary_ref == selector_value
+            assert re.search(
+                rf"(?<![A-Z0-9]){re.escape(selector_value)}(?![A-Z0-9])", text
+            )
+        else:
+            assert selector_kind in {"name", "anchor"}
+            assert re.search(re.escape(selector_value), text, re.IGNORECASE)
+    assert any(
+        artifacts[edge.artifact_id].source_ref
+        == "docs/adr/ADR-0020-sfc-single-node-upgrade-path.md"
+        and capabilities[edge.capability_id].boundary_ref == "SFC"
+        for edge in shared_edges
+    )
+
+
 def test_link_idempotent_incremental(tmp_path: Path) -> None:
     store = _store(tmp_path)
     _ingest_docs(store)

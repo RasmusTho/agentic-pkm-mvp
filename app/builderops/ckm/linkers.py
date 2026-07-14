@@ -37,11 +37,53 @@ def _provenance(artifact: CkmArtifact) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
 
 
-def _seed_path(capability: CkmCapability) -> str | None:
+def _seed_source(capability: CkmCapability) -> tuple[str, str | None] | None:
     marker = "seeded:"
     if not capability.existence_provenance.startswith(marker):
         return None
-    return capability.existence_provenance[len(marker) :].split("::", 1)[0].strip()
+    source = capability.existence_provenance[len(marker) :]
+    path, separator, anchor = source.partition("::")
+    normalized_path = path.strip()
+    if not normalized_path:
+        return None
+    normalized_anchor = anchor.strip() if separator and anchor.strip() else None
+    return normalized_path, normalized_anchor
+
+
+def _seed_path(capability: CkmCapability) -> str | None:
+    source = _seed_source(capability)
+    return source[0] if source is not None else None
+
+
+def _contains_phrase(text: str, phrase: str, *, case_sensitive: bool = False) -> bool:
+    flags = 0 if case_sensitive else re.IGNORECASE
+    return bool(re.search(rf"(?<![\w-]){re.escape(phrase)}(?![\w-])", text, flags))
+
+
+def _adr_disambiguator(
+    text: str,
+    capability: CkmCapability,
+    *,
+    anchor_occurrences: dict[str, int],
+) -> str | None:
+    """Return capability-specific evidence for an ADR sharing a seed document.
+
+    A document path alone cannot identify one capability when multiple seed rows
+    cite it. Prefer the human-readable capability name, then the SBS boundary
+    code, then an anchor only when that anchor uniquely identifies a seed row
+    within the shared document.
+    """
+    if _contains_phrase(text, capability.name):
+        return f"name:{capability.name}"
+    if capability.boundary_ref and _contains_phrase(
+        text, capability.boundary_ref, case_sensitive=True
+    ):
+        return f"boundary:{capability.boundary_ref}"
+    source = _seed_source(capability)
+    anchor = source[1] if source is not None else None
+    if anchor and anchor_occurrences.get(anchor.casefold()) == 1 and _contains_phrase(text, anchor):
+        return f"anchor:{anchor}"
+    return None
 
 
 def _kind(artifact: CkmArtifact) -> str:
@@ -210,6 +252,11 @@ def _adr_links(
     desired_edges: set[tuple[str, str, str]],
 ) -> int:
     changed = 0
+    capabilities_by_seed_path: dict[str, list[CkmCapability]] = {}
+    for capability in capabilities:
+        seed_path = _seed_path(capability)
+        if seed_path:
+            capabilities_by_seed_path.setdefault(seed_path, []).append(capability)
     for artifact in artifacts.values():
         if artifact.artifact_kind != "adr":
             continue
@@ -217,15 +264,34 @@ def _adr_links(
         if not path.is_file():
             continue
         text = path.read_text(encoding="utf-8")
-        for capability in capabilities:
-            seed_path = _seed_path(capability)
-            if seed_path and seed_path in text:
+        for seed_path, candidates in capabilities_by_seed_path.items():
+            if seed_path not in text:
+                continue
+            anchors = [
+                source[1].casefold()
+                for capability in candidates
+                if (source := _seed_source(capability)) is not None and source[1] is not None
+            ]
+            anchor_occurrences = {anchor: anchors.count(anchor) for anchor in set(anchors)}
+            for capability in candidates:
+                disambiguator = None
+                if len(candidates) > 1:
+                    disambiguator = _adr_disambiguator(
+                        text,
+                        capability,
+                        anchor_occurrences=anchor_occurrences,
+                    )
+                    if disambiguator is None:
+                        continue
+                detail = seed_path
+                if disambiguator is not None:
+                    detail = f"{seed_path}|selector:{disambiguator}"
                 changed += _emit(
                     store,
                     artifact,
                     capability,
                     rule="adr-reference",
-                    detail=seed_path,
+                    detail=detail,
                     desired_edges=desired_edges,
                 )
     return changed
