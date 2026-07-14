@@ -36,6 +36,53 @@ def _read_development_workflow() -> str:
     )
 
 
+def _companion_design_audit_path(filename: str) -> Path:
+    return (
+        REPO_ROOT
+        / "companion-ui/design_handoff/2026-07-07-uat-design-audit"
+        / filename
+    )
+
+
+def test_companion_design_audit_handoff_has_durable_sources() -> None:
+    readme = _companion_design_audit_path("README.md").read_text(encoding="utf-8")
+    audit = _companion_design_audit_path("DESIGN_AUDIT.md").read_text(encoding="utf-8")
+    sources_path = _companion_design_audit_path("SOURCES.md")
+    sources = sources_path.read_text(encoding="utf-8")
+
+    assert sources_path.is_file()
+    assert "pull/3359" in sources
+    assert "issues/3431" in sources
+    for issue_number in range(3360, 3365):
+        assert f"issues/{issue_number}" in sources
+    assert "not retained as durable evidence" in sources.lower()
+    assert "not reproducible repo evidence" in readme.lower()
+    for missing_input in (
+        "CLAUDE_DESIGN_AUDIT_PROMPT.md",
+        "UAT_REPORT.md",
+        "findings.json",
+        "findings2.json",
+    ):
+        assert missing_input not in readme
+        assert missing_input not in audit
+
+
+def test_companion_design_audit_handoff_declares_guidance_not_sot() -> None:
+    handoff = "\n".join(
+        _companion_design_audit_path(filename).read_text(encoding="utf-8")
+        for filename in ("README.md", "DESIGN_AUDIT.md", "SOURCES.md")
+    )
+    lowered = handoff.lower()
+
+    assert "design guidance/input" in lowered
+    assert "not a source of truth" in lowered
+    assert "handoff package -> normalized spec -> github issue -> pr -> validation receipt" in lowered
+    assert "#3360" in handoff
+    for issue_number in range(3361, 3365):
+        assert f"#{issue_number}" in handoff
+    assert "durable design source-of-truth" not in lowered
+
+
 def _has_builderops_routing(body: str) -> bool:
     match = _BUILDEROPS_ROUTING_REGEX.search(body)
     if not match:
