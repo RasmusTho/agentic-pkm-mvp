@@ -69,7 +69,16 @@ def test_runtime_reads_one_generation_while_publish_waits(tmp_path, monkeypatch)
         return original_read(path)
 
     monkeypatch.setattr(runtime, "_read_yaml", blocking_read)
-    reader = Thread(target=lambda: runtime._build_bundle())
+    reader_result = []
+    reader_errors = []
+
+    def read_bundle():
+        try:
+            reader_result.append(runtime._build_bundle())
+        except Exception as exc:  # pragma: no cover - assertion below is the check
+            reader_errors.append(exc)
+
+    reader = Thread(target=read_bundle)
     reader.start()
     assert entered.wait(timeout=2)
     publisher = Thread(target=compiler._publish_staged_runtime, args=(new,))
@@ -80,6 +89,8 @@ def test_runtime_reads_one_generation_while_publish_waits(tmp_path, monkeypatch)
     publisher.join(timeout=2)
     assert not reader.is_alive()
     assert not publisher.is_alive()
+    assert reader_errors == []
+    assert reader_result[0].global_.log_level == "DEBUG"
     monkeypatch.setattr(runtime, "_CURRENT", None)
     assert runtime.get_settings_bundle().global_.log_level == "WARNING"
 

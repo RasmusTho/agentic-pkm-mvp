@@ -3,6 +3,7 @@ from __future__ import annotations
 import yaml
 import pytest
 from pathlib import Path
+from multiprocessing import get_context
 from threading import Barrier, Thread
 
 
@@ -10,6 +11,14 @@ from app.events import bus
 from app.settings import compiler
 
 pytestmark = pytest.mark.not_pg
+
+
+def _publish_projection_in_child_process(runtime_dir: str, staged_dir: str, start_gate) -> None:
+    """Publish one staged generation in an independent OS process."""
+    compiler.RUNTIME = Path(runtime_dir)
+    if not start_gate.wait(timeout=5):
+        raise TimeoutError("publisher start gate timed out")
+    compiler._publish_staged_runtime(Path(staged_dir))
 
 
 def test_compile_roundtrip_writes_artifacts(tmp_path, monkeypatch):
@@ -82,6 +91,40 @@ def test_publish_serializes_concurrent_staged_projections(tmp_path, monkeypatch)
         thread.join()
 
     assert errors == []
+    assert yaml.safe_load((runtime_dir / "global.yaml").read_text(encoding="utf-8"))["log_level"] in {
+        "DEBUG",
+        "WARNING",
+    }
+
+
+def test_publish_serializes_separate_processes(tmp_path, monkeypatch) -> None:
+    """The flock contract also serializes separate API/worker processes."""
+    runtime_dir = tmp_path / "runtime/settings"
+    monkeypatch.setattr(compiler, "RUNTIME", runtime_dir)
+    staged = []
+    for level in ("DEBUG", "WARNING"):
+        generation = runtime_dir.parent / f"process-{level.lower()}"
+        compiler.dump(generation, "global.yaml", {"log_level": level})
+        compiler.dump(generation, "providers.yaml", {})
+        compiler.dump(generation, "llm_routing.yaml", {})
+        staged.append(generation)
+
+    context = get_context("fork")
+    start_gate = context.Event()
+    processes = [
+        context.Process(
+            target=_publish_projection_in_child_process,
+            args=(str(runtime_dir), str(generation), start_gate),
+        )
+        for generation in staged
+    ]
+    for process in processes:
+        process.start()
+    start_gate.set()
+    for process in processes:
+        process.join(timeout=5)
+        assert process.exitcode == 0
+
     assert yaml.safe_load((runtime_dir / "global.yaml").read_text(encoding="utf-8"))["log_level"] in {
         "DEBUG",
         "WARNING",
