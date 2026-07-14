@@ -339,6 +339,12 @@ class CkmStore:
     ) -> CkmEvidenceEdge:
         now = utc_now()
         candidate_id = new_id("edge")
+        if extraction_method == "inferred" and (
+            basis is None or not isinstance(basis, str) or not basis.strip()
+        ):
+            raise CkmValidationError(
+                "inferred evidence edges require an explicit non-empty rationale as basis"
+            )
         resolved_basis = basis or source_ref
         candidate = CkmEvidenceEdge(
             id=candidate_id,
@@ -456,7 +462,13 @@ class CkmStore:
             ).fetchone()
         return CkmEvidenceEdge.from_row(row) if row is not None else None
 
-    def confirm_inferred_edge(self, edge_id: str) -> CkmEvidenceEdge:
+    def _set_inferred_edge_confirmed(self, edge_id: str) -> CkmEvidenceEdge:
+        """Apply a confirmation already authorized by semantic receipt validation.
+
+        This is intentionally private: callers must use the receipt-producing and
+        receipt-validating confirmation boundary in ``semantic.py``.
+        """
+
         edge = self.get_evidence_edge_by_id(edge_id)
         if edge is None:
             raise CkmValidationError(f"evidence edge not found: {edge_id}")

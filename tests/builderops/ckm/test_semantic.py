@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+import json
 from pathlib import Path
 
 import pytest
@@ -86,6 +88,23 @@ def test_inferred_edges_fenced_via_store_write_path(store: CkmStore) -> None:
     assert (edge.provider, edge.model) == ("stub-provider", "stub-model")
     assert edge.basis == "The artifact explicitly explains the retrieval capability."
 
+    for rationale in (None, "", "   "):
+        with pytest.raises(CkmValidationError, match="explicit non-empty rationale"):
+            store.upsert_evidence_edge(
+                artifact_id=artifact.id,
+                capability_id=capability.id,
+                evidence_kind="doc",
+                polarity="supports",
+                maturity_dimension="documentation_quality",
+                confidence=0.9,
+                extraction_method="inferred",
+                lifecycle="candidate",
+                source_ref=artifact.source_ref,
+                basis=rationale,
+                provider="stub-provider",
+                model="stub-model",
+            )
+
     with pytest.raises(CkmValidationError, match="inferred evidence edges must enter as candidate"):
         store.upsert_evidence_edge(
             artifact_id=artifact.id,
@@ -101,6 +120,78 @@ def test_inferred_edges_fenced_via_store_write_path(store: CkmStore) -> None:
             provider="stub-provider",
             model="stub-model",
         )
+
+
+def _append_confirmation_receipt(
+    store: CkmStore,
+    *,
+    edge,
+    artifact_ref: str,
+    capability_name: str,
+    variant: str,
+) -> None:
+    payload = {
+        **asdict(edge),
+        "lifecycle": "confirmed",
+        "artifact_source_ref": artifact_ref,
+        "capability_name": capability_name,
+    }
+    actor = {"actor_type": "human", "id": "operator"}
+    action = "confirm_edge"
+    event_type = "ckm_edge_confirmed"
+    target_refs = [
+        {"ref_type": "repo_artifact", "ref": artifact_ref},
+        {"ref_type": "ckm_capability", "ref": capability_name},
+    ]
+    if variant == "non-human":
+        actor = {"actor_type": "agent", "id": "forger"}
+    elif variant == "wrong-event":
+        event_type = "ckm_edge_observed"
+    elif variant == "wrong-action":
+        action = "observe_edge"
+    elif variant == "wrong-target":
+        target_refs[0] = {"ref_type": "repo_artifact", "ref": "docs/other.md"}
+    elif variant == "forged-payload":
+        payload["confidence"] = 0.01
+    store.append_builderops_receipt(
+        source_refs=[{"ref_type": "ckm_evidence_edge", "ref": edge.id}],
+        summary="Attempted confirmation",
+        event_type=event_type,
+        actor=actor,
+        occurred_at=edge.updated_at,
+        target_refs=target_refs,
+        action=action,
+        receipt_body=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        idempotency_key=f"test-confirm-{variant}",
+    )
+
+
+@pytest.mark.parametrize(
+    "variant",
+    ["non-human", "wrong-event", "wrong-action", "wrong-target", "forged-payload"],
+)
+def test_confirmation_rejects_invalid_or_forged_receipts(
+    tmp_path: Path, variant: str
+) -> None:
+    store = CkmStore(tmp_path / f"{variant}.sqlite3")
+    store.ensure_schema()
+    capability = _capability(store)
+    artifact = _artifact(store)
+    associate_unlinked_artifacts(
+        store,
+        client=StubAssociator([_proposal(artifact.id, capability.id)]),
+    )
+    edge = store.list_evidence_edges()[0]
+    _append_confirmation_receipt(
+        store,
+        edge=edge,
+        artifact_ref=artifact.source_ref,
+        capability_name=capability.name,
+        variant=variant,
+    )
+
+    assert reapply_confirmation_receipts(store) == 0
+    assert store.get_evidence_edge_by_id(edge.id).lifecycle == "candidate"
 
 
 def test_confidence_floor_discards(store: CkmStore) -> None:
@@ -165,6 +256,10 @@ def test_confirmation_receipt_survives_rebuild(store: CkmStore) -> None:
         client=StubAssociator([_proposal(artifact.id, capability.id)]),
     )
     original = store.list_evidence_edges()[0]
+
+    # There is no public lifecycle mutation bypass; promotion must traverse a
+    # human receipt that is validated against the edge and both targets.
+    assert not hasattr(store, "confirm_inferred_edge")
 
     runner = CliRunner()
     confirmation = runner.invoke(

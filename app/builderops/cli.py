@@ -31,8 +31,8 @@ from app.builderops.ckm.ingest_repo import ingest_repo
 from app.builderops.ckm.linkers import link_deterministic
 from app.builderops.ckm.semantic import (
     SemanticAssociationError,
+    _confirm_edge_from_cli,
     associate_unlinked_artifacts,
-    confirm_edge,
     reapply_confirmation_receipts,
 )
 from app.builderops.ckm.seed import SeedManifestError, seed_capabilities
@@ -476,7 +476,7 @@ def ckm_associate(ctx: click.Context, limit: int, confidence_floor: float) -> No
 @click.pass_context
 def ckm_confirm_edge(ctx: click.Context, edge_id: str) -> None:
     try:
-        receipt = confirm_edge(_ckm_store(ctx), edge_id)
+        receipt = _confirm_edge_from_cli(_ckm_store(ctx), edge_id)
     except (CkmValidationError, sqlite3.Error) as exc:
         raise click.ClickException(f"ckm edge confirmation failed: {exc}") from exc
     click.echo(f"edge {edge_id} confirmed; receipt builderops://receipts/{receipt['id']}")

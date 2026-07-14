@@ -301,7 +301,85 @@ def _confirmation_payload(store: CkmStore, edge_id: str) -> tuple[dict[str, Any]
     return payload, artifact.source_ref, capability.name
 
 
-def confirm_edge(store: CkmStore, edge_id: str) -> dict[str, Any]:
+def _validated_confirmation_receipt(
+    store: CkmStore,
+    receipt: dict[str, Any],
+    *,
+    expected_edge_id: str | None = None,
+) -> tuple[dict[str, Any], CkmArtifact, CkmCapability]:
+    """Validate that a durable receipt authorizes exactly one edge promotion."""
+
+    if receipt.get("object_type") != "BuilderOpsReceipt":
+        raise CkmValidationError("confirmation record must be a BuilderOpsReceipt")
+    if receipt.get("event_type") != "ckm_edge_confirmed":
+        raise CkmValidationError("confirmation receipt has an invalid event type")
+    if receipt.get("action") != "confirm_edge":
+        raise CkmValidationError("confirmation receipt has an invalid action")
+    actor = receipt.get("actor")
+    if not isinstance(actor, dict) or actor.get("actor_type") != "human":
+        raise CkmValidationError("confirmation receipt requires a human actor")
+    if not isinstance(actor.get("id"), str) or not actor["id"].strip():
+        raise CkmValidationError("confirmation receipt requires a named human actor")
+    try:
+        payload = json.loads(receipt["receipt_body"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise CkmValidationError("confirmation receipt body must be valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise CkmValidationError("confirmation receipt body must be an object")
+
+    edge_id = payload.get("id")
+    if not isinstance(edge_id, str) or not edge_id:
+        raise CkmValidationError("confirmation receipt payload requires an edge id")
+    if expected_edge_id is not None and edge_id != expected_edge_id:
+        raise CkmValidationError("confirmation receipt does not bind the requested edge")
+    if receipt.get("source_refs") != [
+        {"ref_type": "ckm_evidence_edge", "ref": edge_id}
+    ]:
+        raise CkmValidationError("confirmation receipt source does not bind its payload edge")
+    if payload.get("extraction_method") != "inferred" or payload.get("lifecycle") != "confirmed":
+        raise CkmValidationError("confirmation receipt must promote one inferred edge")
+    for field in ("basis", "provider", "model", "artifact_source_ref", "capability_name"):
+        value = payload.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise CkmValidationError(
+                f"confirmation receipt payload requires non-empty {field}"
+            )
+    if payload.get("source_ref") != payload["artifact_source_ref"]:
+        raise CkmValidationError("confirmation payload artifact source binding is inconsistent")
+
+    artifact = next(
+        (item for item in store.list_artifacts() if item.source_ref == payload["artifact_source_ref"]),
+        None,
+    )
+    capability = next(
+        (item for item in store.list_capabilities() if item.name == payload["capability_name"]),
+        None,
+    )
+    if artifact is None or capability is None:
+        raise CkmValidationError("confirmation receipt target is absent from the current graph")
+    expected_targets = [
+        {"ref_type": "repo_artifact", "ref": artifact.source_ref},
+        {"ref_type": "ckm_capability", "ref": capability.name},
+    ]
+    if receipt.get("target_refs") != expected_targets:
+        raise CkmValidationError("confirmation receipt targets do not bind its payload")
+
+    current = store.get_evidence_edge_by_id(edge_id)
+    if current is not None:
+        expected_payload = {
+            **asdict(current),
+            "lifecycle": "confirmed",
+            "artifact_source_ref": artifact.source_ref,
+            "capability_name": capability.name,
+        }
+        if payload != expected_payload:
+            raise CkmValidationError("confirmation receipt payload does not match its source edge")
+    return payload, artifact, capability
+
+
+def _confirm_edge_from_cli(store: CkmStore, edge_id: str) -> dict[str, Any]:
+    """Execute the human-operated CLI confirmation boundary."""
+
     payload, artifact_ref, capability_name = _confirmation_payload(store, edge_id)
     payload["lifecycle"] = "confirmed"
     receipt = store.append_builderops_receipt(
@@ -322,7 +400,8 @@ def confirm_edge(store: CkmStore, edge_id: str) -> dict[str, Any]:
     )
     # Receipt first: if the derived-row update fails, the durable confirmation
     # intent still exists and the normal rebuild/reapply path can restore it.
-    store.confirm_inferred_edge(edge_id)
+    _validated_confirmation_receipt(store, receipt, expected_edge_id=edge_id)
+    store._set_inferred_edge_confirmed(edge_id)
     return receipt
 
 
@@ -332,10 +411,12 @@ def reapply_confirmation_receipts(store: CkmStore) -> int:
     capabilities = {item.name: item for item in store.list_capabilities()}
     for receipt in store.list_builderops_receipts("ckm_edge_confirmed"):
         try:
-            payload = json.loads(receipt["receipt_body"])
-            artifact = artifacts[payload["artifact_source_ref"]]
-            capability = capabilities[payload["capability_name"]]
-        except (KeyError, TypeError, ValueError):
+            payload, artifact, capability = _validated_confirmation_receipt(store, receipt)
+            # The lookup maps make the rebuild dependency explicit and reject
+            # receipts whose targets do not belong to this rebuilt graph.
+            artifact = artifacts[artifact.source_ref]
+            capability = capabilities[capability.name]
+        except (CkmValidationError, KeyError, TypeError, ValueError):
             continue
         edge = store.upsert_evidence_edge(
             artifact_id=artifact.id,
@@ -351,7 +432,7 @@ def reapply_confirmation_receipts(store: CkmStore) -> int:
             provider=payload["provider"],
             model=payload["model"],
         )
-        if store.confirm_inferred_edge(edge.id).lifecycle == "confirmed":
+        if store._set_inferred_edge_confirmed(edge.id).lifecycle == "confirmed":
             restored += 1
     return restored
 
@@ -363,6 +444,5 @@ __all__ = [
     "SemanticBatch",
     "SemanticProposal",
     "associate_unlinked_artifacts",
-    "confirm_edge",
     "reapply_confirmation_receipts",
 ]
