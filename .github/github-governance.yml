@@ -26,7 +26,7 @@ labels:
     - agent:blocked
     - agent:needs-human
   interpretation:
-    agent:ready: queue-eligible work when Status=Ready
+    agent:ready: strictly validated queue-eligible work; Project Status is optional projection
     agent:blocked: blocked by dependency or setup; normally non-active backlog work
     agent:needs-human: blocked on human decision or missing authority; normally non-active backlog work
 project:
@@ -47,7 +47,7 @@ project:
     - name: Kanban
       group_by: Status
     - name: Agent Queue
-      filter: "label:agent:ready status:Ready"
+      filter: "label:agent:ready"
   automation:
     - event: issue_opened
       set_status: Backlog
@@ -143,7 +143,7 @@ rules:
   docs_authoring_prs_must_be_docs_only: true
   governance_lane_prs_may_skip_issue_reference: true
   governance_lane_prs_must_be_limited_to_repo_governance_surfaces: true
-  agents_only_pick: label:agent:ready + status:Ready
+  agents_only_pick: strictly validated label:agent:ready; Project Status is optional projection
   agents_must_follow_issue_constraints: true
   agents_must_satisfy_acceptance: true
   no_free_form_tasks: true

@@ -113,6 +113,27 @@ def test_parallel_selection_rejects_file_lease_dependency_and_validation_conflic
     assert decisions[2005]["skip_reason"] == "active-lease-conflict"
 
 
+def test_project_status_does_not_gate_dispatch() -> None:
+    missing = _candidate(2103, risk="high")
+    missing.pop("project_status")
+    candidates = [
+        _candidate(2101, risk="high", project_status="Backlog"),
+        _candidate(2102, risk="high", project_status="In Progress"),
+        missing,
+    ]
+
+    plan = build_dispatch_plan(
+        epic_issue_number=3229,
+        run_id="run-project-projection",
+        max_parallel=3,
+        candidates=candidates,
+    )
+
+    assert plan["selected_count"] == 3
+    assert all(item["selected_for_dispatch"] for item in plan["decisions"])
+    assert all(item["skip_reason"] is None for item in plan["decisions"])
+
+
 def test_codex_and_claude_use_same_minimal_context_pack_schema() -> None:
     plan = build_dispatch_plan(
         epic_issue_number=3229,

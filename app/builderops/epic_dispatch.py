@@ -257,8 +257,6 @@ def _claimability_skip_reason(
         return "active-lease-conflict"
     if candidate["state"] != "OPEN":
         return "issue-not-open"
-    if candidate["project_status"] != "Ready":
-        return "project-status-not-ready"
     if "agent:ready" not in candidate["labels"]:
         return "missing-agent-ready-label"
     return None
@@ -327,10 +325,6 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
         "url": _normalize_optional_string(candidate.get("url")),
         "state": _normalize_string(candidate.get("state", "OPEN"), "state").upper(),
         "labels": set(_normalize_string_list(candidate.get("labels", []), "labels")),
-        "project_status": _normalize_string(
-            candidate.get("project_status", candidate.get("status", "Ready")),
-            "project_status",
-        ),
         "risk": _normalize_choice(
             candidate.get("risk", "medium"),
             "risk",
