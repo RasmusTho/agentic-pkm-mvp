@@ -110,8 +110,7 @@ The output must include:
 A `pass` verdict is valid only when:
 
 - The reviewed head SHA matches the current PR head.
-- Required CI and governance checks are current and successful, or an explicit
-  human waiver is present and allowed by the governing skill.
+- Required CI and governance checks are current and successful.
 - Every issue acceptance criterion and `Verify:` marker has evidence.
 - No unresolved blocking review thread or machine finding remains.
 - No forbidden mutation or out-of-scope behavior is present in the diff.
@@ -254,7 +253,7 @@ Stop conditions:
 - The blocking finding is not specific enough to fix or disprove.
 - The fix requires scope expansion not authorized by the issue.
 - Required source docs or authority boundaries conflict.
-- Required validation cannot run and no allowed waiver exists.
+- Required validation cannot run.
 - The PR branch drifts, the head SHA changes unexpectedly, or branch truth
   cannot be proven.
 - The repair would mutate GitHub state, protected branches, workflows, labels,
@@ -281,7 +280,7 @@ repair counter is updated. A retry counter alone must never select
 | `auto_repair` | The failure is repo-local, reversible, inside the issue's declared scope, and has a deterministic validation target. | Create or continue the bounded repair path, then run fresh validation/review. |
 | `auto_backoff` | Authentication, rate limit, or an external tool is temporarily unavailable and no mutation has occurred. | Retain the request, record a receipt, and retry with bounded backoff. |
 | `blocked_technical` | The system failed closed, a dependency is unavailable, or the cause needs stronger diagnosis; no authority is missing. | Keep the affected service/merge path disabled or blocked, collect evidence, and create a linked bounded recovery slice when needed. |
-| `needs_owner` | Continuing needs an unapproved irreversible/external effect, a security/privacy/cost commitment, a production/release operator action, a policy waiver, or resolution of contradictory source authority. | Emit one deduplicated Human Exception packet. |
+| `needs_owner` | Continuing needs an unapproved irreversible/external effect, a security/privacy/cost commitment, a production/release operator action, or resolution of contradictory source authority. | Emit one deduplicated Human Exception packet while preserving all CI/review/merge gates. |
 
 Repair accounting is partitioned by failure domain: review/code correctness,
 static-quality, lease/concurrency, and deployment/model-schema compatibility.
@@ -348,8 +347,7 @@ Closure prerequisites:
 - #3215 branch-protection and branch-guardrail contract is implemented and
   enforced for protected branches and PR branches.
 - The PR head SHA is current and all required checks are green for that SHA.
-- Machine review gate passes for the current head SHA, or an allowed human
-  waiver explicitly replaces it.
+- Machine review gate passes for the current head SHA.
 - All issue acceptance criteria and `Verify:` markers have evidence.
 - Required owner-doc writeback is complete, or a no-owner-doc-change receipt is
   present and justified.
