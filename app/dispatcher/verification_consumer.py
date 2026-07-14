@@ -12,6 +12,7 @@ import io
 import os
 import re
 import subprocess
+import tempfile
 import threading
 import tomllib
 import zipfile
@@ -52,6 +53,11 @@ class ProcessResult(Protocol):
 
 
 ProcessRunner = Callable[..., ProcessResult]
+
+_MAX_ARTIFACT_COMPRESSED_BYTES = 2_000_000
+_MAX_ARTIFACT_MEMBERS = 16
+_MAX_ARTIFACT_UNCOMPRESSED_BYTES = 2_000_000
+_MAX_REQUEST_BYTES = 1_000_000
 
 
 _UNSUPPORTED_CODEX_SCHEMA_KEYWORDS = frozenset(
@@ -149,6 +155,61 @@ class GhCliVerificationSource:
             raise RuntimeError(f"gh read failed for {endpoint}")
         return json.loads(result.stdout)
 
+    def _artifact_bytes(self, endpoint: str, artifact_id: int) -> bytes:
+        if self.runner is not subprocess.run:
+            result = self.runner(
+                ["gh", "api", endpoint],
+                capture_output=True,
+                text=False,
+                check=False,
+                timeout=60,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"failed to download verification artifact {artifact_id}")
+            if not isinstance(result.stdout, bytes):
+                raise RuntimeError(f"verification artifact {artifact_id} was not binary")
+            if len(result.stdout) > _MAX_ARTIFACT_COMPRESSED_BYTES:
+                raise ValueError("verification artifact exceeds compressed size limit")
+            return result.stdout
+
+        timed_out = threading.Event()
+        with tempfile.TemporaryFile() as stderr:
+            process = subprocess.Popen(
+                ["gh", "api", endpoint], stdout=subprocess.PIPE, stderr=stderr
+            )
+            assert process.stdout is not None
+
+            def expire() -> None:
+                timed_out.set()
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+
+            timer = threading.Timer(60, expire)
+            timer.start()
+            try:
+                payload = process.stdout.read(_MAX_ARTIFACT_COMPRESSED_BYTES + 1)
+                if len(payload) > _MAX_ARTIFACT_COMPRESSED_BYTES:
+                    try:
+                        process.terminate()
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=5)
+                    raise ValueError("verification artifact exceeds compressed size limit")
+                returncode = process.wait()
+            finally:
+                timer.cancel()
+            if timed_out.is_set():
+                raise RuntimeError(f"verification artifact {artifact_id} download timed out")
+            if returncode != 0:
+                raise RuntimeError(f"failed to download verification artifact {artifact_id}")
+            return payload
+
     def pending_requests(
         self, repository: str, *, limit: int = 20
     ) -> list[dict[str, object]]:
@@ -172,27 +233,33 @@ class GhCliVerificationSource:
                 or isinstance(artifact_id, bool)
             ):
                 continue
-            result = self.runner(
-                ["gh", "api", f"repos/{repository}/actions/artifacts/{artifact_id}/zip"],
-                capture_output=True,
-                text=False,
-                check=False,
-                timeout=60,
+            compressed_size = artifact.get("size_in_bytes")
+            if (
+                not isinstance(compressed_size, int)
+                or isinstance(compressed_size, bool)
+                or compressed_size < 0
+            ):
+                raise ValueError("verification artifact size metadata is malformed")
+            if compressed_size > _MAX_ARTIFACT_COMPRESSED_BYTES:
+                raise ValueError("verification artifact exceeds compressed size limit")
+            payload = self._artifact_bytes(
+                f"repos/{repository}/actions/artifacts/{artifact_id}/zip", artifact_id
             )
-            if result.returncode != 0:
-                raise RuntimeError(f"failed to download verification artifact {artifact_id}")
-            if not isinstance(result.stdout, bytes):
-                raise RuntimeError(f"verification artifact {artifact_id} was not binary")
-            with zipfile.ZipFile(io.BytesIO(result.stdout)) as archive:
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                members = archive.infolist()
+                if len(members) > _MAX_ARTIFACT_MEMBERS:
+                    raise ValueError("verification artifact contains too many members")
+                if sum(info.file_size for info in members) > _MAX_ARTIFACT_UNCOMPRESSED_BYTES:
+                    raise ValueError("verification artifact exceeds uncompressed size limit")
                 candidates = [
                     info
-                    for info in archive.infolist()
+                    for info in members
                     if info.filename == "request.json" or info.filename.endswith("/request.json")
                 ]
                 if len(candidates) != 1:
                     raise ValueError("verification artifact must contain exactly one request.json")
                 info = candidates[0]
-                if info.file_size > 1_000_000:
+                if info.file_size > _MAX_REQUEST_BYTES:
                     raise ValueError("verification request artifact exceeds size limit")
                 request = json.loads(archive.read(info))
             if not isinstance(request, dict):
