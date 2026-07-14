@@ -1,4 +1,4 @@
-"""Agent-led evening reflection on the existing durable chat-session surface."""
+"""Agent-led evening reflection owned by the durable chat-session surface."""
 
 from __future__ import annotations
 

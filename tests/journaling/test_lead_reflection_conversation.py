@@ -7,7 +7,7 @@ import pytest
 
 from app.chat.session_log import load_chat_sessions_for_note
 from app.journaling.day_context import assemble_day_context
-from app.journaling.reflection_conversation import (
+from app.chat.reflection_conversation import (
     ReflectionConversationService,
     ReflectionSettings,
     build_evening_reflection_offer,

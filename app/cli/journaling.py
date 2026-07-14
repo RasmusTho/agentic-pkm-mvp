@@ -10,7 +10,7 @@ import sys
 import click
 
 from app.journaling.day_context import assemble_day_context
-from app.journaling.reflection_conversation import ReflectionConversationService
+from app.chat.reflection_conversation import ReflectionConversationService
 from app.vault.manager import VaultContext
 
 
