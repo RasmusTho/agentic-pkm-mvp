@@ -32,10 +32,13 @@ becomes human-canonical only when the human promotes it through their own review
 
 ## Exclusions
 
-Never direct-write the capture inbox, companion notes, system-plane files, or the `_heimdal`
-control tree — see `.codex/skills/mimer-governed-boundary/SKILL.md`'s exclusion list. If the human
-asks to write into one of these, decline and redirect: inbox content goes through `mimer-capture`;
-the rest are runtime- or Bifrost-owned.
+The Sources zone (`<sources_dir_rel>/`, default `Sources/`) is never a direct app-agent write target;
+the exclusion covers all descendants (`Sources/**` by default), which are reserved for Heimdal-side
+sensor/acquisition writers. Never direct-write the capture inbox, companion notes, system-plane
+files, the Sources zone, or the `_heimdal` control tree — see
+`.codex/skills/mimer-governed-boundary/SKILL.md`'s exclusion list. If the human asks to write into one
+of these, decline and redirect: inbox content goes through `mimer-capture`; the rest are runtime-,
+Bifrost-, or Heimdal-owned.
 
 ## Write discipline (contract §6)
 
@@ -87,8 +90,9 @@ one-transport-per-note rule above.
 
 - No lifecycle/frontmatter mutation of a human note beyond what the human directed.
 - No promotion of workspace drafts to canonical standing — that is the human's act.
-- No writes to the `_heimdal` tree, companion notes, system-plane files, or the capture inbox,
-  ever.
+- No writes to the `_heimdal` tree, companion notes, system-plane files, the Sources zone
+  (`<sources_dir_rel>/`, default `Sources/`, including `Sources/**` by default), or the capture inbox,
+  ever; the Sources zone is never a direct app-agent write target.
 
 ## References
 
