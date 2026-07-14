@@ -46,7 +46,17 @@ def test_panel_llm_e2e_runs_only_after_merge() -> None:
     assert "'tests/agents/test_panel*.py'" in workflow
     assert "id: live-llm" in workflow
     assert "steps.live-llm.outputs.enabled == 'true'" in workflow
-    assert "Docker smoke runs after merge, not on pull requests." in workflow
+
+
+def test_smoke_docker_runs_for_stable_targeting_pull_requests() -> None:
+    workflow = CI_SMOKE_WORKFLOW.read_text(encoding="utf-8")
+
+    stable_or_post_merge = "github.event_name != 'pull_request' || github.base_ref == 'stable'"
+    ordinary_pull_request = "github.event_name == 'pull_request' && github.base_ref != 'stable'"
+
+    assert workflow.count(f"if: {stable_or_post_merge}") == 2
+    assert f"if: {ordinary_pull_request}" in workflow
+    assert "Docker smoke is skipped only for ordinary pull requests." in workflow
 
 
 def test_dedicated_subsystem_workflows_have_path_filters_and_browser_runs_post_merge() -> None:

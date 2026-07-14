@@ -283,7 +283,7 @@ jobs:
               - 'pyproject.toml'
 
       - name: "Docker smoke: worker emits startup log"
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.base_ref == 'stable'
         shell: bash
         run: |
           set -euo pipefail
@@ -329,7 +329,7 @@ jobs:
           exit 1
 
       - name: "CI gate: vaultwide panel verifier"
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.base_ref == 'stable'
         shell: bash
         run: |
           set -euo pipefail
@@ -464,9 +464,9 @@ jobs:
           bash scripts/verify_vaultwide_panel.sh
 
       - name: Skip docker smoke for docs-only PR
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && github.base_ref != 'stable'
         run: |
-          echo "Docker smoke runs after merge, not on pull requests."
+          echo "Docker smoke is skipped only for ordinary pull requests."
 
   panel-llm-e2e:
     runs-on: ubuntu-latest
