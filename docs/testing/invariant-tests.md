@@ -282,6 +282,107 @@ declarative-schema-impossible and therefore live here as the source of truth.
 - **Related docs / contracts / ADRs:** [authority-transition-flow](../architecture/authority-transition-flow.md) §4, [EXE charter](../boundaries/EXE.md), [EXECUTION_REQUEST](../contracts/EXECUTION_REQUEST.md); ADR-0019, ADR-0031.
 - **Related issues:** #2547, #2550, #2552.
 
+## Governed knowledge effect spine invariants
+
+These target-state probes define the production-call-site commitments for the logical effect chain.
+They do not claim that the transitional runtime paths already enforce the whole contract. Runtime
+slices promote a row from `future_runtime` only when the named production seam is exercised without
+mocking away GOV, the state owner/EXE effect, receipt persistence, or recovery state.
+
+### authority_bearing_producers_use_one_governed_effect_chain
+
+- **Purpose:** Every authority-bearing producer family enters the same ordered GOV → state owner/EXE
+  → receipt chain; no producer-specific side door authorizes or acknowledges a durable effect.
+- **Protected principle:** matrix #9, #10, #13, #15; GovernedWriteProtocol invariants.
+- **Affected boundaries:** HIX, CAO, GOV, HKA, MEM, EXE, SIP, DRI, OEF; Heimdal/external intake at the candidate seam.
+- **Required fixture / data:** the producer inventory in
+  `docs/GOVERNED_KNOWLEDGE_EFFECT_SPINE/DEFINE_EFFECT_SPINE_CONTRACTS.md`; production API,
+  orchestrator, eval-capture, state-owner, and EXE call sites with a real receipt sink.
+- **Expected failure mode:** a producer treats WriteGuard, persistence, an HTTP response, outbox event,
+  execution result, cursor, or OEF trace as authorization/accountability and bypasses a stage.
+- **Current enforcement:** `doc_only` / `future_runtime`.
+- **Eventual test path:**
+  `tests/invariants/test_governed_effect_spine.py::test_authority_bearing_producers_use_production_governed_chain`.
+- **Related docs / contracts / ADRs:** [GovernedWriteProtocol](../contracts/GOVERNED_WRITE_PROTOCOL.md),
+  [effect-spine inventory](../GOVERNED_KNOWLEDGE_EFFECT_SPINE/DEFINE_EFFECT_SPINE_CONTRACTS.md),
+  [functional ontology](../architecture/functional-ontology.md); ADR-0019.
+- **Related issues:** #3554; parent #3553.
+
+### orchestrator_effect_requires_prevalidated_decision_token
+
+- **Purpose:** A CAO/orchestrator real-tool effect reaches EXE only with a valid, bound DecisionToken;
+  execution never self-authorizes.
+- **Protected principle:** matrix #10; `execution_cannot_authorize_itself`.
+- **Affected boundaries:** CAO, GOV, EXE.
+- **Required fixture / data:** the production real-tool gate and vault-append execution seam
+  (`app/orchestrator/executor.py::_run_vault_append` or its governed successor), a real EXE request,
+  and a denying/mismatched-token case.
+- **Expected failure mode:** the real tool runs with `decision_token=None`, a mismatched token, or a
+  token invented by the orchestrator/EXE path.
+- **Current enforcement:** `future_runtime`; the current transitional ExecutionRequest permits a
+  missing token and therefore is not proof.
+- **Eventual test path:**
+  `tests/invariants/test_governed_effect_spine.py::test_orchestrator_real_tool_requires_prevalidated_decision_token`.
+- **Related docs / contracts / ADRs:** [EXECUTION_REQUEST](../contracts/EXECUTION_REQUEST.md),
+  [GovernedWriteProtocol](../contracts/GOVERNED_WRITE_PROTOCOL.md); ADR-0019.
+- **Related issues:** #3554; parent #3553.
+
+### eval_capture_cannot_self_promote_or_bypass_receipt
+
+- **Purpose:** Eval-capture may create a candidate, but only an explicit human disposition through
+  the governed production write seam changes its authority-bearing review state, with a durable
+  AuthorityReceipt after mutation.
+- **Protected principle:** matrix #9, #13; `observability_not_policy`.
+- **Affected boundaries:** OEF, GOV, HKA.
+- **Required fixture / data:** production dead-letter/UNKNOWN candidate call sites plus
+  `app/eval/failure_capture.py::promote_draft` / `reject_draft`, a human actor, real write seam, and
+  durable receipt sink.
+- **Expected failure mode:** an OEF finding makes itself golden/promoted, WriteGuard alone stands in
+  for authorization, or disposition succeeds without an AuthorityReceipt.
+- **Current enforcement:** `future_runtime`; current drafting/disposition is WriteGuard-gated but does
+  not implement the complete DecisionToken/AuthorityReceipt chain.
+- **Eventual test path:**
+  `tests/invariants/test_governed_effect_spine.py::test_eval_capture_disposition_uses_production_governed_chain`.
+- **Related docs / contracts / ADRs:** [GovernedWriteProtocol](../contracts/GOVERNED_WRITE_PROTOCOL.md),
+  [effect-spine inventory](../GOVERNED_KNOWLEDGE_EFFECT_SPINE/DEFINE_EFFECT_SPINE_CONTRACTS.md); ADR-0019.
+- **Related issues:** #3554; parent #3553.
+
+### governed_effect_partial_failure_reconciles_without_duplicate_mutation
+
+- **Purpose:** Mutation-success/receipt-failure and receipt-success/notification-failure remain
+  distinguishable and recover idempotently without replaying a completed mutation.
+- **Protected principle:** matrix #9, #13, #15; GovernedWriteProtocol partial-failure states.
+- **Affected boundaries:** GOV, state-owning subsystem or EXE, OEF.
+- **Required fixture / data:** production governed write/effect path, stable operation/effect id,
+  durable receipt sink and outbox, with fault injection at both stage boundaries.
+- **Expected failure mode:** an uncertain applied mutation is blind-retried, a duplicate effect is
+  produced, notification is mistaken for accountability, or success is acknowledged without a
+  durable AuthorityReceipt.
+- **Current enforcement:** `future_runtime`.
+- **Eventual test path:**
+  `tests/invariants/test_governed_effect_spine.py::test_partial_failure_reconciles_without_duplicate_mutation`.
+- **Related docs / contracts / ADRs:** [GovernedWriteProtocol](../contracts/GOVERNED_WRITE_PROTOCOL.md),
+  [effect-spine inventory](../GOVERNED_KNOWLEDGE_EFFECT_SPINE/DEFINE_EFFECT_SPINE_CONTRACTS.md); ADR-0019.
+- **Related issues:** #3554; parent #3553.
+
+### source_correction_repairs_derived_effects_idempotently
+
+- **Purpose:** A source/provenance correction preserves historical receipts while suppressing or
+  rebuilding every affected derived representation before it is served as current.
+- **Protected principle:** matrix #3, #13, #16; doctrine — provenance survives derivation.
+- **Affected boundaries:** SIP, DRI, RCA, GOV, OEF.
+- **Required fixture / data:** a receipted durable source, multiple derived rows, the production
+  correction-to-index/retrieval path, and repeated repair delivery.
+- **Expected failure mode:** corrected source leaves stale derived state live, repair changes or
+  deletes the original AuthorityReceipt, or replay produces divergent projection state.
+- **Current enforcement:** `future_runtime`.
+- **Eventual test path:**
+  `tests/invariants/test_governed_effect_spine.py::test_source_correction_repairs_derived_effects_idempotently`.
+- **Related docs / contracts / ADRs:** [metadata-bundle](../architecture/metadata-bundle.md),
+  [GovernedWriteProtocol](../contracts/GOVERNED_WRITE_PROTOCOL.md),
+  [effect-spine inventory](../GOVERNED_KNOWLEDGE_EFFECT_SPINE/DEFINE_EFFECT_SPINE_CONTRACTS.md); ADR-0018, ADR-0019.
+- **Related issues:** #3554; parent #3553.
+
 ### parent_aggregation_not_sibling_sharing
 
 - **Purpose:** A configured parent/master aggregation is allowed only as declared; it does **not** imply
