@@ -62,6 +62,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   before `retry_after`. Terminal completion additionally requires two fresh clean review receipts
   after the final durable repair attempt. Standard and strongest-capability repair budgets are
   persisted across restart.
+- Restart recovery compares authenticated live PR head truth with the durable current head before
+  fetching checks, reclaiming the lease, or resuming a coordinator session. Head movement fails
+  closed as stale; head rebinding remains an explicit live-truth- and lease-fenced repair action.
 - The schema-valid coordinator receipt carries ordered repair/review events into the same
   lease-fenced ledger as one atomic, deterministically identified batch. Exact receipt replay is a
   no-op, and a later invalid/conflicting event rolls back the whole batch; a no-repair delivery still
