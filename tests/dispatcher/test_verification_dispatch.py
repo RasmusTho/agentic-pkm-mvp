@@ -18,6 +18,13 @@ CLAIM_PRE_LOCK = "2030-01-01T00:00:00.000000+00:00"
 CLAIM_POST_LOCK = "2030-01-01T00:00:20.000000+00:00"
 
 
+def test_shared_request_fixture_carries_governing_issue() -> None:
+    payload = request()
+
+    assert payload["linked_issue"] == 3603
+    assert payload["supporting_issues"] == []
+
+
 class _ClaimClock:
     def __init__(self) -> None:
         self._value = CLAIM_PRE_LOCK
