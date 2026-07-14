@@ -23,7 +23,8 @@ meaning-bearing artifacts; receipts are authoritative only for lifecycle state, 
 
 - Primary subsystem: MEM — Machine Memory & Learning.
 - Secondary subsystems: GOV (transition receipts and authority guard), HKA (human-readable
-  provisional artifact), RCA (bounded read/cited-proposal admission), OEF (deterministic eval).
+  provisional artifact), PDM (content-free receipt persistence), RCA (bounded read/cited-proposal
+  admission), OEF (deterministic eval).
 - Boundary risk: critical. A missed call site can turn unreviewed material into hidden authority.
 
 ## Non-Goals
@@ -66,6 +67,12 @@ security/eval closure. The last task validates the composed capability, not only
 6. **Partial order is fail-closed.** If producer delivery lands before reader delivery, provisional
    records remain reviewable but are not recalled. If the reader lands without a valid record or
    provenance receipt, it excludes the item and emits a content-free diagnostic.
+7. **Markdown is the sole meaning-bearing record.** The typed provisional record is a read model
+   reconstructed from the Markdown artifact plus content-free lifecycle receipts; it is not a
+   second durable content store. A Markdown edit is reflected on the next read. A missing/deleted
+   artifact is excluded and reconciled as missing without resurrecting content from a receipt or
+   runtime cache. Receipt persistence may retain ids, hashes, transitions, actor/time, and artifact
+   references, but never the claim payload needed to reconstruct the note.
 
 ## Capability-Level Acceptance Criteria
 
@@ -109,4 +116,3 @@ replace deterministic call-site proof.
 
 Parent validation hub: #2314. Task Issues are filed from these specs after this directory merges and
 passes strict readiness validation. No task may claim #2314 itself.
-

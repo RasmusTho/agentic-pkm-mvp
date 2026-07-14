@@ -21,8 +21,10 @@ without allowing record existence to imply authority or admission.
 - Adds a provisional-memory record compatible with the canonical `MemoryItem` role constraints:
   `source_role=agent_memory`, `authority_state=noncanonical`, non-evidence role, explicit scope,
   provenance, review state, and lifecycle receipt references.
-- Extends the existing review-decision/receipt storage rather than creating a second lifecycle
-  ledger.
+- Defines a typed read model reconstructed from the Markdown artifact plus content-free lifecycle
+  receipts; it does not create or prescribe a second durable content store.
+- Uses the existing receipt architecture for transition semantics. Any backing-store change must
+  stay content-free and follow the owning PDM/GOV contract in its implementation Issue.
 - Defines reconciliation states for incomplete artifact/receipt pairs.
 
 ## Concretely
@@ -41,14 +43,24 @@ and lifecycle-vs-claim-truth distinction structural before a live path is introd
 - [ ] A provisional record is always noncanonical, scoped, provenance-bearing, and restricted to
   non-authoritative evidence roles. Verify: `tests/agent_memory/test_provisional_memory_record.py::test_record_pins_noncanonical_low_trust_roles`
 - [ ] Invalid action-authorizing or canonical values fail validation. Verify: `tests/agent_memory/test_provisional_memory_record.py::test_record_rejects_authority_escalation`
-- [ ] Lifecycle transitions reuse the durable decision/receipt ledger and distinguish terminal from
-  retryable partial state. Verify: `tests/agent_memory/test_provisional_memory_record.py::test_lifecycle_receipts_distinguish_terminal_and_retryable_state`
-- [ ] Existing promoted-memory and recall behavior is unchanged. Verify: `tests/agent_memory/test_memory_promotion.py` and `tests/agent_memory/test_guarded_recall_activation.py`
+- [ ] Lifecycle transitions use content-free receipts and distinguish terminal from retryable
+  partial state. Verify: `tests/agent_memory/test_provisional_memory_record.py::test_lifecycle_receipts_are_content_free_and_distinguish_retryable_state`
+- [ ] The read model follows edited Markdown and excludes a missing artifact without reconstructing
+  claim content from receipts. Verify: `tests/agent_memory/test_provisional_memory_record.py::test_record_rebuild_follows_markdown_and_never_resurrects_missing_content`
+- [ ] Existing promoted-memory and recall behavior is unchanged. Verify: `tests/agent_memory/test_memory_promotion.py::test_promoted_memory_preserves_provenance` and `tests/agent_memory/test_guarded_recall_activation.py::test_unreviewed_recall_cannot_authorize_writeback`
 
 ## How to Verify (Pre-Merge)
 
-Run the named record tests plus the existing promotion and guarded-recall suites. Inspect the store
-schema/API to confirm there is one lifecycle receipt authority and no new claim-truth store.
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q \
+  tests/agent_memory/test_provisional_memory_record.py \
+  tests/agent_memory/test_memory_promotion.py::test_promoted_memory_preserves_provenance \
+  tests/agent_memory/test_guarded_recall_activation.py::test_unreviewed_recall_cannot_authorize_writeback
+ruff check app tests
+```
+
+Inspect the persistence diff to confirm receipts are content-free and Markdown remains the only
+claim-content source.
 
 ## Out of Scope
 
@@ -67,4 +79,3 @@ schema/API to confirm there is one lifecycle receipt authority and no new claim-
 
 Create one implementation Issue under parent validation hub #2314. TCD hint: Sol/high because the
 record spans memory authority and durable lifecycle semantics.
-

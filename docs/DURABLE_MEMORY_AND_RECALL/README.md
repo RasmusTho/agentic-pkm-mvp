@@ -42,8 +42,8 @@ records that the receipt ledger is **authoritative for lifecycle state, not clai
 memory can still be wrong; promotion records that a transition occurred, not that the content is
 correct). WriteGuard is **health-state-only** today (`app/write_guard.py` gates on the health
 contract, not on a memory trust tier), so the trust-tier guard that enforces the provisional
-read/cited-proposal ceiling is delivered by the `docs/PROVISIONAL_MEMORY/` implementation chain
-under epic #2314 — words only here.
+read/cited-proposal ceiling is specified by the `docs/PROVISIONAL_MEMORY/` implementation chain
+under epic #2314 and remains undelivered until that chain is merged and accepted — words only here.
 
 ## Owner decision basis
 

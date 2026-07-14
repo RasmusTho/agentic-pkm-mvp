@@ -52,8 +52,17 @@ prevent a new recall caller from bypassing the ceiling.
 
 ## How to Verify (Pre-Merge)
 
-Run the named recall/call-site tests plus context-admissibility, context-bundle, guarded-recall, and
-retrieval-scope suites. The action-tier assertion must exercise the real consumer entry point.
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q \
+  tests/agent_memory/test_provisional_memory_call_sites.py \
+  tests/agent_memory/test_provisional_memory_recall.py \
+  tests/agent_memory/test_guarded_recall_activation.py \
+  tests/context_bundles \
+  tests/retrieval/test_scope_prefilter_before_rank.py
+ruff check app tests
+```
+
+The action-tier assertion must exercise the real consumer entry point.
 
 ## Out of Scope
 
@@ -72,4 +81,3 @@ retrieval-scope suites. The action-tier assertion must exercise the real consume
 
 Create after PROVISIONAL-MEMORY-02 merges. TCD hint: Sol/high due to retrieval/context authority and
 production consumer enforcement.
-

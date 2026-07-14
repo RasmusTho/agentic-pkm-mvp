@@ -43,14 +43,24 @@ authority invariant across production boundaries and both supported languages.
   trust result. Verify: `tests/eval/test_provisional_memory_boundary.py::test_bilingual_provisional_memory_boundary`
 - [ ] The end-to-end production chain is exercised from API write through guarded recall/context.
   Verify: `tests/agent_memory/test_provisional_memory_end_to_end.py::test_direct_write_remains_low_trust_through_recall`
-- [ ] Existing bilingual retrieval/memory metrics do not regress. Verify: `tests/eval/test_golden_metrics.py` and `python -m app.eval.run`
+- [ ] Existing bilingual retrieval/memory metrics do not regress. Verify: `tests/eval/test_golden_metrics.py::test_golden_eval_pipeline` and `tests/eval/test_golden_metrics.py::test_memory_recall_slice`
 - [ ] Parent #2314 receives a closure packet listing all child merges, test/eval evidence, owner-doc
   writeback, and any operator-only residual. Verify: GitHub issue #2314 comment headed `W7 capability validation receipt`
 
 ## How to Verify (Pre-Merge)
 
-Run the named security/e2e tests, `python -m app.eval.run`, focused memory/context suites, ruff, and
-the full non-pg suite. Attach the deterministic scorecard/summary to the PR and parent receipt.
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q \
+  tests/eval/test_provisional_memory_boundary.py \
+  tests/agent_memory/test_provisional_memory_end_to_end.py \
+  tests/eval/test_golden_metrics.py::test_golden_eval_pipeline \
+  tests/eval/test_golden_metrics.py::test_memory_recall_slice
+python -m app.eval.run
+ruff check app tests
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "not pg"
+```
+
+Attach the deterministic scorecard/summary to the PR and parent receipt.
 
 ## Out of Scope
 
@@ -69,4 +79,3 @@ the full non-pg suite. Attach the deterministic scorecard/summary to the PR and 
 
 Final implementation Issue under #2314. TCD hint: Sol/high-xhigh because this is the security and
 cross-system acceptance gate.
-

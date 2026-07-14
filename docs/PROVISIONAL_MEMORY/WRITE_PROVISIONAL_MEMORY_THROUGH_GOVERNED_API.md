@@ -49,9 +49,18 @@ live call-site check would leave the highest-risk boundary unenforced.
 
 ## How to Verify (Pre-Merge)
 
-Run the named API, failure, and call-site tests against a temporary vault. Run existing WriteGuard,
-memory-materialization, and review-decision-store suites. Assert artifact/receipt pairing after a
-simulated failure and restart.
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q \
+  tests/agent_memory/test_provisional_memory_api.py \
+  tests/agent_memory/test_provisional_memory_failures.py \
+  tests/agent_memory/test_provisional_memory_call_sites.py \
+  tests/agent_memory/test_memory_materialization.py \
+  tests/agent_memory/test_review_decision_store.py
+ruff check app tests
+```
+
+The failure tests use a temporary vault and fresh store instance to prove artifact/receipt pairing
+after restart.
 
 ## Out of Scope
 
@@ -75,4 +84,3 @@ incomplete pair remains excluded from recall until reconciliation resolves or su
 
 Create after PROVISIONAL-MEMORY-01 merges. TCD hint: Sol/high-xhigh due to authority, filesystem,
 partial-failure, and production API risk.
-
