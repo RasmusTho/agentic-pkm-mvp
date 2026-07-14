@@ -31,6 +31,12 @@ from app.builderops.ckm.gaps import GapDetectionConfig, detect_gaps
 from app.builderops.ckm.ingest_github import ingest_github
 from app.builderops.ckm.ingest_repo import ingest_repo
 from app.builderops.ckm.linkers import link_deterministic
+from app.builderops.ckm.overview_html import write_overview_html
+from app.builderops.ckm.projections import (
+    PROJECTION_FILENAMES as CKM_PROJECTION_FILENAMES,
+    render_capability_show,
+    write_projection as write_ckm_projection,
+)
 from app.builderops.ckm.semantic import (
     SemanticAssociationError,
     _confirm_edge_from_cli,
@@ -541,6 +547,58 @@ def ckm_gaps(
             "global evidence watermark but remain current for their unchanged evidence fingerprint",
             err=True,
         )
+
+
+@ckm.command("show", help="Render one capability as a non-authoritative CKM projection.")
+@click.argument("capability_slug")
+@click.pass_context
+def ckm_show(ctx: click.Context, capability_slug: str) -> None:
+    try:
+        output = render_capability_show(_ckm_store(ctx), capability_slug)
+    except (CkmValidationError, sqlite3.Error) as exc:
+        raise click.ClickException(f"ckm show failed: {exc}") from exc
+    click.echo(output, nl=False)
+
+
+@ckm.command("project", help="Write one non-authoritative CKM Markdown projection.")
+@click.option(
+    "--type",
+    "projection_type",
+    type=click.Choice(sorted(CKM_PROJECTION_FILENAMES)),
+    required=True,
+)
+@click.option(
+    "--out",
+    "output_dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    required=True,
+)
+@click.pass_context
+def ckm_project(ctx: click.Context, projection_type: str, output_dir: Path) -> None:
+    try:
+        result = write_ckm_projection(_ckm_store(ctx), projection_type, output_dir)
+    except (CkmValidationError, OSError, sqlite3.Error) as exc:
+        raise click.ClickException(f"ckm projection failed: {exc}") from exc
+    click.echo(f"{result.projection_type}\t{result.path}")
+
+
+@ckm.command("overview", help="Write the self-contained CKM Development Overview HTML.")
+@click.option(
+    "--out",
+    "output_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    required=True,
+)
+@click.pass_context
+def ckm_overview(ctx: click.Context, output_path: Path) -> None:
+    try:
+        store = _ckm_store(ctx)
+        if not store.db_path.is_file():
+            raise CkmValidationError(f"CKM database does not exist: {store.db_path}")
+        result = write_overview_html(store, output_path)
+    except (CkmValidationError, OSError, sqlite3.Error) as exc:
+        raise click.ClickException(f"ckm overview failed: {exc}") from exc
+    click.echo(result)
 
 
 @builderops.group("inquiry", help="Persist and inspect pre-ticket model inquiry artifacts.")
