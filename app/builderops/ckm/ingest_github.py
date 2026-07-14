@@ -57,16 +57,20 @@ def normalize_github_payload(payload: Mapping[str, Any], *, artifact_kind: str) 
     if artifact_kind not in {"issue", "pull_request"}:
         raise ValueError(f"unsupported GitHub artifact kind: {artifact_kind}")
     key_kind = "issue" if artifact_kind == "issue" else "pull"
+    pull_request = payload.get("pull_request")
+    merged_at = payload.get("merged_at")
+    if merged_at is None and isinstance(pull_request, Mapping):
+        merged_at = pull_request.get("merged_at")
     provenance = {
         "source_ref": f"github:{key_kind}:{number}",
         "extraction_method": "github_rest",
         "number": number,
         "title": str(payload.get("title", "")),
         "state": str(payload.get("state", "")),
-        "merged_at": payload.get("merged_at"),
+        "merged_at": merged_at,
         "labels": _labels(payload),
         "references": _references(payload),
-        "linked_pull_request": payload.get("pull_request"),
+        "linked_pull_request": pull_request,
         "closing_references": payload.get("closing_issues_references", []),
         "changed_files": payload.get("changed_files", [] if artifact_kind == "pull_request" else None),
         "updated_at": updated_at,

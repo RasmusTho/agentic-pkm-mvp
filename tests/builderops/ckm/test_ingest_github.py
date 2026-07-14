@@ -52,6 +52,18 @@ def test_rest_payload_normalization_with_refs() -> None:
     assert pull_payload["merged_at"] == "2026-07-01T10:00:30Z"
 
 
+def test_pull_issue_payload_preserves_nested_merged_at() -> None:
+    pull = _pull()
+    pull.pop("merged_at")
+    pull["pull_request"] = {"merged_at": "2026-07-01T10:00:30Z"}
+
+    payload = json.loads(
+        normalize_github_payload(pull, artifact_kind="pull_request").provenance
+    )
+
+    assert payload["merged_at"] == "2026-07-01T10:00:30Z"
+
+
 def test_updated_at_cursor_incremental(tmp_path: Path) -> None:
     responses = {"issues": [_issue()], "pulls": [_pull()]}
 
