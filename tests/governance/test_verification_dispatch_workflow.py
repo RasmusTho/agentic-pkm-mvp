@@ -97,3 +97,12 @@ def test_workflow_permissions_match_used_read_apis() -> None:
     assert 'repos/${REPOSITORY}/commits/${RUN_HEAD_SHA}/pulls' in text
     assert 'repos/${REPOSITORY}/pulls/${PR_NUMBER}' in text
     assert 'repos/${REPOSITORY}/issues/${ISSUE_NUMBER}' in text
+
+
+def test_workflow_uses_explicit_governing_issue_contract() -> None:
+    text = _workflow_text()
+
+    assert "resolve_issue_contract" in text
+    assert "governing_issue" in text
+    assert "re.search" not in text
+    assert "(?:Fixes|Closes|Resolves)" not in text
