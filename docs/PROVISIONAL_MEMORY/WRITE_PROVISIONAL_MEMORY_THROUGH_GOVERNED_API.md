@@ -82,5 +82,5 @@ incomplete pair remains excluded from recall until reconciliation resolves or su
 
 ## Related GitHub Issues
 
-Create after PROVISIONAL-MEMORY-01 merges. TCD hint: Sol/high-xhigh due to authority, filesystem,
+Filed as #3719, blocked by #3718. TCD hint: Sol/high-xhigh due to authority, filesystem,
 partial-failure, and production API risk.

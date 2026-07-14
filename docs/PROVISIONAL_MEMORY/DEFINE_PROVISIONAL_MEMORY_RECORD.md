@@ -77,5 +77,5 @@ claim-content source.
 
 ## Related GitHub Issues
 
-Create one implementation Issue under parent validation hub #2314. TCD hint: Sol/high because the
-record spans memory authority and durable lifecycle semantics.
+Filed as #3718 under parent validation hub #2314. TCD hint: Sol/high because the record spans memory
+authority and durable lifecycle semantics.
