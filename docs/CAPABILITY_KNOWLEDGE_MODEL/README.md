@@ -57,11 +57,11 @@ Partial-failure walk: seed applied but ingestion fails → registry exists with 
 
 ## Acceptance criteria (capability level)
 
-- [ ] The CEG exists in the BuilderOps store, seeded from SBS + Capability Contract Model, populated with evidence from repo + GitHub sources, and rebuildable from scratch. Verify: `tests/builderops/ckm/test_rebuild_roundtrip.py::test_drop_and_rebuild_reproduces_graph`
-- [ ] Every capability has a seven-dimension assessment where every dimension cites its evidence, with candidate/confirmed share visible. Verify: `tests/builderops/ckm/test_assessment_engine.py::test_every_dimension_cites_evidence`
-- [ ] Gap and missing-evidence findings are generated and specific (capability + dimension + citation). Verify: `tests/builderops/ckm/test_gap_detection.py::test_findings_name_capability_dimension_and_citation`
-- [ ] Projections + CLI + HTML overview exist, self-identify as projections, and carry watermarks. Verify: `tests/builderops/ckm/test_projections.py::test_all_egress_self_identifies_with_watermark`
-- [ ] The orthogonality contract holds on the live path. Verify: `tests/builderops/ckm/test_evidence_kind_orthogonality.py::test_ckm_never_touches_runtime_evidence_role`
+- [x] The CEG exists in the BuilderOps store, seeded from SBS + Capability Contract Model, populated with evidence from repo + GitHub sources, and rebuildable from scratch. Verify: `tests/builderops/ckm/test_rebuild_roundtrip.py::test_drop_and_rebuild_reproduces_graph`
+- [x] Every capability has a seven-dimension assessment where every dimension cites its evidence, with candidate/confirmed share visible. Verify: `tests/builderops/ckm/test_assessment_engine.py::test_every_dimension_cites_evidence`
+- [x] Gap and missing-evidence findings are generated and specific (capability + dimension + citation). Verify: `tests/builderops/ckm/test_gap_detection.py::test_findings_name_capability_dimension_and_citation`
+- [x] Projections + CLI + HTML overview exist, self-identify as projections, and carry watermarks. Verify: `tests/builderops/ckm/test_projections.py::test_all_egress_self_identifies_with_watermark` and `tests/builderops/ckm/test_overview_html.py::test_projection_footer_always_present`
+- [x] The orthogonality contract holds on the live path. Verify: `tests/builderops/ckm/test_evidence_kind_orthogonality.py::test_ckm_never_touches_runtime_evidence_role`
 - [ ] Owner has viewed the Development Overview against the real repo and the parent issue records the validation receipt. Verify: parent feature issue validation comment (operator receipt)
 
 ## Relationship to GitHub issues

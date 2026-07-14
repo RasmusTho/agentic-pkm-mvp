@@ -19,10 +19,10 @@ Create the confirmed structural spine of the Capability Evidence Graph from link
 
 Implements `app/builderops/ckm/linkers.py` — each linker reads ingested artifacts + the seeded registry and emits `ckm_evidence_edge` rows with `extraction_method=deterministic`, lifecycle `confirmed` (OD-K5), and a `basis` provenance string naming the mechanical rule that fired:
 
-- **matrix linker** — parses `docs/architecture/traceability-matrix.md` rows; every cited doc/ADR/schema/test/issue becomes evidence for the capability mapped from the row's control boundaries (`boundary_ref` on seeded capabilities).
+- **matrix linker** — parses `docs/architecture/traceability-matrix.md` rows. A row's control boundaries (`boundary_ref` on seeded capabilities) define a candidate pool, not a license to copy every citation to every sibling. When a boundary has multiple seeded capabilities, an edge is emitted only when the matrix row or cited source names that capability, or the citation is that capability's exact `seed_source`; the `basis` records the row, exact citation, and source-backed selector. Functional source evidence therefore requires an explicit `app/...` citation in the selected matrix row. A test citation never turns all of that test's imports into source evidence. The test↔code linker may attach test evidence only after an imported source file is already deterministically capability-linked.
 - **spec-directory linker** — task files under a spec directory (frontmatter `parent_capability`) become `spec` evidence for that capability; their `Related GitHub Issues` / issue back-references (`Implements {DIR}/{TASK}` pattern from issue bodies captured by CKM-04) link issues/PRs to the same capability.
 - **ADR linker** — ADR files referencing an owner doc that is a capability's `seed_source` become `adr` evidence for it.
-- **test↔code linker** — mirrored paths (`tests/x/test_y.py` ↔ `app/x/y.py`) plus explicit imports (AST-level) attach `test` evidence to whichever capability the source module is already linked to via seed/spec edges (transitive one hop, recorded in `basis`).
+- **test↔code linker** — mirrored paths (`tests/x/test_y.py` ↔ `app/x/y.py`) plus explicit imports (AST-level) attach `test` evidence to whichever capability the source module is already linked to by a confirmed deterministic source edge (transitive one hop, recorded in `basis`). Imports can add test evidence; they can never create source evidence.
 - **github-ref linker** — issue/PR records whose captured refs name a capability's `seed_source` doc or spec directory become `issue`/`pull_request` evidence, with `maturity_dimension` hints (merged PR → functional completeness; closing an issue labeled `type:task` → requirement coverage).
 
 Each linker is idempotent (INV-CKM-7: natural key = artifact+capability+basis) and re-runs incrementally over artifacts newer than its last watermark. CLI: `python -m app.builderops ckm link`.
@@ -42,8 +42,10 @@ If the deterministic spine is thin or wrong, assessment quality collapses and CK
 
 ## Acceptance Criteria
 
-- [ ] The matrix linker reproduces, at minimum, every doc/test/issue citation from the live traceability matrix as edges bound to the correct boundary-mapped capabilities.
+- [ ] The matrix linker reproduces live matrix citations for unambiguous boundaries and capability-specific citations beneath shared boundaries without mechanically sharing evidence among siblings.
   - Verify: `tests/builderops/ckm/test_linkers.py::test_matrix_rows_become_edges_on_live_matrix`
+- [ ] Live Retrieval evidence is mechanically distinct from planned Context building evidence, and every shared-boundary selector resolves to the matrix row or cited source text.
+  - Verify: `tests/builderops/ckm/test_linkers.py::test_live_retrieval_has_capability_specific_functional_evidence` and `tests/builderops/ckm/test_linkers.py::test_shared_boundary_evidence_is_capability_specific`
 - [ ] Every emitted edge has `extraction_method=deterministic`, lifecycle `confirmed`, and a non-empty `basis` naming its rule.
   - Verify: `tests/builderops/ckm/test_linkers.py::test_edges_carry_method_lifecycle_basis`
 - [ ] Linkers are idempotent and incremental (unchanged inputs ⇒ zero new edges; one new artifact ⇒ only its edges).
@@ -54,7 +56,7 @@ If the deterministic spine is thin or wrong, assessment quality collapses and CK
 ## How to Verify (Pre-Merge)
 
 - `python -m pytest tests/builderops/ckm/test_linkers.py -q`
-- Live run: seed + ingest + link on the real repo; spot-check 5 edges against their basis (e.g. matrix row 7 → RCA capabilities).
+- Live run: seed + ingest + link on the real repo; spot-check 5 edges against their basis (e.g. matrix row 7 selects Retrieval beneath RCA without assigning the same evidence to Context building).
 - Full `pytest -m "not pg"` before PR.
 
 ## Out of Scope

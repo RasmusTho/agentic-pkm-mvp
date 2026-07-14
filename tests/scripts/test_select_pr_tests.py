@@ -240,6 +240,22 @@ def test_store_ingest_change_selects_its_owned_contract_tests() -> None:
     assert "tests/architecture" in selection.targets
 
 
+def test_outbox_worker_change_selects_worker_regressions() -> None:
+    """Outbox-worker changes must reach pytest, not fail as unowned in CI."""
+    selection = select_tests(
+        ["app/workers/outbox_worker.py", "tests/workers/test_outbox_worker.py"]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("outbox_worker",)
+    assert selection.unowned_paths == ()
+    assert "tests/workers" in selection.targets
+    assert "tests/worker" in selection.targets
+    assert "tests/services/test_outbox_idempotency.py" in selection.targets
+    assert "tests/events" in selection.targets
+    assert "tests/workers/test_outbox_worker.py" in selection.targets
+
+
 def test_heimdal_capture_adapter_change_has_a_ci_owner() -> None:
     selection = select_tests(["app/heimdal/capture_adapter.py", "tests/heimdal/test_capture_adapter.py"])
 

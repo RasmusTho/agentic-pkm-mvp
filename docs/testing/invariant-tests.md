@@ -935,6 +935,28 @@ The Settings Spine (feature #3156, Option B ruling) consolidates five settings s
 scopes and one spine. Each SET invariant below is a fitness rule the spine must satisfy; they are
 added as their child slices land.
 
+### settings_take_effect_or_fail_loud
+
+- **Purpose:** Vault-authored settings take effect in running services at startup and on edit, or a
+  degraded state is surfaced loudly on the health contract — a service never silently runs on pydantic
+  code defaults while a vault with settings sources is selected.
+- **Protected principle:** SET-1 (settings take effect or fail loud); closes audit F1, the same
+  silent-false-green class the correctness kernel targeted.
+- **Affected boundaries:** WSP (settings resolution); DRI (bundle is a rebuildable projection); OEF
+  (health signal).
+- **Required fixture / data:** a settings source dir (`compiler.VAULT`) with a source `.md` overriding
+  a default; a redirected runtime projection dir; an invalid-YAML source for the degrade case.
+- **Expected failure mode:** a deployed container ignores the vault and serves hardcoded defaults with
+  nothing signalling it (audit F1); or an invalid edit silently falls back to code defaults.
+- **Current enforcement:** `runtime_test` — delivered by #3159 (SETTINGS-01). The production ingestion
+  entrypoint (`app/settings/ingestion.py::ingest_settings`) is driven directly, and the degraded state
+  is asserted from the production reload call site.
+- **Eventual test path:** `tests/settings/test_ingestion_startup.py` (passes today).
+- **Related docs / contracts:** `docs/SETTINGS_SPINE/WIRE_SETTINGS_INGESTION.md`,
+  `docs/audits/SETTINGS_ARCHITECTURE_2026-07-07.md :: F1`, `docs/OBSERVABILITY.md` (health
+  `settings` field).
+- **Related issues:** #3159; parent #3156.
+
 ### single_default_registry
 
 - **Purpose:** Every behavior-shaping environment default is declared exactly once; no call site

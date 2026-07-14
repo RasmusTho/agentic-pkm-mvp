@@ -13,12 +13,13 @@ schema level, not only in application code.
 
 from __future__ import annotations
 
-CKM_SCHEMA_VERSION = 2
+CKM_SCHEMA_VERSION = 4
 
 CKM_TABLE_NAMES = (
     "ckm_capability",
     "ckm_artifact",
     "ckm_evidence_edge",
+    "ckm_evidence_edge_history",
     "ckm_assessment",
     "ckm_finding",
     "ckm_watermark",
@@ -87,6 +88,31 @@ CKM_DDL_STATEMENTS = [
     ON ckm_evidence_edge(artifact_id)
     """,
     """
+    CREATE TABLE IF NOT EXISTS ckm_evidence_edge_history (
+        history_id TEXT PRIMARY KEY,
+        edge_id TEXT NOT NULL,
+        artifact_id TEXT NOT NULL,
+        capability_id TEXT NOT NULL,
+        evidence_kind TEXT NOT NULL,
+        polarity TEXT NOT NULL,
+        maturity_dimension TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        extraction_method TEXT NOT NULL,
+        model TEXT,
+        provider TEXT,
+        lifecycle TEXT NOT NULL,
+        source_ref TEXT NOT NULL,
+        basis TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        retired_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_ckm_evidence_edge_history_edge
+    ON ckm_evidence_edge_history(edge_id, retired_at)
+    """,
+    """
     CREATE TABLE IF NOT EXISTS ckm_assessment (
         id TEXT PRIMARY KEY,
         capability_id TEXT NOT NULL REFERENCES ckm_capability(id),
@@ -104,7 +130,12 @@ CKM_DDL_STATEMENTS = [
         architectural_stability_citations TEXT NOT NULL,
         requirement_coverage REAL NOT NULL,
         requirement_coverage_citations TEXT NOT NULL,
+        candidate_shares TEXT NOT NULL,
+        formula_ids TEXT NOT NULL,
         aggregate REAL NOT NULL,
+        aggregate_formula_id TEXT NOT NULL,
+        low_confidence INTEGER NOT NULL CHECK (low_confidence IN (0, 1)),
+        edge_fingerprint TEXT NOT NULL,
         watermark_set TEXT NOT NULL,
         valid_from TEXT NOT NULL,
         asserted_at TEXT NOT NULL

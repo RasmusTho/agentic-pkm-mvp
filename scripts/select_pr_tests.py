@@ -331,6 +331,25 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ("tests/events", "tests/receipts", "tests/contracts"),
     ),
     (
+        # The outbox worker is the production consumer for event delivery, but
+        # it sits outside app/events/. Keep its poison-row and heartbeat
+        # regressions owned so CI runs them rather than fail-closing as
+        # unowned before pytest starts.
+        "outbox_worker",
+        (
+            "app/workers/outbox_worker.py",
+            "tests/workers/",
+            "tests/worker/",
+            "tests/services/test_outbox_idempotency.py",
+        ),
+        (
+            "tests/workers",
+            "tests/worker",
+            "tests/services/test_outbox_idempotency.py",
+            "tests/events",
+        ),
+    ),
+    (
         "heimdal_mimer",
         (
             "app/heimdal/",

@@ -7,7 +7,7 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from app.builderops.cli import builderops
-from app.builderops.ckm.ingest_github import ingest_github, normalize_github_payload
+from app.builderops.ckm.ingest_github import _gh_fetch, ingest_github, normalize_github_payload
 from app.builderops.ckm.store import CkmStore
 
 
@@ -52,6 +52,18 @@ def test_rest_payload_normalization_with_refs() -> None:
     assert pull_payload["merged_at"] == "2026-07-01T10:00:30Z"
 
 
+def test_pull_issue_payload_preserves_nested_merged_at() -> None:
+    pull = _pull()
+    pull.pop("merged_at")
+    pull["pull_request"] = {"merged_at": "2026-07-01T10:00:30Z"}
+
+    payload = json.loads(
+        normalize_github_payload(pull, artifact_kind="pull_request").provenance
+    )
+
+    assert payload["merged_at"] == "2026-07-01T10:00:30Z"
+
+
 def test_updated_at_cursor_incremental(tmp_path: Path) -> None:
     responses = {"issues": [_issue()], "pulls": [_pull()]}
 
@@ -68,6 +80,32 @@ def test_updated_at_cursor_incremental(tmp_path: Path) -> None:
     updated = ingest_github(store, fetch=fetch)
     assert updated["issues"]["changed"] == 1
     assert len([item for item in store.list_artifacts() if item.source == "github_issues"]) == 1
+
+
+def test_github_pull_fetch_uses_cursor_supported_endpoint(monkeypatch) -> None:
+    calls: list[str] = []
+    pull = {**_pull(), "pull_request": {"url": "https://example.test/pulls/77"}}
+
+    def fake_run(args, **_kwargs):
+        endpoint = args[-1]
+        calls.append(endpoint)
+        if endpoint.startswith("repos/example/repo/issues?"):
+            payload = [[_issue(), pull]]
+        elif endpoint == "repos/example/repo/pulls/77/files?per_page=100":
+            payload = [[{"filename": "app/builderops/ckm/ingest_github.py"}]]
+        else:
+            raise AssertionError(f"unexpected endpoint: {endpoint}")
+        return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr("app.builderops.ckm.ingest_github.subprocess.run", fake_run)
+
+    records = _gh_fetch("example/repo")("pulls", "2026-07-01T10:00:00Z")
+
+    assert records == [{**pull, "changed_files": ["app/builderops/ckm/ingest_github.py"]}]
+    assert calls == [
+        "repos/example/repo/issues?state=all&per_page=100&since=2026-07-01T10:00:00Z",
+        "repos/example/repo/pulls/77/files?per_page=100",
+    ]
 
 
 def test_offline_degrade_preserves_watermark_via_entrypoint(tmp_path: Path, monkeypatch) -> None:
