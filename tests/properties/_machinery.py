@@ -637,7 +637,9 @@ def find_write_frontmatter_call_sites(root: Path = APP_ROOT) -> list[tuple[str, 
 # gap for this port (the P-1 census gap the issue names: a live unguarded
 # caller in ``app/mcp/vault_tools.py`` reached the vault through this helper
 # with no WriteGuard anywhere on its call path). Every production call site is
-# listed here so a NEW call site added later without port-or-caller coverage
+# listed here by stable ``(path, enclosing scope, call ordinal)`` identity, so
+# ordinary source-line drift cannot invalidate an unchanged classification and
+# a NEW call site added later without port-or-caller coverage
 # fails this gate instead of silently shipping the next unguarded-seam
 # regression -- mirroring ``WRITE_FRONTMATTER_SITE_CLASSIFICATION``'s shape
 # exactly (closed set, one-line justification per entry, checked against
@@ -651,57 +653,57 @@ def find_write_frontmatter_call_sites(root: Path = APP_ROOT) -> list[tuple[str, 
 #   "guarded_by_caller" -- in addition to the port guard, the caller ALSO
 #                           asserts its own action string caller-side
 #                           (defense-in-depth, pre-dates #2953).
-WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
-    ("app/chat/session_log.py", 68): (
+WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
+    ("app/chat/session_log.py", "SessionLogWriter.open_session", 1): (
         "guarded_by_caller: SessionLogWriter.open_session asserts "
         "DEFAULT_WRITE_GUARD.assert_writes_allowed(CHAT_SESSION_PERSIST_ACTION) "
         "before resolving identity and preparing the session artifact, in "
         "addition to the port's own guard (#2807)."
     ),
-    ("app/briefing/compose.py", 254): (
+    ("app/briefing/compose.py", "_atomic_write", 1): (
         "guarded_by_caller: compose_briefing asserts write_guard."
         "assert_writes_allowed(BRIEFING_WRITE_ACTION) before the private atomic "
         "staging directory is created, and passes the same guard/action through "
         "to the port's own guard (#3315)."
     ),
-    ("app/relevance/materialization.py", 66): (
+    ("app/relevance/materialization.py", "materialize_moment", 1): (
         "guarded_by_caller: materialize_moment asserts write_guard."
         "assert_writes_allowed(MOMENT_MATERIALIZE_ACTION) immediately before "
         "this call, in addition to the port's own guard (#2953)."
     ),
-    ("app/agent_memory/materialization.py", 77): (
+    ("app/agent_memory/materialization.py", "materialize_promoted_memory", 1): (
         "guarded_by_caller: materialize_promoted_memory asserts write_guard."
         "assert_writes_allowed(MEMORY_MATERIALIZATION_ACTION) immediately "
         "before this call, in addition to the port's own guard (#2953)."
     ),
-    ("app/knowledge_acquisition/candidate_writeback.py", 313): (
+    ("app/knowledge_acquisition/candidate_writeback.py", "write_candidate_note", 1): (
         "guarded_by_caller: write_candidate_note asserts write_guard."
         "assert_writes_allowed(CANDIDATE_WRITE_ACTION) immediately before "
         "this call, in addition to the port's own guard (#2953)."
     ),
-    ("app/eval/failure_capture.py", 258): (
+    ("app/eval/failure_capture.py", "_write_draft", 1): (
         "guarded_by_caller: the shared draft-write helper asserts "
         "write_guard.assert_writes_allowed(FAILURE_CAPTURE_DRAFT_ACTION) "
         "immediately before this call, in addition to the port's own guard "
         "(#2953)."
     ),
-    ("app/eval/failure_capture.py", 561): (
+    ("app/eval/failure_capture.py", "_decide", 1): (
         "guarded_by_caller: same shared draft-write helper as line 258 "
         "(second draft-kind call site), same caller-side assert plus the "
         "port's own guard (#2953)."
     ),
-    ("app/services/commitment_persistence.py", 140): (
+    ("app/services/commitment_persistence.py", "persist_commitment", 1): (
         "guarded_by_caller: the persistence entrypoint asserts write_guard."
         "assert_writes_allowed(COMMITMENT_PERSIST_ACTION) immediately before "
         "this call, in addition to the port's own guard (#2953)."
     ),
-    ("app/mcp/vault_tools.py", 115): (
+    ("app/mcp/vault_tools.py", "append_note", 1): (
         "guarded_by_port: append_note had NO caller-side WriteGuard assert on "
         "`main` before #2953 (the issue's named live violator) -- now closed "
         "by the port's own unconditional guard-at-seam assertion, exactly the "
         "way #2910 closed the absolute-path port's unguarded sites."
     ),
-    ("app/heimdal/entity_register.py", 297): (
+    ("app/heimdal/entity_register.py", "EntityRegister._write_entry", 1): (
         "guarded_by_caller: EntityRegister._write_entry asserts write_guard."
         "assert_writes_allowed(REGISTER_WRITE_ACTION) immediately before this "
         "call, in addition to the port's own guard (#3038, Epic #3019 A1) -- "
@@ -711,7 +713,7 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "related repair the first time this census machinery is touched again "
         "after later Heimdal slices shifted the file."
     ),
-    ("app/heimdal/settings_notes.py", 651): (
+    ("app/heimdal/settings_notes.py", "write_settings_note", 1): (
         "guarded_by_caller: write_settings_note passes write_guard through to "
         "write_note_relative, which asserts write_guard.assert_writes_allowed"
         "(action) at the port itself before any I/O (#2953); callers such as "
@@ -721,21 +723,21 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "re-pinned per this census's own convention as a directly-related "
         "repair the next time the machinery was touched (#3177)."
     ),
-    ("app/heimdal/candidate_projection.py", 382): (
+    ("app/heimdal/candidate_projection.py", "write_candidate_note", 1): (
         "guarded_by_caller: write_candidate_note asserts write_guard."
         "assert_writes_allowed(CANDIDATE_WRITE_ACTION) immediately before this "
         "call (converting a blocked write into a loud, item-scoped, re-runnable "
         "'blocked' result), in addition to the port's own guard (#3031, Epic "
         "#3019 A11 Mimer projector)."
     ),
-    ("app/heimdal/capture_note.py", 331): (
+    ("app/heimdal/capture_note.py", "write_capture_note", 1): (
         "guarded_by_port: write_capture_note passes write_guard through to "
         "write_note_relative, which asserts write_guard.assert_writes_allowed"
         "(action) at the port itself before any I/O (#2953); the function's "
         "own monotonic-status check is not a write gate, so port coverage is "
         "what guards this seam (#3035, Epic #3019 A15 capture note / J0)."
     ),
-    ("app/episodes/store.py", 217): (
+    ("app/episodes/store.py", "write_episode_note", 1): (
         "guarded_by_port: write_episode_note passes write_guard (and the "
         "distinct episodes.write_note action) through to write_note_relative, "
         "which asserts write_guard.assert_writes_allowed(action) at the port "
@@ -746,7 +748,7 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "once to supply an opt-in expected_version); re-pinned per this "
         "census's own directly-related-repair convention (#3450)."
     ),
-    ("app/episodes/segmenter.py", 897): (
+    ("app/episodes/segmenter.py", "_write_fusion_receipt", 1): (
         "guarded_by_port: _write_fusion_receipt passes write_guard (and the "
         "distinct episodes.cross_scope_fusion_receipt action) through to "
         "write_note_relative, which asserts write_guard.assert_writes_allowed"
@@ -758,7 +760,7 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "census's own directly-related-repair convention the next time the "
         "machinery was touched (#3329)."
     ),
-    ("app/standing_questions/question_store.py", 165): (
+    ("app/standing_questions/question_store.py", "QuestionStore._write", 1): (
         "guarded_by_caller: QuestionStore._write asserts self.write_guard."
         "assert_writes_allowed(WRITE_ACTION) on the line immediately before this "
         "call (question_store.py:164), before any serialisation, path creation, or "
@@ -769,7 +771,9 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
 }
 
 
-def find_write_note_relative_call_sites(root: Path = APP_ROOT) -> list[tuple[str, int]]:
+def find_write_note_relative_call_sites(
+    root: Path = APP_ROOT, *, repo_root: Path = REPO_ROOT
+) -> list[tuple[str, str, int]]:
     """AST-scan ``app/**/*.py`` for ``write_note_relative(...)`` call sites.
 
     Matches direct-name calls to ``write_note_relative`` (imported by name
@@ -780,7 +784,7 @@ def find_write_note_relative_call_sites(root: Path = APP_ROOT) -> list[tuple[str
     so this scanner itself cannot become a new escape hatch (#2953, mirrors
     ``find_write_frontmatter_call_sites``).
     """
-    sites: list[tuple[str, int]] = []
+    sites: list[tuple[str, str, int]] = []
     for path in sorted(root.rglob("*.py")):
         try:
             source = path.read_text(encoding="utf-8")
@@ -790,17 +794,42 @@ def find_write_note_relative_call_sites(root: Path = APP_ROOT) -> list[tuple[str
             tree = ast.parse(source, filename=str(path))
         except SyntaxError:
             continue
-        rel = str(path.relative_to(REPO_ROOT))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) and node.name == "write_note_relative":
-                continue
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            if isinstance(func, ast.Name) and func.id == "write_note_relative":
-                sites.append((rel, node.lineno))
-            elif isinstance(func, ast.Attribute) and func.attr == "write_note_relative":
-                sites.append((rel, node.lineno))
+        rel = str(path.relative_to(repo_root))
+
+        class _WriteNoteRelativeVisitor(ast.NodeVisitor):
+            def __init__(self) -> None:
+                self.scope: list[str] = []
+                self.call_counts: dict[str, int] = {}
+
+            def _visit_scope(self, node: ast.AST, name: str) -> None:
+                self.scope.append(name)
+                self.generic_visit(node)
+                self.scope.pop()
+
+            def visit_ClassDef(self, node: ast.ClassDef) -> None:
+                self._visit_scope(node, node.name)
+
+            def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                self._visit_scope(node, node.name)
+
+            def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+                self._visit_scope(node, node.name)
+
+            def visit_Call(self, node: ast.Call) -> None:
+                func = node.func
+                is_write_note_relative = (
+                    isinstance(func, ast.Name) and func.id == "write_note_relative"
+                ) or (
+                    isinstance(func, ast.Attribute) and func.attr == "write_note_relative"
+                )
+                if is_write_note_relative:
+                    qualname = ".".join(self.scope) or "<module>"
+                    ordinal = self.call_counts.get(qualname, 0) + 1
+                    self.call_counts[qualname] = ordinal
+                    sites.append((rel, qualname, ordinal))
+                self.generic_visit(node)
+
+        _WriteNoteRelativeVisitor().visit(tree)
     return sites
 
 

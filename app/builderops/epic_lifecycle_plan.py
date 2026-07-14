@@ -328,34 +328,39 @@ def _plan_done(
 
     terminal_projection_allowed = check_verdict != "failed"
 
-    if issue_terminal and terminal_projection_allowed:
-        _plan_project_status(
-            plan,
-            bucket="issue_project_status",
-            target=f"issue:{issue_number}",
-            current=issue["project_status"],
-            desired="Done",
-            command=_project_status_command("ISSUE_ITEM_ID", "DONE_OPTION_ID"),
-            reason="closed Issue is terminal GitHub truth",
-        )
-    elif pr_terminal:
+    if issue_terminal:
+        if terminal_projection_allowed:
+            _plan_project_status(
+                plan,
+                bucket="issue_project_status",
+                target=f"issue:{issue_number}",
+                current=issue["project_status"],
+                desired="Done",
+                command=_project_status_command("ISSUE_ITEM_ID", "DONE_OPTION_ID"),
+                reason="closed Issue is terminal GitHub truth",
+            )
+    else:
         plan["blocked_reasons"].append("issue-not-closed")
-        plan["authority_notes"].append(
-            "A terminal PR does not by itself close the Issue; verification-and-closure owns issue closure."
-        )
+        if pr_terminal:
+            plan["authority_notes"].append(
+                "A terminal PR does not by itself close the Issue; "
+                "verification-and-closure owns issue closure."
+            )
 
-    if pull_request is not None and pr_terminal and terminal_projection_allowed:
-        _plan_project_status(
-            plan,
-            bucket="pr_project_status",
-            target=f"pr:{pull_request['number']}",
-            current=pull_request["project_status"],
-            desired="Done",
-            command=_project_status_command("PR_ITEM_ID", "DONE_OPTION_ID"),
-            reason="merged or closed PR is terminal GitHub truth",
-        )
-    elif pull_request is not None:
-        plan["blocked_reasons"].append("pr-not-terminal")
+    if pull_request is not None:
+        if pr_terminal:
+            if terminal_projection_allowed:
+                _plan_project_status(
+                    plan,
+                    bucket="pr_project_status",
+                    target=f"pr:{pull_request['number']}",
+                    current=pull_request["project_status"],
+                    desired="Done",
+                    command=_project_status_command("PR_ITEM_ID", "DONE_OPTION_ID"),
+                    reason="merged or closed PR is terminal GitHub truth",
+                )
+        else:
+            plan["blocked_reasons"].append("pr-not-terminal")
 
     _add_verify(
         plan,

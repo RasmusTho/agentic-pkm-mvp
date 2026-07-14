@@ -96,19 +96,10 @@ def test_every_write_seam_asserts_writeguard() -> None:
     )
 
 
-def test_every_write_note_relative_seam_has_port_coverage() -> None:
-    """P-1 census gap closed (#2953): every ``write_note_relative`` call site
-    is classified in ``WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION`` as either
-    ``guarded_by_port`` (covered by construction now that the port itself
-    asserts WriteGuard) or ``guarded_by_caller`` (port coverage plus a
-    pre-existing caller-side assert) -- a NEW call site with neither
-    classification fails this gate instead of silently shipping an unguarded
-    seam, mirroring ``test_every_write_seam_asserts_writeguard``'s shape for
-    ``write_frontmatter``.
-    """
-    sites = find_write_note_relative_call_sites()
-    assert sites, "expected at least the known production write_note_relative call sites"
-
+def _assert_write_note_relative_census_is_closed(
+    sites: list[tuple[str, str, int]],
+) -> None:
+    """Require every stable call-site identity to have one live classification."""
     unregistered = [site for site in sites if site not in WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION]
     assert not unregistered, (
         "Unregistered write_note_relative call site(s) found -- classify each as "
@@ -121,7 +112,7 @@ def test_every_write_note_relative_seam_has_port_coverage() -> None:
     stale = [key for key in WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION if key not in live_set]
     assert not stale, (
         "WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION has stale entries no longer "
-        f"matching a real write_note_relative call site (line drift or removed site): {stale}"
+        f"matching a real write_note_relative call site (removed or moved site): {stale}"
     )
 
     bad_classification = [
@@ -133,6 +124,42 @@ def test_every_write_note_relative_seam_has_port_coverage() -> None:
         "Every classification must start with 'guarded_by_port' or "
         f"'guarded_by_caller': {bad_classification}"
     )
+
+
+def test_every_write_note_relative_seam_has_port_coverage(tmp_path) -> None:
+    """P-1 census gap closed (#2953): every ``write_note_relative`` call site
+    is classified in ``WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION`` as either
+    ``guarded_by_port`` (covered by construction now that the port itself
+    asserts WriteGuard) or ``guarded_by_caller`` (port coverage plus a
+    pre-existing caller-side assert) -- a NEW call site with neither
+    classification fails this gate instead of silently shipping an unguarded
+    seam, mirroring ``test_every_write_seam_asserts_writeguard``'s shape for
+    ``write_frontmatter``.
+    """
+    sites = find_write_note_relative_call_sites()
+    assert sites, "expected at least the known production write_note_relative call sites"
+
+    _assert_write_note_relative_census_is_closed(sites)
+
+    # Prove the stable identifier did not turn into an allowlist escape hatch:
+    # a genuinely new producer has a new (path, enclosing scope, ordinal) key
+    # and therefore still fails loudly even though ordinary line drift does not.
+    synthetic_app = tmp_path / "app"
+    synthetic_app.mkdir()
+    (synthetic_app / "new_producer.py").write_text(
+        "def produce():\n    write_note_relative('new.md', 'content')\n",
+        encoding="utf-8",
+    )
+    new_sites = find_write_note_relative_call_sites(synthetic_app, repo_root=tmp_path)
+    assert new_sites == [("app/new_producer.py", "produce", 1)]
+
+    (synthetic_app / "new_producer.py").write_text(
+        "def produce():\n\n\n    write_note_relative('new.md', 'content')\n",
+        encoding="utf-8",
+    )
+    assert find_write_note_relative_call_sites(synthetic_app, repo_root=tmp_path) == new_sites
+    with pytest.raises(AssertionError, match="app/new_producer.py"):
+        _assert_write_note_relative_census_is_closed(new_sites)
 
 
 def test_registered_write_seams_cover_the_named_gap1_and_gap2_sites() -> None:
