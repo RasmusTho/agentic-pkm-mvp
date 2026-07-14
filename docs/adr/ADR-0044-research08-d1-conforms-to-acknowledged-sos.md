@@ -1,4 +1,4 @@
-State: Accepted (owner decisions, 2026-07-04; RESEARCH-08 D1 + Heimdal structure decisions OD-1/OD-3/OD-7). Ratifies the acknowledged System-of-Systems structure from the 2026-07-04 Fable-5 structure pass (`docs/architecture/ECOSYSTEM_STRUCTURE_PROPOSAL.md`, PR #2914): the ecosystem apex is named **Yggdrasil** (the whole); its constituents are **Mimer** (knowledge-and-cognition, undivided — the current system, reverting to its original name), **Heimdal** (sensor), and a thin **private-bindings** constituent. **Supersedes the naming half of ADR-0043**: ADR-0043's Munin (knowledge/memory) / Hugin (agent-runtime) two-constituent split is replaced by the single undivided **Mimer** constituent, with **Hugin/Munin reserved**; ADR-0043's Heimdal-sensor and observability→OEF decisions are retained. Enactment (the `yggdrasil_runtime/`→Mimer code/doc rename, glossary reconciliation, entity-register + substrate contracts) is deferred to follow-ups; this ADR performs no rename.
+State: Accepted (owner decisions, 2026-07-04; RESEARCH-08 D1 + Heimdal structure decisions OD-1/OD-3/OD-7). Ratifies the acknowledged System-of-Systems structure from the 2026-07-04 Fable-5 structure pass (`docs/architecture/ECOSYSTEM_STRUCTURE_PROPOSAL.md`, PR #2914): the ecosystem apex is named **Yggdrasil** (the whole); its constituents are **Mimer** (knowledge-and-cognition, undivided — the current system, reverting to its original name), **Heimdal** (sensor), and a thin **private-bindings** constituent. **Supersedes the naming half of ADR-0043**: ADR-0043's Munin (knowledge/memory) / Hugin (agent-runtime) two-constituent split is replaced by the single undivided **Mimer** constituent, with **Hugin/Munin reserved**; ADR-0043's Heimdal-sensor and observability→OEF decisions are retained. The `yggdrasil_runtime/`→`mimer_runtime/` rename was subsequently enacted by PRs #3011/#3015 and the glossary reconciliation by PR #3022; entity-register and substrate contract work remains separately governed.
 Doc role: Decision record (ADR)
 Authority: Authoritative for the ecosystem's top-level structure and constituent-naming decision (the apex, the constituent set, and the "what does Yggdrasil denote" question), superseding ADR-0043 on constituent naming only. It does not redefine any constituent's internals (Mimer keeps the 14 control boundaries + CES + correctness kernel; Heimdal keeps its A-doc charter). SoS scope and naming are owner-reserved (R-SOS/R-NAME) and are recorded here as the owner's locked decision, not an agent's.
 Owner: Architecture / CES stewardship (Rasmus)
@@ -81,6 +81,11 @@ SoS scope and naming are owner-reserved (R-SOS/R-NAME); this ADR records the own
 OD-1/OD-3/OD-7 (with OD-2/4/5/6/8/9 in `docs/architecture/ECOSYSTEM_STRUCTURE_PROPOSAL.md` §0). It
 performs **no** rename: the `yggdrasil_runtime/`→Mimer code/doc rename, the `docs/GLOSSARY.md`
 reconciliation, and the entity-register + substrate contracts (OD-5/OD-9) are deferred follow-ups.
+
+> **Enactment note (2026-07-06):** The rename described above was later delivered by PRs #3011 and
+> #3015, and the glossary reconciliation by PR #3022. The historical decision text records what this ADR itself did;
+> it no longer describes the current repository state. Entity-register and substrate contract work
+> remains independently governed.
 
 ## Constraints honored
 
