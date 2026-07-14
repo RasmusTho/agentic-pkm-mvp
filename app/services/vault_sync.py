@@ -27,6 +27,7 @@ from app.db.db import conn_rw, ensure_schema
 from app.events.models import new_trace_id
 from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_OBJECT_METADATA, INGEST_OBJECT_UPDATED
 from app.knowledge.write_ops import default_vault_root_for_path, write_note_from_absolute
+from app.objects import DomainObject, save_object_in_transaction, update_object_source_ref_in_transaction
 from app.write_guard import DEFAULT_WRITE_GUARD
 from app.services.inbox import append_change, append_conflict
 from app.domain.state_axes import normalize_artifact_state_axes
@@ -106,7 +107,15 @@ def _upsert_file_state(
 
 
 def _update_path_only(
-    conn: psycopg.Connection, *, old_path: str, new_path: str, uuid_value: str, fm_hash: str, body_hash: str, mtime: datetime
+    conn: psycopg.Connection,
+    *,
+    old_path: str,
+    new_path: str,
+    uuid_value: str,
+    payload: dict[str, Any],
+    fm_hash: str,
+    body_hash: str,
+    mtime: datetime,
 ) -> None:
     # Step 1: ensure an objects-row exists and has the new path. Do this first, with rollbacks between fallbacks.
     updated = 0
@@ -159,6 +168,17 @@ def _update_path_only(
                     (uuid_value, "note", new_path),
                 )
 
+    save_object_in_transaction(
+        conn,
+        DomainObject(
+            uuid=uuid_value,
+            kind="note",
+            payload=payload,
+            source_ref=new_path,
+            created_at=mtime,
+        ),
+    )
+
     # Step 2: write/normalize file_state last (so it isn’t poisoned by a prior error)
     with conn.cursor() as cur:
         cur.execute(
@@ -209,6 +229,11 @@ def update_path(uuid_value: str, new_path: str) -> None:
                 cur.execute("update objects set path=%s where uuid=%s", (resolved_path, uuid_value))
             except Exception:
                 cur.execute("update objects set path=%s where id=%s", (resolved_path, uuid_value))
+            update_object_source_ref_in_transaction(
+                conn,
+                object_id=uuid_value,
+                source_ref=resolved_path,
+            )
             cur.execute(
                 """
                 insert into file_state(path, uuid, fm_hash, body_hash, mtime, last_seen)
@@ -264,6 +289,11 @@ def delete_note(path: str, *, uuid_value: str | None = None) -> bool:
                         cur.execute("update objects set path = null where uuid = %s", (effective_uuid,))
                     except Exception:
                         cur.execute("update objects set path = null where id = %s", (effective_uuid,))
+                    update_object_source_ref_in_transaction(
+                        conn,
+                        object_id=effective_uuid,
+                        source_ref=None,
+                    )
             if deleted and effective_uuid and remaining_for_uuid == 0:
                 delete_payload = {
                     "path": resolved_path,
@@ -309,15 +339,14 @@ def upsert_object_from_note(path: str, frontmatter: dict[str, Any], body: str, f
         conn.commit()
         state = _get_state_by_uuid(conn, uuid_value)
         with conn.cursor() as cur:
-            payload_json = json.dumps(
-                {
-                    "title": title,
-                    "review_state": review_state,
-                    "maturity": normalized_frontmatter.get("maturity"),
-                    "content": body,
-                    "frontmatter": normalized_frontmatter,
-                }
-            )
+            canonical_payload = {
+                "title": title,
+                "review_state": review_state,
+                "maturity": normalized_frontmatter.get("maturity"),
+                "content": body,
+                "frontmatter": normalized_frontmatter,
+            }
+            payload_json = json.dumps(canonical_payload)
             try:
                 cur.execute(
                     """
@@ -342,6 +371,16 @@ def upsert_object_from_note(path: str, frontmatter: dict[str, Any], body: str, f
                     """,
                     (uuid_value, "note", payload_json, path_str),
                 )
+        save_object_in_transaction(
+            conn,
+            DomainObject(
+                uuid=uuid_value,
+                kind="note",
+                payload=canonical_payload,
+                source_ref=path_str,
+                created_at=mtime,
+            ),
+        )
         _upsert_file_state(
             conn,
             path=path_str,
@@ -437,11 +476,19 @@ def sync_markdown(path: str) -> dict[str, Any]:
 
         # Pure rename: state known on another path → update only path (no re-embed).
         if state is None and rename_state and rename_state["path"] != str(note_path):
+            rename_payload = {
+                "title": frontmatter.get("title") or note_path.stem,
+                "review_state": normalized_frontmatter["review_state"],
+                "maturity": normalized_frontmatter.get("maturity"),
+                "content": body,
+                "frontmatter": normalized_frontmatter,
+            }
             _update_path_only(
                 conn,
                 old_path=rename_state["path"],
                 new_path=str(note_path),
                 uuid_value=uuid_value,
+                payload=rename_payload,
                 fm_hash=fm_hash,
                 body_hash=body_hash,
                 mtime=mtime,
@@ -549,6 +596,17 @@ def sync_markdown(path: str) -> dict[str, Any]:
                     (uuid_value, "note", payload_json, str(note_path)),
                 )
 
+        save_object_in_transaction(
+            conn,
+            DomainObject(
+                uuid=uuid_value,
+                kind="note",
+                payload=json.loads(payload_json),
+                source_ref=str(note_path),
+                created_at=mtime,
+            ),
+        )
+
         _enqueue(topic, obj_payload, conn=conn, observation=mtime.isoformat())
 
         _upsert_file_state(
@@ -589,6 +647,15 @@ def handle_rename(old_path: str, new_path: str) -> dict[str, Any]:
             old_path=state["path"],
             new_path=str(new),
             uuid_value=frontmatter["uuid"],
+            payload={
+                "title": frontmatter.get("title") or new.stem,
+                "review_state": normalize_artifact_state_axes(
+                    frontmatter, default_review_state="provisional"
+                )["review_state"],
+                "maturity": frontmatter.get("maturity"),
+                "content": body,
+                "frontmatter": frontmatter,
+            },
             fm_hash=fm_hash,
             body_hash=body_hash,
             mtime=mtime,

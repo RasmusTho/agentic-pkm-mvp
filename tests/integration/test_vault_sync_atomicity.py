@@ -71,6 +71,19 @@ def _configure_isolated_pg_test(monkeypatch) -> tuple[str, str]:
     schema = f"pgtest_{uuid4().hex}"
     _create_schema(base_dsn, schema)
     dsn = _dsn_with_search_path(base_dsn, schema)
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(
+            """
+            CREATE TABLE store_objects (
+                object_id UUID PRIMARY KEY,
+                kind TEXT NOT NULL,
+                source_ref TEXT,
+                payload JSONB NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """
+        )
     monkeypatch.setenv("DATABASE_URL", dsn)
     monkeypatch.setenv("DB_DSN", dsn)
     return base_dsn, schema
@@ -86,6 +99,14 @@ def _objects_row_count(dsn: str) -> int:
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute("select count(*) from objects")
+            row = cur.fetchone()
+            return int(row[0] or 0) if row else 0
+
+
+def _canonical_objects_row_count(dsn: str) -> int:
+    with psycopg.connect(dsn) as conn:
+        with conn.cursor() as cur:
+            cur.execute("select count(*) from store_objects")
             row = cur.fetchone()
             return int(row[0] or 0) if row else 0
 
@@ -152,6 +173,7 @@ def test_sync_markdown_all_or_nothing(tmp_path, monkeypatch) -> None:
         _write_note(note_path, uuid_value, "Atomicity Note", "hello world")
 
         objects_before = _objects_row_count(dsn)
+        canonical_before = _canonical_objects_row_count(dsn)
         file_state_before = _file_state_row_count(dsn)
         outbox_before = _outbox_row_count(dsn)
 
@@ -168,6 +190,7 @@ def test_sync_markdown_all_or_nothing(tmp_path, monkeypatch) -> None:
         # All-or-nothing: the injected failure must roll back the objects/file_state
         # writes that ran earlier in the same transaction. Zero partial rows.
         assert _objects_row_count(dsn) == objects_before
+        assert _canonical_objects_row_count(dsn) == canonical_before
         assert _file_state_row_count(dsn) == file_state_before
         assert _outbox_row_count(dsn) == outbox_before
 
@@ -178,6 +201,7 @@ def test_sync_markdown_all_or_nothing(tmp_path, monkeypatch) -> None:
         result = vault_sync.sync_markdown(str(note_path))
         assert result["status"] == "ok"
         assert _objects_row_count(dsn) == objects_before + 1
+        assert _canonical_objects_row_count(dsn) == canonical_before + 1
         assert _file_state_row_count(dsn) == file_state_before + 1
         assert _outbox_row_count(dsn) == outbox_before + 1
     finally:
@@ -205,6 +229,7 @@ def test_sync_markdown_fault_between_file_state_and_outbox(tmp_path, monkeypatch
         _write_note(note_path, uuid_value, "Atomicity Note 2", "body text")
 
         objects_before = _objects_row_count(dsn)
+        canonical_before = _canonical_objects_row_count(dsn)
         file_state_before = _file_state_row_count(dsn)
         outbox_before = _outbox_row_count(dsn)
 
@@ -219,6 +244,7 @@ def test_sync_markdown_fault_between_file_state_and_outbox(tmp_path, monkeypatch
             vault_sync.sync_markdown(str(note_path))
 
         assert _objects_row_count(dsn) == objects_before
+        assert _canonical_objects_row_count(dsn) == canonical_before
         assert _file_state_row_count(dsn) == file_state_before
         assert _outbox_row_count(dsn) == outbox_before
 
@@ -226,6 +252,7 @@ def test_sync_markdown_fault_between_file_state_and_outbox(tmp_path, monkeypatch
         result = vault_sync.sync_markdown(str(note_path))
         assert result["status"] == "ok"
         assert _objects_row_count(dsn) == objects_before + 1
+        assert _canonical_objects_row_count(dsn) == canonical_before + 1
         assert _file_state_row_count(dsn) == file_state_before + 1
         assert _outbox_row_count(dsn) == outbox_before + 1
     finally:

@@ -94,6 +94,13 @@ class _FakeCursor:
                 self.conn.objects[uuid_value]["path"] = None
                 self.rowcount = 1
             return
+        if normalized.startswith("update store_objects"):
+            source_ref, object_id = params
+            row = self.conn.store_objects.get(str(object_id))
+            if row is not None:
+                row["source_ref"] = source_ref
+                self.rowcount = 1
+            return
         if normalized.startswith("select path, uuid, fm_hash, body_hash, mtime from file_state where path = %s"):
             (path,) = params
             self._fetchone = self.conn.file_state.get(path)
@@ -108,6 +115,7 @@ class _FakeConn:
     def __init__(self) -> None:
         self.file_state: dict[str, dict[str, object]] = {}
         self.objects: dict[str, dict[str, object]] = {}
+        self.store_objects: dict[str, dict[str, object]] = {}
 
     def __enter__(self) -> "_FakeConn":
         return self
@@ -150,6 +158,11 @@ def _stub_tick_ingest(monkeypatch: pytest.MonkeyPatch):
 
 def _seed_file_state(conn: _FakeConn, *, object_id: str, path: str) -> None:
     conn.objects[object_id] = {"id": object_id, "kind": "note", "path": path}
+    conn.store_objects[object_id] = {
+        "object_id": object_id,
+        "kind": "note",
+        "source_ref": path,
+    }
     conn.file_state[path] = {
         "path": path,
         "uuid": object_id,

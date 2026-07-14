@@ -183,6 +183,10 @@ def _insert_object(dsn: str, *, object_id: str | None = None, obj_uuid: str | No
     ouuid = obj_uuid or oid
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute(
+            "INSERT INTO store_objects (object_id, kind, payload) VALUES (%s, %s, %s::jsonb)",
+            (oid, "note", "{}"),
+        )
+        conn.execute(
             "INSERT INTO objects (id, uuid, kind, payload) VALUES (%s, %s, %s, %s::jsonb)",
             (oid, ouuid, "note", "{}"),
         )
@@ -388,7 +392,7 @@ def test_export_raises_when_object_deleted_sets_object_id_null(
         created_at=datetime(2026, 5, 1, 8, 0, 0, tzinfo=timezone.utc),
     )
     with psycopg.connect(scratch_db, autocommit=True) as conn:
-        conn.execute("DELETE FROM objects WHERE id = %s", (oid,))
+        conn.execute("DELETE FROM store_objects WHERE object_id = %s", (oid,))
         row = conn.execute("SELECT object_id FROM decisions").fetchone()
     assert row[0] is None  # FK SET NULL fired
 

@@ -172,6 +172,41 @@ class ObjectStore:
         return int(binding.store.count_objects(kind=kind))
 
 
+def save_object_in_transaction(conn: Any, obj: DomainObject) -> None:
+    """Persist a canonical object inside an existing Postgres transaction.
+
+    Vault filesystem ingestion also maintains the retained ``objects`` mirror.
+    This seam lets that compatibility producer update the canonical parent and
+    its outbox/file-state writes atomically without becoming a second SQL
+    writer for ``store_objects``.
+    """
+    from app.stores.pg import put_object_with_connection
+
+    put_object_with_connection(
+        conn,
+        object_id=UUID(str(obj.uuid)),
+        kind=str(obj.kind or "note"),
+        source_ref=obj.source_ref,
+        payload=dict(obj.payload or {}),
+    )
+
+
+def update_object_source_ref_in_transaction(
+    conn: Any,
+    *,
+    object_id: str,
+    source_ref: str | None,
+) -> None:
+    """Update canonical source identity inside an existing transaction."""
+    from app.stores.pg import update_object_source_ref_with_connection
+
+    update_object_source_ref_with_connection(
+        conn,
+        object_id=UUID(str(object_id)),
+        source_ref=source_ref,
+    )
+
+
 __all__ = [
     "DomainObject",
     "ObjectStore",
@@ -180,4 +215,6 @@ __all__ = [
     "RelationIndex",
     "ScoredNeighbor",
     "VectorIndex",
+    "save_object_in_transaction",
+    "update_object_source_ref_in_transaction",
 ]

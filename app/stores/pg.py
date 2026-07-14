@@ -334,6 +334,53 @@ def reset_vector_index(cur) -> None:
     cur.execute("DELETE FROM vector_index_meta")
 
 
+def put_object_with_connection(
+    conn,
+    *,
+    object_id: UUID,
+    kind: str,
+    source_ref: str | None,
+    payload: dict,
+) -> None:
+    """Write a canonical object on a caller-owned Postgres transaction."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO store_objects (object_id, kind, source_ref, payload, created_at, updated_at)
+            VALUES (%s, %s, %s, %s::jsonb, now(), now())
+            ON CONFLICT (object_id) DO UPDATE
+            SET kind = EXCLUDED.kind,
+                source_ref = EXCLUDED.source_ref,
+                payload = EXCLUDED.payload,
+                updated_at = now()
+            """,
+            (object_id, kind, source_ref, json.dumps(payload)),
+        )
+
+
+def update_object_source_ref_with_connection(
+    conn,
+    *,
+    object_id: UUID,
+    source_ref: str | None,
+) -> None:
+    """Move an existing canonical object's source on a caller transaction."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE store_objects
+            SET source_ref = %s, updated_at = now()
+            WHERE object_id = %s
+            """,
+            (source_ref, object_id),
+        )
+        if cur.rowcount != 1:
+            raise RuntimeError(
+                "Canonical store_objects parent is missing for vault-sync object "
+                f"{object_id}; run migrations and reconcile the legacy objects row before retrying"
+            )
+
+
 class PgObjectStore(ObjectStore):
     rebuild_source = "vault ingest (vault notes → app/ingest/vault_alpha.py → store_objects)"
     _OBJECTS_TABLE = "store_objects"
@@ -363,19 +410,13 @@ class PgObjectStore(ObjectStore):
     def put(self, object_id: UUID, *, kind: str, source_ref: str, payload: dict) -> None:
         _ensure_tables()
         with _connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO store_objects (object_id, kind, source_ref, payload, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s::jsonb, now(), now())
-                    ON CONFLICT (object_id) DO UPDATE
-                    SET kind = EXCLUDED.kind,
-                        source_ref = EXCLUDED.source_ref,
-                        payload = EXCLUDED.payload,
-                        updated_at = now()
-                    """,
-                    (object_id, kind, source_ref, json.dumps(payload)),
-                )
+            put_object_with_connection(
+                conn,
+                object_id=object_id,
+                kind=kind,
+                source_ref=source_ref,
+                payload=payload,
+            )
 
     def list_by_kind(self, kind: str, *, limit: int = 100) -> Iterable[dict]:
         with _connect() as conn:

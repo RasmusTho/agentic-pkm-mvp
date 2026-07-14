@@ -90,3 +90,6 @@ and moves supported legacy `objects(id)` foreign keys to canonical `store_object
 `PgObjects.upsert` therefore delegates only to `PgObjectStore` and no longer fabricates an empty
 legacy `objects` row. The migration is forward-only and fails loud on unknown FK consumers or
 orphaned ids, with reconciliation guidance in `docs/DB_SCHEMA.md :: Explicit Deltas / Known Gaps`.
+The retained filesystem-watcher compatibility lane still mirrors complete note state into
+`objects`; its `FilesystemVaultAdapter` producer now writes the canonical `store_objects` parent
+through the single store writer on the same transaction as the mirror, file state, and outbox event.

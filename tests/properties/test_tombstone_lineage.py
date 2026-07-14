@@ -103,6 +103,23 @@ class _FakeCursor:
             }
             self.rowcount = 1
             return
+        if normalized.startswith("insert into store_objects"):
+            object_id, kind, source_ref, payload_json = params
+            self.conn.store_objects[str(object_id)] = {
+                "object_id": str(object_id),
+                "kind": kind,
+                "source_ref": source_ref,
+                "payload": payload_json,
+            }
+            self.rowcount = 1
+            return
+        if normalized.startswith("update store_objects"):
+            source_ref, object_id = params
+            row = self.conn.store_objects.get(str(object_id))
+            if row is not None:
+                row["source_ref"] = source_ref
+                self.rowcount = 1
+            return
         if normalized.startswith("insert into file_state(path, uuid, fm_hash, body_hash, mtime, last_seen)"):
             path, uuid_value, fm_hash, body_hash, mtime = params
             self.conn.file_state[path] = {
@@ -168,6 +185,7 @@ class _FakeConn:
         self.file_state: dict[str, dict[str, object]] = {}
         # Keyed by object id/uuid -- models the `objects` table row set.
         self.objects: dict[str, dict[str, object]] = {}
+        self.store_objects: dict[str, dict[str, object]] = {}
 
     def __enter__(self) -> "_FakeConn":
         return self
@@ -208,6 +226,12 @@ def _seed_note(
         "kind": "note",
         "payload": '{"title": "Property Note"}',
         "path": path,
+    }
+    conn.store_objects[object_id] = {
+        "object_id": object_id,
+        "kind": "note",
+        "payload": '{"title": "Property Note"}',
+        "source_ref": path,
     }
     conn.file_state[path] = {
         "path": path,
