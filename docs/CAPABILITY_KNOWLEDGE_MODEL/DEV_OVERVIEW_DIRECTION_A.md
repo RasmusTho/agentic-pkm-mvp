@@ -21,7 +21,7 @@ Refine `app/builderops/ckm/overview_html.py` so a reader can judge trust and mat
 - scored, evidence-starved, and unassessed dimension-cell states;
 - a subordinate aggregate labeled `min`, plus text-and-shape maturity-band encoding;
 - explicit `node: confirmed` lifecycle wording;
-- honest explanatory prose in expanded details;
+- explicit explanatory prose in expanded details that names assessment availability, stale-relative-to-evidence state, and candidate-evidence share without presenting absence as zero;
 - capability↔gap fragment links and grouped gap presentation;
 - visible focus, disclosure, narrow-viewport, zoom, and non-color affordances.
 
@@ -29,7 +29,7 @@ The renderer signature remains `render_overview_html(store) -> str`. Store reads
 
 ## CKM11-STATIC-CONTRACT
 
-The output remains one self-contained HTML file with inline CSS, native semantic HTML, and no JavaScript, remote fonts, images, stylesheets, or other network references. Verify: CKM11 acceptance criterion 8. Missing or invalid database behavior is unchanged and rendering is deterministic. Verify: CKM11 acceptance criterion 11. Missing assessment is rendered as unavailable (`—` / `min —`), never as `0.00` or `0.0%`. Candidate and confirmed evidence remain visibly distinct. Verify: CKM11 acceptance criteria 2, 3, and 12.
+The output remains one self-contained HTML file with inline CSS, native semantic HTML, and no JavaScript, remote fonts, images, stylesheets, or other network references. Verify: CKM11 acceptance criterion 8. Missing-database behavior is unchanged and rendering is deterministic. Verify: CKM11 acceptance criterion 11. Missing assessment is rendered as unavailable (`—` / `min —`), never as `0.00` or `0.0%`. Candidate and confirmed evidence remain visibly distinct. Verify: CKM11 acceptance criteria 2, 3, and 12.
 
 Every color signal has a text or shape twin: maturity band uses dot plus word; trust states use named chips; candidate share uses a named percentage; unassessed uses a dash plus accessible text; evidence-starved uses a dotted treatment plus citation count. Verify: CKM11 acceptance criteria 1, 2, 3, 5, and 10.
 
@@ -63,6 +63,7 @@ The legend spells out every mapping. Verify: CKM11 acceptance criterion 7. Each 
 10. Native disclosure/link semantics, visible focus rules, plus/minus disclosure affordance, relative typography, non-color state labels, unique citation summaries, and the narrow-viewport layout contract are present in the generated artifact. Verify: `tests/builderops/ckm/test_overview_html.py::test_accessibility_and_responsive_contract`; visual behavior at desktop, expanded-row, 390×844, and 200% zoom-equivalent widths: parent #3138 visual-review receipt explicitly naming all four reviewed states
 11. Two renders over unchanged store state are byte-identical, the renderer does not mutate the store, and the CLI continues to reject a missing database without creating it. Verify: `tests/builderops/ckm/test_overview_html.py::test_pure_render_over_fixture_graph`; `tests/builderops/ckm/test_overview_html.py::test_cli_rejects_missing_database_without_creating_it`
 12. Lifecycle status is labeled `node: {lifecycle}` so node confirmation cannot be read as evidence confirmation, and candidate/confirmed evidence retain distinct named markup. Verify: `tests/builderops/ckm/test_overview_html.py::test_node_lifecycle_and_evidence_confirmation_are_distinct`
+13. Expanded capability details state whether an assessment is available, whether it is stale relative to evidence, and the candidate-evidence share in prose; unavailable assessment is described as unavailable rather than zero. Verify: `tests/builderops/ckm/test_overview_html.py::test_expanded_honesty_prose_names_trust_state`
 
 ## CKM11-ACCESSIBILITY
 
@@ -79,4 +80,4 @@ No filters, search, sort, comparison mode, URL state, evolution timeline, print 
 
 ## CKM11-VALIDATION
 
-Run the focused renderer suite, standard lint/type/test baseline, and generate the overview against the live repository-backed CKM store. Capture desktop, expanded-row, and 390×844 views for visual comparison. Post the delivered child receipt and the review artifact on parent #3138; #3138 remains the owner-validation hub and is never a pickup issue.
+Run the focused renderer suite, standard lint/type/test baseline, and generate the overview against the live repository-backed CKM store. Capture desktop, expanded-row, 390×844, and 200%-zoom-equivalent views for visual comparison. Post the delivered child receipt and the review artifact on parent #3138; #3138 remains the owner-validation hub and is never a pickup issue.
