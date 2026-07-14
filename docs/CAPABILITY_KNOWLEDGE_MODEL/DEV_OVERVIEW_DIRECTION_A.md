@@ -25,13 +25,13 @@ Refine `app/builderops/ckm/overview_html.py` so a reader can judge trust and mat
 - capability↔gap fragment links and grouped gap presentation;
 - visible focus, disclosure, narrow-viewport, zoom, and non-color affordances.
 
-The renderer signature remains `render_overview_html(store) -> str`. Store reads remain read-only and rendering remains deterministic.
+The renderer signature remains `render_overview_html(store) -> str`. Store reads remain read-only and rendering remains deterministic. Verify: CKM11 acceptance criterion 11.
 
 ## CKM11-STATIC-CONTRACT
 
-The output remains one self-contained HTML file with inline CSS, native semantic HTML, and no JavaScript, remote fonts, images, stylesheets, or other network references. Missing or invalid database behavior is unchanged. Missing assessment is rendered as unavailable (`—` / `min —`), never as `0.00` or `0.0%`. Candidate and confirmed evidence remain visibly distinct.
+The output remains one self-contained HTML file with inline CSS, native semantic HTML, and no JavaScript, remote fonts, images, stylesheets, or other network references. Verify: CKM11 acceptance criterion 8. Missing or invalid database behavior is unchanged and rendering is deterministic. Verify: CKM11 acceptance criterion 11. Missing assessment is rendered as unavailable (`—` / `min —`), never as `0.00` or `0.0%`. Candidate and confirmed evidence remain visibly distinct. Verify: CKM11 acceptance criteria 2, 3, and 12.
 
-Every color signal has a text or shape twin: maturity band uses dot plus word; trust states use named chips; candidate share uses a named percentage; unassessed uses a dash plus accessible text; evidence-starved uses a dotted treatment plus citation count.
+Every color signal has a text or shape twin: maturity band uses dot plus word; trust states use named chips; candidate share uses a named percentage; unassessed uses a dash plus accessible text; evidence-starved uses a dotted treatment plus citation count. Verify: CKM11 acceptance criteria 1, 2, 3, 5, and 10.
 
 ## CKM11-DIMENSIONS
 
@@ -47,12 +47,12 @@ The collapsed vector keeps the declared order and uses these abbreviations:
 | ARC | architectural stability |
 | REQ | requirement coverage |
 
-The legend spells out every mapping. Each capability always exposes seven cells. A scored cell uses a proportional fill; an evidence-starved zero uses a dotted warning treatment; an unavailable assessment uses `—` without a score/fill variable. The cell group has a combined accessible label rather than seven tab stops.
+The legend spells out every mapping. Verify: CKM11 acceptance criterion 7. Each capability always exposes seven cells. A scored cell uses a proportional fill; an evidence-starved zero uses a dotted warning treatment; an unavailable assessment uses `—` without a score/fill variable. Verify: CKM11 acceptance criterion 2. The cell group has a combined accessible label rather than seven tab stops. Verify: CKM11 acceptance criterion 10.
 
 ## CKM11-ACCEPTANCE
 
 1. Stale and low-confidence markers are descendants of the capability `summary`, so they remain visible while collapsed. Verify: `tests/builderops/ckm/test_overview_html.py::test_honesty_markers_render`
-2. Every collapsed capability renders exactly seven dimension cells, and unavailable cells render `—` without a score/fill value. Verify: `tests/builderops/ckm/test_overview_html.py::test_unassessed_cells_render_dash`
+2. Every collapsed capability renders exactly seven dimension cells: scored cells expose proportional fill values, evidence-starved zeroes use the dotted state, and unavailable cells render `—` without a score/fill value. Verify: `tests/builderops/ckm/test_overview_html.py::test_dimension_cells_render_three_states_and_proportional_fill`
 3. Candidate-share summary markup is absent at zero and present with a percentage above zero. Verify: `tests/builderops/ckm/test_overview_html.py::test_candidate_chip_conditional`
 4. Findings for known capabilities link to their capability fragments, and capabilities with findings link back to grouped gap fragments. Verify: `tests/builderops/ckm/test_overview_html.py::test_gap_capability_crosslinks`
 5. The aggregate is labeled `min {value}` or `min —` and is never an anonymous summary numeral. Verify: `tests/builderops/ckm/test_overview_html.py::test_aggregate_demoted_label`
@@ -60,7 +60,9 @@ The legend spells out every mapping. Each capability always exposes seven cells.
 7. The legend contains all seven full dimension names and explains scored, evidence-starved, and unassessed cells. Verify: `tests/builderops/ckm/test_overview_html.py::test_legend_dimension_mapping`
 8. Output remains self-contained with no script elements, executable inline handlers, or external/network references. Verify: `tests/builderops/ckm/test_overview_html.py::test_no_scripts_or_external_references`
 9. An empty store renders the provenance banner, a `0 capabilities` trust summary, empty map and gap states, and the footer. Verify: `tests/builderops/ckm/test_overview_html.py::test_empty_store_page_state`
-10. Native disclosure/link semantics, visible focus rules, plus/minus disclosure affordance, relative typography, non-color state labels, unique citation summaries, and the narrow-viewport layout contract are present in the generated artifact. Verify: `tests/builderops/ckm/test_overview_html.py::test_accessibility_and_responsive_contract`; visual behavior at desktop, expanded-row, 390×844, and 200% zoom-equivalent widths: parent #3138 visual-review receipt
+10. Native disclosure/link semantics, visible focus rules, plus/minus disclosure affordance, relative typography, non-color state labels, unique citation summaries, and the narrow-viewport layout contract are present in the generated artifact. Verify: `tests/builderops/ckm/test_overview_html.py::test_accessibility_and_responsive_contract`; visual behavior at desktop, expanded-row, 390×844, and 200% zoom-equivalent widths: parent #3138 visual-review receipt explicitly naming all four reviewed states
+11. Two renders over unchanged store state are byte-identical, the renderer does not mutate the store, and the CLI continues to reject a missing database without creating it. Verify: `tests/builderops/ckm/test_overview_html.py::test_pure_render_over_fixture_graph`; `tests/builderops/ckm/test_overview_html.py::test_cli_rejects_missing_database_without_creating_it`
+12. Lifecycle status is labeled `node: {lifecycle}` so node confirmation cannot be read as evidence confirmation, and candidate/confirmed evidence retain distinct named markup. Verify: `tests/builderops/ckm/test_overview_html.py::test_node_lifecycle_and_evidence_confirmation_are_distinct`
 
 ## CKM11-ACCESSIBILITY
 
