@@ -17,6 +17,7 @@ def test_retry_exhaustion_alone_cannot_require_human_exception() -> None:
     assert "`needs_owner`" in contract
     for route in ("`auto_repair`", "`auto_backoff`", "`blocked_technical`"):
         assert route in contract
+    assert "before capability escalation and classifier-based repair" in contract
 
 
 def test_host_preflight_failure_routes_to_disabled_technical_recovery() -> None:
@@ -25,6 +26,15 @@ def test_host_preflight_failure_routes_to_disabled_technical_recovery() -> None:
     assert "### Verification dispatch recovery" in process_map
     assert "disabled -> preflight -> observe-only -> pilot ->" in process_map
     assert "returns to `disabled` as `blocked_technical`" in process_map
+
+
+def test_repeated_review_findings_route_to_triage_before_owner() -> None:
+    process_map = PROCESS_MAP.read_text(encoding="utf-8")
+
+    assert "Capability escalation + classifier triage" in process_map
+    assert "Triage -->|technical pause| Block[\"blocked_technical\"]" in process_map
+    assert "Triage -->|explicit authority category| Human[\"Human exception\"]" in process_map
+    assert "Blocking -->|repeated| Exception[\"Human exception\"]" not in process_map
 
 
 def test_agent_policy_reserves_owner_interruptions_for_authority() -> None:
