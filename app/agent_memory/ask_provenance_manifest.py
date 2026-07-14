@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from queue import Full, Queue
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterator, Mapping, Sequence
 from uuid import uuid4
 
 import fcntl
@@ -212,7 +212,7 @@ def _validate_manifest(manifest: Mapping[str, Any]) -> None:
 
 
 @contextmanager
-def _exclusive_manifest_lock(path: Path):
+def _exclusive_manifest_lock(path: Path) -> Iterator[None]:
     """Serialize read/retain/replace across threads and worker processes."""
 
     path.parent.mkdir(parents=True, exist_ok=True)

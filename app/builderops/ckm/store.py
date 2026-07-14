@@ -85,6 +85,7 @@ class CkmStore:
         # exists first: receipt writes below depend on it.
         self._receipt_store.initialize()
         with self._connect() as conn:
+            self._migrate_evidence_edge_basis(conn)
             for statement in CKM_DDL_STATEMENTS:
                 conn.execute(statement)
             conn.commit()
@@ -96,6 +97,40 @@ class CkmStore:
         if prior_receipts:
             return prior_receipts[-1]
         return self._emit_schema_receipt(event_type="ckm_schema_ensured", action="ensure_schema")
+
+    @staticmethod
+    def _migrate_evidence_edge_basis(conn: sqlite3.Connection) -> None:
+        columns = conn.execute("PRAGMA table_info(ckm_evidence_edge)").fetchall()
+        if not columns or any(row["name"] == "basis" for row in columns):
+            return
+        conn.execute("ALTER TABLE ckm_evidence_edge RENAME TO ckm_evidence_edge_v1")
+        edge_ddl = next(
+            statement for statement in CKM_DDL_STATEMENTS
+            if "CREATE TABLE IF NOT EXISTS ckm_evidence_edge" in statement
+        )
+        conn.execute(edge_ddl)
+        conn.execute(
+            """
+            INSERT INTO ckm_evidence_edge (
+                id, artifact_id, capability_id, evidence_kind, polarity,
+                maturity_dimension, confidence, extraction_method, model,
+                provider, lifecycle, source_ref, basis, created_at, updated_at
+            )
+            SELECT id, artifact_id, capability_id, evidence_kind, polarity,
+                   maturity_dimension, confidence, extraction_method, model,
+                   provider, lifecycle,
+                   CASE WHEN json_valid(source_ref)
+                        THEN COALESCE(json_extract(source_ref, '$.artifact_source_ref'), source_ref)
+                        ELSE source_ref END,
+                   (CASE WHEN json_valid(source_ref)
+                         THEN COALESCE(json_extract(source_ref, '$.basis'), source_ref)
+                         ELSE 'legacy:' || source_ref END)
+                   || ':legacy:' || evidence_kind || ':' || maturity_dimension,
+                   created_at, updated_at
+            FROM ckm_evidence_edge_v1
+            """
+        )
+        conn.execute("DROP TABLE ckm_evidence_edge_v1")
 
     def rebuild(self) -> dict[str, Any]:
         """Drop and recreate ``ckm_*`` tables only (INV-CKM-4). Emits a receipt."""
@@ -298,11 +333,13 @@ class CkmStore:
         extraction_method: str,
         lifecycle: str,
         source_ref: str,
+        basis: str | None = None,
         model: str | None = None,
         provider: str | None = None,
     ) -> CkmEvidenceEdge:
         now = utc_now()
         candidate_id = new_id("edge")
+        resolved_basis = basis or source_ref
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
@@ -310,11 +347,13 @@ class CkmStore:
                 INSERT INTO ckm_evidence_edge (
                     id, artifact_id, capability_id, evidence_kind, polarity,
                     maturity_dimension, confidence, extraction_method, model,
-                    provider, lifecycle, source_ref, created_at, updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(artifact_id, capability_id, evidence_kind, maturity_dimension)
+                    provider, lifecycle, source_ref, basis, created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(artifact_id, capability_id, basis)
                 DO UPDATE SET
+                    evidence_kind = excluded.evidence_kind,
                     polarity = excluded.polarity,
+                    maturity_dimension = excluded.maturity_dimension,
                     confidence = excluded.confidence,
                     extraction_method = excluded.extraction_method,
                     model = excluded.model,
@@ -336,6 +375,7 @@ class CkmStore:
                     provider,
                     lifecycle,
                     source_ref,
+                    resolved_basis,
                     now,
                     now,
                 ),
@@ -346,6 +386,7 @@ class CkmStore:
             capability_id=capability_id,
             evidence_kind=evidence_kind,
             maturity_dimension=maturity_dimension,
+            basis=resolved_basis,
         )
         if edge is None:  # pragma: no cover - defensive
             raise CkmValidationError("evidence edge upsert did not persist")
@@ -358,16 +399,27 @@ class CkmStore:
         capability_id: str,
         evidence_kind: str,
         maturity_dimension: str,
+        basis: str | None = None,
     ) -> CkmEvidenceEdge | None:
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT * FROM ckm_evidence_edge
-                WHERE artifact_id = ? AND capability_id = ?
-                  AND evidence_kind = ? AND maturity_dimension = ?
-                """,
-                (artifact_id, capability_id, evidence_kind, maturity_dimension),
-            ).fetchone()
+            if basis is None:
+                row = conn.execute(
+                    """
+                    SELECT * FROM ckm_evidence_edge
+                    WHERE artifact_id = ? AND capability_id = ?
+                      AND evidence_kind = ? AND maturity_dimension = ?
+                    ORDER BY basis LIMIT 1
+                    """,
+                    (artifact_id, capability_id, evidence_kind, maturity_dimension),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT * FROM ckm_evidence_edge
+                    WHERE artifact_id = ? AND capability_id = ? AND basis = ?
+                    """,
+                    (artifact_id, capability_id, basis),
+                ).fetchone()
         return CkmEvidenceEdge.from_row(row) if row is not None else None
 
     def list_evidence_edges_for_capability(self, capability_id: str) -> list[CkmEvidenceEdge]:
@@ -377,6 +429,39 @@ class CkmStore:
                 (capability_id,),
             ).fetchall()
         return [CkmEvidenceEdge.from_row(row) for row in rows]
+
+    def list_evidence_edges(self) -> list[CkmEvidenceEdge]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM ckm_evidence_edge ORDER BY artifact_id, capability_id"
+            ).fetchall()
+        return [CkmEvidenceEdge.from_row(row) for row in rows]
+
+    def delete_deterministic_edges_not_in(
+        self,
+        edge_keys: set[tuple[str, str, str]],
+        *,
+        owned_basis_prefixes: tuple[str, ...],
+    ) -> int:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, artifact_id, capability_id, basis
+                FROM ckm_evidence_edge
+                WHERE extraction_method = 'deterministic'
+                """
+            ).fetchall()
+            stale = [
+                row["id"]
+                for row in rows
+                if str(row["basis"]).startswith(owned_basis_prefixes)
+                if (row["artifact_id"], row["capability_id"], row["basis"])
+                not in edge_keys
+            ]
+            for edge_id in stale:
+                conn.execute("DELETE FROM ckm_evidence_edge WHERE id = ?", (edge_id,))
+            conn.commit()
+        return len(stale)
 
     # --- Assessment (append-only, bitemporal) -----------------------------------
 
@@ -466,7 +551,9 @@ class CkmStore:
             dimension: _loads(row[f"{dimension}_citations"]) for dimension in MATURITY_DIMENSIONS
         }
         watermark_set = _loads(row["watermark_set"])
-        return CkmAssessment.from_row(row, scores=scores, citations=citations, watermark_set=watermark_set)
+        return CkmAssessment.from_row(
+            dict(row), scores=scores, citations=citations, watermark_set=watermark_set
+        )
 
     # --- Finding -----------------------------------------------------------------
 

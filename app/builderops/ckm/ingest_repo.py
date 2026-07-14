@@ -158,6 +158,19 @@ def iter_source(root: Path) -> Iterable[RepoArtifact]:
         )
 
 
+def iter_schemas(root: Path) -> Iterable[RepoArtifact]:
+    for path in sorted((root / "schemas").glob("**/*.json")):
+        content = path.read_bytes()
+        yield _file_artifact(
+            root,
+            path,
+            content=content,
+            kind="document",
+            summary=f"JSON schema: {_relative(root, path)}",
+            source="repo_schemas",
+        )
+
+
 def _git(root: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-C", str(root), *args], check=True, text=True, capture_output=True
@@ -242,6 +255,7 @@ def ingest_repo(store: CkmStore, root: Path, *, git_limit: int = 500) -> dict[st
         "docs": _ingest_tree(store, "docs", iter_docs(root)),
         "tests": _ingest_tree(store, "tests", iter_tests(root)),
         "source": _ingest_tree(store, "source", iter_source(root)),
+        "schemas": _ingest_tree(store, "schemas", iter_schemas(root)),
     }
     previous_head = store.get_watermark("git")
     # Bind both traversal and the persisted watermark to one immutable snapshot.

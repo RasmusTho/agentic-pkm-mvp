@@ -13,7 +13,7 @@ schema level, not only in application code.
 
 from __future__ import annotations
 
-CKM_SCHEMA_VERSION = 1
+CKM_SCHEMA_VERSION = 2
 
 CKM_TABLE_NAMES = (
     "ckm_capability",
@@ -72,9 +72,10 @@ CKM_DDL_STATEMENTS = [
         provider TEXT,
         lifecycle TEXT NOT NULL CHECK (lifecycle IN ('candidate', 'confirmed')),
         source_ref TEXT NOT NULL,
+        basis TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        UNIQUE (artifact_id, capability_id, evidence_kind, maturity_dimension)
+        UNIQUE (artifact_id, capability_id, basis)
     )
     """,
     """
