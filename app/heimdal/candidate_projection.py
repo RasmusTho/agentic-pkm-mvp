@@ -450,7 +450,7 @@ def _vault_root(context: VaultContext) -> Path:
 
 def _is_durable_candidate(path: Path, candidate: HeimdalCandidate) -> bool:
     """Return whether an existing path is this candidate's durable replay result."""
-    if not path.is_file():
+    if not path.is_file() or path.is_symlink():
         return False
     try:
         raw = path.read_text(encoding="utf-8")
@@ -484,7 +484,9 @@ def _is_durable_candidate(path: Path, candidate: HeimdalCandidate) -> bool:
         and authority.get("requires_review") is True
         and parsed.get("review_state") == REVIEW_STATE_DRAFT
         and parsed.get("triage_state") == TRIAGE_STATE_CAPTURED
-        and candidate.evidence_text in body
+        and body.startswith(
+            f"\n## Observed evidence\n\n{candidate.evidence_text}\n\n## Human takeaways\n"
+        )
     )
 
 
