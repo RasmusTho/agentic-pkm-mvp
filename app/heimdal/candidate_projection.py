@@ -442,7 +442,10 @@ def project_pending_candidates(
 def _vault_root(context: VaultContext) -> Path:
     if not context.is_selected:
         raise CandidateProjectionError("candidate projection requires a selected vault")
-    root = Path(context.active_vault_path).expanduser().resolve()
+    active_vault_path = context.active_vault_path
+    if active_vault_path is None:
+        raise CandidateProjectionError("candidate projection requires a selected vault")
+    root = Path(active_vault_path).expanduser().resolve()
     if not root.is_dir():
         raise CandidateProjectionError("candidate projection requires an existing vault directory")
     return root
