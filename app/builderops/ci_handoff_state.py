@@ -97,7 +97,7 @@ def plan_ci_handoff_resume(
     normalized_handoff = normalize_ci_handoff(handoff)
     live_head = _extract_pr_head_sha(live_pr)
     normalized_checks = [_normalize_check(item) for item in checks]
-    latest_checks = _latest_checks_by_name(normalized_checks)
+    latest_checks = latest_checks_by_name(normalized_checks)
     verdict = _checks_verdict(latest_checks)
     blocked_reasons: list[str] = []
 
@@ -156,27 +156,45 @@ def find_ci_handoff(
 
 def pending_check_summary(checks: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return [
-        item for item in _latest_checks_by_name(
+        item for item in latest_checks_by_name(
             [_normalize_check(check) for check in checks]
         )
         if item["status"] != "completed"
     ]
 
 
-def _latest_checks_by_name(checks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def latest_checks_by_name(
+    checks: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep the newest GitHub check-run per name using stable run evidence."""
+
     latest: dict[str, dict[str, Any]] = {}
     for check in checks:
-        existing = latest.get(check["name"])
-        if existing is None or _check_rank(check) >= _check_rank(existing):
-            latest[check["name"]] = check
+        normalized = dict(check)
+        existing = latest.get(normalized["name"])
+        if existing is None or _is_check_newer(normalized, existing):
+            latest[normalized["name"]] = normalized
     return list(latest.values())
 
 
-def _check_rank(check: Mapping[str, Any]) -> tuple[str, str]:
-    return (
-        str(check.get("started_at") or ""),
-        str(check.get("id") or ""),
-    )
+def _is_check_newer(
+    candidate: Mapping[str, Any],
+    existing: Mapping[str, Any],
+) -> bool:
+    candidate_started = str(candidate.get("started_at") or "")
+    existing_started = str(existing.get("started_at") or "")
+    if candidate_started and existing_started and candidate_started != existing_started:
+        return candidate_started > existing_started
+    return _check_id_rank(candidate) >= _check_id_rank(existing)
+
+
+def _check_id_rank(check: Mapping[str, Any]) -> tuple[int, int, str]:
+    check_id = check.get("id")
+    if isinstance(check_id, int) and not isinstance(check_id, bool):
+        return (1, check_id, "")
+    if isinstance(check_id, str) and check_id.isdigit():
+        return (1, int(check_id), "")
+    return (0, 0, str(check_id or ""))
 
 
 def _checks_verdict(checks: list[dict[str, Any]]) -> str:
