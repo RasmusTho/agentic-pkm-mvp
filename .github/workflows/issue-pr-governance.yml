@@ -230,6 +230,7 @@ jobs:
               "scripts/validate_source_anchors.py",
               "scripts/validate_issue_readiness.py",
               "scripts/await_pr_checks.sh",
+              "companion-ui/prompts/codex/deliver-epic-autonomous-runner.md",
               "tests/ops/test_git_hygiene.py",
               "tests/architecture/test_agent_skill_entrypoints.py",
               "tests/architecture/test_pr_hot_path_governance.py",
