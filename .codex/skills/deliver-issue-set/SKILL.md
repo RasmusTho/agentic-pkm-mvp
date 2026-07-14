@@ -178,6 +178,13 @@ live repository/GitHub state whether a small, source-authorized remediation can 
 claimed, or continued. Typical examples include a malformed configuration issue, an omitted channel
 binding, or a validation precondition whose owning source already identifies the intended repair.
 
+For any vault-binding remediation, run `owner-decision-brief :: Local vault-binding preflight` before
+creating, repairing, claiming, or continuing that remediation — even when no owner question is yet
+needed. A vault-binding repair may proceed only when that preflight independently establishes its
+channel-owned source and either confirms all-writer isolation or proves that the bounded repair will
+restore one missing/divergent writer binding to that already-proven source; otherwise it is a
+verified authority stop, not a repair candidate.
+
 If such remediation exists, the agent must not conclude delivery with the blocker report. It must:
 
 1. repair an existing Issue contract through `issue-maintenance-change-control`, or create a bounded
@@ -192,6 +199,10 @@ Escalate through `owner-decision-brief` only when the evidence verifies that a h
 choice, credential, or external action is genuinely required. Record that authority need and the
 evidence in the maintenance receipt. A blocked slice may pause while that decision is pending, but a
 plain “reported the blocker” update is not delivery completion.
+
+For vault-binding or startup/configuration investigations, all Issue, PR, BuilderOps, and maintenance
+receipt evidence must be redacted: record variable names plus boolean/path-class results only. Never
+record raw paths, vault names, environment values, DSNs, secrets, or raw startup/Compose output.
 
 The only valid final states for a reparable blocker are an active/next claimed remediation, a strict
 ready Issue with an explicit next pickup owner when a claim cannot yet run, or a verified

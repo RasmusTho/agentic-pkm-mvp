@@ -60,6 +60,11 @@ This preflight is inspection-only unless the governing issue or source authority
 resulting bounded repair. It does not authorize a real-vault write, a deployment, or disclosure of
 environment-file contents.
 
+This redaction discipline applies to every preflight outcome, including a repair that can continue:
+Issue, PR, BuilderOps, and maintenance receipts may contain only variable names and redacted
+boolean/path-class results. They must never contain raw paths, vault names, environment values, DSNs,
+secrets, or raw startup/Compose output.
+
 ## Step 1 — The filter: is this discretionary decision the owner's at all?
 
 Before writing anything owner-facing, test the decision against the escalation gate of
