@@ -172,16 +172,29 @@ def latest_checks_by_name(
     for check in checks:
         normalized = dict(check)
         existing = latest.get(normalized["name"])
-        if existing is None or _check_rank(check) >= _check_rank(existing):
+        if existing is None or _is_check_newer(normalized, existing):
             latest[normalized["name"]] = normalized
     return list(latest.values())
 
 
-def _check_rank(check: Mapping[str, Any]) -> tuple[str, str]:
-    return (
-        str(check.get("started_at") or ""),
-        str(check.get("id") or ""),
-    )
+def _is_check_newer(
+    candidate: Mapping[str, Any],
+    existing: Mapping[str, Any],
+) -> bool:
+    candidate_started = str(candidate.get("started_at") or "")
+    existing_started = str(existing.get("started_at") or "")
+    if candidate_started and existing_started and candidate_started != existing_started:
+        return candidate_started > existing_started
+    return _check_id_rank(candidate) >= _check_id_rank(existing)
+
+
+def _check_id_rank(check: Mapping[str, Any]) -> tuple[int, int, str]:
+    check_id = check.get("id")
+    if isinstance(check_id, int) and not isinstance(check_id, bool):
+        return (1, check_id, "")
+    if isinstance(check_id, str) and check_id.isdigit():
+        return (1, int(check_id), "")
+    return (0, 0, str(check_id or ""))
 
 
 def _checks_verdict(checks: list[dict[str, Any]]) -> str:

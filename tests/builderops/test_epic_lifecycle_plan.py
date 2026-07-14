@@ -191,18 +191,18 @@ def test_done_plan_uses_latest_check_run_per_name() -> None:
         pull_request=_pr(state="CLOSED", merged=True, project_status="Review"),
         checks=[
             {
-                "id": 100,
+                "id": 9,
                 "name": "unit",
                 "status": "completed",
                 "conclusion": "cancelled",
                 "started_at": "2026-07-14T22:00:00Z",
             },
             {
-                "id": 101,
+                "id": 10,
                 "name": "unit",
                 "status": "completed",
                 "conclusion": "success",
-                "started_at": "2026-07-14T22:05:00Z",
+                "started_at": "2026-07-14T22:00:00Z",
             },
         ],
         repo="RasmusTho/agentic-pkm-mvp",
@@ -214,24 +214,26 @@ def test_done_plan_uses_latest_check_run_per_name() -> None:
             "name": "unit",
             "status": "COMPLETED",
             "conclusion": "SUCCESS",
-            "id": 101,
-            "started_at": "2026-07-14T22:05:00Z",
+            "id": 10,
+            "started_at": "2026-07-14T22:00:00Z",
         }
     ]
 
 
 @pytest.mark.parametrize(
-    ("status", "conclusion"),
+    ("status", "conclusion", "latest_started_at"),
     [
-        ("completed", "failure"),
-        ("completed", "cancelled"),
-        ("completed", "timed_out"),
-        ("in_progress", None),
+        ("completed", "failure", "2026-07-14T22:05:00Z"),
+        ("completed", "cancelled", "2026-07-14T22:05:00Z"),
+        ("completed", "timed_out", "2026-07-14T22:05:00Z"),
+        ("in_progress", None, "2026-07-14T22:05:00Z"),
+        ("queued", None, None),
     ],
 )
 def test_done_plan_latest_non_green_check_still_blocks(
     status: str,
     conclusion: str | None,
+    latest_started_at: str | None,
 ) -> None:
     plan = build_lifecycle_transition_plan(
         transition="done",
@@ -239,18 +241,18 @@ def test_done_plan_latest_non_green_check_still_blocks(
         pull_request=_pr(state="CLOSED", merged=True, project_status="Review"),
         checks=[
             {
-                "id": 100,
+                "id": 9,
                 "name": "unit",
                 "status": "completed",
                 "conclusion": "success",
                 "started_at": "2026-07-14T22:00:00Z",
             },
             {
-                "id": 101,
+                "id": 10,
                 "name": "unit",
                 "status": status,
                 "conclusion": conclusion,
-                "started_at": "2026-07-14T22:05:00Z",
+                "started_at": latest_started_at,
             },
         ],
         repo="RasmusTho/agentic-pkm-mvp",
@@ -367,18 +369,18 @@ def test_cli_deduplicates_github_check_runs_by_latest_attempt(tmp_path: Path) ->
                 "total_count": 2,
                 "check_runs": [
                     {
-                        "id": 200,
+                        "id": 9,
                         "name": "unit",
                         "status": "completed",
                         "conclusion": "cancelled",
                         "started_at": "2026-07-14T22:00:00Z",
                     },
                     {
-                        "id": 201,
+                        "id": 10,
                         "name": "unit",
                         "status": "completed",
                         "conclusion": "success",
-                        "started_at": "2026-07-14T22:05:00Z",
+                        "started_at": "2026-07-14T22:00:00Z",
                     },
                 ],
             }
@@ -410,9 +412,9 @@ def test_cli_deduplicates_github_check_runs_by_latest_attempt(tmp_path: Path) ->
     assert payload["content"]["checks"] == [
         {
             "conclusion": "SUCCESS",
-            "id": 201,
+            "id": 10,
             "name": "unit",
-            "started_at": "2026-07-14T22:05:00Z",
+            "started_at": "2026-07-14T22:00:00Z",
             "status": "COMPLETED",
         }
     ]
