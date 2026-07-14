@@ -1,11 +1,16 @@
 # Companion UI — design audit
 
 **Audited:** 2026-07-07 live UAT captures (dev channel, real runtime, Chromium 1440×900 unless noted)
-**Against:** the design intent in `CLAUDE_DESIGN_AUDIT_PROMPT.md` + `UAT_REPORT.md`, and the Yggdrasil design system.
-**Evidence:** screenshots `01`–`23` (+ degraded `00a`/`00b`), referenced by number throughout.
-**Method:** each of the 24 captures was viewed and cross-checked against `findings.json` / `findings2.json`.
+**Authority:** archived design guidance/input only; implementation authority flows through normalized specs, GitHub issues, PRs, and validation receipts.
+**Sources:** see `SOURCES.md`. The original prompt, report, findings exports, and screenshots are not retained as reproducible repo evidence.
+**Evidence labels:** `01`–`23` (+ degraded `00a`/`00b`) are historical screenshot labels, not links to checked-in evidence.
+**Method (historical):** the audit author reviewed 24 captures; the retained package cannot independently reproduce that review.
 
 Constraint honored: every recommendation stays inside the existing visual language (dark, quiet, typographic). No dashboards, badges, or notification systems are proposed. Where possible the fix **removes or merges** rather than adds.
+
+Recommendations in this document do not authorize direct implementation. Remediation follows
+`companion-ui/docs/DESIGN_HANDOFF_GOVERNANCE.md`: handoff package -> normalized spec -> GitHub
+issue -> PR -> validation receipt. For this audit, see hub #3360 and normalized issues #3361–#3364.
 
 ---
 
