@@ -56,19 +56,20 @@ The legend spells out every mapping. Each capability always exposes seven cells.
 3. Candidate-share summary markup is absent at zero and present with a percentage above zero. Verify: `tests/builderops/ckm/test_overview_html.py::test_candidate_chip_conditional`
 4. Findings for known capabilities link to their capability fragments, and capabilities with findings link back to grouped gap fragments. Verify: `tests/builderops/ckm/test_overview_html.py::test_gap_capability_crosslinks`
 5. The aggregate is labeled `min {value}` or `min —` and is never an anonymous summary numeral. Verify: `tests/builderops/ckm/test_overview_html.py::test_aggregate_demoted_label`
-6. The generated-projection provenance banner precedes the capability map and the projection footer contract remains present. Verify: `tests/builderops/ckm/test_overview_html.py::test_projection_footer_always_present`
+6. The generated-projection provenance banner precedes the capability map and the projection footer contract remains present. Verify: `tests/builderops/ckm/test_overview_html.py::test_provenance_banner_precedes_map_and_footer_remains`
 7. The legend contains all seven full dimension names and explains scored, evidence-starved, and unassessed cells. Verify: `tests/builderops/ckm/test_overview_html.py::test_legend_dimension_mapping`
-8. Output remains self-contained with no scripts or external references. Verify: `tests/builderops/ckm/test_overview_html.py::test_no_external_references`
+8. Output remains self-contained with no script elements, executable inline handlers, or external/network references. Verify: `tests/builderops/ckm/test_overview_html.py::test_no_scripts_or_external_references`
 9. An empty store renders the provenance banner, a `0 capabilities` trust summary, empty map and gap states, and the footer. Verify: `tests/builderops/ckm/test_overview_html.py::test_empty_store_page_state`
+10. Native disclosure/link semantics, visible focus rules, plus/minus disclosure affordance, relative typography, non-color state labels, unique citation summaries, and the narrow-viewport layout contract are present in the generated artifact. Verify: `tests/builderops/ckm/test_overview_html.py::test_accessibility_and_responsive_contract`; visual behavior at desktop, expanded-row, 390×844, and 200% zoom-equivalent widths: parent #3138 visual-review receipt
 
 ## CKM11-ACCESSIBILITY
 
-- Use native `details`, `summary`, and fragment links in document order.
-- Preserve visible `:focus-visible` outlines on summaries and links.
-- Provide a visible plus/minus disclosure affordance without motion.
-- Use system font stacks and relative units; avoid horizontal scrolling at 390 px and at 200% zoom-equivalent widths.
-- Give every collapsed trust signal a non-color label and every maturity band a dot plus text.
-- Use unique expanded disclosure labels such as `Citations — test completeness (0)`.
+- Use native `details`, `summary`, and fragment links in document order. Verify: CKM11 acceptance criterion 10.
+- Preserve visible `:focus-visible` outlines on summaries and links. Verify: CKM11 acceptance criterion 10.
+- Provide a visible plus/minus disclosure affordance without motion. Verify: CKM11 acceptance criterion 10.
+- Use system font stacks and relative units; avoid horizontal scrolling at 390 px and at 200% zoom-equivalent widths. Verify: CKM11 acceptance criterion 10 plus parent #3138 visual-review receipt.
+- Give every collapsed trust signal a non-color label and every maturity band a dot plus text. Verify: CKM11 acceptance criteria 1, 5, and 10.
+- Use unique expanded disclosure labels such as `Citations — test completeness (0)`. Verify: CKM11 acceptance criterion 10.
 
 ## CKM11-OUT-OF-SCOPE
 
