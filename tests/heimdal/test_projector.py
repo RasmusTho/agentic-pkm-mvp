@@ -545,6 +545,19 @@ def test_projector_does_not_acknowledge_symlinked_candidate(tmp_path: Path) -> N
     assert get_cursor(CANDIDATE_CONSUMER_ID) == 0
 
 
+def test_projector_does_not_acknowledge_broken_symlinked_candidate(tmp_path: Path) -> None:
+    _publish("obs-broken-symlink", episode_id="ep-broken-symlink")
+    vault = _vault(tmp_path / "vault")
+    candidate_path = Path(vault.active_vault_path) / "Sources/Heimdal/ep-broken-symlink-raw-sha.md"
+    candidate_path.parent.mkdir(parents=True)
+    candidate_path.symlink_to(tmp_path / "missing-candidate-target.md")
+
+    results = project_pending_candidates(vault_context=vault, write_guard=_allowing_guard())
+
+    assert results[0].status == "blocked"
+    assert get_cursor(CANDIDATE_CONSUMER_ID) == 0
+
+
 def test_already_exists_is_idempotent_no_overwrite(tmp_path: Path) -> None:
     """Re-running the same candidate never overwrites an existing note."""
     _publish("obs-idem", content="original")

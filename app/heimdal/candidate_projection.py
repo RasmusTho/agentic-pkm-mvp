@@ -361,7 +361,7 @@ def write_candidate_note(
     artifact_path = candidate_note_path(candidate, candidates_dir=candidates_dir)
 
     candidate_path = vault_root / artifact_path
-    if candidate_path.exists():
+    if candidate_path.exists() or candidate_path.is_symlink():
         if _is_durable_candidate(candidate_path, candidate):
             return CandidateWriteResult(
                 status="already_exists",
