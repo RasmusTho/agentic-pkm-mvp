@@ -1,6 +1,6 @@
 State: Mixed-status index. The original Heimdal "A" artifacts remain advisory design history, but their architecture window has been enacted and Heimdal's v1 capture-to-projection pipeline is shipped in `app/heimdal/`; use `docs/STATUS.md` and `docs/ARCHITECTURE.md` for current runtime truth.
 Doc role: Directory index (Draft)
-Authority: Index/entry point for the Heimdal groundwork docs. Subordinate to the docs it points at. Claims no shipped reality.
+Authority: Index/entry point for the Heimdal document set. The A-artifact descriptions preserve their original advisory scope; current shipped reality is owned by `docs/STATUS.md` and `docs/ARCHITECTURE.md`.
 Owner: Architecture / CES stewardship (Rasmus)
 Temporal class: strategic
 Review cadence: event-driven
