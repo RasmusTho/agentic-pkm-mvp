@@ -49,9 +49,13 @@ def test_no_legacy_route_sends_technical_stops_directly_to_owner() -> None:
     assert "frontier_rescue --> needs_human" not in process_map
     assert 'Classify -->|unresolved| Human["Human exception/block"]' not in process_map
     assert 'Stop["Stop condition"] --> Packet["Human Exception packet"]' not in process_map
-    assert "classify the stop under" in closure_skill
+    assert "Escalation classifier" in closure_skill
     assert "surface the stall to the owner as a merge-gate decision" not in closure_skill
-    assert "surface a merge-gate waiver only when" in closure_skill
+    assert "A technical outage never creates a CI/review/merge waiver" in closure_skill
+    assert "policy waiver" not in contract
+    assert "human waiver" not in contract
+    assert "clean/fixed/waived" not in process_map
+    assert "owner waiver" not in process_map
 
 
 def test_agent_policy_reserves_owner_interruptions_for_authority() -> None:
