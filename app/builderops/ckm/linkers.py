@@ -20,7 +20,6 @@ _BOUNDARY_RE = re.compile(r"\b(HIX|WSP|HKA|SIP|GOV|EBF|PDM|DRI|RCA|MEM|CAO|EXE|S
 _PARENT_RE = re.compile(r"^parent_capability:\s*(.+?)\s*$", re.MULTILINE)
 _LINKER_BASIS_PREFIXES = (
     "matrix:",
-    "matrix-test-source:",
     "spec-directory:",
     "spec-source:",
     "adr-reference:",
@@ -272,24 +271,6 @@ def _matrix_links(
                     detail=detail,
                     desired_edges=desired_edges,
                 )
-                if artifact.artifact_kind != "test":
-                    continue
-                for module in sorted(_imported_modules(root / artifact.source_ref)):
-                    if not module.startswith("app."):
-                        continue
-                    source_ref = module.replace(".", "/") + ".py"
-                    source = artifacts.get(source_ref)
-                    if source is None:
-                        continue
-                    changed += _emit(
-                        store,
-                        source,
-                        capability,
-                        rule="matrix-test-source",
-                        detail=detail,
-                        desired_edges=desired_edges,
-                        maturity_dimension="functional_completeness",
-                    )
     return changed
 
 
@@ -415,10 +396,13 @@ def _test_links(
     changed = 0
     artifact_edges: dict[str, set[str]] = {}
     for edge in store.list_evidence_edges():
+        linked_artifact = artifacts.get(edge.source_ref)
         if (
             edge.extraction_method == "deterministic"
             and edge.lifecycle == "confirmed"
-            and edge.basis.startswith(("seed-source:", "spec-source:"))
+            and linked_artifact is not None
+            and linked_artifact.artifact_kind == "source_file"
+            and edge.evidence_kind == "source"
         ):
             artifact_edges.setdefault(edge.artifact_id, set()).add(edge.capability_id)
     capabilities = {capability.id: capability for capability in store.list_capabilities()}

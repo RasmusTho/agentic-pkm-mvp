@@ -97,7 +97,7 @@ def test_live_retrieval_has_capability_specific_functional_evidence(
     functional_edges = [
         edge for edge in store.list_evidence_edges()
         if edge.maturity_dimension == "functional_completeness"
-        and edge.basis.startswith(("matrix:", "matrix-test-source:"))
+        and edge.basis.startswith("matrix:")
     ]
     retrieval = next(item for item in capabilities.values() if item.name == "Retrieval")
     context = next(item for item in capabilities.values() if item.name == "Context building")
@@ -110,6 +110,14 @@ def test_live_retrieval_has_capability_specific_functional_evidence(
     ]
     assert retrieval_edges
     assert len(retrieval_edges) > len(context_edges)
+    artifacts = {item.id: item for item in store.list_artifacts()}
+    retrieval_sources = {
+        artifacts[edge.artifact_id].source_ref
+        for edge in retrieval_edges
+        if artifacts[edge.artifact_id].artifact_kind == "source_file"
+    }
+    assert "app/retrieval/capability.py" in retrieval_sources
+    assert all("|citation:app/" in edge.basis for edge in retrieval_edges if edge.evidence_kind == "source")
     assert {edge.artifact_id for edge in retrieval_edges} != {
         edge.artifact_id for edge in context_edges
     }
@@ -135,7 +143,7 @@ def test_shared_boundary_evidence_is_capability_specific(tmp_path: Path) -> None
             )
     matrix_edges = [
         edge for edge in store.list_evidence_edges()
-        if edge.basis.startswith(("matrix:", "matrix-test-source:"))
+        if edge.basis.startswith("matrix:")
         and (
             boundary := capabilities[edge.capability_id].boundary_ref
         ) is not None
@@ -167,6 +175,85 @@ def test_shared_boundary_evidence_is_capability_specific(tmp_path: Path) -> None
             assert re.search(re.escape(selector_value), source_text, re.IGNORECASE)
         else:
             assert citation.source_ref == selector_value
+
+
+def test_matrix_test_imports_do_not_manufacture_unrelated_source_edges(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo"
+    matrix = root / "docs/architecture/traceability-matrix.md"
+    retrieval_source = root / "app/retrieval/capability.py"
+    unrelated_source = root / "app/episodes/segmenter.py"
+    test_path = root / "tests/test_retrieval.py"
+    for path in (matrix, retrieval_source, unrelated_source, test_path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    matrix.write_text(
+        "| # | Principle | Control boundaries | Contract | Tests |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| 1 | Retrieval produces candidates. | RCA | "
+        "[Retrieval implementation](../../app/retrieval/capability.py) | "
+        "[retrieval test](../../tests/test_retrieval.py) |\n",
+        encoding="utf-8",
+    )
+    retrieval_source.write_text("def retrieve() -> None:\n    pass\n", encoding="utf-8")
+    unrelated_source.write_text("def segment() -> None:\n    pass\n", encoding="utf-8")
+    test_path.write_text(
+        "from app.retrieval.capability import retrieve\n"
+        "from app.episodes.segmenter import segment\n",
+        encoding="utf-8",
+    )
+
+    store = CkmStore(tmp_path / "builderops.sqlite3")
+    store.ensure_schema()
+    retrieval = store.upsert_capability(
+        name="Retrieval",
+        definition="Fixture",
+        existence_provenance="seeded:docs/retrieval.md :: retrieval",
+        lifecycle="confirmed",
+        boundary_ref="RCA",
+    )
+    store.upsert_capability(
+        name="Context building",
+        definition="Fixture",
+        existence_provenance="seeded:docs/context.md :: context",
+        lifecycle="confirmed",
+        boundary_ref="RCA",
+    )
+    for source_ref, kind in (
+        ("app/retrieval/capability.py", "source_file"),
+        ("app/episodes/segmenter.py", "source_file"),
+        ("tests/test_retrieval.py", "test"),
+    ):
+        store.upsert_artifact(
+            source_ref=source_ref,
+            artifact_kind=kind,
+            source="fixture",
+            watermark="one",
+            provenance=json.dumps({"source_ref": source_ref}),
+        )
+
+    link_deterministic(store, root)
+
+    artifacts = {item.id: item for item in store.list_artifacts()}
+    retrieval_edges = [
+        edge for edge in store.list_evidence_edges()
+        if edge.capability_id == retrieval.id
+    ]
+    source_refs = {
+        artifacts[edge.artifact_id].source_ref
+        for edge in retrieval_edges
+        if artifacts[edge.artifact_id].artifact_kind == "source_file"
+    }
+    assert source_refs == {"app/retrieval/capability.py"}
+    direct = next(edge for edge in retrieval_edges if edge.evidence_kind == "source")
+    assert direct.basis == (
+        "matrix:row:3|citation:app/retrieval/capability.py|selector:row-name:Retrieval"
+    )
+    assert any(
+        edge.evidence_kind == "test"
+        and edge.basis == "test-code:app/retrieval/capability.py"
+        for edge in retrieval_edges
+    )
 
 
 def test_edges_carry_method_lifecycle_basis(tmp_path: Path) -> None:

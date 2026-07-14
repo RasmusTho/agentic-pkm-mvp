@@ -17,7 +17,7 @@ Compute the load-bearing output of the CKM: an explainable maturity assessment p
 
 ## What This Task Does
 
-- Implements `app/builderops/ckm/assess.py` computing, per capability, seven dimension scores in [0,1] from capability-specific evidence edges — **pure transparent functions over edge counts/kinds/polarity, no LLM**. A shared SBS boundary is only a linker candidate pool: it never causes sibling capabilities to inherit the same evidence, and the assessment layer does not use capability names or planned maturity labels as hidden priors.
+- Implements `app/builderops/ckm/assess.py` computing, per capability, seven dimension scores in [0,1] from capability-specific evidence edges — **pure transparent functions over edge counts/kinds/polarity, no LLM**. A shared SBS boundary is only a linker candidate pool: it never causes sibling capabilities to inherit the same evidence. Functional source evidence requires an exact capability-selected source citation; incidental imports in a cited test are not evidence. The assessment layer does not use capability names or planned maturity labels as hidden priors.
   1. functional completeness (merged PRs + source edges vs. spec/requirement edges; weakened by `weakens` edges)
   2. test completeness (test edges + invariant-registry citations)
   3. documentation quality (doc edges whose artifacts carry a current `State:` header)
