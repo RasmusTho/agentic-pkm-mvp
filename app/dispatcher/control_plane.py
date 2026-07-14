@@ -75,7 +75,7 @@ _REQUIRED_COLUMNS = {
 # (or relies on it being unique).  Column presence alone is therefore not a
 # usable-schema check: a hand-created table can have the right columns but no
 # primary key or UNIQUE index, and will only fail later when a writer runs.
-_REQUIRED_UNIQUE_KEYS = {
+_REQUIRED_UNIQUE_KEYS: dict[str, tuple[tuple[str, ...], ...]] = {
     "dispatcher_tasks": (("task_id",),),
     "dispatcher_leases": (("lease_id",),),
     "dispatcher_events": (("event_id",),),

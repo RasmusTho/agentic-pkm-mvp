@@ -18,7 +18,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Mapping, Protocol, Sequence
+from typing import Callable, Iterable, Mapping, Protocol, Sequence, cast
 
 import jsonschema
 
@@ -45,11 +45,20 @@ class LiveTruthSource(Protocol):
     def checks(self, repository: str, head_sha: str) -> Sequence[Mapping[str, object]]: ...
 
 
+class ProcessResult(Protocol):
+    returncode: int
+    stdout: str | bytes
+    stderr: str | bytes | None
+
+
+ProcessRunner = Callable[..., ProcessResult]
+
+
 class GhCliVerificationSource:
     """Read request artifacts and live truth with the host's authenticated gh CLI."""
 
-    def __init__(self, runner=subprocess.run) -> None:
-        self.runner = runner
+    def __init__(self, runner: ProcessRunner | None = None) -> None:
+        self.runner = runner or cast(ProcessRunner, subprocess.run)
 
     def _json(self, endpoint: str) -> object:
         result = self.runner(
@@ -91,6 +100,8 @@ class GhCliVerificationSource:
             )
             if result.returncode != 0:
                 raise RuntimeError(f"failed to download verification artifact {artifact_id}")
+            if not isinstance(result.stdout, bytes):
+                raise RuntimeError(f"verification artifact {artifact_id} was not binary")
             with zipfile.ZipFile(io.BytesIO(result.stdout)) as archive:
                 candidates = [
                     info
@@ -141,9 +152,9 @@ class AuthPreflight(Protocol):
 class CodexChatGPTAuthPreflight:
     """Check saved ChatGPT login and keyring policy without reading auth.json."""
 
-    def __init__(self, config_path: Path, runner=subprocess.run) -> None:
+    def __init__(self, config_path: Path, runner: ProcessRunner | None = None) -> None:
         self.config_path = config_path
-        self.runner = runner
+        self.runner = runner or cast(ProcessRunner, subprocess.run)
 
     def check(self) -> AuthReceipt:
         try:
@@ -195,12 +206,12 @@ class CodexExecLauncher:
         receipt_schema: Path,
         context_path: Path,
         adapter_path: Path | None = None,
-        runner=subprocess.run,
+        runner: ProcessRunner | None = None,
     ) -> None:
         self.worktree = worktree
         self.receipt_schema = receipt_schema
         self.context_path = context_path
-        self.runner = runner
+        self.runner = runner or cast(ProcessRunner, subprocess.run)
         self.adapter_path = adapter_path or worktree / ".codex/agents/verification-closer.toml"
         try:
             adapter = tomllib.loads(self.adapter_path.read_text(encoding="utf-8"))
@@ -267,6 +278,7 @@ class CodexExecLauncher:
         heartbeat_thread: threading.Thread | None = None
         stderr_thread: threading.Thread | None = None
         stderr_chunks: list[str] = []
+        lines: Iterable[str | bytes]
         if self.runner is subprocess.run:
             process = subprocess.Popen(
                 self.command(resume_session_id), cwd=self.worktree, env=env,
@@ -274,10 +286,11 @@ class CodexExecLauncher:
             )
             assert process.stdout is not None
             lines = process.stdout
-            assert process.stderr is not None
+            stderr = process.stderr
+            assert stderr is not None
 
             def drain_stderr() -> None:
-                while chunk := process.stderr.read(4096):
+                while chunk := stderr.read(4096):
                     stderr_chunks.append(chunk)
                     if sum(map(len, stderr_chunks)) > 16_384:
                         stderr_chunks[:] = ["".join(stderr_chunks)[-16_384:]]
@@ -296,7 +309,7 @@ class CodexExecLauncher:
                 capture_output=True, text=True, check=False,
             )
             lines = result.stdout.splitlines()
-            stderr_chunks = [str(getattr(result, "stderr", ""))[-16_384:]]
+            stderr_chunks = [str(getattr(result, "stderr", "") or "")[-16_384:]]
         thread_id: str | None = resume_session_id
         terminal: dict[str, object] | None = None
         terminal_error: str | None = None
@@ -311,7 +324,7 @@ class CodexExecLauncher:
             if event.get("type") == "thread.started" and isinstance(event.get("thread_id"), str):
                 thread_id = event["thread_id"]
                 if on_thread_started:
-                    on_thread_started(thread_id)
+                    on_thread_started(event["thread_id"])
             if on_heartbeat:
                 on_heartbeat()
             if event.get("type") == "item.completed":
