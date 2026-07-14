@@ -41,7 +41,8 @@ drains GraphQL to zero and stalls every other agent's reads — a recurring, sys
    and the newer successful one for the same check name on one SHA (observed on PR #2915 and
    #2924's `pr-contract` check). `scripts/await_pr_checks.sh` keeps only the latest record per
    check-run name (ranked by `started_at`, falling back to run id) before green/red classification;
-   a genuinely failed latest record still fails closed.
+   `epic-run-state lifecycle-plan` reuses that shared latest-record selector for terminal dry-runs.
+   A genuinely failed latest record still fails closed.
 
 ## Blessed path
 
