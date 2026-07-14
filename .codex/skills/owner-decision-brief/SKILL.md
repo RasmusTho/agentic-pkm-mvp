@@ -29,6 +29,30 @@ Two failure modes motivate this skill, and it must close both:
 2. **Escalations in project jargon.** When a decision *is* the owner's, it arrives wrapped
    in internal terminology, so he must first decode the question before he can decide.
 
+## Local vault-binding preflight
+
+When the apparent blocker is a missing local vault binding, mount, or path, complete this preflight
+before adding `agent:needs-human` or asking the owner. A missing binding is often a reparable
+channel-bootstrap/configuration problem, not an owner decision.
+
+1. Inspect the deploy environment files selected for the target channel and identify the variables
+   that supply the vault source and target. Check presence and resolved path shape only; never copy
+   secret values into chat, Issues, PRs, or receipts.
+2. Inspect the effective Compose file and overlays for the target service, including the resolved
+   mount/bind source and container target. Confirm that the deploy environment and Compose wiring
+   agree.
+3. Check the configured source path and the standard local Obsidian locations, including
+   `~/Library/Mobile Documents/iCloud~md~obsidian/Documents` and `~/Documents/Obsidian`, then the
+   intended vault subdirectory. Confirm that a candidate is readable, not merely present.
+4. If these checks expose a source-authorized, reversible repair, create or repair the bounded Issue
+   and continue delivery; do not ask the owner for confirmation. If the source is absent or several
+   legitimate vaults remain and the owner must choose one, retain the command/path evidence in the
+   durable record and proceed to Step 1.
+
+This preflight is inspection-only unless the governing issue or source authority already permits the
+resulting bounded repair. It does not authorize a real-vault write, a deployment, or disclosure of
+environment-file contents.
+
 ## Step 1 — The filter: is this discretionary decision the owner's at all?
 
 Before writing anything owner-facing, test the decision against the escalation gate of
