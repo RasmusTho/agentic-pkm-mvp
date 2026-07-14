@@ -604,6 +604,26 @@ class _IgnoringTerminateProcess:
             self.condition.notify_all()
 
 
+class _DescendantHeldStdoutProcess(_IgnoringTerminateProcess):
+    def __init__(self, lines: list[str]) -> None:
+        super().__init__(lines)
+        self.pid = 42_023
+        self.descendant_alive = True
+        self.group_signals: list[tuple[int, int]] = []
+
+    def killpg(self, process_group_id: int, sig: int) -> None:
+        self.group_signals.append((process_group_id, sig))
+        if process_group_id != self.pid or not self.descendant_alive:
+            raise ProcessLookupError(process_group_id)
+        if sig == verification_consumer.signal.SIGTERM:
+            # The direct parent exits, but its descendant ignores SIGTERM and
+            # retains the inherited stdout pipe.
+            self.returncode = -verification_consumer.signal.SIGTERM
+        elif sig == verification_consumer.signal.SIGKILL:
+            self.descendant_alive = False
+            self.release_stdout()
+
+
 def _authority_loss_launcher(tmp_path: Path) -> CodexExecLauncher:
     return CodexExecLauncher(
         tmp_path,
@@ -718,6 +738,94 @@ def test_background_authority_loss_rejects_late_stdout(
     tmp_path, monkeypatch
 ) -> None:
     process, error = _background_authority_loss(tmp_path, monkeypatch)
+
+    assert error.receipt["session_id"] is None
+    assert process.stdout.reads == 1
+
+
+def _process_group_authority_loss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[_DescendantHeldStdoutProcess, CodexExecFailure, dict[str, object]]:
+    process = _DescendantHeldStdoutProcess(_late_terminal_lines())
+    popen_kwargs: dict[str, object] = {}
+
+    def popen(*args, **kwargs):
+        popen_kwargs.update(kwargs)
+        return process
+
+    monkeypatch.setattr(verification_consumer.subprocess, "Popen", popen)
+    monkeypatch.setattr(verification_consumer.os, "killpg", process.killpg)
+    event_wait = verification_consumer.threading.Event.wait
+
+    def accelerated_wait(event, timeout=None):
+        if timeout is not None:
+            timeout = min(timeout, 0.01)
+        return event_wait(event, timeout)
+
+    monkeypatch.setattr(
+        verification_consumer.threading.Event, "wait", accelerated_wait
+    )
+    outcome: dict[str, BaseException] = {}
+
+    def launch() -> None:
+        try:
+            _authority_loss_launcher(tmp_path).launch(
+                {"head_sha": HEAD},
+                on_heartbeat=lambda: (_ for _ in ()).throw(
+                    RuntimeError("verification lease heartbeat rejected")
+                ),
+            )
+        except BaseException as exc:  # noqa: BLE001 - asserted thread outcome
+            outcome["error"] = exc
+
+    worker = Thread(target=launch, daemon=True)
+    worker.start()
+    try:
+        worker.join(timeout=0.5)
+        assert not worker.is_alive(), {
+            "launcher_still_blocked": True,
+            "group_signals": process.group_signals,
+            "parent_returncode": process.returncode,
+            "wait_calls": process.wait_calls,
+        }
+    finally:
+        process.release_stdout()
+        worker.join(timeout=1)
+
+    error = outcome.get("error")
+    assert isinstance(error, CodexExecFailure), outcome
+    return process, error, popen_kwargs
+
+
+def test_authority_loss_terminates_process_group_when_descendant_holds_stdout(
+    tmp_path, monkeypatch
+) -> None:
+    process, error, popen_kwargs = _process_group_authority_loss(
+        tmp_path, monkeypatch
+    )
+
+    assert error.receipt["outcome"] == "heartbeat_authority_lost"
+    assert popen_kwargs["start_new_session"] is True
+    assert process.returncode == -verification_consumer.signal.SIGTERM
+    assert not process.descendant_alive
+
+
+def test_authority_loss_kills_only_coordinator_process_group(
+    tmp_path, monkeypatch
+) -> None:
+    process, _, _ = _process_group_authority_loss(tmp_path, monkeypatch)
+
+    assert process.group_signals == [
+        (process.pid, verification_consumer.signal.SIGTERM),
+        (process.pid, 0),
+        (process.pid, verification_consumer.signal.SIGKILL),
+    ]
+
+
+def test_process_group_authority_loss_rejects_late_descendant_output(
+    tmp_path, monkeypatch
+) -> None:
+    process, error, _ = _process_group_authority_loss(tmp_path, monkeypatch)
 
     assert error.receipt["session_id"] is None
     assert process.stdout.reads == 1

@@ -77,9 +77,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   usage-limit, quota, or credit-exhaustion signal on that non-zero path remains a lease-fenced backoff
   receipt with no repair-budget use or API-key fallback.
 - Heartbeat rejection or failure to persist the thread identity under the exact lease is immediate
-  loss of coordinator authority: the consumer terminates and reaps the active Codex child, rejects
-  any later stdout, and records one bounded backoff receipt without accepting a terminal result from
-  the authority-lost process.
+  loss of coordinator authority: the consumer terminates the private Codex process group, escalates
+  surviving descendants to a bounded group kill, reaps the direct child, rejects any later stdout,
+  and records one bounded backoff receipt without accepting a terminal result from the
+  authority-lost process.
 - Pre-launch eligibility and post-launch delivery truth are separate gates. Launch still requires an
   open current-head PR; a `delivered` receipt is accepted only when a fresh GitHub read proves the
   exact repository, PR, head, merged state, merge timestamp, merge commit, and green checks.

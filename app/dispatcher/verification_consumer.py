@@ -11,6 +11,7 @@ import json
 import io
 import os
 import re
+import signal
 import subprocess
 import tempfile
 import threading
@@ -455,12 +456,52 @@ class CodexExecLauncher:
         stderr_thread: threading.Thread | None = None
         stderr_chunks: list[str] = []
         process: subprocess.Popen[str] | None = None
+        process_group_id: int | None = None
         process_lock = threading.Lock()
         lines: Iterable[str | bytes]
 
+        def signal_process_group(sig: int) -> bool:
+            if process_group_id is None:
+                return False
+            try:
+                os.killpg(process_group_id, sig)
+            except ProcessLookupError:
+                return False
+            return True
+
+        def process_group_is_alive() -> bool:
+            if process_group_id is None:
+                return False
+            try:
+                os.killpg(process_group_id, 0)
+            except ProcessLookupError:
+                return False
+            except PermissionError:
+                # The group still exists. This should not occur for our own
+                # child, but fail closed instead of assuming it is gone.
+                return True
+            return True
+
         def terminate_and_reap_child() -> None:
+            nonlocal process_group_id
             with process_lock:
                 if process is None:
+                    return
+                if process_group_id is not None:
+                    signal_process_group(signal.SIGTERM)
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        signal_process_group(signal.SIGKILL)
+                        process.wait(timeout=5)
+                    else:
+                        # The direct child may exit while a descendant keeps
+                        # the inherited stdout pipe and execution authority.
+                        # The private process group lets us remove that
+                        # residual without signalling unrelated processes.
+                        if process_group_is_alive():
+                            signal_process_group(signal.SIGKILL)
+                    process_group_id = None
                     return
                 if process.poll() is None:
                     try:
@@ -494,7 +535,9 @@ class CodexExecLauncher:
             process = subprocess.Popen(
                 self.command(resume_session_id), cwd=self.worktree, env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                start_new_session=True,
             )
+            process_group_id = getattr(process, "pid", None)
             assert process.stdout is not None
             lines = process.stdout
             stderr = process.stderr
