@@ -7,37 +7,51 @@
     "head_sha": {"type": "string", "pattern": "^[0-9a-fA-F]{40}$"},
     "summary": {"type": "string"},
     "receipt_ids": {"type": "array", "items": {"type": "string"}},
-    "retry_after": {"oneOf": [{"type": "string"}, {"type": "number"}]},
+    "retry_after": {
+      "anyOf": [{"type": "string"}, {"type": "number"}, {"type": "null"}]
+    },
     "review_events": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "kind": {"enum": ["repair", "review"]},
-          "session_id": {"type": "string", "minLength": 1},
-          "capability": {"type": "string", "minLength": 1},
-          "reasoning_effort": {"type": "string", "minLength": 1},
-          "outcome": {"type": "string", "minLength": 1},
-          "finding_id": {"type": "string", "minLength": 1},
-          "strongest": {"type": "boolean"}
-        },
-        "required": ["kind", "session_id", "capability", "reasoning_effort", "outcome"],
-        "allOf": [
-          {
-            "if": {"properties": {"kind": {"const": "repair"}}},
-            "then": {"required": ["finding_id"]}
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": {"enum": ["repair", "review"]},
+              "session_id": {"type": "string", "minLength": 1},
+              "capability": {"type": "string", "minLength": 1},
+              "reasoning_effort": {"type": "string", "minLength": 1},
+              "outcome": {"type": "string", "minLength": 1},
+              "finding_id": {
+                "anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]
+              },
+              "strongest": {
+                "anyOf": [{"type": "boolean"}, {"type": "null"}]
+              }
+            },
+            "required": [
+              "kind",
+              "session_id",
+              "capability",
+              "reasoning_effort",
+              "outcome",
+              "finding_id",
+              "strongest"
+            ],
+            "additionalProperties": false
           }
-        ],
-        "additionalProperties": false
-      }
+        },
+        {"type": "null"}
+      ]
     }
   },
-  "required": ["verdict", "head_sha", "summary", "receipt_ids"],
-  "allOf": [
-    {
-      "if": {"properties": {"verdict": {"const": "delivered"}}},
-      "then": {"required": ["review_events"], "properties": {"review_events": {"minItems": 2}}}
-    }
+  "required": [
+    "verdict",
+    "head_sha",
+    "summary",
+    "receipt_ids",
+    "retry_after",
+    "review_events"
   ],
   "additionalProperties": false
 }

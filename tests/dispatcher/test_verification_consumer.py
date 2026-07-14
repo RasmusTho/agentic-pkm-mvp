@@ -7,6 +7,9 @@ from pathlib import Path
 import zipfile
 
 import pytest
+import jsonschema
+
+import app.dispatcher.verification_consumer as verification_consumer
 
 from app.dispatcher.verification_consumer import (
     AuthReceipt,
@@ -132,7 +135,7 @@ def test_codex_launcher_uses_explicit_noninteractive_flags_and_no_api_env(tmp_pa
 
     class Result:
         returncode = 0
-        stdout = '{"type":"thread.started","thread_id":"thread-1"}\n{"type":"item.completed","item":{"type":"agent_message","text":"{\\"verdict\\":\\"needs_human\\",\\"head_sha\\":\\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\",\\"summary\\":\\"test\\",\\"receipt_ids\\":[]}"}}\n'
+        stdout = '{"type":"thread.started","thread_id":"thread-1"}\n{"type":"item.completed","item":{"type":"agent_message","text":"{\\"verdict\\":\\"needs_human\\",\\"head_sha\\":\\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\",\\"summary\\":\\"test\\",\\"receipt_ids\\":[],\\"retry_after\\":null,\\"review_events\\":null}"}}\n'
 
     def runner(command, **kwargs):
         calls.append((command, kwargs))
@@ -141,7 +144,31 @@ def test_codex_launcher_uses_explicit_noninteractive_flags_and_no_api_env(tmp_pa
     monkeypatch.setenv("OPENAI_API_KEY", "must-not-pass")
     monkeypatch.setenv("CODEX_API_KEY", "must-not-pass")
     schema = tmp_path / "receipt.schema.json"
-    schema.write_text("{}", encoding="utf-8")
+    schema.write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "properties": {
+                    "verdict": {"type": "string"},
+                    "head_sha": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "receipt_ids": {"type": "array", "items": {"type": "string"}},
+                    "retry_after": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "review_events": {"type": "null"},
+                },
+                "required": [
+                    "verdict",
+                    "head_sha",
+                    "summary",
+                    "receipt_ids",
+                    "retry_after",
+                    "review_events",
+                ],
+                "additionalProperties": False,
+            }
+        ),
+        encoding="utf-8",
+    )
     launcher = CodexExecLauncher(tmp_path, schema, tmp_path / "context.json", adapter_path=Path(__file__).resolve().parents[2] / ".codex/agents/verification-closer.toml", runner=runner)
     session, _ = launcher.launch({"head_sha": HEAD})
     command, kwargs = calls[0]
@@ -200,6 +227,95 @@ def test_process_runner_injection_preserves_falsey_callable(tmp_path) -> None:
     assert GhCliVerificationSource(runner=runner).runner is runner
     assert CodexChatGPTAuthPreflight(config, runner=runner).runner is runner
     assert launcher.runner is runner
+
+
+def test_production_receipt_schema_uses_codex_subset_and_preserves_semantics() -> None:
+    schema_path = (
+        Path(__file__).resolve().parents[2]
+        / "app/dispatcher/schemas/verification_closer_receipt.schema.json"
+    )
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+
+    verification_consumer.validate_codex_output_schema(schema)
+    assert "allOf" not in json.dumps(schema)
+    assert "oneOf" not in json.dumps(schema)
+
+    valid = {
+        "verdict": "delivered",
+        "head_sha": HEAD,
+        "summary": "verified",
+        "receipt_ids": ["review-1", "review-2"],
+        "retry_after": None,
+        "review_events": [
+            {
+                "kind": "review",
+                "session_id": "review-1",
+                "capability": "gpt-5.6-sol",
+                "reasoning_effort": "xhigh",
+                "outcome": "clean",
+                "finding_id": None,
+                "strongest": None,
+            },
+            {
+                "kind": "review",
+                "session_id": "review-2",
+                "capability": "gpt-5.6-sol",
+                "reasoning_effort": "xhigh",
+                "outcome": "clean",
+                "finding_id": None,
+                "strongest": None,
+            },
+        ],
+    }
+    verification_consumer.validate_verification_closer_receipt(valid, schema)
+
+    without_reviews = dict(valid, review_events=None)
+    with pytest.raises(jsonschema.ValidationError, match="two review events"):
+        verification_consumer.validate_verification_closer_receipt(without_reviews, schema)
+
+    repair_without_finding = dict(valid)
+    repair_without_finding["review_events"] = [
+        dict(valid["review_events"][0], kind="repair"),  # type: ignore[index]
+        valid["review_events"][1],  # type: ignore[index]
+    ]
+    with pytest.raises(jsonschema.ValidationError, match="finding_id"):
+        verification_consumer.validate_verification_closer_receipt(
+            repair_without_finding, schema
+        )
+
+
+def test_codex_launcher_rejects_unsupported_schema_before_process_start(tmp_path) -> None:
+    schema = tmp_path / "receipt.schema.json"
+    schema.write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "properties": {"verdict": {"type": "string"}},
+                "required": ["verdict"],
+                "additionalProperties": False,
+                "allOf": [{"properties": {"verdict": {"const": "delivered"}}}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    def runner(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("invalid schema must fail before process start")
+
+    launcher = CodexExecLauncher(
+        tmp_path,
+        schema,
+        tmp_path / "context.json",
+        adapter_path=Path(__file__).resolve().parents[2]
+        / ".codex/agents/verification-closer.toml",
+        runner=runner,
+    )
+    with pytest.raises(ValueError, match=r"unsupported output-schema keyword.*allOf"):
+        launcher.launch({"head_sha": HEAD})
+    assert calls == []
 
 
 def test_restart_recovers_without_duplicate_agent_or_mutation(tmp_path) -> None:

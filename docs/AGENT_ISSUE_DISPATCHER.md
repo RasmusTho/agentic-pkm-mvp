@@ -45,6 +45,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   registered `verification_closer` adapter with its pinned model, reasoning, sandbox, and developer
   instructions. Streaming `codex exec --json --output-schema` events persist the thread identity
   immediately; only a schema-valid final `agent_message` receipt drives terminal state.
+- Before process start, the launcher rejects output schemas outside the Codex Structured Outputs
+  subset (including conditional composition and object fields that are not required). The provider
+  schema keeps optional values explicitly nullable; local semantic validation still fail-closes a
+  delivered receipt without two review events or a repair event without its finding identity.
 - Missing or pending checks and auth/rate limits enter time-bounded `backoff`; replay cannot launch
   before `retry_after`. Terminal completion additionally requires two fresh clean review receipts
   after the final durable repair attempt. Standard and strongest-capability repair budgets are

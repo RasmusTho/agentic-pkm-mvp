@@ -54,6 +54,87 @@ class ProcessResult(Protocol):
 ProcessRunner = Callable[..., ProcessResult]
 
 
+_UNSUPPORTED_CODEX_SCHEMA_KEYWORDS = frozenset(
+    {
+        "allOf",
+        "oneOf",
+        "not",
+        "dependentRequired",
+        "dependentSchemas",
+        "if",
+        "then",
+        "else",
+    }
+)
+
+
+def validate_codex_output_schema(schema: Mapping[str, object]) -> None:
+    """Fail before launch when a receipt schema exceeds Codex's response subset."""
+
+    try:
+        jsonschema.Draft202012Validator.check_schema(schema)
+    except jsonschema.SchemaError as exc:
+        raise ValueError(f"invalid output schema: {exc.message}") from exc
+
+    if schema.get("type") != "object":
+        raise ValueError("Codex output schema root must be an object")
+
+    def walk(node: object, pointer: str = "") -> None:
+        if isinstance(node, Mapping):
+            for keyword in _UNSUPPORTED_CODEX_SCHEMA_KEYWORDS.intersection(node):
+                location = f"{pointer}/{keyword}" or f"/{keyword}"
+                raise ValueError(
+                    f"unsupported output-schema keyword at {location}: {keyword}"
+                )
+            if node.get("type") == "object" or "properties" in node:
+                properties = node.get("properties")
+                required = node.get("required")
+                if not isinstance(properties, Mapping):
+                    raise ValueError(f"Codex object schema at {pointer or '/'} lacks properties")
+                if not isinstance(required, list) or set(required) != set(properties):
+                    raise ValueError(
+                        f"Codex object schema at {pointer or '/'} must require every property"
+                    )
+                if node.get("additionalProperties") is not False:
+                    raise ValueError(
+                        f"Codex object schema at {pointer or '/'} must set "
+                        "additionalProperties=false"
+                    )
+            for key, value in node.items():
+                walk(value, f"{pointer}/{key}")
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                walk(value, f"{pointer}/{index}")
+
+    walk(schema)
+
+
+def validate_verification_closer_receipt(
+    receipt: Mapping[str, object], schema: Mapping[str, object]
+) -> None:
+    """Apply provider-safe structural validation plus local semantic invariants."""
+
+    jsonschema.validate(receipt, schema)
+    review_events = receipt.get("review_events")
+    if receipt.get("verdict") == "delivered" and (
+        not isinstance(review_events, list) or len(review_events) < 2
+    ):
+        raise jsonschema.ValidationError(
+            "a delivered receipt requires at least two review events"
+        )
+    if not isinstance(review_events, list):
+        return
+    for index, event in enumerate(review_events):
+        if not isinstance(event, Mapping):
+            continue
+        if event.get("kind") == "repair" and not (
+            isinstance(event.get("finding_id"), str) and event["finding_id"]
+        ):
+            raise jsonschema.ValidationError(
+                f"repair review event {index} requires finding_id"
+            )
+
+
 class GhCliVerificationSource:
     """Read request artifacts and live truth with the host's authenticated gh CLI."""
 
@@ -268,6 +349,14 @@ class CodexExecLauncher:
         on_thread_started: Callable[[str], None] | None = None,
         on_heartbeat: Callable[[], None] | None = None,
     ) -> tuple[str, Mapping[str, object]]:
+        try:
+            schema = json.loads(self.receipt_schema.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("verification closer receipt schema is unavailable") from exc
+        if not isinstance(schema, Mapping):
+            raise ValueError("verification closer receipt schema must be an object")
+        validate_codex_output_schema(schema)
+
         # This generic launcher writes only non-secret request identity into its
         # isolated worktree. Host service configuration stays outside Git.
         self.context_path.write_text(
@@ -313,7 +402,6 @@ class CodexExecLauncher:
         thread_id: str | None = resume_session_id
         terminal: dict[str, object] | None = None
         terminal_error: str | None = None
-        schema = json.loads(self.receipt_schema.read_text(encoding="utf-8"))
         for line in lines:
             try:
                 event = json.loads(line)
@@ -334,7 +422,7 @@ class CodexExecLauncher:
                     if isinstance(text, str):
                         try:
                             candidate = json.loads(text)
-                            jsonschema.validate(candidate, schema)
+                            validate_verification_closer_receipt(candidate, schema)
                         except (json.JSONDecodeError, jsonschema.ValidationError):
                             continue
                         terminal = candidate
