@@ -1,7 +1,7 @@
 State: Research/design proposal (advisory, 2026-07-15). **This document is not a specification and enacts no runtime behavior, consent grant, schema, model choice, or threshold.** It proposes a buildable local-only direction under ADR-0060; Posture A remains operational until ADR-0060's activation gates pass.
 Doc role: Research/design proposal — input to a later `feature-breakdown` pass
 Authority: Advisory only. ADR-0060 owns the B-full and voiceprint consent-class decisions; `docs/HEIMDAL/OWNER_DECISIONS.md` retains R-CONSENT/R-PRIVACY/R-EXTERNAL; enacted event and runtime contracts remain with their existing owner surfaces.
-Owner: Architecture / Heimdal attribution + Mimer identity seam (Rasmus)
+Owner: Architecture / Heimdal attribution + Mimer identity seam
 Temporal class: reference
 Review cadence: event-driven (before voiceprint feature breakdown or when the local model bake-off runs)
 Source of truth: ADR-0060, ADR-0049, `docs/HEIMDAL/FABLE_COMPANION.md`, `docs/HEIMDAL/CAPABILITY_CHARTER.md`, and `docs/HEIMDAL/ENTITY_IDENTIFICATION_RESEARCH.md`; external sources below support model feasibility only.
