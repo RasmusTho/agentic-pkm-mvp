@@ -549,6 +549,43 @@ def live_truth_rejection(
         return "draft"
     if _nested(pr, "head", "sha") != (expected_head_sha or run.head_sha):
         return "stale_head"
+    return _checks_rejection(checks)
+
+
+def delivered_live_truth_rejection(
+    run: VerificationRun,
+    pr: Mapping[str, object],
+    checks: Sequence[Mapping[str, object]],
+    *,
+    expected_head_sha: str,
+) -> str | None:
+    """Validate exact post-merge truth for a coordinator-delivered receipt."""
+
+    number = pr.get("number")
+    if not isinstance(number, int) or isinstance(number, bool):
+        return "malformed_pr"
+    if number != run.pr_number:
+        return "pr_mismatch"
+    if _nested(pr, "base", "repo", "full_name") != run.repository:
+        return "repository_mismatch"
+    if _nested(pr, "head", "sha") != expected_head_sha:
+        return "stale_head"
+    if (
+        pr.get("state") != "closed"
+        or pr.get("merged") is not True
+        or not isinstance(pr.get("merged_at"), str)
+        or not pr["merged_at"]
+    ):
+        return "closed_unmerged"
+    merge_commit_sha = pr.get("merge_commit_sha")
+    if not isinstance(merge_commit_sha, str) or not re.fullmatch(
+        r"[0-9a-fA-F]{40}", merge_commit_sha
+    ):
+        return "missing_merge_evidence"
+    return _checks_rejection(checks)
+
+
+def _checks_rejection(checks: Sequence[Mapping[str, object]]) -> str | None:
     if not checks:
         return "missing_checks"
     latest: dict[str, tuple[tuple[int, str, int], Mapping[str, object]]] = {}
@@ -873,11 +910,20 @@ class VerificationConsumer:
         # stale receipt heads never reach the review ledger.
         live_pr = self.truth.pull_request(claimed.repository, claimed.pr_number)
         live_checks = self.truth.checks(claimed.repository, receipt_head)
-        rejection = live_truth_rejection(
-            claimed,
-            live_pr,
-            live_checks,
-            expected_head_sha=receipt_head,
+        rejection = (
+            delivered_live_truth_rejection(
+                claimed,
+                live_pr,
+                live_checks,
+                expected_head_sha=receipt_head,
+            )
+            if verdict == "delivered"
+            else live_truth_rejection(
+                claimed,
+                live_pr,
+                live_checks,
+                expected_head_sha=receipt_head,
+            )
         )
         transient = rejection in {"missing_checks", "checks_not_green"}
         if changed_head and (rejection is None or transient):

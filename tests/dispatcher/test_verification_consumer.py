@@ -61,11 +61,74 @@ class RateLimitedLauncher(Launcher):
         }
 
 
+class DeliveredLauncher(Launcher):
+    def launch(
+        self,
+        context_pack,
+        *,
+        resume_session_id=None,
+        on_thread_started=None,
+        on_heartbeat=None,
+    ):
+        self.calls.append((context_pack, resume_session_id))
+        session = resume_session_id or "thread-delivered"
+        if on_thread_started:
+            on_thread_started(session)
+        return session, {
+            "verdict": "delivered",
+            "head_sha": HEAD,
+            "summary": "verified and merged",
+            "receipt_ids": ["review-1", "review-2"],
+            "review_events": [
+                {
+                    "kind": "review",
+                    "session_id": "review-1",
+                    "capability": "gpt-5.6-sol",
+                    "reasoning_effort": "xhigh",
+                    "outcome": "clean",
+                },
+                {
+                    "kind": "review",
+                    "session_id": "review-2",
+                    "capability": "gpt-5.6-sol",
+                    "reasoning_effort": "xhigh",
+                    "outcome": "clean",
+                },
+            ],
+        }
+
+
+class TransitionTruth:
+    def __init__(self, terminal_pr: dict[str, object]) -> None:
+        self.prs = iter([eligible_pr(), terminal_pr])
+
+    def pull_request(self, repository, pr_number):
+        return next(self.prs)
+
+    def checks(self, repository, head_sha):
+        return GREEN
+
+
 def eligible_pr(**updates):
     value = {
         "number": 3603, "state": "open", "draft": False, "merged_at": None,
         "base": {"ref": "main"}, "head": {"ref": "branch", "sha": HEAD},
     }
+    value.update(updates)
+    return value
+
+
+def merged_pr(**updates: object) -> dict[str, object]:
+    value = eligible_pr(
+        state="closed",
+        merged=True,
+        merged_at="2026-07-15T00:00:00Z",
+        merge_commit_sha="b" * 40,
+        base={
+            "ref": "main",
+            "repo": {"full_name": "RasmusTho/agentic-pkm-mvp"},
+        },
+    )
     value.update(updates)
     return value
 
@@ -219,6 +282,57 @@ def test_eligible_request_invokes_registered_verification_closer_with_minimal_co
     assert pack["agent_adapter"] == ".codex/agents/verification-closer.toml"
     assert pack["verification_skill"] == ".codex/skills/verification-and-closure/SKILL.md"
     assert "body" not in pack and "credentials" not in pack
+
+
+def test_delivered_receipt_accepts_matching_post_merge_live_truth(tmp_path) -> None:
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        TransitionTruth(merged_pr()),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "completed"
+    assert result.verified_head_sha == HEAD
+
+
+@pytest.mark.parametrize(
+    ("terminal_pr", "reason"),
+    [
+        (
+            merged_pr(merged=False, merged_at=None, merge_commit_sha=None),
+            "receipt_live_truth_closed_unmerged",
+        ),
+        (
+            merged_pr(head={"ref": "branch", "sha": "b" * 40}),
+            "receipt_head_mismatch",
+        ),
+        (
+            merged_pr(
+                base={"ref": "main", "repo": {"full_name": "attacker/redirect"}}
+            ),
+            "receipt_live_truth_repository_mismatch",
+        ),
+        (
+            merged_pr(merge_commit_sha=None),
+            "receipt_live_truth_missing_merge_evidence",
+        ),
+    ],
+)
+def test_delivered_receipt_rejects_closed_unmerged_or_mismatched_merge(
+    tmp_path, terminal_pr, reason
+) -> None:
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        TransitionTruth(terminal_pr),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "needs_human"
+    assert result.stop_reason == reason
 
 
 def test_codex_launcher_uses_explicit_noninteractive_flags_and_no_api_env(tmp_path, monkeypatch) -> None:

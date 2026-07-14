@@ -21,8 +21,10 @@ from tests.dispatcher.test_verification_consumer import (
     GREEN,
     Auth,
     Launcher,
+    TransitionTruth,
     Truth,
     eligible_pr,
+    merged_pr,
 )
 from tests.dispatcher.verification_helpers import HEAD, ledger, request
 
@@ -90,7 +92,7 @@ def test_delivered_receipt_records_no_repair_reviews_and_completes(tmp_path) -> 
     state = ledger(tmp_path)
     result = VerificationConsumer(
         state,
-        Truth(eligible_pr(), GREEN),
+        TransitionTruth(merged_pr()),
         Auth(),
         DeliveredWithReviewsLauncher(),
         "host",

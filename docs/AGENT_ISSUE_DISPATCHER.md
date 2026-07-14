@@ -73,6 +73,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - Heartbeat rejection is immediate loss of coordinator authority: the consumer terminates and reaps
   the active Codex child, rejects any later stdout, and records one bounded backoff receipt without
   accepting a terminal result from the authority-lost process.
+- Pre-launch eligibility and post-launch delivery truth are separate gates. Launch still requires an
+  open current-head PR; a `delivered` receipt is accepted only when a fresh GitHub read proves the
+  exact repository, PR, head, merged state, merge timestamp, merge commit, and green checks.
 - The immutable request head remains the run/idempotency audit identity. A repair receipt may advance
   the separate current head only under the exact active lease after a fresh GitHub read proves that
   exact live PR head; terminal delivery records the verified head only after two clean reviews on it.

@@ -14,6 +14,7 @@ from tests.dispatcher.test_verification_consumer import (
     Auth,
     Launcher,
     eligible_pr,
+    merged_pr,
 )
 from tests.dispatcher.verification_helpers import HEAD, ledger, request
 
@@ -149,9 +150,12 @@ def test_nonzero_codex_rate_limit_uses_durable_backoff_without_duplicate(tmp_pat
 class StaticTruth:
     def __init__(self, head: str) -> None:
         self.head = head
+        self.merged = False
         self.checked_heads: list[str] = []
 
     def pull_request(self, repository, pr_number):
+        if self.merged:
+            return merged_pr(head={"ref": "branch", "sha": self.head})
         return eligible_pr(head={"ref": "branch", "sha": self.head})
 
     def checks(self, repository, head_sha):
@@ -177,6 +181,7 @@ class RepairedDeliveryLauncher(Launcher):
         if on_thread_started:
             on_thread_started("coordinator")
         self.truth.head = self.live_head
+        self.truth.merged = True
         return "coordinator", {
             "verdict": "delivered",
             "head_sha": NEW_HEAD,
