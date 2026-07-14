@@ -129,8 +129,9 @@ A `blocking` verdict is required when:
 
 An `inconclusive` verdict is required when required context is unavailable and
 the missing context could change the result. Inconclusive review is not a pass.
-It routes to Human Exception unless the governing workflow allows a bounded
-retry or a human waiver.
+It routes through the escalation classifier: use bounded evidence recovery or
+`blocked_technical` when the missing context is technical, and Human Exception
+only when resolving it needs an explicit `needs_owner` authority category.
 
 ### Actionable Finding Criteria
 

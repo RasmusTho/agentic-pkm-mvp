@@ -349,8 +349,10 @@ stateDiagram-v2
   Patch --> AwaitChecks
   PreExisting --> ReceiptOrFollowup
   ReceiptOrFollowup --> Green
-  Unresolved --> Blocked
-  Blocked --> HumanException
+  Unresolved --> Triage
+  Triage --> Blocked: technical pause
+  Triage --> Patch: bounded repair
+  Triage --> HumanException: explicit authority category
 ```
 
 ### Docs/Spec Feedback Lifecycle
@@ -731,7 +733,9 @@ stateDiagram-v2
   spec_needed --> issue_drafted
   issue_drafted --> needs_repair
   needs_repair --> issue_drafted
-  issue_drafted --> needs_human
+  issue_drafted --> escalation_triage
+  escalation_triage --> needs_human: explicit authority category
+  escalation_triage --> issue_drafted: bounded repair
   needs_human --> issue_drafted
   issue_drafted --> agent_ready
   agent_ready --> claimed
@@ -741,7 +745,7 @@ stateDiagram-v2
   CI_failing --> PR_repair
   PR_repair --> PR_published
   PR_published --> frontier_rescue
-  frontier_rescue --> needs_human
+  frontier_rescue --> escalation_triage
   PR_published --> merge_eligible
   merge_eligible --> merged
   merged --> closure
@@ -779,7 +783,9 @@ flowchart TD
   Patch --> Recheck["Re-run/recheck"]
   Recheck --> Check
   Classify -->|pre-existing| Followup["Receipt/follow-up"]
-  Classify -->|unresolved| Human["Human exception/block"]
+  Classify -->|unresolved| Triage["Classifier triage"]
+  Triage -->|technical pause| Block["blocked_technical"]
+  Triage -->|explicit authority category| Human["Human exception"]
 ```
 
 ### Review/Repair Loop
@@ -814,8 +820,10 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-  Stop["Stop condition"] --> Packet["Human Exception packet"]
-  Packet --> Label["agent:needs-human / blocker"]
+  Stop["Stop condition"] --> Triage["Escalation classifier"]
+  Triage -->|technical route| Recover["auto-repair / auto-backoff / blocked_technical"]
+  Triage -->|explicit authority category| Packet["Human Exception packet"]
+  Packet --> Label["agent:needs-human"]
   Label --> Decision["Rasmus decision"]
   Decision -->|authorize| Resume["Resume autonomous flow"]
   Decision -->|reject| Close["Close/block/discard"]
