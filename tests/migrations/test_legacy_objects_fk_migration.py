@@ -102,3 +102,53 @@ def test_legacy_objects_fk_migration_backfills_existing_parents(scratch_dsn: str
         ).fetchone()
     assert parent == ("note", None, {"title": "Legacy"})
     assert fk_target == ("store_objects",)
+
+
+def test_active_decision_writer_preflights_before_receipt_on_pre_cutover_schema(
+    scratch_dsn: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The production writer rejects pre-#3510 schema before its commit point."""
+    _upgrade(PRE_CUTOVER_REVISION)
+    object_id = uuid.uuid4()
+    with psycopg.connect(scratch_dsn) as conn:
+        conn.execute(
+            "INSERT INTO store_objects (object_id, kind, payload) "
+            "VALUES (%s, 'note', '{}'::jsonb)",
+            (object_id,),
+        )
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+
+    import app.receipts.decision_receipt_log as receipt_log
+    from app.services.decisions import (
+        DecisionsSchemaMigrationRequired,
+        _resolved_backend,
+        insert_decision,
+    )
+
+    monkeypatch.setattr(
+        receipt_log.DEFAULT_WRITE_GUARD,
+        "assert_writes_allowed",
+        lambda action: None,
+    )
+    _resolved_backend.cache_clear()
+
+    with pytest.raises(
+        DecisionsSchemaMigrationRequired,
+        match=r"#3510.*alembic upgrade head",
+    ):
+        insert_decision(
+            str(object_id),
+            "classification",
+            {"type": "note"},
+            trace_id="pre-cutover",
+        )
+
+    assert receipt_log.iter_decision_receipts(vault) == []
+    with psycopg.connect(scratch_dsn) as conn:
+        assert conn.execute("SELECT count(*) FROM decisions").fetchone() == (0,)

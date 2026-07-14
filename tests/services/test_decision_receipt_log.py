@@ -84,6 +84,7 @@ class _RecordingConn:
 def durable_backend(monkeypatch: pytest.MonkeyPatch) -> None:
     """Force the durable (non-memory) branch of ``insert_decision``."""
     monkeypatch.setattr(decisions_module, "_use_memory_backend", lambda: False)
+    monkeypatch.setattr(decisions_module, "_assert_decisions_fk_cutover", lambda: None)
     # vault_uuid resolution touches the DB; keep it deterministic/offline here.
     monkeypatch.setattr(receipt_log, "resolve_vault_uuid", lambda object_id: None)
 

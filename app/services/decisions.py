@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import psycopg
 
-from app.db.db import conn_rw
+from app.db.db import conn_ro, conn_rw
 from app.db.dsn import resolve_dsn
 from app.receipts.decision_receipt_log import append_decision_receipt
 
@@ -19,6 +19,62 @@ from app.receipts.decision_receipt_log import append_decision_receipt
 _MEM_DECISIONS: Dict[str, List[dict[str, Any]]] = {}
 
 _ALLOWED_BACKENDS = {"memory", "pg"}
+
+
+class DecisionsSchemaMigrationRequired(RuntimeError):
+    """The active decisions projection still has its pre-#3510 FK parent."""
+
+
+def _assert_decisions_fk_cutover() -> None:
+    """Fail before receipt append unless decisions uses the canonical parent.
+
+    This preflight is deliberately read-only and uses ``conn_ro`` so it never
+    invokes the legacy ``conn_rw`` schema bootstrap. Receipt-before-ack still
+    governs the actual decision write; the schema gate merely proves that the
+    rebuildable projection can accept that receipt before the canonical log is
+    mutated.
+    """
+    with conn_ro() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ccu.table_schema, ccu.table_name, ccu.column_name, rc.delete_rule
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu
+                  ON tc.constraint_name = kcu.constraint_name
+                 AND tc.table_schema = kcu.table_schema
+                JOIN information_schema.referential_constraints rc
+                  ON rc.constraint_name = tc.constraint_name
+                 AND rc.constraint_schema = tc.table_schema
+                JOIN information_schema.constraint_column_usage ccu
+                  ON ccu.constraint_name = tc.constraint_name
+                 AND ccu.constraint_schema = tc.table_schema
+                WHERE tc.table_schema = 'public'
+                  AND tc.table_name = 'decisions'
+                  AND tc.constraint_type = 'FOREIGN KEY'
+                  AND kcu.column_name = 'object_id'
+                """
+            )
+            rows = cur.fetchall()
+
+    expected = ("public", "store_objects", "object_id", "SET NULL")
+    normalized = [
+        (
+            row["table_schema"],
+            row["table_name"],
+            row["column_name"],
+            row["delete_rule"],
+        )
+        if isinstance(row, dict)
+        else tuple(row)
+        for row in rows
+    ]
+    if normalized != [expected]:
+        raise DecisionsSchemaMigrationRequired(
+            "#3510 decisions FK migration is required before a durable decision receipt can be "
+            "appended: run 'alembic upgrade head' and retry. Expected "
+            "public.decisions(object_id) -> public.store_objects(object_id) ON DELETE SET NULL."
+        )
 
 
 @lru_cache(maxsize=8)
@@ -99,6 +155,12 @@ def insert_decision(object_id: str, key: str, value: dict[str, Any], trace_id: s
     # Durable path — decision-receipt log is CANONICAL, Postgres is the
     # projection (feat #2969, docs/DECISION_RECEIPT_LOG/README.md).
     #
+    # The read-only #3510 schema preflight must run before the canonical log is
+    # mutated. Otherwise a pre-cutover FK can accept the receipt and then reject
+    # its projection with a raw ForeignKeyViolation, leaving an avoidable
+    # durable-but-unprojected decision.
+    _assert_decisions_fk_cutover()
+
     # Receipt-before-ack (C-5/P-5): append the WriteGuard-gated durable receipt
     # FIRST — that append is the commit point. A blocked WriteGuard raises
     # (WritesBlockedError) and any I/O failure raises (DecisionReceiptWriteError);
