@@ -32,8 +32,17 @@ temporal_code_prefixes = (
 )
 temporal_code_changed = any(c.startswith(prefix) for prefix in temporal_code_prefixes for c in changed)
 skip_temporal_guard = os.environ.get("DOCS_GUARD_ALLOW_TEMPORAL_SKIP") == "1"
+governance_enforcement_changed = any(
+    c == "scripts/git_hygiene.py" or c.startswith(".codex/skills/") for c in changed
+)
+governance_owner_doc_touched = any(c.startswith("docs/development/") for c in changed)
 
-if temporal_code_changed and not temporal_doc_touched and not skip_temporal_guard:
+if (
+    temporal_code_changed
+    and not temporal_doc_touched
+    and not (governance_enforcement_changed and governance_owner_doc_touched)
+    and not skip_temporal_guard
+):
     print("Docs guard: temporal code/config changed but no high-risk temporal docs were touched.")
     print(
         json.dumps(
