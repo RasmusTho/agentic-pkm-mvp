@@ -13,6 +13,7 @@ never invents its own receipt/authority path.
 from __future__ import annotations
 
 import json
+import secrets
 import sqlite3
 from pathlib import Path
 from typing import Any, Mapping
@@ -339,7 +340,34 @@ class CkmStore:
     ) -> CkmEvidenceEdge:
         now = utc_now()
         candidate_id = new_id("edge")
+        if extraction_method == "inferred" and (
+            basis is None or not isinstance(basis, str) or not basis.strip()
+        ):
+            raise CkmValidationError(
+                "inferred evidence edges require an explicit non-empty rationale as basis"
+            )
         resolved_basis = basis or source_ref
+        candidate = CkmEvidenceEdge(
+            id=candidate_id,
+            artifact_id=artifact_id,
+            capability_id=capability_id,
+            evidence_kind=evidence_kind,
+            polarity=polarity,
+            maturity_dimension=maturity_dimension,
+            confidence=confidence,
+            extraction_method=extraction_method,
+            model=model,
+            provider=provider,
+            lifecycle=lifecycle,
+            source_ref=source_ref,
+            basis=resolved_basis,
+            created_at=now,
+            updated_at=now,
+        ).validate()
+        if candidate.extraction_method == "inferred" and candidate.lifecycle != "candidate":
+            raise CkmValidationError(
+                "inferred evidence edges must enter as candidate; use a confirmation receipt"
+            )
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
@@ -358,7 +386,13 @@ class CkmStore:
                     extraction_method = excluded.extraction_method,
                     model = excluded.model,
                     provider = excluded.provider,
-                    lifecycle = excluded.lifecycle,
+                    lifecycle = CASE
+                        WHEN ckm_evidence_edge.extraction_method = 'inferred'
+                         AND ckm_evidence_edge.lifecycle = 'confirmed'
+                         AND excluded.extraction_method = 'inferred'
+                        THEN 'confirmed'
+                        ELSE excluded.lifecycle
+                    END,
                     source_ref = excluded.source_ref,
                     updated_at = excluded.updated_at
                 """,
@@ -421,6 +455,76 @@ class CkmStore:
                     (artifact_id, capability_id, basis),
                 ).fetchone()
         return CkmEvidenceEdge.from_row(row) if row is not None else None
+
+    def get_evidence_edge_by_id(self, edge_id: str) -> CkmEvidenceEdge | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM ckm_evidence_edge WHERE id = ?", (edge_id,)
+            ).fetchone()
+        return CkmEvidenceEdge.from_row(row) if row is not None else None
+
+    def _set_inferred_edge_confirmed(self, edge_id: str) -> CkmEvidenceEdge:
+        """Apply a confirmation already authorized by semantic receipt validation.
+
+        This is intentionally private: callers must use the receipt-producing and
+        receipt-validating confirmation boundary in ``semantic.py``.
+        """
+
+        edge = self.get_evidence_edge_by_id(edge_id)
+        if edge is None:
+            raise CkmValidationError(f"evidence edge not found: {edge_id}")
+        if edge.extraction_method != "inferred":
+            raise CkmValidationError("only inferred evidence edges require confirmation")
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE ckm_evidence_edge SET lifecycle = 'confirmed', updated_at = ? WHERE id = ?",
+                (utc_now(), edge_id),
+            )
+            conn.commit()
+        confirmed = self.get_evidence_edge_by_id(edge_id)
+        if confirmed is None:  # pragma: no cover - defensive
+            raise CkmValidationError(f"confirmed edge disappeared: {edge_id}")
+        return confirmed
+
+    def list_builderops_receipts(self, event_type: str | None = None) -> list[JsonDict]:
+        receipts = self._receipt_store.list_records("BuilderOpsReceipt")
+        if event_type is None:
+            return receipts
+        return [receipt for receipt in receipts if receipt.get("event_type") == event_type]
+
+    def append_builderops_receipt(self, **fields: Any) -> JsonDict:
+        return self._receipt_store.append_receipt(**fields)
+
+    def _confirmation_signing_key(self, *, create: bool = False) -> bytes | None:
+        """Return the local CKM confirmation key, creating it only at the CLI boundary.
+
+        The key lives in BuilderOps metadata, outside the rebuildable ``ckm_*``
+        projection.  Receipt replay may read it but never creates it: an
+        unsigned, self-asserted receipt therefore cannot bootstrap its own
+        authority after a rebuild.
+        """
+
+        key_name = "ckm_confirmation_signing_key_v1"
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT value FROM builderops_meta WHERE key = ?", (key_name,)
+            ).fetchone()
+            if row is None and create:
+                value = secrets.token_hex(32)
+                conn.execute(
+                    "INSERT INTO builderops_meta (key, value) VALUES (?, ?)",
+                    (key_name, value),
+                )
+                conn.commit()
+                return bytes.fromhex(value)
+            conn.commit()
+        if row is None:
+            return None
+        try:
+            return bytes.fromhex(str(row["value"]))
+        except ValueError as exc:  # fail closed on damaged trusted metadata
+            raise CkmValidationError("CKM confirmation signing key is invalid") from exc
 
     def list_evidence_edges_for_capability(self, capability_id: str) -> list[CkmEvidenceEdge]:
         with self._connect() as conn:
