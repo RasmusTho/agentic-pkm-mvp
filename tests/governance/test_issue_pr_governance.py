@@ -142,9 +142,11 @@ def test_pr_body_generator_fixtures_are_governance_lane_allowed() -> None:
 
 def test_autonomous_runner_prompt_is_governance_lane_allowed() -> None:
     text = _read_workflow()
+    exact = text.split("const governanceAllowedExact = new Set([", 1)[1].split("]);", 1)[0]
+    prefixes = text.split("const governanceAllowedPrefixes = [", 1)[1].split("];", 1)[0]
 
-    assert '"companion-ui/prompts/codex/deliver-epic-autonomous-runner.md"' in text
-    assert '"companion-ui/prompts/codex/"' not in text
+    assert '"companion-ui/prompts/codex/deliver-epic-autonomous-runner.md"' in exact
+    assert '"companion-ui/prompts/codex/deliver-epic-autonomous-runner.md"' not in prefixes
 
 
 def test_review_before_ci_gate_is_governance_lane_allowed() -> None:
