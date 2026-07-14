@@ -383,6 +383,19 @@ stateDiagram-v2
   ResumeAutonomy --> AutonomousWork
 ```
 
+### Verification dispatch recovery
+
+Verification-dispatch recovery is fail-closed but normally autonomous. The host
+uses this sequence: `disabled -> preflight -> observe-only -> pilot ->
+limited-enable -> enabled`. Preflight and pilot are non-mutating: they validate
+the installed commit, schema/profile compatibility, authentication posture, and
+receipt parsing before a request is claimed or any GitHub mutation is possible.
+A failed preflight or pilot returns to `disabled` as `blocked_technical`; it
+creates an evidence-backed compatibility recovery path and does not create a
+Human Exception merely because a retry budget is exhausted. The only route to
+`agent:needs-human` is the authority classifier in
+`AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier`.
+
 ## 7. Decision Points
 
 | Decision point | Current mechanism | Deterministic? | Agentic? | Human? | Inputs | Outputs | Failure mode | Evidence |
@@ -395,7 +408,7 @@ stateDiagram-v2
 | Risk level? | TCD + PR hot path | partial | yes | no | lane/touched surface | low/normal/high | under-modeling | [AGENTS.md:142-157], [docs/development/PR_HOT_PATH.md:12-25] |
 | Docs-only/code/runtime/governance/release/Mimer/BuilderOps? | lane and skill routing | partial | yes | no | files/scope | lane | wrong lane | [docs/development/DEV_WORKFLOW.md:107-169], [`.codex/skills/README.md`:130-164] |
 | Requires frontier planning? | feature-breakdown/deliver-issue-set | no | yes | maybe | scope size | breakdown | parent issue used as slice | [`.codex/skills/feature-breakdown/SKILL.md`:25-47] |
-| Requires human exception? | stop conditions + fallback | partial | yes | yes | ambiguity/failure | packet/blocker | unnecessary interrupt or unsafe continue | [AGENTS.md:161-169], [docs/architecture/SBS_OPERATING_MODEL.md §12] |
+| Requires human exception? | escalation classifier + fallback | partial | yes | yes | explicit authority category | packet/blocker | unnecessary interrupt or unsafe continue | [AGENTS.md:161-169], [docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier] |
 | Can an agent claim? | dispatcher/preflight/labels | yes | yes | no | queue/preflight | lease/claim | double claim | [docs/AGENT_ISSUE_DISPATCHER.md:152-180] |
 | Can implementation proceed? | issue-to-code stop conditions | partial | yes | if unclear | issue/docs/env | proceed/block | scope drift | [`.codex/skills/issue-to-code/SKILL.md`:62-72] |
 | Which tests/checks required? | `DEV_WORKFLOW`, issue `Verify:` | partial | yes | no | touched files/ACs | validation plan | missing coverage | [docs/development/DEV_WORKFLOW.md:60-83] |
@@ -593,7 +606,12 @@ Rasmus may be called only for:
 - safety-critical cases: prod/stable, secrets, migrations, vault/HKA/MEM authority, irreversible/external-facing actions.
 - authority-critical cases: owner-doc/product authority, release operator acknowledgement, governance boundary crossings.
 - intent-critical ambiguity: strategic direction or preference cannot be inferred from docs/source anchors.
-- autonomous-failure-critical cases: bounded repair/review/rescue loops failed and continuing would be unsafe.
+- autonomous-failure-critical cases: bounded repair/review/rescue loops failed, stronger autonomous diagnosis cannot produce a safe bounded replan, and continuing would require an explicit authority category.
+
+Technical failures, repair-budget exhaustion, host/schema compatibility pauses,
+or static-quality findings do not independently qualify. They route through the
+escalation classifier as `auto_repair`, `auto_backoff`, or
+`blocked_technical`.
 
 Canonical packet:
 
