@@ -456,6 +456,20 @@ def test_projector_preflight_rejects_missing_durable_intake_state() -> None:
     assert get_cursor(CANDIDATE_CONSUMER_ID) == 0
 
 
+def test_projector_does_not_acknowledge_invalid_existing_candidate(tmp_path: Path) -> None:
+    _publish("obs-occupied", episode_id="ep-occupied")
+    vault = _vault(tmp_path / "vault")
+    occupied_path = Path(vault.active_vault_path) / "Sources/Heimdal/ep-occupied-raw-sha.md"
+    occupied_path.parent.mkdir(parents=True)
+    occupied_path.write_text("not a Heimdal candidate", encoding="utf-8")
+
+    results = project_pending_candidates(vault_context=vault, write_guard=_allowing_guard())
+
+    assert results[0].status == "blocked"
+    assert "non-durable artifact" in results[0].reason
+    assert get_cursor(CANDIDATE_CONSUMER_ID) == 0
+
+
 def test_already_exists_is_idempotent_no_overwrite(tmp_path: Path) -> None:
     """Re-running the same candidate never overwrites an existing note."""
     _publish("obs-idem", content="original")

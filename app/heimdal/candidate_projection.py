@@ -360,11 +360,19 @@ def write_candidate_note(
     vault_root = _vault_root(vault_context)
     artifact_path = candidate_note_path(candidate, candidates_dir=candidates_dir)
 
-    if (vault_root / artifact_path).exists():
+    candidate_path = vault_root / artifact_path
+    if candidate_path.exists():
+        if _is_durable_candidate(candidate_path, candidate):
+            return CandidateWriteResult(
+                status="already_exists",
+                artifact_path=artifact_path,
+                observation_id=candidate.observation_id,
+            )
         return CandidateWriteResult(
-            status="already_exists",
-            artifact_path=artifact_path,
+            status="blocked",
+            artifact_path=None,
             observation_id=candidate.observation_id,
+            reason=f"candidate path is occupied by a non-durable artifact: {artifact_path}",
         )
 
     content = render_candidate_note(candidate)
@@ -438,6 +446,31 @@ def _vault_root(context: VaultContext) -> Path:
     if not root.is_dir():
         raise CandidateProjectionError("candidate projection requires an existing vault directory")
     return root
+
+
+def _is_durable_candidate(path: Path, candidate: HeimdalCandidate) -> bool:
+    """Return whether an existing path is this candidate's durable replay result."""
+    if not path.is_file():
+        return False
+    try:
+        raw = path.read_text(encoding="utf-8")
+        if not raw.startswith("---\n"):
+            return False
+        frontmatter, separator, _body = raw.removeprefix("---\n").partition("\n---\n")
+        if not separator:
+            return False
+        parsed = yaml.safe_load(frontmatter)
+    except (OSError, yaml.YAMLError):
+        return False
+    if not isinstance(parsed, Mapping) or parsed.get("artifact_class") != ARTIFACT_CLASS:
+        return False
+    provenance = parsed.get("provenance")
+    return (
+        isinstance(provenance, Mapping)
+        and provenance.get("observation_id") == candidate.observation_id
+        and provenance.get("derived_from") == candidate.derived_from
+        and provenance.get("content_identity") == candidate.content_identity
+    )
 
 
 def _slug(value: str) -> str:
