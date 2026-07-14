@@ -172,6 +172,7 @@ def test_gh_source_fetches_bounded_artifact_and_live_truth_without_shell(tmp_pat
                             {
                                 "id": 7,
                                 "name": f"verification-dispatch-3603-{HEAD}",
+                                "size_in_bytes": len(archive_bytes.getvalue()),
                                 "expired": False,
                                 "workflow_run": {
                                     "id": 123,
@@ -218,6 +219,7 @@ def _artifact_source_for_request(payload: dict[str, object], *, workflow_run_id:
                             {
                                 "id": 7,
                                 "name": f"verification-dispatch-3603-{HEAD}",
+                                "size_in_bytes": len(archive_bytes.getvalue()),
                                 "expired": False,
                                 "workflow_run": {
                                     "id": workflow_run_id,
@@ -232,6 +234,125 @@ def _artifact_source_for_request(payload: dict[str, object], *, workflow_run_id:
         return Result(archive_bytes.getvalue())
 
     return GhCliVerificationSource(runner=runner), calls
+
+
+def test_pending_request_rejects_oversized_archive_before_buffering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Process:
+        def __init__(self) -> None:
+            self.stdout = io.BytesIO(
+                b"x" * (verification_consumer._MAX_ARTIFACT_COMPRESSED_BYTES + 1)
+            )
+            self.returncode: int | None = None
+            self.terminate_calls = 0
+            self.wait_calls = 0
+
+        def terminate(self) -> None:
+            self.terminate_calls += 1
+            self.returncode = -15
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+        def wait(self, timeout: float | None = None) -> int:
+            self.wait_calls += 1
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+    process = Process()
+    source = GhCliVerificationSource()
+    monkeypatch.setattr(
+        source,
+        "_json",
+        lambda _endpoint: {
+            "artifacts": [
+                {
+                    "id": 7,
+                    "name": f"verification-dispatch-3603-{HEAD}",
+                    # Even stale or lying metadata cannot bypass the stream cap.
+                    "size_in_bytes": 1,
+                    "expired": False,
+                    "workflow_run": {
+                        "id": 123,
+                        "repository_id": 456,
+                        "head_repository_id": 456,
+                    },
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        verification_consumer.subprocess,
+        "Popen",
+        lambda *args, **kwargs: process,
+    )
+
+    monkeypatch.setattr(
+        verification_consumer.io,
+        "BytesIO",
+        lambda *_args, **_kwargs: pytest.fail("oversized artifact reached BytesIO"),
+    )
+
+    with pytest.raises(ValueError, match="compressed size limit"):
+        source.pending_requests("RasmusTho/agentic-pkm-mvp")
+
+    assert process.terminate_calls == 1
+    assert process.wait_calls >= 1
+
+
+def test_pending_request_rejects_oversized_archive_members() -> None:
+    archives: list[bytes] = []
+    member_archive = io.BytesIO()
+    with zipfile.ZipFile(member_archive, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("verification-dispatch/request.json", json.dumps(artifact_request()))
+        for index in range(verification_consumer._MAX_ARTIFACT_MEMBERS):
+            archive.writestr(f"extra-{index}.txt", "x")
+    archives.append(member_archive.getvalue())
+
+    aggregate_archive = io.BytesIO()
+    with zipfile.ZipFile(aggregate_archive, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("verification-dispatch/request.json", json.dumps(artifact_request()))
+        archive.writestr(
+            "large.txt",
+            b"x" * verification_consumer._MAX_ARTIFACT_UNCOMPRESSED_BYTES,
+        )
+    archives.append(aggregate_archive.getvalue())
+
+    for payload in archives:
+        class Result:
+            def __init__(self, stdout):
+                self.returncode = 0
+                self.stdout = stdout
+
+        def runner(command, **kwargs):
+            if command[-1].endswith("actions/artifacts?per_page=100"):
+                return Result(
+                    json.dumps(
+                        {
+                            "artifacts": [
+                                {
+                                    "id": 7,
+                                    "name": f"verification-dispatch-3603-{HEAD}",
+                                    "size_in_bytes": len(payload),
+                                    "expired": False,
+                                    "workflow_run": {
+                                        "id": 123,
+                                        "repository_id": 456,
+                                        "head_repository_id": 456,
+                                    },
+                                }
+                            ]
+                        }
+                    )
+                )
+            return Result(payload)
+
+        with pytest.raises(ValueError, match="too many members|uncompressed size limit"):
+            GhCliVerificationSource(runner=runner).pending_requests(
+                "RasmusTho/agentic-pkm-mvp"
+            )
 
 
 def test_pending_request_rejects_repository_mismatch() -> None:

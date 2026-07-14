@@ -54,7 +54,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   delivered receipt without two review events or a repair event without its finding identity.
 - Artifact ingestion binds the untrusted request repository, artifact name, uploader workflow-run
   id, and repository id to the authenticated GitHub artifact metadata before dispatcher persistence
-  or any request-directed repository read. A mismatch fails closed before claim or model launch.
+  or any request-directed repository read. Authenticated compressed-size metadata is checked before
+  download; the production stream, ZIP member count, aggregate declared size, and request member are
+  independently bounded before an in-memory request is accepted. A mismatch or oversized artifact
+  fails closed before claim or model launch.
 - Missing or pending checks and auth/rate limits enter time-bounded `backoff`; replay cannot launch
   before `retry_after`. Terminal completion additionally requires two fresh clean review receipts
   after the final durable repair attempt. Standard and strongest-capability repair budgets are
