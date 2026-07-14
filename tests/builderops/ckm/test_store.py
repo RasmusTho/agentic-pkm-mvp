@@ -76,6 +76,8 @@ def test_upsert_idempotent_and_rebuild(store: CkmStore) -> None:
     edge_second = _upsert_evidence_edge(store, artifact_first.id, first.id)
     assert edge_first.id == edge_second.id
     assert len(store.list_evidence_edges_for_capability(first.id)) == 1
+    with sqlite3.connect(store.db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM ckm_evidence_edge_history").fetchone()[0] == 0
 
     assert store.table_names() == sorted(CKM_TABLE_NAMES)
 

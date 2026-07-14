@@ -26,6 +26,7 @@ from app.builderops.ckm_reevaluation import (
     build_ckm_reevaluation_report,
 )
 from app.builderops.ckm.models import CkmValidationError
+from app.builderops.ckm.assess import assess_capabilities
 from app.builderops.ckm.ingest_github import ingest_github
 from app.builderops.ckm.ingest_repo import ingest_repo
 from app.builderops.ckm.linkers import link_deterministic
@@ -480,6 +481,19 @@ def ckm_confirm_edge(ctx: click.Context, edge_id: str) -> None:
     except (CkmValidationError, sqlite3.Error) as exc:
         raise click.ClickException(f"ckm edge confirmation failed: {exc}") from exc
     click.echo(f"edge {edge_id} confirmed; receipt builderops://receipts/{receipt['id']}")
+
+
+@ckm.command("assess", help="Append explainable maturity assessments for changed capabilities.")
+@click.pass_context
+def ckm_assess(ctx: click.Context) -> None:
+    try:
+        result = assess_capabilities(_ckm_store(ctx))
+    except (CkmValidationError, sqlite3.Error) as exc:
+        raise click.ClickException(f"ckm assessment failed: {exc}") from exc
+    click.echo(
+        f"assessed {result.assessed} capabilities "
+        f"({result.skipped} unchanged, skipped)"
+    )
 
 
 @builderops.group("inquiry", help="Persist and inspect pre-ticket model inquiry artifacts.")

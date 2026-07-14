@@ -319,7 +319,12 @@ class CkmAssessment:
     capability_id: str
     scores: Mapping[str, float]
     citations: Mapping[str, list[JsonDict]]
+    candidate_shares: Mapping[str, float]
+    formula_ids: Mapping[str, str]
     aggregate: float
+    aggregate_formula_id: str
+    low_confidence: bool
+    edge_fingerprint: str
     watermark_set: Mapping[str, str]
     valid_from: str
     asserted_at: str
@@ -334,10 +339,18 @@ class CkmAssessment:
             score = self.scores[dimension]
             if not isinstance(score, (int, float)) or not (0.0 <= float(score) <= 1.0):
                 raise CkmValidationError(f"{dimension} score must be a number in [0.0, 1.0]")
-            if dimension not in self.citations or not self.citations[dimension]:
-                raise CkmValidationError(f"{dimension} must cite at least one evidence edge")
+            if dimension not in self.citations:
+                raise CkmValidationError(f"{dimension} must carry a citations list")
+            share = self.candidate_shares.get(dimension)
+            if not isinstance(share, (int, float)) or not (0.0 <= float(share) <= 1.0):
+                raise CkmValidationError(f"{dimension} candidate share must be in [0.0, 1.0]")
+            _require_nonempty_str(self.formula_ids.get(dimension), f"{dimension} formula_id")
         if not isinstance(self.aggregate, (int, float)) or not (0.0 <= float(self.aggregate) <= 1.0):
             raise CkmValidationError("aggregate must be a number in [0.0, 1.0]")
+        _require_nonempty_str(self.aggregate_formula_id, "aggregate_formula_id")
+        if not isinstance(self.low_confidence, bool):
+            raise CkmValidationError("low_confidence must be a boolean")
+        _require_nonempty_str(self.edge_fingerprint, "edge_fingerprint")
         if not self.watermark_set:
             raise CkmValidationError("watermark_set must not be empty")
         _require_nonempty_str(self.valid_from, "valid_from")
@@ -351,6 +364,8 @@ class CkmAssessment:
         *,
         scores: Mapping[str, float],
         citations: Mapping[str, list[JsonDict]],
+        candidate_shares: Mapping[str, float],
+        formula_ids: Mapping[str, str],
         watermark_set: Mapping[str, str],
     ) -> "CkmAssessment":
         return cls(
@@ -358,7 +373,12 @@ class CkmAssessment:
             capability_id=row["capability_id"],
             scores=scores,
             citations=citations,
+            candidate_shares=candidate_shares,
+            formula_ids=formula_ids,
             aggregate=row["aggregate"],
+            aggregate_formula_id=row["aggregate_formula_id"],
+            low_confidence=bool(row["low_confidence"]),
+            edge_fingerprint=row["edge_fingerprint"],
             watermark_set=watermark_set,
             valid_from=row["valid_from"],
             asserted_at=row["asserted_at"],
@@ -370,11 +390,25 @@ class CkmAssessment:
             "capability_id": self.capability_id,
             "scores": dict(self.scores),
             "citations": {k: list(v) for k, v in self.citations.items()},
+            "candidate_shares": dict(self.candidate_shares),
+            "formula_ids": dict(self.formula_ids),
             "aggregate": self.aggregate,
+            "aggregate_formula_id": self.aggregate_formula_id,
+            "low_confidence": self.low_confidence,
+            "edge_fingerprint": self.edge_fingerprint,
             "watermark_set": dict(self.watermark_set),
             "valid_from": self.valid_from,
             "asserted_at": self.asserted_at,
         }
+
+
+@dataclass(frozen=True)
+class CkmAssessmentProjection:
+    """Projection read model with freshness computed from current store state."""
+
+    assessment: CkmAssessment
+    current_watermark_set: Mapping[str, str]
+    stale_relative_to_evidence: bool
 
 
 @dataclass(frozen=True)
