@@ -339,7 +339,7 @@ def compute_aggregate(scores: Mapping[str, float]) -> float:
     )
 
 
-def _fingerprint(
+def assessment_fingerprint(
     edges: Sequence[CkmEvidenceEdge],
     artifacts: Mapping[str, CkmArtifact],
 ) -> str:
@@ -409,7 +409,7 @@ def assess_capabilities(store: CkmStore) -> AssessmentRunResult:
     skipped = 0
     for capability in store.list_capabilities():
         edges = store.list_evidence_edges_for_capability(capability.id)
-        fingerprint = _fingerprint(edges, artifacts)
+        fingerprint = assessment_fingerprint(edges, artifacts)
         latest = store.latest_assessment_for_capability(capability.id)
         if latest is not None and latest.edge_fingerprint == fingerprint:
             skipped += 1

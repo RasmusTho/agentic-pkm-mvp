@@ -25,8 +25,9 @@ from app.builderops.ckm_reevaluation import (
     CkmReevaluationError,
     build_ckm_reevaluation_report,
 )
-from app.builderops.ckm.models import CkmValidationError
+from app.builderops.ckm.models import MATURITY_DIMENSIONS, CkmValidationError
 from app.builderops.ckm.assess import assess_capabilities
+from app.builderops.ckm.gaps import GapDetectionConfig, detect_gaps
 from app.builderops.ckm.ingest_github import ingest_github
 from app.builderops.ckm.ingest_repo import ingest_repo
 from app.builderops.ckm.linkers import link_deterministic
@@ -493,6 +494,46 @@ def ckm_assess(ctx: click.Context) -> None:
     click.echo(
         f"assessed {result.assessed} capabilities "
         f"({result.skipped} unchanged, skipped)"
+    )
+
+
+@ckm.command("gaps", help="Regenerate cited CKM gap and missing-evidence findings.")
+@click.option("--floor", type=click.FloatRange(0.0, 1.0), default=0.5, show_default=True)
+@click.option(
+    "--healthy-floor",
+    type=click.FloatRange(0.0, 1.0),
+    default=0.75,
+    show_default=True,
+)
+@click.option(
+    "--healthy-sibling-count",
+    type=click.IntRange(1, len(MATURITY_DIMENSIONS) - 1),
+    default=2,
+    show_default=True,
+)
+@click.pass_context
+def ckm_gaps(
+    ctx: click.Context,
+    floor: float,
+    healthy_floor: float,
+    healthy_sibling_count: int,
+) -> None:
+    try:
+        result = detect_gaps(
+            _ckm_store(ctx),
+            config=GapDetectionConfig(
+                floor=floor,
+                healthy_floor=healthy_floor,
+                healthy_sibling_count=healthy_sibling_count,
+            ),
+        )
+    except (CkmValidationError, sqlite3.Error) as exc:
+        raise click.ClickException(f"ckm gap detection failed: {exc}") from exc
+    click.echo(
+        f"{result.findings} findings: "
+        f"{result.starved_dimensions} starved-dimension, "
+        f"{result.uncovered_boundaries} uncovered-boundary, "
+        f"{result.claim_exceeds_evidence} claim-exceeds-evidence"
     )
 
 

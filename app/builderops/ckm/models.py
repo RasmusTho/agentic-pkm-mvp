@@ -432,6 +432,28 @@ class CkmFinding:
         _require_nonempty_str(self.statement, "statement")
         if not self.citations:
             raise CkmValidationError("citations must not be empty")
+        has_evidence_snapshot = False
+        for citation in self.citations:
+            if not isinstance(citation, Mapping):
+                raise CkmValidationError("finding citations must be mappings")
+            edge_payload = citation.get("edge")
+            artifact_payload = citation.get("artifact")
+            if isinstance(edge_payload, Mapping):
+                edge = CkmEvidenceEdge.from_row(edge_payload).validate()
+                if citation.get("edge_id") not in {None, edge.id}:
+                    raise CkmValidationError("finding citation edge id does not match its snapshot")
+                has_evidence_snapshot = True
+            if isinstance(artifact_payload, Mapping):
+                artifact = CkmArtifact.from_row(artifact_payload).validate()
+                if citation.get("artifact_id") not in {None, artifact.id}:
+                    raise CkmValidationError(
+                        "finding citation artifact id does not match its snapshot"
+                    )
+                has_evidence_snapshot = True
+        if not has_evidence_snapshot:
+            raise CkmValidationError(
+                "finding citations must include an evidence edge or artifact snapshot"
+            )
         _require_nonempty_str(self.created_at, "created_at")
         _require_nonempty_str(self.updated_at, "updated_at")
         return self
