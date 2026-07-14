@@ -65,9 +65,14 @@ not create that artifact either. The deployment authority for this policy is
 
 When a PR's acceptance criteria require live UAT against its exact SHA:
 
-1. Verify the exact candidate tag is present in GHCR before changing or restarting any channel.
-2. If it is absent, report a blocked UAT receipt with the exact tag and command result. Do not make
-   the normal PR workflow push images, and do not substitute a local or older image as proof.
+1. Identify whether the selected non-prod channel is in checkout mode or pinned-image mode.
+   Checkout-mode UAT may start the selected channel from the exact isolated PR worktree using the
+   explicit `APP_CODE_BIND_COMPOSE=docker-compose.app-bind.yml` overlay; record the worktree SHA,
+   selected vault/channel, and runtime proof. This does not publish an image or change a pin.
+2. For a pinned-image channel, verify the exact candidate tag is present in GHCR before changing or
+   restarting that channel. If it is absent, report a blocked UAT receipt with the exact tag and
+   command result. Do not make the normal PR workflow push images, and do not substitute a local or
+   older image as proof.
 3. Only a separately approved, manually initiated candidate-artifact flow may publish a selected
    SHA for UAT. That flow must produce an artifact identity receipt and must not deploy it; channel
    changes remain under the release/promotion skills.

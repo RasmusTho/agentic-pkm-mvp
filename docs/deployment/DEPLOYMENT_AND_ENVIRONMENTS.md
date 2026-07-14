@@ -89,13 +89,19 @@ ordinary PR must not add a registry push, change a channel image pin, restart a 
 locally built image as live-channel evidence just to obtain a UAT receipt. Publishing an image and
 deploying an image are separate actions: neither follows from opening a PR.
 
-If exact-SHA live UAT is required before merge, first verify that the candidate tag exists in GHCR.
-When it does not, record the UAT as blocked with the exact missing artifact and command result. Do
-not broaden the PR workflow as a workaround. A separately approved, manually initiated candidate
-artifact flow may later publish a named SHA for selected UAT; it must return the SHA/digest receipt
-and must not mutate any channel. Channel deployment remains governed by the promotion and deploy
-workflows below. Until that separate flow exists, no agent may claim a live-channel UAT for an
-unpublished PR SHA. This boundary was made explicit after the SETTINGS-01 verification of PR #3517.
+If exact-SHA live UAT is required before merge, first identify the selected channel's execution mode.
+The current checkout-mode test channel can be started from the exact isolated PR worktree with the
+explicit `APP_CODE_BIND_COMPOSE=docker-compose.app-bind.yml` overlay while retaining its real
+test-channel vault and configuration. That is valid live-channel UAT evidence when the receipt names
+the worktree SHA and the selected channel; it neither publishes an image nor changes a channel pin.
+
+A channel already running in pinned-image mode instead requires the candidate tag to exist in GHCR.
+When that artifact is absent, record the UAT as blocked with the exact missing tag and command
+result; do not broaden the ordinary PR workflow as a workaround. A separately approved, manually
+initiated candidate-artifact flow may later publish a named SHA for selected UAT; it must return the
+SHA/digest receipt and must not mutate any channel. Channel deployment remains governed by the
+promotion and deploy workflows below. This boundary was made explicit after the SETTINGS-01
+verification of PR #3517.
 
 1. **Build (CI, S2).** On the appropriate trigger, CI builds the app image from the repo `Dockerfile` and tags it with the immutable commit SHA: `ghcr.io/<owner>/pkm-app:<full-or-short-sha>`. The build injects `VCS_REF`/`BUILT_AT` build-args (already wired in `docker-compose.yaml` and the `Makefile` for local builds; CI mirrors this) so the image's `/version` reports its own SHA.
 2. **Registry and artifact identity (S3).** The SHA-tagged image is pushed to a container registry — **GHCR** (`ghcr.io`) is the chosen registry (already the GitHub-native default for this repo's tooling). Byte-identity claims are only truthful once the registry enforces digest pinning or explicit SHA-tag immutability; until then, the channel pin is just a pointer to the intended image artifact, not proof that the registry cannot be retagged.
