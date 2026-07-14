@@ -46,6 +46,7 @@ def upgrade() -> None:
             orphan_count bigint;
             delete_action text;
             update_action text;
+            source_expression text;
         BEGIN
             IF to_regclass('public.objects') IS NULL THEN
                 RAISE EXCEPTION USING
@@ -57,6 +58,48 @@ def upgrade() -> None:
                     MESSAGE = '#3510 unsupported schema: public.store_objects is missing',
                     HINT = 'Run the store-schema migrations before retrying this migration.';
             END IF;
+
+            IF EXISTS (
+                SELECT 1
+                FROM pg_constraint c
+                WHERE c.contype = 'f'
+                  AND c.confrelid = 'public.objects'::regclass
+                  AND (cardinality(c.conkey) <> 1 OR cardinality(c.confkey) <> 1)
+            ) THEN
+                RAISE EXCEPTION USING
+                    MESSAGE = '#3510 unsupported schema: composite FK references public.objects',
+                    HINT = 'Inventory this live consumer and extend the reviewed migration strategy before retrying.';
+            END IF;
+
+            -- Existing-resource producer: materialize every retained legacy object
+            -- in the canonical store before any FK is moved.  Existing canonical
+            -- rows win; the legacy row is a continuity source, never a second
+            -- writer after this migration.
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'objects'
+                  AND column_name = 'source_ref'
+            ) THEN
+                source_expression := 'source_ref';
+            ELSIF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'objects'
+                  AND column_name = 'path'
+            ) THEN
+                source_expression := 'path';
+            ELSE
+                source_expression := 'NULL::text';
+            END IF;
+
+            EXECUTE format(
+                'INSERT INTO public.store_objects '
+                || '(object_id, kind, source_ref, payload, created_at, updated_at) '
+                || 'SELECT id, COALESCE(kind, ''legacy''), %s, '
+                || 'COALESCE(payload::jsonb, ''{}''::jsonb), COALESCE(created_at, now()), '
+                || 'COALESCE(updated_at, now()) FROM public.objects '
+                || 'ON CONFLICT (object_id) DO NOTHING',
+                source_expression
+            );
 
             FOR fk IN
                 SELECT c.oid,

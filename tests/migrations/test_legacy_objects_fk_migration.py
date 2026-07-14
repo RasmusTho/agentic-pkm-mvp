@@ -73,3 +73,32 @@ def test_legacy_objects_fk_migration_fails_loudly_on_unsupported_state(scratch_d
             "AND contype = 'f'"
         ).fetchone()
     assert row == (True,), "failed migration must roll back without partially retargeting constraints"
+
+
+def test_legacy_objects_fk_migration_backfills_existing_parents(scratch_dsn: str) -> None:
+    _upgrade(PRE_CUTOVER_REVISION)
+    object_id = uuid.uuid4()
+    with psycopg.connect(scratch_dsn) as conn:
+        conn.execute(
+            "INSERT INTO objects (id, kind, payload) "
+            "VALUES (%s, 'note', '{\"title\": \"Legacy\"}'::jsonb)",
+            (object_id,),
+        )
+        conn.execute(
+            "INSERT INTO decisions (object_id, key, value) VALUES (%s, 'review', '{}'::jsonb)",
+            (object_id,),
+        )
+
+    _upgrade("head")
+
+    with psycopg.connect(scratch_dsn) as conn:
+        parent = conn.execute(
+            "SELECT kind, source_ref, payload FROM store_objects WHERE object_id = %s",
+            (object_id,),
+        ).fetchone()
+        fk_target = conn.execute(
+            "SELECT confrelid::regclass::text FROM pg_constraint "
+            "WHERE conrelid = 'public.decisions'::regclass AND contype = 'f'"
+        ).fetchone()
+    assert parent == ("note", None, {"title": "Legacy"})
+    assert fk_target == ("store_objects",)
