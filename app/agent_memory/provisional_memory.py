@@ -221,6 +221,12 @@ class ProvisionalMemoryRecord(BaseModel):
     may_apply: Literal[False] = False
     may_write: Literal[False] = False
 
+    @model_validator(mode="after")
+    def _require_canonical_artifact_ref(self) -> "ProvisionalMemoryRecord":
+        if self.artifact_ref != _artifact_ref_for(self.memory_id):
+            raise ValueError("artifact_ref must be canonical for memory_id")
+        return self
+
     @field_validator("created_at")
     @classmethod
     def _require_aware_created_at(cls, value: datetime) -> datetime:

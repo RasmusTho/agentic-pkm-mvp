@@ -106,6 +106,10 @@ def test_record_rejects_authority_escalation(field: str, value: str) -> None:
         ("lifecycle_receipt_refs", ()),
         ("created_at", datetime(2026, 7, 15)),
         ("may_apply", True),
+        (
+            "artifact_ref",
+            f"vault://Memory/Provisional/{OTHER_MEMORY_ID}.md",
+        ),
     ],
 )
 def test_direct_record_construction_cannot_bypass_invariants(
