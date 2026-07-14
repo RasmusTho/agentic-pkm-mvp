@@ -51,6 +51,30 @@ conditional path — only when readiness/repair work is still needed before veri
 - Use `--draft` only with an explicit reason that the PR is not yet ready for review or still needs integration/repair.
 - Publication does not move work to `Done`.
 
+### Container candidate and channel boundary
+
+Opening or updating a normal PR is a source-control publication action only. It must not publish a
+container image, change a channel image pin, restart a channel, or trigger a deploy/rollback.
+
+The `Build SHA-tagged app image` check on a pull request is validation-only: it builds an image in
+the ephemeral CI runner with `push: false`. A passing check is not evidence that
+`ghcr.io/<owner>/pkm-app:<pr-sha>` exists or is pullable by a runtime channel. Nightly test runs do
+not create that artifact either. The deployment authority for this policy is
+`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: PR validation is not artifact publication
+(current policy)`.
+
+When a PR's acceptance criteria require live UAT against its exact SHA:
+
+1. Verify the exact candidate tag is present in GHCR before changing or restarting any channel.
+2. If it is absent, report a blocked UAT receipt with the exact tag and command result. Do not make
+   the normal PR workflow push images, and do not substitute a local or older image as proof.
+3. Only a separately approved, manually initiated candidate-artifact flow may publish a selected
+   SHA for UAT. That flow must produce an artifact identity receipt and must not deploy it; channel
+   changes remain under the release/promotion skills.
+
+This boundary prevents a high-volume PR stream from silently becoming a high-volume image-publication
+or deployment stream. It does not prohibit the existing `main` image publication path.
+
 ## Publication workflow (all steps are executable)
 
 ### Step 1: Confirm File Set
