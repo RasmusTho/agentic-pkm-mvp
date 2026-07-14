@@ -1097,19 +1097,32 @@ class VerificationConsumer:
             )
 
         pack = context_pack(claimed, live_pr)
+        loop = VerificationAgentLoop(
+            self.ledger,
+            claimed.run_id,
+            holder=self.holder,
+            lease_id=lease_id,
+        )
         if events:
-            loop = VerificationAgentLoop(
-                self.ledger,
-                claimed.run_id,
-                holder=self.holder,
-                lease_id=lease_id,
-            )
             loop.apply_events(events, context=pack)
+        if verdict == "needs_human":
+            loop.stop(
+                "coordinator_needs_human",
+                {
+                    "governing_issue": claimed.request.get("linked_issue"),
+                    "head_sha": claimed.head_sha,
+                    "receipt_ids": receipt.get("receipt_ids", []),
+                    "summary": receipt.get("summary", ""),
+                },
+            )
+            terminal = self.ledger.get(claimed.run_id)
+            if terminal is None:
+                raise RuntimeError("verification exception terminal state was not persisted")
+            return terminal
         status = (
             {
                 "delivered": "completed",
                 "blocked": "failed",
-                "needs_human": "needs_human",
             }.get(verdict)
             if isinstance(verdict, str)
             else None

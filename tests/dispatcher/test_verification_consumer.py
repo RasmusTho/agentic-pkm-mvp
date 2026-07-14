@@ -406,6 +406,51 @@ def test_eligible_request_invokes_registered_verification_closer_with_minimal_co
     assert "body" not in pack and "credentials" not in pack
 
 
+def test_needs_human_receipt_persists_deduplicated_exception(tmp_path) -> None:
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state, Truth(eligible_pr(), GREEN), Auth(), Launcher(), "host"
+    ).consume(request())
+
+    assert result.status == "needs_human"
+    assert result.stop_reason == "coordinator_needs_human"
+    assert result.terminal_receipt is not None
+    exception_id = result.terminal_receipt["exception_id"]
+    with state.store._connect() as conn:
+        rows = conn.execute(
+            "SELECT exception_id, failure_class, head_sha, packet_json "
+            "FROM verification_exceptions WHERE run_id=?",
+            (result.run_id,),
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["exception_id"] == exception_id
+    assert rows[0]["failure_class"] == "coordinator_needs_human"
+    assert rows[0]["head_sha"] == HEAD
+    packet = json.loads(rows[0]["packet_json"])
+    assert packet["governing_issue"] == 3603
+    assert packet["summary"] == "test"
+
+
+def test_needs_human_receipt_replay_is_idempotent(tmp_path) -> None:
+    state = ledger(tmp_path)
+    launcher = Launcher()
+    consumer = VerificationConsumer(
+        state, Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    )
+
+    first = consumer.consume(request())
+    second = consumer.consume(request())
+
+    assert second == first
+    assert len(launcher.calls) == 1
+    with state.store._connect() as conn:
+        exception_count = conn.execute(
+            "SELECT COUNT(*) FROM verification_exceptions WHERE run_id=?",
+            (first.run_id,),
+        ).fetchone()[0]
+    assert exception_count == 1
+
+
 def test_delivered_receipt_accepts_matching_post_merge_live_truth(tmp_path) -> None:
     result = VerificationConsumer(
         ledger(tmp_path),

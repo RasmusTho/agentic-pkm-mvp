@@ -84,6 +84,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - Pre-launch eligibility and post-launch delivery truth are separate gates. Launch still requires an
   open current-head PR; a `delivered` receipt is accepted only when a fresh GitHub read proves the
   exact repository, PR, head, merged state, merge timestamp, merge commit, and green checks.
+- A genuine coordinator `needs_human` verdict crosses the one durable Human Exception boundary:
+  the consumer records a head- and governing-issue-bound, deduplicated exception packet before it
+  terminals the run. Replay returns the existing terminal state without a second packet or launch.
 - The immutable request head remains the run/idempotency audit identity. A repair receipt may advance
   the separate current head only under the exact active lease after a fresh GitHub read proves that
   exact live PR head; terminal delivery records the verified head only after two clean reviews on it.

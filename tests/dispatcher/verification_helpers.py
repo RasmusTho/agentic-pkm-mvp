@@ -26,10 +26,11 @@ def request(head: str = HEAD) -> dict[str, object]:
                 "updated_at": "2026-07-13T12:00:00Z",
             },
         },
-        pr={
-            "number": 3603,
-            "state": "open",
-            "base": {"ref": "main"},
+            pr={
+                "number": 3603,
+                "state": "open",
+                "body": "Governing-Issue: #3603\n\nRefs #3603",
+                "base": {"ref": "main"},
             "head": {"ref": "codex/issue-3603", "sha": head},
         },
         issue={"number": 3603},
