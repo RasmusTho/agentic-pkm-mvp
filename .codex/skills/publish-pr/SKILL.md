@@ -140,7 +140,7 @@ scripts/agent_workspace_preflight.sh \
 # Never wrap this in `|| echo ...`; that swallows the failure and the commit runs anyway.
 ```
 
-Publication-boundary base-branch semantics (specific to this skill): the gate asserts the publication HEAD already contains `origin/main`. A local `main` ref that merely lags `origin/main` *while HEAD already contains `origin/main`* is advisory (`status: "behind"`, does not fail) — in the doctrinal worktree flow `main` is checked out in the root worktree and cannot be fast-forwarded from here. A `behind` status where HEAD does **not** yet contain `origin/main` fails the gate and means "rebase onto `origin/main`", which is distinct from a `diverged` base (genuine drift). Either way a failing gate is STOP: fix it by fetching and rebasing onto `origin/main`, never by bypassing with `--base-branch ""` or by reading "behind" as automatically safe.
+Publication-boundary base-branch semantics (specific to this skill): the gate asserts the publication HEAD already contains `origin/main`. A local `main` ref that lags or diverges from `origin/main` is advisory when HEAD already contains `origin/main` — in the doctrinal worktree flow `main` is checked out in the shared root worktree and another task may advance or diverge it. A `behind` or `diverged` status where HEAD does **not** yet contain `origin/main` fails the gate and means "rebase onto `origin/main`". Either way a failing gate is STOP: fix it by fetching and rebasing onto `origin/main`, never by bypassing with `--base-branch ""` or by treating local-base drift as safe without proving origin/main reachability.
 
 ### Step 4: Create Commit
 

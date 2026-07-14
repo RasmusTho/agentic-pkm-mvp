@@ -145,13 +145,20 @@ def _base_branch_status(cwd: Path, base_branch: str | None) -> dict[str, Any]:
             status = "ahead"
         else:
             status = "diverged"
+            # `main` is shared across worktrees. A concurrent root-worktree
+            # task can legitimately leave that local ref diverged while this
+            # dedicated publication branch already contains origin/main. The
+            # remote base is the publish authority, so preserve the local
+            # state as evidence but do not reject the isolated branch solely
+            # because of that unrelated shared-ref drift.
+            head_contains_remote = _is_ancestor(cwd, remote_ref, "HEAD")
 
     if status == "current":
         mismatch = False
     elif status == "behind":
         mismatch = not head_contains_remote
     else:
-        mismatch = True
+        mismatch = not head_contains_remote
 
     result: dict[str, Any] = {
         "base_branch": base_branch,
@@ -160,14 +167,16 @@ def _base_branch_status(cwd: Path, base_branch: str | None) -> dict[str, Any]:
         "remote_sha": remote_sha,
         "status": status,
     }
-    # Surface a distinct reason label for 'behind' so operators can differentiate a
-    # blocking case (HEAD missing origin/main → rebase required) from an advisory one
-    # (HEAD already contains origin/main → stale local ref, but gate passes).
-    # No reason key is added for other statuses (current, ahead, diverged, unavailable).
-    if status == "behind":
-        result["reason"] = (
-            "rebase_required" if mismatch else "advisory_stale_local_ref"
-        )
+    # Surface a distinct reason whenever a shared local base ref differs from
+    # origin. The gate remains blocking unless this dedicated HEAD proves it
+    # already contains the remote publication base.
+    if status in {"behind", "diverged"}:
+        if mismatch:
+            result["reason"] = "rebase_required"
+        elif status == "behind":
+            result["reason"] = "advisory_stale_local_ref"
+        else:
+            result["reason"] = "advisory_diverged_local_base_ref"
     result["head_contains_remote"] = head_contains_remote
     result["mismatch"] = mismatch
     return result
