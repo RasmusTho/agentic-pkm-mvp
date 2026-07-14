@@ -44,12 +44,12 @@ FORMULAS: dict[str, Formula] = {
     "functional-evidence-balance-v1": Formula(
         "functional-evidence-balance-v1",
         "functional_completeness",
-        "Confidence-weighted supporting functional edges divided by supporting plus weakening edges.",
+        "Realizing source/merged-PR confidence versus declared spec/requirement intent, reduced by weakening evidence.",
     ),
     "test-evidence-balance-v1": Formula(
         "test-evidence-balance-v1",
         "test_completeness",
-        "Confidence-weighted supporting test edges divided by supporting plus weakening edges.",
+        "Confidence-weighted executable test and invariant-registry evidence balance.",
     ),
     "current-doc-evidence-v1": Formula(
         "current-doc-evidence-v1",
@@ -59,7 +59,7 @@ FORMULAS: dict[str, Formula] = {
     "source-and-surface-span-v1": Formula(
         "source-and-surface-span-v1",
         "integration_completeness",
-        "Half credit for source realization and half for a caller/surface or integration edge.",
+        "Half credit for source realization and half for another caller/surface artifact kind, reduced by integration weaknesses.",
     ),
     "operational-evidence-balance-v1": Formula(
         "operational-evidence-balance-v1",
@@ -113,11 +113,6 @@ def _dimension_edges(edges: Sequence[CkmEvidenceEdge], dimension: str) -> tuple[
     return tuple(edge for edge in edges if edge.maturity_dimension == dimension)
 
 
-def _generic_dimension(edges: Sequence[CkmEvidenceEdge], dimension: str) -> DimensionResult:
-    selected = _dimension_edges(edges, dimension)
-    return DimensionResult(score=_edge_balance(selected), edges=selected)
-
-
 def _artifact_payload(artifact: CkmArtifact) -> Mapping[str, object]:
     try:
         value = json.loads(artifact.provenance)
@@ -126,10 +121,75 @@ def _artifact_payload(artifact: CkmArtifact) -> Mapping[str, object]:
     return value if isinstance(value, dict) else {}
 
 
+def _is_merged_pull_request(
+    edge: CkmEvidenceEdge, artifacts: Mapping[str, CkmArtifact]
+) -> bool:
+    return edge.evidence_kind == "pull_request" and bool(
+        _artifact_payload(artifacts[edge.artifact_id]).get("merged_at")
+    )
+
+
+def _functional(edges: Sequence[CkmEvidenceEdge], artifacts: Mapping[str, CkmArtifact]) -> DimensionResult:
+    """Compare realized source/merged-PR evidence with declared intent."""
+
+    relevant_kinds = {"source", "pull_request", "spec", "requirement"}
+    selected = tuple(
+        edge
+        for edge in edges
+        if edge.evidence_kind in relevant_kinds
+        or (
+            edge.maturity_dimension == "functional_completeness"
+            and edge.polarity == "weakens"
+        )
+    )
+    realization = sum(
+        float(edge.confidence)
+        for edge in selected
+        if edge.polarity == "supports"
+        and (
+            edge.evidence_kind == "source"
+            or _is_merged_pull_request(edge, artifacts)
+        )
+    )
+    intent = sum(
+        float(edge.confidence)
+        for edge in selected
+        if edge.polarity == "supports" and edge.evidence_kind in {"spec", "requirement"}
+    )
+    base = min(1.0, realization / max(1.0, intent))
+    weakening = sum(float(edge.confidence) for edge in selected if edge.polarity == "weakens")
+    score = base * (realization / (realization + weakening) if realization + weakening else 0.0)
+    return DimensionResult(score, selected)
+
+
+def _test_completeness(
+    edges: Sequence[CkmEvidenceEdge], artifacts: Mapping[str, CkmArtifact]
+) -> DimensionResult:
+    """Use executable test evidence plus explicit invariant-registry citations."""
+
+    test_kinds = {"test", "coverage", "benchmark", "ci_result"}
+    selected = tuple(
+        edge
+        for edge in edges
+        if edge.maturity_dimension == "test_completeness"
+        and (
+            edge.evidence_kind in test_kinds
+            or edge.source_ref == "docs/testing/invariant-tests.md"
+        )
+    )
+    return DimensionResult(_edge_balance(selected), selected)
+
+
 def _documentation(
     edges: Sequence[CkmEvidenceEdge], artifacts: Mapping[str, CkmArtifact]
 ) -> DimensionResult:
     selected = _dimension_edges(edges, "documentation_quality")
+    selected = tuple(
+        edge
+        for edge in selected
+        if edge.evidence_kind == "doc"
+        and artifacts[edge.artifact_id].artifact_kind == "document"
+    )
     if not selected:
         return DimensionResult(0.0, ())
     current = 0.0
@@ -158,17 +218,22 @@ def _integration(
         edge
         for edge in edges
         if edge.polarity == "supports"
-        and (
-            edge.maturity_dimension == "integration_completeness"
-            or edge.evidence_kind in {"doc", "pull_request"}
-        )
-        and edge not in source_edges
+        and edge.maturity_dimension == "integration_completeness"
+        and edge.evidence_kind != "source"
     )
-    selected = tuple(dict.fromkeys((*source_edges, *surface_edges)))
-    score = (0.5 if source_edges else 0.0) + (0.5 if surface_edges else 0.0)
-    weakening = [edge for edge in selected if edge.polarity == "weakens"]
-    if weakening:
-        score *= _edge_balance(selected)
+    weakening_edges = tuple(
+        edge for edge in edges if edge.maturity_dimension == "integration_completeness" and edge.polarity == "weakens"
+    )
+    selected = tuple(dict.fromkeys((*source_edges, *surface_edges, *weakening_edges)))
+    source_kinds = {artifacts[edge.artifact_id].artifact_kind for edge in source_edges}
+    surface_kinds = {artifacts[edge.artifact_id].artifact_kind for edge in surface_edges}
+    score = (0.5 if source_kinds else 0.0) + (0.5 if surface_kinds - source_kinds else 0.0)
+    supporting_confidence = sum(
+        float(edge.confidence) for edge in selected if edge.polarity == "supports"
+    )
+    weakening_confidence = sum(float(edge.confidence) for edge in weakening_edges)
+    if weakening_confidence:
+        score *= supporting_confidence / (supporting_confidence + weakening_confidence)
     return DimensionResult(score, selected)
 
 
@@ -179,8 +244,12 @@ def _operational(
     selected = tuple(
         edge
         for edge in edges
-        if edge.maturity_dimension == "operational_readiness"
-        or any(keyword in artifacts[edge.artifact_id].source_ref.casefold() for keyword in keywords)
+        if edge.evidence_kind == "doc"
+        and artifacts[edge.artifact_id].artifact_kind == "document"
+        and (
+            edge.maturity_dimension == "operational_readiness"
+            or any(keyword in artifacts[edge.artifact_id].source_ref.casefold() for keyword in keywords)
+        )
     )
     return DimensionResult(_edge_balance(selected), selected)
 
@@ -197,12 +266,14 @@ def _architectural_stability(
         float(edge.confidence)
         for edge in architecture
         if edge.polarity == "supports"
+        and artifacts[edge.artifact_id].artifact_kind != "commit"
     )
     weakening = sum(
         float(edge.confidence)
         for edge in architecture
         if edge.polarity == "weakens"
-    ) + len(churn)
+        and artifacts[edge.artifact_id].artifact_kind != "commit"
+    ) + sum(float(edge.confidence) for edge in churn)
     denominator = stable + weakening
     return DimensionResult(stable / denominator if denominator else 0.0, selected)
 
@@ -214,7 +285,8 @@ def _requirement_coverage(
     realization = tuple(
         edge
         for edge in edges
-        if edge.polarity == "supports" and edge.evidence_kind in {"source", "pull_request"}
+        if edge.polarity == "supports"
+        and (edge.evidence_kind == "source" or _is_merged_pull_request(edge, artifacts))
     )
     verification = tuple(
         edge
@@ -223,11 +295,21 @@ def _requirement_coverage(
         and edge.evidence_kind in {"test", "coverage", "benchmark", "ci_result"}
     )
     selected = tuple(dict.fromkeys((*intent, *realization, *verification)))
-    if not intent:
+    supporting_intent = sum(
+        float(edge.confidence) for edge in intent if edge.polarity == "supports"
+    )
+    if not supporting_intent:
         return DimensionResult(0.0, selected)
-    score = (0.5 if realization else 0.0) + (0.5 if verification else 0.0)
-    if any(edge.polarity == "weakens" for edge in intent):
-        score *= _edge_balance(intent)
+    realization_coverage = min(
+        1.0, sum(float(edge.confidence) for edge in realization) / supporting_intent
+    )
+    verification_coverage = min(
+        1.0, sum(float(edge.confidence) for edge in verification) / supporting_intent
+    )
+    score = min(realization_coverage, verification_coverage)
+    weakening = sum(float(edge.confidence) for edge in intent if edge.polarity == "weakens")
+    if weakening:
+        score *= supporting_intent / (supporting_intent + weakening)
     return DimensionResult(score, selected)
 
 
@@ -235,12 +317,8 @@ _SCORERS: Mapping[
     str,
     Callable[[Sequence[CkmEvidenceEdge], Mapping[str, CkmArtifact]], DimensionResult],
 ] = {
-    "functional_completeness": lambda edges, artifacts: _generic_dimension(
-        edges, "functional_completeness"
-    ),
-    "test_completeness": lambda edges, artifacts: _generic_dimension(
-        edges, "test_completeness"
-    ),
+    "functional_completeness": _functional,
+    "test_completeness": _test_completeness,
     "documentation_quality": _documentation,
     "integration_completeness": _integration,
     "operational_readiness": _operational,
@@ -261,8 +339,11 @@ def compute_aggregate(scores: Mapping[str, float]) -> float:
     )
 
 
-def _fingerprint(edges: Sequence[CkmEvidenceEdge]) -> str:
-    payload = [
+def _fingerprint(
+    edges: Sequence[CkmEvidenceEdge],
+    artifacts: Mapping[str, CkmArtifact],
+) -> str:
+    edge_payload = [
         {
             "id": edge.id,
             "artifact_id": edge.artifact_id,
@@ -275,9 +356,27 @@ def _fingerprint(edges: Sequence[CkmEvidenceEdge]) -> str:
             "lifecycle": edge.lifecycle,
             "model": edge.model,
             "provider": edge.provider,
+            "artifact": {
+                "kind": artifacts[edge.artifact_id].artifact_kind,
+                "source_ref": artifacts[edge.artifact_id].source_ref,
+                "watermark": artifacts[edge.artifact_id].watermark,
+                "provenance": artifacts[edge.artifact_id].provenance,
+            },
         }
         for edge in sorted(edges, key=lambda item: (item.artifact_id, item.basis, item.id))
     ]
+    formula_payload = {
+        formula_id: {
+            "dimension": FORMULAS[formula_id].dimension,
+            "description": FORMULAS[formula_id].description,
+            "weight": FORMULAS[formula_id].weight,
+        }
+        for formula_id in (*_DIMENSION_FORMULA_IDS.values(), AGGREGATE_FORMULA_ID)
+    }
+    payload = {
+        "edges": edge_payload,
+        "formulae": formula_payload,
+    }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
@@ -306,7 +405,7 @@ def assess_capabilities(store: CkmStore) -> AssessmentRunResult:
     skipped = 0
     for capability in store.list_capabilities():
         edges = store.list_evidence_edges_for_capability(capability.id)
-        fingerprint = _fingerprint(edges)
+        fingerprint = _fingerprint(edges, artifacts)
         latest = store.latest_assessment_for_capability(capability.id)
         if latest is not None and latest.edge_fingerprint == fingerprint:
             skipped += 1

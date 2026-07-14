@@ -147,7 +147,7 @@ class CkmStore:
             ("formula_ids", "TEXT NOT NULL DEFAULT '{}'"),
             (
                 "aggregate_formula_id",
-                "TEXT NOT NULL DEFAULT 'aggregate-weighted-min-v1'",
+                "TEXT NOT NULL DEFAULT 'legacy-pre-ckm07'",
             ),
             ("low_confidence", "INTEGER NOT NULL DEFAULT 0 CHECK (low_confidence IN (0, 1))"),
             ("edge_fingerprint", "TEXT NOT NULL DEFAULT 'legacy'"),
