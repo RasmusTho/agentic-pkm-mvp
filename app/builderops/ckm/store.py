@@ -16,7 +16,7 @@ import json
 import secrets
 import sqlite3
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
 from app.builderops.config import BuilderOpsPaths, load_paths, validate_db_path_outside_vault
@@ -902,10 +902,17 @@ class CkmStore:
         statement: str,
         citations: list[JsonDict],
     ) -> CkmFinding:
-        if not citations:
-            raise CkmValidationError("citations must not be empty")
         now = utc_now()
-        candidate_id = new_id("find")
+        candidate = CkmFinding(
+            id=new_id("find"),
+            kind=kind,
+            capability_id=capability_id,
+            dimension=dimension,
+            statement=statement,
+            citations=citations,
+            created_at=now,
+            updated_at=now,
+        ).validate()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
@@ -919,13 +926,102 @@ class CkmStore:
                     citations = excluded.citations,
                     updated_at = excluded.updated_at
                 """,
-                (candidate_id, kind, capability_id, dimension, statement, _dumps(citations), now, now),
+                (
+                    candidate.id,
+                    candidate.kind,
+                    candidate.capability_id,
+                    candidate.dimension,
+                    candidate.statement,
+                    _dumps(candidate.citations),
+                    candidate.created_at,
+                    candidate.updated_at,
+                ),
             )
             conn.commit()
         finding = self.get_finding(kind=kind, capability_id=capability_id, dimension=dimension)
         if finding is None:  # pragma: no cover - defensive
             raise CkmValidationError("finding upsert did not persist")
         return finding
+
+    def replace_findings(self, findings: Sequence[Mapping[str, Any]]) -> list[CkmFinding]:
+        """Atomically reconcile the disposable current finding projection."""
+
+        now = utc_now()
+        candidates: dict[tuple[str, str, str], CkmFinding] = {}
+        for raw in findings:
+            raw_citations = raw.get("citations", [])
+            if not isinstance(raw_citations, list):
+                raise CkmValidationError("finding citations must be a list")
+            candidate = CkmFinding(
+                id=new_id("find"),
+                kind=str(raw.get("kind", "")),
+                capability_id=str(raw.get("capability_id", "")),
+                dimension=str(raw.get("dimension", "")),
+                statement=str(raw.get("statement", "")),
+                citations=list(raw_citations),
+                created_at=now,
+                updated_at=now,
+            ).validate()
+            key = (candidate.kind, candidate.capability_id, candidate.dimension)
+            if key in candidates:
+                raise CkmValidationError(f"duplicate finding natural key: {key}")
+            candidates[key] = candidate
+
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing_rows = conn.execute("SELECT * FROM ckm_finding").fetchall()
+            existing = {
+                (row["kind"], row["capability_id"], row["dimension"]): row
+                for row in existing_rows
+            }
+            for kind, capability_id, dimension in set(existing) - set(candidates):
+                conn.execute(
+                    """
+                    DELETE FROM ckm_finding
+                    WHERE kind = ? AND capability_id = ? AND dimension = ?
+                    """,
+                    (kind, capability_id, dimension),
+                )
+            for key, candidate in sorted(candidates.items()):
+                row = existing.get(key)
+                citations_json = _dumps(candidate.citations)
+                if row is None:
+                    conn.execute(
+                        """
+                        INSERT INTO ckm_finding (
+                            id, kind, capability_id, dimension, statement,
+                            citations, created_at, updated_at
+                        ) VALUES (?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            candidate.id,
+                            candidate.kind,
+                            candidate.capability_id,
+                            candidate.dimension,
+                            candidate.statement,
+                            citations_json,
+                            candidate.created_at,
+                            candidate.updated_at,
+                        ),
+                    )
+                elif row["statement"] != candidate.statement or row["citations"] != citations_json:
+                    conn.execute(
+                        """
+                        UPDATE ckm_finding
+                        SET statement = ?, citations = ?, updated_at = ?
+                        WHERE kind = ? AND capability_id = ? AND dimension = ?
+                        """,
+                        (
+                            candidate.statement,
+                            citations_json,
+                            now,
+                            candidate.kind,
+                            candidate.capability_id,
+                            candidate.dimension,
+                        ),
+                    )
+            conn.commit()
+        return self.list_findings()
 
     def get_finding(self, *, kind: str, capability_id: str, dimension: str) -> CkmFinding | None:
         with self._connect() as conn:
@@ -945,5 +1041,15 @@ class CkmStore:
             rows = conn.execute(
                 "SELECT * FROM ckm_finding WHERE capability_id = ? ORDER BY created_at",
                 (capability_id,),
+            ).fetchall()
+        return [CkmFinding.from_row(row, citations=_loads(row["citations"])) for row in rows]
+
+    def list_findings(self) -> list[CkmFinding]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM ckm_finding
+                ORDER BY kind, capability_id, dimension
+                """
             ).fetchall()
         return [CkmFinding.from_row(row, citations=_loads(row["citations"])) for row in rows]
