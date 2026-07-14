@@ -197,6 +197,23 @@ class GhCliVerificationSource:
                 request = json.loads(archive.read(info))
             if not isinstance(request, dict):
                 raise ValueError("verification request artifact is not an object")
+            if request.get("repository") != repository:
+                raise ValueError("verification artifact repository mismatch")
+            provenance = request.get("artifact_provenance")
+            workflow_run = artifact.get("workflow_run")
+            if not isinstance(provenance, Mapping) or not isinstance(
+                workflow_run, Mapping
+            ):
+                raise ValueError("verification artifact workflow-run mismatch")
+            if (
+                provenance.get("workflow_run_id") != workflow_run.get("id")
+                or provenance.get("repository_id") != workflow_run.get("repository_id")
+                or workflow_run.get("head_repository_id")
+                != workflow_run.get("repository_id")
+            ):
+                raise ValueError("verification artifact workflow-run mismatch")
+            if provenance.get("artifact_name") != name:
+                raise ValueError("verification artifact identity mismatch")
             requests.append(request)
         return requests
 

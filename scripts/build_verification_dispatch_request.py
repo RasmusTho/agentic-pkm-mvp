@@ -101,6 +101,7 @@ def build_request(
 ) -> dict[str, object] | None:
     """Return a dispatch request only for successful CI on the current PR head."""
     run = _as_dict(event.get("workflow_run"))
+    artifact_run = _as_dict(event.get("artifact_workflow_run"))
     if (
         run.get("name") != SOURCE_WORKFLOW
         or run.get("event") != "pull_request"
@@ -117,6 +118,8 @@ def build_request(
     base_ref = _nested_str(pr, "base", "ref")
     head_ref = _nested_str(pr, "head", "ref")
     generated_at = run.get("updated_at")
+    artifact_workflow_run_id = artifact_run.get("id")
+    artifact_repository_id = artifact_run.get("repository_id")
     if not (
         repository
         and pr.get("state") == "open"
@@ -130,6 +133,8 @@ def build_request(
         and head_ref
         and isinstance(generated_at, str)
         and generated_at
+        and _is_positive_int(artifact_workflow_run_id)
+        and _is_positive_int(artifact_repository_id)
     ):
         return None
 
@@ -152,6 +157,11 @@ def build_request(
             "run_id": run_id,
             "run_attempt": run_attempt,
             "head_sha": run_head_sha,
+        },
+        "artifact_provenance": {
+            "workflow_run_id": artifact_workflow_run_id,
+            "repository_id": artifact_repository_id,
+            "artifact_name": f"verification-dispatch-{pr_number}-{current_head_sha}",
         },
         "evidence_pack": {
             "contract": "pr_evidence_pack",
@@ -214,10 +224,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-markdown", type=Path, required=True)
     parser.add_argument("--github-output", type=Path)
+    parser.add_argument("--artifact-workflow-run-id", type=int, required=True)
+    parser.add_argument("--artifact-repository-id", type=int, required=True)
     args = parser.parse_args(argv)
 
+    event = _load_json(args.event_json)
+    event["artifact_workflow_run"] = {
+        "id": args.artifact_workflow_run_id,
+        "repository_id": args.artifact_repository_id,
+    }
     request = build_request(
-        event=_load_json(args.event_json),
+        event=event,
         pr=_load_json(args.pr_json),
         issue=_load_json(args.issue_json),
     )

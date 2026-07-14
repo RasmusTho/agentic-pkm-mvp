@@ -19,6 +19,7 @@ def _event(
 ) -> dict[str, object]:
     return {
         "repository": {"full_name": REPOSITORY},
+        "artifact_workflow_run": {"id": 123, "repository_id": 456},
         "workflow_run": {
             "id": 987654,
             "run_attempt": 2,
@@ -66,6 +67,11 @@ def test_request_schema_and_idempotency_are_deterministic() -> None:
         "run_id": 987654,
         "run_attempt": 2,
         "head_sha": HEAD_SHA,
+    }
+    assert first["artifact_provenance"] == {
+        "workflow_run_id": 123,
+        "repository_id": 456,
+        "artifact_name": f"verification-dispatch-3602-{HEAD_SHA}",
     }
     assert first["generated_at"] == "2026-07-13T12:00:00Z"
     assert len(first["idempotency_key"]) == 64

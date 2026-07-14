@@ -140,6 +140,8 @@ jobs:
             --issue-json verification-dispatch/issue.json \
             --output-json verification-dispatch/request.json \
             --output-markdown verification-dispatch/request.md \
+            --artifact-workflow-run-id "${{ github.run_id }}" \
+            --artifact-repository-id "${{ github.repository_id }}" \
             --github-output "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4

@@ -15,6 +15,7 @@ def request(head: str = HEAD) -> dict[str, object]:
     result = build_request(
         event={
             "repository": {"full_name": REPO},
+            "artifact_workflow_run": {"id": 123, "repository_id": 456},
             "workflow_run": {
                 "id": 99,
                 "run_attempt": 1,

@@ -93,6 +93,17 @@ def _validate_request(request: Mapping[str, object]) -> None:
         _positive_int(source.get(key)) for key in ("run_id", "run_attempt")
     ) or source.get("head_sha") != head_sha:
         raise ValueError("malformed verification source identity")
+    artifact_provenance = request.get("artifact_provenance")
+    expected_artifact_name = (
+        f"verification-dispatch-{request['pr_number']}-{head_sha}"
+    )
+    if (
+        not isinstance(artifact_provenance, Mapping)
+        or not _positive_int(artifact_provenance.get("workflow_run_id"))
+        or not _positive_int(artifact_provenance.get("repository_id"))
+        or artifact_provenance.get("artifact_name") != expected_artifact_name
+    ):
+        raise ValueError("malformed verification artifact provenance")
     live_truth = request.get("live_truth")
     if not isinstance(live_truth, Mapping):
         raise ValueError("malformed verification live-truth identity")

@@ -23,6 +23,8 @@ def test_workflow_triggers_from_completed_ci_workflow_run() -> None:
     assert 'repos/${REPOSITORY}/commits/${RUN_HEAD_SHA}/pulls' in text
     assert "resolve_pr_number" in text
     assert "scripts/build_verification_dispatch_request.py" in text
+    assert '--artifact-workflow-run-id "${{ github.run_id }}"' in text
+    assert '--artifact-repository-id "${{ github.repository_id }}"' in text
 
 
 def test_successful_current_head_emits_dispatch_artifact() -> None:

@@ -49,6 +49,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   subset (including conditional composition and object fields that are not required). The provider
   schema keeps optional values explicitly nullable; local semantic validation still fail-closes a
   delivered receipt without two review events or a repair event without its finding identity.
+- Artifact ingestion binds the untrusted request repository, artifact name, uploader workflow-run
+  id, and repository id to the authenticated GitHub artifact metadata before dispatcher persistence
+  or any request-directed repository read. A mismatch fails closed before claim or model launch.
 - Missing or pending checks and auth/rate limits enter time-bounded `backoff`; replay cannot launch
   before `retry_after`. Terminal completion additionally requires two fresh clean review receipts
   after the final durable repair attempt. Standard and strongest-capability repair budgets are

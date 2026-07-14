@@ -73,10 +73,23 @@ def eligible_pr(**updates):
 GREEN = [{"status": "completed", "conclusion": "success"}]
 
 
+def artifact_request(**updates: object) -> dict[str, object]:
+    value = request()
+    value["artifact_provenance"] = {
+        "workflow_run_id": 123,
+        "repository_id": 456,
+        "artifact_name": f"verification-dispatch-3603-{HEAD}",
+    }
+    value.update(updates)
+    return value
+
+
 def test_gh_source_fetches_bounded_artifact_and_live_truth_without_shell(tmp_path) -> None:
     archive_bytes = io.BytesIO()
     with zipfile.ZipFile(archive_bytes, "w") as archive:
-        archive.writestr("verification-dispatch/request.json", json.dumps(request()))
+        archive.writestr(
+            "verification-dispatch/request.json", json.dumps(artifact_request())
+        )
 
     class Result:
         def __init__(self, stdout):
@@ -89,7 +102,24 @@ def test_gh_source_fetches_bounded_artifact_and_live_truth_without_shell(tmp_pat
         calls.append(command)
         endpoint = command[-1]
         if endpoint.endswith("actions/artifacts?per_page=100"):
-            return Result(json.dumps({"artifacts": [{"id": 7, "name": "verification-dispatch-3603-head", "expired": False}]}))
+            return Result(
+                json.dumps(
+                    {
+                        "artifacts": [
+                            {
+                                "id": 7,
+                                "name": f"verification-dispatch-3603-{HEAD}",
+                                "expired": False,
+                                "workflow_run": {
+                                    "id": 123,
+                                    "repository_id": 456,
+                                    "head_repository_id": 456,
+                                },
+                            }
+                        ]
+                    }
+                )
+            )
         if endpoint.endswith("artifacts/7/zip"):
             return Result(archive_bytes.getvalue())
         if "/pulls/3603" in endpoint:
@@ -97,10 +127,70 @@ def test_gh_source_fetches_bounded_artifact_and_live_truth_without_shell(tmp_pat
         return Result(json.dumps({"check_runs": GREEN}))
 
     source = GhCliVerificationSource(runner=runner)
-    assert source.pending_requests("RasmusTho/agentic-pkm-mvp") == [request()]
+    assert source.pending_requests("RasmusTho/agentic-pkm-mvp") == [artifact_request()]
     assert source.pull_request("RasmusTho/agentic-pkm-mvp", 3603)["number"] == 3603
     assert source.checks("RasmusTho/agentic-pkm-mvp", HEAD) == GREEN
     assert all(call[:2] == ["gh", "api"] for call in calls)
+
+
+def _artifact_source_for_request(payload: dict[str, object], *, workflow_run_id: int = 123):
+    archive_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w") as archive:
+        archive.writestr("verification-dispatch/request.json", json.dumps(payload))
+
+    class Result:
+        def __init__(self, stdout):
+            self.returncode = 0
+            self.stdout = stdout
+
+    calls: list[list[str]] = []
+
+    def runner(command, **kwargs):
+        calls.append(command)
+        if command[-1].endswith("actions/artifacts?per_page=100"):
+            return Result(
+                json.dumps(
+                    {
+                        "artifacts": [
+                            {
+                                "id": 7,
+                                "name": f"verification-dispatch-3603-{HEAD}",
+                                "expired": False,
+                                "workflow_run": {
+                                    "id": workflow_run_id,
+                                    "repository_id": 456,
+                                    "head_repository_id": 456,
+                                },
+                            }
+                        ]
+                    }
+                )
+            )
+        return Result(archive_bytes.getvalue())
+
+    return GhCliVerificationSource(runner=runner), calls
+
+
+def test_pending_request_rejects_repository_mismatch() -> None:
+    source, calls = _artifact_source_for_request(
+        artifact_request(repository="attacker/redirected-repo")
+    )
+
+    with pytest.raises(ValueError, match="artifact repository mismatch"):
+        source.pending_requests("RasmusTho/agentic-pkm-mvp")
+
+    assert len(calls) == 2
+
+
+def test_pending_request_rejects_workflow_run_mismatch() -> None:
+    source, calls = _artifact_source_for_request(
+        artifact_request(), workflow_run_id=999
+    )
+
+    with pytest.raises(ValueError, match="artifact workflow-run mismatch"):
+        source.pending_requests("RasmusTho/agentic-pkm-mvp")
+
+    assert len(calls) == 2
 
 
 @pytest.mark.parametrize("pr,checks,reason", [
