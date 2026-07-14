@@ -97,6 +97,7 @@ _PANEL_LATENCY_SUMMARY_DEDUP = EventDedupStore()
 
 # Dead-letter reason for a dispatch-time schema violation (KERNEL-08, #2770).
 SCHEMA_VIOLATION_REASON = "schema_violation"
+INVALID_NOTE_UUID_REASON = "invalid_note_uuid"
 
 
 class SchemaViolationDispatchError(RuntimeError):
@@ -113,6 +114,19 @@ class SchemaViolationDispatchError(RuntimeError):
     def __init__(self, violation: TopicSchemaViolation) -> None:
         super().__init__(str(violation))
         self.violation = violation
+
+
+class InvalidPanelNoteUUIDDispatchError(ValueError):
+    """A stored panel-note UUID is malformed and cannot be dispatched safely.
+
+    This is deliberately distinct from a transient handler error. The source note
+    and its queued event are durable evidence, but retrying the same immutable
+    malformed UUID only crash-loops the worker. The consume loop dead-letters
+    this one row immediately and continues with later events.
+    """
+
+    def __init__(self, value: str) -> None:
+        super().__init__(f"invalid panel note uuid: {value}")
 
 
 def _resolve_instance_id() -> str:
@@ -331,6 +345,23 @@ def run_once(
     event_id = _event_id_from_message(message)
     try:
         _dispatch_topic(topic, payload, trace_id=trace_id, message=message, event_id=event_id)
+    except InvalidPanelNoteUUIDDispatchError as uuid_exc:
+        logger.warning(
+            "worker dead-lettered malformed panel note uuid topic=%s id=%s",
+            topic,
+            message.get("id"),
+        )
+        _dead_letter_outbox_message(
+            topic,
+            payload,
+            message_id=str(message.get("id") or ""),
+            reason=INVALID_NOTE_UUID_REASON,
+            attempts=0,
+            trace_id=None if trace_id == "-" else trace_id,
+            error=str(uuid_exc),
+        )
+        ack_outbox(message["id"])
+        return WorkerTickResult(state="processed", processed=1)
     except SchemaViolationDispatchError as schema_exc:
         # Immediate dead-letter (KERNEL-08, #2770): see the matching branch in
         # run()'s consume loop for the invariant (never transient, no retry budget).
@@ -1254,6 +1285,11 @@ def handle_panel_scan_requested(
         logger.info("panel scan skipped (missing uuid) note_path=%s", note_path)
         return WorkerPanelSummary(emitted=0, deferred=True)
 
+    try:
+        UUID(note_uuid)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise InvalidPanelNoteUUIDDispatchError(note_uuid) from exc
+
     refresh_panel_note_object(
         note_uuid=note_uuid,
         note_path=note_path,
@@ -1641,6 +1677,24 @@ def run(
                             message=message,
                             event_id=event_id,
                         )
+                    except InvalidPanelNoteUUIDDispatchError as uuid_exc:
+                        errors_total += 1
+                        logger.warning(
+                            "worker dead-lettered malformed panel note uuid topic=%s id=%s",
+                            topic,
+                            message.get("id"),
+                        )
+                        _dead_letter_outbox_message(
+                            topic,
+                            payload,
+                            message_id=str(message.get("id") or ""),
+                            reason=INVALID_NOTE_UUID_REASON,
+                            attempts=0,
+                            trace_id=None if trace_id == "-" else trace_id,
+                            error=str(uuid_exc),
+                        )
+                        ack_outbox(message["id"])
+                        continue
                     except SchemaViolationDispatchError as schema_exc:
                         # Immediate dead-letter (KERNEL-08, #2770): a registered-schema
                         # violation is never transient and never worth a retry budget —
