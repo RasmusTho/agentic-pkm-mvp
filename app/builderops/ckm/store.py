@@ -13,6 +13,7 @@ never invents its own receipt/authority path.
 from __future__ import annotations
 
 import json
+import secrets
 import sqlite3
 from pathlib import Path
 from typing import Any, Mapping
@@ -493,6 +494,37 @@ class CkmStore:
 
     def append_builderops_receipt(self, **fields: Any) -> JsonDict:
         return self._receipt_store.append_receipt(**fields)
+
+    def _confirmation_signing_key(self, *, create: bool = False) -> bytes | None:
+        """Return the local CKM confirmation key, creating it only at the CLI boundary.
+
+        The key lives in BuilderOps metadata, outside the rebuildable ``ckm_*``
+        projection.  Receipt replay may read it but never creates it: an
+        unsigned, self-asserted receipt therefore cannot bootstrap its own
+        authority after a rebuild.
+        """
+
+        key_name = "ckm_confirmation_signing_key_v1"
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT value FROM builderops_meta WHERE key = ?", (key_name,)
+            ).fetchone()
+            if row is None and create:
+                value = secrets.token_hex(32)
+                conn.execute(
+                    "INSERT INTO builderops_meta (key, value) VALUES (?, ?)",
+                    (key_name, value),
+                )
+                conn.commit()
+                return bytes.fromhex(value)
+            conn.commit()
+        if row is None:
+            return None
+        try:
+            return bytes.fromhex(str(row["value"]))
+        except ValueError as exc:  # fail closed on damaged trusted metadata
+            raise CkmValidationError("CKM confirmation signing key is invalid") from exc
 
     def list_evidence_edges_for_capability(self, capability_id: str) -> list[CkmEvidenceEdge]:
         with self._connect() as conn:

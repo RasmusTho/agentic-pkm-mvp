@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 import json
 from pathlib import Path
+import sqlite3
 
 import pytest
 from click.testing import CliRunner
@@ -10,6 +10,7 @@ from click.testing import CliRunner
 from app.builderops.cli import builderops
 from app.builderops.ckm.models import CkmValidationError
 from app.builderops.ckm.semantic import (
+    FabricSemanticAssociator,
     SemanticAssociationError,
     SemanticAssociationResult,
     SemanticBatch,
@@ -18,6 +19,7 @@ from app.builderops.ckm.semantic import (
     reapply_confirmation_receipts,
 )
 from app.builderops.ckm.store import CkmStore
+from app.components.llm.constrained import ConstrainedCompletionError
 
 
 @pytest.fixture()
@@ -131,10 +133,23 @@ def _append_confirmation_receipt(
     variant: str,
 ) -> None:
     payload = {
-        **asdict(edge),
+        "edge_id": edge.id,
         "lifecycle": "confirmed",
         "artifact_source_ref": artifact_ref,
         "capability_name": capability_name,
+        "evidence_kind": edge.evidence_kind,
+        "polarity": edge.polarity,
+        "maturity_dimension": edge.maturity_dimension,
+        "confidence": edge.confidence,
+        "extraction_method": edge.extraction_method,
+        "source_ref": edge.source_ref,
+        "basis": edge.basis,
+        "provider": edge.provider,
+        "model": edge.model,
+        "confirmation_key": "a" * 64,
+        # A structurally plausible value is still not trusted without the
+        # secret binding created by the human-operated confirmation boundary.
+        "binding": "b" * 64,
     }
     actor = {"actor_type": "human", "id": "operator"}
     action = "confirm_edge"
@@ -168,7 +183,14 @@ def _append_confirmation_receipt(
 
 @pytest.mark.parametrize(
     "variant",
-    ["non-human", "wrong-event", "wrong-action", "wrong-target", "forged-payload"],
+    [
+        "self-asserted",
+        "non-human",
+        "wrong-event",
+        "wrong-action",
+        "wrong-target",
+        "forged-payload",
+    ],
 )
 def test_confirmation_rejects_invalid_or_forged_receipts(
     tmp_path: Path, variant: str
@@ -192,6 +214,44 @@ def test_confirmation_rejects_invalid_or_forged_receipts(
 
     assert reapply_confirmation_receipts(store) == 0
     assert store.get_evidence_edge_by_id(edge.id).lifecycle == "candidate"
+
+    # Absence of the source edge after rebuild must not turn a structurally
+    # valid human self-assertion into authority.
+    store.rebuild()
+    _capability(store)
+    _artifact(store)
+    assert reapply_confirmation_receipts(store) == 0
+    assert store.list_evidence_edges() == []
+
+
+class _FabricClient:
+    def __init__(self, *, response: str | None = None, error: Exception | None = None) -> None:
+        self.response = response
+        self.error = error
+
+    def chat(self, *args, **kwargs) -> str:
+        if self.error is not None:
+            raise self.error
+        assert self.response is not None
+        return self.response
+
+
+@pytest.mark.parametrize("failure", ["schema", "constrained"])
+def test_fabric_adapter_maps_structured_output_failures(failure: str) -> None:
+    associator = object.__new__(FabricSemanticAssociator)
+    associator.provider = "stub-provider"
+    associator.model = "stub-model"
+    if failure == "schema":
+        associator._client = _FabricClient(response='{"proposals": [{"artifact_id": "x"}]}')
+    else:
+        associator._client = _FabricClient(
+            error=ConstrainedCompletionError(
+                schema_ref="test", reason="schema violation"
+            )
+        )
+
+    with pytest.raises(SemanticAssociationError, match="invalid semantic association response"):
+        associator.propose(artifacts=[], capabilities=[])
 
 
 def test_confidence_floor_discards(store: CkmStore) -> None:
@@ -248,7 +308,9 @@ def test_llm_unavailable_skips_cleanly(store: CkmStore) -> None:
     assert store.get_watermark("semantic_association") == "prior"
 
 
-def test_confirmation_receipt_survives_rebuild(store: CkmStore) -> None:
+def test_confirmation_receipt_survives_rebuild(
+    store: CkmStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
     capability = _capability(store)
     artifact = _artifact(store)
     associate_unlinked_artifacts(
@@ -271,6 +333,18 @@ def test_confirmation_receipt_survives_rebuild(store: CkmStore) -> None:
     receipt = store.list_builderops_receipts("ckm_edge_confirmed")[0]
     assert store.get_evidence_edge_by_id(original.id).lifecycle == "confirmed"
     assert receipt["event_type"] == "ckm_edge_confirmed"
+
+    # The stable semantic confirmation key makes a delayed retry idempotent;
+    # changing wall-clock timestamps cannot conflict with the prior request.
+    monkeypatch.setattr(
+        "app.builderops.ckm.semantic.utc_now", lambda: "2099-01-01T00:00:00Z"
+    )
+    repeated = runner.invoke(
+        builderops,
+        ["--db-path", str(store.db_path), "ckm", "confirm-edge", original.id],
+    )
+    assert repeated.exit_code == 0, repeated.output
+    assert len(store.list_builderops_receipts("ckm_edge_confirmed")) == 1
 
     # An idempotent association pass must not demote a human-confirmed edge.
     store.upsert_evidence_edge(
@@ -300,3 +374,45 @@ def test_confirmation_receipt_survives_rebuild(store: CkmStore) -> None:
     assert restored[0].capability_id == rebuilt_capability.id
     assert restored[0].lifecycle == "confirmed"
     assert restored[0].basis == original.basis
+
+
+@pytest.mark.parametrize("field", ["actor", "confidence", "model", "basis"])
+def test_trusted_confirmation_rejects_tampering_before_and_after_rebuild(
+    tmp_path: Path, field: str
+) -> None:
+    store = CkmStore(tmp_path / f"tamper-{field}.sqlite3")
+    store.ensure_schema()
+    capability = _capability(store)
+    artifact = _artifact(store)
+    associate_unlinked_artifacts(
+        store,
+        client=StubAssociator([_proposal(artifact.id, capability.id)]),
+    )
+    edge = store.list_evidence_edges()[0]
+    runner = CliRunner()
+    confirmation = runner.invoke(
+        builderops,
+        ["--db-path", str(store.db_path), "ckm", "confirm-edge", edge.id],
+    )
+    assert confirmation.exit_code == 0, confirmation.output
+    receipt = store.list_builderops_receipts("ckm_edge_confirmed")[0]
+
+    if field == "actor":
+        receipt["actor"] = {"actor_type": "human", "id": "different-human"}
+    else:
+        body = json.loads(receipt["receipt_body"])
+        body[field] = 0.01 if field == "confidence" else f"altered-{field}"
+        receipt["receipt_body"] = json.dumps(body, ensure_ascii=False, sort_keys=True)
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            "UPDATE builderops_records SET payload = ? WHERE id = ?",
+            (json.dumps(receipt, ensure_ascii=False, sort_keys=True), receipt["id"]),
+        )
+        conn.commit()
+
+    assert reapply_confirmation_receipts(store) == 0
+    store.rebuild()
+    _capability(store)
+    _artifact(store)
+    assert reapply_confirmation_receipts(store) == 0
+    assert store.list_evidence_edges() == []
