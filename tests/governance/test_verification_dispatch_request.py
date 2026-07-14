@@ -4,7 +4,11 @@ import json
 
 import pytest
 
-from scripts.build_verification_dispatch_request import build_request, resolve_pr_number
+from scripts.build_verification_dispatch_request import (
+    build_request,
+    resolve_issue_contract,
+    resolve_pr_number,
+)
 
 
 REPOSITORY = "RasmusTho/agentic-pkm-mvp"
@@ -37,7 +41,7 @@ def _pr(*, head_sha: str = HEAD_SHA, state: str = "open") -> dict[str, object]:
     return {
         "number": 3602,
         "state": state,
-        "body": "Fixes #3602",
+        "body": "Governing-Issue: #3602\n\nFixes #3602",
         "base": {"ref": "main"},
         "head": {"ref": "codex/issue-3602", "sha": head_sha},
     }
@@ -59,6 +63,7 @@ def test_request_schema_and_idempotency_are_deterministic() -> None:
     assert first["repository"] == REPOSITORY
     assert first["pr_number"] == 3602
     assert first["linked_issue"] == 3602
+    assert first["supporting_issues"] == []
     assert first["base_ref"] == "main"
     assert first["head_ref"] == "codex/issue-3602"
     assert first["current_head_sha"] == HEAD_SHA
@@ -87,6 +92,35 @@ def test_non_eligible_events_are_noops() -> None:
         build_request(event=_event(), pr=_pr(head_sha="b" * 40), issue=_issue())
         is None
     )
+
+
+def test_multi_issue_pr_selects_explicit_governing_issue() -> None:
+    pr = _pr()
+    pr["body"] = (
+        "Governing-Issue: #3603\n\nRefs #3603\nFixes #3626\n"
+        "Fixes #3698\nFixes #3699\nFixes #3700\nFixes #3705"
+    )
+
+    request = build_request(event=_event(), pr=pr, issue={"number": 3603})
+
+    assert request is not None
+    assert request["linked_issue"] == 3603
+    assert request["supporting_issues"] == [3626, 3698, 3699, 3700, 3705]
+
+
+def test_ambiguous_governing_issue_emits_no_request() -> None:
+    missing = _pr()
+    missing["body"] = "Fixes #3626\nFixes #3603"
+    conflicting = _pr()
+    conflicting["body"] = "Governing-Issue: #3603\nGoverning-Issue: #3626"
+    mismatched = _pr()
+    mismatched["body"] = "Governing-Issue: #3603\nFixes #3626"
+
+    assert resolve_issue_contract(missing["body"]) is None
+    assert resolve_issue_contract(conflicting["body"]) is None
+    assert build_request(event=_event(), pr=missing, issue={"number": 3603}) is None
+    assert build_request(event=_event(), pr=conflicting, issue={"number": 3603}) is None
+    assert build_request(event=_event(), pr=mismatched, issue={"number": 3626}) is None
 
 
 def test_associated_pr_must_still_be_open() -> None:

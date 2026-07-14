@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Sequence, TypeGuard
 
@@ -14,6 +15,12 @@ CONTRACT_VERSION = "verification_dispatch_request.v1"
 STAGE = "verification"
 SOURCE_WORKFLOW = "CI"
 EVIDENCE_WORKFLOW = "PR Evidence Pack"
+GOVERNING_ISSUE_PATTERN = re.compile(
+    r"(?im)^\s*Governing-Issue:\s*#([1-9][0-9]*)\s*$"
+)
+SUPPORTING_ISSUE_PATTERN = re.compile(
+    r"\b(?:Fixes|Closes|Resolves|Refs)\s+#([1-9][0-9]*)\b", re.I
+)
 
 
 def _as_dict(value: object) -> dict[str, object]:
@@ -93,6 +100,26 @@ def resolve_pr_number(
     return next(iter(matches))
 
 
+def resolve_issue_contract(pr_body: object) -> tuple[int, tuple[int, ...]] | None:
+    """Resolve one explicit governing issue and bounded supporting evidence."""
+    if not isinstance(pr_body, str):
+        return None
+    governing_matches = GOVERNING_ISSUE_PATTERN.findall(pr_body)
+    if len(governing_matches) != 1:
+        return None
+    governing_issue = int(governing_matches[0])
+    supporting_issues = tuple(
+        sorted(
+            {
+                int(match)
+                for match in SUPPORTING_ISSUE_PATTERN.findall(pr_body)
+                if int(match) != governing_issue
+            }
+        )
+    )
+    return governing_issue, supporting_issues
+
+
 def build_request(
     *,
     event: dict[str, object],
@@ -138,10 +165,14 @@ def build_request(
     ):
         return None
 
+    issue_contract = resolve_issue_contract(pr.get("body"))
+    if issue_contract is None:
+        return None
+    governing_issue, supporting_issues = issue_contract
     issue_data = issue or {}
     linked_issue = issue_data.get("number")
-    if not isinstance(linked_issue, int):
-        linked_issue = None
+    if linked_issue != governing_issue:
+        return None
 
     return {
         "contract_version": CONTRACT_VERSION,
@@ -149,6 +180,7 @@ def build_request(
         "repository": repository,
         "pr_number": pr_number,
         "linked_issue": linked_issue,
+        "supporting_issues": list(supporting_issues),
         "base_ref": base_ref,
         "head_ref": head_ref,
         "current_head_sha": current_head_sha,

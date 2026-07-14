@@ -103,15 +103,16 @@ jobs:
           python3 - <<'PY'
           import json
           import os
-          import re
           from pathlib import Path
 
+          from scripts.build_verification_dispatch_request import resolve_issue_contract
+
           pr = json.loads(Path("verification-dispatch/pr.json").read_text())
-          body = pr.get("body") or ""
-          match = re.search(r"\b(?:Fixes|Closes|Resolves)\s+#(\d+)\b", body, re.I)
-          if match:
+          issue_contract = resolve_issue_contract(pr.get("body"))
+          if issue_contract:
+              governing_issue, _supporting_issues = issue_contract
               with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
-                  output.write(f"issue_number={int(match.group(1))}\n")
+                  output.write(f"issue_number={governing_issue}\n")
           PY
         id: snapshots
 
