@@ -433,6 +433,105 @@ def test_retired_confirmed_edge_is_not_resurrected_but_rebuild_restores(
     assert restored[0].lifecycle == "confirmed"
 
 
+@pytest.mark.parametrize(
+    ("field", "changed_value"),
+    (
+        ("confidence", 0.1),
+        ("model", "replacement-model"),
+        ("provider", "replacement-provider"),
+        ("polarity", "weakens"),
+        ("maturity_dimension", "operational_readiness"),
+        ("evidence_kind", "requirement"),
+    ),
+)
+def test_material_change_demotes_confirmed_edge_until_new_receipt(
+    store: CkmStore,
+    field: str,
+    changed_value: object,
+) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    associate_unlinked_artifacts(
+        store,
+        client=StubAssociator([_proposal(artifact.id, capability.id)]),
+    )
+    original = store.list_evidence_edges()[0]
+    runner = CliRunner()
+    confirmation = runner.invoke(
+        builderops,
+        ["--db-path", str(store.db_path), "ckm", "confirm-edge", original.id],
+    )
+    assert confirmation.exit_code == 0, confirmation.output
+
+    replacement = {
+        "artifact_id": original.artifact_id,
+        "capability_id": original.capability_id,
+        "evidence_kind": original.evidence_kind,
+        "polarity": original.polarity,
+        "maturity_dimension": original.maturity_dimension,
+        "confidence": original.confidence,
+        "extraction_method": original.extraction_method,
+        "lifecycle": "candidate",
+        "source_ref": original.source_ref,
+        "basis": original.basis,
+        "provider": original.provider,
+        "model": original.model,
+    }
+    replacement[field] = changed_value
+    changed = store.upsert_evidence_edge(**replacement)
+
+    assert changed.id == original.id
+    assert changed.lifecycle == "candidate"
+    assert getattr(changed, field) == changed_value
+    assert reapply_confirmation_receipts(store) == 0
+    assert store.get_active_evidence_edge_by_id(original.id).lifecycle == "candidate"
+    assert len(store.list_builderops_receipts("ckm_edge_confirmed")) == 1
+
+    reconfirmation = runner.invoke(
+        builderops,
+        ["--db-path", str(store.db_path), "ckm", "confirm-edge", original.id],
+    )
+    assert reconfirmation.exit_code == 0, reconfirmation.output
+    assert store.get_active_evidence_edge_by_id(original.id).lifecycle == "confirmed"
+    assert len(store.list_builderops_receipts("ckm_edge_confirmed")) == 2
+
+
+def test_new_basis_creates_candidate_without_mutating_confirmed_claim(
+    store: CkmStore,
+) -> None:
+    capability = _capability(store)
+    artifact = _artifact(store)
+    associate_unlinked_artifacts(
+        store,
+        client=StubAssociator([_proposal(artifact.id, capability.id)]),
+    )
+    original = store.list_evidence_edges()[0]
+    confirmation = CliRunner().invoke(
+        builderops,
+        ["--db-path", str(store.db_path), "ckm", "confirm-edge", original.id],
+    )
+    assert confirmation.exit_code == 0, confirmation.output
+
+    replacement = store.upsert_evidence_edge(
+        artifact_id=original.artifact_id,
+        capability_id=original.capability_id,
+        evidence_kind=original.evidence_kind,
+        polarity=original.polarity,
+        maturity_dimension=original.maturity_dimension,
+        confidence=original.confidence,
+        extraction_method=original.extraction_method,
+        lifecycle="candidate",
+        source_ref=original.source_ref,
+        basis="A materially different rationale.",
+        provider=original.provider,
+        model=original.model,
+    )
+
+    assert replacement.id != original.id
+    assert replacement.lifecycle == "candidate"
+    assert store.get_active_evidence_edge_by_id(original.id).lifecycle == "confirmed"
+
+
 @pytest.mark.parametrize("field", ["actor", "confidence", "model", "basis"])
 def test_trusted_confirmation_rejects_tampering_before_and_after_rebuild(
     tmp_path: Path, field: str

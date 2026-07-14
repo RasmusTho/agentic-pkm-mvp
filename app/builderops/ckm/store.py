@@ -457,14 +457,6 @@ class CkmStore:
                 """,
                 (artifact_id, capability_id, resolved_basis),
             ).fetchone()
-            desired_lifecycle = lifecycle
-            if (
-                existing_row is not None
-                and existing_row["extraction_method"] == "inferred"
-                and existing_row["lifecycle"] == "confirmed"
-                and extraction_method == "inferred"
-            ):
-                desired_lifecycle = "confirmed"
             if existing_row is not None:
                 material_fields = (
                     "artifact_id",
@@ -492,8 +484,19 @@ class CkmStore:
                     "source_ref": source_ref,
                     "basis": resolved_basis,
                 }
-                unchanged = all(existing_row[field] == desired[field] for field in material_fields)
-                unchanged = unchanged and existing_row["lifecycle"] == desired_lifecycle
+                material_unchanged = all(
+                    existing_row[field] == desired[field] for field in material_fields
+                )
+                confirmation_preserved = (
+                    material_unchanged
+                    and existing_row["extraction_method"] == "inferred"
+                    and existing_row["lifecycle"] == "confirmed"
+                    and extraction_method == "inferred"
+                    and lifecycle == "candidate"
+                )
+                unchanged = material_unchanged and (
+                    existing_row["lifecycle"] == lifecycle or confirmation_preserved
+                )
                 if unchanged:
                     conn.commit()
                     return CkmEvidenceEdge.from_row(existing_row)
@@ -514,13 +517,7 @@ class CkmStore:
                     extraction_method = excluded.extraction_method,
                     model = excluded.model,
                     provider = excluded.provider,
-                    lifecycle = CASE
-                        WHEN ckm_evidence_edge.extraction_method = 'inferred'
-                         AND ckm_evidence_edge.lifecycle = 'confirmed'
-                         AND excluded.extraction_method = 'inferred'
-                        THEN 'confirmed'
-                        ELSE excluded.lifecycle
-                    END,
+                    lifecycle = excluded.lifecycle,
                     source_ref = excluded.source_ref,
                     updated_at = excluded.updated_at
                 """,
