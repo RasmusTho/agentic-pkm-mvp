@@ -37,6 +37,21 @@ def test_repeated_review_findings_route_to_triage_before_owner() -> None:
     assert "Blocking -->|repeated| Exception[\"Human exception\"]" not in process_map
 
 
+def test_no_legacy_route_sends_technical_stops_directly_to_owner() -> None:
+    contract = GATE_CONTRACT.read_text(encoding="utf-8")
+    process_map = PROCESS_MAP.read_text(encoding="utf-8")
+    closure_skill = (ROOT / ".codex/skills/verification-and-closure/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "It routes to Human Exception unless" not in contract
+    assert "Blocked --> HumanException" not in process_map
+    assert "frontier_rescue --> needs_human" not in process_map
+    assert 'Classify -->|unresolved| Human["Human exception/block"]' not in process_map
+    assert 'Stop["Stop condition"] --> Packet["Human Exception packet"]' not in process_map
+    assert "classify the stop under" in closure_skill
+
+
 def test_agent_policy_reserves_owner_interruptions_for_authority() -> None:
     agents = AGENTS.read_text(encoding="utf-8")
 

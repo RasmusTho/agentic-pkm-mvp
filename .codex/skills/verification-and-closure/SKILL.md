@@ -178,11 +178,13 @@ than independent re-review.
   finding or mechanism. Independently re-review after each substantive attempt, and record the
   selected model/agent family, reasoning level, prior context supplied, fallback (if any), and outcome
   for every escalated round.
-- Stop and route through `owner-decision-brief` only when any blocking finding remains after the
-  PR-wide budget of 2 standard plus 2 escalated fix attempts is exhausted, the strongest available
-  capability cannot run or repeatedly fails, or a genuine authority/scope ambiguity appears. Do not
-  reset the budget when the finding or mechanism changes, and do not ask the owner merely because the
-  standard-capability attempts failed.
+- After the PR-wide budget of 2 standard plus 2 escalated fix attempts is exhausted, or when the
+  strongest available capability cannot run or repeatedly fails, classify the stop under
+  `AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier`. Continue with bounded
+  technical recovery, backoff, or a blocked-technical receipt when safe; route through
+  `owner-decision-brief` only if that classifier identifies an explicit authority/scope category.
+  Do not reset the budget when the finding or mechanism changes, and do not ask the owner merely
+  because the standard-capability attempts failed.
 - Record each round's outcome and the final round count in the delivery receipt so convergence is
   auditable after merge.
 
