@@ -103,6 +103,30 @@ def _dimension_markup(
       </section>"""
 
 
+def _mini_dimensions_markup(scores: Mapping[str, float] | None) -> str:
+    """Render the seven maturity dimensions in the always-visible card summary."""
+
+    bars = []
+    for dimension in MATURITY_DIMENSIONS:
+        score = float(scores[dimension]) if scores is not None else None
+        percent = max(0.0, min(100.0, score * 100.0)) if score is not None else 0.0
+        label = (
+            f"{dimension.replace('_', ' ')}: {score:.2f}"
+            if score is not None
+            else f"{dimension.replace('_', ' ')}: not assessed"
+        )
+        bars.append(
+            f'<span class="mini-dimension{" mini-unknown" if score is None else ""}" '
+            f'title="{_e(label)}" aria-label="{_e(label)}" '
+            f'style="--score:{percent:.1f}%"></span>'
+        )
+    return (
+        '<span class="mini-dimensions" aria-label="Seven-dimension maturity">'
+        + "".join(bars)
+        + "</span>"
+    )
+
+
 def _evidence_markup(edges: Sequence[CkmEvidenceEdge]) -> str:
     if not edges:
         return '<p class="empty">No linked evidence.</p>'
@@ -147,10 +171,13 @@ def _capability_markup(
         flags.append('<span class="flag flag-stale">STALE relative to evidence</span>')
     if assessment and assessment.low_confidence:
         flags.append('<span class="flag flag-low">LOW CONFIDENCE</span>')
-    max_candidate_share = max(assessment.candidate_shares.values()) if assessment else 0.0
-    flags.append(
-        f'<span class="flag flag-candidate">candidate share {max_candidate_share:.1%}</span>'
-    )
+    if assessment:
+        max_candidate_share = max(assessment.candidate_shares.values())
+        flags.append(
+            f'<span class="flag flag-candidate">candidate share {max_candidate_share:.1%}</span>'
+        )
+    else:
+        flags.append('<span class="flag flag-candidate">candidate share unavailable</span>')
     dimensions = ""
     if assessment:
         dimensions = "".join(
@@ -170,6 +197,7 @@ def _capability_markup(
       <details>
         <summary>
           <span class="tree-name">{_e(capability.name)}</span>
+          {_mini_dimensions_markup(assessment.scores if assessment else None)}
           <span class="aggregate">{_e(aggregate_text)}</span>
           <span class="lifecycle">{_e(capability.lifecycle)}</span>
         </summary>
@@ -225,6 +253,9 @@ def render_overview_html(
     .band-critical {{ border-left-color:var(--critical); }} .band-watch {{ border-left-color:var(--watch); }} .band-healthy {{ border-left-color:var(--healthy); }}
     summary {{ cursor:pointer; }} .capability > details > summary {{ display:flex; gap:10px; align-items:center; padding:12px 14px; }}
     .tree-name {{ flex:1; font-weight:700; }} .capability-body {{ border-top:1px solid var(--line); padding:14px; }}
+    .mini-dimensions {{ display:grid; grid-template-columns:repeat(7,18px); gap:3px; }}
+    .mini-dimension {{ width:18px; height:8px; border-radius:8px; background:linear-gradient(to right,#60a5fa var(--score),#25304a var(--score)); }}
+    .mini-unknown {{ background:var(--unknown); opacity:.55; }}
     .dimensions {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px; margin:14px 0; }}
     .dimension {{ border:1px solid var(--line); border-radius:8px; padding:10px; }} .dimension-label {{ display:flex; justify-content:space-between; gap:8px; }}
     .dimension-track {{ height:8px; margin:7px 0; border-radius:8px; background:#25304a; overflow:hidden; }} .dimension-bar {{ display:block; height:100%; background:#60a5fa; }}
@@ -232,7 +263,7 @@ def render_overview_html(
     .drilldown,.citations {{ margin-top:10px; }} .evidence-list,.finding-list {{ padding-left:20px; }} .evidence-list li,.finding-list li {{ margin:7px 0; }} .basis {{ color:var(--muted); margin-left:8px; }}
     .gaps-panel {{ margin:24px 0; padding:16px; border:1px solid var(--line); border-radius:10px; background:var(--panel); }}
     footer {{ margin-top:28px; padding:18px 0 36px; border-top:1px solid var(--line); color:var(--muted); overflow-wrap:anywhere; }}
-    @media (max-width:650px) {{ .capability {{ margin-left:calc(var(--depth) * 8px); }} .capability > details > summary {{ align-items:flex-start; flex-wrap:wrap; }} }}
+    @media (max-width:650px) {{ .capability {{ margin-left:calc(var(--depth) * 8px); }} .capability > details > summary {{ align-items:flex-start; flex-wrap:wrap; }} .mini-dimensions {{ order:4; width:100%; }} }}
   </style>
 </head>
 <body>

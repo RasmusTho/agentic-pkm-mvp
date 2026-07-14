@@ -593,9 +593,10 @@ def ckm_project(ctx: click.Context, projection_type: str, output_dir: Path) -> N
 def ckm_overview(ctx: click.Context, output_path: Path) -> None:
     try:
         store = _ckm_store(ctx)
-        store.ensure_schema()
+        if not store.db_path.is_file():
+            raise CkmValidationError(f"CKM database does not exist: {store.db_path}")
         result = write_overview_html(store, output_path)
-    except (OSError, sqlite3.Error) as exc:
+    except (CkmValidationError, OSError, sqlite3.Error) as exc:
         raise click.ClickException(f"ckm overview failed: {exc}") from exc
     click.echo(result)
 

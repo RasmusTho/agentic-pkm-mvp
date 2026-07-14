@@ -129,6 +129,8 @@ def test_pure_render_over_fixture_graph(overview_store: CkmStore) -> None:
     assert 'style="--depth:1"' in first
     assert 'data-aggregate-band="healthy"' in first
     assert first.count('class="dimension-bar"') == len(MATURITY_DIMENSIONS)
+    summary = first.split("</summary>", maxsplit=1)[0]
+    assert summary.count('class="mini-dimension"') == len(MATURITY_DIMENSIONS)
     assert '<details class="drilldown"><summary>Evidence and basis</summary>' in first
     assert "Retrieval needs stronger test evidence." in first
 
@@ -139,6 +141,8 @@ def test_honesty_markers_render(overview_store: CkmStore) -> None:
     assert "STALE relative to evidence" in rendered
     assert "LOW CONFIDENCE" in rendered
     assert "candidate share 75.0%" in rendered
+    assert "candidate share unavailable" in rendered
+    assert rendered.count('mini-dimension mini-unknown') == len(MATURITY_DIMENSIONS)
     assert "2 confirmed / 1 candidate" not in rendered
     assert "1 confirmed / 1 candidate" in rendered
     assert '<span class="badge">candidate</span>' in rendered
@@ -159,7 +163,6 @@ def test_projection_footer_always_present(tmp_path: Path, overview_store: CkmSto
         assert "Generated: 2026-07-14T15:00:00Z" in rendered
         assert "Watermarks:" in rendered
         assert "Candidate and confirmed evidence remain distinct." in rendered
-
 
 def test_no_external_references(overview_store: CkmStore) -> None:
     rendered = render_overview_html(overview_store)
@@ -190,3 +193,18 @@ def test_cli_writes_overview(overview_store: CkmStore, tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert output.is_file()
     assert "Development Overview" in output.read_text(encoding="utf-8")
+
+
+def test_cli_rejects_missing_database_without_creating_it(tmp_path: Path) -> None:
+    database = tmp_path / "missing" / "ckm.sqlite3"
+    output = tmp_path / "ckm-overview.html"
+
+    result = CliRunner().invoke(
+        builderops,
+        ["--db-path", str(database), "ckm", "overview", "--out", str(output)],
+    )
+
+    assert result.exit_code != 0
+    assert "CKM database does not exist" in result.output
+    assert not database.exists()
+    assert not output.exists()
