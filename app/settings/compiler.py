@@ -5,8 +5,11 @@ import os
 import shutil
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Tuple
+
+import fcntl
 
 import yaml
 from pydantic import ValidationError
@@ -104,6 +107,25 @@ def _new_staged_runtime_dir() -> Path:
     )
 
 
+@contextmanager
+def runtime_projection_lock(*, shared: bool):
+    """Coordinate projection publishers with runtime snapshot readers.
+
+    API, worker, and watcher share the app bind mount in dev. The lock lives
+    beside the symlink so separate processes serialize publication while a
+    reader resolves and consumes one complete projection generation.
+    """
+    RUNTIME.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = RUNTIME.parent / f".{RUNTIME.name}.lock"
+    with lock_path.open("a+") as handle:
+        mode = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+        fcntl.flock(handle.fileno(), mode)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def _publish_staged_runtime(staged_dir: Path) -> None:
     """Atomically switch a complete staged projection into place.
 
@@ -113,33 +135,34 @@ def _publish_staged_runtime(staged_dir: Path) -> None:
     never a mixture.  A legacy real directory is converted only after all
     compilation and specialised validation succeeded.
     """
-    link = RUNTIME.parent / f".{RUNTIME.name}.next"
-    link.unlink(missing_ok=True)
-    link.symlink_to(staged_dir.name)
+    with runtime_projection_lock(shared=False):
+        link = RUNTIME.parent / f".{RUNTIME.name}.next"
+        link.unlink(missing_ok=True)
+        link.symlink_to(staged_dir.name)
 
-    if RUNTIME.is_symlink():
-        previous_dir = RUNTIME.resolve()
-        os.replace(link, RUNTIME)
-        if previous_dir != staged_dir:
-            shutil.rmtree(previous_dir, ignore_errors=True)
-        return
+        if RUNTIME.is_symlink():
+            previous_dir = RUNTIME.resolve()
+            os.replace(link, RUNTIME)
+            if previous_dir != staged_dir:
+                shutil.rmtree(previous_dir, ignore_errors=True)
+            return
 
-    # Existing checkouts may still hold a real runtime/settings directory.  Do
-    # not touch it until a complete replacement has been staged and validated.
-    # The first conversion needs two filesystem operations because POSIX cannot
-    # atomically replace a non-empty directory with a symlink; all subsequent
-    # publications use the atomic path above.
-    previous = RUNTIME.parent / f".{RUNTIME.name}.previous"
-    previous.unlink(missing_ok=True)
-    if RUNTIME.exists():
-        os.replace(RUNTIME, previous)
-    try:
-        os.replace(link, RUNTIME)
-    except Exception:
-        if previous.exists():
-            os.replace(previous, RUNTIME)
-        raise
-    shutil.rmtree(previous, ignore_errors=True)
+        # Existing checkouts may still hold a real runtime/settings directory.
+        # Do not touch it until a complete replacement has been staged and
+        # validated. The first conversion needs two filesystem operations
+        # because POSIX cannot atomically replace a non-empty directory with a
+        # symlink; all later publications use the atomic path above.
+        previous = RUNTIME.parent / f".{RUNTIME.name}.previous"
+        previous.unlink(missing_ok=True)
+        if RUNTIME.exists():
+            os.replace(RUNTIME, previous)
+        try:
+            os.replace(link, RUNTIME)
+        except Exception:
+            if previous.exists():
+                os.replace(previous, RUNTIME)
+            raise
+        shutil.rmtree(previous, ignore_errors=True)
 
 def _auto_heal_enabled(auto_heal: bool | None) -> bool:
     if auto_heal is not None:

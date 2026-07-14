@@ -7,7 +7,7 @@ from typing import Callable, Dict, Any, List
 
 import yaml
 
-from .compiler import RUNTIME
+from .compiler import RUNTIME, runtime_projection_lock
 from .reload_signal import read_reload_signal
 from .models import (
     AskSettings,
@@ -70,25 +70,29 @@ def _read_typed_mapping_yaml(path: Path, *, setting_name: str) -> Dict[str, Any]
 
 
 def _build_bundle() -> SettingsBundle:
-    global_yaml = _read_yaml(RUNTIME / "global.yaml")
-    providers_yaml = _read_yaml(RUNTIME / "providers.yaml")
-    llm_routing_yaml = _read_yaml(RUNTIME / "llm_routing.yaml")
-    embeddings_yaml = _read_yaml(RUNTIME / "embeddings.yaml")
-    retrieval_tuning_yaml = _read_typed_mapping_yaml(
-        RUNTIME / "retrieval_tuning.yaml", setting_name="retrieval_tuning.yaml"
-    )
-    instance_yaml = _read_yaml(RUNTIME / "instance.yaml")
-    yggdrasil_yaml = _read_yaml(RUNTIME / "yggdrasil.yaml")
-    agents_dir = RUNTIME / "agents"
-    agents: Dict[str, Any] = {}
-    if agents_dir.exists():
-        for file in sorted(agents_dir.glob("*.yaml")):
-            agent_data = _read_yaml(file)
-            model_cls = AGENT_MODEL_MAP.get(file.stem)
-            if model_cls:
-                agents[file.stem] = model_cls(**agent_data)
-            else:
-                agents[file.stem] = agent_data
+    # Hold a shared interprocess lock while resolving the symlink and reading
+    # its files. A publisher cannot replace/delete this generation mid-build.
+    with runtime_projection_lock(shared=True):
+        runtime_dir = RUNTIME.resolve()
+        global_yaml = _read_yaml(runtime_dir / "global.yaml")
+        providers_yaml = _read_yaml(runtime_dir / "providers.yaml")
+        llm_routing_yaml = _read_yaml(runtime_dir / "llm_routing.yaml")
+        embeddings_yaml = _read_yaml(runtime_dir / "embeddings.yaml")
+        retrieval_tuning_yaml = _read_typed_mapping_yaml(
+            runtime_dir / "retrieval_tuning.yaml", setting_name="retrieval_tuning.yaml"
+        )
+        instance_yaml = _read_yaml(runtime_dir / "instance.yaml")
+        yggdrasil_yaml = _read_yaml(runtime_dir / "yggdrasil.yaml")
+        agents_dir = runtime_dir / "agents"
+        agents: Dict[str, Any] = {}
+        if agents_dir.exists():
+            for file in sorted(agents_dir.glob("*.yaml")):
+                agent_data = _read_yaml(file)
+                model_cls = AGENT_MODEL_MAP.get(file.stem)
+                if model_cls:
+                    agents[file.stem] = model_cls(**agent_data)
+                else:
+                    agents[file.stem] = agent_data
 
     embedding_profiles = EmbeddingProfiles()
     if embeddings_yaml:

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import yaml
 import pytest
+from threading import Event, Thread
 
 from app.events import bus
-from app.settings import runtime
+from app.settings import compiler, runtime
 from app.settings.models import EmbeddingProfiles
 
 pytestmark = pytest.mark.not_pg
@@ -43,6 +44,44 @@ def test_runtime_subscriber_gets_updates(tmp_path, monkeypatch):
     _write_yaml(runtime_dir / "global.yaml", {"log_level": "WARN"})
     runtime.reload_settings_bundle()
     assert seen[-1] == "WARN"
+
+
+def test_runtime_reads_one_generation_while_publish_waits(tmp_path, monkeypatch):
+    runtime_dir = tmp_path / "runtime/settings"
+    old = runtime_dir.parent / "old"
+    new = runtime_dir.parent / "new"
+    for generation, level in ((old, "DEBUG"), (new, "WARNING")):
+        _write_yaml(generation / "global.yaml", {"log_level": level})
+        _write_yaml(generation / "providers.yaml", {})
+        _write_yaml(generation / "llm_routing.yaml", {})
+    monkeypatch.setattr(compiler, "RUNTIME", runtime_dir)
+    monkeypatch.setattr(runtime, "RUNTIME", runtime_dir)
+    compiler._publish_staged_runtime(old)
+
+    entered = Event()
+    release = Event()
+    original_read = runtime._read_yaml
+
+    def blocking_read(path):
+        if path.name == "global.yaml":
+            entered.set()
+            release.wait(timeout=2)
+        return original_read(path)
+
+    monkeypatch.setattr(runtime, "_read_yaml", blocking_read)
+    reader = Thread(target=lambda: runtime._build_bundle())
+    reader.start()
+    assert entered.wait(timeout=2)
+    publisher = Thread(target=compiler._publish_staged_runtime, args=(new,))
+    publisher.start()
+    assert publisher.is_alive()
+    release.set()
+    reader.join(timeout=2)
+    publisher.join(timeout=2)
+    assert not reader.is_alive()
+    assert not publisher.is_alive()
+    monkeypatch.setattr(runtime, "_CURRENT", None)
+    assert runtime.get_settings_bundle().global_.log_level == "WARNING"
 
 
 def test_runtime_loads_llm_routing_settings(tmp_path, monkeypatch):

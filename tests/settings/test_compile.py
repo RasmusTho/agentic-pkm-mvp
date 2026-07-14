@@ -3,6 +3,7 @@ from __future__ import annotations
 import yaml
 import pytest
 from pathlib import Path
+from threading import Barrier, Thread
 
 
 from app.events import bus
@@ -50,6 +51,41 @@ def test_compile_removes_stale_agent_yaml(tmp_path, monkeypatch):
     compiler.compile_all()
 
     assert not stale_file.exists()
+
+
+def test_publish_serializes_concurrent_staged_projections(tmp_path, monkeypatch) -> None:
+    """Concurrent service boot cannot race on the shared publish symlink."""
+    runtime_dir = tmp_path / "runtime/settings"
+    monkeypatch.setattr(compiler, "RUNTIME", runtime_dir)
+    staged = []
+    for level in ("DEBUG", "WARNING"):
+        generation = runtime_dir.parent / f"generation-{level.lower()}"
+        compiler.dump(generation, "global.yaml", {"log_level": level})
+        compiler.dump(generation, "providers.yaml", {})
+        compiler.dump(generation, "llm_routing.yaml", {})
+        staged.append(generation)
+
+    barrier = Barrier(2)
+    errors: list[Exception] = []
+
+    def publish(generation: Path) -> None:
+        try:
+            barrier.wait()
+            compiler._publish_staged_runtime(generation)
+        except Exception as exc:  # pragma: no cover - assertion below is the check
+            errors.append(exc)
+
+    threads = [Thread(target=publish, args=(generation,)) for generation in staged]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    assert yaml.safe_load((runtime_dir / "global.yaml").read_text(encoding="utf-8"))["log_level"] in {
+        "DEBUG",
+        "WARNING",
+    }
 
 
 def test_compile_includes_panel_and_watcher_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
