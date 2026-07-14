@@ -33,7 +33,10 @@ profile is versioned with the BuilderOps command. That profile gives both roles 
 effort and a bounded extended deadline. Neither skill rebuilds that environment, configures
 providers, or reimplements orchestration in prompt prose.
 
-The operator machine needs the `Tailscale_macmini` SSH alias. A failed copy or SSH command, empty
+The operator machine needs the `Tailscale_macmini` SSH alias. The remote host may internally mediate
+the Fable command through a GUI-session proxy so the SSH child does not directly depend on login-keychain
+access. That authentication path is host-specific operator configuration outside Git; desktop skill
+packages neither configure it nor access its credentials, certificates, or endpoint. A failed copy or SSH command, empty
 stdout, malformed JSON, or absent response field fails loudly: report the error and stop. Do not
 retry, inspect the vault for a substitute response, or fall back to an in-chat inquiry.
 
