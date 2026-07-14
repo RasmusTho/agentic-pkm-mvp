@@ -16,6 +16,7 @@ from app.builderops.ckm.models import (
     CkmValidationError,
     utc_now,
 )
+from app.builderops.ckm.seed import SeedManifestError, load_manifest
 from app.builderops.ckm.store import CkmStore
 
 
@@ -93,7 +94,29 @@ def _slug(value: str) -> str:
 
 def _capability_by_slug(store: CkmStore, slug: str) -> CkmCapability:
     normalized = _slug(slug)
-    matches = [item for item in store.list_capabilities() if _slug(item.name) == normalized]
+    try:
+        manifest = load_manifest()
+    except SeedManifestError as exc:
+        raise CkmValidationError(f"cannot resolve capability slugs: {exc}") from exc
+    manifest_by_slug = {_slug(entry.slug): entry for entry in manifest}
+    manifest_entry = manifest_by_slug.get(normalized)
+    if manifest_entry is not None:
+        capability = store.get_capability_by_name(manifest_entry.name)
+        if capability is None:
+            raise CkmValidationError(
+                f"seeded capability is missing for manifest slug: {slug}"
+            )
+        return capability
+
+    # Manifest slugs are the stable query contract for seeded capabilities.
+    # Name-derived slugs exist only as a deterministic fallback for inferred
+    # capabilities that are not represented in the reviewed seed manifest.
+    seeded_names = {entry.name for entry in manifest}
+    matches = [
+        item
+        for item in store.list_capabilities()
+        if item.name not in seeded_names and _slug(item.name) == normalized
+    ]
     if not matches:
         raise CkmValidationError(f"unknown capability slug: {slug}")
     if len(matches) > 1:

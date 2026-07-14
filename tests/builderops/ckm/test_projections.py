@@ -14,6 +14,7 @@ from app.builderops.ckm.projections import (
     render_projection,
     write_projection,
 )
+from app.builderops.ckm.seed import seed_capabilities
 from app.builderops.ckm.store import CkmStore
 
 
@@ -200,3 +201,23 @@ def test_cli_project_and_show(populated_store: CkmStore, tmp_path: Path) -> None
     assert shown.exit_code == 0, shown.output
     assert "Projection type: ckm-show" in shown.output
     assert "basis: fixture:confirmed-source" in shown.output
+
+
+def test_show_resolves_manifest_slug_and_inferred_fallback(tmp_path: Path) -> None:
+    store = CkmStore(tmp_path / "slug-query.sqlite3")
+    store.ensure_schema()
+    seed_capabilities(store)
+    store.upsert_capability(
+        name="Novel Inferred Capability",
+        definition="A candidate capability outside the reviewed seed manifest.",
+        existence_provenance="inferred:fixture",
+        lifecycle="candidate",
+    )
+
+    boundary = render_capability_show(store, "rca")
+    inferred = render_capability_show(store, "novel-inferred-capability")
+
+    assert "# Retrieval & Context Assembly" in boundary
+    assert "Boundary: **RCA**" in boundary
+    assert "# Novel Inferred Capability" in inferred
+    assert "Lifecycle: **candidate**" in inferred
