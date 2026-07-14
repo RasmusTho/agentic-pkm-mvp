@@ -26,6 +26,7 @@ from app.builderops.ckm.models import (
     MATURITY_DIMENSIONS,
     CkmArtifact,
     CkmAssessment,
+    CkmAssessmentProjection,
     CkmCapability,
     CkmEvidenceEdge,
     CkmFinding,
@@ -87,6 +88,7 @@ class CkmStore:
         self._receipt_store.initialize()
         with self._connect() as conn:
             self._migrate_evidence_edge_basis(conn)
+            self._migrate_assessment_explainability(conn)
             for statement in CKM_DDL_STATEMENTS:
                 conn.execute(statement)
             conn.commit()
@@ -132,6 +134,37 @@ class CkmStore:
             """
         )
         conn.execute("DROP TABLE ckm_evidence_edge_v1")
+
+    @staticmethod
+    def _migrate_assessment_explainability(conn: sqlite3.Connection) -> None:
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(ckm_assessment)").fetchall()
+        }
+        if not columns:
+            return
+        additions = (
+            ("candidate_shares", "TEXT NOT NULL DEFAULT '{}'"),
+            ("formula_ids", "TEXT NOT NULL DEFAULT '{}'"),
+            (
+                "aggregate_formula_id",
+                "TEXT NOT NULL DEFAULT 'aggregate-weighted-min-v1'",
+            ),
+            ("low_confidence", "INTEGER NOT NULL DEFAULT 0 CHECK (low_confidence IN (0, 1))"),
+            ("edge_fingerprint", "TEXT NOT NULL DEFAULT 'legacy'"),
+        )
+        for name, declaration in additions:
+            if name not in columns:
+                conn.execute(f"ALTER TABLE ckm_assessment ADD COLUMN {name} {declaration}")
+        zero_shares = _dumps({dimension: 0.0 for dimension in MATURITY_DIMENSIONS})
+        legacy_formulas = _dumps({dimension: "legacy-pre-ckm07" for dimension in MATURITY_DIMENSIONS})
+        conn.execute(
+            """
+            UPDATE ckm_assessment
+            SET candidate_shares = CASE WHEN candidate_shares = '{}' THEN ? ELSE candidate_shares END,
+                formula_ids = CASE WHEN formula_ids = '{}' THEN ? ELSE formula_ids END
+            """,
+            (zero_shares, legacy_formulas),
+        )
 
     def rebuild(self) -> dict[str, Any]:
         """Drop and recreate ``ckm_*`` tables only (INV-CKM-4). Emits a receipt."""
@@ -319,6 +352,11 @@ class CkmStore:
                 (source, value, utc_now()),
             )
             conn.commit()
+
+    def current_watermark_set(self) -> dict[str, str]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT source, value FROM ckm_watermark ORDER BY source").fetchall()
+        return {str(row["source"]): str(row["value"]) for row in rows}
 
     # --- Evidence edge ---------------------------------------------------------
 
@@ -567,6 +605,11 @@ class CkmStore:
             conn.commit()
         return len(stale)
 
+    def delete_evidence_edge(self, edge_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM ckm_evidence_edge WHERE id = ?", (edge_id,))
+            conn.commit()
+
     # --- Assessment (append-only, bitemporal) -----------------------------------
 
     def append_assessment(
@@ -575,7 +618,12 @@ class CkmStore:
         capability_id: str,
         scores: Mapping[str, float],
         citations: Mapping[str, list[JsonDict]],
+        candidate_shares: Mapping[str, float] | None = None,
+        formula_ids: Mapping[str, str] | None = None,
         aggregate: float,
+        aggregate_formula_id: str = "legacy-pre-ckm07",
+        low_confidence: bool = False,
+        edge_fingerprint: str = "legacy",
         watermark_set: Mapping[str, str],
         valid_from: str | None = None,
         asserted_at: str | None = None,
@@ -583,11 +631,17 @@ class CkmStore:
         missing = set(MATURITY_DIMENSIONS) - set(scores)
         if missing:
             raise CkmValidationError(f"assessment missing dimension score(s): {sorted(missing)}")
-        missing_citations = [d for d in MATURITY_DIMENSIONS if not citations.get(d)]
+        missing_citations = [d for d in MATURITY_DIMENSIONS if d not in citations]
         if missing_citations:
             raise CkmValidationError(
-                f"assessment dimension(s) missing citations: {sorted(missing_citations)}"
+                f"assessment dimension(s) missing citations list: {sorted(missing_citations)}"
             )
+        resolved_candidate_shares = candidate_shares or {
+            dimension: 0.0 for dimension in MATURITY_DIMENSIONS
+        }
+        resolved_formula_ids = formula_ids or {
+            dimension: "legacy-pre-ckm07" for dimension in MATURITY_DIMENSIONS
+        }
         if not watermark_set:
             raise CkmValidationError("watermark_set must not be empty")
 
@@ -603,8 +657,28 @@ class CkmStore:
             values.append(scores[dimension])
             columns.append(f"{dimension}_citations")
             values.append(_dumps(citations[dimension]))
-        columns += ["aggregate", "watermark_set", "valid_from", "asserted_at"]
-        values += [aggregate, _dumps(watermark_set), resolved_valid_from, resolved_asserted_at]
+        columns += [
+            "candidate_shares",
+            "formula_ids",
+            "aggregate",
+            "aggregate_formula_id",
+            "low_confidence",
+            "edge_fingerprint",
+            "watermark_set",
+            "valid_from",
+            "asserted_at",
+        ]
+        values += [
+            _dumps(resolved_candidate_shares),
+            _dumps(resolved_formula_ids),
+            aggregate,
+            aggregate_formula_id,
+            int(low_confidence),
+            edge_fingerprint,
+            _dumps(watermark_set),
+            resolved_valid_from,
+            resolved_asserted_at,
+        ]
 
         placeholders = ",".join("?" for _ in values)
         column_list = ",".join(columns)
@@ -648,15 +722,35 @@ class CkmStore:
         assessments = self.list_assessments_for_capability(capability_id)
         return assessments[-1] if assessments else None
 
+    def assessment_for_projection(self, capability_id: str) -> CkmAssessmentProjection:
+        """Return the newest assessment plus store-derived freshness (INV-CKM-5)."""
+
+        assessment = self.latest_assessment_for_capability(capability_id)
+        if assessment is None:
+            raise CkmValidationError(f"capability has no assessment: {capability_id}")
+        current = self.current_watermark_set()
+        return CkmAssessmentProjection(
+            assessment=assessment,
+            current_watermark_set=current,
+            stale_relative_to_evidence=dict(assessment.watermark_set) != current,
+        )
+
     @staticmethod
     def _assessment_from_row(row: sqlite3.Row) -> CkmAssessment:
         scores = {dimension: row[dimension] for dimension in MATURITY_DIMENSIONS}
         citations = {
             dimension: _loads(row[f"{dimension}_citations"]) for dimension in MATURITY_DIMENSIONS
         }
+        candidate_shares = _loads(row["candidate_shares"])
+        formula_ids = _loads(row["formula_ids"])
         watermark_set = _loads(row["watermark_set"])
         return CkmAssessment.from_row(
-            dict(row), scores=scores, citations=citations, watermark_set=watermark_set
+            dict(row),
+            scores=scores,
+            citations=citations,
+            candidate_shares=candidate_shares,
+            formula_ids=formula_ids,
+            watermark_set=watermark_set,
         )
 
     # --- Finding -----------------------------------------------------------------

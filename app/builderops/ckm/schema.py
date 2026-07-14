@@ -13,7 +13,7 @@ schema level, not only in application code.
 
 from __future__ import annotations
 
-CKM_SCHEMA_VERSION = 2
+CKM_SCHEMA_VERSION = 3
 
 CKM_TABLE_NAMES = (
     "ckm_capability",
@@ -104,7 +104,12 @@ CKM_DDL_STATEMENTS = [
         architectural_stability_citations TEXT NOT NULL,
         requirement_coverage REAL NOT NULL,
         requirement_coverage_citations TEXT NOT NULL,
+        candidate_shares TEXT NOT NULL,
+        formula_ids TEXT NOT NULL,
         aggregate REAL NOT NULL,
+        aggregate_formula_id TEXT NOT NULL,
+        low_confidence INTEGER NOT NULL CHECK (low_confidence IN (0, 1)),
+        edge_fingerprint TEXT NOT NULL,
         watermark_set TEXT NOT NULL,
         valid_from TEXT NOT NULL,
         asserted_at TEXT NOT NULL
