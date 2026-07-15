@@ -36,6 +36,12 @@ This slice promotes the existing seed without changing content-vault authority.
   API container into mode-`0600` channel staging, validate it before stopping that container, then
   import through a new-image one-shot migrator with the durable volume mounted. No old container is
   safe only with proof of a durable legacy source or proof that no legacy registry existed.
+- Keep rollback readable from this first migration onward: every committed registry revision also
+  refreshes a versioned, mode-`0600` rollback export under the same lock, and the rollback preflight
+  validates and transforms that export into the exact legacy `AppLocalSettingsStore` path before an
+  old image starts. A rollback must therefore see the latest committed registrations and
+  last-active state, not merely the pre-migration snapshot. This compatibility exporter/transformer
+  remains required until MVR-07 proves that no supported rollback reader needs it.
 - Serialize every mutation with a shared-volume file lock, monotonic revision/CAS reload, and
   same-directory temp-file + `fsync` + atomic replace + directory `fsync`. Readers observe complete
   revisions; all production writers reuse this store transaction boundary.
@@ -118,6 +124,10 @@ single-vault package or can silently lose identity during migration.
 - [ ] Concurrent picker/API/CLI registry mutations serialize without lost updates or partial files,
   and stale revision CAS fails explicitly before retry.
   - Verify: `tests/instance/test_vault_registry_concurrency.py::test_production_mutations_are_locked_atomic_and_revision_checked`
+- [ ] After a post-migration registry mutation, the supported previous image can be started through
+  the rollback preflight and reads the latest committed registration and last-active state from its
+  legacy path; a missing, stale, or invalid rollback export blocks startup.
+  - Verify: `tests/integration/test_vault_registry_rollback.py::test_previous_image_reads_latest_post_migration_registry_state`
 
 ## Out of Scope
 
@@ -126,7 +136,7 @@ single-vault package or can silently lose identity during migration.
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/instance/test_vault_registry.py tests/instance/test_vault_registry_migration.py tests/instance/test_vault_registry_concurrency.py tests/api/test_vault_registry_recovery.py tests/architecture/test_instance_vault_registry_boundary.py tests/ops/test_instance_state_volume_contract.py`
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_vault_registry_container_durability.py`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_vault_registry_container_durability.py tests/integration/test_vault_registry_rollback.py`
 - `ruff check app tests`
 
 ## Restart / Durability Posture
@@ -136,7 +146,8 @@ instance-local Markdown store. Container consumers share the per-channel `instan
 native installs use their app-data directory. The old-container export happens before destructive
 recreate, and mode-`0600` staging remains until the new revision is verified across all four
 consumers; an independently durable legacy source is also retained when one exists. Mutations are
-locked, revision-checked, and atomically replaced. Parse
+locked, revision-checked, and atomically replaced, and each commit refreshes the validated rollback
+export consumed by the old-image pre-start transformer. Parse
 corruption remains recoverable through the shipped picker backup/reseed path; an ambiguous
 migration or write failure leaves prior payload, staging, and destination recoverable and blocks
 only unsafe automatic resolution until repaired or explicitly recovered.

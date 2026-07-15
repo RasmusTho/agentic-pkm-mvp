@@ -99,7 +99,10 @@ consumer migration and validation after those contracts are frozen.
 ## Suggested Validation
 
 - Run every child task's `## How to Verify (Pre-Merge)` commands on its PR.
-- On final merged head: `pytest -q tests/integration/test_multi_vault_capability_acceptance.py tests/integration/test_single_vault_compatibility.py`.
+- On a clean detached worktree whose `HEAD` equals fetched `origin/main`, run every exact parent and
+  capability target listed at
+  `docs/MULTI_VAULT_RUNTIME/PROMOTE_MULTI_VAULT_RUNTIME_TRUTH.md :: How to Verify (Post-Merge Closure)`;
+  branch-local or stale evidence is not a closure receipt.
 - `python3 scripts/docs_guard.py` and `pytest -q tests/architecture/test_docs_index.py`.
 - Live REST audit of #2143, every child/PR, #2566, #3156, and #3163.
 
