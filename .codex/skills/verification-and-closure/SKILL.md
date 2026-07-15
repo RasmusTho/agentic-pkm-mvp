@@ -192,23 +192,22 @@ than independent re-review.
 - **Stop condition:** the gate passes once a round comes back clean (no new findings). For PRs touching
   security/data/migration/auth/concurrency/external-API surfaces (`AGENTS.md :: Total Cost of
   Development` escalation tier), require 2 consecutive clean rounds before passing.
-- Once 2 standard fix attempts have been spent anywhere on the PR and a blocking finding remains or
-  reappears, treat that as a **capability-escalation trigger**, not an automatic owner escalation.
-  Start a fresh repair context at the strongest available capability selected through `AGENTS.md ::
-  Total Cost of Development` and the current platform configuration, and pass it all prior findings,
-  attempted fixes, changed mechanisms, and relevant evidence. Do not duplicate a provider/model
-  ladder here; the canonical policy and live configuration may select any available agent family.
-- Permit at most 2 additional capability-escalated fix attempts **across the whole PR**, not per
-  finding or mechanism. Independently re-review after each substantive attempt, and record the
-  selected model/agent family, reasoning level, prior context supplied, fallback (if any), and outcome
-  for every escalated round.
-- After the PR-wide budget of 2 standard plus 2 escalated fix attempts is exhausted, or when the
-  strongest available capability cannot run or repeatedly fails, classify the stop under
-  `AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier`. Continue with bounded
-  technical recovery, backoff, or a blocked-technical receipt when safe; route through
-  `owner-decision-brief` only if that classifier identifies an explicit authority/scope category.
-  Do not reset the budget when the finding or mechanism changes, and do not ask the owner merely
-  because the standard-capability attempts failed.
+- There is no global numeric repair-attempt budget. Continue a bounded, in-scope repair/re-review
+  loop only while each round records measurable progress: a finding closes or narrows, the failure
+  mechanism changes with evidence, validation coverage improves, or diagnostic uncertainty is
+  reduced. A fresh finding alone is not progress if it repeats the same unresolved mechanism.
+- Repeated findings or a round without measurable progress are **capability-escalation and bounded
+  replan triggers**, not automatic stop counters. Select the next capability through `AGENTS.md ::
+  Total Cost of Development` and current platform configuration, start a fresh repair context when
+  that improves independence, and pass it all prior findings, attempted fixes, changed mechanisms,
+  validation evidence, and the last progress assessment. Do not duplicate a provider/model ladder
+  here; the canonical policy and live configuration may select any available agent family.
+- Stop the repair loop only on evidence of non-convergence or a hard gate: the strongest feasible
+  diagnosis repeats the same mechanism without new evidence or progress, the required capability or
+  validation cannot run after bounded recovery/backoff, branch/head truth cannot be proved, or the
+  next repair needs scope/authority expansion. Classify that stop under
+  `AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier`; preserve the merge block and
+  route through `owner-decision-brief` only for an explicit authority category.
 - Record each round's outcome and the final round count in the delivery receipt so convergence is
   auditable after merge.
 

@@ -5,8 +5,8 @@ Owner: Builder System governance
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-07-09
-Last verified against: issue #3211, issue #3224, issue #3225, `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md`, `.codex/skills/verification-and-closure/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/_shared/CI_WAIT_CONTRACT.md`
+Last reviewed: 2026-07-15
+Last verified against: issue #3211, issue #3224, issue #3225, issue #3814, `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md`, `.codex/skills/verification-and-closure/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/_shared/CI_WAIT_CONTRACT.md`
 
 # Autonomous Review and Repair Gate Contracts
 
@@ -29,8 +29,8 @@ In scope:
 - Machine review gate inputs, outputs, verdicts, required evidence, and
   actionable-finding criteria.
 - CI repair gate inputs, first safe modes, future patch-branch prerequisites,
-  retry limits, and frontier-rescue budget.
-- Review repair loop routing, maximum attempts, and stop conditions.
+  bounded retry/backoff, and frontier-rescue stop conditions.
+- Review repair loop routing, evidence-based convergence, and stop conditions.
 - Human Exception packet schema, dedupe behavior, and escalation classes.
 - Closure eligibility for future autonomous closure and merge-adjacent flows.
 
@@ -195,27 +195,31 @@ met:
   secrets, migrations, broad refactors, or owner-doc authority changes unless
   the issue explicitly authorizes them.
 - Local validation command and expected proof before push.
-- Maximum attempt budget declared before the first patch.
+- Convergence evidence and the non-progress stop condition declared before the first patch.
 - PR comment receipt after every patch attempt, including SHA, files changed,
   command evidence, and remaining risk.
 
 If any prerequisite is missing, the gate may only observe, produce artifacts, or
 propose a repair.
 
-### Retry and Frontier-Rescue Budget
+### Retry and Frontier-Rescue Boundaries
 
 Retry budget:
 
 - One CI rerun is allowed for a suspected flake when logs support a flaky or
   infrastructure classification and the governing workflow allows reruns.
-- At most two repair attempts are allowed for the same failure mechanism.
-- A new failure mechanism resets only after the gate proves it is materially
-  different from the prior mechanism.
+- Repair may continue only when its receipt shows measurable progress: the
+  failure narrows or clears, the mechanism changes with evidence, validation
+  coverage improves, or diagnostic uncertainty decreases.
+- Repetition without new evidence is a capability-escalation and bounded-replan
+  trigger. It is never progress merely because the attempt has a new ordinal.
 
 Frontier-rescue stop conditions:
 
-- The same failure mechanism survives two repair attempts.
-- The cause is unknown after the context pack and one focused investigation.
+- The strongest feasible bounded diagnosis repeats the same failure mechanism
+  without new evidence or measurable progress.
+- The cause remains unknown after a bounded focused investigation and the next
+  safe diagnostic step cannot be named.
 - The proposed repair expands scope beyond the issue contract.
 - Repair would touch protected branches, workflows, secrets, migrations,
   production configuration, or high-risk runtime behavior without explicit
@@ -238,15 +242,16 @@ Required loop:
    evidence, and unresolved risk.
 5. Review gate reruns against the new current head SHA.
 
-Maximum attempts:
+Convergence policy:
 
-- Two substantive fix attempts are allowed for the same blocking finding or
-  failure mechanism before capability escalation and classifier-based repair
-  triage; retry exhaustion alone is not a Human Exception.
+- There is no global numeric repair-attempt budget. Continue only while each
+  repair receipt and fresh re-review demonstrate measurable progress.
+- A repeated blocking finding or a round without progress triggers TCD-based
+  capability escalation and a bounded replan with the complete prior evidence;
+  it does not trigger an owner interruption by count.
 - A high-risk PR needs two clean review rounds only when the governing
   verification skill or human reviewer requires it.
-- Cosmetic or receipt-only corrections do not reset the substantive attempt
-  counter.
+- Cosmetic or receipt-only corrections are not substantive progress.
 
 Stop conditions:
 
@@ -282,17 +287,17 @@ repair counter is updated. A retry counter alone must never select
 | `blocked_technical` | The system failed closed, a dependency is unavailable, or the cause needs stronger diagnosis; no authority is missing. | Keep the affected service/merge path disabled or blocked, collect evidence, and create a linked bounded recovery slice when needed. |
 | `needs_owner` | Continuing needs an unapproved irreversible/external effect, a security/privacy/cost commitment, a production/release operator action, or resolution of contradictory source authority. | Emit one deduplicated Human Exception packet while preserving all CI/review/merge gates. |
 
-Repair accounting is partitioned by failure domain: review/code correctness,
+Repair history is partitioned by failure domain: review/code correctness,
 static-quality, lease/concurrency, and deployment/model-schema compatibility.
-A failure in one domain does not consume another domain's budget. Repeatedly
-identical findings still hit a circuit breaker: it triggers stronger autonomous
-diagnosis and a bounded replan, not an owner interruption, unless that replan
-crosses a `needs_owner` authority category.
+A failure in one domain does not establish non-convergence in another domain.
+Repeatedly identical findings without new evidence still hit a circuit breaker:
+it triggers stronger autonomous diagnosis and a bounded replan, not an owner
+interruption, unless that replan crosses a `needs_owner` authority category.
 
 Deployment/model-schema compatibility is a control-plane concern. It must be
 checked in a non-mutating preflight before a dispatcher claim or pilot; a
 mismatch is `blocked_technical`, leaves the host disabled, and must not consume
-the PR's review/code repair budget.
+or alter the PR's review/code repair history.
 
 ### Packet Schema
 
@@ -334,8 +339,8 @@ Each packet must include:
   broader than the issue/skill permits.
 - `intent-critical`: the requested behavior conflicts with owner intent,
   product/runtime boundaries, or the issue's non-goals.
-- `autonomous-failure-critical`: the autonomous loop exhausted its attempt
-  budget, cannot classify the failure after bounded diagnosis, or cannot prove
+- `autonomous-failure-critical`: the autonomous loop cannot demonstrate further
+  progress or classify the failure after bounded diagnosis, or cannot prove
   branch/head truth **and** a safe recovery would require one of the explicit
   `needs_owner` authority categories above.
 

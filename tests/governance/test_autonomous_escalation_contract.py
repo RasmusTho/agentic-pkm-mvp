@@ -7,9 +7,12 @@ ROOT = Path(__file__).resolve().parents[2]
 GATE_CONTRACT = ROOT / "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md"
 PROCESS_MAP = ROOT / "docs/development/BUILDER_SYSTEM_PROCESS_MAP.md"
 AGENTS = ROOT / "AGENTS.md"
+VERIFICATION_SKILL = ROOT / ".codex/skills/verification-and-closure/SKILL.md"
+SUBAGENT_ROLES = ROOT / "docs/development/BUILDER_SUBAGENT_ROLES.md"
+DISPATCHER_CONTRACT = ROOT / "docs/AGENT_ISSUE_DISPATCHER.md"
 
 
-def test_retry_exhaustion_alone_cannot_require_human_exception() -> None:
+def test_attempt_count_alone_cannot_require_human_exception() -> None:
     contract = GATE_CONTRACT.read_text(encoding="utf-8")
 
     assert "## Escalation Classifier" in contract
@@ -17,7 +20,7 @@ def test_retry_exhaustion_alone_cannot_require_human_exception() -> None:
     assert "`needs_owner`" in contract
     for route in ("`auto_repair`", "`auto_backoff`", "`blocked_technical`"):
         assert route in contract
-    assert "before capability escalation and classifier-based repair" in contract
+    assert "Repeatedly identical findings without new evidence" in contract
 
 
 def test_host_preflight_failure_routes_to_disabled_technical_recovery() -> None:
@@ -66,3 +69,34 @@ def test_agent_policy_reserves_owner_interruptions_for_authority() -> None:
 
     assert "A retry count, a failed local/CI/type check" in agents
     assert "only its explicit authority categories may create `agent:needs-human`" in agents
+
+
+def test_review_repair_uses_evidence_based_convergence_without_numeric_budget() -> None:
+    contract = GATE_CONTRACT.read_text(encoding="utf-8")
+    closure_skill = VERIFICATION_SKILL.read_text(encoding="utf-8")
+    roles = SUBAGENT_ROLES.read_text(encoding="utf-8")
+    dispatcher = DISPATCHER_CONTRACT.read_text(encoding="utf-8")
+
+    assert "evidence-based convergence" in contract
+    assert "no global numeric repair-attempt budget" in closure_skill
+    assert "measurable progress" in closure_skill
+    assert "evidence-based convergence" in roles
+    assert "no fixed repair-attempt cap" in dispatcher
+
+    forbidden = (
+        "Maximum attempt budget declared",
+        "At most two repair attempts",
+        "same failure mechanism survives two repair attempts",
+        "Two substantive fix attempts",
+        "2 standard fix attempts",
+        "at most 2 additional capability-escalated fix attempts",
+        "budget of 2 standard plus 2 escalated fix attempts",
+        "two standard attempts followed by at most two",
+        "2+2 repair budget",
+        "cumulative 2+2 budget",
+    )
+    for fragment in forbidden:
+        assert fragment not in contract
+        assert fragment not in closure_skill
+        assert fragment not in roles
+        assert fragment not in dispatcher

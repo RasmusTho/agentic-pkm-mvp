@@ -54,6 +54,40 @@ def test_shared_request_fixture_carries_governing_issue() -> None:
     assert payload["supporting_issues"] == []
 
 
+def test_attempt_recording_remains_lease_fenced_without_numeric_repair_cap(tmp_path) -> None:
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "host")
+    context = {"head": run.head_sha}
+
+    with pytest.raises(ValueError, match="ownership mismatch"):
+        state.record_attempt(
+            run.run_id,
+            "standard_repair",
+            "wrong-lease",
+            "terra",
+            "high",
+            context,
+            "fixed",
+            holder="host",
+            lease_id="wrong-lease",
+        )
+
+    for ordinal in range(1, 7):
+        assert state.record_attempt(
+            run.run_id,
+            "standard_repair",
+            f"fix-{ordinal}",
+            "terra",
+            "high",
+            context,
+            "fixed",
+            {"finding_id": f"F{ordinal}", "head_sha": run.head_sha},
+            holder="host",
+            lease_id=claimed.lease_id,
+        ) == ordinal
+
+
 @pytest.mark.parametrize(
     ("path", "field"),
     [

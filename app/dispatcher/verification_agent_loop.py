@@ -280,16 +280,6 @@ class VerificationAgentLoop:
                         )
                     kind = "escalated_repair" if strongest else "standard_repair"
                     ordinal = sum(row["kind"] == kind for row in working) + 1
-                    if ordinal > 2:
-                        raise ValueError(f"{kind} budget exhausted")
-                    if strongest:
-                        standard = sum(
-                            row["kind"] == "standard_repair" for row in working
-                        )
-                        if standard < 2:
-                            raise ValueError(
-                                "strongest capability is only allowed after two standard attempts"
-                            )
                     receipt: dict[str, object] = {
                         "finding_id": finding_id,
                         "head_sha": head_sha,

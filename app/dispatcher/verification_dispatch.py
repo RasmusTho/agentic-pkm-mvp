@@ -1434,8 +1434,7 @@ class VerificationDispatchLedger:
         lease_id: str,
         idempotency_key: str | None = None,
     ) -> int:
-        limits = {"standard_repair": 2, "escalated_repair": 2}
-        allowed = {*limits, "review", "verification"}
+        allowed = {"standard_repair", "escalated_repair", "review", "verification"}
         if kind not in allowed:
             raise ValueError("invalid verification attempt kind")
         context_hash = hashlib.sha256(_json(dict(context)).encode()).hexdigest()
@@ -1492,16 +1491,6 @@ class VerificationDispatchLedger:
                 (run_id, kind),
             ).fetchone()[0]
             ordinal = count + 1
-            if kind in limits and ordinal > limits[kind]:
-                raise ValueError(f"{kind} budget exhausted")
-            if kind == "escalated_repair":
-                standard = conn.execute(
-                    "SELECT COUNT(*) FROM verification_attempts "
-                    "WHERE run_id=? AND attempt_kind='standard_repair'",
-                    (run_id,),
-                ).fetchone()[0]
-                if standard < 2:
-                    raise ValueError("strongest capability is only allowed after two standard attempts")
             conn.execute(
                 """
                 INSERT INTO verification_attempts (

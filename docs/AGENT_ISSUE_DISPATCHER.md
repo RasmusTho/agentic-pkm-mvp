@@ -5,8 +5,8 @@ Owner: Delivery governance / multi-agent coordination
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed (GitHub issue contracts + repo governance docs)
-Last reviewed: 2026-07-10
-Last verified against: #617, #621, #622, #623, #624, #625, #637, #639, #640, #561, #3312, #3603, AGENTS.md, docs/ARCHITECTURE.md, docs/development/GITHUB_GOVERNANCE_SETUP.md, .github/github-governance.yml
+Last reviewed: 2026-07-15
+Last verified against: #617, #621, #622, #623, #624, #625, #637, #639, #640, #561, #3312, #3603, #3814, AGENTS.md, docs/ARCHITECTURE.md, docs/development/GITHUB_GOVERNANCE_SETUP.md, .github/github-governance.yml
 
 # Agent Issue Dispatcher (MVP Contract)
 
@@ -84,8 +84,8 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   inside the SQLite write transaction. If the observation and canonical token both prove the incoming
   repaired head is the exact open, unmerged, non-draft live PR head while the prior head's coordinator
   row still has an expired running lease, ingestion atomically requeues that same run on the new head, clears
-  stale lease/session/terminal state, and retains every existing attempt and the exhausted
-  standard/escalated 2+2 repair budget. An unauthenticated artifact, a missing or mismatched live
+  stale lease/session/terminal state, and retains every existing attempt plus monotonic
+  standard/escalated repair and progress accounting. An unauthenticated artifact, a missing or mismatched live
   observation, a live lease, mismatched governing authority, removal/replacement of prior supporting
   issues in either the incoming request or live PR, or an ambiguous terminal chain fails closed without
   changing the run. Freshly observed repaired heads may extend the supporting-issue set monotonically
@@ -107,7 +107,8 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   rate-limit backoff. Terminal completion
   additionally requires two fresh clean
   review receipts after the final durable repair attempt. Standard and strongest-capability repair
-  budgets are persisted across restart.
+  history is persisted across restart with no fixed repair-attempt cap; TCD and evidence-based
+  convergence govern capability escalation and non-progress stops.
 - Completion never relies on coordinator receipt ids or review-event prose alone. The fresh exact-head
   GitHub read must contain a named, completed, successful `Unit tests (not pg)` check produced by
   the authoritative `github-actions` App and authenticated as a pull-request run of
@@ -120,7 +121,7 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   lease-fenced ledger as one atomic, deterministically identified batch. Exact receipt replay is a
   no-op, and a later invalid/conflicting event rolls back the whole batch. A semantic event-batch
   rejection becomes an exact-lease technical terminal receipt before any pending-check backoff, so
-  invalid review or repair events cannot strand coordinator authority or consume a partial budget;
+  invalid review or repair events cannot strand coordinator authority or persist a partial ledger;
   a no-repair delivery still requires two distinct clean review sessions. Schema validity does not
   make model-produced text durable-safe: raw coordinator prose remains transient and never enters
   attempts, pending replay receipts, terminal rows, Human Exception packets, or status output. Its
@@ -156,7 +157,7 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   If normal stale-head handling supersedes a chain before the repaired-head artifact arrives, only
   a later artifact with the same repository, PR, stage, and governing issue may reopen that exact
   chain on the new head. Reopening preserves immutable requested-head audit plus all attempts and
-  2+2 budget, while clearing stale lease, session, context, retry, and terminal state. No other
+  convergence evidence, while clearing stale lease, session, context, retry, and terminal state. No other
   terminal status or supersession reason is reopenable, and a different-head artifact cannot route
   around that terminal chain by creating an empty run. Exact same-artifact replay is resolved
   globally before any canonical-chain decision. A stale-head reopen is allowed only when that row
@@ -168,13 +169,13 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   dispatcher never selects a newer empty active row over an older row with spent budget.
   An expired unclaimed technical backoff follows the same authenticated live-head takeover rule:
   the first authoritative artifact for the newer live head requeues the existing canonical run,
-  preserves its immutable requested head, attempts, exceptions, and cumulative 2+2 budget, and
+  preserves its immutable requested head, attempts, exceptions, and cumulative convergence evidence, and
   clears only head-bound coordinator, context, receipt, retry, and verified-head state. An
   unexpired backoff or any authority/token mismatch remains non-mutating and fail-closed.
 - The Codex process boundary drains bounded stderr concurrently and rejects non-zero exits or
   terminal error events even when stdout contained an otherwise valid receipt. A bounded rate-limit,
   usage-limit, quota, or credit-exhaustion signal on that non-zero path remains a lease-fenced backoff
-  receipt with no repair-budget use or API-key fallback; either diagnostic channel can supply the
+  receipt with no repair-attempt record or API-key fallback; either diagnostic channel can supply the
   structured signal without masking the other. Raw stderr, terminal event content, exception
   text, paths, and credentials are transient classification input only: durable attempts, terminal
   receipts, and `verification-status` retain only bounded outcome, return-code, failure-class,
@@ -235,7 +236,7 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   PR-wide standard/escalated repair and fresh-review accounting. A mismatched head or governing
   authority fails closed instead of sharing the ledger.
   When the repaired head's checks are still pending, its repair event is persisted before bounded
-  backoff so replay cannot bypass the 2+2 ledger; review events are rejected until checks are green.
+  backoff so replay cannot bypass the monotonic repair ledger; review events are rejected until checks are green.
   An exact same-session terminal receipt replay reuses its deterministic verification attempt, so
   already-deduplicated review events retain the same closure anchor. A changed receipt or session
   creates a new anchor and must earn fresh reviews.
