@@ -142,11 +142,13 @@ Every partial state remains fenced as described in `Cross-Task Invariants / Inte
 four distinct merged receipts are required on #2143.
 
 Partial-delivery gates are explicit: after 05A, only the compatible new runtime may use the migrated
-binding-keyed store and old request adapters remain single-binding; after 05B, scoped reads are live
-but new scoped write commands remain disabled; 05C enables only governed write producers that emit
-the complete binding/context envelope in the same slice; 05D migrates the remaining producers and
-interim worker before aggregate readiness. No stage permits a legacy envelope, old scalar process,
-or un-revalidated read/write to cross its floor.
+binding-keyed store and old request adapters remain single-binding. The deployment fence continues
+to block every unmigrated vault-bound enqueue producer after migration; 05B enables scoped reads but
+no vault-bound enqueue, and 05C enables only governed write producers that emit the complete
+binding/context envelope in the same slice. Under the same fence, 05D re-runs legacy classification,
+migrates the remaining producers and interim worker, proves no unscoped row appeared, then releases
+their ingress. No stage permits a legacy envelope, old scalar process, or un-revalidated read/write
+to cross its floor; independently safe explicit-global work may continue.
 
 ## Source Anchors
 
@@ -214,6 +216,10 @@ or un-revalidated read/write to cross its floor.
 - [ ] **MVR-05A:** The deployment fence inventory is generated from production compose/runtime producer truth and
   fails when any enabled process that can call the DB/outbox seam is absent from the drain/stop plan.
   - Verify: `tests/ops/test_mvr05_mixed_version_fence.py::test_fence_inventory_covers_every_enabled_db_outbox_process`
+- [ ] **MVR-05A:** After the binding-keyed migration, every unmigrated vault-bound producer remains
+  ingress-fenced across 05A–05C; 05C may enable only complete-envelope producers, and 05D reclassifies
+  under the fence before enabling the remaining producers, so no fresh legacy row can appear.
+  - Verify: `tests/ops/test_mvr05_mixed_version_fence.py::test_unmigrated_vault_bound_producers_remain_fenced_until_mvr05d`
 - [ ] **MVR-05C:** Production capture/governed-write paths require one explicit authorized target and record
   vault/context provenance in their receipt.
   - Verify: `tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt`

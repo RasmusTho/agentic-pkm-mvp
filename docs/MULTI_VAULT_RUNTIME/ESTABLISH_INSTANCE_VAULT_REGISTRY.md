@@ -135,7 +135,9 @@ then carries only its mapped acceptance criteria and validation commands:
 
 1. **MVR-01A — registry core:** package relocation, stable registry identity/schema, lossless
    migration, corruption recovery, permissions, locking/CAS, producers/fixtures/preflight, and the
-   production picker/store tests. It establishes the local store but does not change deployment.
+   production picker/store tests. It establishes and tests the local store but does not activate the
+   new schema as production authority: production preflight keeps the legacy store authoritative and
+   rejects new-schema picker/registration writes until the 01B rollback capability is present.
 2. **MVR-01B — durable deployment and ownership:** per-channel instance-state export/import,
    cross-process store identity, host-global ledger/key lifecycle, first-rollout legacy-owner
    bootstrap, channel transfer, latest-revision legacy export/transformer for scalar-representable
@@ -147,6 +149,12 @@ then carries only its mapped acceptance criteria and validation commands:
 
 No issue may borrow an acceptance criterion from a later group merely to bypass its dependency.
 The post-spec issue extraction records three distinct child receipts on #2143.
+
+The 01A activation gate is durable and fail-closed, not a release-note convention. An 01A-only
+runtime may read/migrate into disposable validation state, but cannot commit new-only identity/schema
+fields or replace the authoritative legacy file. 01B atomically installs rollback export/
+transformation support before flipping that gate. Consequently a previous-image picker write can
+never encounter and truncate authoritative new-schema state before fork/merge protection exists.
 
 ## Source Anchors
 
@@ -207,6 +215,10 @@ The post-spec issue extraction records three distinct child receipts on #2143.
   - Verify: `tests/architecture/test_instance_vault_registry_boundary.py::test_production_registry_imports_use_instance_package`
 - [ ] **MVR-01A:** Store initialization, migration, fixtures, and preflight all produce the current schema.
   - Verify: `tests/architecture/test_instance_vault_registry_boundary.py::test_registry_schema_producers_match_runtime_precondition`
+- [ ] **MVR-01A:** Production cannot activate or mutate the new authoritative schema until preflight
+  proves the 01B rollback exporter/transformer capability; an 01A-only rollback picker write can
+  touch only the still-authoritative legacy state and cannot discard new binding/schema fields.
+  - Verify: `tests/ops/test_instance_state_volume_contract.py::test_mvr01a_schema_activation_requires_rollback_capability`
 - [ ] **MVR-01B:** An old-image-to-new-image pinned force-recreate exports before stop and preserves all MVR-01
   registry state on a per-channel durable volume; API, worker, watcher, and Heimdal resolve and read
   the identical revision after restart.
