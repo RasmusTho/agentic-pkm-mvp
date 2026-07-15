@@ -22,8 +22,7 @@ deploy_channel_compose() {
   shift 5
 
   local runtime_env_ref runtime_env_file vault_host_root
-  local -a env_args compose_args
-  env_args=(--env-file "${channel_env_file}")
+  local -a compose_args
   compose_args=(-f "${root}/docker-compose.yaml" -f "${root}/${compose_overlay}")
 
   runtime_env_ref="$(_deploy_channel_env_value "${channel_env_file}" WATCHER_RUNTIME_ENV_FILE)"
@@ -53,8 +52,25 @@ deploy_channel_compose() {
 
   (
     cd "${root}" || exit 1
+
+    # Compose gives the caller shell precedence over --env-file values. Pin the
+    # two governed selectors here so a stale parent shell cannot swap the
+    # selected runtime env or vault after the overlay decision above. The
+    # runtime env itself stays a service env_file; passing it as a CLI
+    # --env-file would expose its DSNs and other values to Compose interpolation.
+    if [ -n "${runtime_env_ref}" ]; then
+      export WATCHER_RUNTIME_ENV_FILE="${runtime_env_ref}"
+    else
+      unset WATCHER_RUNTIME_ENV_FILE
+    fi
+    if [ -n "${vault_host_root}" ]; then
+      export VAULT_HOST_ROOT="${vault_host_root}"
+    else
+      unset VAULT_HOST_ROOT
+    fi
+
     docker compose \
-      "${env_args[@]}" \
+      --env-file "${channel_env_file}" \
       "${compose_args[@]}" \
       -p "${compose_project}" \
       "$@"

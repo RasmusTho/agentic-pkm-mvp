@@ -21,6 +21,9 @@ def _render_deploy_compose(
     runtime_env = tmp_path / f"{channel}-runtime.env"
     runtime_lines = [
         "LLM_PROVIDER=mock",
+        "DEPLOY_RUNTIME_SENTINEL=governed",
+        "DATABASE_URL=postgresql+psycopg://app:app@db:5432/runtime_cross_channel",
+        "DB_DSN=postgresql+psycopg://app:app@db:5432/runtime_cross_channel",
         f"WATCHER_ENABLE={'1' if channel == 'test' else '0'}",
         "WATCHER_VAULT_PATH=/app/vault" if channel == "test" else "WATCHER_VAULT_PATH=",
     ]
@@ -57,16 +60,25 @@ deploy_channel_compose \
   config --format json
 """
     env = os.environ.copy()
+    hostile_vault = tmp_path / "hostile-parent-vault"
+    hostile_vault.mkdir()
+    hostile_runtime_env = tmp_path / "hostile-parent-runtime.env"
+    hostile_runtime_env.write_text(
+        "DEPLOY_RUNTIME_SENTINEL=hostile\n"
+        "DATABASE_URL=postgresql+psycopg://app:app@db:5432/hostile_parent\n"
+        "DB_DSN=postgresql+psycopg://app:app@db:5432/hostile_parent\n",
+        encoding="utf-8",
+    )
     for key in (
         "COMPOSE_FILE",
-        "VAULT_HOST_ROOT",
         "VAULT_ROOT",
         "VAULT_ROOT_TEST",
         "WATCHER_ENABLE",
         "WATCHER_VAULT_PATH",
-        "WATCHER_RUNTIME_ENV_FILE",
     ):
         env.pop(key, None)
+    env["VAULT_HOST_ROOT"] = str(hostile_vault)
+    env["WATCHER_RUNTIME_ENV_FILE"] = str(hostile_runtime_env)
     result = subprocess.run(
         ["bash", "-c", command],
         cwd=REPO_ROOT,
@@ -113,6 +125,7 @@ def test_deploy_channel_test_no_vault_keeps_idle_overlay_set(tmp_path: Path) -> 
         assert "VAULT_ROOT_TEST" not in env
         assert env["WATCHER_ENABLE"] == "0"
         assert env["WATCHER_VAULT_PATH"] == ""
+        assert env["DEPLOY_RUNTIME_SENTINEL"] == "governed"
         assert service["image"] == f"ghcr.io/rasmustho/pkm-app:{IMAGE_SHA}"
 
 
@@ -132,6 +145,7 @@ def test_deploy_channel_test_explicit_vault_uses_governed_overlay_order(
         assert env["VAULT_ROOT_TEST"] == "/app/vault"
         assert env["WATCHER_ENABLE"] == "1"
         assert env["WATCHER_VAULT_PATH"] == "/app/vault"
+        assert env["DEPLOY_RUNTIME_SENTINEL"] == "governed"
         assert service["image"] == f"ghcr.io/rasmustho/pkm-app:{IMAGE_SHA}"
 
     migrate = _environment(services["migrate"])
@@ -154,6 +168,9 @@ def test_deploy_channel_non_test_explicit_vault_uses_legacy_overlay_only(
         assert _mount_source(service, "/app/vault") == selected_vault
         assert env["VAULT_ROOT"] == "/app/vault"
         assert env["WATCHER_ENABLE"] == "0"
+        assert env["DEPLOY_RUNTIME_SENTINEL"] == "governed"
+        assert env["DATABASE_URL"].endswith("/app")
+        assert env["DB_DSN"].endswith("/app")
 
 
 def test_deploy_and_rollback_share_vault_overlay_selection() -> None:
