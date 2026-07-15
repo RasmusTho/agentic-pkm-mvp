@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import app.auth as auth_module
 from app.agent_memory import provisional_write as provisional_write_module
 from app.api.app import app
 from tests.api._vault_test_helpers import bind_initialized_vault
@@ -102,3 +103,20 @@ def test_provisional_artifact_is_visibly_distinct_from_promoted_memory(
     assert "authority_state: noncanonical" in markdown
     assert "Provisional / low trust — not authority" in markdown
     assert "agent_promoted" not in markdown
+
+
+def test_non_loopback_provisional_write_requires_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(auth_module.settings, "api_key", None)
+    monkeypatch.setattr(auth_module.settings, "companion_trusted_proxy_hosts", "")
+    monkeypatch.setattr(auth_module.settings, "companion_ui_proxy_hosts", "")
+    client = TestClient(app, client=("203.0.113.10", 50000))
+
+    response = client.post(
+        "/api/companion/memory/provisional",
+        json=_payload(),
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "API key required for non-loopback request"

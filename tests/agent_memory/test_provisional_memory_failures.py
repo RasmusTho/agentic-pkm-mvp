@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+import multiprocessing
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -15,6 +17,8 @@ from app.agent_memory.provisional_memory import (
 )
 from app.agent_memory.provisional_write import (
     ProvisionalMemoryWriteError,
+    ProvisionalReceiptStore,
+    ProvisionalReceiptStoreError,
     ProvisionalWriteRequest,
     write_provisional_memory,
 )
@@ -42,6 +46,27 @@ class _FailFirstReceiptStore(_FailCreatedReceiptStore):
 class _MemoryReceiptStore(_FailCreatedReceiptStore):
     def append(self, receipt: ProvisionalLifecycleReceipt) -> None:
         self.receipts.append(receipt)
+
+
+def _append_receipt_process(path: str, payload: str) -> None:
+    store = ProvisionalReceiptStore(Path(path))
+    store.append(ProvisionalLifecycleReceipt.model_validate_json(payload))
+
+
+def _staged_receipt(
+    *,
+    memory_id: UUID,
+    offset: int,
+) -> ProvisionalLifecycleReceipt:
+    return ProvisionalLifecycleReceipt(
+        receipt_id=uuid4(),
+        memory_id=memory_id,
+        artifact_ref=f"vault://Memory/Provisional/{memory_id}.md",
+        transition=ProvisionalLifecycleTransition.WRITE_STAGED,
+        actor_ref="agent",
+        occurred_at=datetime(2026, 7, 15, tzinfo=timezone.utc)
+        + timedelta(microseconds=offset),
+    )
 
 
 def _request() -> ProvisionalWriteRequest:
@@ -147,4 +172,79 @@ def test_artifact_failure_records_retryable_content_free_failure(
     failed_payload = store.receipts[-1].content_free_payload()
     assert failed_payload["error_code"] == "permission_denied"
     assert "claim text" not in str(failed_payload)
+    assert not (vault / "Memory" / "Provisional").exists()
+
+
+def test_receipt_store_serializes_cross_process_appends(tmp_path: Path) -> None:
+    path = tmp_path / "receipts.jsonl"
+    memory_id = uuid4()
+    receipts = [_staged_receipt(memory_id=memory_id, offset=index) for index in range(8)]
+    context = multiprocessing.get_context("fork")
+    processes = [
+        context.Process(
+            target=_append_receipt_process,
+            args=(str(path), receipt.model_dump_json()),
+        )
+        for receipt in receipts
+    ]
+
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=20)
+        assert process.exitcode == 0
+
+    restarted = ProvisionalReceiptStore(path)
+    persisted = restarted.list_for(memory_id)
+    assert {item.receipt_id for item in persisted} == {
+        item.receipt_id for item in receipts
+    }
+    assert len(path.read_text(encoding="utf-8").splitlines()) == len(receipts)
+
+
+def test_failed_atomic_replace_preserves_restart_readability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "receipts.jsonl"
+    memory_id = uuid4()
+    first = _staged_receipt(memory_id=memory_id, offset=1)
+    second = _staged_receipt(memory_id=memory_id, offset=2)
+    store = ProvisionalReceiptStore(path)
+    store.append(first)
+
+    def _fail_replace(source: object, target: object) -> None:
+        raise OSError("simulated replace failure")
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(provisional_write_module.os, "replace", _fail_replace)
+        with pytest.raises(OSError, match="simulated replace failure"):
+            store.append(second)
+
+    restarted = ProvisionalReceiptStore(path)
+    assert restarted.list_for(memory_id) == (first,)
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_corrupt_ledger_restart_fails_closed_before_artifact(tmp_path: Path) -> None:
+    path = tmp_path / "receipts.jsonl"
+    memory_id = uuid4()
+    store = ProvisionalReceiptStore(path)
+    store.append(_staged_receipt(memory_id=memory_id, offset=1))
+    path.write_bytes(path.read_bytes() + b'{"partial"')
+
+    restarted = ProvisionalReceiptStore(path)
+    with pytest.raises(ProvisionalReceiptStoreError):
+        restarted.list_for(memory_id)
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    with pytest.raises(ProvisionalMemoryWriteError) as caught:
+        write_provisional_memory(
+            _request(),
+            vault_root=vault,
+            receipt_store=restarted,
+            write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+        )
+    assert caught.value.reconciliation.record is None
     assert not (vault / "Memory" / "Provisional").exists()

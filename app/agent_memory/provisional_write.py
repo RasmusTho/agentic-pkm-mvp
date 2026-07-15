@@ -6,12 +6,15 @@ It deliberately imports no promotion or materialization path.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+import fcntl
 import json
 import logging
 import os
 from pathlib import Path
-from typing import Annotated, Callable, Protocol
+import tempfile
+from typing import Annotated, Callable, Iterator, Protocol
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -114,34 +117,97 @@ class ProvisionalReceiptStore:
         payload = receipt.content_free_payload()
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor = os.open(self.path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
-        try:
-            remaining = memoryview(encoded.encode("utf-8"))
-            while remaining:
-                written = os.write(descriptor, remaining)
-                if written <= 0:
-                    raise OSError("receipt append made no progress")
-                remaining = remaining[written:]
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+        with _receipt_ledger_lock(self.path, shared=False):
+            existing = self.path.read_bytes() if self.path.exists() else b""
+            _validate_ledger_bytes(existing)
+            descriptor, staged_name = tempfile.mkstemp(
+                dir=self.path.parent,
+                prefix=f".{self.path.name}.",
+                suffix=".tmp",
+            )
+            staged_path = Path(staged_name)
+            try:
+                try:
+                    os.fchmod(descriptor, 0o600)
+                except Exception:
+                    os.close(descriptor)
+                    raise
+                with os.fdopen(descriptor, "wb", closefd=True) as handle:
+                    handle.write(existing)
+                    handle.write(encoded.encode("utf-8"))
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(staged_path, self.path)
+                _fsync_directory(self.path.parent)
+            except Exception:
+                staged_path.unlink(missing_ok=True)
+                raise
 
     def list_for(self, memory_id: UUID) -> tuple[ProvisionalLifecycleReceipt, ...]:
         if not self.path.exists():
             return ()
-        receipts: list[ProvisionalLifecycleReceipt] = []
-        for line in self.path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                receipt = ProvisionalLifecycleReceipt.model_validate_json(line)
-            except ValidationError as exc:
-                raise ProvisionalReceiptStoreError(
-                    "provisional receipt ledger contains an invalid line"
-                ) from exc
-            if receipt.memory_id == memory_id:
-                receipts.append(receipt)
-        return tuple(receipts)
+        with _receipt_ledger_lock(self.path, shared=True):
+            raw = self.path.read_bytes()
+        return tuple(
+            receipt
+            for receipt in _receipts_from_ledger(raw)
+            if receipt.memory_id == memory_id
+        )
+
+
+@contextmanager
+def _receipt_ledger_lock(path: Path, *, shared: bool) -> Iterator[None]:
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as lock_handle:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(
+            lock_handle.fileno(),
+            fcntl.LOCK_SH if shared else fcntl.LOCK_EX,
+        )
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+
+def _validate_ledger_bytes(raw: bytes) -> None:
+    _receipts_from_ledger(raw)
+
+
+def _receipts_from_ledger(raw: bytes) -> tuple[ProvisionalLifecycleReceipt, ...]:
+    if not raw:
+        return ()
+    if not raw.endswith(b"\n"):
+        raise ProvisionalReceiptStoreError(
+            "provisional receipt ledger ends with an incomplete line"
+        )
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ProvisionalReceiptStoreError(
+            "provisional receipt ledger is not valid UTF-8"
+        ) from exc
+    receipts: list[ProvisionalLifecycleReceipt] = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            receipt = ProvisionalLifecycleReceipt.model_validate_json(line)
+        except ValidationError as exc:
+            raise ProvisionalReceiptStoreError(
+                "provisional receipt ledger contains an invalid line"
+            ) from exc
+        receipts.append(receipt)
+    return tuple(receipts)
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def assert_provisional_trust_tier(artifact: ProvisionalMarkdownArtifact) -> None:
@@ -257,11 +323,15 @@ def write_provisional_memory(
     try:
         store.append(created)
     except Exception as exc:
-        receipts = _safe_receipts(store, memory_id)
+        receipts = tuple(
+            receipt
+            for receipt in _safe_receipts(store, memory_id)
+            if receipt.receipt_id != created.receipt_id
+        )
         reconciliation = rebuild_provisional_memory(
             memory_id=memory_id,
             artifact_ref=artifact_ref,
-            artifact=_safe_artifact(vault_root / note_rel),
+            artifact=_safe_artifact(vault_root / note_rel, vault_root=vault_root),
             receipts=receipts,
         )
         raise ProvisionalMemoryWriteError(
@@ -269,7 +339,7 @@ def write_provisional_memory(
             reconciliation=reconciliation,
         ) from exc
 
-    persisted_artifact = _safe_artifact(vault_root / note_rel)
+    persisted_artifact = _safe_artifact(vault_root / note_rel, vault_root=vault_root)
     receipts = _safe_receipts(store, memory_id)
     reconciliation = rebuild_provisional_memory(
         memory_id=memory_id,
@@ -300,9 +370,13 @@ def _safe_receipts(
         return ()
 
 
-def _safe_artifact(path: Path) -> ProvisionalMarkdownArtifact | None:
+def _safe_artifact(
+    path: Path,
+    *,
+    vault_root: Path,
+) -> ProvisionalMarkdownArtifact | None:
     try:
-        return load_provisional_markdown(path)
+        return load_provisional_markdown(path, vault_root=vault_root)
     except Exception as exc:
         logger.warning("provisional Markdown could not be read back: %s", exc)
         return None
@@ -330,7 +404,26 @@ def render_provisional_markdown(artifact: ProvisionalMarkdownArtifact) -> str:
     return f"---\n{yaml_block}\n---\n\n{_VISIBLE_PREFIX}{artifact.content}\n"
 
 
-def load_provisional_markdown(path: Path) -> ProvisionalMarkdownArtifact:
+def load_provisional_markdown(
+    path: Path,
+    *,
+    vault_root: Path,
+) -> ProvisionalMarkdownArtifact:
+    if ".." in path.parts:
+        raise ValueError("provisional Markdown path must be lexical-canonical")
+    if path.is_symlink():
+        raise ValueError("provisional Markdown path must not be a symlink")
+    resolved_root = vault_root.expanduser().resolve()
+    resolved_path = path.expanduser().resolve()
+    relative_path = resolved_path.relative_to(resolved_root)
+    if relative_path.parent.as_posix() != PROVISIONAL_MEMORY_DIR:
+        raise ValueError("physical provisional Markdown directory is not canonical")
+    try:
+        path_memory_id = UUID(relative_path.stem)
+    except ValueError as exc:
+        raise ValueError("physical provisional Markdown filename is not a UUID") from exc
+    if path_memory_id.version != 4 or relative_path.suffix != ".md":
+        raise ValueError("physical provisional Markdown filename is not canonical")
     raw = path.read_text(encoding="utf-8")
     if not raw.startswith("---\n") or "\n---\n" not in raw[4:]:
         raise ValueError("provisional Markdown requires YAML frontmatter")
@@ -348,6 +441,8 @@ def load_provisional_markdown(path: Path) -> ProvisionalMarkdownArtifact:
         raise ValueError("provisional-memory low-trust warning is required")
     content = normalized_body.removeprefix(_VISIBLE_PREFIX).rstrip("\n")
     memory_id = UUID(str(metadata["uuid"]))
+    if memory_id != path_memory_id:
+        raise ValueError("physical provisional Markdown path does not match its UUID")
     return ProvisionalMarkdownArtifact(
         memory_id=memory_id,
         artifact_ref=f"vault://{PROVISIONAL_MEMORY_DIR}/{memory_id}.md",

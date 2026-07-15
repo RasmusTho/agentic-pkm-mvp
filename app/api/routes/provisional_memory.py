@@ -1,7 +1,7 @@
 """Product API for governed provisional-memory direct writes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
 from app.agent_memory.provisional_write import (
@@ -11,12 +11,17 @@ from app.agent_memory.provisional_write import (
     write_provisional_memory,
 )
 from app.api.routes.vault_resolution import active_vault_root_or_selection_required
+from app.auth import require_loopback_or_api_key
 from app.write_guard import WritesBlockedError
 
 router = APIRouter(prefix="/companion/memory", tags=["companion", "memory"])
 
 
-@router.post("/provisional", response_model=ProvisionalWriteResult)
+@router.post(
+    "/provisional",
+    response_model=ProvisionalWriteResult,
+    dependencies=[Depends(require_loopback_or_api_key)],
+)
 def post_provisional_memory(
     request: ProvisionalWriteRequest,
 ) -> ProvisionalWriteResult | JSONResponse:
