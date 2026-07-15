@@ -1171,6 +1171,28 @@ class VerificationConsumer:
             )
         if rejection:
             if transient:
+                repair_events = [
+                    event
+                    for event in events
+                    if isinstance(event, Mapping) and event.get("kind") == "repair"
+                ]
+                if len(repair_events) != len(events):
+                    return self.ledger.terminal(
+                        claimed.run_id,
+                        "failed",
+                        dict(receipt),
+                        reason="reviews_before_checks_green",
+                        holder=self.holder,
+                        lease_id=lease_id,
+                    )
+                if repair_events:
+                    pack = context_pack(claimed, live_pr)
+                    VerificationAgentLoop(
+                        self.ledger,
+                        claimed.run_id,
+                        holder=self.holder,
+                        lease_id=lease_id,
+                    ).apply_events(repair_events, context=pack)
                 return self.ledger.backoff(
                     claimed.run_id,
                     {

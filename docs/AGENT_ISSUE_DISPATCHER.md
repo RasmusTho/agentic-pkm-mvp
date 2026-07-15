@@ -103,6 +103,8 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - The immutable request head remains the run/idempotency audit identity. A repair receipt may advance
   the separate current head only under the exact active lease after a fresh GitHub read proves that
   exact live PR head; terminal delivery records the verified head only after two clean reviews on it.
+  When the repaired head's checks are still pending, its repair event is persisted before bounded
+  backoff so replay cannot bypass the 2+2 ledger; review events are rejected until checks are green.
 - `verification-ingest` and `verification-status` are host-neutral dispatcher CLI surfaces. The
   Demerzel enable/disable/poll wrapper and service configuration remain host-local outside Git.
 - GitHub Actions remains artifact-only. The consumer grants no mutation or merge authority beyond

@@ -585,6 +585,120 @@ def test_human_exception_packet_requires_actionable_decision_space(tmp_path) -> 
             verification_consumer.validate_verification_closer_receipt(invalid, schema)
 
 
+def test_pending_repair_checks_persist_repair_before_backoff(tmp_path) -> None:
+    new_head = "b" * 40
+    pending = [{"id": 2, "name": "CI", "status": "in_progress", "conclusion": None}]
+    truth = Truth(eligible_pr(), GREEN)
+
+    class PendingRepairLauncher(Launcher):
+        def launch(self, context_pack, **kwargs):
+            self.calls.append((context_pack, kwargs.get("resume_session_id")))
+            if callback := kwargs.get("on_thread_started"):
+                callback("repair-session")
+            truth.pr = eligible_pr(head={"ref": "branch", "sha": new_head})
+            truth.check_rows = pending
+            return "repair-session", {
+                "verdict": "blocked",
+                "head_sha": new_head,
+                "summary": "repair pushed; checks pending",
+                "receipt_ids": ["repair-1"],
+                "review_events": [
+                    {
+                        "kind": "repair",
+                        "session_id": "repair-1",
+                        "capability": "gpt-5.6-terra",
+                        "reasoning_effort": "high",
+                        "outcome": "fixed",
+                        "finding_id": "F1",
+                        "strongest": False,
+                    }
+                ],
+            }
+
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state, truth, Auth(), PendingRepairLauncher(), "host"
+    ).consume(request())
+
+    assert result.status == "backoff"
+    assert result.head_sha == new_head
+    assert [row["kind"] for row in state.attempts(result.run_id)] == [
+        "verification",
+        "standard_repair",
+    ]
+
+
+def test_pending_repair_replay_preserves_two_plus_two_accounting(tmp_path) -> None:
+    new_head = "b" * 40
+    pending = [{"id": 2, "name": "CI", "status": "in_progress", "conclusion": None}]
+    truth = Truth(eligible_pr(), GREEN)
+
+    class PendingRepairLauncher(Launcher):
+        def launch(self, context_pack, **kwargs):
+            self.calls.append((context_pack, kwargs.get("resume_session_id")))
+            if callback := kwargs.get("on_thread_started"):
+                callback("repair-session")
+            truth.pr = eligible_pr(head={"ref": "branch", "sha": new_head})
+            truth.check_rows = pending
+            return "repair-session", {
+                "verdict": "blocked",
+                "head_sha": new_head,
+                "summary": "repair pushed; checks pending",
+                "receipt_ids": ["repair-1"],
+                "review_events": [{
+                    "kind": "repair", "session_id": "repair-1",
+                    "capability": "gpt-5.6-terra", "reasoning_effort": "high",
+                    "outcome": "fixed", "finding_id": "F1", "strongest": False,
+                }],
+            }
+
+    class ReviewOnlyDeliveryLauncher(Launcher):
+        def launch(self, context_pack, **kwargs):
+            self.calls.append((context_pack, kwargs.get("resume_session_id")))
+            truth.pr = merged_pr(head={"ref": "branch", "sha": new_head})
+            return "delivery-session", {
+                "verdict": "delivered",
+                "head_sha": new_head,
+                "summary": "checks green and reviews clean",
+                "receipt_ids": ["review-1", "review-2"],
+                "review_events": [
+                    {
+                        "kind": "review", "session_id": "review-1",
+                        "capability": "gpt-5.6-sol", "reasoning_effort": "xhigh",
+                        "outcome": "clean", "finding_id": None, "strongest": None,
+                    },
+                    {
+                        "kind": "review", "session_id": "review-2",
+                        "capability": "gpt-5.6-sol", "reasoning_effort": "xhigh",
+                        "outcome": "clean", "finding_id": None, "strongest": None,
+                    },
+                ],
+            }
+
+    state = ledger(tmp_path)
+    first = VerificationConsumer(
+        state, truth, Auth(), PendingRepairLauncher(), "host"
+    ).consume(request())
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET retry_after='2000-01-01T00:00:00+00:00' "
+            "WHERE run_id=?",
+            (first.run_id,),
+        )
+        conn.commit()
+    truth.pr = eligible_pr(head={"ref": "branch", "sha": new_head})
+    truth.check_rows = GREEN
+
+    final = VerificationConsumer(
+        state, truth, Auth(), ReviewOnlyDeliveryLauncher(), "host"
+    ).consume(request())
+
+    assert final.status == "completed"
+    assert [row["kind"] for row in state.attempts(final.run_id)] == [
+        "verification", "standard_repair", "verification", "review", "review"
+    ]
+
+
 def test_technical_receipt_failures_never_require_owner(tmp_path) -> None:
     class InvalidVerdictLauncher(Launcher):
         def launch(self, context_pack, **kwargs):
