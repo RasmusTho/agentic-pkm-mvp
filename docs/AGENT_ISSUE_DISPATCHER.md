@@ -98,7 +98,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   around that terminal chain by creating an empty run. Exact same-artifact replay is resolved
   globally before any canonical-chain decision. A stale-head reopen is allowed only when that row
   is the unambiguous terminal set; another terminal row fails closed without mutation. Further work
-  requires a governed lifecycle decision rather than a budget reset.
+  requires a governed lifecycle decision rather than a budget reset. Any legacy database containing
+  both an active chain and a terminal chain for the same authority is rejected before exact or active
+  replay, so a newer empty run cannot hide older spent budget.
 - The Codex process boundary drains bounded stderr concurrently and rejects non-zero exits or
   terminal error events even when stdout contained an otherwise valid receipt. A bounded rate-limit,
   usage-limit, quota, or credit-exhaustion signal on that non-zero path remains a lease-fenced backoff
