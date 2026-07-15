@@ -576,7 +576,51 @@ class GhCliVerificationSource:
         payload = self._json(f"repos/{repository}/commits/{head_sha}/check-runs?per_page=100")
         if not isinstance(payload, Mapping) or not isinstance(payload.get("check_runs"), list):
             raise RuntimeError("malformed GitHub check-runs response")
-        return [row for row in payload["check_runs"] if isinstance(row, Mapping)]
+        workflow_payload = self._json(
+            f"repos/{repository}/actions/runs?head_sha={head_sha}&per_page=100"
+        )
+        if not isinstance(workflow_payload, Mapping) or not isinstance(
+            workflow_payload.get("workflow_runs"), list
+        ):
+            raise RuntimeError("malformed GitHub workflow-runs response")
+        workflows_by_suite: dict[int, list[Mapping[str, object]]] = {}
+        for workflow in workflow_payload["workflow_runs"]:
+            if not isinstance(workflow, Mapping):
+                continue
+            suite_id = workflow.get("check_suite_id")
+            if (
+                not isinstance(suite_id, int)
+                or isinstance(suite_id, bool)
+                or workflow.get("head_sha") != head_sha
+            ):
+                continue
+            workflows_by_suite.setdefault(suite_id, []).append(workflow)
+
+        checks: list[Mapping[str, object]] = []
+        for row in payload["check_runs"]:
+            if not isinstance(row, Mapping):
+                continue
+            authenticated = dict(row)
+            authenticated.pop("workflow_run", None)
+            suite_id = _nested(row, "check_suite", "id")
+            candidates = (
+                workflows_by_suite.get(suite_id, [])
+                if isinstance(suite_id, int) and not isinstance(suite_id, bool)
+                else []
+            )
+            if len(candidates) == 1:
+                workflow = candidates[0]
+                authenticated["workflow_run"] = {
+                    "id": workflow.get("id"),
+                    "workflow_id": workflow.get("workflow_id"),
+                    "path": workflow.get("path"),
+                    "event": workflow.get("event"),
+                    "head_sha": workflow.get("head_sha"),
+                    "check_suite_id": workflow.get("check_suite_id"),
+                    "run_attempt": workflow.get("run_attempt"),
+                }
+            checks.append(authenticated)
+        return checks
 
 
 class CoordinatorLauncher(Protocol):
@@ -1263,7 +1307,9 @@ def live_truth_rejection(
         return "stale_head"
     if not _governing_contract_matches(run, pr.get("body")):
         return "governing_issue_mismatch"
-    return _checks_rejection(checks)
+    return _checks_rejection(
+        checks, expected_head_sha=expected_head_sha or run.head_sha
+    )
 
 
 def delivered_live_truth_rejection(
@@ -1298,18 +1344,34 @@ def delivered_live_truth_rejection(
         r"[0-9a-fA-F]{40}", merge_commit_sha
     ):
         return "missing_merge_evidence"
-    return _checks_rejection(checks)
+    return _checks_rejection(checks, expected_head_sha=expected_head_sha)
 
 
-def _checks_rejection(checks: Sequence[Mapping[str, object]]) -> str | None:
+def _checks_rejection(
+    checks: Sequence[Mapping[str, object]], *, expected_head_sha: str
+) -> str | None:
     if not checks:
         return "missing_checks"
-    required_checks = {"Unit tests (not pg)"}
+    required_checks = {"Unit tests (not pg)": ".github/workflows/ci.yml"}
     latest: dict[str, tuple[tuple[int, str, int], Mapping[str, object]]] = {}
     for index, check in enumerate(checks):
         name = check.get("name")
-        if name in required_checks and _nested(check, "app", "slug") != "github-actions":
-            continue
+        required_workflow = required_checks.get(name) if isinstance(name, str) else None
+        if required_workflow is not None:
+            suite_id = _nested(check, "check_suite", "id")
+            workflow_run_id = _nested(check, "workflow_run", "id")
+            if (
+                _nested(check, "app", "slug") != "github-actions"
+                or not isinstance(suite_id, int)
+                or isinstance(suite_id, bool)
+                or not isinstance(workflow_run_id, int)
+                or isinstance(workflow_run_id, bool)
+                or _nested(check, "workflow_run", "check_suite_id") != suite_id
+                or _nested(check, "workflow_run", "path") != required_workflow
+                or _nested(check, "workflow_run", "event") != "pull_request"
+                or _nested(check, "workflow_run", "head_sha") != expected_head_sha
+            ):
+                continue
         key = name if isinstance(name, str) and name else f"__unnamed_{index}"
         check_id = check.get("id")
         rank = (
@@ -1319,7 +1381,7 @@ def _checks_rejection(checks: Sequence[Mapping[str, object]]) -> str | None:
         )
         if key not in latest or rank > latest[key][0]:
             latest[key] = (rank, check)
-    if not required_checks.issubset(latest):
+    if not required_checks.keys() <= latest.keys():
         return "missing_checks"
     for required in required_checks:
         check = latest[required][1]

@@ -10,10 +10,10 @@ from app.dispatcher.verification_consumer import (
     VerificationConsumer,
 )
 from tests.dispatcher.test_verification_consumer import (
-    GREEN,
     Auth,
     Launcher,
     eligible_pr,
+    green_checks,
     merged_pr,
 )
 from tests.dispatcher.verification_helpers import HEAD, ledger, request
@@ -165,7 +165,7 @@ class StaticTruth:
 
     def checks(self, repository, head_sha):
         self.checked_heads.append(head_sha)
-        return GREEN
+        return green_checks(self.head)
 
 
 class RepairedDeliveryLauncher(Launcher):
