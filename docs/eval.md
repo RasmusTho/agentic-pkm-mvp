@@ -229,6 +229,14 @@ re-measuring the golden set — never to make a regression pass.
   "by_slice": {"exact_lexical": {"...": "..."}, "...": "..."},
   "memory_recall": {"precision@k": 0.20, "ndcg@k": 1.0, "count": 5},
   "memory_recall_route_intents": ["low_trust_citation", "recall_into_ask"],
+  "provisional_memory_boundary": {
+    "schema_version": "provisional_memory_boundary.v1",
+    "n_cases": 16,
+    "languages": ["en", "sv"],
+    "hard_gate_passed": true,
+    "failures": [],
+    "cases": [{"...": "normalized categorical outcome"}]
+  },
   "classification": {
     "mode": "replay",
     "n_cases": 68,
@@ -278,7 +286,9 @@ What it reports — per-slice deltas (baseline → candidate, delta, delta %):
   answer rate, unknown safe-fail rate), **per-class** precision/recall
   (`classification.per_class`, keyed like `by_language`/`by_slice`), plus the
   KERNEL-13 **confusion slice**: hard-gate state on both sides, candidate
-  mutation-side confusions, and the non-zero confusion-matrix cell deltas.
+  mutation-side confusions, and the non-zero confusion-matrix cell deltas;
+- **provisional-memory authority** hard-gate state on both sides, including
+  the candidate's normalized categorical failures and bilingual case count.
 
 Every numeric leaf the compare touches — including confusion-matrix cells and
 `failures` entries — is checked by a single spec-driven validation walker on
@@ -288,7 +298,8 @@ Verdict (`regression` / `improved` / `neutral`), printed as `VERDICT: ...` and
 mirrored in the `--output` JSON artifact (`eval_scorecard_compare.v1`):
 
 - `regression` (exit code 1) when any of: the candidate trips the KERNEL-13
-  mutation-side hard gate (blocking, never tolerance-relative); the candidate
+  mutation-side hard gate or the provisional-memory authority hard gate
+  (blocking, never tolerance-relative); the candidate
   scorecard failed its own configured floors (`regression: true` — the floors
   come from `config/eval_thresholds.yaml` at scorecard build time, which is how
   compare consumes them); any compared metric worsened by more than the
@@ -299,7 +310,8 @@ mirrored in the `--output` JSON artifact (`eval_scorecard_compare.v1`):
 - `improved` (exit 0) when no regression and at least one metric improved
   beyond the tolerance.
 - `neutral` (exit 0) otherwise.
-- Malformed input (missing sections or keys, non-numeric or NaN/±inf values
+- Malformed input (including a missing or invalid
+  `provisional_memory_boundary`, missing sections or keys, non-numeric or NaN/±inf values
   anywhere in the compared surface, malformed confusion/failure entries, wrong
   `schema_version`) is exit code **2** with an `error:` message naming the
   offending path — never conflated with a regression verdict.

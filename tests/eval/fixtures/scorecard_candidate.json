@@ -28,6 +28,15 @@
   },
   "memory_recall": {"precision@k": 0.22, "ndcg@k": 1.0, "count": 5},
   "memory_recall_route_intents": ["low_trust_citation", "recall_into_ask"],
+  "provisional_memory_boundary": {
+    "schema_version": "provisional_memory_boundary.v1",
+    "n_cases": 16,
+    "languages": ["en", "sv"],
+    "families": ["apply_escalation", "citation_omission", "direct_write_poisoning", "false_authority_claim", "prompt_injection", "provenance_loss"],
+    "hard_gate_passed": true,
+    "failures": [],
+    "cases": []
+  },
   "classification": {
     "mode": "replay",
     "n_cases": 68,

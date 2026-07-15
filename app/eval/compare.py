@@ -25,7 +25,8 @@ ever consume the validated view, never the raw input.
 Verdict semantics:
 
 - ``regression`` — any of:
-  1. the candidate trips the KERNEL-13 mutation-side hard gate
+  1. the candidate trips either the KERNEL-13 mutation-side hard gate or the
+     provisional-memory authority hard gate
      (``classification.hard_gate_passed`` is false) — blocking, never
      tolerance-relative;
   2. the candidate scorecard failed its own configured floors
@@ -103,6 +104,8 @@ CONFUSION_ENTRY_KEYS = ("case_id", "expected_intent", "predicted_intent")
 # numeric ones are finiteness-checked because the renderer formats them.
 FAILURE_ENTRY_KEYS = ("scope", "metric", "value", "threshold")
 FAILURE_ENTRY_NUMERIC_KEYS = ("value", "threshold")
+PROVISIONAL_BOUNDARY_SCHEMA_VERSION = "provisional_memory_boundary.v1"
+PROVISIONAL_FAILURE_ENTRY_KEYS = ("case_id", "reason")
 
 
 class ScorecardCompareError(ValueError):
@@ -159,6 +162,12 @@ def _require_finite(value: object, path: str) -> float:
     if not math.isfinite(value):
         raise ScorecardCompareError(f"non-finite metric value at {path}: {value!r}")
     return float(value)
+
+
+def _require_bool(value: object, path: str) -> bool:
+    if not isinstance(value, bool):
+        raise ScorecardCompareError(f"non-boolean gate value at {path}: {value!r}")
+    return value
 
 
 def _validated_bucket(
@@ -222,8 +231,9 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
         }
     view["confusion_matrix"] = validated_matrix
 
-    view["hard_gate_passed"] = bool(
-        _resolve(scorecard, label, ("classification", "hard_gate_passed"))
+    view["hard_gate_passed"] = _require_bool(
+        _resolve(scorecard, label, ("classification", "hard_gate_passed")),
+        f"{label}.classification.hard_gate_passed",
     )
 
     confusions = _resolve(scorecard, label, ("classification", "mutation_side_confusions"))
@@ -241,6 +251,62 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
                     f"malformed entry at {confusions_path}[{index}]: missing {key!r}"
                 )
     view["mutation_side_confusions"] = confusions
+
+    provisional = _resolve_dict(scorecard, label, ("provisional_memory_boundary",))
+    provisional_path = f"{label}.provisional_memory_boundary"
+    if provisional.get("schema_version") != PROVISIONAL_BOUNDARY_SCHEMA_VERSION:
+        raise ScorecardCompareError(
+            f"unsupported provisional-memory boundary schema_version "
+            f"{provisional.get('schema_version')!r} at {provisional_path}.schema_version"
+        )
+    n_cases = _require_finite(provisional.get("n_cases"), f"{provisional_path}.n_cases")
+    if not n_cases.is_integer() or n_cases <= 0:
+        raise ScorecardCompareError(
+            f"provisional-memory boundary case count must be a positive integer at "
+            f"{provisional_path}.n_cases"
+        )
+    languages = provisional.get("languages")
+    if not isinstance(languages, list) or not all(
+        isinstance(language, str) for language in languages
+    ):
+        raise ScorecardCompareError(
+            f"scorecard section at {provisional_path}.languages is not a string list"
+        )
+    if not {"en", "sv"} <= set(languages):
+        raise ScorecardCompareError(
+            f"scorecard is missing required bilingual coverage at "
+            f"{provisional_path}.languages"
+        )
+    provisional_failures = provisional.get("failures")
+    if not isinstance(provisional_failures, list):
+        raise ScorecardCompareError(
+            f"scorecard section at {provisional_path}.failures is not a list"
+        )
+    for index, entry in enumerate(provisional_failures):
+        if not isinstance(entry, dict):
+            raise ScorecardCompareError(
+                f"malformed entry at {provisional_path}.failures[{index}]: not an object"
+            )
+        for key in PROVISIONAL_FAILURE_ENTRY_KEYS:
+            if not isinstance(entry.get(key), str) or not entry[key]:
+                raise ScorecardCompareError(
+                    f"malformed entry at {provisional_path}.failures[{index}]: "
+                    f"missing non-empty {key!r}"
+                )
+    provisional_hard_gate_passed = _require_bool(
+        provisional.get("hard_gate_passed"),
+        f"{provisional_path}.hard_gate_passed",
+    )
+    if provisional_hard_gate_passed != (not provisional_failures):
+        raise ScorecardCompareError(
+            f"inconsistent hard-gate state and failures at {provisional_path}"
+        )
+    view["provisional_memory_boundary"] = {
+        "hard_gate_passed": provisional_hard_gate_passed,
+        "n_cases": int(n_cases),
+        "languages": sorted(set(languages)),
+        "failures": provisional_failures,
+    }
 
     view["floor_regression"] = bool(scorecard.get("regression"))
     failures = scorecard.get("failures", [])
@@ -401,6 +467,17 @@ def _compare_validated(baseline: Dict, candidate: Dict, tolerance: float) -> Dic
             baseline["confusion_matrix"], candidate["confusion_matrix"]
         ),
     }
+    provisional_memory_boundary = {
+        "baseline_hard_gate_passed": baseline["provisional_memory_boundary"][
+            "hard_gate_passed"
+        ],
+        "candidate_hard_gate_passed": candidate["provisional_memory_boundary"][
+            "hard_gate_passed"
+        ],
+        "candidate_failures": candidate["provisional_memory_boundary"]["failures"],
+        "candidate_n_cases": candidate["provisional_memory_boundary"]["n_cases"],
+        "candidate_languages": candidate["provisional_memory_boundary"]["languages"],
+    }
 
     def _flag(kind: str) -> List[Dict]:
         flagged: List[Dict] = []
@@ -421,7 +498,10 @@ def _compare_validated(baseline: Dict, candidate: Dict, tolerance: float) -> Dic
     regressions = _flag("regression")
     improvements = _flag("improved")
 
-    hard_gate_regression = not classification_confusion["candidate_hard_gate_passed"]
+    hard_gate_regression = (
+        not classification_confusion["candidate_hard_gate_passed"]
+        or not provisional_memory_boundary["candidate_hard_gate_passed"]
+    )
     candidate_floor_regression = candidate["floor_regression"]
 
     if hard_gate_regression or candidate_floor_regression or missing_slices or regressions:
@@ -436,6 +516,7 @@ def _compare_validated(baseline: Dict, candidate: Dict, tolerance: float) -> Dic
         "tolerance": tolerance,
         "slices": slices,
         "classification_confusion": classification_confusion,
+        "provisional_memory_boundary": provisional_memory_boundary,
         "candidate_gate": {
             "regression": candidate_floor_regression,
             "failures": candidate["failures"],
@@ -544,6 +625,21 @@ def render_compare_summary(comparison: Dict) -> str:
     else:
         lines.append("  Confusion-matrix delta: none.")
 
+    boundary = comparison["provisional_memory_boundary"]
+    lines.append("")
+    lines.append("Provisional-memory authority hard gate:")
+    lines.append(
+        "  baseline="
+        f"{'pass' if boundary['baseline_hard_gate_passed'] else 'FAIL'} "
+        f"candidate={'pass' if boundary['candidate_hard_gate_passed'] else 'FAIL'} "
+        f"(n={boundary['candidate_n_cases']}; "
+        f"languages={','.join(boundary['candidate_languages'])})"
+    )
+    if boundary["candidate_failures"]:
+        lines.append("  HARD GATE VIOLATIONS in candidate (blocking):")
+        for failure in boundary["candidate_failures"]:
+            lines.append(f"    - {failure['case_id']}: {failure['reason']}")
+
     if comparison["missing_slices"]:
         lines.append("")
         lines.append("Slices present in baseline but MISSING in candidate (blocking):")
@@ -566,10 +662,16 @@ def render_compare_summary(comparison: Dict) -> str:
         lines.append("")
         lines.append("Candidate scorecard failed its own configured floors:")
         for failure in comparison["candidate_gate"]["failures"]:
-            lines.append(
-                f"  - {failure['scope']}: {failure['metric']}={failure['value']:.4f} "
-                f"< required {failure['threshold']:.4f}"
-            )
+            if failure.get("kind") == "categorical":
+                lines.append(
+                    f"  - {failure['scope']}: categorical violation: "
+                    f"{failure['metric']}"
+                )
+            else:
+                lines.append(
+                    f"  - {failure['scope']}: {failure['metric']}="
+                    f"{failure['value']:.4f} < required {failure['threshold']:.4f}"
+                )
 
     lines.append("")
     lines.append(f"VERDICT: {comparison['verdict']}")

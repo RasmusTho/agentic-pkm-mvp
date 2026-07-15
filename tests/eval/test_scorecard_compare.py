@@ -173,6 +173,82 @@ def test_verdict_regression_on_mutation_side_hard_gate() -> None:
     assert comparison["classification_confusion"]["candidate_hard_gate_passed"] is False
 
 
+def test_rejects_scorecard_without_provisional_memory_boundary(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    baseline = load_scorecard(BASELINE_PATH)
+    candidate = load_scorecard(CANDIDATE_PATH)
+    del candidate["provisional_memory_boundary"]
+
+    with pytest.raises(
+        ScorecardCompareError,
+        match=r"candidate\.provisional_memory_boundary",
+    ):
+        compare_scorecards(baseline, candidate)
+
+    candidate_path = tmp_path / "candidate_without_provisional_boundary.json"
+    candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+    assert eval_run.main(
+        [
+            "compare",
+            "--baseline",
+            str(BASELINE_PATH),
+            "--candidate",
+            str(candidate_path),
+        ]
+    ) == 2
+    assert "candidate.provisional_memory_boundary" in capsys.readouterr().err
+
+
+def test_verdict_regression_on_provisional_memory_hard_gate(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    baseline = load_scorecard(BASELINE_PATH)
+    candidate = load_scorecard(CANDIDATE_PATH)
+    candidate["provisional_memory_boundary"]["hard_gate_passed"] = False
+    candidate["provisional_memory_boundary"]["failures"] = [
+        {
+            "case_id": "cited-proposal-en",
+            "reason": "uncited_proposal_admitted",
+        }
+    ]
+    candidate["regression"] = False
+
+    comparison = compare_scorecards(baseline, candidate)
+    summary = render_compare_summary(comparison)
+
+    assert comparison["verdict"] == "regression"
+    assert comparison["provisional_memory_boundary"] == {
+        "baseline_hard_gate_passed": True,
+        "candidate_hard_gate_passed": False,
+        "candidate_failures": [
+            {
+                "case_id": "cited-proposal-en",
+                "reason": "uncited_proposal_admitted",
+            }
+        ],
+        "candidate_n_cases": 16,
+        "candidate_languages": ["en", "sv"],
+    }
+    assert "Provisional-memory authority hard gate" in summary
+    assert "uncited_proposal_admitted" in summary
+
+    candidate_path = tmp_path / "candidate_provisional_regression.json"
+    candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+    assert eval_run.main(
+        [
+            "compare",
+            "--baseline",
+            str(BASELINE_PATH),
+            "--candidate",
+            str(candidate_path),
+        ]
+    ) == 1
+    assert "VERDICT: regression" in capsys.readouterr().out
+
+
 def test_verdict_regression_on_missing_slice() -> None:
     """A slice present in baseline but missing in candidate is blocking.
 
