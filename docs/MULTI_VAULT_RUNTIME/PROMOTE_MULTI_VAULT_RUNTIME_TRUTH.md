@@ -140,9 +140,14 @@ operators, or future agents still act on stale single-global-vault truth.
   not the merged-head closure receipt.
 - `pytest -q tests/integration/test_multi_vault_capability_acceptance.py::test_merged_multi_vault_capability tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/uat/`
-- Deploy the exact candidate through the governed test-channel path:
-  `scripts/deploy_channel.sh deploy test "$MVR08_CANDIDATE_SHA"`; fail if the selected deployment
-  model cannot resolve that exact artifact/checkout SHA.
+- Route the exact candidate through the governed
+  [promote-to-test](../../.codex/skills/promote-to-test/SKILL.md) workflow with
+  `MVR08_CANDIDATE_SHA` as its candidate ref. That workflow must run its channel-isolation
+  preflight before mutation, select the live checkout or pinned-image deployment model, and emit
+  the durable test-promotion receipt for that exact SHA. A direct `deploy_channel.sh` invocation is
+  not acceptance evidence; the governed workflow may invoke the script only after it has proved
+  that the test channel is pinned-image based. Fail if the selected deployment model cannot resolve
+  the exact artifact/checkout SHA.
 - With two isolated disposable test bindings declared in the redacted fixture manifest, run
   `python3 scripts/multi_vault_test_channel_smoke.py --channel test --fixture-manifest "$MVR_TEST_FIXTURE_MANIFEST" --json`.
   The MVR-07 compatibility slice owns this harness and its production-path test. It must assert two
@@ -162,6 +167,11 @@ operators, or future agents still act on stale single-global-vault truth.
   `pytest -q tests/instance/test_vault_registry_migration.py::test_parent_registry_acceptance tests/integration/test_multi_vault_request_isolation.py::test_parent_request_context_acceptance tests/integration/test_multi_vault_lifecycle_and_dimension.py::test_parent_dimension_background_acceptance tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior tests/integration/test_multi_vault_dimensions.py::test_dimension_preserves_per_binding_authority_and_provenance tests/architecture/test_multi_vault_context_boundaries.py::test_production_consumers_use_context_seam tests/integration/test_multi_vault_capability_acceptance.py::test_merged_multi_vault_capability tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`.
 - Run the opt-in integrated UAT in the same worktree and attach its exact merged SHA and result to
   #2143. A branch-local, dirty, stale, skipped, or missing-target run cannot close the parent.
+- Route that exact merged `origin/main` SHA through the governed
+  [promote-to-test](../../.codex/skills/promote-to-test/SKILL.md) workflow again, then run
+  `python3 scripts/multi_vault_test_channel_smoke.py --channel test --fixture-manifest "$MVR_TEST_FIXTURE_MANIFEST" --json`
+  against the resulting test deployment. The durable test-promotion receipt and redacted smoke
+  receipt must both name the merged SHA; candidate-SHA channel evidence cannot close the parent.
 - **Parent closure workflow, outside the MVR-08 child:** after its merge, post MVR-08's exact merge
   SHA and the merged-head receipt to #2143, close the parent only when that ledger is complete, then
   create and merge the required docs-only post-close receipt PR and link it from the closed parent.

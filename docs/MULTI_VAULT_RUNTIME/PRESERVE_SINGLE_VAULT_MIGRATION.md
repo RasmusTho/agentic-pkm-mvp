@@ -104,6 +104,7 @@ can break startup or strand durable state. Both failures are latent outages rath
 
 ## How to Verify (Pre-Merge)
 
+- `pytest -q tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_harness_is_production_path_and_redacted`
 - `pytest -q tests/architecture/test_multi_vault_context_boundaries.py tests/integration/test_single_vault_compatibility.py tests/instance/test_vault_registry_migration.py tests/runtime/test_multi_vault_channel_bootstrap.py`
 - `mypy app`
 - `pytest -q -m "not pg"`
