@@ -138,7 +138,17 @@ class ProvisionalReceiptStore:
                     handle.flush()
                     os.fsync(handle.fileno())
                 os.replace(staged_path, self.path)
-                _fsync_directory(self.path.parent)
+                try:
+                    _fsync_directory(self.path.parent)
+                except Exception:
+                    expected = existing + encoded.encode("utf-8")
+                    if self.path.read_bytes() == expected:
+                        logger.warning(
+                            "receipt ledger directory fsync failed after a visible "
+                            "atomic replace; treating the append as committed"
+                        )
+                    else:
+                        raise
             except Exception:
                 staged_path.unlink(missing_ok=True)
                 raise

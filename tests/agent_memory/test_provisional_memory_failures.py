@@ -226,6 +226,41 @@ def test_failed_atomic_replace_preserves_restart_readability(
     assert list(tmp_path.glob("*.tmp")) == []
 
 
+def test_visible_receipt_after_directory_fsync_failure_is_committed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    path = tmp_path / "receipts.jsonl"
+    fsync_calls = 0
+
+    def _fail_created_directory_fsync(directory: Path) -> None:
+        nonlocal fsync_calls
+        fsync_calls += 1
+        if fsync_calls == 2:
+            raise OSError("simulated post-replace directory fsync failure")
+
+    monkeypatch.setattr(
+        provisional_write_module,
+        "_fsync_directory",
+        _fail_created_directory_fsync,
+    )
+    result = write_provisional_memory(
+        _request(),
+        vault_root=vault,
+        receipt_store=ProvisionalReceiptStore(path),
+        write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+    )
+
+    assert result.reconciliation.state is ProvisionalReconciliationState.READY
+    restarted = ProvisionalReceiptStore(path)
+    assert [item.transition for item in restarted.list_for(result.lifecycle_receipt.memory_id)] == [
+        ProvisionalLifecycleTransition.WRITE_STAGED,
+        ProvisionalLifecycleTransition.CREATED,
+    ]
+
+
 def test_corrupt_ledger_restart_fails_closed_before_artifact(tmp_path: Path) -> None:
     path = tmp_path / "receipts.jsonl"
     memory_id = uuid4()
