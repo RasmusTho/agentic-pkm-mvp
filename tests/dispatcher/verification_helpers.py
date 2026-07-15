@@ -39,5 +39,15 @@ def request(head: str = HEAD) -> dict[str, object]:
     return result
 
 
+def pre_trust_request(head: str = HEAD) -> dict[str, object]:
+    """Return the exact producer shape deployed before artifact authority."""
+    result = request(head)
+    result.pop("supporting_issues")
+    result.pop("artifact_provenance")
+    result["base_ref"] = "main"
+    result["head_ref"] = "codex/issue-3603"
+    return result
+
+
 def ledger(tmp_path: Path) -> VerificationDispatchLedger:
     return VerificationDispatchLedger(SqliteStore(tmp_path / "dispatcher.sqlite3"))

@@ -12,7 +12,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping, Sequence, TypeGuard
 
-from app.dispatcher.store import SqliteStore
+from app.dispatcher.schema import LEGACY_UNTRUSTED_VERIFICATION_STATUS
+from app.dispatcher.store import (
+    SqliteStore,
+    recognized_pre_trust_verification_request,
+)
 
 CONTRACT_VERSION = "verification_dispatch_request.v1"
 TERMINAL_STATES = frozenset({"completed", "failed", "needs_human", "superseded"})
@@ -407,6 +411,8 @@ def _validated_stored_request(value: str | None) -> dict[str, object]:
 
 
 def _validated_row_request(row: sqlite3.Row) -> dict[str, object]:
+    if row["status"] == LEGACY_UNTRUSTED_VERIFICATION_STATUS:
+        raise ValueError("legacy verification audit is not executable")
     request = _validated_stored_request(row["request_json"])
     idempotency_key = request["idempotency_key"]
     assert isinstance(idempotency_key, str)
@@ -435,6 +441,32 @@ def _validated_row_request(row: sqlite3.Row) -> dict[str, object]:
         raise ValueError("verification canonical run authority is malformed")
     _validated_supporting_authority(row, request)
     return request
+
+
+def _validated_legacy_row_request(row: sqlite3.Row) -> dict[str, object]:
+    loaded = _load(row["request_json"])
+    if (
+        row["status"] != LEGACY_UNTRUSTED_VERIFICATION_STATUS
+        or not isinstance(loaded, Mapping)
+        or not recognized_pre_trust_verification_request(row, loaded)
+        or _load(row["supporting_authority_json"]) != []
+        or row["current_head_sha"] != row["head_sha"]
+        or row["verified_head_sha"] is not None
+        or any(
+            row[field] is not None
+            for field in (
+                "claimed_by",
+                "lease_id",
+                "lease_expires_at",
+                "last_heartbeat_at",
+                "coordinator_session_id",
+                "context_pack_json",
+                "retry_after",
+            )
+        )
+    ):
+        raise ValueError("legacy verification audit is malformed")
+    return dict(loaded)
 
 
 def _validated_supporting_authority(
@@ -576,6 +608,9 @@ def _validated_mutation_row(
         "SELECT * FROM verification_runs WHERE run_id = ?", (run_id,)
     ).fetchone()
     if row is not None:
+        if row["status"] == LEGACY_UNTRUSTED_VERIFICATION_STATUS:
+            _validated_legacy_row_request(row)
+            raise ValueError("legacy verification audit is not executable")
         _validated_row_request(row)
     return row
 
@@ -591,6 +626,7 @@ class VerificationRun:
     verified_head_sha: str | None
     stage: str
     status: str
+    authority_state: str
     claimed_by: str | None
     lease_id: str | None
     lease_expires_at: str | None
@@ -609,7 +645,15 @@ class VerificationRun:
 
 
 def _run(row: sqlite3.Row) -> VerificationRun:
-    request = _validated_row_request(row)
+    is_legacy = row["status"] == LEGACY_UNTRUSTED_VERIFICATION_STATUS
+    request = (
+        _validated_legacy_row_request(row)
+        if is_legacy
+        else _validated_row_request(row)
+    )
+    supporting_authority = (
+        [] if is_legacy else _validated_supporting_authority(row, request)
+    )
     return VerificationRun(
         run_id=row["run_id"],
         idempotency_key=row["idempotency_key"],
@@ -620,12 +664,15 @@ def _run(row: sqlite3.Row) -> VerificationRun:
         verified_head_sha=row["verified_head_sha"],
         stage=row["stage"],
         status=row["status"],
+        authority_state=(
+            LEGACY_UNTRUSTED_VERIFICATION_STATUS if is_legacy else "canonical"
+        ),
         claimed_by=row["claimed_by"],
         lease_id=row["lease_id"],
         lease_expires_at=row["lease_expires_at"],
         coordinator_session_id=row["coordinator_session_id"],
         request=request,
-        supporting_authority=tuple(_validated_supporting_authority(row, request)),
+        supporting_authority=tuple(supporting_authority),
         context_pack=_load(row["context_pack_json"]),
         terminal_receipt=_load(row["terminal_receipt_json"]),
         stop_reason=row["stop_reason"],
@@ -701,6 +748,23 @@ class VerificationDispatchLedger:
         run_id = f"vrun-{str(request['idempotency_key'])[:16]}"
         with self.store._connect() as conn:
             now = _begin_immediate_now(conn)
+            inert_audit_exists = conn.execute(
+                """
+                SELECT 1 FROM verification_runs
+                WHERE repository=? AND pr_number=? AND stage=? AND status=?
+                LIMIT 1
+                """,
+                (
+                    request["repository"],
+                    request["pr_number"],
+                    request["stage"],
+                    LEGACY_UNTRUSTED_VERIFICATION_STATUS,
+                ),
+            ).fetchone()
+            if inert_audit_exists is not None and not authenticated_artifact:
+                raise ValueError(
+                    "legacy verification audit requires an authenticated artifact"
+                )
             active_before_exact = list(
                 conn.execute(
                     """
@@ -1585,11 +1649,15 @@ class VerificationDispatchLedger:
     def closure_ready(self, run_id: str) -> bool:
         with self.store._connect() as conn:
             row = conn.execute(
-                "SELECT current_head_sha FROM verification_runs WHERE run_id=?",
+                "SELECT * FROM verification_runs WHERE run_id=?",
                 (run_id,),
             ).fetchone()
             if row is None:
                 return False
+            if row["status"] == LEGACY_UNTRUSTED_VERIFICATION_STATUS:
+                _validated_legacy_row_request(row)
+                return False
+            _validated_row_request(row)
             return self._closure_ready(conn, run_id, row["current_head_sha"])
 
     def exception(

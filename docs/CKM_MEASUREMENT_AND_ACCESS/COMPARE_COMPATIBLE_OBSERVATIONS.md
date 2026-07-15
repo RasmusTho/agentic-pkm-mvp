@@ -20,7 +20,7 @@ Provide honest snapshot-to-snapshot descriptive comparison without manufacturing
 - Define a compatibility predicate over every semantics-bearing observation field.
 - Compare two or more immutable observations only after compatibility succeeds.
 - Return component-wise deltas, unchanged components, tagged missing states, citations/provenance, and explicit limitations.
-- Refuse mismatched metric definitions, formulas, detector/configuration bundles, schemas, taxonomy, query semantics, candidate policy, value-state semantics, or unsupported history modes.
+- Refuse mismatched metric definitions, formulas, detector/configuration bundles, schemas, taxonomy, query semantics, candidate policy, identity policy, access/redaction policy, value-state semantics, or unsupported history modes.
 
 ## Concretely
 
@@ -32,13 +32,13 @@ Silent comparison across changed definitions or datasets produces persuasive but
 
 ## Acceptance Criteria
 
-- [ ] Compatibility checks bind metric ID/version/digest, formula/detector/configuration bundles, resource/envelope schemas, taxonomy digest, canonical query semantics, value-state schema, and candidate/confirmed policy.
+- [ ] Compatibility checks bind metric ID/version/digest, formula/detector/configuration bundles, resource/envelope schemas, taxonomy digest, canonical query semantics, value-state schema, candidate/confirmed policy, identity-policy version, and access/redaction-policy version.
   Verify: `tests/builderops/ckm/test_metric_comparison.py::test_compatibility_binds_every_semantics_bearing_field`
 - [ ] Compatible immutable observations produce deterministic component-wise deltas with input IDs/digests, provenance, freshness, citations, tagged value states, and explicit limitations.
   Verify: `tests/builderops/ckm/test_metric_comparison.py::test_compatible_observations_produce_deterministic_bound_delta`
 - [ ] Any semantics-bearing mismatch returns a typed incompatibility/refusal listing the mismatched fields; no fallback, coercion, or partial comparison occurs.
   Verify: `tests/builderops/ckm/test_metric_comparison.py::test_semantic_mismatch_refuses_without_partial_comparison`
-- [ ] Measured zero, missing, not-applicable, and unsupported transitions remain explicit and cannot be converted into numeric deltas accidentally.
+- [ ] Measured zero, missing, unassessed, and unsupported transitions remain explicit and cannot be converted into numeric deltas accidentally.
   Verify: `tests/builderops/ckm/test_metric_comparison.py::test_value_state_transitions_are_not_coerced_to_numbers`
 - [ ] Comparison exposes no ranking, gate, prioritization, agent score, forecast, causal claim, automated action, or privileged aggregate scalar.
   Verify: `tests/builderops/ckm/test_metric_comparison.py::test_comparison_has_no_authority_or_scalar_ranking_surface`
@@ -60,6 +60,7 @@ Silent comparison across changed definitions or datasets produces persuasive but
 - Trend, regression, causality, prediction, drift alerts, gates, rankings, or automated action.
 - A fixed cadence, window, or minimum evidence count.
 - General bitemporal queries, retroactive history, dashboards, federation, or Product/Runtime authority.
+- Comparison whose source snapshots cannot be replayed under the accepted retention policy.
 
 ## Related Docs
 
@@ -69,4 +70,4 @@ Silent comparison across changed definitions or datasets produces persuasive but
 
 ## Related GitHub Issues
 
-Implementation issue #3781 under validation parent #3775, dependency-blocked on #3779. TCD hint: Terra/high; escalate for definition-compatibility or authority-boundary uncertainty.
+Implementation issue #3781 under validation parent #3775, dependency-blocked on #3779 and the identity/access/retention owner gates. TCD hint: Terra/high; escalate for definition-compatibility or authority-boundary uncertainty.
