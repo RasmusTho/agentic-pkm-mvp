@@ -32,8 +32,14 @@ not background lifecycles.
   deferred #2566 visual switcher—to create or replace a scoped selection, retain the returned
   `context_selection_id` for that client session, and send it as
   `X-Active-Context-Session` on vault-bound **read** requests in MVR-05B. Until MVR-05C activates
-  governed scoped writes, the client keeps existing one-vault writes carrier-free so they can use
-  the sealed compatibility path; it must not attach the retained bearer to a mutation. MVR-05C
+  governed scoped writes, the server also returns an opaque, authenticated
+  `X-Compatibility-Write-Precondition` bound to that client's intended stable binding and exact
+  compatibility revision. The migrated client sends this value—not its context bearer—on every
+  vault-bound mutation. It selects no target and grants no authority; immediately before effect the
+  server requires its binding/revision to equal the freshly resolved sole compatibility state or
+  fails `capability_not_ready`. Thus client S1 retaining A cannot become an indistinguishable legacy
+  B writer after client S2 moves the picker to B. Truly legacy clients remain carrier/precondition-
+  free only for their existing one-vault journey against the fresh compatibility binding. MVR-05C
   switches mutation call sites to the scoped carrier in the same delivery that installs their
   DecisionToken/effect fence. On
   expiry/restart the client clears the stale ID and never retries the failed request via fallback.
@@ -223,8 +229,9 @@ acceptance criteria prefixed with its ID:
    producers. Cross-channel transfer remains
    capability-gated. It also installs the pre-05C mutation seal: any vault-bound write carrying a
    scoped session/override, or resolving differently from the sole named compatibility binding,
-   fails `capability_not_ready` before the compatibility translator or filesystem/store seam. Only
-   a carrier-free legacy single-binding request that revalidates that exact compatibility binding
+   fails `capability_not_ready` before the compatibility translator or filesystem/store seam. A
+   migrated client supplies an opaque expected-binding/revision precondition that must match that
+   exact compatibility state; only a truly legacy carrier/precondition-free single-binding request
    may retain the old write journey until 05C. This slice also owns stale selection, deterministic
    many-binding settings compatibility, the temporary #3163 picker bridge, and active-context/
    settings architecture writeback. Depends on 05A and #3163.
@@ -249,10 +256,12 @@ remain pending/unacknowledged with blocked readiness while independent global wo
 single-vault watcher/ingest/capture/Heimdal producers remain live throughout 05A–05D through the 05A
 compatibility ingress translator: it derives their one authoritative compatibility binding, validates
 authority/revision/root immediately, and writes a complete versioned envelope (or fails that request
-loudly), never a fresh legacy row. After 05B, that translator accepts only a carrier-free legacy
-write whose freshly resolved target equals the sole named compatibility binding. A scoped write or
-any mismatch fails before translation/effect, so concurrent session selection cannot redirect an
-old capture path. 05B enables scoped reads; 05C replaces this seal with governed explicit-target
+loudly), never a fresh legacy row. After 05B, that translator accepts either a truly legacy
+carrier/precondition-free write whose fresh target equals the sole compatibility binding or a
+migrated-client write whose opaque expected binding/revision matches that same fresh state. A scoped
+write, stale/mismatched precondition, or missing precondition at a migrated production call site
+fails before translation/effect, so client S2 cannot redirect client S1's intended A write into B.
+05B enables scoped reads; 05C replaces this seal with governed explicit-target
 writes and their native envelope; 05D removes the translator only after every producer has migrated
 and proves no unscoped row appeared. No stage permits a legacy envelope, old scalar process, or
 un-revalidated read/write to cross its floor; independently safe explicit-global work may continue.
@@ -418,9 +427,14 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
 - [ ] **MVR-05B:** Until MVR-05C replaces the compatibility write path, every production vault-bound
   mutation carrying a scoped session/override—or resolving to a target other than the sole freshly
   revalidated compatibility binding—fails `capability_not_ready` before the translator and before
-  filesystem/store/outbox effects. A carrier-free legacy single-binding write to that exact binding
-  remains available, and concurrent session A cannot be redirected by picker/compatibility binding B.
+  filesystem/store/outbox effects. Every migrated picker-client mutation carries an opaque
+  authenticated expected-binding/revision precondition; stale, missing, or mismatched preconditions
+  fail before effect and never select a target or grant authority. A truly legacy carrier/
+  precondition-free single-binding write to the exact compatibility binding remains available. If
+  S1 retains A and S2 moves the compatibility picker to B, S1's mutation fails rather than becoming
+  a legacy B write.
   - Verify: `tests/integration/test_multi_vault_partial_delivery.py::test_scoped_write_is_sealed_until_mvr05c`
+  - Verify: `tests/integration/test_multi_vault_partial_delivery.py::test_migrated_client_write_precondition_prevents_cross_client_compatibility_redirect`
 - [ ] **MVR-05B:** The production request dependency resolves and propagates exactly one immutable
   ActiveContextSet per request, including preserved cognitive dimensions and active ownership lease
   evidence, while passing action/write class/permission separately to GOV without consulting mutable
@@ -517,6 +531,7 @@ maps directly to that child ID; an early child never runs a later slice's accept
 ### MVR-05B validation
 
 - `pytest -q tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk tests/integration/test_multi_vault_request_isolation.py::test_authority_change_cannot_cross_read_effect_window tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_read_after_staged_channel_lease_transfer tests/retrieval/test_multi_vault_retrieval.py::test_production_retrieval_preserves_binding_provenance tests/integration/test_multi_vault_settings_resolution.py::test_many_binding_request_fails_before_effect_when_request_wide_settings_conflict tests/api/test_multi_vault_request_fail_closed.py::test_invalid_selection_never_falls_back tests/api/test_active_context_resolution.py::test_request_override_header_outranks_session_without_mutating_it tests/api/test_active_context_resolution.py::test_request_uses_one_context_generation_end_to_end tests/integration/test_multi_vault_picker_context.py::test_session_selection_reuses_bindings_with_per_request_server_scope tests/integration/test_multi_vault_partial_delivery.py::test_scoped_write_is_sealed_until_mvr05c tests/integration/test_multi_vault_picker_context.py::test_existing_picker_drives_scoped_request_context tests/integration/test_multi_vault_picker_context.py::test_fresh_vault_initialize_returns_usable_scoped_context tests/integration/test_multi_vault_picker_context.py::test_stale_selection_restart_requires_visible_reselection tests/integration/test_multi_vault_picker_context.py::test_legacy_picker_bridge_preserves_single_watcher_until_mvr06 tests/integration/test_multi_vault_picker_context.py::test_picker_and_watcher_rebind_is_failure_atomic tests/integration/test_multi_vault_picker_context.py::test_prepare_drains_old_binding_writes_before_quiescent_ack tests/integration/test_multi_vault_picker_context.py::test_picker_commit_succeeds_with_durable_no_lifecycle_watcher_posture tests/architecture/test_multi_vault_context_boundaries.py::test_request_consumers_use_context_seam tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior`
+- `pytest -q tests/integration/test_multi_vault_partial_delivery.py::test_migrated_client_write_precondition_prevents_cross_client_compatibility_redirect tests/integration/test_multi_vault_picker_context.py::test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_binding`
 - Verify the 05B PR diff contains its mapped `docs/ARCHITECTURE.md` and `docs/SETTINGS.md` writebacks.
 
 ### MVR-05C validation

@@ -320,9 +320,11 @@ Partial delivery remains fail-closed:
   disabling the bridge or enabling intent mutation;
 - after issue 05B but before issue 05C, scoped session/override writes and any write whose resolved
   target differs from the sole freshly validated compatibility binding fail capability-not-ready
-  before the compatibility translator or any effect. Only carrier-free legacy single-binding
-  writes to that exact binding retain the prior journey; 05C replaces this seal with governed
-  explicit-target writes;
+  before the compatibility translator or any effect. A migrated picker client sends an opaque
+  expected-binding/revision precondition on mutations; it grants no authority and fails before
+  effect if another client moved the compatibility binding. Only truly legacy carrier/precondition-
+  free single-binding writes to that exact binding retain the prior journey; 05C replaces this seal
+  with governed explicit-target writes;
 - before issue 05A enables the first binding-keyed compatibility producer, every pending legacy
   outbox key is classified and
   scoped/coalesced under the DB fence; identical retries preserve one canonical lineage and
