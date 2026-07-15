@@ -22,7 +22,7 @@ import threading
 from typing import Iterator, Mapping, Protocol
 from uuid import uuid4
 
-from app.activation.gate import ActivationPosture
+from app.activation.gate import ActivationDecision, ActivationPosture
 from app.activation.journal_draft import (
     JOURNAL_DRAFT_CAPABILITY_ID,
     build_journal_draft_receipt_record,
@@ -84,7 +84,7 @@ class _ResolvedSession:
     session_id: str
     relative_path: str
     owner_turns: tuple[str, ...]
-    review_state: ReviewState
+    review_state: ReviewState | None
 
     @property
     def source_id(self) -> str:
@@ -164,6 +164,11 @@ def draft_journal_entry(
             posture=activation_posture,
             now=now,
         )
+        source_blocks = _non_proposal_source_reasons(activation)
+        if source_blocks:
+            raise JournalDraftBlockedError(
+                "journal draft source admission blocked: " + ", ".join(source_blocks)
+            )
         if not activation.activatable:
             reasons = ", ".join(activation.blocked_reasons) or "unknown"
             raise JournalDraftBlockedError(f"journal draft activation blocked: {reasons}")
@@ -190,7 +195,7 @@ def draft_journal_entry(
                 artifact_id=session.source_id,
                 note_path=session.relative_path,
                 role="conversation",
-                review_state=session.review_state.value,
+                review_state=_review_state_value(session.review_state),
             )
             for session in sessions
         ) + tuple(
@@ -198,7 +203,7 @@ def draft_journal_entry(
                 artifact_id=item.provenance_ref,
                 note_path=_reference_path(item.provenance_ref),
                 role="system_context",
-                review_state=review_states[item.provenance_ref].value,
+                review_state=_review_state_value(review_states[item.provenance_ref]),
             )
             for item in context_items
         )
@@ -483,7 +488,7 @@ def _resolve_session(vault_root: Path, session_id: str) -> _ResolvedSession:
         session_id=session_id,
         relative_path=path.relative_to(vault_root).as_posix(),
         owner_turns=owner_turns,
-        review_state=_review_state(frontmatter),
+        review_state=_review_state(frontmatter, default=ReviewState.UNREVIEWED),
     )
 
 
@@ -567,29 +572,56 @@ def _validate_jsonl_fragment(path: Path, fragment: str, reference: str) -> None:
     )
 
 
-def _review_state(frontmatter: Mapping[str, object]) -> ReviewState:
+def _review_state(
+    frontmatter: Mapping[str, object], *, default: ReviewState | None
+) -> ReviewState | None:
     raw = str(frontmatter.get("review_state") or "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"draft", "provisional", "unreviewed"}:
+        return ReviewState.UNREVIEWED
     if raw in {"accepted", "protected"}:
         return ReviewState.ACCEPTED
     if raw == "reviewed":
         return ReviewState.REVIEWED
-    return ReviewState.UNREVIEWED
+    if raw == "rejected":
+        return ReviewState.REJECTED
+    if raw == "revised":
+        return ReviewState.REVISED
+    return None
 
 
 def _source_review_states(
     vault_root: Path,
     sessions: tuple[_ResolvedSession, ...],
     context_items: tuple[DayContextItem, ...],
-) -> dict[str, ReviewState]:
+) -> dict[str, ReviewState | None]:
     states = {session.source_id: session.review_state for session in sessions}
     for item in context_items:
         path = vault_root / _reference_path(item.provenance_ref)
-        state = ReviewState.UNREVIEWED
+        state: ReviewState | None = None
         if path.suffix.lower() == ".md":
             frontmatter, _body = load_frontmatter(path.read_text(encoding="utf-8"))
-            state = _review_state(frontmatter)
+            state = _review_state(frontmatter, default=None)
         states[item.provenance_ref] = state
     return states
+
+
+def _review_state_value(state: ReviewState | None) -> str:
+    return state.value if state is not None else "unknown"
+
+
+def _non_proposal_source_reasons(decision: ActivationDecision) -> tuple[str, ...]:
+    admitted = set(decision.admitted_artifact_ids)
+    blocked: list[str] = []
+    for evaluated in decision.receipt.evaluated:
+        if evaluated.artifact_id in admitted:
+            continue
+        provenance = next(
+            axis for axis in evaluated.axes if axis.axis == "provenance"
+        )
+        blocked.append(f"{evaluated.artifact_id}:{provenance.reason}")
+    return tuple(blocked)
 
 
 def _materialize_reasoning_sources(

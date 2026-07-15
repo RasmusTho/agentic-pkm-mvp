@@ -173,6 +173,24 @@ def test_cited_unreviewed_builder_preserves_raw_posture_without_authority() -> N
         )
 
 
+@pytest.mark.parametrize("review_state", ("rejected", "revised", "unknown"))
+def test_cited_unreviewed_builder_rejects_non_proposal_posture(
+    review_state: str,
+) -> None:
+    with pytest.raises(ValueError, match="non-approved review_state"):
+        build_cited_unreviewed_compilation_draft(
+            ProposalContext(
+                source_refs=(
+                    SourceRef(artifact_id="inadmissible", review_state=review_state),
+                ),
+                authority_limits=ContextAuthorityLimits(
+                    may_inform=True, may_propose=True
+                ),
+            ),
+            title="forbidden",
+        )
+
+
 _FORBIDDEN_IMPORT_SUBSTRINGS = (
     "sqlalchemy",
     "app.db",

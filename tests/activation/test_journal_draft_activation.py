@@ -18,7 +18,13 @@ from app.write_guard import WriteGuard
 
 
 def test_draft_requires_activation_record(tmp_path: Path) -> None:
-    green = evaluate_journal_draft_activation(["session:abc", "Sources/day.md"])
+    green = evaluate_journal_draft_activation(
+        ["session:abc", "Sources/day.md"],
+        review_states={
+            "session:abc": ReviewState.UNREVIEWED,
+            "Sources/day.md": ReviewState.UNREVIEWED,
+        },
+    )
     assert green.capability_id == JOURNAL_DRAFT_CAPABILITY_ID
     assert green.activatable is True
     assert green.receipt.outcome == "activatable"

@@ -49,7 +49,7 @@ def build_journal_draft_posture(
 def evaluate_journal_draft_activation(
     source_ids: Iterable[str],
     *,
-    review_states: Mapping[str, ReviewState] | None = None,
+    review_states: Mapping[str, ReviewState | None] | None = None,
     posture: ActivationPosture | None = None,
     receipt_id: str | None = None,
     now: datetime | None = None,
@@ -64,12 +64,10 @@ def evaluate_journal_draft_activation(
             sphere=resolved.scope or JOURNAL_DRAFT_SCOPE,
             is_memory=False,
             has_provenance=True,
-            # A missing declaration stays conservative. Owner transcript and
-            # JRNL-01 candidate captures are raw inputs to a proposal, not
-            # silently upgraded reviewed knowledge.
-            review_state=source_review_states.get(
-                source_id.strip(), ReviewState.UNREVIEWED
-            ),
+            # A missing declaration stays unknown/read-only. Production
+            # callers explicitly identify owner transcripts and draft captures
+            # as raw/unreviewed; absence must not become cited-proposal input.
+            review_state=source_review_states.get(source_id.strip()),
         )
         for source_id in source_ids
         if source_id.strip()

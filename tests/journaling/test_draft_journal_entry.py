@@ -11,6 +11,7 @@ import pytest
 from app.journaling.day_context import assemble_day_context
 from app.journaling.draft import (
     JOURNAL_DRAFT_WRITE_ACTION,
+    JournalDraftBlockedError,
     UnresolvableJournalCitationError,
     draft_journal_entry,
     resolve_journal_draft_activation_receipt,
@@ -662,6 +663,47 @@ def test_draft_preserves_unreviewed_capture_posture(tmp_path: Path) -> None:
         if ref.note_path == capture.relative_to(root).as_posix()
     )
     assert capture_ref.review_state == "unreviewed"
+
+
+@pytest.mark.parametrize(
+    ("review_state", "expected_reason"),
+    (
+        ("rejected", "contradicted_or_rejected"),
+        ("revised", "revised_read_only"),
+        ("queued", "provenance_unverified"),
+    ),
+)
+def test_non_proposal_capture_posture_blocks_before_cognition_or_staging(
+    tmp_path: Path, review_state: str, expected_reason: str
+) -> None:
+    root, context, session_id, capture = _seed_inputs(tmp_path)
+    capture.write_text(
+        capture.read_text(encoding="utf-8").replace(
+            "review_state: draft", f"review_state: {review_state}"
+        ),
+        encoding="utf-8",
+    )
+    cognition_called = False
+
+    def forbidden_cognition(
+        _object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        nonlocal cognition_called
+        del trace_id
+        cognition_called = True
+        return ReasoningOutput()
+
+    with pytest.raises(JournalDraftBlockedError, match=expected_reason):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+            reasoning_fn=forbidden_cognition,
+        )
+
+    assert cognition_called is False
+    assert not list(root.glob("**/drafts/journal/*.md"))
 
 
 def test_activation_receipt_resolves_after_restart(tmp_path: Path) -> None:
