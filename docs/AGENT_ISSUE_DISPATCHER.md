@@ -102,8 +102,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   before `retry_after`. Rate-limit classification requires either a structured `retry` receipt or the
   launcher's structured `failure_class=rate_limit`, derived once from a non-zero provider failure;
   only parsed provider fields such as status 429 or canonical failure codes, inspected independently
-  across bounded stderr and structured terminal events, or the exact top-level Codex CLI `error`
-  event grammar `You've hit your usage limit...`, can create that signal. The Codex event envelope
+  across bounded stderr and structured terminal events, or a full match of the versioned top-level
+  Codex CLI `error` event grammar for plan guidance plus its bounded retry suffix, can create that
+  signal. Prefix-only matches are forbidden. The Codex event envelope
   is classified while streaming so a later `turn.failed` event cannot erase the earlier signal,
   while free-form, arbitrary, negated, or explicitly false terminal/stderr prose cannot select
   rate-limit backoff. Terminal completion

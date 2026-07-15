@@ -1476,16 +1476,27 @@ def _is_codex_usage_limit_event(event: object) -> bool:
     if not isinstance(message, str):
         return False
     normalized = " ".join(message.strip().split()).casefold()
-    prefixes = (
-        "you've hit your usage limit",
-        "you’ve hit your usage limit",
-        "you have hit your usage limit",
+    retry_time = (
+        r"(?:[0-9]{1,2}:[0-9]{2} (?:am|pm)|"
+        r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec) "
+        r"[0-9]{1,2}(?:st|nd|rd|th), [0-9]{4} [0-9]{1,2}:[0-9]{2} "
+        r"(?:am|pm))"
     )
-    return any(
-        normalized == prefix
-        or normalized.startswith(prefix + ".")
-        or normalized.startswith(prefix + "!")
-        for prefix in prefixes
+    retry = rf"(?:later|at {retry_time})"
+    plan_copy = (
+        r"(?:upgrade to pro \(https://chatgpt\.com/explore/pro\), visit "
+        r"https://chatgpt\.com/codex/settings/usage to purchase more credits|"
+        r"to get more access now, send a request to your admin|"
+        r"upgrade to plus to continue using codex "
+        r"\(https://chatgpt\.com/explore/plus\),|"
+        r"visit https://chatgpt\.com/codex/settings/usage to purchase more credits)"
+    )
+    return bool(
+        re.fullmatch(
+            rf"you've hit your usage limit\. (?:{plan_copy} or try again {retry}|"
+            rf"try again {retry})\.",
+            normalized,
+        )
     )
 
 

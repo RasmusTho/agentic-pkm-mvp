@@ -3451,11 +3451,41 @@ def _codex_json_usage_failure_launcher(
     return launcher, calls
 
 
-def test_codex_json_usage_limit_event_enters_durable_backoff(tmp_path) -> None:
+CANONICAL_CODEX_USAGE_LIMIT = (
+    "You've hit your usage limit. Visit "
+    "https://chatgpt.com/codex/settings/usage to purchase more credits "
+    "or try again at 4:30 PM."
+)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        CANONICAL_CODEX_USAGE_LIMIT,
+        "You've hit your usage limit. Try again later.",
+        (
+            "You've hit your usage limit. Upgrade to Pro "
+            "(https://chatgpt.com/explore/pro), visit "
+            "https://chatgpt.com/codex/settings/usage to purchase more credits "
+            "or try again later."
+        ),
+        (
+            "You've hit your usage limit. To get more access now, send a request "
+            "to your admin or try again at Jul 16th, 2026 4:30 PM."
+        ),
+        (
+            "You've hit your usage limit. Upgrade to Plus to continue using Codex "
+            "(https://chatgpt.com/explore/plus), or try again later."
+        ),
+    ],
+)
+def test_codex_json_usage_limit_event_enters_durable_backoff(
+    tmp_path, message: str
+) -> None:
     state = ledger(tmp_path)
     launcher, calls = _codex_json_usage_failure_launcher(
         tmp_path,
-        message="You've hit your usage limit. Synthetic retry guidance.",
+        message=message,
     )
 
     result = VerificationConsumer(
@@ -3482,11 +3512,19 @@ def test_codex_json_usage_limit_event_enters_durable_backoff(tmp_path) -> None:
         ("This is not a usage limit.", False, ""),
         ("Example: You've hit your usage limit.", False, ""),
         ("You've hit your usage limit: false", False, ""),
-        ("You've hit your usage limit. Nested model text.", True, ""),
+        ("You've hit your usage limit. false", False, ""),
+        ("You've hit your usage limit! false", False, ""),
+        ("You've hit your usage limit. . This is not an actual limit.", False, ""),
+        (
+            "You've hit your usage limit. Try again later.\" is only an example.",
+            False,
+            "",
+        ),
+        (CANONICAL_CODEX_USAGE_LIMIT, True, ""),
         (
             "synthetic execution failure",
             False,
-            "You've hit your usage limit. Untrusted stderr.",
+            CANONICAL_CODEX_USAGE_LIMIT,
         ),
         (
             "synthetic execution failure",
@@ -3494,7 +3532,7 @@ def test_codex_json_usage_limit_event_enters_durable_backoff(tmp_path) -> None:
             json.dumps(
                 {
                     "type": "error",
-                    "message": "You've hit your usage limit. Untrusted stderr JSON.",
+                    "message": CANONICAL_CODEX_USAGE_LIMIT,
                 }
             ),
         ),
@@ -3520,7 +3558,7 @@ def test_codex_json_usage_limit_backoff_replay_is_idempotent(tmp_path) -> None:
     state = ledger(tmp_path)
     launcher, calls = _codex_json_usage_failure_launcher(
         tmp_path,
-        message="You've hit your usage limit. Synthetic retry guidance.",
+        message=CANONICAL_CODEX_USAGE_LIMIT,
     )
     consumer = VerificationConsumer(
         state, Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
@@ -3538,7 +3576,7 @@ def test_codex_json_usage_limit_backoff_replay_is_idempotent(tmp_path) -> None:
 
 
 def test_codex_json_usage_limit_event_is_not_durable(tmp_path) -> None:
-    marker = "You've hit your usage limit. SYNTHETIC_PRIVATE_DIAGNOSTIC"
+    marker = CANONICAL_CODEX_USAGE_LIMIT
     state = ledger(tmp_path)
     launcher, _ = _codex_json_usage_failure_launcher(tmp_path, message=marker)
 
