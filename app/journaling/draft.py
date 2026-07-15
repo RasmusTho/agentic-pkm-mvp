@@ -705,28 +705,31 @@ def _run_cognition(
                 "claims": 0,
                 "inferences": 0,
                 "object_ids": [],
+                "outcome": "missing_input",
                 "degraded": True,
-                "degraded_reason": "reasoning inputs could not be resolved in object store",
+                "degraded_reason": "missing_input",
             },
             "Cognition degraded: no UUID-addressable reasoning inputs resolved.",
         )
     try:
         output = reasoning_fn(object_ids, trace_id=trace_id)
-        claims = getattr(output, "claims", ())
-        inferences = getattr(output, "inferences", ())
-    except Exception as exc:
+        claims = output.claims
+        inferences = output.inferences
+    except Exception:
         return (
             {
                 "engine": "run_multi_note_reasoning",
                 "claims": 0,
                 "inferences": 0,
                 "object_ids": list(object_ids),
+                "outcome": "provider_failure",
                 "degraded": True,
-                "degraded_reason": type(exc).__name__,
+                "degraded_reason": "provider_failure",
             },
             "Cognition degraded; the citation-grounded collation remains available.",
         )
-    degraded = not claims and not inferences
+    degraded = output.degraded
+    degraded_reason = _bounded_reasoning_degraded_reason(output)
     source_by_object = {source.object_id: source.source_id for source in sources}
     rendered: list[str] = []
     for claim in claims:
@@ -735,18 +738,35 @@ def _run_cognition(
     for inference in inferences:
         rendered.append(f"- Cross-source synthesis: {inference.rationale}")
     if degraded:
-        rendered.append("Cognition returned no claims or inferences; using collation only.")
+        rendered.append(
+            "Cognition degraded; the citation-grounded collation remains available."
+        )
     return (
         {
             "engine": "run_multi_note_reasoning",
             "claims": len(claims),
             "inferences": len(inferences),
             "object_ids": list(object_ids),
+            "outcome": output.outcome,
             "degraded": degraded,
-            **({"degraded_reason": "empty_reasoning_output"} if degraded else {}),
+            **({"degraded_reason": degraded_reason} if degraded_reason else {}),
         },
         "\n".join(rendered),
     )
+
+
+def _bounded_reasoning_degraded_reason(output: ReasoningOutput) -> str | None:
+    if not output.degraded:
+        return None
+    expected = {
+        "provider_failure": "provider_failure",
+        "empty_output": "empty_provider_output",
+        "missing_input": "missing_input",
+    }
+    allowed = set(expected.values())
+    if output.degraded_reason in allowed:
+        return output.degraded_reason
+    return expected.get(output.outcome, "provider_failure")
 
 
 def _review_actions(*, is_addendum: bool) -> str:

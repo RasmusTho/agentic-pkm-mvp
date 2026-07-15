@@ -16,7 +16,7 @@ from app.journaling.draft import (
     resolve_journal_draft_activation_receipt,
 )
 from app.knowledge_acquisition.candidate_writeback import ARTIFACT_CLASS, DEFAULT_SOURCES_DIR
-from app.reasoning.schema import ReasoningOutput
+from app.reasoning.schema import Claim, Inference, ReasoningOutput
 from app.vault.manager import VaultContext
 from app.write_guard import WriteGuard, WritesBlockedError
 from scripts.yaml_roundtrip import load_frontmatter
@@ -484,7 +484,7 @@ session_id: session-later
     assert receipt_ids == {result[2] for result in results}
 
 
-def test_default_cognition_uses_resolvable_objects_and_synthesis(
+def test_successful_cognition_uses_resolvable_objects_and_synthesis(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from app.stores import reset_memory_store_backend
@@ -510,12 +510,42 @@ def test_default_cognition_uses_resolvable_objects_and_synthesis(
     conversation = service.start(note_path=note, day_context=bundle)
     service.submit_owner_turn(conversation, "I connected the real session shape.")
 
+    def successful_reasoning(
+        object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        del trace_id
+        resolved_ids = tuple(object_ids)  # type: ignore[arg-type]
+        claims = [
+            Claim(
+                id=f"claim-{index}",
+                object_uuid=object_id,
+                text=f"Grounded claim {index}",
+                modality="assertion",
+                confidence=0.8,
+            )
+            for index, object_id in enumerate(resolved_ids, start=1)
+        ]
+        return ReasoningOutput(
+            claims=claims,
+            inferences=[
+                Inference(
+                    id="cross-source",
+                    premises=[claim.id for claim in claims[:2]],
+                    conclusion_id=claims[0].id,
+                    type="synthesis",
+                    rationale="Grounded cross-source synthesis.",
+                )
+            ],
+            outcome="success",
+        )
+
     result = draft_journal_entry(
         vault_context=context,
         for_date=DAY,
         session_id=conversation.session.session_id,
         day_context=bundle,
         write_guard=_allowing_guard(),
+        reasoning_fn=successful_reasoning,
     )
 
     frontmatter, body = _read_result(root, result.path)
@@ -526,6 +556,94 @@ def test_default_cognition_uses_resolvable_objects_and_synthesis(
     assert len(cognition["object_ids"]) >= 2
     assert "Machine cognition (not owner utterance)" in body
     assert "I connected the real session shape." in body
+
+
+@pytest.mark.parametrize(
+    ("outcome", "provided_reason", "expected_reason"),
+    (
+        ("provider_failure", "provider leaked internal detail", "provider_failure"),
+        ("empty_output", "empty_provider_output", "empty_provider_output"),
+    ),
+)
+def test_journal_preserves_explicit_degraded_reasoning_outcome_without_fabrication(
+    tmp_path: Path, outcome: str, provided_reason: str, expected_reason: str
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+
+    def degraded_reasoning(
+        _object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        del trace_id
+        return ReasoningOutput(  # type: ignore[arg-type]
+            outcome=outcome, degraded_reason=provided_reason
+        )
+
+    result = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+        reasoning_fn=degraded_reasoning,
+    )
+
+    frontmatter, body = _read_result(root, result.path)
+    cognition = frontmatter["proposed_by"]["cognition"]
+    assert cognition["outcome"] == outcome
+    assert cognition["degraded"] is True
+    assert cognition["degraded_reason"] == expected_reason
+    assert provided_reason not in body
+    assert cognition["claims"] == 0
+    assert cognition["inferences"] == 0
+    assert "I connected several loose ends." in body
+    assert "Cognition degraded; the citation-grounded collation remains available." in body
+    assert "Cross-source synthesis" not in body
+
+
+def test_journal_keeps_mixed_degraded_cognition_separate_from_collation(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+
+    def mixed_reasoning(
+        object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        del trace_id
+        first_object_id = tuple(object_ids)[0]  # type: ignore[arg-type]
+        return ReasoningOutput(
+            claims=[
+                Claim(
+                    id="real-provider-claim",
+                    object_uuid=first_object_id,
+                    text="One provider returned this grounded claim.",
+                    modality="assertion",
+                    confidence=0.8,
+                )
+            ],
+            outcome="provider_failure",
+            degraded_reason="provider_failure",
+        )
+
+    result = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+        reasoning_fn=mixed_reasoning,
+    )
+
+    frontmatter, body = _read_result(root, result.path)
+    cognition = frontmatter["proposed_by"]["cognition"]
+    assert cognition["outcome"] == "provider_failure"
+    assert cognition["degraded"] is True
+    assert cognition["degraded_reason"] == "provider_failure"
+    assert cognition["claims"] == 1
+    assert cognition["inferences"] == 0
+    assert "One provider returned this grounded claim." in body
+    assert "Cross-source synthesis" not in body
+    assert body.index("## My reflection") < body.index(
+        "## Machine cognition (not owner utterance)"
+    )
+    assert "I connected several loose ends." in body
 
 
 def test_draft_preserves_unreviewed_capture_posture(tmp_path: Path) -> None:
