@@ -138,6 +138,19 @@ def test_publication_surfaces_require_governing_issue_identity() -> None:
     assert "Fixes #<ISSUE_NUMBER>" in publish_skill
 
 
+def test_canonical_agent_rules_allow_open_multi_issue_governor() -> None:
+    agents = _read("AGENTS.md")
+    normalized_agents = " ".join(agents.split())
+
+    for fragment in (
+        "exactly one `Governing-Issue: #<id>` line",
+        "the governing parent may remain open",
+        "closing keywords name only the fully delivered issues",
+        "PR_HOT_PATH.md :: Multi-Issue PR Scope",
+    ):
+        assert fragment in normalized_agents
+
+
 import re as _re
 
 

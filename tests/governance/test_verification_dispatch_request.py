@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +14,7 @@ from scripts.build_verification_dispatch_request import (
 
 REPOSITORY = "RasmusTho/agentic-pkm-mvp"
 HEAD_SHA = "a" * 40
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _event(
@@ -44,6 +46,9 @@ def _pr(*, head_sha: str = HEAD_SHA, state: str = "open") -> dict[str, object]:
         "body": "Governing-Issue: #3602\n\nFixes #3602",
         "base": {"ref": "main"},
         "head": {"ref": "codex/issue-3602", "sha": head_sha},
+        "live_closing_issues": [
+            {"number": 3602, "repository": REPOSITORY},
+        ],
     }
 
 
@@ -101,6 +106,10 @@ def test_multi_issue_pr_selects_explicit_governing_issue() -> None:
         "Governing-Issue: #3603\n\nRefs #3603\nFixes #3626\n"
         "Fixes #3698\nFixes #3699\nFixes #3700\nFixes #3705"
     )
+    pr["live_closing_issues"] = [
+        {"number": number, "repository": REPOSITORY}
+        for number in (3626, 3698, 3699, 3700, 3705)
+    ]
 
     request = build_request(event=_event(), pr=pr, issue={"number": 3603})
 
@@ -108,6 +117,47 @@ def test_multi_issue_pr_selects_explicit_governing_issue() -> None:
     assert request["linked_issue"] == 3603
     assert request["closing_issues"] == [3626, 3698, 3699, 3700, 3705]
     assert request["supporting_issues"] == [3626, 3698, 3699, 3700, 3705]
+
+
+@pytest.mark.parametrize(
+    "live_closing_issues",
+    [
+        None,
+        [],
+        [{"number": 3603, "repository": REPOSITORY}],
+        [
+            {"number": 3602, "repository": REPOSITORY},
+            {"number": 3603, "repository": REPOSITORY},
+        ],
+        [
+            {"number": 3602, "repository": REPOSITORY},
+            {"number": 3602, "repository": REPOSITORY},
+        ],
+        [{"number": 3602, "repository": "other/repository"}],
+        [{"number": "3602", "repository": REPOSITORY}],
+    ],
+)
+def test_live_github_closing_links_must_equal_body_authority(
+    live_closing_issues: object,
+) -> None:
+    pr = _pr()
+    pr["live_closing_issues"] = live_closing_issues
+
+    assert build_request(event=_event(), pr=pr, issue=_issue()) is None
+
+
+def test_workflow_fetches_all_live_github_closing_links() -> None:
+    workflow = (
+        REPO_ROOT / ".github/workflows/verification-dispatch-request.yml"
+    ).read_text(encoding="utf-8")
+
+    for fragment in (
+        "gh api graphql --paginate",
+        "closingIssuesReferences(first: 100, after: $endCursor)",
+        "nodes { number repository { nameWithOwner } }",
+        "live_closing_issues",
+    ):
+        assert fragment in workflow
 
 
 def test_crlf_authority_is_canonicalized_before_request_emission() -> None:
@@ -190,6 +240,10 @@ def test_github_closing_keyword_variants_bind_exact_closure_authority() -> None:
         "Governing-Issue: #3602\nFix #3602\nFixed: #3603\n"
         "Closed #3604\nResolve: #3605\nResolved #3606"
     )
+    pr["live_closing_issues"] = [
+        {"number": number, "repository": REPOSITORY}
+        for number in (3602, 3603, 3604, 3605, 3606)
+    ]
 
     request = build_request(event=_event(), pr=pr, issue=_issue())
 

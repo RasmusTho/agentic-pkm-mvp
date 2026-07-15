@@ -46,6 +46,28 @@ def _is_positive_int(value: object) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
+def _resolve_live_closing_issues(
+    value: object, *, repository: str
+) -> tuple[int, ...] | None:
+    """Return the authenticated repo-local GitHub closing set, or fail closed."""
+    if not isinstance(value, list) or not value:
+        return None
+    issues: list[int] = []
+    for reference in value:
+        if not isinstance(reference, dict):
+            return None
+        number = reference.get("number")
+        if (
+            not _is_positive_int(number)
+            or reference.get("repository") != repository
+        ):
+            return None
+        issues.append(number)
+    if len(set(issues)) != len(issues):
+        return None
+    return tuple(sorted(issues))
+
+
 def _idempotency_key(
     *, repository: str, pr_number: int, head_sha: str, stage: str
 ) -> str:
@@ -141,6 +163,11 @@ def build_request(
 
     issue_authority = resolve_issue_authority(pr.get("body"))
     if issue_authority is None:
+        return None
+    live_closing_issues = _resolve_live_closing_issues(
+        pr.get("live_closing_issues"), repository=repository
+    )
+    if live_closing_issues != tuple(sorted(issue_authority.closing_issues)):
         return None
     issue_data = issue or {}
     linked_issue = issue_data.get("number")

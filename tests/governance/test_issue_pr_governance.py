@@ -204,6 +204,15 @@ def test_issue_free_lanes_do_not_require_governing_identity(body: str) -> None:
     assert _governing_issue_identity_satisfied(body)
 
 
+def test_default_template_preserves_issue_free_lane_authority() -> None:
+    template = (REPO_ROOT / ".github/pull_request_template.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert not _js_issue_authority(template)["hasIssueAuthority"]
+    assert "Fixes #" not in template
+
+
 @pytest.mark.parametrize(
     ("body", "accepted"),
     [

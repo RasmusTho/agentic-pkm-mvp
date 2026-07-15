@@ -9,7 +9,7 @@ Governance lane applies to bounded repository-governance changes such as repo-lo
 <!-- Issue-backed only: replace this comment with exactly one line like `Governing-Issue: #123`. -->
 
 ## Linked Issue
-Fixes #
+<!-- Issue-backed only: add one closing-keyword line for every fully delivered issue. -->
 
 Both lines are required for a single-issue PR and identify the same issue. For an approved multi-issue PR, keep exactly one governing identity, reference the governing parent when it remains open, and use closing keywords only for fully delivered issues.
 Leave both fields blank only when no governing issue exists, including issue-free docs-authoring or governance-lane PRs.

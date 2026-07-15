@@ -45,6 +45,9 @@ def request(head: str = HEAD) -> dict[str, object]:
             "body": "Governing-Issue: #3603\n\nFixes #3603",
             "base": {"ref": "main"},
             "head": {"ref": "codex/issue-3603", "sha": head},
+            "live_closing_issues": [
+                {"number": 3603, "repository": REPO},
+            ],
         },
         issue={"number": 3603},
     )
