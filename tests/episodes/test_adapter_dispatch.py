@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from app.episodes import closure, segmenter
-from app.episodes.stream_registry import STATUS_LIVE, StreamRegistry, StreamRegistryEntry
+from app.episodes.stream_registry import STATUS_LIVE, StreamRegistry, StreamRegistryEntry, load_registry
 from app.write_guard import WriteGuard
 
 
@@ -221,16 +221,83 @@ def test_new_stream_joins_via_registry_and_adapter_only(tmp_path: Path) -> None:
         write_guard=_guard(),
     )
     assert result["consumed"] == {entry.stream_id: 3}
-    assert result["no_adapter"] == []
 
 
-def test_unadapted_live_stream_reported_not_dropped(tmp_path: Path) -> None:
+def test_every_live_entry_resolves_to_an_adapter() -> None:
+    registry = load_registry()
+
+    for entry in registry.live_entries():
+        assert segmenter.resolve_stream_adapter(entry) is not None
+
+
+def test_live_without_adapter_fails_loud_at_tick(tmp_path: Path) -> None:
     entry = _entry("fixture.unadapted")
-    result = segmenter.run_segmentation_tick(
-        vault_root=tmp_path,
-        registry=StreamRegistry({entry.stream_id: entry}),
-        adapters={},
-        write_guard=_guard(),
+
+    with pytest.raises(RuntimeError, match=r"fixture\.unadapted.*live.*no adapter"):
+        segmenter.run_segmentation_tick(
+            vault_root=tmp_path,
+            registry=StreamRegistry({entry.stream_id: entry}),
+            adapters={},
+            write_guard=_guard(),
+        )
+
+
+def test_adapter_correspondence_fails_before_any_tick_io(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+    valid = _entry("fixture.valid")
+    missing = _entry("fixture.missing")
+
+    class TrackingAdapter:
+        def read(self, ctx: segmenter.TickContext) -> segmenter.ReadResult:
+            events.append("read")
+            return segmenter.ReadResult(rows=[object()])
+
+        def normalize(
+            self, row: object, ctx: segmenter.TickContext
+        ) -> segmenter.SegmentationSignal | None:
+            events.append("normalize")
+            return None
+
+        def advance_cursor(self, rows: list[object], ctx: segmenter.TickContext) -> None:
+            events.append("advance")
+
+    monkeypatch.setattr(
+        segmenter.engine_state,
+        "all_state_with_prefix",
+        lambda prefix: events.append("state-read") or {},
     )
-    assert result["consumed"] == {}
-    assert result["no_adapter"] == [entry.stream_id]
+    monkeypatch.setattr(
+        segmenter.engine_state,
+        "set_state",
+        lambda key, value: events.append("state-write"),
+    )
+    monkeypatch.setattr(
+        segmenter.engine_state,
+        "delete_state",
+        lambda key: events.append("state-delete"),
+    )
+    monkeypatch.setattr(
+        segmenter,
+        "_emit_proposals_with_fusion_gate",
+        lambda *a, **k: events.append("emit"),
+    )
+    monkeypatch.setattr(
+        closure,
+        "run_closure_tick",
+        lambda **k: events.append("closure"),
+    )
+
+    registry = StreamRegistry(
+        {valid.stream_id: valid, missing.stream_id: missing}
+    )
+    with pytest.raises(RuntimeError, match=r"fixture\.missing.*live.*no adapter"):
+        segmenter.run_segmentation_tick(
+            vault_root=tmp_path,
+            registry=registry,
+            adapters={valid.stream_id: TrackingAdapter()},
+            write_guard=_guard(),
+        )
+
+    assert events == []
