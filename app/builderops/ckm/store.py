@@ -217,9 +217,24 @@ class CkmStore:
                 active = conn.execute(
                     "SELECT public_id FROM ckm_evidence_edge WHERE id = ?", (row["edge_id"],)
                 ).fetchone()
-                public_id = str(active["public_id"]) if active else CkmStore._edge_public_id(
-                    conn, row["artifact_id"], row["capability_id"], row["basis"]
-                )
+                if active:
+                    public_id = str(active["public_id"])
+                else:
+                    artifact = conn.execute(
+                        "SELECT public_id FROM ckm_artifact WHERE id = ?", (row["artifact_id"],)
+                    ).fetchone()
+                    artifact_public_id = (
+                        str(artifact["public_id"])
+                        if artifact
+                        else stable_public_id("artifact", str(row["source_ref"]))
+                    )
+                    public_id = CkmStore._edge_public_id_from_refs(
+                        artifact_public_id=artifact_public_id,
+                        capability_public_id=CkmStore._referenced_public_id(
+                            conn, "ckm_capability", str(row["capability_id"])
+                        ),
+                        basis=str(row["basis"]),
+                    )
             conn.execute(
                 "UPDATE ckm_evidence_edge_history SET public_id = ? WHERE history_id = ?",
                 (public_id, row["history_id"]),
@@ -234,6 +249,89 @@ class CkmStore:
                 conn, row["kind"], row["capability_id"], row["dimension"]
             )
             conn.execute("UPDATE ckm_finding SET public_id = ? WHERE id = ?", (public_id, row["id"]))
+        CkmStore._backfill_serialized_citation_identities(conn)
+
+    @staticmethod
+    def _backfill_serialized_citation_identities(conn: sqlite3.Connection) -> None:
+        for row in conn.execute("SELECT * FROM ckm_assessment ORDER BY id").fetchall():
+            for dimension in MATURITY_DIMENSIONS:
+                column = f"{dimension}_citations"
+                original = _loads(row[column])
+                migrated = CkmStore._backfill_citation_value(conn, original)
+                if migrated != original:
+                    conn.execute(
+                        f"UPDATE ckm_assessment SET {column} = ? WHERE id = ?",
+                        (_dumps(migrated), row["id"]),
+                    )
+        for row in conn.execute("SELECT id, citations FROM ckm_finding ORDER BY id").fetchall():
+            original = _loads(row["citations"])
+            migrated = CkmStore._backfill_citation_value(conn, original)
+            if migrated != original:
+                conn.execute(
+                    "UPDATE ckm_finding SET citations = ? WHERE id = ?",
+                    (_dumps(migrated), row["id"]),
+                )
+
+    @staticmethod
+    def _backfill_citation_value(conn: sqlite3.Connection, value: Any) -> Any:
+        if isinstance(value, list):
+            return [CkmStore._backfill_citation_value(conn, item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        migrated = {
+            key: CkmStore._backfill_citation_value(conn, item) for key, item in value.items()
+        }
+        if not migrated.get("public_id") and {
+            "id",
+            "artifact_kind",
+            "source_ref",
+        } <= migrated.keys():
+            artifact = conn.execute(
+                "SELECT public_id FROM ckm_artifact WHERE id = ?", (migrated["id"],)
+            ).fetchone()
+            migrated["public_id"] = (
+                str(artifact["public_id"])
+                if artifact
+                else stable_public_id("artifact", str(migrated["source_ref"]))
+            )
+        if not migrated.get("public_id") and {
+            "id",
+            "artifact_id",
+            "capability_id",
+            "basis",
+            "evidence_kind",
+        } <= migrated.keys():
+            edge = conn.execute(
+                "SELECT public_id FROM ckm_evidence_edge WHERE id = ?", (migrated["id"],)
+            ).fetchone()
+            if edge is None:
+                edge = conn.execute(
+                    """
+                    SELECT public_id FROM ckm_evidence_edge_history
+                    WHERE edge_id = ? ORDER BY retired_at DESC LIMIT 1
+                    """,
+                    (migrated["id"],),
+                ).fetchone()
+            if edge is not None:
+                migrated["public_id"] = str(edge["public_id"])
+            else:
+                artifact = conn.execute(
+                    "SELECT public_id FROM ckm_artifact WHERE id = ?",
+                    (migrated["artifact_id"],),
+                ).fetchone()
+                artifact_public_id = (
+                    str(artifact["public_id"])
+                    if artifact
+                    else stable_public_id("artifact", str(migrated.get("source_ref", "")))
+                )
+                migrated["public_id"] = CkmStore._edge_public_id_from_refs(
+                    artifact_public_id=artifact_public_id,
+                    capability_public_id=CkmStore._referenced_public_id(
+                        conn, "ckm_capability", str(migrated["capability_id"])
+                    ),
+                    basis=str(migrated["basis"]),
+                )
+        return migrated
 
     @staticmethod
     def _preflight_schema(conn: sqlite3.Connection) -> None:
@@ -309,12 +407,24 @@ class CkmStore:
     def _edge_public_id(
         conn: sqlite3.Connection, artifact_id: str, capability_id: str, basis: str
     ) -> str:
+        return CkmStore._edge_public_id_from_refs(
+            artifact_public_id=CkmStore._referenced_public_id(
+                conn, "ckm_artifact", artifact_id
+            ),
+            capability_public_id=CkmStore._referenced_public_id(
+                conn, "ckm_capability", capability_id
+            ),
+            basis=basis,
+        )
+
+    @staticmethod
+    def _edge_public_id_from_refs(
+        *, artifact_public_id: str, capability_public_id: str, basis: str
+    ) -> str:
         identity = canonical_digest(
             {
-                "artifact": CkmStore._referenced_public_id(conn, "ckm_artifact", artifact_id),
-                "capability": CkmStore._referenced_public_id(
-                    conn, "ckm_capability", capability_id
-                ),
+                "artifact": artifact_public_id,
+                "capability": capability_public_id,
                 "basis": basis,
             }
         )

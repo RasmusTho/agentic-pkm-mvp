@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -52,7 +53,14 @@ def _artifact(store: CkmStore, *, source_ref: str = "docs/measurement.md"):
     )
 
 
-def _edge(store: CkmStore, artifact_id: str, capability_id: str, *, basis: str = "doc:1"):
+def _edge(
+    store: CkmStore,
+    artifact_id: str,
+    capability_id: str,
+    *,
+    basis: str = "doc:1",
+    source_ref: str = "docs/measurement.md",
+):
     return store.upsert_evidence_edge(
         artifact_id=artifact_id,
         capability_id=capability_id,
@@ -62,7 +70,7 @@ def _edge(store: CkmStore, artifact_id: str, capability_id: str, *, basis: str =
         confidence=0.8,
         extraction_method="deterministic",
         lifecycle="confirmed",
-        source_ref="docs/measurement.md",
+        source_ref=source_ref,
         basis=basis,
     )
 
@@ -278,12 +286,12 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
     db_path = tmp_path / "legacy.sqlite3"
     legacy = CkmStore(db_path)
     legacy.ensure_schema()
-    capability = _capability(legacy)
-    inferred_capability = legacy.upsert_capability(
+    capability = legacy.upsert_capability(
         name="Legacy inferred capability",
         definition="Pre-Q1 inferred fixture.",
         existence_provenance="receipt:legacy-inference",
     )
+    inferred_capability = capability
     artifact = _artifact(legacy)
     edge = _edge(legacy, artifact.id, capability.id)
     legacy.upsert_evidence_edge(
@@ -316,8 +324,54 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
         statement="Missing migration coverage.",
         citations=[{"artifact": artifact.to_dict(), "artifact_id": artifact.id}],
     )
+    stale_artifact = _artifact(legacy, source_ref="docs/stale-history.md")
+    stale_edge = _edge(
+        legacy,
+        stale_artifact.id,
+        capability.id,
+        basis="stale-history:1",
+        source_ref=stale_artifact.source_ref,
+    )
+    legacy.upsert_finding(
+        kind="gap",
+        capability_id=capability.id,
+        dimension="operational_readiness",
+        statement="Historical artifact was retired.",
+        citations=[
+            {"artifact": stale_artifact.to_dict(), "artifact_id": stale_artifact.id}
+        ],
+    )
+    assert legacy.delete_artifacts_not_in(
+        "repo_artifact_ingestion", {artifact.source_ref}
+    ) == 1
+
+    def strip_public_ids(value: object) -> object:
+        if isinstance(value, list):
+            return [strip_public_ids(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                key: strip_public_ids(item)
+                for key, item in value.items()
+                if key != "public_id"
+            }
+        return value
 
     with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        for row in conn.execute("SELECT * FROM ckm_assessment").fetchall():
+            for dimension in MATURITY_DIMENSIONS:
+                column = f"{dimension}_citations"
+                stripped = strip_public_ids(json.loads(row[column]))
+                conn.execute(
+                    f"UPDATE ckm_assessment SET {column} = ? WHERE id = ?",
+                    (json.dumps(stripped), row["id"]),
+                )
+        for row in conn.execute("SELECT id, citations FROM ckm_finding").fetchall():
+            stripped = strip_public_ids(json.loads(row["citations"]))
+            conn.execute(
+                "UPDATE ckm_finding SET citations = ? WHERE id = ?",
+                (json.dumps(stripped), row["id"]),
+            )
         for index_name in (
             "idx_ckm_capability_public_id",
             "idx_ckm_capability_identity_key",
@@ -347,12 +401,31 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
     assert all(item.identity_key for item in legacy.list_capabilities())
     assert all(item.public_id for item in legacy.list_artifacts())
     assert all(item.public_id for item in legacy.list_evidence_edges())
-    assert all(item.public_id for item in legacy.list_assessments_for_capability(capability.id))
-    assert all(item.public_id for item in legacy.list_findings())
+    assessments = legacy.list_assessments_for_capability(capability.id)
+    assert all(item.public_id for item in assessments)
+    assert all(
+        citation.get("public_id")
+        for assessment in assessments
+        for dimension in MATURITY_DIMENSIONS
+        for citation in assessment.citations[dimension]
+    )
+    findings = legacy.list_findings()
+    assert all(item.public_id for item in findings)
+    assert all(item.validate() for item in findings)
+    assert all(
+        citation.get("artifact", {}).get("public_id")
+        for finding in findings
+        for citation in finding.citations
+        if "artifact" in citation
+    )
     with sqlite3.connect(db_path) as conn:
         assert conn.execute(
             "SELECT COUNT(*) FROM ckm_evidence_edge_history WHERE public_id = ''"
         ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT public_id FROM ckm_evidence_edge_history WHERE edge_id = ?",
+            (stale_edge.id,),
+        ).fetchone()[0] == stale_edge.public_id
 
     legacy.ensure_schema()
     assert legacy.state_identity() == migrated_state
