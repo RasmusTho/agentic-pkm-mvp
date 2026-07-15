@@ -219,6 +219,51 @@ class VerificationDispatchLedger:
         run_id = f"vrun-{str(request['idempotency_key'])[:16]}"
         with self.store._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            active_before_exact = list(
+                conn.execute(
+                    """
+                    SELECT * FROM verification_runs
+                    WHERE repository=? AND pr_number=? AND stage=?
+                      AND status IN ('queued','backoff','claimed','running')
+                    ORDER BY created_at ASC, run_id ASC
+                    """,
+                    (request["repository"], request["pr_number"], request["stage"]),
+                )
+            )
+            terminal_before_exact = list(
+                conn.execute(
+                    """
+                    SELECT * FROM verification_runs
+                    WHERE repository=? AND pr_number=? AND stage=?
+                      AND status IN ('completed','failed','needs_human','superseded')
+                    ORDER BY created_at ASC, run_id ASC
+                    """,
+                    (request["repository"], request["pr_number"], request["stage"]),
+                )
+            )
+            if active_before_exact and terminal_before_exact:
+                for candidate in [*active_before_exact, *terminal_before_exact]:
+                    candidate_request = _load(candidate["request_json"])
+                    if not isinstance(candidate_request, Mapping):
+                        raise ValueError(
+                            "verification canonical run authority is malformed"
+                        )
+                    if candidate_request.get("linked_issue") != request.get(
+                        "linked_issue"
+                    ):
+                        if (
+                            candidate["idempotency_key"]
+                            == request["idempotency_key"]
+                            and candidate["status"]
+                            in {"completed", "failed", "needs_human", "superseded"}
+                        ):
+                            raise ValueError(
+                                "verification idempotency authority conflict"
+                            )
+                        raise ValueError(
+                            "verification canonical run governing issue mismatch"
+                        )
+                raise ValueError("verification canonical terminal chain is ambiguous")
             existing = conn.execute(
                 "SELECT * FROM verification_runs WHERE idempotency_key = ?",
                 (request["idempotency_key"],),

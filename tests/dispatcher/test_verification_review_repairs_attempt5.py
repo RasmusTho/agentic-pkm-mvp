@@ -661,3 +661,47 @@ def test_active_rebound_chain_rejects_original_artifact_replay(tmp_path) -> None
     assert retained.status == "backoff"
     assert retained.requested_head_sha == HEAD
     assert retained.current_head_sha == REPAIRED_HEAD
+
+
+def test_legacy_terminal_budget_blocks_exact_empty_active_replay(tmp_path) -> None:
+    state = ledger(tmp_path)
+    terminal_run_id = _superseded_exhausted_chain(state)
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET status='failed', "
+            "stop_reason='technical_failure' WHERE run_id=?",
+            (terminal_run_id,),
+        )
+        payload = request(REPAIRED_HEAD)
+        conn.execute(
+            """
+            INSERT INTO verification_runs (
+                run_id, idempotency_key, contract_version, repository,
+                pr_number, head_sha, current_head_sha, stage, request_json,
+                status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
+            """,
+            (
+                "legacy-new-active",
+                payload["idempotency_key"],
+                payload["contract_version"],
+                payload["repository"],
+                payload["pr_number"],
+                REPAIRED_HEAD,
+                REPAIRED_HEAD,
+                payload["stage"],
+                json.dumps(payload),
+                "2999-01-02T00:00:00+00:00",
+                "2999-01-02T00:00:00+00:00",
+            ),
+        )
+        conn.commit()
+
+    with pytest.raises(ValueError, match="canonical terminal chain is ambiguous"):
+        state.ingest(request(REPAIRED_HEAD))
+
+    assert [row["kind"] for row in state.attempts(terminal_run_id)] == [
+        "standard_repair",
+        "standard_repair",
+    ]
+    assert state.attempts("legacy-new-active") == []
