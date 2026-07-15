@@ -250,6 +250,11 @@ to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup.
   resolution for a new client with no stale explicit intent is a separate path.
 - Every read, retrieval result, write, receipt, cache entry, and background binding preserves
   vault identity and context-generation provenance.
+- Many-binding requests resolve settings before effects: binding-local values remain inside each
+  binding's isolated sub-operation, and every registry-classified request-wide behavior setting
+  must have one identical typed effective value across all participating bindings. A conflict fails
+  the whole request before reads, cache/model/retrieval work, or partial results; binding iteration
+  order is never settings precedence.
 - Container registry/default/background intent survives force-recreate on a shared instance-state
   volume and resolves to the identical store from every enabled process.
 - Request/session selection never auto-enrols a vault into background work. Background lifecycle
@@ -295,6 +300,11 @@ Partial delivery remains fail-closed:
   single-watcher bridge while scoped request/session selection does not; issue 06B atomically hands
   that live binding plus the MVR-05 scalar worker to versioned durable singleton/empty state before
   disabling the bridge or enabling intent mutation;
+- after issue 05B but before issue 05C, scoped session/override writes and any write whose resolved
+  target differs from the sole freshly validated compatibility binding fail capability-not-ready
+  before the compatibility translator or any effect. Only carrier-free legacy single-binding
+  writes to that exact binding retain the prior journey; 05C replaces this seal with governed
+  explicit-target writes;
 - before issue 05A enables the first binding-keyed compatibility producer, every pending legacy
   outbox key is classified and
   scoped/coalesced under the DB fence; identical retries preserve one canonical lineage and
