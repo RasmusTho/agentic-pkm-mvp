@@ -82,7 +82,7 @@ These invariants are registered in `docs/architecture/SBS_FITNESS_RULES.md`; thi
 Partial-failure paths:
 
 - Q1a state identity lands but Q1b is absent: the public capability is **not delivered**; no consumer may treat schemas as a supported query surface.
-- A CKM mutation commits after page one: continuation refuses `snapshot_changed`; it never mixes pages.
+- If later size evidence authorizes pagination, continuation replays its retained immutable snapshot or refuses when that snapshot is unavailable; it never follows mutable current state.
 - The store is absent, old, or unsupported: query returns a typed error without creating a directory/database/schema/receipt.
 - Access, redaction, identity-lifecycle, or retention policy is missing or unsupported: export/history operations refuse; they do not inherit an implicit permissive default.
 - A metric definition or detector bundle changes: comparison refuses; it never coerces observations into a trend.
