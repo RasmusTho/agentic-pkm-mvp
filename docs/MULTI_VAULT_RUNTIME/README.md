@@ -201,6 +201,9 @@ Partial delivery remains fail-closed:
 - after task 05 but before task 06, the existing picker alone continues to drive #3163's named
   single-watcher bridge while scoped request/session selection does not; task 06 atomically hands
   that live binding to the durable supervisor before disabling the bridge;
+- after task 05 but before task 06, versioned vault-bound outbox rows remain pending and
+  unacknowledged behind the interim scalar-worker gate; safe global work continues, and only task
+  06 enables binding-scoped dispatch/classification/recovery;
 - a dimension containing an unknown, stale, or unauthorized member fails the whole production
   context resolution; it never returns a partial set, excludes the member, or substitutes another;
 - if one background binding fails, its lifecycle and health remain failed while other bindings

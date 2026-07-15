@@ -21,15 +21,19 @@ cross-process truth belong here.
 
 - Reuse #3163's selection-event/settings-reload mechanism; do not duplicate it.
 - At the MVR-06 migration boundary, read the live binding owned by MVR-05's named legacy-picker
-  bridge, materialize that binding as the initial `compatibility_default` lifecycle intent, start
-  the revision-reconciling supervisor, and disable the bridge in one fail-closed cutover. Roll back
+  bridge, materialize that binding as durable `compatibility_binding_id` in compatibility mode,
+  start the revision-reconciling supervisor, and disable the bridge in one fail-closed cutover. Roll back
   the cutover if either handoff step fails. Afterward, picker/session selection never changes
   background intent; operators use the governed background administration surface.
 - Add a durable, mechanical instance-local `background_vault_binding_ids` intent set. Request or
   session selection never auto-enrols a member. Each unique binding is re-resolved and
   re-authorized at lifecycle start; a missing/unauthorized member remains explicitly failed.
-- Persist an intent mode that distinguishes `compatibility_default` from `explicit`. A missing
-  legacy field is initialized exactly once as compatibility mode; any governed add/remove command
+- Persist an intent mode that distinguishes `compatibility` from `explicit`. A missing legacy field
+  is initialized exactly once as compatibility mode: MVR-06 snapshots the live bridge binding when
+  present, otherwise the current default/no-vault result, into nullable durable
+  `compatibility_binding_id`. Restart reuses that exact binding and never re-derives another from
+  interaction history or default. While mode remains compatibility, an explicit MVR-02 default
+  set/clear atomically replaces/clears this field and triggers rebind. Any governed add/remove command
   transitions to explicit mode. `explicit` with an empty binding list is durable and means idle—it
   must never re-enrol the default after restart. This state mutates through MVR-01's locked,
   revision-checked atomic registry transaction.
@@ -39,20 +43,20 @@ cross-process truth belong here.
   require instance-administrative authority and the stored binding ID but remain idempotent when
   that registration is missing or no longer content-authorized, so failed stale intent can always
   be cleared safely. Both record redacted receipts and commit a durable change record/revision in
-  the same fsync-backed registry
-  transaction. A lifecycle event is only an idempotent wake-up hint for that revision, never the
+  the same fsync-backed registry transaction. A lifecycle event is only an idempotent wake-up hint for that revision, never the
   sole handoff. Tests must use these production producers rather than seeding the store.
 - Introduce a lifecycle supervisor that treats the durable set only as intent. At start/rebind it
   derives one immutable full `ActiveContextSet` per lifecycle binding, including context ID,
   generation, stable binding, server-derived instance-background principal, operational scope,
-  topology posture, and `background_intent` or `compatibility_default` provenance. Watcher, worker,
-  settings, queues, health, and receipts propagate that context rather than a rival
-  binding-plus-generation model. For migrated one-vault installs with no explicit set, the instance
-  default/legacy bootstrap yields exactly one compatibility context; no request/session state
-  participates.
+  topology posture, and `background_intent`, `compatibility_handoff`, or `compatibility_default`
+  provenance. Watcher, worker, settings, queues, health, and receipts propagate that context rather than a rival
+  binding-plus-generation model. For migrated one-vault installs with no explicit set, the captured
+  live bridge binding—or, absent that, the instance default/legacy bootstrap—yields exactly
+  one durable compatibility context; no later request/session state participates.
 - Subscribe the supervisor to MVR-02's versioned default-mutation event. While intent mode is
-  `compatibility_default`, replacing or clearing the default drains the current generation and
-  re-resolves the replacement binding or truthful no-vault state before later work is accepted.
+  `compatibility`, replacing or clearing the default atomically updates `compatibility_binding_id`,
+  drains the current generation, and re-resolves the replacement binding or truthful no-vault
+  state before later work is accepted.
   The same event cannot alter an `explicit` intent set. A default mutation may not leave a running
   compatibility lifecycle silently bound to the prior vault or rely on process restart.
 - Reconcile durable registry revisions at supervisor startup and continuously while running, with
@@ -144,6 +148,10 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
   revision-reconciling supervisor, and retires the legacy picker bridge; injected failure leaves
   the old bridge authoritative and never enables two or zero watcher owners.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_settings_spine_bridge_handoff_is_atomic`
+- [ ] The imported live compatibility binding survives restart even when it differs from the
+  instance default; only an explicit default set/clear while still in compatibility mode or a
+  governed transition to explicit background intent changes it.
+  - Verify: `tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback`
 - [ ] The production supervisor runs independent watcher/worker lifecycles for two bindings and
   attributes ingest, queues, settings, health, and receipts to the correct immutable
   ActiveContextSet/vault/generation.
@@ -206,8 +214,8 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
 ## Restart / Durability Posture
 
 Lifecycle instances are rebuildable. On restart the supervisor reconstructs them from explicit
-intent (including durable explicit-empty), or from the one-vault default only while the migrated
-intent mode remains `compatibility_default`, and records fresh generations. It re-authorizes every
+intent (including durable explicit-empty), or from durable `compatibility_binding_id` while the
+migrated intent mode remains `compatibility`, and records fresh generations. It re-authorizes every
 member, records its durable registry revision cursor, and continuously reconciles later revisions;
 events are lossy wake-up hints only. Request/session selections are ignored. In-flight ephemeral
 work is retried only under its existing idempotency contract, never silently rebound.

@@ -31,10 +31,10 @@ fail-closed precedence resolver.
   They validate registration and authority, use MVR-01's locked transaction, emit redacted
   receipts, and never mutate last-active. Tests drive these production commands rather than seeding
   the store or invoking an internal setter directly.
-- Publish the versioned default-mutation event consumed by MVR-06. While background intent remains
-  `compatibility_default`, set/clear must drain the current compatibility lifecycle and make the
-  supervisor re-resolve the new default or truthful no-vault result before accepting later work.
-  Explicit background intent is unaffected.
+- Publish the versioned default-mutation event consumed by MVR-06. After MVR-06, while background
+  intent mode remains `compatibility`, set/clear atomically replaces/clears its durable
+  `compatibility_binding_id`; the supervisor drains the old generation and resolves the new default
+  or truthful no-vault result before accepting later work. Explicit background intent is unaffected.
 - Preserve no-vault startup and headless bootstrap behavior through explicit adapters.
 
 ## Concretely

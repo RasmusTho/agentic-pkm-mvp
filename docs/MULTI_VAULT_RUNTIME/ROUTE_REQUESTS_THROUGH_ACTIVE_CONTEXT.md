@@ -45,6 +45,13 @@ not background lifecycles.
   cannot safely filter or acknowledge binding-keyed projection/outbox rows. Promotion preflight
   names this forward-only boundary; rollback remains available only to a build that understands at
   least MVR-05. Apply invariant→producers to startup, migrations, fixtures, and rollback preflight.
+- Version every MVR-05 vault-bound outbox producer with `routing_class=vault_bound`, stable binding,
+  and captured context identity before it may serve multi-vault writes. In the same slice, teach the
+  still-scalar worker to recognize that envelope and fail closed before handler dispatch: leave the
+  row durably pending/unacknowledged, report readiness `blocked_pending_mvr06`, and continue only
+  independently safe `global` work. MVR-06 owns binding-scoped dispatch, legacy classification,
+  quarantine, and recovery; until it lands no versioned vault-bound row can execute against the
+  worker's env-selected vault.
 - Make many-binding reads explicit and provenance-preserving; require an explicit target binding
   for writes unless the command contract already provides one unambiguously.
 - Add an architecture guard against new direct process-global vault resolution in request code.
@@ -115,6 +122,10 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 - [ ] Production capture/governed-write paths require one explicit authorized target and record
   vault/context provenance in their receipt.
   - Verify: `tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt`
+- [ ] Every MVR-05 vault-bound producer emits the versioned binding/context routing envelope, and
+  the interim scalar worker leaves such rows pending/unacknowledged with blocked readiness instead
+  of dispatching them; global work remains independently processable until MVR-06.
+  - Verify: `tests/workers/test_multi_vault_partial_delivery_gate.py::test_scalar_worker_never_dispatches_mvr05_vault_bound_rows`
 - [ ] Invalid or unauthorized request selection returns the explicit error/picker contract and
   never serves default, last-active, CWD, or another binding.
   - Verify: `tests/api/test_multi_vault_request_fail_closed.py::test_invalid_selection_never_falls_back`
@@ -137,7 +148,7 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/integration/test_multi_vault_picker_context.py tests/integration/test_multi_vault_projection_isolation.py tests/migrations/test_multi_vault_projection_backfill.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/architecture/test_multi_vault_context_boundaries.py`
+- `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/integration/test_multi_vault_picker_context.py tests/integration/test_multi_vault_projection_isolation.py tests/migrations/test_multi_vault_projection_backfill.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/workers/test_multi_vault_partial_delivery_gate.py tests/architecture/test_multi_vault_context_boundaries.py`
 - `ruff check app tests`
 
 ## Restart / Durability Posture
