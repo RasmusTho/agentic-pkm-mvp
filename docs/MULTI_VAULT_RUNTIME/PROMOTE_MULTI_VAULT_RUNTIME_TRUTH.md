@@ -108,6 +108,9 @@ operators, or future agents still act on stale single-global-vault truth.
   `docs/SETTINGS.md :: Multi-vault settings resolution` + doc writeback at
   `docs/ENVIRONMENTS.md :: Vault terminology` + doc writeback at
   `docs/HEALTH.md :: Runtime health` + doc writeback at
+  `docs/STATUS.md :: Current Snapshot` + doc writeback at
+  `docs/COMPONENTS.md :: Ingest / pipeline agents` + doc writeback at
+  `docs/OPERATIONS.md :: Watcher Operations` + doc writeback at
   `docs/SECURITY.md :: Security` + doc writeback at
   `docs/EVENTS.md :: Events` + doc writeback at
   `docs/DB_SCHEMA.md :: DB Schema (Current Reality)` + doc writeback at

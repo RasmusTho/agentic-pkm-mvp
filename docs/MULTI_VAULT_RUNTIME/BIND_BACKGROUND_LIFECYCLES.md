@@ -116,8 +116,15 @@ cross-process truth belong here.
   compatibility binding, the removal journal computes the post-removal MVR-02 default in the same
   transaction: an authorized replacement default runs through the same prepare/quiesce/commit/resume
   protocol and atomically becomes the compatibility binding, while no replacement persists enabled
-  idle/no-vault. It never clears first and repairs from a later default event. Failure or a revision
-  race leaves the source registration/default/compatibility lifecycle authoritative and unchanged.
+  idle/no-vault. Prepare installs a durable `draining_removal` reservation under the ownership fence:
+  it blocks every new foreground/background holder but preserves old-root access exclusively for the
+  removal reconciler while the final scan and buffered direct-filesystem observations complete. Only
+  their durable receipt permits the atomic registration/default/compatibility commit to replace that
+  reservation with the immutable removal tombstone and release ownership. A direct write racing any
+  drain phase is therefore either included in the final receipt or prevented by the reservation; a
+  crash resumes from the durable journal without reopening ordinary access. It never clears first
+  and repairs from a later default event. Failure or a revision race leaves the source
+  registration/default/compatibility lifecycle authoritative and unchanged.
   Explicit mode instead retains a removed member as loudly failed intent until instance-authorized
   removal, preserving the explicit operator decision. MVR-06 never requires MVR-02 to interpret
   these fields retroactively.
@@ -168,6 +175,12 @@ cross-process truth belong here.
   unknown/ambiguous row remains quarantined for explicit recovery without dispatch or ack. A quarantined unsafe row makes the affected worker
   readiness degraded/blocked but a valid global row never blocks multi-binding startup merely for
   lacking a binding.
+- Before the first MVR-06D queue-state write or many-binding dispatch/enrollment activation, advance
+  the channel floor atomically to `minimum_runtime_schema=MVR-06D` under the all-process fence and
+  prove every API/watcher/worker candidate understands claim fencing tokens, `effect_pending`,
+  reconciliation states, and binding/global dispatch. A 06A-06C image cannot start against 06D
+  state. Recovery uses a 06D-compatible roll-forward or rollback image; no downgrade may discard or
+  reinterpret these fields unless a separately proven lossless downgrade contract exists.
 - Before multi-worker activation, prove the production PostgreSQL poll/claim/dispatch/ack seam gives
   each row at most one concurrent claim owner through an atomic recoverable database lease/claim, not
   a plain select followed by later acknowledgement. Preserve the current at-least-once contract:
@@ -177,11 +190,15 @@ cross-process truth belong here.
   races concurrent workers and injects crash-after-effect; missing PostgreSQL/claim semantics errors,
   never skips.
 - Admit a handler to MVR-06D dispatch only when its stable idempotency identity supports durable
-  post-effect reconciliation. Before invoking it, persist an `effect_pending` phase with claim,
-  binding, idempotency identity, and bounded effect descriptor. The handler must either commit its
-  effect and durable outcome/receipt atomically in one store transaction or expose a production
-  no-effect reconciliation read that can prove the idempotent effect applied or did not apply. After
-  a crash, an expired `effect_pending` claim is reconciled before any current-authority quarantine:
+  post-effect reconciliation. Every claim acquisition receives a database-monotonic fencing token;
+  before invoking an effect, persist an `effect_pending` phase with that token, binding, idempotency
+  identity, and bounded effect descriptor. The production effect boundary rejects a stale token after
+  expiry/reclaim, including when the former owner resumes after pausing past TTL. External sinks must
+  atomically enforce the stable idempotency identity/fencing token or expose a reconciliation read
+  before they are admitted; an in-process token check alone is insufficient. The handler must either
+  commit its effect and durable outcome/receipt atomically in one store transaction or expose a
+  production no-effect reconciliation read that can prove the idempotent effect applied or did not
+  apply. After a crash, an expired `effect_pending` claim is reconciled before any current-authority quarantine:
   a proven applied effect records/links its audit receipt and terminates acknowledged even if the
   binding was subsequently revoked or removed (recording the prior authorized effect grants no new
   authority); a proven no-effect row proceeds through current authority checks and may redispatch or
@@ -248,8 +265,9 @@ acceptance criteria prefixed with its ID:
    the real supervisor and proves independent reconciliation/health while the production enrollment
    and dispatch gates remain sealed; multi-binding activation remains dormant. Depends on 06B.
 4. **MVR-06D — queued-work convergence and aggregate proof:** validate MVR-05 classification, preserve or
-   quarantine pending rows under current authority/binding, atomically activate many-binding
-   enrollment/start plus its matching dispatch contract, write environment/health truth, and prove
+   quarantine pending rows under current authority/binding, advance the all-process floor before
+   introducing fenced claim/reconciliation state, atomically activate many-binding enrollment/start
+   plus its matching dispatch contract, write deployment/environment/health truth, and prove
    aggregate zero/one/many behavior. Depends on 06C and closes MVR-06.
 
 Four distinct merged receipts are required on #2143; no child recreates #3163 or #3156.
@@ -416,10 +434,13 @@ migration, preflight, and fail-loud gate merge together.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_background_effect_fence_closes_authorization_race_window`
 - [ ] **MVR-06B:** When removal of the active compatibility binding also replaces the instance
   default, the production removal journal atomically prepares and drains the old lifecycle, commits
-  the removal/default/replacement compatibility revision, completes the old-root drain, and resumes
-  the authorized replacement. With no replacement it persists enabled idle/no-vault; injected
-  failure never exposes a new foreground default beside an idle or stale background binding.
+  a draining-removal reservation that blocks ordinary access while retaining reconciler-only
+  old-root authority, completes and receipts the final scan/direct-write buffer, then atomically
+  tombstones the registration and commits the removal/default/replacement compatibility revision
+  before resuming the authorized replacement. With no replacement it persists enabled idle/no-vault;
+  injected failure never exposes a new foreground default beside an idle or stale background binding.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_default_changing_removal_atomically_rebinds_compatibility_lifecycle`
+  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_direct_filesystem_write_during_removal_is_receipted_before_tombstone`
 - [ ] **MVR-06C:** After every foreground and background consumer uses the shared-effect lock order,
   the production relocation command activates and takes the ownership fence plus exclusive binding
   lease; it waits for prior authorized effects, commits the new root/revision, and no later effect can
@@ -473,6 +494,18 @@ migration, preflight, and fail-loud gate merge together.
   PostgreSQL or required lease constraints.
   - Verify: `tests/integration/test_multi_vault_outbox_pg_claims.py::test_concurrent_claim_owner_and_crash_redelivery_preserve_at_least_once` +
     successful exact-SHA `integration-nightly / pg-contracts` workflow receipt on #2143
+- [ ] **MVR-06D:** Before its first queue-state write or many-binding activation, the all-process
+  fence advances `minimum_runtime_schema=MVR-06D`; every older API/watcher/worker refuses startup,
+  and rollback uses a 06D-compatible image rather than interpreting claim/reconciliation state with
+  06A-06C semantics.
+  - Verify: `tests/migrations/test_multi_vault_outbox_upgrade.py::test_mvr06d_floor_precedes_first_queue_state_write_and_blocks_older_runtime`
+  - Verify: doc writeback at `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments` +
+    doc writeback at `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification`
+- [ ] **MVR-06D:** If claim owner W1 pauses after `effect_pending` beyond TTL and W2 reclaims the row,
+  W1's stale monotonic token is rejected at the production effect boundary; the admitted sink's
+  atomic idempotency/fencing or reconciliation contract lets only one effect become durable before
+  receipt/ack convergence.
+  - Verify: `tests/integration/test_multi_vault_outbox_pg_claims.py::test_expired_claim_stale_owner_cannot_effect_after_reclaim`
 - [ ] **MVR-06D:** If authority is revoked or a binding is removed after a handler effect but before
   receipt/ack, production claim recovery reconciles the durable `effect_pending` idempotency outcome
   first: a proven effect becomes receipted/acknowledged under its prior authorized provenance, a
@@ -547,7 +580,7 @@ PostgreSQL receipt belongs only to 06D.
 
 ### MVR-06B validation
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_settings_spine_bridge_handoff_is_atomic tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff tests/integration/test_multi_vault_background_lifecycle.py::test_post_handoff_picker_rebind_preserves_two_phase_failure_atomicity tests/integration/test_multi_vault_background_lifecycle.py::test_default_mutation_rebinds_only_compatibility_lifecycle tests/integration/test_multi_vault_background_lifecycle.py::test_default_changing_removal_atomically_rebinds_compatibility_lifecycle tests/integration/test_multi_vault_background_lifecycle.py::test_rebind_reuses_settings_spine_and_is_generation_clean tests/integration/test_multi_vault_background_lifecycle.py::test_lifecycle_requires_matching_channel_ownership_lease tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window tests/integration/test_multi_vault_background_lifecycle.py::test_registration_removal_activates_after_all_consumer_floors tests/integration/test_multi_vault_background_lifecycle.py::test_removed_binding_rehome_preserves_historical_receipt_audit tests/integration/test_multi_vault_background_lifecycle.py::test_background_effect_fence_closes_authorization_race_window tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback tests/runtime/test_background_binding_handoff.py::test_env_only_single_vault_upgrade_preserves_compatibility_watcher tests/runtime/test_background_binding_handoff.py::test_remove_last_then_restart_preserves_explicit_empty_intent tests/runtime/test_background_binding_handoff.py::test_mvr06b_restart_uses_only_durable_authorized_singleton_or_empty_intent tests/runtime/test_background_binding_handoff.py::test_scalar_worker_handoff_is_atomic_versioned_and_intent_gated tests/runtime/test_background_binding_handoff.py::test_background_context_has_explicit_workspace_and_capability_identity tests/api/test_background_binding_admin.py::test_mvr06b_commands_allow_only_singleton_or_empty_intent tests/api/test_background_binding_admin.py::test_first_explicit_mutation_snapshots_compatibility_singleton_before_apply tests/api/test_background_binding_admin.py::test_stale_binding_intent_can_be_removed_without_content_authority`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_settings_spine_bridge_handoff_is_atomic tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff tests/integration/test_multi_vault_background_lifecycle.py::test_post_handoff_picker_rebind_preserves_two_phase_failure_atomicity tests/integration/test_multi_vault_background_lifecycle.py::test_default_mutation_rebinds_only_compatibility_lifecycle tests/integration/test_multi_vault_background_lifecycle.py::test_default_changing_removal_atomically_rebinds_compatibility_lifecycle tests/integration/test_multi_vault_background_lifecycle.py::test_direct_filesystem_write_during_removal_is_receipted_before_tombstone tests/integration/test_multi_vault_background_lifecycle.py::test_rebind_reuses_settings_spine_and_is_generation_clean tests/integration/test_multi_vault_background_lifecycle.py::test_lifecycle_requires_matching_channel_ownership_lease tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window tests/integration/test_multi_vault_background_lifecycle.py::test_registration_removal_activates_after_all_consumer_floors tests/integration/test_multi_vault_background_lifecycle.py::test_removed_binding_rehome_preserves_historical_receipt_audit tests/integration/test_multi_vault_background_lifecycle.py::test_background_effect_fence_closes_authorization_race_window tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback tests/runtime/test_background_binding_handoff.py::test_env_only_single_vault_upgrade_preserves_compatibility_watcher tests/runtime/test_background_binding_handoff.py::test_remove_last_then_restart_preserves_explicit_empty_intent tests/runtime/test_background_binding_handoff.py::test_mvr06b_restart_uses_only_durable_authorized_singleton_or_empty_intent tests/runtime/test_background_binding_handoff.py::test_scalar_worker_handoff_is_atomic_versioned_and_intent_gated tests/runtime/test_background_binding_handoff.py::test_background_context_has_explicit_workspace_and_capability_identity tests/api/test_background_binding_admin.py::test_mvr06b_commands_allow_only_singleton_or_empty_intent tests/api/test_background_binding_admin.py::test_first_explicit_mutation_snapshots_compatibility_singleton_before_apply tests/api/test_background_binding_admin.py::test_stale_binding_intent_can_be_removed_without_content_authority`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_handoff_buffers_direct_filesystem_write_through_commit`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_channel_transfer_lifecycle.py::test_post_handoff_transfer_repairs_mvr06_intent_before_restart`
 - Verify the 06B PR diff contains its mapped vault/settings, Settings Spine, environment, and health
@@ -565,9 +598,12 @@ PostgreSQL receipt belongs only to 06D.
 - Dispatch exact-head `integration-nightly / pg-contracts` for
   `tests/integration/test_multi_vault_outbox_pg_claims.py::test_concurrent_claim_owner_and_crash_redelivery_preserve_at_least_once`
   and
-  `tests/integration/test_multi_vault_outbox_pg_claims.py::test_revocation_after_effect_reconciles_receipt_before_authority_quarantine`;
+  `tests/integration/test_multi_vault_outbox_pg_claims.py::test_revocation_after_effect_reconciles_receipt_before_authority_quarantine`
+  and
+  `tests/integration/test_multi_vault_outbox_pg_claims.py::test_expired_claim_stale_owner_cannot_effect_after_reclaim`;
   missing PostgreSQL or claim constraints is an error, never a skip, and the successful URL/SHA is
   attached to #2143.
+- `pytest -q tests/migrations/test_multi_vault_outbox_upgrade.py::test_mvr06d_floor_precedes_first_queue_state_write_and_blocks_older_runtime`
 - Verify the 06D PR diff contains its mapped activated `docs/ENVIRONMENTS.md`, `docs/HEALTH.md`,
   `docs/DB_SCHEMA.md`, and `docs/EVENTS.md` writebacks.
 
