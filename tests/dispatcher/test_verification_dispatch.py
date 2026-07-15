@@ -26,6 +26,81 @@ CLAIM_PRE_LOCK = "2030-01-01T00:00:00.000000+00:00"
 CLAIM_POST_LOCK = "2030-01-01T00:00:20.000000+00:00"
 
 
+def _canonical_v1_request(*, supporting_issues: list[int]) -> dict[str, object]:
+    payload = request()
+    payload["contract_version"] = "verification_dispatch_request.v1"
+    payload["supporting_issues"] = supporting_issues
+    payload.pop("closing_issues")
+    identity = {
+        "contract_version": payload["contract_version"],
+        "head_sha": payload["current_head_sha"],
+        "pr_number": payload["pr_number"],
+        "repository": payload["repository"],
+        "stage": payload["stage"],
+    }
+    payload["idempotency_key"] = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return payload
+
+
+def _write_deployed_v1_run(
+    state,
+    *,
+    supporting_issues: list[int],
+) -> tuple[str, dict[str, object]]:
+    original = state.ingest(request())
+    payload = _canonical_v1_request(supporting_issues=supporting_issues)
+    idempotency_key = payload["idempotency_key"]
+    assert isinstance(idempotency_key, str)
+    run_id = f"vrun-{idempotency_key[:16]}"
+    with sqlite3.connect(state.store.db_path) as conn:
+        conn.execute(
+            """
+            UPDATE verification_runs
+            SET run_id=?, idempotency_key=?, contract_version=?, request_json=?,
+                supporting_authority_json=?, closing_authority_json='[3603]',
+                status='running', claimed_by='host', lease_id='legacy-lease',
+                lease_expires_at='2030-01-01T00:00:00+00:00',
+                last_heartbeat_at='2026-07-16T10:00:00+00:00',
+                coordinator_session_id='01900000-0000-7000-8000-000000000002',
+                context_pack_json='{"legacy":"context"}'
+            WHERE run_id=?
+            """,
+            (
+                run_id,
+                idempotency_key,
+                payload["contract_version"],
+                json.dumps(
+                    payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ),
+                json.dumps(supporting_issues, separators=(",", ":")),
+                original.run_id,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO verification_attempts (
+                attempt_id, run_id, attempt_kind, ordinal, session_id,
+                capability, reasoning_effort, context_hash, outcome,
+                finding_id, failure_domain, mechanism_id, receipt_json, created_at
+            ) VALUES (
+                'attempt-v1-closure', ?, 'standard_repair', 1,
+                '01900000-0000-7000-8000-000000000002', 'gpt-5.6-terra',
+                'high', 'legacy-context-hash', 'fixed', 'F-v1-ambiguous',
+                'review_code_correctness', 'legacy-closing-authority',
+                '{"legacy":true}', '2026-07-16T10:00:01+00:00'
+            )
+            """,
+            (run_id,),
+        )
+        conn.commit()
+    return run_id, payload
+
+
 def _migrated_legacy_ledger(tmp_path, legacy_request: dict | None = None):
     state = ledger(tmp_path)
     original = state.ingest(request())
@@ -951,70 +1026,22 @@ def test_schema_v4_backfills_closing_authority_without_resetting_chain(
     assert migrated_state.attempts(original.run_id) == before_attempts
 
 
-@pytest.mark.parametrize("existing_schema", ["4", "5"])
-def test_schema_reconciliation_quarantines_ambiguous_v1_multi_issue_closure(
-    tmp_path, existing_schema: str
+@pytest.mark.parametrize("supporting_issues", [[], [3626]])
+@pytest.mark.parametrize("existing_schema", ["3", "4", "5"])
+def test_schema_reconciliation_quarantines_v1_without_authenticated_closure(
+    tmp_path, existing_schema: str, supporting_issues: list[int]
 ) -> None:
-    payload = request()
-    payload["contract_version"] = "verification_dispatch_request.v1"
-    payload.pop("closing_issues")
-    identity = {
-        "contract_version": payload["contract_version"],
-        "head_sha": payload["current_head_sha"],
-        "pr_number": payload["pr_number"],
-        "repository": payload["repository"],
-        "stage": payload["stage"],
-    }
-    payload["idempotency_key"] = hashlib.sha256(
-        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
-
     state = ledger(tmp_path)
-    original = state.ingest(payload)
-    claim = state.claim(original.run_id, "host")
-    assert claim.lease_id is not None
-    state.start(
-        original.run_id,
-        "host",
-        claim.lease_id,
-        "01900000-0000-7000-8000-000000000002",
-        {"head_sha": original.head_sha},
+    run_id, _ = _write_deployed_v1_run(
+        state,
+        supporting_issues=supporting_issues,
     )
-    state.record_attempt(
-        original.run_id,
-        "standard_repair",
-        "01900000-0000-7000-8000-000000000002",
-        "gpt-5.6-terra",
-        "high",
-        {"head_sha": original.head_sha},
-        "fixed",
-        {
-            "finding_id": "F-v1-ambiguous",
-            "failure_domain": "review_code_correctness",
-            "mechanism_id": "legacy-closing-authority",
-        },
-        holder="host",
-        lease_id=claim.lease_id,
-    )
-    before_attempts = state.attempts(original.run_id)
-    payload["supporting_issues"] = [3626]
-    with sqlite3.connect(state.store.db_path) as conn:
-        conn.execute(
-            "UPDATE verification_runs "
-            "SET request_json=?, supporting_authority_json='[3626]' "
-            "WHERE run_id=?",
-            (
-                json.dumps(
-                    payload,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    ensure_ascii=False,
-                ),
-                original.run_id,
-            ),
-        )
-        conn.commit()
-    if existing_schema == "4":
+    if existing_schema == "3":
+        with sqlite3.connect(state.store.db_path) as conn:
+            conn.execute("ALTER TABLE verification_runs DROP COLUMN supporting_authority_json")
+            downgrade_verification_schema_to_v3(conn)
+            conn.commit()
+    elif existing_schema == "4":
         with sqlite3.connect(state.store.db_path) as conn:
             conn.execute(
                 "ALTER TABLE verification_runs DROP COLUMN closing_authority_json"
@@ -1023,7 +1050,7 @@ def test_schema_reconciliation_quarantines_ambiguous_v1_multi_issue_closure(
             conn.commit()
 
     migrated_state = ledger(tmp_path)
-    migrated = migrated_state.get(original.run_id)
+    migrated = migrated_state.get(run_id)
 
     assert migrated is not None
     assert migrated.status == "legacy_untrusted"
@@ -1033,30 +1060,29 @@ def test_schema_reconciliation_quarantines_ambiguous_v1_multi_issue_closure(
     assert migrated.claimed_by is None
     assert migrated.lease_id is None
     assert migrated.coordinator_session_id is None
-    assert migrated.repair_budget_policy == "v2"
-    assert migrated_state.attempts(original.run_id) == before_attempts
+    assert migrated.context_pack is None
+    assert migrated.repair_budget_policy == ("v1" if existing_schema == "3" else "v2")
+    attempts = migrated_state.attempts(run_id)
+    assert len(attempts) == 1
+    assert attempts[0]["attempt_id"] == "attempt-v1-closure"
+    assert attempts[0]["kind"] == "standard_repair"
+    budget = migrated_state.repair_budget_projection(run_id)
+    assert budget["policy_version"] == migrated.repair_budget_policy
+    mechanism = budget["mechanisms"][0]
+    assert mechanism["standard_used"] == 1
+    assert mechanism["standard_remaining"] == 1
+    assert mechanism["escalated_used"] == 0
+    assert mechanism["escalated_remaining"] == 2
 
 
-def test_ingest_rejects_ambiguous_v1_multi_issue_closure_before_persistence(
-    tmp_path,
+@pytest.mark.parametrize("supporting_issues", [[], [3626]])
+def test_ingest_rejects_v1_without_authenticated_closure_before_persistence(
+    tmp_path, supporting_issues: list[int]
 ) -> None:
-    payload = request()
-    payload["contract_version"] = "verification_dispatch_request.v1"
-    payload.pop("closing_issues")
-    payload["supporting_issues"] = [3626]
-    identity = {
-        "contract_version": payload["contract_version"],
-        "head_sha": payload["current_head_sha"],
-        "pr_number": payload["pr_number"],
-        "repository": payload["repository"],
-        "stage": payload["stage"],
-    }
-    payload["idempotency_key"] = hashlib.sha256(
-        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    payload = _canonical_v1_request(supporting_issues=supporting_issues)
     state = ledger(tmp_path)
 
-    with pytest.raises(ValueError, match="ambiguous multi-issue closure authority"):
+    with pytest.raises(ValueError, match="fresh v2 artifact"):
         state.ingest(payload)
 
     with state.store._connect() as conn:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import hashlib
 import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -174,6 +175,77 @@ def _write_pre_trust_v3_state(tmp_path: Path, legacy_request: dict | None = None
     return paths, run, legacy_request
 
 
+def _write_v1_empty_supporting_v3_state(
+    tmp_path: Path,
+) -> tuple[object, str, dict[str, object]]:
+    """Create a deployed canonical v1 row whose closure semantics are unknown."""
+    store, paths = _store(tmp_path)
+    original = VerificationDispatchLedger(store).ingest(verification_request())
+    legacy_request = verification_request()
+    legacy_request["contract_version"] = "verification_dispatch_request.v1"
+    legacy_request.pop("closing_issues")
+    assert legacy_request["supporting_issues"] == []
+    identity = {
+        "contract_version": legacy_request["contract_version"],
+        "head_sha": legacy_request["current_head_sha"],
+        "pr_number": legacy_request["pr_number"],
+        "repository": legacy_request["repository"],
+        "stage": legacy_request["stage"],
+    }
+    legacy_key = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    legacy_request["idempotency_key"] = legacy_key
+    legacy_run_id = f"vrun-{legacy_key[:16]}"
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.execute(
+            """
+            UPDATE verification_runs
+            SET run_id=?, idempotency_key=?, contract_version=?, request_json=?,
+                closing_authority_json='[3603]', status='running',
+                claimed_by='host', lease_id='legacy-lease',
+                lease_expires_at='2030-01-01T00:00:00+00:00',
+                last_heartbeat_at='2026-07-16T10:00:00+00:00',
+                coordinator_session_id='01900000-0000-7000-8000-000000000003',
+                context_pack_json='{"legacy":"context"}'
+            WHERE run_id=?
+            """,
+            (
+                legacy_run_id,
+                legacy_key,
+                legacy_request["contract_version"],
+                json.dumps(
+                    legacy_request,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ),
+                original.run_id,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO verification_attempts (
+                attempt_id, run_id, attempt_kind, ordinal, session_id,
+                capability, reasoning_effort, context_hash, outcome,
+                finding_id, failure_domain, mechanism_id, receipt_json, created_at
+            ) VALUES (
+                'attempt-v1-empty', ?, 'standard_repair', 1,
+                '01900000-0000-7000-8000-000000000003', 'gpt-5.6-terra',
+                'high', 'legacy-context-hash', 'fixed', 'F-v1-empty',
+                'review_code_correctness', 'legacy-closing-authority',
+                '{"legacy":true}', '2026-07-16T10:00:01+00:00'
+            )
+            """,
+            (legacy_run_id,),
+        )
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN supporting_authority_json")
+        downgrade_verification_schema_to_v3(conn)
+        conn.commit()
+    paths.events_path.touch()
+    return paths, legacy_run_id, legacy_request
+
+
 def test_recovery_accepts_and_restores_canonical_v1_until_store_migrates_it(
     tmp_path: Path,
 ) -> None:
@@ -258,6 +330,48 @@ def test_pre_repair_v3_backup_restore_self_migrates_without_data_loss(
     assert attempt_after == attempt_before
     assert exception_after == exception_before
     assert migrated.get_task("task-1") is not None
+    assert control_plane.health(restored)["ok"] is True
+
+
+def test_v1_empty_supporting_backup_restore_quarantines_without_budget_reset(
+    tmp_path: Path,
+) -> None:
+    paths, run_id, legacy_request = _write_v1_empty_supporting_v3_state(tmp_path)
+    before = paths.db_path.read_bytes()
+
+    assert control_plane.health(paths)["ok"] is True
+    assert paths.db_path.read_bytes() == before
+    backup = tmp_path / "backup-v1-empty"
+    control_plane.backup(paths, backup)
+    assert paths.db_path.read_bytes() == before
+    restored = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "restored-v1-empty")})
+    assert control_plane.restore(backup, restored)["integrity"] == "ok"
+
+    migrated_state = VerificationDispatchLedger(SqliteStore(restored.db_path))
+    migrated = migrated_state.get(run_id)
+
+    assert migrated is not None
+    assert migrated.status == "legacy_untrusted"
+    assert migrated.authority_state == "legacy_untrusted"
+    assert migrated.request == legacy_request
+    assert migrated.supporting_authority == ()
+    assert migrated.closing_authority == ()
+    assert migrated.claimed_by is None
+    assert migrated.lease_id is None
+    assert migrated.coordinator_session_id is None
+    assert migrated.context_pack is None
+    assert migrated.repair_budget_policy == "v1"
+    attempts = migrated_state.attempts(run_id)
+    assert len(attempts) == 1
+    assert attempts[0]["attempt_id"] == "attempt-v1-empty"
+    assert attempts[0]["kind"] == "standard_repair"
+    budget = migrated_state.repair_budget_projection(run_id)
+    assert budget["policy_version"] == "v1"
+    mechanism = budget["mechanisms"][0]
+    assert mechanism["standard_used"] == 1
+    assert mechanism["standard_remaining"] == 1
+    assert mechanism["escalated_used"] == 0
+    assert mechanism["escalated_remaining"] == 2
     assert control_plane.health(restored)["ok"] is True
 
 

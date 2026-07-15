@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import hashlib
 import io
 import json
 import os
@@ -884,6 +885,29 @@ def _artifact_source_for_request(payload: dict[str, object], *, workflow_run_id:
                     }
                 )
             )
+        if command[-1].endswith("actions/runs/99"):
+            return Result(
+                json.dumps(
+                    {
+                        "id": 99,
+                        "run_attempt": 1,
+                        "name": "CI",
+                        "path": ".github/workflows/ci.yml",
+                        "event": "pull_request",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "head_sha": HEAD,
+                        "repository": {
+                            "id": 456,
+                            "full_name": "RasmusTho/agentic-pkm-mvp",
+                        },
+                        "head_repository": {
+                            "id": 456,
+                            "full_name": "RasmusTho/agentic-pkm-mvp",
+                        },
+                    }
+                )
+            )
         return Result(archive_bytes.getvalue())
 
     return GhCliVerificationSource(runner=runner), calls
@@ -1074,6 +1098,29 @@ def test_pending_request_rejects_workflow_run_mismatch() -> None:
         source.pending_requests("RasmusTho/agentic-pkm-mvp")
 
     assert len(calls) == 3
+
+
+def test_pending_request_rejects_v1_empty_supporting_closure_authority() -> None:
+    payload = artifact_request()
+    payload["contract_version"] = "verification_dispatch_request.v1"
+    payload.pop("closing_issues")
+    assert payload["supporting_issues"] == []
+    identity = {
+        "contract_version": payload["contract_version"],
+        "head_sha": payload["current_head_sha"],
+        "pr_number": payload["pr_number"],
+        "repository": payload["repository"],
+        "stage": payload["stage"],
+    }
+    payload["idempotency_key"] = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    source, calls = _artifact_source_for_request(payload)
+
+    with pytest.raises(ValueError, match="request artifact is malformed"):
+        source.pending_requests("RasmusTho/agentic-pkm-mvp")
+
+    assert len(calls) == 4
 
 
 @pytest.mark.parametrize("pr,checks,reason", [

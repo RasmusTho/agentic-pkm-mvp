@@ -363,7 +363,9 @@ def _required_positive_int(request: Mapping[str, object], field: str) -> int:
     return value
 
 
-def _validate_request(request: Mapping[str, object]) -> None:
+def _validate_request(
+    request: Mapping[str, object], *, allow_legacy_audit: bool = False
+) -> None:
     if "base_ref" in request or "head_ref" in request:
         raise ValueError("verification request contains untrusted branch refs")
     required_strings = {
@@ -392,22 +394,22 @@ def _validate_request(request: Mapping[str, object]) -> None:
         raise ValueError("verification request supporting issues are malformed")
     if (
         request["contract_version"] == LEGACY_CONTRACT_VERSION
-        and supporting_issues
+        and not allow_legacy_audit
     ):
         raise ValueError(
-            "legacy verification request has ambiguous multi-issue closure authority"
+            "legacy verification request does not authenticate closing authority; "
+            "fresh v2 artifact required"
         )
-    closing_issues = request.get("closing_issues")
-    if request["contract_version"] == LEGACY_CONTRACT_VERSION:
-        closing_issues = [linked_issue]
-    if (
-        not isinstance(closing_issues, list)
-        or not closing_issues
-        or any(not _positive_int(value) for value in closing_issues)
-        or len(set(closing_issues)) != len(closing_issues)
-        or not set(closing_issues).issubset({linked_issue, *supporting_issues})
-    ):
-        raise ValueError("verification request closing issues are malformed")
+    if request["contract_version"] == CONTRACT_VERSION:
+        closing_issues = request.get("closing_issues")
+        if (
+            not isinstance(closing_issues, list)
+            or not closing_issues
+            or any(not _positive_int(value) for value in closing_issues)
+            or len(set(closing_issues)) != len(closing_issues)
+            or not set(closing_issues).issubset({linked_issue, *supporting_issues})
+        ):
+            raise ValueError("verification request closing issues are malformed")
     repository = strings["repository"]
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or any(
         component in {".", ".."} for component in repository.split("/")
@@ -561,11 +563,8 @@ def _validated_supporting_authority(
 
 
 def _request_closing_authority(request: Mapping[str, object]) -> list[int]:
-    linked_issue = request.get("linked_issue")
-    if request.get("contract_version") == LEGACY_CONTRACT_VERSION:
-        if not _positive_int(linked_issue):
-            raise ValueError("verification closing authority is malformed")
-        return [linked_issue]
+    if request.get("contract_version") != CONTRACT_VERSION:
+        raise ValueError("verification closing authority requires a v2 artifact")
     closing = request.get("closing_issues")
     if not isinstance(closing, list):
         raise ValueError("verification closing authority is malformed")

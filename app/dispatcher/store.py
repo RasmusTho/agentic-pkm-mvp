@@ -265,12 +265,11 @@ def recognized_ambiguous_v1_closure_request(
     row: Mapping[str, Any] | sqlite3.Row,
     request: Mapping[str, object],
 ) -> bool:
-    """Recognize a canonical v1 request whose multi-issue closure is unknowable."""
+    """Recognize a canonical v1 request whose exact closure is unknowable."""
     supporting = request.get("supporting_issues")
     if (
         request.get("contract_version") != "verification_dispatch_request.v1"
         or not isinstance(supporting, list)
-        or not supporting
     ):
         return False
     try:
@@ -280,9 +279,7 @@ def recognized_ambiguous_v1_closure_request(
         )
 
         projected = _canonical_request_projection(request)
-        validation_projection = dict(projected)
-        validation_projection["supporting_issues"] = []
-        _validate_request(validation_projection)
+        _validate_request(projected, allow_legacy_audit=True)
     except (KeyError, TypeError, ValueError):
         return False
     idempotency_key = request.get("idempotency_key")
@@ -324,13 +321,8 @@ def _verification_closing_authority_migration(row: sqlite3.Row) -> str:
         raise ValueError("verification closing authority is malformed")
     version = request.get("contract_version")
     closing = request.get("closing_issues")
-    if version == "verification_dispatch_request.v1":
-        closing = [linked_issue]
     if (
-        version not in {
-            "verification_dispatch_request.v1",
-            "verification_dispatch_request.v2",
-        }
+        version != "verification_dispatch_request.v2"
         or not isinstance(closing, list)
         or not closing
         or any(not _positive_int(issue) for issue in closing)
