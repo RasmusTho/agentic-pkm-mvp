@@ -69,12 +69,46 @@ class ProcessResult(Protocol):
 
 ProcessRunner = Callable[..., ProcessResult]
 
+_COORDINATOR_REQUIRED_ENVIRONMENT = ("HOME", "PATH")
+_COORDINATOR_OPTIONAL_ENVIRONMENT = (
+    "LANG",
+    "LANGUAGE",
+    "LC_ADDRESS",
+    "LC_ALL",
+    "LC_COLLATE",
+    "LC_CTYPE",
+    "LC_IDENTIFICATION",
+    "LC_MEASUREMENT",
+    "LC_MESSAGES",
+    "LC_MONETARY",
+    "LC_NAME",
+    "LC_NUMERIC",
+    "LC_PAPER",
+    "LC_TELEPHONE",
+    "LC_TIME",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+)
+
+
+def _coordinator_environment(base: Mapping[str, str]) -> dict[str, str]:
+    """Return the non-secret runtime environment allowed into Codex children."""
+
+    if any(not base.get(key) for key in _COORDINATOR_REQUIRED_ENVIRONMENT):
+        raise RuntimeError("verification coordinator required environment unavailable")
+    return {
+        key: base[key]
+        for key in (
+            *_COORDINATOR_REQUIRED_ENVIRONMENT,
+            *_COORDINATOR_OPTIONAL_ENVIRONMENT,
+        )
+        if base.get(key)
+    }
+
 CANONICAL_RECEIPT_SCHEMA_PATH = (
     Path(__file__).resolve().parent
     / "schemas/verification_closer_receipt.schema.json"
-)
-_COORDINATOR_ENV_ALLOWLIST = frozenset(
-    {"HOME", "LANG", "LC_ALL", "LC_CTYPE", "NO_COLOR", "PATH", "TERM", "TMPDIR"}
 )
 _VERIFICATION_SOURCE_PATH = ".github/workflows/ci.yml"
 _VERIFICATION_ARTIFACT_NAME = re.compile(
@@ -84,15 +118,6 @@ _VERIFICATION_ARTIFACT_NAME = re.compile(
 
 class ReceiptContractError(ValueError):
     """Untrusted launcher output failed the canonical receipt contract."""
-
-
-def _minimal_coordinator_environment() -> dict[str, str]:
-    """Return only non-secret host values required to locate and run Codex."""
-    return {
-        key: os.environ[key]
-        for key in _COORDINATOR_ENV_ALLOWLIST
-        if key in os.environ
-    }
 
 
 class WholeTreeContainment(Protocol):
@@ -842,12 +867,21 @@ class CodexChatGPTAuthPreflight:
         store = config.get("cli_auth_credentials_store")
         if mode != "chatgpt" or store != "keyring":
             return AuthReceipt(False, str(mode or ""), str(store or ""), "ChatGPT/keyring policy mismatch")
+        try:
+            env = _coordinator_environment(os.environ)
+        except RuntimeError:
+            return AuthReceipt(
+                False,
+                "chatgpt",
+                "keyring",
+                "required runtime environment unavailable",
+            )
         result = self.runner(
             ["codex", "login", "status"],
             capture_output=True,
             text=True,
             timeout=30,
-            env=_minimal_coordinator_environment(),
+            env=env,
             check=False,
         )
         if result.returncode != 0:
@@ -1520,7 +1554,7 @@ class CodexExecLauncher:
         self.context_path.write_text(
             json.dumps(context_pack, sort_keys=True, indent=2) + "\n", encoding="utf-8"
         )
-        base_env = _minimal_coordinator_environment()
+        base_env = _coordinator_environment(os.environ)
         try:
             containment = self.containment_factory()
             cleanup_tracker = (

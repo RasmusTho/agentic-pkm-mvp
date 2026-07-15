@@ -1925,6 +1925,100 @@ def test_codex_launcher_uses_explicit_noninteractive_flags_and_no_api_env(tmp_pa
     assert "resume" in resumed and resumed[resumed.index("resume") + 1] == "01900000-0000-7000-8000-000000000010"
 
 
+def _capturing_coordinator_launcher(tmp_path: Path, calls: list[dict[str, object]]) -> CodexExecLauncher:
+    class Result:
+        returncode = 0
+        stderr = ""
+        stdout = (
+            '{"type":"thread.started","thread_id":"01900000-0000-7000-8000-000000000030"}\n'
+            '{"type":"item.completed","item":{"type":"agent_message","text":"{\\"verdict\\":\\"blocked\\",\\"head_sha\\":\\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\",\\"summary\\":\\"test\\",\\"receipt_ids\\":[],\\"retry_after\\":null,\\"review_events\\":null,\\"human_exception\\":null}"}}\n'
+        )
+
+    def runner(command, **kwargs):
+        calls.append(kwargs)
+        return Result()
+
+    return CodexExecLauncher(
+        tmp_path,
+        Path(__file__).resolve().parents[2]
+        / "app/dispatcher/schemas/verification_closer_receipt.schema.json",
+        tmp_path / "context.json",
+        adapter_path=Path(__file__).resolve().parents[2]
+        / ".codex/agents/verification-closer.toml",
+        runner=runner,
+    )
+
+
+def test_coordinator_launch_strips_ambient_host_credentials(tmp_path, monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+    for key in (
+        "ANTHROPIC_API_KEY",
+        "AWS_SECRET_ACCESS_KEY",
+        "DATABASE_URL",
+        "GH_TOKEN",
+        "OPENAI_API_KEY",
+    ):
+        monkeypatch.setenv(key, "rejected-value")
+
+    _capturing_coordinator_launcher(tmp_path, calls).launch({"head_sha": HEAD})
+
+    child_env = calls[0]["env"]
+    assert isinstance(child_env, dict)
+    assert not set(child_env).intersection(
+        {
+            "ANTHROPIC_API_KEY",
+            "AWS_SECRET_ACCESS_KEY",
+            "DATABASE_URL",
+            "GH_TOKEN",
+            "OPENAI_API_KEY",
+        }
+    )
+
+
+def test_coordinator_launch_uses_explicit_runtime_environment(tmp_path, monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+    runtime_environment = {
+        "HOME": "/non-secret/home",
+        "LANG": "sv_SE.UTF-8",
+        "LC_CTYPE": "UTF-8",
+        "LC_MESSAGES": "sv_SE.UTF-8",
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "TMPDIR": "/non-secret/tmp",
+    }
+    for key in verification_consumer._COORDINATOR_OPTIONAL_ENVIRONMENT:
+        monkeypatch.delenv(key, raising=False)
+    for key, value in runtime_environment.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("UNRELATED_SERVICE_CREDENTIAL", "rejected-value")
+
+    _capturing_coordinator_launcher(tmp_path, calls).launch({"head_sha": HEAD})
+
+    child_env = calls[0]["env"]
+    assert isinstance(child_env, dict)
+    assert {key: child_env[key] for key in runtime_environment} == runtime_environment
+    assert set(child_env) == {
+        *runtime_environment,
+        "PKM_VERIFICATION_PROCESS_TREE",
+    }
+
+
+@pytest.mark.parametrize("missing_key", ["HOME", "PATH"])
+def test_coordinator_launch_missing_required_environment_fails_closed(
+    tmp_path, monkeypatch, missing_key
+) -> None:
+    calls: list[dict[str, object]] = []
+    monkeypatch.delenv(missing_key, raising=False)
+    monkeypatch.setenv("HOST_CREDENTIAL", "rejected-value")
+
+    with pytest.raises(
+        RuntimeError,
+        match="^verification coordinator required environment unavailable$",
+    ):
+        _capturing_coordinator_launcher(tmp_path, calls).launch({"head_sha": HEAD})
+
+    assert calls == []
+
+
 class _AuthorityLossOutput:
     def __init__(self, lines: list[str]) -> None:
         self.lines = iter(lines)

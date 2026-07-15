@@ -34,8 +34,9 @@ def test_chatgpt_subscription_keyring_auth_is_required() -> None:
     assert 'mode != "chatgpt"' in text
     assert 'store != "keyring"' in text
     assert '["codex", "login", "status"]' in text
-    assert "_COORDINATOR_ENV_ALLOWLIST" in text
-    assert "_minimal_coordinator_environment()" in text
+    assert '_COORDINATOR_REQUIRED_ENVIRONMENT = ("HOME", "PATH")' in text
+    assert "_COORDINATOR_OPTIONAL_ENVIRONMENT" in text
+    assert text.count("_coordinator_environment(os.environ)") == 2
     assert "os.environ.items()" not in text
     assert "OPENAI_API_KEY" not in text
     assert "CODEX_API_KEY" not in text
