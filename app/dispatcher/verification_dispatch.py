@@ -732,6 +732,7 @@ class VerificationDispatchLedger:
         )
 
     def ingest(self, request: Mapping[str, object]) -> VerificationRun:
+        authenticated_artifact = isinstance(request, _AuthenticatedVerificationRequest)
         live_observation = (
             request.live_observation
             if isinstance(request, _LiveObservedVerificationRequest)
