@@ -275,6 +275,17 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
                 raise ScorecardCompareError(
                     f"malformed entry at {confusions_path}[{index}]: missing {key!r}"
                 )
+            if not isinstance(entry[key], str) or not entry[key]:
+                raise ScorecardCompareError(
+                    f"malformed entry at {confusions_path}[{index}]: invalid {key!r}"
+                )
+    confusion_signatures = {
+        tuple(entry[key] for key in CONFUSION_ENTRY_KEYS) for entry in confusions
+    }
+    if len(confusion_signatures) != len(confusions):
+        raise ScorecardCompareError(
+            f"duplicate mutation-side confusion at {confusions_path}"
+        )
     view["mutation_side_confusions"] = confusions
     if view["hard_gate_passed"] != (not confusions):
         raise ScorecardCompareError(
@@ -486,6 +497,32 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
         raise ScorecardCompareError(
             f"hard-gate evidence contradicts categorical failures at {label}"
         )
+    expected_categorical_metrics = {
+        "classification:hard_gate": sorted(
+            "mutation_side_confusion:"
+            f"{entry['case_id']}->{entry['predicted_intent']}"
+            for entry in confusions
+        ),
+        "provisional_memory:hard_gate": sorted(
+            f"{entry['case_id']}:{entry['reason']}"
+            for entry in view["provisional_memory_boundary"]["failures"]
+        ),
+    }
+    for scope, expected_metrics in expected_categorical_metrics.items():
+        actual_metrics = sorted(
+            entry["metric"]
+            for entry in failures
+            if entry["kind"] == "categorical" and entry["scope"] == scope
+        )
+        if actual_metrics != expected_metrics:
+            raise ScorecardCompareError(
+                f"categorical metrics contradict nested evidence for {label}.{scope}"
+            )
+    failure_signatures = {
+        (entry["scope"], entry["metric"], entry["kind"]) for entry in failures
+    }
+    if len(failure_signatures) != len(failures):
+        raise ScorecardCompareError(f"duplicate scorecard failure at {label}.failures")
     view["floor_regression"] = scorecard_regression
     view["failures"] = failures
 

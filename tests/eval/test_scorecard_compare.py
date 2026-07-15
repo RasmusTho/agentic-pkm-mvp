@@ -294,6 +294,80 @@ def test_cli_rejects_classification_gate_confusion_contradiction(
     assert "hard-gate state contradicts" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("gate", ["classification", "provisional"])
+def test_cli_rejects_categorical_metric_nested_evidence_mismatch(
+    gate: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    candidate = load_scorecard(CANDIDATE_PATH)
+    if gate == "classification":
+        candidate["classification"]["hard_gate_passed"] = False
+        candidate["classification"]["mutation_side_confusions"] = [
+            {
+                "case_id": "adv-sv-01",
+                "expected_intent": "exploratory",
+                "predicted_intent": "governance_bearing",
+            }
+        ]
+        scope = "classification:hard_gate"
+    else:
+        boundary = candidate["provisional_memory_boundary"]
+        boundary["hard_gate_passed"] = False
+        boundary["failures"] = [
+            {
+                "case_id": "cited-proposal-en",
+                "reason": "uncited_proposal_admitted",
+            }
+        ]
+        next(
+            case
+            for case in boundary["cases"]
+            if case["id"] == "cited-proposal-en"
+        )["passed"] = False
+        scope = "provisional_memory:hard_gate"
+    candidate["regression"] = True
+    candidate["failures"] = [
+        {
+            "scope": scope,
+            "metric": "totally-wrong-case:totally-wrong-reason",
+            "value": 1.0,
+            "threshold": 0.0,
+            "kind": "categorical",
+        }
+    ]
+    path = tmp_path / f"candidate_{gate}_metric_mismatch.json"
+    path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    assert eval_run.main(
+        ["compare", "--baseline", str(BASELINE_PATH), "--candidate", str(path)]
+    ) == 2
+    assert "categorical metrics contradict nested evidence" in capsys.readouterr().err
+
+
+def test_cli_rejects_duplicate_scorecard_failure(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    candidate = load_scorecard(CANDIDATE_PATH)
+    failure = {
+        "scope": "aggregate",
+        "metric": "precision_at_k",
+        "value": 0.1,
+        "threshold": 0.15,
+        "kind": "threshold_floor",
+    }
+    candidate["regression"] = True
+    candidate["failures"] = [failure, failure]
+    path = tmp_path / "candidate_duplicate_failure.json"
+    path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    assert eval_run.main(
+        ["compare", "--baseline", str(BASELINE_PATH), "--candidate", str(path)]
+    ) == 2
+    assert "duplicate scorecard failure" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     "target,mutation",
     [
