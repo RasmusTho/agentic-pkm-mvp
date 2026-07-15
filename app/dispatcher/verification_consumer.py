@@ -7,15 +7,19 @@ dedupe, auth preflight, context minimisation, and launch receipts; the launched
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
 import io
 import os
 import re
+import secrets
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
+import time
 import tomllib
 import zipfile
 from dataclasses import dataclass
@@ -60,6 +64,163 @@ class ProcessResult(Protocol):
 
 
 ProcessRunner = Callable[..., ProcessResult]
+
+
+class WholeTreeContainment(Protocol):
+    """One launch-scoped host boundary that can prove descendant cleanup."""
+
+    def environment(self, base: Mapping[str, str]) -> dict[str, str]: ...
+
+    def attach(self, root_pid: int) -> None: ...
+
+    def cleanup(self) -> bool: ...
+
+
+class TaggedProcessTreeCleanup:
+    """Best-effort escape cleanup; deliberately never claims kernel proof."""
+
+    _ENV_KEY = "PKM_VERIFICATION_PROCESS_TREE"
+
+    def __init__(self) -> None:
+        self.token = secrets.token_hex(32)
+        self._known_pids: set[int] = set()
+        self._root_pid: int | None = None
+        self._stop = threading.Event()
+        self._tracker: threading.Thread | None = None
+
+    def environment(self, base: Mapping[str, str]) -> dict[str, str]:
+        return {**base, self._ENV_KEY: self.token}
+
+    @staticmethod
+    def _children_of(parent_pid: int) -> set[int]:
+        proc = Path("/proc")
+        if proc.is_dir():
+            children: set[int] = set()
+            for entry in proc.iterdir():
+                if not entry.name.isdigit():
+                    continue
+                try:
+                    status = (entry / "status").read_text(encoding="utf-8")
+                except (OSError, PermissionError):
+                    continue
+                match = re.search(r"(?m)^PPid:\s+(\d+)$", status)
+                if match and int(match.group(1)) == parent_pid:
+                    children.add(int(entry.name))
+            return children
+        if sys.platform == "darwin":
+            try:
+                libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
+                list_children = libproc.proc_listchildpids
+                list_children.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+                list_children.restype = ctypes.c_int
+                buffer = (ctypes.c_int * 4096)()
+                count = list_children(
+                    parent_pid, buffer, ctypes.sizeof(buffer)
+                )
+            except (OSError, AttributeError):
+                return set()
+            count = max(0, count)
+            return {int(buffer[index]) for index in range(count) if buffer[index] > 0}
+        return set()
+
+    def _sample_descendants(self) -> None:
+        frontier = {self._root_pid} if self._root_pid is not None else set()
+        frontier |= set(self._known_pids)
+        observed: set[int] = set()
+        while frontier:
+            parent = frontier.pop()
+            children = self._children_of(parent)
+            new_children = children - observed
+            observed |= new_children
+            frontier |= new_children
+        self._known_pids |= observed
+
+    def attach(self, root_pid: int) -> None:
+        self._root_pid = root_pid
+
+        def track() -> None:
+            while not self._stop.wait(0.01):
+                self._sample_descendants()
+
+        self._tracker = threading.Thread(target=track, daemon=True)
+        self._tracker.start()
+
+    def _tagged_pids(self) -> set[int]:
+        marker = f"{self._ENV_KEY}={self.token}"
+        proc = Path("/proc")
+        if proc.is_dir():
+            found: set[int] = set()
+            for entry in proc.iterdir():
+                if not entry.name.isdigit():
+                    continue
+                try:
+                    environ = (entry / "environ").read_bytes()
+                except (OSError, PermissionError):
+                    continue
+                if marker.encode() in environ.split(b"\0"):
+                    found.add(int(entry.name))
+            return found
+        try:
+            result = subprocess.run(
+                ["ps", "-axeww", "-o", "pid=,command="],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return set()
+        found = set()
+        for line in result.stdout.splitlines():
+            pid_text, _, command = line.strip().partition(" ")
+            if marker in command and pid_text.isdigit():
+                found.add(int(pid_text))
+        return found
+
+    def cleanup(self) -> bool:
+        self._stop.set()
+        if self._tracker:
+            self._tracker.join(timeout=0.2)
+        self._sample_descendants()
+        own_pid = os.getpid()
+        targets = (self._known_pids | self._tagged_pids()) - {own_pid}
+        for pid in targets:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+
+        def still_alive(pids: set[int]) -> set[int]:
+            alive: set[int] = set()
+            for pid in pids:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    continue
+                except PermissionError:
+                    pass
+                alive.add(pid)
+            return alive
+
+        deadline = time.monotonic() + 0.5
+        while targets and time.monotonic() < deadline:
+            targets = still_alive(targets)
+            if targets:
+                time.sleep(0.01)
+        for pid in targets:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        deadline = time.monotonic() + 0.5
+        while targets and time.monotonic() < deadline:
+            targets = still_alive(targets)
+            if targets:
+                time.sleep(0.01)
+        # An inherited marker lets us remove observed setsid escapes, but a
+        # process can erase its environment. Only a stronger host adapter may
+        # return True and authorize a terminal receipt.
+        return False
 
 _MAX_ARTIFACT_COMPRESSED_BYTES = 2_000_000
 _MAX_ARTIFACT_MEMBERS = 16
@@ -474,11 +635,13 @@ class CodexExecLauncher:
         context_path: Path,
         adapter_path: Path | None = None,
         runner: ProcessRunner | None = None,
+        containment_factory: Callable[[], WholeTreeContainment] | None = None,
     ) -> None:
         self.worktree = worktree
         self.receipt_schema = receipt_schema
         self.context_path = context_path
         self.runner = runner if runner is not None else cast(ProcessRunner, subprocess.run)
+        self.containment_factory = containment_factory or TaggedProcessTreeCleanup
         self.adapter_path = adapter_path or worktree / ".codex/agents/verification-closer.toml"
         try:
             adapter = tomllib.loads(self.adapter_path.read_text(encoding="utf-8"))
@@ -548,7 +711,14 @@ class CodexExecLauncher:
         self.context_path.write_text(
             json.dumps(context_pack, sort_keys=True, indent=2) + "\n", encoding="utf-8"
         )
-        env = {k: v for k, v in os.environ.items() if k not in {"OPENAI_API_KEY", "CODEX_API_KEY"}}
+        containment = self.containment_factory()
+        env = containment.environment(
+            {
+                k: v
+                for k, v in os.environ.items()
+                if k not in {"OPENAI_API_KEY", "CODEX_API_KEY"}
+            }
+        )
         stop_heartbeat = threading.Event()
         stdout_complete = threading.Event()
         authority_lost = threading.Event()
@@ -560,6 +730,7 @@ class CodexExecLauncher:
         stderr_chunks: list[str] = []
         process: subprocess.Popen[str] | None = None
         process_group_id: int | None = None
+        containment_proven = False
         process_lock = threading.Lock()
         lines: Iterable[str | bytes]
 
@@ -586,7 +757,7 @@ class CodexExecLauncher:
             return True
 
         def terminate_and_reap_child() -> None:
-            nonlocal process_group_id
+            nonlocal containment_proven, process_group_id
             with process_lock:
                 if process is None:
                     return
@@ -605,6 +776,7 @@ class CodexExecLauncher:
                         if process_group_is_alive():
                             signal_process_group(signal.SIGKILL)
                     process_group_id = None
+                    containment_proven = containment.cleanup() or containment_proven
                     return
                 if process.poll() is None:
                     try:
@@ -619,6 +791,7 @@ class CodexExecLauncher:
                     except ProcessLookupError:
                         pass
                     process.wait(timeout=5)
+                containment_proven = containment.cleanup() or containment_proven
 
         def record_authority_loss(
             exc: Exception, *, outcome: str = "heartbeat_authority_lost"
@@ -641,6 +814,8 @@ class CodexExecLauncher:
                 start_new_session=True,
             )
             process_group_id = getattr(process, "pid", None)
+            if process_group_id is not None:
+                containment.attach(process_group_id)
             assert process.stdout is not None
             lines = process.stdout
             stderr = process.stderr
@@ -753,6 +928,7 @@ class CodexExecLauncher:
                     terminate_and_reap_child()
                 else:
                     process_group_id = None
+                    containment_proven = containment.cleanup()
             if stderr_thread:
                 stderr_thread.join(timeout=1)
             returncode = process.returncode
@@ -791,6 +967,10 @@ class CodexExecLauncher:
                     "terminal_error": terminal_error,
                     "session_id": thread_id,
                 }
+            )
+        if self.runner is subprocess.run and not containment_proven:
+            raise RuntimeError(
+                "whole-process-tree containment unavailable; terminal receipt rejected"
             )
         if not thread_id:
             raise RuntimeError("codex exec produced no thread identity")

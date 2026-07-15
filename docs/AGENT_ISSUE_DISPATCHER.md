@@ -88,12 +88,16 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   usage-limit, quota, or credit-exhaustion signal on that non-zero path remains a lease-fenced backoff
   receipt with no repair-budget use or API-key fallback. A zero exit without both thread identity
   and one schema-valid final receipt also enters exact-lease technical backoff; malformed or missing
-  coordinator output can neither terminal the run nor retain an active claim. Before a clean terminal
-  receipt returns, the launcher also removes any stdout-independent descendants that retain authority
-  in the coordinator's private process group, using the same bounded group-only TERM/KILL cleanup.
+  coordinator output can neither terminal the run nor retain an active claim. Every launch carries a
+  launch-scoped process-tree tracker plus a high-entropy tag so bounded cleanup can remove observed
+  descendants even after a `setsid` escape. Before a clean terminal receipt returns, the launcher
+  removes residual private-group members and requires a host containment adapter to prove whole-tree
+  cleanup; tracker/tag-only best-effort cleanup never claims that proof, so an otherwise valid receipt
+  fails technically on an uncontained host.
 - Heartbeat rejection or failure to persist the thread identity under the exact lease is immediate
   loss of coordinator authority: the consumer terminates the private Codex process group, escalates
-  surviving descendants to a bounded group kill, reaps the direct child, rejects any later stdout,
+  surviving descendants to a bounded group kill, reaps the direct child, performs tracked whole-tree
+  cleanup, rejects any later stdout,
   and records one bounded backoff receipt without accepting a terminal result from the
   authority-lost process. The same technical authority-loss path applies when the direct Codex
   parent exits but a descendant keeps inherited stdout open beyond the bounded drain grace;
