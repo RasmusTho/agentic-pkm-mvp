@@ -118,8 +118,10 @@ required by #2143 without pretending that the move has shipped.
   a valid legacy `last_active_vault_ref` as `default_vault_binding_id` with explicit
   `legacy_last_active_migration` provenance when no default exists. Later last-active changes never
   mutate the default;
-- request selection outranks session selection; session selection outranks the instance default;
-  default outranks an explicit legacy bootstrap adapter; absence resolves to no-vault. The
+- a one-request `X-Active-Context-Override` selection outranks the retained
+  `X-Active-Context-Session` selection; session selection outranks the instance default; default
+  outranks an explicit legacy bootstrap adapter; absence resolves to no-vault. The override is
+  never persisted into the session. The
   one-time legacy restoration is a migration only, not a later runtime-precedence source;
 - unknown, unauthorized, or stale selections fail closed and never fall back silently to another
   vault, CWD, or `./vault`.
@@ -218,9 +220,10 @@ to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup.
   `last_active`, CWD, or `./vault` after an explicit selection fails.
 - One request uses one immutable context generation. A session-only selection change lets in-flight
   reads keep their snapshot. Binding relocation/removal or authority revision invalidates caches and
-  later generations, and every governed mutation must immediately before write re-resolve the target
-  binding revision/root and validate a current GOV `DecisionToken`; stale in-flight mutations fail
-  without writing or drain under an owner-defined transaction protocol.
+  later generations, and every governed mutation must hold a cross-process shared per-binding
+  effect lease from final target/auth revalidation through I/O and receipt. Relocation, removal, and
+  revocation take the matching exclusive lease; stale in-flight mutations fail before writing or a
+  change waits for an already-authorized effect to complete under the prior revision.
 - Every read, retrieval result, write, receipt, cache entry, and background binding preserves
   vault identity and context-generation provenance.
 - Container registry/default/background intent survives force-recreate on a shared instance-state
@@ -285,8 +288,10 @@ Partial delivery remains fail-closed:
 ## Capability acceptance
 
 - [ ] Two sessions can concurrently select different registered vaults and use production read
-  and governed-write paths without global mutation or cross-talk.
-  Verify: `tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk`
+  and governed-write paths without global mutation or cross-talk; a one-request override outranks
+  its retained session without mutating it.
+  Verify: `tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk` +
+  `tests/api/test_active_context_resolution.py::test_request_override_header_outranks_session_without_mutating_it`
 - [ ] A fresh process resolves an explicit default, while request/session selection overrides it
   without mutating it; invalid explicit selection fails closed.
   Verify: `tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior`

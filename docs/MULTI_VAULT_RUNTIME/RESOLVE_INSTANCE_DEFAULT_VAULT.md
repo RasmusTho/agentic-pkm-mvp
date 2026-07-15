@@ -22,8 +22,9 @@ fail-closed precedence resolver.
 - Add nullable `default_vault_binding_id` to the versioned instance registry settings. Treat a
   compatibility `DEFAULT_VAULT_ID` as an untrusted logical-ID lookup that must resolve to exactly
   one local binding.
-- Provide one resolver for explicit request, session, default, legacy bootstrap, and no-vault
-  outcomes, with inspectable provenance.
+- Provide one resolver for explicit one-request override, retained session selection, default,
+  legacy bootstrap, and no-vault outcomes, with inspectable provenance. MVR-05 exposes the two
+  production ingress carriers: `X-Active-Context-Override` and `X-Active-Context-Session`.
 - During the one-time schema migration only, materialize a valid legacy
   `last_active_vault_ref` as the default when no default exists, recording
   `legacy_last_active_migration` provenance. Subsequent last-active changes never update default.
@@ -96,8 +97,9 @@ turns an invalid explicit selection into a dangerous silent read/write against t
 
 ## Acceptance Criteria
 
-- [ ] The production resolver applies explicit request > session > instance default > explicit
-  legacy bootstrap > no-vault and reports which branch won.
+- [ ] The production resolver accepts distinct explicit one-request-override and retained-session
+  inputs, applies override > session > instance default > explicit legacy bootstrap > no-vault,
+  and reports which branch won. MVR-05B owns their later HTTP carriers and non-mutation proof.
   - Verify: `tests/instance/test_default_vault_resolution.py::test_production_resolution_precedence_is_explicit`
 - [ ] An invalid explicit request/session/default fails closed without selecting last-active,
   another registry entry, CWD, or `./vault`.

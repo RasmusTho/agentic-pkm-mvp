@@ -31,6 +31,11 @@ producer and consumer has a replacement and proves reversibility to the single-v
 - Add the deterministic `scripts/multi_vault_test_channel_smoke.py` harness consumed by MVR-08; it
   accepts only an explicit redacted fixture manifest and exercises production APIs without logging
   paths, names, tokens, or content.
+- Before registering either fixture, canonicalize every manifest root and prove it is a distinct
+  descendant of the configured test-sandbox root. Reject overlap with the prod/dev/native vault
+  roots known to channel preflight, overlap between fixture roots, an unresolvable root, or any
+  symlink/path escape before the first registration or write. Checking only the singular
+  `TEST_VAULT_ROOT` is insufficient.
 
 ## Concretely
 
@@ -85,6 +90,10 @@ can break startup or strand durable state. Both failures are latent outages rath
 - [ ] The test-channel smoke harness exercises two bindings/sessions, one dimension read, one
   governed write, and background health through production entrypoints while emitting a redacted receipt.
   - Verify: `tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_harness_is_production_path_and_redacted`
+- [ ] The smoke harness rejects either manifest binding when its canonical root is outside the
+  declared test sandbox, overlaps a known prod/dev/native root, aliases the other fixture, or escapes
+  through a symlink, and performs zero registrations/writes on rejection.
+  - Verify: `tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_rejects_non_test_manifest_roots_before_registration`
 - [ ] Existing no-vault and one-vault journeys preserve startup, picker, request, restart, watcher
   idle/bind, CLI/agent/MCP, retrieval, governed-write, and receipt behavior.
   - Verify: `tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`
@@ -105,6 +114,7 @@ can break startup or strand durable state. Both failures are latent outages rath
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_harness_is_production_path_and_redacted`
+- `pytest -q tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_rejects_non_test_manifest_roots_before_registration`
 - `pytest -q tests/architecture/test_multi_vault_context_boundaries.py tests/integration/test_single_vault_compatibility.py tests/instance/test_vault_registry_migration.py tests/runtime/test_multi_vault_channel_bootstrap.py`
 - `mypy app`
 - `pytest -q -m "not pg"`

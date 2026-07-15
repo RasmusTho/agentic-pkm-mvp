@@ -21,10 +21,17 @@ not background lifecycles.
 
 - Inject the request's immutable `ActiveContextSet` into Companion/API routes and shared service
   calls that read, retrieve, capture, mutate, or emit receipts against content vaults.
+- Define two authenticated ingress carriers rather than collapsing request and session precedence:
+  `X-Active-Context-Session` carries the client's retained session selection, while
+  `X-Active-Context-Override` carries a one-request selection and outranks it. Both values are
+  opaque `context_selection_id` bearers resolved by MVR-03; the override is never persisted into,
+  or used to mutate, the session selection. Supplying an invalid value in either explicit carrier
+  fails that request closed rather than falling through to the other carrier or the instance default.
 - Migrate the existing Companion choose/open-vault picker **and fresh-vault initialize flow** with
   their current client state—not the
   deferred #2566 visual switcher—to create or replace a scoped selection, retain the returned
-  `context_selection_id` for that client session, and send it on every vault-bound request. On
+  `context_selection_id` for that client session, and send it as
+  `X-Active-Context-Session` on every vault-bound request. On
   expiry/restart the client clears the stale ID and never retries the failed request via fallback.
   It may mint a fresh selection automatically only when a new authenticated resolution proves
   exactly one authorized registered binding and that binding is the explicit instance default; the
@@ -94,12 +101,18 @@ not background lifecycles.
   reauthorization error without reading or serving cached data from the old root. Long-running read
   transactions use an owner-defined snapshot/drain fence; immutable request context alone is not an
   authorization lease.
-- At every governed mutation seam, immediately before the owner store writes, re-resolve the target
-  binding and compare its current revision/root plus the current authorization epoch with the
-  request snapshot, then validate a live GOV `DecisionToken` for that principal, scope, operation,
-  and binding. Relocation, removal, or revocation after request resolution returns a stale-context/
-  reauthorization error without writing; it never continues merely because the request snapshot is
-  immutable. Long-running owner transactions must use their existing drain/fence contract.
+- At every governed mutation seam, acquire a cross-process shared effect lease for the stable
+  binding, then—while holding it through the filesystem/store effect—re-resolve the target binding,
+  compare its current revision/root plus the current authorization epoch with the request snapshot,
+  and validate a live GOV `DecisionToken` for that principal, scope, operation, and binding.
+  Registration relocation/removal and GOV revocation acquire the same binding's exclusive lease
+  before changing locator/authority state and wait for shared effects to drain. The lock-order
+  contract is host-global ownership fence → binding effect fence → registry/auth transaction →
+  owner-store lock; no producer may invert it. A process-local mutex or check released before I/O is
+  insufficient. Relocation, removal, or revocation racing before lease acquisition returns a
+  stale-context/reauthorization error without writing; a change racing afterward waits until the
+  already-authorized effect and receipt finish, then advances revision/epoch before later effects.
+  Long-running owner transactions use the same lease for their full externally visible effect.
 - Extend the canonical GOV token/receipt schema in this slice. A server-minted DecisionToken binds
   decision ID, authenticated human/delegated-role principal, instance identity, operational scope,
   action/write class, stable vault binding, binding revision/root fingerprint, authorization epoch,
@@ -130,14 +143,17 @@ acceptance criteria prefixed with its ID:
 1. **MVR-05A — binding-keyed persistence cutover:** projection/outbox schema and backfill,
    idempotency classification, all-process mixed-version fence, minimum-runtime floor, duplicate-
    binding projection isolation, and an immediately shipped scalar-worker poll/ack compatibility
-   gate, with DB/deployment/release owner-doc writebacks.
+   gate, with a non-skippable real-PostgreSQL CI receipt and DB/deployment/release owner-doc
+   writebacks.
 2. **MVR-05B — request ingress and reads:** production resolver, picker, API/CLI/agent/MCP context
-   propagation, retrieval/cache provenance, pre-read revision/auth revalidation, stale selection,
-   the temporary #3163 picker bridge, and active-context architecture writeback. Depends on 05A and
-   #3163.
+   propagation including distinct one-request-override and retained-session carriers,
+   retrieval/cache provenance, pre-read revision/auth revalidation, stale selection, the temporary
+   #3163 picker bridge, and active-context architecture writeback. Depends on 05A and #3163.
 3. **MVR-05C — governed writes:** explicit target selection plus expanded DecisionToken/
-   AuthorityReceipt producers, migration, fixtures, preflight, and immediately-before-write race
-   enforcement, with governed-write owner-contract writeback. Depends on 05B.
+   AuthorityReceipt producers, migration, fixtures, preflight, and the cross-process per-binding
+   effect fence spanning final revalidation through I/O/receipt, including exclusive
+   relocation/removal/revocation producers and lock-order enforcement, with governed-write
+   owner-contract writeback. Depends on 05B.
 4. **MVR-05D — outbox producers and delivery completion:** production envelope registry, binding-keyed
    dedup, remaining-producer migration and full worker delivery, event-contract writeback, and aggregate request
    acceptance. Depends on 05C and closes MVR-05.
@@ -207,6 +223,11 @@ to cross its floor; independently safe explicit-global work may continue.
 - [ ] **MVR-05A:** Legacy single-vault projection rows backfill only with one provable binding; ambiguous rows
   block mixed-mode startup until quarantined/rebuilt, without destructive guessing.
   - Verify: `tests/migrations/test_multi_vault_projection_backfill.py::test_projection_backfill_is_unambiguous_or_fails_loud`
+- [ ] **MVR-05A:** Projection/outbox migration, uniqueness, foreign-key, and binding-keyed dedup targets
+  execute against the provisioned real PostgreSQL service in repository CI on the exact delivery
+  SHA; the tests error rather than skip when PostgreSQL or required constraints are absent.
+  - Verify: `tests/architecture/test_multi_vault_pg_ci_lane.py::test_mvr05_pg_targets_run_on_provisioned_postgres_and_cannot_skip` +
+    successful exact-SHA `integration-nightly / pg-contracts` workflow receipt on #2143
 - [ ] **MVR-05A:** Before any binding-keyed producer starts, all pending legacy outbox keys are classified and
   scoped/coalesced under the DB fence; an identical retry produces one canonical dispatch lineage,
   while conflicting or ambiguous rows quarantine and cannot later duplicate the upgraded event.
@@ -240,6 +261,11 @@ to cross its floor; independently safe explicit-global work may continue.
   the current DecisionToken/binding revision and blocks the in-flight mutation without writing to
   either the old or replacement root.
   - Verify: `tests/api/test_multi_vault_governed_writes.py::test_authority_or_locator_change_blocks_inflight_write_before_commit`
+- [ ] **MVR-05C:** Production governed writes hold the cross-process per-binding shared effect lease from
+  final revalidation through filesystem/store mutation and receipt, while relocation/removal/revocation
+  use the same binding's exclusive lease; an injected change after validation but before I/O either
+  blocks the write before effect or waits until its authorized effect completes under the old revision.
+  - Verify: `tests/integration/test_multi_vault_write_effect_fence.py::test_locator_or_authority_change_cannot_cross_validation_write_window`
 - [ ] **MVR-05B:** Relocation, removal, or GOV revocation after request resolution but before a production
   filesystem/retrieval/cache read revalidates or drains that in-flight request and never returns data
   from the stale root or authorization snapshot.
@@ -265,6 +291,10 @@ to cross its floor; independently safe explicit-global work may continue.
 - [ ] **MVR-05B:** Invalid or unauthorized request selection returns the explicit error/picker contract and
   never serves default, last-active, CWD, or another binding.
   - Verify: `tests/api/test_multi_vault_request_fail_closed.py::test_invalid_selection_never_falls_back`
+- [ ] **MVR-05B:** `X-Active-Context-Override` outranks `X-Active-Context-Session` for exactly one
+  production request without mutating the retained session; an invalid explicit override fails closed
+  rather than using the valid session selection.
+  - Verify: `tests/api/test_active_context_resolution.py::test_request_override_header_outranks_session_without_mutating_it`
 - [ ] **MVR-05B:** The shipped Companion picker creates/replaces a scoped selection and its client sends that
   bearer ID through production read requests; choosing B changes later reads to B, and stale-ID
   recovery with zero, many, ambiguous, or default-mismatched bindings visibly asks for reselection.
@@ -322,6 +352,12 @@ to cross its floor; independently safe explicit-global work may continue.
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/integration/test_multi_vault_resolution.py tests/integration/test_multi_vault_picker_context.py tests/integration/test_multi_vault_projection_isolation.py tests/integration/test_multi_vault_outbox_producers.py tests/migrations/test_multi_vault_projection_backfill.py tests/migrations/test_multi_vault_outbox_upgrade.py tests/ops/test_mvr05_mixed_version_fence.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/workers/test_multi_vault_partial_delivery_gate.py tests/services/test_multi_vault_outbox_idempotency.py tests/architecture/test_multi_vault_context_boundaries.py`
+- MVR-05A adds its migration/backfill/dedup targets to the real-Postgres `pg-contracts` job in
+  `.github/workflows/integration-nightly.yaml`; those tests must error, not skip, when the provisioned
+  database/constraints are unavailable. Before merge, dispatch that workflow on the exact PR head
+  and attach the successful run URL/SHA to #2143.
+- `DATABASE_URL=postgresql+psycopg://app:app@127.0.0.1:15434/app_test pytest -q -m pg tests/migrations/test_multi_vault_projection_backfill.py tests/migrations/test_multi_vault_outbox_upgrade.py tests/services/test_multi_vault_outbox_idempotency_pg.py`
+- `pytest -q tests/architecture/test_multi_vault_pg_ci_lane.py::test_mvr05_pg_targets_run_on_provisioned_postgres_and_cannot_skip`
 - `mypy app`
 - `pytest -q -m "not pg"`
 - `ruff check app tests`

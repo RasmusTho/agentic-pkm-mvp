@@ -71,6 +71,12 @@ generation unknown. A process-global mutable manager cannot safely represent con
   `/api/companion/vault/select` remains only a
   named legacy-global adapter until task 05 migrates its production client; it cannot be the new
   session-selection command or mutate a scoped selection implicitly.
+- The selection resource is reusable by the later MVR-05 ingress contract without inventing a
+  second store: a retained client session sends its bearer as `X-Active-Context-Session`; a caller
+  that needs a one-request override mints/uses a separately authorized selection and sends it as
+  `X-Active-Context-Override`. The request dependency gives the override precedence for that call
+  only and never replaces the retained session record. This slice owns store/auth semantics;
+  MVR-05B owns the production header dependency and call-site test.
 - Keep session selection TTL-bound and ephemeral in V1. A request that supplies no selection ID
   may resolve the instance default or no-vault. A request that explicitly supplies an expired,
   unknown, or pre-restart `context_selection_id` fails closed with a reselection-required error; it
