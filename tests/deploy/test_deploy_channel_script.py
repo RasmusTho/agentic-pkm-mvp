@@ -90,7 +90,7 @@ def test_deploy_sequence_and_forward_only_ack_gate() -> None:
     run_block = text.split('echo "deploy plan:', 1)[1]
     assert run_block.index("migration_gate") < run_block.index("write_pin")
     assert run_block.index("write_pin") < run_block.index("compose pull")
-    assert run_block.index("compose pull") < run_block.index("compose up -d --force-recreate")
+    assert run_block.index("compose pull") < run_block.index("recreate_channel_services")
 
     result = subprocess.run(
         ["bash", "-n", str(SCRIPT)],
@@ -119,9 +119,9 @@ def test_health_gate_blocks_and_triggers_rollback() -> None:
     assert "http://127.0.0.1:${ui_port}/healthz" in text
     assert 'wait_json_ok "http://127.0.0.1:${ui_port}/healthz"' in text
     assert "isinstance(data, dict)" in text
-    assert "health gate failed; attempting rollback to previous pin" in text
+    assert 'rollback_failed_startup "health gate failed"' in text
     run_block = text.split('echo "deploy plan:', 1)[1]
-    assert run_block.index("compose up -d --force-recreate") < run_block.index("health_gate")
+    assert run_block.index("recreate_channel_services") < run_block.index("health_gate")
     assert run_block.index("health_gate") < run_block.index("version_gate")
 
 
