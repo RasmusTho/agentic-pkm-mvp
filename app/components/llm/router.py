@@ -116,14 +116,16 @@ def _is_shipped_default_embedding_target(
     operator choice and therefore must not mask an explicit embedding-profile
     activation during a governed identity cutover.
     """
-    if target is None or (target.profile or "").strip().lower() != "default":
+    if (
+        target is None
+        or target.model_id != "ollama.embed.nomic_embed_text"
+        or (target.profile or "").strip().lower() != "default"
+    ):
         return False
     provider = target.provider or resolved_provider
     model = target.model or resolved_model
-    model_id_is_default = target.model_id in {None, "ollama.embed.nomic_embed_text"}
     return (
-        model_id_is_default
-        and provider == "ollama"
+        provider == "ollama"
         and model in {"nomic-embed-text", "nomic-embed-text:latest"}
     )
 

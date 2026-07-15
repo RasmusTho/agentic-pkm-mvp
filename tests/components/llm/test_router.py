@@ -189,6 +189,37 @@ def test_router_honors_settings_default_profile_over_shipped_default_target(
     assert client.identity.normalize is True
 
 
+def test_model_id_less_nomic_target_remains_explicit_under_profile_activation(
+    monkeypatch,
+    clean_llm_env,
+) -> None:
+    clean_llm_env.setenv("EMBED_PROFILE", "bge-m3")
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            tasks={
+                "embed": LLMRoutingSettings.TaskPolicy(
+                    primary=LLMRoutingSettings.RouteTarget(
+                        provider="ollama",
+                        model="nomic-embed-text:latest",
+                        profile="default",
+                    )
+                )
+            }
+        )
+    )
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+
+    intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    route = LLMRouter().route(intent)
+    client = get_embeddings_client(intent)
+
+    assert route.provider == "ollama"
+    assert route.model == "nomic-embed-text:latest"
+    assert client.identity.provider == "ollama"
+    assert client.identity.model == "nomic-embed-text:latest"
+    assert client.identity.dim == 768
+
+
 def test_explicit_embedding_task_target_remains_higher_precedence_than_env_profile(
     monkeypatch,
     clean_llm_env,
