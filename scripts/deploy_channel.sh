@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
+source "${ROOT}/scripts/lib/deploy_channel_compose.sh"
 PYTHON="${PYTHON:-}"
 if [ -z "${PYTHON}" ]; then
   if [ -x "${ROOT}/.venv/bin/python" ]; then
@@ -210,15 +211,13 @@ PY
 }
 
 compose() {
-  (
-    cd "${ROOT}" || exit 1
-    docker compose \
-      --env-file "config/deploy/${channel}.env" \
-      -f docker-compose.yaml \
-      -f "${compose_overlay}" \
-      -p "${compose_project}" \
-      "$@"
-  )
+  deploy_channel_compose \
+    "${ROOT}" \
+    "${channel}" \
+    "${compose_overlay}" \
+    "${compose_project}" \
+    "${pin_file}" \
+    "$@"
 }
 
 wait_json_ok() {
