@@ -55,6 +55,11 @@ This slice promotes the existing seed without changing content-vault authority.
   stale, unauthorized, or ambiguous target blocks the old image. The complete new-schema registry,
   snapshots, and lineage remain immutable beside the projection for later roll-forward; scalar
   rollback cannot discard or reinterpret default, dimension, or background-intent truth.
+- Enforce that target in deployment, not only in the legacy payload: the rollback compose overlay
+  removes the old API's direct published port, exposes it only through an authenticated gateway
+  that denies picker select/initialize mutations, and mounts only the chosen content root at the
+  canonical legacy path. Startup preflight proves the direct port is absent, the gateway policy is
+  active, and no broader host vault roots are mounted. A failed guard blocks rollback startup.
 - Before rolling forward again from the previous image, export and validate its latest legacy
   payload while it is still running, compare its recorded fork/base revision with the durable
   registry lineage, and transform rollback-period mutations into the next locked monotonic registry
@@ -76,8 +81,9 @@ This slice promotes the existing seed without changing content-vault authority.
 
 An existing instance with two `known_vaults` restarts after upgrade and exposes the same two
 stable IDs from `app.instance.vault_registry`; moving one content root updates its path without
-creating a new identity. A parse-corrupt payload selected through the picker is backed up and
-reseeded; an ambiguous migration reports the file/error and remains untouched.
+creating a new identity. A parse-corrupt provably pre-MVR/empty payload selected through the picker
+is backed up and reseeded; a populated current-schema payload restores its verified snapshot or
+fails closed, and an ambiguous migration reports the file/error and remains untouched.
 
 ## Why This Matters
 
@@ -163,6 +169,10 @@ single-vault package or can silently lose identity during migration.
   one validated explicit rollback binding, constrains legacy startup/selection to that binding,
   and otherwise blocks while preserving the complete new-schema registry and lineage.
   - Verify: `tests/integration/test_vault_registry_rollback.py::test_multi_binding_rollback_requires_one_safe_explicit_target`
+- [ ] The scalar rollback deployment exposes the old API only through the authenticated mutation-
+  filtering gateway, publishes no bypass port, and mounts no content root except the validated
+  target; production picker select/initialize calls for another path are rejected.
+  - Verify: `tests/ops/test_scalar_rollback_guard.py::test_rollback_gateway_and_mounts_enforce_selected_binding`
 - [ ] Registrations and last-active changes made by the previous image during rollback are imported
   as the next registry revision on roll-forward; divergent mutation, ambiguous identity, or invalid
   lineage fails before recreate without overwriting either side.
@@ -174,7 +184,7 @@ single-vault package or can silently lose identity during migration.
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/instance/test_vault_registry.py tests/instance/test_vault_registry_migration.py tests/instance/test_vault_registry_concurrency.py tests/instance/test_vault_registry_permissions.py tests/api/test_vault_registry_recovery.py tests/architecture/test_instance_vault_registry_boundary.py tests/ops/test_instance_state_volume_contract.py`
+- `pytest -q tests/instance/test_vault_registry.py tests/instance/test_vault_registry_migration.py tests/instance/test_vault_registry_concurrency.py tests/instance/test_vault_registry_permissions.py tests/api/test_vault_registry_recovery.py tests/architecture/test_instance_vault_registry_boundary.py tests/ops/test_instance_state_volume_contract.py tests/ops/test_scalar_rollback_guard.py`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_vault_registry_container_durability.py tests/integration/test_vault_registry_rollback.py`
 - `ruff check app tests`
 

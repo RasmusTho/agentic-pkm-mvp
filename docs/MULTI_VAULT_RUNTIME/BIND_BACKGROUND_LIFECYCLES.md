@@ -20,6 +20,11 @@ cross-process truth belong here.
 ## What This Task Does
 
 - Reuse #3163's selection-event/settings-reload mechanism; do not duplicate it.
+- At the MVR-06 migration boundary, read the live binding owned by MVR-05's named legacy-picker
+  bridge, materialize that binding as the initial `compatibility_default` lifecycle intent, start
+  the revision-reconciling supervisor, and disable the bridge in one fail-closed cutover. Roll back
+  the cutover if either handoff step fails. Afterward, picker/session selection never changes
+  background intent; operators use the governed background administration surface.
 - Add a durable, mechanical instance-local `background_vault_binding_ids` intent set. Request or
   session selection never auto-enrols a member. Each unique binding is re-resolved and
   re-authorized at lifecycle start; a missing/unauthorized member remains explicitly failed.
@@ -30,8 +35,11 @@ cross-process truth belong here.
   revision-checked atomic registry transaction.
 - Add governed production add/remove/list operations for that set through the existing
   Companion state-change authentication boundary and a headless CLI using the same service.
-  Mutations validate registry membership and authorization, are idempotent by binding ID, record
-  redacted receipts, and commit a durable change record/revision in the same fsync-backed registry
+  Add mutations validate current registry membership and content authority. Remove mutations
+  require instance-administrative authority and the stored binding ID but remain idempotent when
+  that registration is missing or no longer content-authorized, so failed stale intent can always
+  be cleared safely. Both record redacted receipts and commit a durable change record/revision in
+  the same fsync-backed registry
   transaction. A lifecycle event is only an idempotent wake-up hint for that revision, never the
   sole handoff. Tests must use these production producers rather than seeding the store.
 - Introduce a lifecycle supervisor that treats the durable set only as intent. At start/rebind it
@@ -70,6 +78,13 @@ cross-process truth belong here.
   explicit recovery without dispatch or ack. A quarantined unsafe row makes the affected worker
   readiness degraded/blocked but a valid global row never blocks multi-binding startup merely for
   lacking a binding.
+- Revalidate every not-yet-in-flight vault-bound row against the current registry revision,
+  authorization verdict, lifecycle generation, and routing class before dispatch. Removal, lost
+  authority, or generation rotation atomically moves a stale row to durable quarantine without
+  dispatch or acknowledgement. Authenticated administration can inspect and drop it, or reissue it
+  only after the same stable binding is authorized under a fresh context, preserving original
+  idempotency/lineage; it can never retarget the row to another binding. Quarantine is a terminal,
+  observable disposition rather than an indefinitely pending row.
 
 ## Concretely
 
@@ -125,6 +140,10 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
 
 ## Acceptance Criteria
 
+- [ ] MVR-06 atomically imports the live MVR-05/#3163 compatibility watcher binding, starts the
+  revision-reconciling supervisor, and retires the legacy picker bridge; injected failure leaves
+  the old bridge authoritative and never enables two or zero watcher owners.
+  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_settings_spine_bridge_handoff_is_atomic`
 - [ ] The production supervisor runs independent watcher/worker lifecycles for two bindings and
   attributes ingest, queues, settings, health, and receipts to the correct immutable
   ActiveContextSet/vault/generation.
@@ -136,6 +155,9 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
   background intent, reject unknown/unauthorized bindings, atomically commit a durable revision,
   and publish an idempotent wake-up event for that revision.
   - Verify: `tests/api/test_background_binding_admin.py::test_production_enrollment_commands_drive_lifecycle_intent`
+- [ ] Instance-authorized removal clears stale stored intent idempotently even after its registry
+  entry disappears or content authority is lost; add still requires live membership and authority.
+  - Verify: `tests/api/test_background_binding_admin.py::test_stale_binding_intent_can_be_removed_without_content_authority`
 - [ ] Removing the final explicit member persists explicit-empty intent; restart and list remain
   empty/idle and never re-enrol the instance default.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_remove_last_then_restart_preserves_explicit_empty_intent`
@@ -162,6 +184,10 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
   prior evidence, and unknown/ambiguous rows quarantine without dispatch or acknowledgement; new
   vault polling and ack are binding-scoped.
   - Verify: `tests/migrations/test_multi_vault_outbox_upgrade.py::test_legacy_pending_rows_backfill_or_quarantine_fail_loud`
+- [ ] Pending vault-bound rows are revalidated before dispatch; lifecycle removal, lost authority,
+  or generation rotation quarantines them durably without dispatch/ack, and governed reissue can
+  target only the same re-authorized stable binding with lineage/idempotency preserved.
+  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_pending_rows_quarantine_across_removal_and_rebind`
 - [ ] Production watcher/worker/settings callers consume ActiveContextSet outside named bootstrap
   adapters; no parallel lifecycle context type remains.
   - Verify: `tests/architecture/test_multi_vault_context_boundaries.py::test_background_consumers_use_lifecycle_seam`

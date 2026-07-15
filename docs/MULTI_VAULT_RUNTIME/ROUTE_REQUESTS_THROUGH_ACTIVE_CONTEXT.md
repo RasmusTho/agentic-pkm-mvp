@@ -26,6 +26,11 @@ not background lifecycles.
   `context_selection_id` for that client session, and send it on every vault-bound request. On
   expiry/restart the client clears the stale ID, shows the existing reselection contract, and never
   silently continues on the instance default.
+- Preserve #3163 during the MVR-05→MVR-06 transition: the legacy choose/open picker action also
+  emits its existing single-watcher selection event through one named compatibility bridge, while
+  generic scoped request/session selections never do. MVR-06 must atomically initialize durable
+  background intent from the then-current compatibility watcher binding and disable this bridge
+  when its supervisor takes ownership; no release may leave both or neither mechanism active.
 - Resolve per-binding settings, paths, caches, retrieval scope, and write provenance from the
   snapshot.
 - Namespace durable/rebuildable projections and associations by `vault_binding_id` plus their
@@ -107,6 +112,10 @@ call site can leak retrieval context or write to the wrong human artifact surfac
   bearer ID through production read and governed-write requests; choosing B changes later requests
   to B, and stale-ID recovery visibly asks for reselection.
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_existing_picker_drives_scoped_request_context`
+- [ ] Before MVR-06 takes ownership, only the legacy choose/open picker action also drives #3163's
+  single-watcher rebind; generic scoped session/request selection does not. The bridge is named and
+  guarded for atomic retirement by MVR-06.
+  - Verify: `tests/integration/test_multi_vault_picker_context.py::test_legacy_picker_bridge_preserves_single_watcher_until_mvr06`
 - [ ] Request-bound production code cannot introduce new direct global vault resolution outside
   named compatibility adapters.
   - Verify: `tests/architecture/test_multi_vault_context_boundaries.py::test_request_consumers_use_context_seam`

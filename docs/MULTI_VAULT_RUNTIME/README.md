@@ -127,9 +127,11 @@ member binding independently. Removing a dimension does not remove its vault reg
   this directory creates no second switcher issue. It stays blocked until the request/session
   runtime contract it needs is delivered.
 - **#3156 / #3163** own the Settings Spine and the single-watcher-follows-single-selection
-  rebind. #3163 is a reusable prerequisite for background lifecycle migration, not a multi-active
-  implementation. Its stale dependency state must be repaired after #3159 delivery is confirmed;
-  no duplicate watcher-rebind issue is created here.
+  rebind. MVR-05 temporarily preserves that production behavior only for the legacy picker action;
+  generic scoped selections do not drive it. MVR-06 reuses #3163's reload machinery, atomically
+  imports the live watcher binding into durable lifecycle intent, then retires the single-selection
+  bridge in favor of explicit background administration. #3163 is not a multi-active
+  implementation, and no duplicate watcher-rebind issue is created here.
 - **#2003 / #2311** delivered no-vault startup, runtime switching foundations, and removal of
   silent `./vault` fallback. This capability preserves those contracts.
 - **#2356** delivered the v0 `ActiveContextSet` containment adapter. Task 03 evolves that seam;
@@ -193,6 +195,9 @@ Partial delivery remains fail-closed:
 - after task 03 but before tasks 05/06, migrated callers may use ActiveContextSet while unmigrated
   callers stay on named single-vault adapters; the architecture guard records the mixed state and
   no global "multi-vault delivered" claim is allowed;
+- after task 05 but before task 06, the existing picker alone continues to drive #3163's named
+  single-watcher bridge while scoped request/session selection does not; task 06 atomically hands
+  that live binding to the durable supervisor before disabling the bridge;
 - a dimension containing an unknown, stale, or unauthorized member fails the whole production
   context resolution; it never returns a partial set, excludes the member, or substitutes another;
 - if one background binding fails, its lifecycle and health remain failed while other bindings
