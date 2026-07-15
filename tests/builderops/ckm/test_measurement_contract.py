@@ -416,6 +416,10 @@ def test_cursor_contract_binds_query_snapshot_versions() -> None:
         CursorPayload.decode(tampered, secret)
     assert invalid.value.code == "invalid_cursor"
 
+    with pytest.raises(CkmContractError) as noncanonical:
+        CursorPayload.decode(f"{body}=.{signature}", secret)
+    assert noncanonical.value.code == "invalid_cursor"
+
 
 def test_unsupported_versions_and_semantics_are_typed() -> None:
     cases = (

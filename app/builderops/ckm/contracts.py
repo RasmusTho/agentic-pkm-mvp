@@ -89,10 +89,15 @@ class TaggedValue:
         if self.state not in SUPPORTED_VALUE_STATES:
             raise ValueError(f"unsupported tagged value state: {self.state}")
         if self.state == "measured":
+            if self.value is None:
+                raise ValueError("measured values must carry a value; use a tagged absence state")
             if self.reason is not None:
                 raise ValueError("measured values must not carry a refusal reason")
-        elif self.value is not None:
-            raise ValueError(f"{self.state} values must not carry a measured value")
+        else:
+            if self.value is not None:
+                raise ValueError(f"{self.state} values must not carry a measured value")
+            if not isinstance(self.reason, str) or not self.reason.strip():
+                raise ValueError(f"{self.state} values must carry a non-empty reason")
 
     @classmethod
     def measured(cls, value: Any) -> "TaggedValue":
@@ -189,6 +194,8 @@ class TruncationMetadata:
     def __post_init__(self) -> None:
         if self.returned_count < 0 or self.limit <= 0:
             raise ValueError("returned_count must be non-negative and limit must be positive")
+        if self.returned_count > self.limit:
+            raise ValueError("returned_count must not exceed limit")
         if self.truncated != (self.next_cursor is not None):
             raise ValueError("truncation and next_cursor must be stated together")
 
@@ -207,6 +214,10 @@ class ResourceDto:
     def __post_init__(self) -> None:
         if self.resource_type not in SUPPORTED_RESOURCE_TYPES:
             raise ValueError(f"unsupported CKM resource type: {self.resource_type}")
+        if not self.public_id or not self.display_name:
+            raise ValueError("resource public_id and display_name must not be empty")
+        if not self.provenance:
+            raise ValueError("resource provenance must not be empty")
         if self.candidate != (self.lifecycle == "candidate"):
             raise ValueError("candidate marker must agree with lifecycle")
 
@@ -240,6 +251,8 @@ class ResultEnvelope:
     def __post_init__(self) -> None:
         if any(resource.resource_type != self.resource_type for resource in self.resources):
             raise ValueError("every resource must match the envelope resource type")
+        if len(self.resources) != self.truncation.returned_count:
+            raise ValueError("truncation returned_count must match the resource count")
         keys = [resource.total_order_key for resource in self.resources]
         if keys != sorted(keys):
             raise ValueError("resources must use the stable public total order")
@@ -283,6 +296,20 @@ class CursorPayload:
     resource_schema_version: int = RESOURCE_SCHEMA_VERSION
     cursor_schema_version: int = CURSOR_SCHEMA_VERSION
 
+    def __post_init__(self) -> None:
+        validate_contract_request(
+            envelope_schema_version=self.envelope_schema_version,
+            resource_schema_version=self.resource_schema_version,
+            cursor_schema_version=self.cursor_schema_version,
+            resource_type=self.resource_type,
+        )
+        if not self.query_digest or not self.snapshot_digest:
+            raise ValueError("cursor query and snapshot digests must not be empty")
+        if self.limit <= 0:
+            raise ValueError("cursor limit must be positive")
+        if not self.last_key or not all(isinstance(value, str) and value for value in self.last_key):
+            raise ValueError("cursor last_key must contain non-empty strings")
+
     def to_dict(self) -> JsonDict:
         return {
             "cursor_schema_version": self.cursor_schema_version,
@@ -305,9 +332,13 @@ class CursorPayload:
     @classmethod
     def decode(cls, token: str, secret: bytes) -> "CursorPayload":
         try:
+            if not secret:
+                raise ValueError("cursor secret must not be empty")
             encoded_body, encoded_signature = token.split(".", 1)
             body = _b64url_decode(encoded_body)
             signature = _b64url_decode(encoded_signature)
+            if _b64url(body) != encoded_body or _b64url(signature) != encoded_signature:
+                raise ValueError("cursor encoding is not canonical base64url")
             expected = hmac.new(secret, body, hashlib.sha256).digest()
             if not hmac.compare_digest(signature, expected):
                 raise ValueError("signature mismatch")
