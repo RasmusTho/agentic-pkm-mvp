@@ -1476,20 +1476,26 @@ def _is_valid_codex_retry(retry: str) -> bool:
     current = datetime.now().astimezone().replace(
         tzinfo=None, second=0, microsecond=0
     )
-    try:
-        parsed_time = datetime.strptime(timestamp, "%I:%M %p")
-    except ValueError:
-        pass
-    else:
+    clock = re.fullmatch(
+        r"(?P<hour>[1-9]|1[0-2]):(?P<minute>[0-9]{2}) (?P<period>AM|PM)",
+        timestamp,
+    )
+    if clock is not None:
+        hour = int(clock.group("hour"))
+        minute = int(clock.group("minute"))
+        if minute > 59:
+            return False
+        hour = hour % 12 + (12 if clock.group("period") == "PM" else 0)
         candidate = current.replace(
-            hour=parsed_time.hour,
-            minute=parsed_time.minute,
+            hour=hour,
+            minute=minute,
         )
         return current <= candidate <= current + timedelta(days=1)
     match = re.fullmatch(
         r"(?P<month>Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
-        r"(?P<day>[0-9]{1,2})(?P<suffix>st|nd|rd|th), "
-        r"(?P<year>[0-9]{4}) (?P<clock>[0-9]{1,2}:[0-9]{2} (?:AM|PM))",
+        r"(?P<day>[1-9]|[12][0-9]|3[01])(?P<suffix>st|nd|rd|th), "
+        r"(?P<year>[0-9]{4}) (?P<hour>[1-9]|1[0-2]):"
+        r"(?P<minute>[0-9]{2}) (?P<period>AM|PM)",
         timestamp,
     )
     if match is None:
@@ -1502,13 +1508,29 @@ def _is_valid_codex_retry(retry: str) -> bool:
     )
     if match.group("suffix") != suffix:
         return False
+    minute = int(match.group("minute"))
+    if minute > 59:
+        return False
+    hour = int(match.group("hour")) % 12 + (
+        12 if match.group("period") == "PM" else 0
+    )
+    month = {
+        "Jan": 1,
+        "Feb": 2,
+        "Mar": 3,
+        "Apr": 4,
+        "May": 5,
+        "Jun": 6,
+        "Jul": 7,
+        "Aug": 8,
+        "Sep": 9,
+        "Oct": 10,
+        "Nov": 11,
+        "Dec": 12,
+    }[match.group("month")]
     try:
-        candidate = datetime.strptime(
-            (
-                f"{match.group('month')} {day}, {match.group('year')} "
-                f"{match.group('clock')}"
-            ),
-            "%b %d, %Y %I:%M %p",
+        candidate = datetime(
+            int(match.group("year")), month, day, hour, minute
         )
     except ValueError:
         return False
@@ -1524,9 +1546,10 @@ def _is_codex_usage_limit_event(event: object) -> bool:
     if not isinstance(message, str) or not message.isascii():
         return False
     retry_time = (
-        r"(?:[0-9]{1,2}:[0-9]{2} (?:AM|PM)|"
+        r"(?:(?:[1-9]|1[0-2]):[0-9]{2} (?:AM|PM)|"
         r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
-        r"[0-9]{1,2}(?:st|nd|rd|th), [0-9]{4} [0-9]{1,2}:[0-9]{2} "
+        r"(?:[1-9]|[12][0-9]|3[01])(?:st|nd|rd|th), [0-9]{4} "
+        r"(?:[1-9]|1[0-2]):[0-9]{2} "
         r"(?:AM|PM))"
     )
     retry = rf"(?:later|at {retry_time})"

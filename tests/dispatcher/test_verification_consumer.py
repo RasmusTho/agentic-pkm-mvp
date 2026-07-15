@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import subprocess
 import sys
@@ -3484,6 +3485,27 @@ FUTURE_CODEX_RETRY = _codex_retry_timestamp(
 PAST_CODEX_RETRY = _codex_retry_timestamp(
     datetime.now().astimezone() - timedelta(days=1)
 )
+
+
+def _future_single_digit_day_retry() -> str:
+    candidate = datetime.now().astimezone() + timedelta(days=1)
+    while candidate.day >= 10:
+        candidate += timedelta(days=1)
+    return _codex_retry_timestamp(candidate)
+
+
+PADDED_HOUR_CODEX_RETRY = re.sub(
+    r" (?P<hour>[1-9]):(?P<minute>[0-9]{2}) (?P<period>AM|PM)$",
+    r" 0\g<hour>:\g<minute> \g<period>",
+    _codex_retry_timestamp(
+        (datetime.now().astimezone() + timedelta(days=2)).replace(hour=9)
+    ),
+)
+PADDED_DAY_CODEX_RETRY = re.sub(
+    r"^(?P<month>[A-Z][a-z]{2}) (?P<day>[1-9])(?P<suffix>st|nd|rd|th),",
+    r"\g<month> 0\g<day>\g<suffix>,",
+    _future_single_digit_day_retry(),
+)
 CANONICAL_CODEX_USAGE_LIMIT = (
     "You've hit your usage limit. Visit "
     "https://chatgpt.com/codex/settings/usage to purchase more credits "
@@ -3551,6 +3573,17 @@ def test_codex_json_usage_limit_event_enters_durable_backoff(
         ("You've hit your usage limit. . This is not an actual limit.", False, ""),
         ("You've hit your usage limit. Try again at 99:99 PM.", False, ""),
         ("You've hit your usage limit. Try again at 0:00 AM.", False, ""),
+        ("You've hit your usage limit. Try again at 09:30 PM.", False, ""),
+        (
+            f"You've hit your usage limit. Try again at {PADDED_HOUR_CODEX_RETRY}.",
+            False,
+            "",
+        ),
+        (
+            f"You've hit your usage limit. Try again at {PADDED_DAY_CODEX_RETRY}.",
+            False,
+            "",
+        ),
         (f"You've hit your usage limit. Try again at {PAST_CODEX_RETRY}.", False, ""),
         ("You've hit your usage limit. Try again at Jan 1st, 2020 4:30 PM.", False, ""),
         (
