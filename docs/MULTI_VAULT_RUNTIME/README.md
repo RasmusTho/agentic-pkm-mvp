@@ -188,7 +188,7 @@ member binding independently. Removing a dimension does not remove its vault reg
 | Order | Task | Adds | Dependency | Initial capability |
 | --- | --- | --- | --- | --- |
 | 01A | [ESTABLISH_INSTANCE_VAULT_REGISTRY](ESTABLISH_INSTANCE_VAULT_REGISTRY.md#bounded-implementation-issue-decomposition) | registry identity/store, package relocation, recovery, and concurrency | none | Sol/high |
-| 01B | [ESTABLISH_INSTANCE_VAULT_REGISTRY](ESTABLISH_INSTANCE_VAULT_REGISTRY.md#bounded-implementation-issue-decomposition) | durable volume migration and host-global ownership/key fencing | 01A | Sol/xhigh |
+| 01B | [ESTABLISH_INSTANCE_VAULT_REGISTRY](ESTABLISH_INSTANCE_VAULT_REGISTRY.md#bounded-implementation-issue-decomposition) | durable volume migration, ownership/key fencing, and scalar-compatible rollback export | 01A | Sol/xhigh |
 | 01C | [ESTABLISH_INSTANCE_VAULT_REGISTRY](ESTABLISH_INSTANCE_VAULT_REGISTRY.md#bounded-implementation-issue-decomposition) | scalar rollback gateway, exports, and roll-forward lineage | 01B | Sol/xhigh |
 | 02 | [RESOLVE_INSTANCE_DEFAULT_VAULT](RESOLVE_INSTANCE_DEFAULT_VAULT.md) | explicit default and fail-closed precedence | 01A–01C | Sol/high |
 | 03 | [VERSION_ACTIVE_CONTEXT_SELECTION](VERSION_ACTIVE_CONTEXT_SELECTION.md) | versioned request/session `ActiveContextSet` | 01A–01C, 02 | Sol/xhigh |
@@ -200,7 +200,7 @@ member binding independently. Removing a dimension does not remove its vault reg
 | 06A | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | durable intent, service role, admin, and runtime floor | 05D | Sol/xhigh |
 | 06B | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | #3163 compatibility bridge handoff and settings rebind | 06A, #3163 | Sol/xhigh |
 | 06C | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | isolated zero/one/many lifecycle supervision | 06B | Sol/xhigh |
-| 06D | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | queued-work convergence, aggregate proof, and owner docs | 06C | Sol/xhigh |
+| 06D | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | queued-work convergence and aggregate proof | 06C | Sol/xhigh |
 | 07 | [PRESERVE_SINGLE_VAULT_MIGRATION](PRESERVE_SINGLE_VAULT_MIGRATION.md) | compatibility adapters and migration fitness | 04, 05A–05D, 06A–06D | Terra/high |
 | 08 | [PROMOTE_MULTI_VAULT_RUNTIME_TRUTH](PROMOTE_MULTI_VAULT_RUNTIME_TRUTH.md) | integrated proof, owner-doc/debt promotion, parent closure ledger | 01A–01C, 02–04, 05A–05D, 06A–06D, 07 | Terra/high review; Sol/high if residual architecture risk |
 

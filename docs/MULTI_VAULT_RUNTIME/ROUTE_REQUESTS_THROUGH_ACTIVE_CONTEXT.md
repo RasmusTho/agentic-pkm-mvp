@@ -126,16 +126,17 @@ acceptance criteria prefixed with its ID:
 
 1. **MVR-05A — binding-keyed persistence cutover:** projection/outbox schema and backfill,
    idempotency classification, all-process mixed-version fence, minimum-runtime floor, and
-   duplicate-binding projection isolation.
+   duplicate-binding projection isolation, with DB/deployment/release owner-doc writebacks.
 2. **MVR-05B — request ingress and reads:** production resolver, picker, API/CLI/agent/MCP context
    propagation, retrieval/cache provenance, pre-read revision/auth revalidation, stale selection,
-   and the temporary #3163 picker bridge. Depends on 05A and #3163.
+   the temporary #3163 picker bridge, and active-context architecture writeback. Depends on 05A and
+   #3163.
 3. **MVR-05C — governed writes:** explicit target selection plus expanded DecisionToken/
    AuthorityReceipt producers, migration, fixtures, preflight, and immediately-before-write race
-   enforcement. Depends on 05B.
+   enforcement, with governed-write owner-contract writeback. Depends on 05B.
 4. **MVR-05D — outbox producers and interim delivery:** production envelope registry, binding-keyed
-   dedup, scalar-worker partial-delivery guard, aggregate request acceptance, and owner-doc
-   writebacks. Depends on 05C and closes MVR-05.
+   dedup, scalar-worker partial-delivery guard, event-contract writeback, and aggregate request
+   acceptance. Depends on 05C and closes MVR-05.
 
 Every partial state remains fenced as described in `Cross-Task Invariants / Interaction Safety`;
 four distinct merged receipts are required on #2143.
@@ -169,10 +170,9 @@ or un-revalidated read/write to cross its floor.
 - Sync/deployment impact: supports concurrent requests without process rebinding
 - External boundary impact: API input maps to context selectors, not raw trusted paths
 - New or changed contract: request-context propagation and explicit multi-binding write target
-- Owner-doc impact: will-update-in-PR at `docs/ARCHITECTURE.md`,
-  `docs/contracts/GOVERNED_WRITE_PROTOCOL.md`, `docs/EVENTS.md`,
-  `docs/DB_SCHEMA.md`, `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, and
-  `docs/RELEASE_CHANNELS/README.md`
+- Owner-doc impact: each owning child updates in its PR: 05A `docs/DB_SCHEMA.md`, deployment, and
+  release channels; 05B `docs/ARCHITECTURE.md`; 05C
+  `docs/contracts/GOVERNED_WRITE_PROTOCOL.md`; 05D `docs/EVENTS.md`
 - Transition debt impact: reduces D1 and request-side D13 global-binding debt
 - Fitness rule impact: adds production-entrypoint context-boundary guard
 
@@ -271,15 +271,21 @@ or un-revalidated read/write to cross its floor.
 - [ ] **MVR-05B:** Production resolution applies explicit selection, instance default, and no-vault precedence
   without consulting last-active, CWD, or another binding after an invalid explicit choice.
   - Verify: `tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior`
-- [ ] **MVR-05D:** Architecture, event, DB, deployment, and release-channel owner contracts describe the shipped
-  binding/context envelope, idempotency-key migration, projection namespace, minimum-runtime floor,
-  and all-process fenced cutover.
-  - Verify: doc writeback at `docs/ARCHITECTURE.md :: Active context and vault bindings` + doc
-    writeback at `docs/contracts/GOVERNED_WRITE_PROTOCOL.md :: GovernedWriteProtocol` + doc
-    writeback at `docs/EVENTS.md :: Events` + doc writeback at
-    `docs/DB_SCHEMA.md :: DB Schema (Current Reality)` + doc writeback at
+- [ ] **MVR-05A:** DB, deployment, and release owner contracts describe the shipped binding-keyed
+  projection/outbox schema, migration and idempotency classification, minimum-runtime floor, and
+  all-process fenced cutover in the same PR.
+  - Verify: doc writeback at `docs/DB_SCHEMA.md :: DB Schema (Current Reality)` + doc writeback at
     `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments` + doc writeback at
     `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification`
+- [ ] **MVR-05B:** The architecture owner contract describes the shipped immutable request context,
+  scoped selection/read resolution, and immediately-before-read revision/auth enforcement.
+  - Verify: doc writeback at `docs/ARCHITECTURE.md :: Active context and vault bindings`
+- [ ] **MVR-05C:** The governed-write owner contract describes the shipped expanded DecisionToken/
+  AuthorityReceipt fields and immediately-before-write validation.
+  - Verify: doc writeback at `docs/contracts/GOVERNED_WRITE_PROTOCOL.md :: GovernedWriteProtocol`
+- [ ] **MVR-05D:** The event owner contract describes the shipped binding/context envelope,
+  routing class, binding-keyed idempotency, and producer/worker compatibility posture.
+  - Verify: doc writeback at `docs/EVENTS.md :: Events`
 
 ## Out of Scope
 

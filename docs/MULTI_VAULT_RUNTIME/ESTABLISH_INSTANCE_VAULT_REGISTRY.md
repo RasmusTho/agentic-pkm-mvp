@@ -138,9 +138,10 @@ then carries only its mapped acceptance criteria and validation commands:
    production picker/store tests. It establishes the local store but does not change deployment.
 2. **MVR-01B — durable deployment and ownership:** per-channel instance-state export/import,
    cross-process store identity, host-global ledger/key lifecycle, first-rollout legacy-owner
-   bootstrap, channel transfer, and deployment/release owner-doc writebacks. It depends on 01A and
-   does not implement scalar rollback.
-3. **MVR-01C — rollback lineage:** validated rollback export, explicit scalar target, authenticated
+   bootstrap, channel transfer, latest-revision legacy export/transformer for scalar-representable
+   state, guarded previous-image startup, and cutover owner-doc writebacks. It depends on 01A. If
+   more than one registration exists, active volume cutover remains dormant until 01C is present.
+3. **MVR-01C — multi-registration rollback lineage:** explicit scalar target, authenticated
    mutation-filtering gateway/mount restriction, minimum-runtime floor, and roll-forward merge. It
    depends on 01B and closes the aggregate parent-registry acceptance target.
 
@@ -235,7 +236,7 @@ The post-spec issue extraction records three distinct child receipts on #2143.
 - [ ] **MVR-01A:** Concurrent picker/API/CLI registry mutations serialize without lost updates or partial files,
   and stale revision CAS fails explicitly before retry.
   - Verify: `tests/instance/test_vault_registry_concurrency.py::test_production_mutations_are_locked_atomic_and_revision_checked`
-- [ ] **MVR-01C:** After a post-migration registry mutation, the supported previous image can be started through
+- [ ] **MVR-01B:** After a post-migration registry mutation in scalar-representable state, the supported previous image can be started through
   the rollback preflight and reads the latest committed registration and last-active state from its
   legacy path; a missing, stale, or invalid rollback export blocks startup.
   - Verify: `tests/integration/test_vault_registry_rollback.py::test_previous_image_reads_latest_post_migration_registry_state`
@@ -258,8 +259,16 @@ The post-spec issue extraction records three distinct child receipts on #2143.
 - [ ] **MVR-01C:** The parent registry acceptance target composes the delivered registry, migration, durability,
   concurrency, recovery, and rollback contracts and passes before MVR-01 merges.
   - Verify: `tests/instance/test_vault_registry_migration.py::test_parent_registry_acceptance`
-- [ ] **MVR-01C:** Deployment/release owner docs describe the shipped instance-state volume, quiesced final
-  export/import, scalar rollback projection, and roll-forward lineage without future-state claims.
+- [ ] **MVR-01B:** Vault/settings, deployment, and release owner docs describe the shipped
+  instance-state volume, host-global ownership/key fence, quiesced final export/import, latest-
+  revision legacy transformer, and the gate that keeps multi-registration cutover dormant until
+  01C, without future-state claims.
+  - Verify: doc writeback at `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md :: Future Multi-Vault` +
+    doc writeback at `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments` +
+    doc writeback at `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification`
+- [ ] **MVR-01C:** Deployment/release owner docs describe the shipped explicit scalar rollback
+  projection, authenticated mutation-filtering gateway, minimum-runtime floor, and roll-forward
+  lineage without future-state claims.
   - Verify: doc writeback at `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments` +
     doc writeback at `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification`
 

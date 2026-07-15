@@ -144,16 +144,17 @@ acceptance criteria prefixed with its ID:
 
 1. **MVR-06A — intent and service authority:** durable compatibility/explicit intent schema,
    governed admin producers, explicit-empty semantics, delegated background-runtime role, producer
-   migrations/fixtures/preflight, and the MVR-06 minimum-runtime floor. Depends on MVR-05D.
+   migrations/fixtures/preflight, the MVR-06 minimum-runtime floor, and security/governed-write
+   owner-doc updates. Depends on MVR-05D.
 2. **MVR-06B — compatibility bridge handoff:** atomic #3163 watcher bridge retirement, durable picker
    and default-driven compatibility binding, commit-before-hint, and Settings Spine drain/rebind.
-   Depends on 06A and #3163.
+   It updates the vault/settings and Settings Spine owners. Depends on 06A and #3163.
 3. **MVR-06C — isolated lifecycle supervision:** zero/one/many per-binding watcher/worker/settings
    lifecycles, ownership-lease checks, revision/auth-epoch reconciliation, truthful health, and
-   cross-process ActiveContextSet handoff. Depends on 06B.
-4. **MVR-06D — queued-work convergence and owner truth:** validate MVR-05 classification, preserve or
+   cross-process ActiveContextSet handoff, with environment runtime-control writeback. Depends on 06B.
+4. **MVR-06D — queued-work convergence and aggregate proof:** validate MVR-05 classification, preserve or
    quarantine pending rows under current authority/binding, architecture boundary, aggregate
-   lifecycle acceptance, and owner-doc writebacks. Depends on 06C and closes MVR-06.
+   lifecycle acceptance, and final family proof. Depends on 06C and closes MVR-06.
 
 Four distinct merged receipts are required on #2143; no child recreates #3163 or #3156.
 
@@ -190,10 +191,9 @@ migration, preflight, and fail-loud gate merge together.
 - Sync/deployment impact: replaces frozen env snapshot with explicit cross-process binding truth
 - External boundary impact: env remains bootstrap adapter only
 - New or changed contract: per-binding lifecycle supervision through ActiveContextSet and truthful state transitions
-- Owner-doc impact: will-update-in-PR at `docs/ENVIRONMENTS.md :: Runtime Control Surface`,
-  `docs/SECURITY.md :: Auth And Rate Limiting`, `docs/contracts/GOVERNED_WRITE_PROTOCOL.md ::
-  Invariants`, `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md :: Service Gating`, and
-  `docs/SETTINGS_SPINE/REBIND_ON_VAULT_SELECTION.md :: What This Task Does`
+- Owner-doc impact: each owning child updates in its PR: 06A security/governed-write; 06B
+  vault/settings and Settings Spine; 06C environment runtime control; 06D adds no deferred runtime
+  truth
 - Transition debt impact: reduces D13/D14; residual adapters remain for task 07
 - Fitness rule impact: strengthens lifecycle isolation and truthful health
 
@@ -296,14 +296,19 @@ migration, preflight, and fail-loud gate merge together.
 - [ ] **MVR-06D:** Production watcher/worker/settings callers consume ActiveContextSet outside named bootstrap
   adapters; no parallel lifecycle context type remains.
   - Verify: `tests/architecture/test_multi_vault_context_boundaries.py::test_background_consumers_use_lifecycle_seam`
-- [ ] **MVR-06D:** Environment, security, governed-write, vault/settings, and Settings Spine owner contracts
-  describe the shipped background-role producer, durable intent, per-binding lifecycle, and
-  authorization/rebind behavior in the same PR without claiming later MVR scope.
-  - Verify: doc writeback at `docs/ENVIRONMENTS.md :: Runtime Control Surface` + doc writeback at
-    `docs/SECURITY.md :: Auth And Rate Limiting` + doc writeback at
-    `docs/contracts/GOVERNED_WRITE_PROTOCOL.md :: Invariants` + doc writeback at
-    `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md :: Service Gating` + doc writeback at
-    `docs/SETTINGS_SPINE/REBIND_ON_VAULT_SELECTION.md :: What This Task Does`
+- [ ] **MVR-06A:** Security and governed-write owner contracts describe the shipped delegated
+  background-role producer, least-privilege scope, durable authority state, startup preflight, and
+  auth-epoch revocation behavior in the same PR.
+  - Verify: doc writeback at `docs/SECURITY.md :: Auth And Rate Limiting` + doc writeback at
+    `docs/contracts/GOVERNED_WRITE_PROTOCOL.md :: Invariants`
+- [ ] **MVR-06B:** Vault/settings and Settings Spine owner contracts describe the shipped durable
+  compatibility intent, picker/default commit-before-hint, bridge retirement, and drain/rebind
+  behavior in the same PR.
+  - Verify: doc writeback at `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md :: Service Gating` + doc
+    writeback at `docs/SETTINGS_SPINE/REBIND_ON_VAULT_SELECTION.md :: What This Task Does`
+- [ ] **MVR-06C:** The environment owner contract describes shipped zero/one/many per-binding
+  lifecycle supervision, ownership/auth checks, truthful health, and cross-process binding state.
+  - Verify: doc writeback at `docs/ENVIRONMENTS.md :: Runtime Control Surface`
 
 ## Out of Scope
 
