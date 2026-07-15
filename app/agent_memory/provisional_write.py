@@ -224,6 +224,14 @@ class ProvisionalReceiptStore:
             if receipt.memory_id == memory_id
         )
 
+    def list_all(self) -> tuple[ProvisionalLifecycleReceipt, ...]:
+        """Return the content-free ledger for deterministic read-side rebuilds."""
+        if not self.path.exists():
+            return ()
+        with _receipt_ledger_lock(self.path, shared=True):
+            raw = self.path.read_bytes()
+        return _receipts_from_ledger(raw)
+
 
 @contextmanager
 def _receipt_ledger_lock(path: Path, *, shared: bool) -> Iterator[None]:
