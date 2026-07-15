@@ -94,14 +94,16 @@ This slice promotes the existing seed without changing content-vault authority.
   identity, the unchanged `local_instance_id`, source/destination channel and binding IDs, canonical-
   root fingerprint, and both registry revisions. The source tombstone, destination registration, and
   transfer lineage all retain that same clone identity; transfer never remints it merely because the
-  channel-local binding changes. Before source retirement, the same transaction applies the normal
-  source-reference repair contracts: if the binding is the source default it requires an authorized exact replacement
-  or atomically clears it, and it removes the binding from every source dimension while retaining the
-  dimension revision/audit receipt; no default or dimension membership transfers implicitly to the
-  destination. It also closes source producers and drains every pending source-bound outbox/queue row
-  to a terminal delivered-or-governed-dead-letter state with its source binding and idempotency lineage
-  receipted. An unsettled row aborts transfer before the source registration or lease changes; rows
-  are never retargeted to the destination ID or left for a worker that can no longer validate them.
+  channel-local binding changes. MVR-01B defines versioned dormant extension points in that journal
+  for source-reference repair and source-bound work drain, but does not invent or implement schemas
+  owned by later slices. MVR-02 installs the default repair hook, MVR-04 installs the dimension repair
+  hook, and MVR-05A installs the outbox/queue drain hook. MVR-05C is the first slice allowed to require
+  and invoke all three production implementations: before source retirement, the same transaction
+  then clears or explicitly replaces the source default, removes the binding from every source
+  dimension with its revision/audit receipt, and drains every pending source-bound row to a terminal
+  receipted outcome under the source binding. Missing hooks or an unsettled row leave transfer
+  capability-not-ready and abort before the source registration or lease changes; no default,
+  dimension membership, or row is implicitly retargeted to the destination.
   Only after reference repair, queue drain, source retirement, and destination registration/lineage are durable does
   it replace `transferring` with the destination active lease. A crash resumes or compensates from
   the journal while the reservation blocks both channels; it never admits an ordinary duplicate,
@@ -386,14 +388,6 @@ never encounter and truncate authoritative new-schema state before fork/merge pr
   `local_instance_id` in its tombstone, destination registration, and immutable lineage while changing
   only channel-local binding identity; retry/recovery cannot remint clone provenance.
   - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_transfer_preserves_local_clone_identity_across_channel_binding_change`
-- [ ] **MVR-01B:** Transfer atomically clears or explicitly replaces a source default and removes the
-  source binding from every dimension before tombstoning it; destination default/dimension membership
-  is never inferred, and crash recovery exposes neither dangling nor duplicated references.
-  - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_transfer_repairs_source_default_and_dimensions_before_retirement`
-- [ ] **MVR-01B:** Transfer cannot change binding identity while any source-bound outbox/queue row is
-  unsettled. It drains each row to a terminal receipted outcome under the source ID and preserves its
-  idempotency lineage; drain failure aborts before source retirement without retargeting the row.
-  - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_transfer_drains_source_bound_rows_before_destination_id_activation`
 - [ ] **MVR-01B:** Relocation remains dormant after registration ships: every production relocation
   request fails capability-not-ready and leaves the root/revision/lease unchanged until MVR-06C
   proves foreground plus background shared-effect fencing and activates the matching exclusive
@@ -491,7 +485,7 @@ family-wide command that requires a later sealed slice.
 
 ### MVR-01B validation
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_vault_registry_container_durability.py::test_registry_survives_recreate_and_is_shared_cross_process tests/integration/test_vault_registry_channel_isolation.py::test_overlapping_content_roots_cannot_be_active_in_two_channels tests/integration/test_vault_registry_channel_isolation.py::test_same_channel_nested_vaults_preserve_child_boundary tests/integration/test_vault_registry_channel_isolation.py::test_transfer_is_dormant_until_foreground_ownership_floor tests/integration/test_vault_registry_channel_isolation.py::test_transfer_mints_destination_binding_and_preserves_lineage_atomically tests/integration/test_vault_registry_channel_isolation.py::test_transfer_preserves_local_clone_identity_across_channel_binding_change tests/integration/test_vault_registry_channel_isolation.py::test_transfer_repairs_source_default_and_dimensions_before_retirement tests/integration/test_vault_registry_channel_isolation.py::test_transfer_drains_source_bound_rows_before_destination_id_activation tests/integration/test_vault_registry_channel_isolation.py::test_relocation_is_dormant_until_all_consumer_effect_leases tests/integration/test_vault_registry_channel_isolation.py::test_registration_removal_is_dormant_until_all_consumer_floors tests/integration/test_vault_registry_channel_isolation.py::test_removed_binding_reregistration_preserves_tombstone_lineage tests/integration/test_vault_registry_channel_isolation.py::test_first_upgrade_seeds_all_legacy_channel_owners_before_claim tests/integration/test_vault_registry_channel_isolation.py::test_env_only_bootstrap_atomically_enrolls_one_stable_binding_or_fails_closed tests/integration/test_vault_registry_channel_isolation.py::test_uninitialized_env_upgrade_preserves_read_only_binding_without_writes tests/integration/test_vault_registry_channel_isolation.py::test_host_global_ledger_key_is_durable_shared_and_rotates_atomically tests/integration/test_vault_registry_rollback.py::test_second_registration_is_sealed_across_all_producers_until_01c tests/integration/test_vault_registry_rollback.py::test_previous_image_reads_latest_post_migration_registry_state tests/ops/test_instance_state_volume_contract.py::test_legacy_registry_export_happens_after_writer_quiescence tests/ops/test_instance_state_volume_contract.py::test_registry_volume_and_preflight_cover_all_consumers tests/ops/test_instance_state_volume_contract.py::test_registry_override_cannot_become_content_owned tests/ops/test_instance_state_volume_contract.py::test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restore`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_vault_registry_container_durability.py::test_registry_survives_recreate_and_is_shared_cross_process tests/integration/test_vault_registry_channel_isolation.py::test_overlapping_content_roots_cannot_be_active_in_two_channels tests/integration/test_vault_registry_channel_isolation.py::test_same_channel_nested_vaults_preserve_child_boundary tests/integration/test_vault_registry_channel_isolation.py::test_transfer_is_dormant_until_foreground_ownership_floor tests/integration/test_vault_registry_channel_isolation.py::test_transfer_mints_destination_binding_and_preserves_lineage_atomically tests/integration/test_vault_registry_channel_isolation.py::test_transfer_preserves_local_clone_identity_across_channel_binding_change tests/integration/test_vault_registry_channel_isolation.py::test_relocation_is_dormant_until_all_consumer_effect_leases tests/integration/test_vault_registry_channel_isolation.py::test_registration_removal_is_dormant_until_all_consumer_floors tests/integration/test_vault_registry_channel_isolation.py::test_removed_binding_reregistration_preserves_tombstone_lineage tests/integration/test_vault_registry_channel_isolation.py::test_first_upgrade_seeds_all_legacy_channel_owners_before_claim tests/integration/test_vault_registry_channel_isolation.py::test_env_only_bootstrap_atomically_enrolls_one_stable_binding_or_fails_closed tests/integration/test_vault_registry_channel_isolation.py::test_uninitialized_env_upgrade_preserves_read_only_binding_without_writes tests/integration/test_vault_registry_channel_isolation.py::test_host_global_ledger_key_is_durable_shared_and_rotates_atomically tests/integration/test_vault_registry_rollback.py::test_second_registration_is_sealed_across_all_producers_until_01c tests/integration/test_vault_registry_rollback.py::test_previous_image_reads_latest_post_migration_registry_state tests/ops/test_instance_state_volume_contract.py::test_legacy_registry_export_happens_after_writer_quiescence tests/ops/test_instance_state_volume_contract.py::test_registry_volume_and_preflight_cover_all_consumers tests/ops/test_instance_state_volume_contract.py::test_registry_override_cannot_become_content_owned tests/ops/test_instance_state_volume_contract.py::test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restore`
 - Verify the 01B PR diff contains its mapped owner-doc targets in
   `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md`,
   `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, and `docs/RELEASE_CHANNELS/README.md`.

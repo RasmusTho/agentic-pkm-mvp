@@ -129,12 +129,14 @@ cross-process truth belong here.
   before accepting later work; removal or failed authorization stops that binding loudly. This
   revision cursor makes a producer crash after the atomic commit but before event publication
   converge without leaving removed or relocated bindings active.
-- Before each watcher batch, content read/write, queue dispatch/ack, or emitted outbox mutation,
-  acquire the host-global ownership fence and then the binding's cross-process shared effect lease;
-  validate the active channel/root lease, current auth epoch/binding revision, and a live GOV decision.
-  Release the global fence after the stable snapshot but hold the shared lease through I/O, dispatch,
-  acknowledgement, and receipt. Relocation/removal/revocation/transfer takes the ownership fence then
-  matching exclusive binding lease and drains shared effects before changing state. A process-local or
+- Before each vault-bound watcher batch, content read/write, queue dispatch/ack, or emitted outbox
+  mutation, acquire the host-global ownership fence and then that binding's cross-process shared
+  effect lease; validate the active channel/root lease, current auth epoch/binding revision, and a
+  live GOV decision. Release the global fence after the stable snapshot but hold the shared lease
+  through I/O, dispatch, acknowledgement, and receipt. A `routing_class=global` row instead uses the
+  separately fenced singleton global claim/dispatch path and never acquires or invents a binding
+  lease. Relocation/removal/revocation/transfer takes the ownership fence then matching exclusive
+  binding lease and drains vault-bound shared effects before changing state. A process-local or
   check-then-effect guard is insufficient; immutable producer provenance never authorizes continued work.
 - Define start/rebind/drain/stop behavior for zero/one/many bindings, including clean in-flight
   completion and loud partial failure.

@@ -72,9 +72,13 @@ consumer migration and validation after those contracts are frozen.
   selection, dimensions, request/background migration, single-vault preservation, and final
   promotion into independently verifiable tasks.
   - Verify: doc writeback at `docs/MULTI_VAULT_RUNTIME/README.md :: Implementation tasks`
-- [ ] Registry identity and persistence preserve same-logical-vault clones, explicit default,
-  shipped corrupt-registry picker recovery, and lossless producer migration.
+- [ ] Registry identity and persistence preserve same-logical-vault clones, shipped corrupt-registry
+  picker recovery, and lossless producer migration.
   - Verify: `tests/instance/test_vault_registry_migration.py::test_parent_registry_acceptance`
+- [ ] Explicit default resolution and persistence survive process/container restart without being
+  replaced by mutable last-active selection.
+  - Verify: `tests/instance/test_default_vault_resolution.py::test_legacy_last_active_materializes_default_once`
+  - Verify: `tests/integration/test_vault_registry_container_durability.py::test_default_survives_recreate_after_mvr02`
 - [ ] Two bearer-capability sessions can concurrently use distinct vault contexts, and
   same-binding/same-generation sessions with different cognitive scope/sphere/situated identity or
   selection capability cannot share cache state. Endpoint action/permission remains a separate GOV

@@ -4,8 +4,8 @@ description: Migrate production HTTP retrieval and governed-write paths to immut
 task_id: MVR-05
 source_anchor: "docs/MULTI_VAULT_RUNTIME/README.md :: Active context and isolation"
 parent_capability: Multi-vault runtime selection
-prerequisites: [MVR-03, MVR-04, SETTINGS-05]
-depends_on: [VERSION_ACTIVE_CONTEXT_SELECTION.md, GROUP_VAULT_BINDINGS_BY_DIMENSION.md, "#3163"]
+prerequisites: [MVR-03, MVR-04]
+depends_on: [VERSION_ACTIVE_CONTEXT_SELECTION.md, GROUP_VAULT_BINDINGS_BY_DIMENSION.md]
 can_parallelize_with: []
 ---
 
@@ -419,6 +419,16 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
   current GOV authorization; failure to advance the floor leaves transfer dormant.
   - Verify: `tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_write_after_channel_lease_transfer`
   - Verify: `tests/integration/test_multi_vault_channel_transfer_foreground.py::test_destination_uses_minted_binding_and_transfer_lineage`
+- [ ] **MVR-05C:** Transfer invokes the MVR-02 and MVR-04 journal hooks to atomically clear or
+  explicitly replace the source default and remove the source binding from every dimension before
+  retirement; destination default/dimension membership is never inferred, and recovery exposes no
+  dangling or duplicated reference.
+  - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_transfer_repairs_source_default_and_dimensions_before_retirement`
+- [ ] **MVR-05C:** Transfer invokes the MVR-05A drain hook and cannot change binding identity while
+  any source-bound outbox/queue row is unsettled. Every row reaches a terminal receipted outcome
+  under the source ID with idempotency lineage preserved; failure aborts before source retirement
+  without retargeting the row.
+  - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_transfer_drains_source_bound_rows_before_destination_id_activation`
 - [ ] **MVR-05C:** The production capture path issues, persists, validates, and receipts the expanded
   token bound to principal/instance plus exact context ID/generation, workspace/no-workspace,
   cognitive dimensions, selection digest and complete selected set, as well as target binding
@@ -578,7 +588,7 @@ maps directly to that child ID; an early child never runs a later slice's accept
 
 ### MVR-05C validation
 
-- `pytest -q tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt tests/api/test_multi_vault_governed_writes.py::test_write_target_must_belong_to_active_context_set tests/api/test_multi_vault_governed_writes.py::test_authority_change_blocks_inflight_write_before_commit tests/api/test_multi_vault_governed_writes.py::test_capture_token_binds_exact_active_context_and_target_membership tests/integration/test_multi_vault_write_effect_fence.py::test_authority_change_cannot_cross_validation_write_window tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_write_after_channel_lease_transfer tests/integration/test_multi_vault_channel_transfer_foreground.py::test_destination_uses_minted_binding_and_transfer_lineage tests/integration/test_multi_vault_picker_context.py::test_scoped_picker_governed_write_targets_selected_binding`
+- `pytest -q tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt tests/api/test_multi_vault_governed_writes.py::test_write_target_must_belong_to_active_context_set tests/api/test_multi_vault_governed_writes.py::test_authority_change_blocks_inflight_write_before_commit tests/api/test_multi_vault_governed_writes.py::test_capture_token_binds_exact_active_context_and_target_membership tests/integration/test_multi_vault_write_effect_fence.py::test_authority_change_cannot_cross_validation_write_window tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_write_after_channel_lease_transfer tests/integration/test_multi_vault_channel_transfer_foreground.py::test_destination_uses_minted_binding_and_transfer_lineage tests/integration/test_vault_registry_channel_isolation.py::test_transfer_repairs_source_default_and_dimensions_before_retirement tests/integration/test_vault_registry_channel_isolation.py::test_transfer_drains_source_bound_rows_before_destination_id_activation tests/integration/test_multi_vault_picker_context.py::test_scoped_picker_governed_write_targets_selected_binding`
 - Verify the 05C PR diff contains its mapped `docs/contracts/GOVERNED_WRITE_PROTOCOL.md` writeback.
 
 ### MVR-05D validation
