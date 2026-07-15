@@ -71,6 +71,10 @@ weaken them and does not enter Product Runtime.
   storage/client migration in later bounded PR work after BCP-02/04; do not create a second
   verification orchestrator or rewrite the merged PR.
 - The executor is an API client and never opens PostgreSQL/SQLite directly.
+- The executor cannot claim an outbox intent until its commit LSN is independently durable. Before a
+  GitHub/model call, it commits a fenced pre-effect attempt/receipt and waits for that transaction LSN
+  to reach the independent recovery watermark; stalled durability leaves the external system
+  untouched.
 - General clients and Product Runtime never receive model or merge credentials.
 - The executor resolves GitHub/model credentials from host-secret references at effect time. Raw
   material never enters API requests, PostgreSQL, outbox payloads, receipts, artifacts, logs, or
@@ -92,6 +96,9 @@ weaken them and does not enter Product Runtime.
 - [ ] Restart after reviewer/repair success does not repeat a committed attempt and resumes unknown
   external effects through reconciliation.
   Verify: `tests/dispatcher/test_verification_recovery.py::test_restart_resumes_from_api_receipts_without_duplicate_attempt`.
+- [ ] Stalled recovery durability prevents outbox claim/execution and leaves GitHub untouched until
+  the intent and fenced pre-effect attempt LSNs are independently durable.
+  Verify: `tests/dispatcher/test_verification_recovery.py::test_executor_waits_for_independent_durability_before_external_effect`.
 - [ ] Merge is rejected for stale SHA, missing required CI/review/protection gate, expired fencing,
   repo scope mismatch, client-vs-protected manifest mismatch, stale base/manifest hash, or host
   credential mapping outside the target `RepoRef` policy.

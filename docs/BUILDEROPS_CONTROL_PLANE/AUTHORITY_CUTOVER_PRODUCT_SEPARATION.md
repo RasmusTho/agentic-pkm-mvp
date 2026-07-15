@@ -63,8 +63,11 @@ unchanged.
 
 ## Constraints
 
-- Cutover is fail-closed on missing inventory, unresolved quarantine, failed restore drill,
-  unhealthy schema/outbox, client fallback, executor failure, or remaining Product ownership.
+- Cutover is fail-closed on missing inventory, authority-bearing ambiguity that is neither evidence-
+  resolved nor protected by duplicate-preventing non-authoritative tombstone semantics, failed
+  restore drill, unhealthy schema/outbox, client fallback, executor failure, or remaining Product
+  ownership. Plain quarantine is allowed only for evidence that cannot authorize, suppress, or replay
+  an effect.
 - Invariant → producers: every producer/initializer/client of legacy state is migrated or disabled in
   the same change, with a fail-loud preflight.
 - No dual-write/dual-authority window is permitted.
@@ -81,11 +84,14 @@ unchanged.
 
 - [ ] Final inventory/import reconciliation covers the producer-derived expected host/worktree/
   container/automation universe, accounts for all legacy state, records a new authority epoch, and
-  proves no coverage gap, live legacy lease, unresolved conflict, or evidence-ambiguous repo
-  provenance entered production authority.
+  proves no coverage gap or live legacy lease entered production authority. Every authority-bearing
+  conflict/provenance ambiguity is evidence-resolved or duplicate-preventing tombstoned; plain
+  quarantine contains evidence-only material.
   Verify: cutover receipt containing BCP-03 inventory/import/reconciliation hashes.
 - [ ] MacBook client plus Demerzel executor complete a record→lease→attempt→outbox→GitHub readback→
-  receipt flow against one PostgreSQL epoch after restart.
+  receipt flow against one PostgreSQL epoch after restart, while a stalled independent recovery
+  watermark proves API replay and GitHub execution remain fail-closed until both intent and
+  pre-effect attempt LSNs are durable.
   Verify: `tests/builderops/control_plane/test_end_to_end_api_flow.py::test_remote_client_and_executor_share_one_authority_epoch` plus Demerzel runtime receipt.
 - [ ] Product FastAPI has no BuilderOps/Signboard route, Product startup/Compose has no BuilderOps
   process/data/secret/health ownership, and Product reaches readiness while BuilderOps is stopped.

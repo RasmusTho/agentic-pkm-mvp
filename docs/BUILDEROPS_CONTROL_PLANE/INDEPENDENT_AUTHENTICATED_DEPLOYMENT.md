@@ -41,9 +41,10 @@ Product ownership.
 
 The slice adds a BuilderOps-only Compose invocation and service entrypoint such that an operator can
 deploy a pinned image, wait for migrations, call authenticated `/healthz` and `/readyz`, inspect
-secret-safe status, prove synchronous recovery durability before mutation acknowledgement, take a
-full backup, independently recover its decryption capability, restore it plus WAL through the highest
-acknowledged LSN into an isolated project while Demerzel's host secret store is unavailable, and
+secret-safe status, prove synchronous recovery durability before mutation acknowledgement/replay or
+external-effect eligibility, take a full backup, independently recover its decryption capability,
+restore it plus WAL through the highest acknowledged LSN into an isolated project while Demerzel's
+host secret store is unavailable, and
 change to a compatible BuilderOps image without rewinding authoritative data or running a `pkm-*`
 Compose command.
 
@@ -77,6 +78,9 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
   authority-threatening outbox condition, a recovery target co-resident with Demerzel or sharing
   its primary storage failure domain, or inability to keep the commit/recovery LSN synchronously
   durable in the independent recovery target.
+- Recovery eligibility is server-enforced: API success/replay and dependent transitions wait for the
+  originating LSN, outbox claim waits for the intent LSN, and the external call waits for the fenced
+  claim/pre-effect attempt LSN. No client or executor assertion can bypass either watermark.
 - A persistent volume or snapshot alone is not accepted as recoverability. Full backup + continuous
   WAL must restore through the highest acknowledged LSN/receipt sequence; backup/restore negative
   scans must also prove the credential exclusion boundary.
@@ -104,6 +108,10 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
   co-resident/shared-storage target and fails closed when the durability guarantee or lag bound is
   unavailable.
   Verify: `tests/builderops/control_plane/test_recovery_durability.py::test_authority_ack_requires_separate_failure_domain_and_recovery_lsn`.
+- [ ] Stalling the independent recovery watermark after local intent and claim commits withholds API
+  success/replay and every dependent transition, keeps the outbox intent ineligible, and leaves
+  GitHub untouched until both the intent and fenced pre-effect attempt LSNs are durable.
+  Verify: `tests/builderops/control_plane/test_recovery_durability.py::test_external_effect_waits_for_intent_and_claim_recovery_lsn`.
 - [ ] With Demerzel's host secret store unavailable, independently recoverable key/KMS custody can
   decrypt an encrypted full backup plus continuous WAL and restore a disposable database through the
   highest acknowledged LSN/receipt sequence with passing schema, count, integrity, outbox/lease, and
@@ -126,9 +134,10 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
 
 - render/validate Compose config under the dedicated project name;
 - run auth-negative, credential-redaction, durable-state, WAL, and restored-backup secret scans;
-- interrupt recovery durability to prove acknowledgement/readiness fails closed, then execute full
-  backup + WAL restore through the acknowledged watermark in an isolated test project with
-  Demerzel's host secret store unavailable; and
+- interrupt recovery durability to prove acknowledgement/replay, dependent transitions, and GitHub
+  effects fail closed through both intent and pre-effect attempt watermarks, then execute full backup
+  + WAL restore through the acknowledged watermark in an isolated test project with Demerzel's host
+  secret store unavailable; and
 - run `ruff check app tests` plus focused ops tests.
 
 ## Related Docs

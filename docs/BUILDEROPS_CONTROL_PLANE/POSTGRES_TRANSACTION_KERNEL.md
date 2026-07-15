@@ -26,10 +26,12 @@ port and PostgreSQL implementation before network deployment or migration can be
   authority-bearing record, with repo-namespaced leases, idempotency keys, outbox operations, and
   promotions;
 - make guarded state + idempotency result + receipt + outbox intent one transaction;
-- expose the committed receipt sequence and PostgreSQL recovery LSN so the API can withhold
-  acknowledgement until BCP-02 proves independent synchronous durability;
+- expose the committed receipt sequence and PostgreSQL recovery LSN so API acknowledgement/replay,
+  dependent authority transitions, and outbox eligibility can wait until BCP-02 proves independent
+  synchronous durability;
 - implement atomic claim/heartbeat/release/complete with monotonically fenced ownership;
-- implement an outbox claim/retry/reconciliation state machine with deterministic operation keys;
+- implement an outbox claim/retry/reconciliation state machine with deterministic operation keys,
+  durability-watermark eligibility, and a fenced pre-effect attempt/receipt;
 - retain SQLite only as an explicitly injected test/migration adapter, never an automatic runtime
   default; and
 - expose schema/authority-epoch metadata needed by readiness and cutover.
@@ -66,6 +68,10 @@ by BuilderOps governance and remains outside Product persistence authority.
 - File projections/artifacts cannot be the sole terminal-state or receipt authority.
 - A transaction result is not externally acknowledgeable without its committed receipt sequence and
   recovery LSN; BCP-02 owns the independent durability gate.
+- An idempotent replay cannot expose success, and an outbox worker cannot claim an intent, until the
+  independent recovery watermark covers the original transaction LSN. Before an external call, the
+  worker must also wait until the fenced claim/pre-effect attempt transaction LSN is independently
+  durable; stalled durability leaves the effect unattempted.
 - Missing/ambiguous repo scope fails closed; an identity, lease, idempotency key, or promotion in one
   repo namespace cannot collide with or authorize another.
 - Do not yet switch production clients or remove Product routes.
@@ -84,6 +90,10 @@ by BuilderOps governance and remains outside Product persistence authority.
 - [ ] Outbox claims are crash-recoverable and a timed-out external effect enters reconciliation
   rather than immediate replay or terminal success.
   Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_unknown_external_effect_requires_readback_before_retry`.
+- [ ] With the recovery watermark stalled after local intent and claim commits, API replay exposes no
+  success, the outbox intent is not effect-eligible, and GitHub remains untouched; advancing the
+  watermark through both transaction LSNs permits one reconciled effect.
+  Verify: `tests/builderops/control_plane/test_recovery_durability.py::test_external_effect_waits_for_intent_and_claim_recovery_lsn`.
 - [ ] Production construction requires a PostgreSQL DSN and never selects/creates SQLite implicitly;
   the SQLite adapter is available only through explicit test/migration injection.
   Verify: `tests/builderops/control_plane/test_store_selection.py::test_production_store_fails_closed_without_postgres`.

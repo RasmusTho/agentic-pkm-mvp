@@ -60,8 +60,9 @@ reshape a Product SBS subsystem.
 ## Suggested Validation
 
 - keep a child/PR/receipt ledger on the parent;
-- require the BCP-06 end-to-end cutover, restore-through-acknowledged-watermark, and independent
-  recovery-key/KMS custody receipts before BCP-07; and
+- require the BCP-06 end-to-end cutover, stalled-durability/no-GitHub-effect fault proof,
+  authority-ambiguity resolution/tombstone reconciliation, restore-through-acknowledged-watermark,
+  and independent recovery-key/KMS custody receipts before BCP-07; and
 - close only through BCP-07's parent-closure handoff.
 
 ## Source Docs
@@ -96,7 +97,9 @@ authoritative cutover gates.
 ## Validation / Acceptance Path
 
 After BCP-06, attach the Demerzel end-to-end API/executor/GitHub readback receipt, legacy-import
-reconciliation, independent Product/BuilderOps lifecycle proof, and full-backup + continuous-WAL
-restore-through-acknowledged-watermark drill with Demerzel's host secret store unavailable and
+reconciliation (including evidence-only quarantine versus duplicate-preventing authority tombstones),
+stalled-durability proof that GitHub remains untouched until intent and pre-effect attempt LSNs are
+independently durable, independent Product/BuilderOps lifecycle proof, and full-backup + continuous-
+WAL restore-through-acknowledged-watermark drill with Demerzel's host secret store unavailable and
 independently recoverable key/KMS custody. Only then
 may #3690/BCP-07 promote current-state owner docs and close this parent.

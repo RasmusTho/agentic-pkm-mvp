@@ -27,9 +27,10 @@ host-identity lessons remain migration inputs.
   writer status, and reject stale/foreign inventory acknowledgement;
 - create versioned read-only adapters and deterministic normalized identities/provenance;
 - derive `RepoRef`, scope, and stack only from recorded source evidence, registered worktree/repo
-  identity, or an acknowledged deterministic mapping; quarantine missing/ambiguous provenance;
+  identity, or an acknowledged deterministic mapping; quarantine evidence-only ambiguity and require
+  authority-bearing ambiguity to be resolved or converted to duplicate-preventing tombstones;
 - dry-run and import tasks/events/records/attempts/idempotency/artifact references/receipts while
-  reporting counts, deduplication, conflicts, omissions, and quarantine;
+  reporting counts, deduplication, conflicts, omissions, quarantine, and tombstones;
 - expire/tombstone all legacy live leases and create a new PostgreSQL authority epoch/fencing base;
 - make import idempotent and restart-safe without mutating source files; and
 - produce machine-readable preflight, dry-run, import, and reconciliation receipts consumed by BCP-06.
@@ -41,7 +42,8 @@ from producer/default-path inventory plus live Git/Docker/automation enumeration
 authorize access but cannot omit a producer or registered root. The command emits a coverage manifest
 and hash, accepts a host/user/freshness-bound acknowledgement, runs a no-write dry import, and
 produces a reconciliation ledger. Re-running the same inputs returns the same normalized result;
-missing roots, changed inputs, or conflicts block with explicit evidence.
+missing roots, changed inputs, or authority-bearing conflicts without resolved/tombstoned replay
+protection block with explicit evidence.
 
 ## Why This Matters
 
@@ -67,14 +69,18 @@ knowledge, runtime data, and GitHub/repo delivery authority are unchanged.
   cutover hosts. Caller-supplied roots may add scope but never subtract expected coverage.
 - An expected missing or inaccessible root is an explicit blocking receipt, not silent absence.
 - Source adapters are read-only and hash-verify before and after import.
-- Conflicting equal identities are quarantined; timestamps or path order never silently choose a
-  winner.
+- Conflicting equal identities never use last-write-wins. Evidence-only conflicts may remain plain
+  non-authoritative quarantine. Authority-bearing conflicts block cutover until evidence-resolved or
+  represented by a non-authoritative tombstone that preserves source hashes, reserves legacy
+  identity/idempotency/operation keys, rejects retry as manual conflict, and cannot authorize an
+  effect.
 - No legacy lease becomes a live PostgreSQL lease.
 - Existing immutable inquiry artifacts may remain external by hash, but authoritative identity,
   state, promotion, and receipts import into PostgreSQL.
-- Unknown/ambiguous repo provenance is never defaulted from CWD or import target. Quarantined records
-  cannot authorize a lease, effect, promotion, or merge and unresolved authority-bearing provenance
-  blocks cutover.
+- Unknown/ambiguous repo provenance is never defaulted from CWD or import target. Plain quarantine is
+  limited to evidence-only records. Authority-bearing ambiguity blocks cutover until evidence-
+  resolved or converted into the duplicate-preventing tombstone form; a possible prior external
+  effect must be reconciled against GitHub before any successor operation.
 - Import is not production cutover and does not disable writers; BCP-06 owns the freeze window.
 
 ## Acceptance Criteria
@@ -86,22 +92,26 @@ knowledge, runtime data, and GitHub/repo delivery authority are unchanged.
 - [ ] Re-running an unchanged import is idempotent, while a source changed after freeze fails hash
   verification and imports nothing further.
   Verify: `tests/builderops/control_plane/test_legacy_import.py::test_import_is_restart_safe_and_rejects_changed_source`.
-- [ ] Equal identities with divergent content are quarantined with provenance and block cutover
-  rather than last-write-wins resolution.
-  Verify: `tests/builderops/control_plane/test_legacy_import.py::test_conflicting_identity_is_quarantined_and_blocks_cutover`.
+- [ ] Equal authority-bearing identities with divergent content block cutover rather than using
+  last-write-wins or plain quarantine; activation becomes eligible only after evidence resolution or
+  a non-authoritative tombstone reserves all legacy identity/idempotency/operation keys and makes
+  replay fail closed.
+  Verify: `tests/builderops/control_plane/test_legacy_import.py::test_conflicting_identity_requires_resolution_or_duplicate_preventing_tombstone`.
 - [ ] Legacy live leases import only as expired/tombstone evidence and cannot authorize mutation in
   the new epoch.
   Verify: `tests/builderops/control_plane/test_legacy_import.py::test_live_legacy_leases_do_not_cross_authority_epoch`.
 - [ ] Inquiry/epic-run identities, transitions, promotions, and receipts are represented in
   PostgreSQL with content-hash references to immutable artifacts and no file-only terminal state.
   Verify: `tests/builderops/control_plane/test_legacy_artifact_import.py::test_file_first_authority_imports_envelope_and_receipts`.
-- [ ] Legacy `RepoRef`/scope/stack is backfilled only from evidence-bound mappings; missing or
-  ambiguous provenance is quarantined as non-authoritative and cannot authorize a lease, effect,
+- [ ] Legacy `RepoRef`/scope/stack is backfilled only from evidence-bound mappings. Evidence-only
+  ambiguity may remain plain non-authoritative quarantine; authority-bearing ambiguity must be
+  evidence-resolved or duplicate-preventing tombstoned and cannot authorize a lease, effect,
   promotion, or merge.
-  Verify: `tests/builderops/control_plane/test_legacy_import.py::test_unresolved_repo_provenance_is_quarantined_and_non_authoritative`.
+  Verify: `tests/builderops/control_plane/test_legacy_import.py::test_authority_ambiguity_requires_resolution_or_duplicate_preventing_tombstone`.
 - [ ] A reconciliation receipt accounts for every expected producer/root and every source item as
-  imported, deduplicated, quarantined, explicitly missing/inaccessible, intentionally excluded, or
-  archived, and cutover rejects any unresolved coverage gap.
+  imported, deduplicated, evidence-quarantined, duplicate-preventing tombstoned, explicitly missing/
+  inaccessible, intentionally excluded, or archived, and cutover rejects any unresolved coverage or
+  authority-replay gap.
   Verify: `tests/builderops/control_plane/test_legacy_reconciliation.py::test_reconciliation_accounts_for_expected_universe_and_blocks_coverage_gaps`.
 
 ## Out of Scope

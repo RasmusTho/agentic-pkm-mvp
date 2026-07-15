@@ -33,7 +33,7 @@ required CI, review gates, repository protection, and GitHub merge results remai
 |---|---|---|---|---|---|
 | 1 | [PostgreSQL Transaction Kernel](POSTGRES_TRANSACTION_KERNEL.md) | BCP-01 | #3792 | Store port, PostgreSQL schema/migrations, fenced leases, atomic idempotency + state + receipt + outbox | — |
 | 2 | [Independent Authenticated Deployment](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md) | BCP-02 | #3790 | Separate service app/Compose project, auth, release pin, health, full backup + continuous WAL recovery, trust boundary | BCP-01 |
-| 3 | [Legacy Authority Migration](LEGACY_AUTHORITY_MIGRATION.md) | BCP-03 | #3789 | Complete SQLite/JSONL/JSON inventory, read-only import, conflict/quarantine report, authority epoch | BCP-01 |
+| 3 | [Legacy Authority Migration](LEGACY_AUTHORITY_MIGRATION.md) | BCP-03 | #3789 | Complete SQLite/JSONL/JSON inventory, read-only import, evidence-quarantine/authority-tombstone report, authority epoch | BCP-01 |
 | 4 | [API-Only Client Cutover](API_ONLY_CLIENT_CUTOVER.md) | BCP-04 | #3791 | MacBook skills/CLI/automation use authenticated API and fail closed with no local/direct-DB fallback | BCP-02 |
 | 5 | [Demerzel Review And Merge Orchestration](DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md) | BCP-05 | existing #3603; baseline PR #3620 merged | Migrate the delivered executor to API/PostgreSQL/outbox and scoped merge authority | BCP-02, BCP-04 |
 | 6 | [Authority Cutover And Product Separation](AUTHORITY_CUTOVER_PRODUCT_SEPARATION.md) | BCP-06 | #3793 | Import/cutover, disable legacy writers, remove Product routes/startup, prove restore-through-watermark/no-fallback, archive sources | BCP-03, BCP-04, BCP-05 |
@@ -57,11 +57,15 @@ not by rewriting that merge.
 2. **API-only authority.** Every production client, including the Demerzel executor, uses the
    authenticated API. Only the BuilderOps data layer reaches PostgreSQL.
 3. **Atomic local transition.** Idempotency result, guarded state mutation, receipt, and outbox intent
-   commit in one PostgreSQL transaction. If any part fails, none becomes visible. The API
-   acknowledges only after the commit/recovery LSN is durable outside Demerzel's primary host and
-   storage failure domains; a co-resident target fails readiness.
-4. **Reconciled external effects.** An outbox timeout is `unknown`, not `failed`. Retry reads GitHub
-   before repeating; terminal success requires GitHub readback bound to repo and current SHA.
+   commit in one PostgreSQL transaction. If any part fails, none becomes visible. API success/replay,
+   dependent authority transitions, and outbox claim eligibility wait until that commit/recovery LSN
+   is durable outside Demerzel's primary host and storage failure domains; a co-resident target fails
+   readiness.
+4. **Durable, reconciled external effects.** After an eligible intent is claimed, its fenced
+   pre-effect attempt/receipt commit must also cross the independent recovery watermark before the
+   executor calls GitHub. A stalled watermark leaves GitHub untouched. A timeout is `unknown`, not
+   `failed`; retry reads GitHub before repeating, and terminal success requires GitHub readback bound
+   to repo and current SHA.
 5. **Fenced leases.** Stale workers cannot mutate after expiry/reassignment; fencing survives API,
    worker, and database restarts.
 6. **Credential/policy non-transitivity and non-persistence.** A credential/lease for repo A cannot
@@ -80,17 +84,22 @@ not by rewriting that merge.
 9. **Artifact integrity.** Large artifacts may remain content-addressed files, but identity, state,
    terminal receipts, and promotion/outbox status are PostgreSQL-authoritative.
 10. **Fail-loud cutover.** Incomplete producer-derived source coverage, an unenumerated host/
-    worktree/container root, unresolved conflicts, failed restore drill, unhealthy schema/outbox,
-    missing credentials, or an extant Product route blocks cutover.
+    worktree/container root, authority-bearing ambiguity that is neither evidence-resolved nor
+    converted into a duplicate-preventing non-authoritative tombstone, failed restore drill,
+    unhealthy schema/outbox, missing credentials, or an extant Product route blocks cutover. Plain
+    quarantine is permitted only for evidence-only material that cannot authorize or replay effects.
 
 Partial-failure examples:
 
-- If the API commits an outbox row and crashes before responding, an idempotent client retry returns
-  the committed result; it does not create a second intent.
+- If the API commits an outbox row and crashes before responding, an idempotent client retry creates
+  no second intent and returns success only after the original LSN is independently durable.
+- If intent or pre-effect attempt WAL is stalled before the independent recovery target, the executor
+  does not call GitHub; once both watermarks advance, the same deterministic operation executes once.
 - If GitHub accepts a merge/create request and the executor times out, the executor reconciles by
   deterministic marker/repo/SHA before retry and records the readback receipt.
-- If import sees two records with one identity and different hashes, neither is chosen silently; the
-  conflict is quarantined and cutover stays blocked.
+- If import sees two authority-bearing records with one identity and different hashes, neither is
+  chosen silently; cutover stays blocked until evidence resolves the conflict or a non-authoritative
+  tombstone reserves every identity/operation key and makes replay fail closed.
 - If backup succeeds but the restore drill fails, deployment may continue in a non-authoritative test
   environment but production cutover is rejected.
 - If BuilderOps is unavailable, MacBook commands return a typed unavailable/auth error. They do not
@@ -109,12 +118,15 @@ Partial-failure examples:
   without direct database access or local-authority fallback.
   Verify: `tests/builderops/control_plane/test_end_to_end_api_flow.py::test_remote_client_and_executor_share_one_authority_epoch`.
 - [ ] A crash at each state/outbox/external-effect boundary produces no duplicate accepted transition
-  and a reconcilable receipt chain.
-  Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_external_effect_crash_windows_reconcile_once`.
+  and a reconcilable receipt chain; stalled independent durability exposes no success and leaves
+  GitHub untouched until intent and pre-effect attempt LSNs are durable.
+  Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_external_effect_crash_windows_reconcile_once` plus `tests/builderops/control_plane/test_recovery_durability.py::test_external_effect_waits_for_intent_and_claim_recovery_lsn`.
 - [ ] A producer-derived manifest proves the complete MacBook/Demerzel worktree/container source
-  universe, and every expected source is imported, quarantined, explicitly accounted missing, or
-  archived, with no live lease carried into the new epoch. Evidence-backed repo provenance is
-  backfilled; unresolved provenance remains non-authoritative quarantine.
+  universe, and every expected source is imported, quarantined, tombstoned, explicitly accounted
+  missing, or archived, with no live lease carried into the new epoch. Evidence-backed repo
+  provenance is backfilled. Plain quarantine contains only evidence-only material; every authority-
+  bearing ambiguity is evidence-resolved or represented by a duplicate-preventing,
+  non-authoritative tombstone before activation.
   Verify: BCP-03 migration reconciliation receipt plus BCP-06 cutover receipt.
 - [ ] Product Runtime contains no BuilderOps route, process bootstrap, data mount, secret, or health
   dependency, and its lifecycle remains healthy with BuilderOps stopped.

@@ -129,16 +129,19 @@ the control-plane data layer talks to PostgreSQL. Product Runtime owns none of i
 ### RQ2 — What must be atomic?
 
 Idempotency, guarded state transition, lease/fencing validation, append-only receipt, and outbox
-intent commit in one PostgreSQL transaction. External GitHub effects use at-least-once outbox
-delivery plus deterministic reconciliation and authoritative readback. This is not false
-"exactly-once GitHub"; it is exactly-one accepted local transition with reconciled external effect.
+intent commit in one PostgreSQL transaction. API success/replay and outbox claim wait for that
+transaction LSN to be independently durable; the fenced pre-effect attempt/receipt LSN must also be
+durable before GitHub is called. External effects then use at-least-once outbox delivery plus
+deterministic reconciliation and authoritative readback. This is not false "exactly-once GitHub"; it
+is exactly-one recoverable accepted transition with a recoverable attempt and reconciled effect.
 
 ### RQ3 — How does cutover avoid silent loss or split brain?
 
 Derive the expected source/root universe from every legacy producer/default plus MacBook/Demerzel
 worktree, container, automation, and host inventory; then freeze every SQLite/JSONL/JSON authority
-source, hash it, dry-run a versioned read-only import, preserve evidence-backed repo provenance and
-quarantine missing/ambiguous provenance or conflicts,
+source, hash it, dry-run a versioned read-only import, preserve evidence-backed repo provenance,
+quarantine only evidence-only ambiguity, and evidence-resolve or duplicate-preventing-tombstone every
+authority-bearing ambiguity,
 invalidate live leases into a new authority epoch, back up before import, reconcile coverage/counts/
 hashes, cut all clients to the API, disable legacy writers, and archive sources read-only. Before
 activation the pre-import backup is available; after activation a full backup plus continuous WAL
@@ -199,12 +202,12 @@ Minimum deployable unit:
 |---|---|---|---|
 | BCP-INV-01 | MUST | Every production authority-bearing client uses authenticated API; no direct DB/local fallback. | client contract tests + static inventory gate |
 | BCP-INV-02 | MUST | Exactly one production PostgreSQL authority epoch exists. | schema metadata + startup/readiness gate |
-| BCP-INV-03 | MUST | State, idempotency, receipt, and outbox intent commit atomically; API acknowledgement waits for independent recovery-LSN durability. | transaction/fault-injection + recovery-durability tests |
-| BCP-INV-04 | MUST | External effects become terminal only after deterministic reconciliation/readback. | outbox crash-window tests |
+| BCP-INV-03 | MUST | State, idempotency, receipt, and outbox intent commit atomically; API success/replay, dependent transitions, and outbox claim wait for the intent LSN, and the external call waits for the fenced pre-effect attempt LSN, to become independently durable. | transaction/fault-injection + stalled-recovery-durability tests |
+| BCP-INV-04 | MUST | External systems remain untouched before both durability gates; attempted effects become terminal only after deterministic reconciliation/readback. | outbox durability/crash-window tests |
 | BCP-INV-05 | MUST | Lease fencing rejects stale workers across expiry/restart. | concurrent claim/heartbeat tests |
 | BCP-INV-06 | MUST | Product Runtime owns no BuilderOps route, process, data, credential, or health path. | architecture/Compose route-removal gate |
 | BCP-INV-07 | GATE | Independent migrations, full backup + continuous WAL, independently recoverable key/KMS custody, restore through acknowledged LSN without the primary host secret store, release pin, health, and no-authority-rewind recovery pass before cutover. | deploy/cutover/recovery receipt |
-| BCP-INV-08 | GATE | Producer-derived host/worktree/container/automation coverage proves all legacy stores are inventoried, frozen, provenance-resolved or quarantined, reconciled, and archived; live leases are not imported. | expected-source/provenance manifest + reconciliation receipt |
+| BCP-INV-08 | GATE | Producer-derived host/worktree/container/automation coverage proves all legacy stores are inventoried, frozen, and reconciled; plain quarantine contains evidence-only material, every authority-bearing ambiguity is evidence-resolved or duplicate-preventing tombstoned, and live leases are not imported. | expected-source/provenance manifest + reconciliation receipt |
 | BCP-INV-09 | MUST | Executor revalidates protected-base repo policy and credential binding; credentials and raw recovery keys are unavailable to Product/general clients and absent from BuilderOps durable state/backups/WAL. | manifest/secret/permission + durable-state/restore negative tests |
 | BCP-INV-10 | DOCTOR | Outbox age/dead letters, lease conflicts, credential/rate-limit state, and executor heartbeat are visible without secrets. | status/metrics contract |
 

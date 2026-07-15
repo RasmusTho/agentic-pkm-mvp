@@ -93,17 +93,20 @@ transaction:
 3. the append-only BuilderOps receipt; and
 4. an outbox intent.
 
-The API does not acknowledge that transition until its commit/recovery LSN is synchronously durable
-in an encrypted recovery target outside Demerzel's primary host and storage failure domains. A
-co-resident volume or storage backend is not independent recovery durability. Durable recovery state
-tracks the highest acknowledged LSN/receipt sequence; authority readiness fails closed when that
-invariant cannot be maintained.
+The transaction records its commit/recovery LSN. No authority-bearing success response, idempotent
+replay, dependent authority transition, or outbox claim may pass until the independent recovery
+watermark covers that LSN in an encrypted target outside Demerzel's primary host and storage failure
+domains. A co-resident volume or storage backend is not independent recovery durability. After an
+eligible intent is claimed, the executor commits a fenced pre-effect attempt/receipt and also waits
+for that transaction's LSN to cross the independent recovery watermark before calling GitHub. If the
+watermark stalls, readiness fails closed, clients receive pending/unavailable rather than success,
+and the executor leaves GitHub untouched.
 
-GitHub cannot participate in that transaction. A privileged executor claims the durable outbox
-intent, performs the external effect with deterministic reconciliation, reads GitHub back, and then
-records the observed outcome in a new transaction and receipt. A timed-out call is unknown, never
-assumed failed; retries reconcile before repeating. Terminal success is never inferred solely from
-the attempted call.
+GitHub cannot participate in either PostgreSQL transaction. Once both durability gates pass, the
+privileged executor performs the external effect with deterministic reconciliation, reads GitHub
+back, and records the observed outcome in a new transaction and receipt. A timed-out call is unknown,
+never assumed failed; retries reconcile before repeating. Terminal success is never inferred solely
+from the attempted call.
 
 Immutable large artifacts may remain in a dedicated artifact store only as content-addressed
 payloads referenced by PostgreSQL. No file-only manifest, receipt, JSON run state, or Markdown
@@ -183,10 +186,15 @@ reactivated as authority.
 `RepoRef`, `scope`, `stack`, actor, source references, and schema version are mandatory on authority-
 bearing records. TCD routing keys on `(repo, stack, task-class)` with global → stack → repo priors so
 learning from one stack does not silently distort another. Existing data is backfilled where
-evidence supports it and quarantined as `unknown`/unresolved where it does not; provenance is never
-invented. An unresolved envelope cannot authorize a lease, external effect, promotion, or merge and
-blocks authoritative cutover until it is evidence-resolved or retained as non-authoritative
-quarantine.
+evidence supports it; provenance is never invented. Plain non-authoritative quarantine is permitted
+only for evidence-only material that cannot authorize, suppress, or cause replay of an idempotency
+result, transition, lease, outbox operation, promotion, merge, or receipt. For authority-bearing
+ambiguity, plain quarantine is insufficient: before activation the item must either be evidence-
+resolved or imported as an explicit non-authoritative tombstone that preserves source hashes and
+reserves every legacy identity, idempotency key, and external-operation key. A tombstone fails
+retries as quarantined/manual-conflict and can never authorize an effect; possible prior effects
+reconcile against GitHub before any successor operation. Cutover blocks until every authority-
+bearing ambiguity is resolved or has those duplicate-preventing tombstone semantics.
 
 Promotion is addressed to one consumer repo and requires that repo's normal acceptance path. A
 BuilderOps standing in repo A is non-transitive to repo B. BuilderOpsReceipt projections may be
@@ -240,7 +248,8 @@ requires an owner decision before specification and backlog preparation.
 - Issue #3690 remains the owner-doc enactment task and must be rewritten to reflect this topology
   after the BCP-06 cutover is proved.
 - Current local/file-first BuilderOps records are not silently discarded. Migration preserves
-  identity and provenance or emits a reviewable quarantine/conflict receipt.
+  identity/provenance, limits plain quarantine to evidence-only material, and emits a reviewable
+  duplicate-preventing tombstone/conflict receipt for unresolved authority-bearing inputs.
 - Independent full-backup + continuous-WAL restore-through-watermark with independently recoverable
   key/KMS custody is a launch gate. A persistent volume or snapshot alone is not recoverability.
 - Product availability and BuilderOps availability are independent: either may be down without the
