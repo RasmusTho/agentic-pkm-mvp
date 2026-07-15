@@ -705,3 +705,85 @@ def test_legacy_terminal_budget_blocks_exact_empty_active_replay(tmp_path) -> No
         "standard_repair",
     ]
     assert state.attempts("legacy-new-active") == []
+
+
+def _insert_legacy_active_chain(
+    state: VerificationDispatchLedger,
+    head_sha: str,
+    *,
+    linked_issue: int | None = None,
+) -> str:
+    payload = request(head_sha)
+    if linked_issue is not None:
+        payload["linked_issue"] = linked_issue
+    run_id = f"legacy-active-{head_sha[:8]}"
+    with state.store._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO verification_runs (
+                run_id, idempotency_key, contract_version, repository,
+                pr_number, head_sha, current_head_sha, stage, request_json,
+                status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
+            """,
+            (
+                run_id,
+                payload["idempotency_key"],
+                payload["contract_version"],
+                payload["repository"],
+                payload["pr_number"],
+                head_sha,
+                head_sha,
+                payload["stage"],
+                json.dumps(payload),
+                "2999-01-02T00:00:00+00:00",
+                "2999-01-02T00:00:00+00:00",
+            ),
+        )
+        conn.commit()
+    return run_id
+
+
+def test_multiple_active_canonical_chains_fail_closed_before_exact_replay(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    older_run = state.ingest(request())
+    _record_exhausted_repair_budget(state, older_run.run_id)
+    exact_run_id = _insert_legacy_active_chain(state, REPAIRED_HEAD)
+
+    with state.store._connect() as conn:
+        before = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM verification_runs ORDER BY run_id"
+            )
+        ]
+
+    with pytest.raises(ValueError, match="canonical active chain is ambiguous"):
+        state.ingest(request(REPAIRED_HEAD))
+
+    with state.store._connect() as conn:
+        after = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM verification_runs ORDER BY run_id"
+            )
+        ]
+    assert after == before
+    assert [row["kind"] for row in state.attempts(older_run.run_id)] == [
+        "standard_repair",
+        "standard_repair",
+    ]
+    assert state.attempts(exact_run_id) == []
+
+
+def test_multiple_active_canonical_chains_reject_governing_issue_mismatch(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    state.ingest(request())
+    _insert_legacy_active_chain(state, REPAIRED_HEAD, linked_issue=999999)
+
+    with pytest.raises(ValueError, match="canonical run governing issue mismatch"):
+        state.ingest(request(REPAIRED_HEAD))
