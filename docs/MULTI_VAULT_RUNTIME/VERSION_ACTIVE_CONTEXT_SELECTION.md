@@ -70,7 +70,14 @@ generation unknown. A process-global mutable manager cannot safely represent con
   added human/agent role receives a distinct principal. Update bootstrap, existing-install migration,
   channel init, and test fixtures in this slice before fail-closed enforcement is enabled.
 - Treat this new private delegated-principal record as a versioned runtime boundary. Before its first
-  durable write MVR-03 records a `minimum_runtime_principal` floor; the MVR-01 rollback launcher
+  durable write, a production-derived channel/native producer inventory fences new governed/auth
+  operations, drains and stops every pre-MVR-03 API, CLI daemon, Companion proxy, auth-state writer,
+  credential rotation path, bootstrap/init process, and other enabled principal producer, and proves
+  none can restart or retain an auth-state write handle. Only then does MVR-03 record a
+  `minimum_runtime_principal` floor and write/migrate the delegated-role record. A missing producer,
+  drain failure, or crash before the floor leaves old auth state authoritative and the migration
+  untouched; a failure after the floor requires compatible roll-forward and cannot restart an old
+  producer. The MVR-01 rollback launcher
   and native preflight refuse an earlier credential-only image while that floor exists. Compatible
   roll-forward exports the prior image's final credential/auth revision under lock, verifies its
   recorded fork, and reconciles a credential rotation into the same role ID; missing, divergent, or
@@ -192,6 +199,13 @@ retrieval, settings, or write provenance to leak between humans or vaults.
   durable role write; credential-only rollback is blocked, while compatible roll-forward preserves
   role identity and reconciles only an unambiguous credential rotation from its final old-image export.
   - Verify: `tests/migrations/test_local_operator_principal_upgrade.py::test_principal_floor_blocks_credential_only_rollback_and_reconciles_safe_rollforward`
+- [ ] **MVR-03:** Before the principal floor or first delegated-role write, the deployment/native
+  cutover fences new operations, drains and stops every enabled legacy API/CLI/proxy/auth writer,
+  credential rotation and bootstrap producer, proves the inventory complete from production truth,
+  and prevents restart. Fault injection exposes no window where a credential-only producer can race
+  or perform a governed effect after the new role state becomes authoritative.
+  - Verify: `tests/ops/test_mvr03_principal_mixed_version_fence.py::test_every_legacy_auth_producer_stops_before_principal_floor_write`
+  - Verify: `tests/ops/test_mvr03_principal_mixed_version_fence.py::test_principal_fence_inventory_covers_every_enabled_auth_producer`
 - [ ] **MVR-03:** Deployment and release-channel owner docs record the shipped
   `minimum_runtime_principal` floor, compatible rollback/roll-forward images, and operator preflight
   in the same PR that advances the floor.
@@ -238,7 +252,7 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 
 ## How to Verify (Pre-Merge)
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/instance/test_context_selection_store.py tests/api/test_active_context_resolution.py tests/api/test_active_context_selection_api.py tests/api/test_active_context_selection_api.py::test_selection_bearer_is_redacted_from_success_failure_logs_and_receipts tests/retrieval/test_active_context_cache_isolation.py tests/integration/test_local_operator_principal_bootstrap.py tests/migrations/test_local_operator_principal_upgrade.py`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/instance/test_context_selection_store.py tests/api/test_active_context_resolution.py tests/api/test_active_context_selection_api.py tests/api/test_active_context_selection_api.py::test_selection_bearer_is_redacted_from_success_failure_logs_and_receipts tests/retrieval/test_active_context_cache_isolation.py tests/integration/test_local_operator_principal_bootstrap.py tests/migrations/test_local_operator_principal_upgrade.py tests/ops/test_mvr03_principal_mixed_version_fence.py::test_every_legacy_auth_producer_stops_before_principal_floor_write tests/ops/test_mvr03_principal_mixed_version_fence.py::test_principal_fence_inventory_covers_every_enabled_auth_producer`
 - `mypy app`
 - `pytest -q -m "not pg"`
 - `ruff check app tests`
