@@ -241,7 +241,9 @@ class VerificationDispatchLedger:
                     (request["repository"], request["pr_number"], request["stage"]),
                 )
             )
-            if active_before_exact and terminal_before_exact:
+            multiple_active = len(active_before_exact) > 1
+            active_with_terminal = bool(active_before_exact and terminal_before_exact)
+            if multiple_active or active_with_terminal:
                 for candidate in [*active_before_exact, *terminal_before_exact]:
                     candidate_request = _load(candidate["request_json"])
                     if not isinstance(candidate_request, Mapping):
@@ -263,6 +265,8 @@ class VerificationDispatchLedger:
                         raise ValueError(
                             "verification canonical run governing issue mismatch"
                         )
+                if multiple_active:
+                    raise ValueError("verification canonical active chain is ambiguous")
                 raise ValueError("verification canonical terminal chain is ambiguous")
             existing = conn.execute(
                 "SELECT * FROM verification_runs WHERE idempotency_key = ?",

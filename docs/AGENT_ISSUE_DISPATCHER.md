@@ -101,6 +101,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   requires a governed lifecycle decision rather than a budget reset. Any legacy database containing
   both an active chain and a terminal chain for the same authority is rejected before exact or active
   replay, so a newer empty run cannot hide older spent budget.
+  Multiple active canonical chains for the same repository, PR, and stage likewise fail closed before
+  exact replay; every candidate must match the governing issue, and no chain is selected or mutated
+  while that ambiguity exists.
 - The Codex process boundary drains bounded stderr concurrently and rejects non-zero exits or
   terminal error events even when stdout contained an otherwise valid receipt. A bounded rate-limit,
   usage-limit, quota, or credit-exhaustion signal on that non-zero path remains a lease-fenced backoff
