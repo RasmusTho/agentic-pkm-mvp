@@ -450,6 +450,11 @@ Platform-side governance applied:
 - local Agent Issue Dispatcher hot-path coordination is now active: agents use dispatcher
   `status` / `next` / `claim` / `heartbeat` / `complete` for operational pickup while GitHub
   Issues, labels, and PR state remain the durable lifecycle truth
+- the verification-dispatch integration line now fails closed on exact-head, authoritative
+  `github-actions` required-check evidence, preserves review/repair budgets across restart, and
+  rejects ambiguous legacy active-plus-terminal authority chains. Host rollout remains disabled
+  until the ordered `preflight` → `observe-only` → `pilot` → `limited-enable` → `enabled`
+  evidence receipts have each been recorded; implementation merge alone is not enablement.
 
 Observed before this change:
 - existing Issues were present but not normalized to a strict machine-readable task contract

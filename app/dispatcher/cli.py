@@ -13,6 +13,7 @@ import argparse
 import json
 import sqlite3
 import sys
+from pathlib import Path
 from typing import Any
 
 from app.dispatcher import leases as lease_module
@@ -38,6 +39,7 @@ REQUIRED_COMMANDS = frozenset([
     "init", "queue", "next", "show", "claim",
     "heartbeat", "release", "update", "move", "block", "complete", "events", "pull",
     "export-signboard", "signboard-validate", "backup", "mode",
+    "verification-ingest", "verification-status",
 ])
 
 
@@ -346,6 +348,71 @@ def _cmd_status(args: argparse.Namespace, store: SqliteStore) -> int:
     return 0
 
 
+def _compact_verification_run(run: Any) -> dict[str, Any]:
+    from app.dispatcher.verification_consumer import (
+        bounded_coordinator_session_id,
+        redact_durable_diagnostics,
+    )
+
+    return {
+        "run_id": run.run_id,
+        "idempotency_key": run.idempotency_key,
+        "repository": run.repository,
+        "pr_number": run.pr_number,
+        "head_sha": run.head_sha,
+        "requested_head_sha": run.requested_head_sha,
+        "current_head_sha": run.current_head_sha,
+        "verified_head_sha": run.verified_head_sha,
+        "stage": run.stage,
+        "status": run.status,
+        "claimed_by": run.claimed_by,
+        "lease_id": run.lease_id,
+        "lease_expires_at": run.lease_expires_at,
+        "coordinator_session_id": bounded_coordinator_session_id(
+            run.coordinator_session_id
+        ),
+        "retry_after": run.retry_after,
+        "terminal_receipt": redact_durable_diagnostics(run.terminal_receipt),
+    }
+
+
+def _cmd_verification_ingest(args: argparse.Namespace, store: SqliteStore) -> int:
+    from app.dispatcher.verification_dispatch import VerificationDispatchLedger
+
+    try:
+        request = json.loads(Path(args.request).read_text(encoding="utf-8"))
+        if not isinstance(request, dict):
+            raise ValueError("request JSON must be an object")
+        run = VerificationDispatchLedger(store).ingest(request)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        return _emit_error(str(exc), args.json)
+    _emit({"ok": True, "run": _compact_verification_run(run)}, args.json)
+    return 0
+
+
+def _cmd_verification_status(args: argparse.Namespace, store: SqliteStore) -> int:
+    from app.dispatcher.verification_dispatch import VerificationDispatchLedger
+
+    ledger = VerificationDispatchLedger(store)
+    runs = [_compact_verification_run(run) for run in ledger.list(limit=args.limit)]
+    active = [
+        _compact_verification_run(run)
+        for status in ("claimed", "running")
+        for run in ledger.list(limit=args.limit, status=status)
+    ]
+    _emit(
+        {
+            "ok": True,
+            "active_count": len(active),
+            "active_run": active[0] if active else None,
+            "last_run": runs[0] if runs else None,
+            "runs": runs,
+        },
+        args.json,
+    )
+    return 0
+
+
 def _cmd_pull(args: argparse.Namespace, store: SqliteStore) -> int:
     # With ``action="append"`` args.repo is a list; a single --repo X still
     # arrives as a one-element list.
@@ -522,6 +589,8 @@ _COMMAND_MAP = {
     "events": _cmd_events,
     "link-pr": _cmd_link_pr,
     "status": _cmd_status,
+    "verification-ingest": _cmd_verification_ingest,
+    "verification-status": _cmd_verification_status,
     "pull": _cmd_pull,
     "export-signboard": _cmd_export_signboard,
     "signboard-validate": _cmd_signboard_validate,
@@ -632,6 +701,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("mode", choices=("normal", "degraded", "recovery"))
     p.add_argument("--activation-id", required=True)
     p.add_argument("--expected-revision", type=int, required=True)
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("verification-ingest", help="Idempotently ingest a verification request")
+    p.add_argument("request", help="Path to verification_dispatch_request.v1 JSON")
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("verification-status", help="Show durable verification-run status")
+    p.add_argument("--limit", type=int, default=20)
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("pull", help="Pull open agent:ready issues from GitHub")

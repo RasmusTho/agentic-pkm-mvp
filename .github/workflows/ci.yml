@@ -58,6 +58,8 @@ jobs:
             --base-ref "origin/${{ github.base_ref }}" \
             --head-ref HEAD \
             --github-output "$GITHUB_OUTPUT"
+      - name: Run mandatory repo-wide mypy gate
+        run: mypy app
       - name: Run not-pg unit tests
         shell: bash
         timeout-minutes: 22

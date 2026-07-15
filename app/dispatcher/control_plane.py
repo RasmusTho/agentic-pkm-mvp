@@ -11,7 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from app.dispatcher.config import DEFAULT_DB_NAME, DEFAULT_EVENTS_NAME, DispatcherPaths
-from app.dispatcher.schema import SCHEMA_VERSION
+from app.dispatcher.schema import (
+    SCHEMA_VERSION,
+    has_unique_key,
+    verification_v3_schema_error,
+)
 from app.dispatcher.store import SqliteStore
 
 STATE_KEY = "control_plane_state"
@@ -71,11 +75,11 @@ _REQUIRED_COLUMNS = {
 # (or relies on it being unique).  Column presence alone is therefore not a
 # usable-schema check: a hand-created table can have the right columns but no
 # primary key or UNIQUE index, and will only fail later when a writer runs.
-_REQUIRED_UNIQUE_KEYS = {
-    "dispatcher_tasks": ("task_id",),
-    "dispatcher_leases": ("lease_id",),
-    "dispatcher_events": ("event_id",),
-    "dispatcher_meta": ("key",),
+_REQUIRED_UNIQUE_KEYS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "dispatcher_tasks": (("task_id",),),
+    "dispatcher_leases": (("lease_id",),),
+    "dispatcher_events": (("event_id",),),
+    "dispatcher_meta": (("key",),),
 }
 _LEGACY_V1_TABLES = frozenset({"dispatcher_tasks", "dispatcher_events"})
 _LEGACY_V1_COLUMNS = {
@@ -114,12 +118,9 @@ def _dispatcher_schema_error(conn: sqlite3.Connection) -> str | None:
         missing_columns = sorted(required - columns)
         if missing_columns:
             return f"missing dispatcher columns in {table}: {', '.join(missing_columns)}"
-    for table, required_key in _REQUIRED_UNIQUE_KEYS.items():
-        if not _has_unique_key(conn, table, required_key):
-            return (
-                f"missing required unique key in {table}: "
-                f"{', '.join(required_key)}"
-            )
+    unique_error = _unique_key_error(conn, _REQUIRED_UNIQUE_KEYS)
+    if unique_error:
+        return unique_error
     row = conn.execute(
         "SELECT value FROM dispatcher_meta WHERE key = 'schema_version'"
     ).fetchone()
@@ -129,8 +130,24 @@ def _dispatcher_schema_error(conn: sqlite3.Connection) -> str | None:
         version = int(row[0])
     except (TypeError, ValueError):
         return "invalid dispatcher schema_version"
-    if version not in {1, SCHEMA_VERSION}:
+    if version not in {1, 2, SCHEMA_VERSION}:
         return f"unsupported dispatcher schema_version: {version}"
+    if version == SCHEMA_VERSION:
+        return verification_v3_schema_error(conn, allow_additive_migration=True)
+    return None
+
+
+def _unique_key_error(
+    conn: sqlite3.Connection,
+    requirements: dict[str, tuple[tuple[str, ...], ...]],
+) -> str | None:
+    for table, required_keys in requirements.items():
+        for required_key in required_keys:
+            if not has_unique_key(conn, table, required_key):
+                return (
+                    f"missing required unique key in {table}: "
+                    f"{', '.join(required_key)}"
+                )
     return None
 
 
@@ -145,7 +162,7 @@ def _is_canonical_v1_schema(conn: sqlite3.Connection, tables: set[str]) -> bool:
         if columns != required:
             return False
     return all(
-        _has_unique_key(conn, table, required_key)
+        has_unique_key(conn, table, required_key)
         for table, required_key in _LEGACY_V1_UNIQUE_KEYS.items()
     )
 
@@ -158,43 +175,6 @@ def _is_canonical_v1(conn: sqlite3.Connection) -> bool:
         ).fetchall()
     }
     return _is_canonical_v1_schema(conn, tables)
-
-
-def _has_unique_key(
-    conn: sqlite3.Connection, table: str, required_key: tuple[str, ...]
-) -> bool:
-    """Return whether ``table`` enforces uniqueness for ``required_key``.
-
-    SQLite represents table primary keys and explicit ``UNIQUE`` constraints
-    through slightly different pragma surfaces.  Inspect both so recovery
-    commands accept compatible legacy databases without certifying a shape
-    that a normal dispatcher write cannot use.
-    """
-    columns = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    primary_key = tuple(
-        str(row[1])
-        for row in sorted(columns, key=lambda row: int(row[5]))
-        if int(row[5]) > 0
-    )
-    if primary_key == required_key:
-        return True
-
-    for index in conn.execute(f"PRAGMA index_list({table})").fetchall():
-        if not bool(index[2]):
-            continue
-        # A partial UNIQUE index cannot satisfy ``ON CONFLICT(column)``
-        # without the same WHERE clause.  Dispatcher writers use bare
-        # conflict targets, so accepting one here would certify a database
-        # that fails as soon as state is written.
-        if bool(index[4]):
-            continue
-        index_columns = tuple(
-            str(row[2])
-            for row in conn.execute(f"PRAGMA index_info({index[1]})").fetchall()
-        )
-        if index_columns == required_key:
-            return True
-    return False
 
 
 def state(store: SqliteStore) -> dict[str, Any]:

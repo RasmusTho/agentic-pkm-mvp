@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Verification closer terminal receipt",
+  "type": "object",
+  "properties": {
+    "verdict": {"enum": ["delivered", "blocked", "needs_human", "retry"]},
+    "head_sha": {"type": "string", "pattern": "^[0-9a-fA-F]{40}$"},
+    "summary": {"type": "string"},
+    "receipt_ids": {"type": "array", "items": {"type": "string"}},
+    "retry_after": {
+      "anyOf": [{"type": "string"}, {"type": "number"}, {"type": "null"}]
+    },
+    "review_events": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": {"enum": ["repair", "review"]},
+              "session_id": {"type": "string", "minLength": 1},
+              "capability": {"type": "string", "minLength": 1},
+              "reasoning_effort": {"type": "string", "minLength": 1},
+              "outcome": {"type": "string", "minLength": 1},
+              "finding_id": {
+                "anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]
+              },
+              "strongest": {
+                "anyOf": [{"type": "boolean"}, {"type": "null"}]
+              }
+            },
+            "required": [
+              "kind",
+              "session_id",
+              "capability",
+              "reasoning_effort",
+              "outcome",
+              "finding_id",
+              "strongest"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {"type": "null"}
+      ]
+    },
+    "human_exception": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "failure_class": {
+              "enum": [
+                "safety-critical",
+                "authority-critical",
+                "intent-critical",
+                "autonomous-failure-critical"
+              ]
+            },
+            "original_intent": {"type": "string", "minLength": 1},
+            "current_state": {"type": "string", "minLength": 1},
+            "tried_actions": {
+              "type": "array",
+              "minItems": 1,
+              "items": {"type": "string", "minLength": 1}
+            },
+            "evidence": {
+              "type": "array",
+              "minItems": 1,
+              "items": {"type": "string", "minLength": 1}
+            },
+            "why_unsafe": {"type": "string", "minLength": 1},
+            "options": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 3,
+              "uniqueItems": true,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {"type": "string", "minLength": 1},
+                  "label": {"type": "string", "minLength": 1},
+                  "consequence": {"type": "string", "minLength": 1}
+                },
+                "required": ["id", "label", "consequence"],
+                "additionalProperties": false
+              }
+            },
+            "no_action_option": {"type": "string", "minLength": 1},
+            "recommended_option": {"type": "string", "minLength": 1},
+            "recommendation_rationale": {"type": "string", "minLength": 1},
+            "consequence_of_doing_nothing": {"type": "string", "minLength": 1}
+          },
+          "required": [
+            "failure_class",
+            "original_intent",
+            "current_state",
+            "tried_actions",
+            "evidence",
+            "why_unsafe",
+            "options",
+            "no_action_option",
+            "recommended_option",
+            "recommendation_rationale",
+            "consequence_of_doing_nothing"
+          ],
+          "additionalProperties": false
+        },
+        {"type": "null"}
+      ]
+    }
+  },
+  "required": [
+    "verdict",
+    "head_sha",
+    "summary",
+    "receipt_ids",
+    "retry_after",
+    "review_events",
+    "human_exception"
+  ],
+  "additionalProperties": false
+}

@@ -15,7 +15,11 @@ from typing import Any, Protocol
 
 from app.dispatcher.events import JsonlEventWriter
 from app.dispatcher.models import EventRecord, LeaseRecord, TaskRecord
-from app.dispatcher.schema import DDL_STATEMENTS, SCHEMA_VERSION
+from app.dispatcher.schema import (
+    DDL_STATEMENTS,
+    SCHEMA_VERSION,
+    verification_v3_schema_error,
+)
 
 
 class DispatcherStore(Protocol):
@@ -43,6 +47,25 @@ def _loads(value: str | None) -> Any:
     if value is None or value == "":
         return None
     return json.loads(value)
+
+
+def _supporting_authority_from_request_json(value: str) -> str:
+    """Project the cumulative supporting-issue baseline from a stored request."""
+    try:
+        request = json.loads(value)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("verification request audit is malformed") from exc
+    supporting = request.get("supporting_issues") if isinstance(request, dict) else None
+    if (
+        not isinstance(supporting, list)
+        or any(
+            isinstance(issue, bool) or not isinstance(issue, int) or issue <= 0
+            for issue in supporting
+        )
+        or len(set(supporting)) != len(supporting)
+    ):
+        raise ValueError("verification supporting authority is malformed")
+    return json.dumps(supporting, separators=(",", ":"), ensure_ascii=False)
 
 
 class SqliteStore:
@@ -86,7 +109,7 @@ class SqliteStore:
         (e.g. one dispatcher ``pull`` upserting hundreds of issues) pays the
         cheap outer check once per process, not once per row.
 
-        The migration itself (ADD COLUMN + two backfill UPDATEs) runs inside
+        The migration itself (additive DDL plus authority backfills) runs inside
         one explicit ``BEGIN IMMEDIATE`` transaction, committed or rolled back
         together: ``ALTER TABLE`` autocommits immediately outside an explicit
         transaction in Python's sqlite3 driver, so without this a crash
@@ -116,8 +139,27 @@ class SqliteStore:
                 "SELECT value FROM dispatcher_meta WHERE key='schema_version'"
             ).fetchone()
             current_version = None if row is None else str(row["value"])
+        verification_columns: set[str] = set()
+        verification_runs_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='verification_runs'"
+        ).fetchone()
+        if verification_runs_exists is not None:
+            verification_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(verification_runs)")
+            }
+        verification_additive_columns_complete = {
+            "current_head_sha",
+            "verified_head_sha",
+            "supporting_authority_json",
+        }.issubset(verification_columns)
         if "repo" in columns and current_version == str(SCHEMA_VERSION):
-            return
+            schema_error = verification_v3_schema_error(
+                conn, allow_additive_migration=True
+            )
+            if schema_error is not None:
+                raise ValueError(schema_error)
+            if verification_additive_columns_complete:
+                return
 
         # Only the original v1 layout is a supported migration source.  In
         # particular, do not turn a database written by a newer dispatcher
@@ -127,13 +169,11 @@ class SqliteStore:
         # dispatcher_meta, so its absence is recognized only together with
         # the v1-specific missing ``repo`` column.
         is_unversioned_v1 = current_version is None and "repo" not in columns
-        if current_version not in {"1", str(SCHEMA_VERSION)} and not is_unversioned_v1:
+        if current_version not in {"1", "2", str(SCHEMA_VERSION)} and not is_unversioned_v1:
             version = "missing" if current_version is None else repr(current_version)
             raise ValueError(f"unsupported dispatcher schema_version: {version}")
-        if current_version == str(SCHEMA_VERSION):
-            raise ValueError(
-                "dispatcher schema_version 2 is incompatible with the on-disk schema"
-            )
+        if current_version == "2" and "repo" not in columns:
+            raise ValueError("dispatcher schema_version 2 is incompatible with the on-disk schema")
 
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -153,13 +193,60 @@ class SqliteStore:
                 ).fetchone()
                 current_version = None if row is None else str(row["value"])
             is_unversioned_v1 = current_version is None and "repo" not in columns
-            if current_version not in {"1", str(SCHEMA_VERSION)} and not is_unversioned_v1:
+            if current_version not in {"1", "2", str(SCHEMA_VERSION)} and not is_unversioned_v1:
                 version = "missing" if current_version is None else repr(current_version)
                 raise ValueError(f"unsupported dispatcher schema_version: {version}")
             if current_version == str(SCHEMA_VERSION) and "repo" in columns:
+                schema_error = verification_v3_schema_error(
+                    conn, allow_additive_migration=True
+                )
+                if schema_error is not None:
+                    raise ValueError(schema_error)
+                verification_columns = {
+                    row["name"]
+                    for row in conn.execute("PRAGMA table_info(verification_runs)")
+                }
+                if "current_head_sha" not in verification_columns:
+                    conn.execute(
+                        "ALTER TABLE verification_runs ADD COLUMN "
+                        "current_head_sha TEXT NOT NULL DEFAULT ''"
+                    )
+                    conn.execute(
+                        "UPDATE verification_runs SET current_head_sha=head_sha "
+                        "WHERE current_head_sha=''"
+                    )
+                if "verified_head_sha" not in verification_columns:
+                    conn.execute(
+                        "ALTER TABLE verification_runs ADD COLUMN verified_head_sha TEXT"
+                    )
+                if "supporting_authority_json" not in verification_columns:
+                    conn.execute(
+                        "ALTER TABLE verification_runs ADD COLUMN "
+                        "supporting_authority_json TEXT NOT NULL DEFAULT '[]'"
+                    )
+                    for verification_row in conn.execute(
+                        "SELECT run_id, request_json FROM verification_runs"
+                    ).fetchall():
+                        conn.execute(
+                            "UPDATE verification_runs "
+                            "SET supporting_authority_json=? WHERE run_id=?",
+                            (
+                                _supporting_authority_from_request_json(
+                                    verification_row["request_json"]
+                                ),
+                                verification_row["run_id"],
+                            ),
+                        )
+                schema_error = verification_v3_schema_error(conn)
+                if schema_error is not None:
+                    raise ValueError(schema_error)
                 conn.commit()
                 return
             if current_version == str(SCHEMA_VERSION):
+                raise ValueError(
+                    f"dispatcher schema_version {SCHEMA_VERSION} is incompatible with the on-disk schema"
+                )
+            if current_version == "2" and "repo" not in columns:
                 raise ValueError(
                     "dispatcher schema_version 2 is incompatible with the on-disk schema"
                 )
@@ -190,6 +277,9 @@ class SqliteStore:
                 )
             for stmt in DDL_STATEMENTS:
                 conn.execute(stmt)
+            schema_error = verification_v3_schema_error(conn)
+            if schema_error is not None:
+                raise ValueError(schema_error)
             conn.execute(
                 "INSERT OR REPLACE INTO dispatcher_meta(key, value) VALUES (?, ?)",
                 ("schema_version", str(SCHEMA_VERSION)),
@@ -201,13 +291,21 @@ class SqliteStore:
 
     def initialize(self) -> None:
         with self._connect() as conn:
-            for stmt in DDL_STATEMENTS:
-                conn.execute(stmt)
-            conn.execute(
-                "INSERT OR REPLACE INTO dispatcher_meta(key, value) VALUES (?, ?)",
-                ("schema_version", str(SCHEMA_VERSION)),
-            )
-            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for stmt in DDL_STATEMENTS:
+                    conn.execute(stmt)
+                schema_error = verification_v3_schema_error(conn)
+                if schema_error is not None:
+                    raise ValueError(schema_error)
+                conn.execute(
+                    "INSERT OR REPLACE INTO dispatcher_meta(key, value) VALUES (?, ?)",
+                    ("schema_version", str(SCHEMA_VERSION)),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
 
     # ----- coordination metadata -----
 
