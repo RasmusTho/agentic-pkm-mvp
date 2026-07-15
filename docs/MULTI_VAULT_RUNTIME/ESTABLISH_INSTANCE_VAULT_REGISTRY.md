@@ -47,6 +47,14 @@ This slice promotes the existing seed without changing content-vault authority.
   old image starts. A rollback must therefore see the latest committed registrations and
   last-active state, not merely the pre-migration snapshot. This compatibility exporter/transformer
   remains required until MVR-07 proves that no supported rollback reader needs it.
+- Treat rollback into a scalar previous image as an explicit authority boundary. If current state
+  has multiple registrations, a non-default explicit background set, dimensions, or any other
+  state the previous image cannot represent, rollback preflight requires one operator-supplied
+  `rollback_vault_binding_id`; it validates that exact registration and materializes a constrained
+  legacy payload/bootstrap whose sole selectable and startup target is that binding. Missing,
+  stale, unauthorized, or ambiguous target blocks the old image. The complete new-schema registry,
+  snapshots, and lineage remain immutable beside the projection for later roll-forward; scalar
+  rollback cannot discard or reinterpret default, dimension, or background-intent truth.
 - Before rolling forward again from the previous image, export and validate its latest legacy
   payload while it is still running, compare its recorded fork/base revision with the durable
   registry lineage, and transform rollback-period mutations into the next locked monotonic registry
@@ -151,6 +159,10 @@ single-vault package or can silently lose identity during migration.
   the rollback preflight and reads the latest committed registration and last-active state from its
   legacy path; a missing, stale, or invalid rollback export blocks startup.
   - Verify: `tests/integration/test_vault_registry_rollback.py::test_previous_image_reads_latest_post_migration_registry_state`
+- [ ] Rolling a multi-binding or explicit-background instance into a scalar previous image requires
+  one validated explicit rollback binding, constrains legacy startup/selection to that binding,
+  and otherwise blocks while preserving the complete new-schema registry and lineage.
+  - Verify: `tests/integration/test_vault_registry_rollback.py::test_multi_binding_rollback_requires_one_safe_explicit_target`
 - [ ] Registrations and last-active changes made by the previous image during rollback are imported
   as the next registry revision on roll-forward; divergent mutation, ambiguous identity, or invalid
   lineage fails before recreate without overwriting either side.
@@ -176,7 +188,9 @@ consumers; an independently durable legacy source is also retained when one exis
 locked, revision-checked, and atomically replaced, and each commit refreshes the validated rollback
 export consumed by the old-image pre-start transformer. A later roll-forward re-exports the running
 old image and reconciles its rollback-period changes against the recorded fork revision before the
-new image starts; divergent lineages fail closed with both sources intact. Parse
+new image starts; divergent lineages fail closed with both sources intact. A scalar old image starts
+only from a validated explicit rollback target when newer state is not scalar-representable, while
+the complete new-schema lineage stays immutable for roll-forward. Parse
 corruption remains recoverable through legacy/empty backup-reseed or populated last-good-snapshot
 restore; it never commits an empty replacement for populated state. An ambiguous recovery,
 migration, or write failure leaves prior payload, snapshot, staging, rollback export, and

@@ -109,6 +109,7 @@ operators, or future agents still act on stale single-global-vault truth.
 
 - On the PR head, run every child pre-merge target plus docs/lint checks; this is candidate evidence,
   not the merged-head closure receipt.
+- `pytest -q tests/integration/test_multi_vault_capability_acceptance.py::test_merged_multi_vault_capability tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/uat/`
 - `python3 scripts/docs_guard.py`
 - Live REST inspection of #2143, all child issues/PRs, #2566, #3156, and #3163

@@ -31,8 +31,9 @@ cross-process truth belong here.
 - Add governed production add/remove/list operations for that set through the existing
   Companion state-change authentication boundary and a headless CLI using the same service.
   Mutations validate registry membership and authorization, are idempotent by binding ID, record
-  redacted receipts, and publish the versioned lifecycle/reload event. Tests must use these
-  production producers rather than seeding the store.
+  redacted receipts, and commit a durable change record/revision in the same fsync-backed registry
+  transaction. A lifecycle event is only an idempotent wake-up hint for that revision, never the
+  sole handoff. Tests must use these production producers rather than seeding the store.
 - Introduce a lifecycle supervisor that treats the durable set only as intent. At start/rebind it
   derives one immutable full `ActiveContextSet` per lifecycle binding, including context ID,
   generation, stable binding, server-derived instance-background principal, operational scope,
@@ -46,6 +47,13 @@ cross-process truth belong here.
   re-resolves the replacement binding or truthful no-vault state before later work is accepted.
   The same event cannot alter an `explicit` intent set. A default mutation may not leave a running
   compatibility lifecycle silently bound to the prior vault or rely on process restart.
+- Reconcile durable registry revisions at supervisor startup and continuously while running, with
+  idempotent event hints only accelerating that reconciliation. For every unseen revision, diff
+  registration path/device/authority provenance, removal, default, and background intent. Drain,
+  re-resolve, and re-authorize every affected lifecycle into a new ActiveContextSet generation
+  before accepting later work; removal or failed authorization stops that binding loudly. This
+  revision cursor makes a producer crash after the atomic commit but before event publication
+  converge without leaving removed or relocated bindings active.
 - Define start/rebind/drain/stop behavior for zero/one/many bindings, including clean in-flight
   completion and loud partial failure.
 - Propagate the complete background `ActiveContextSet` identity, including binding and generation,
@@ -125,7 +133,8 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
   supervisor reconstructs exactly the explicitly enrolled, deduplicated, re-authorized set.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_restart_uses_only_durable_authorized_binding_set`
 - [ ] Governed production API and CLI add/remove/list operations are the tested producers of
-  background intent, reject unknown/unauthorized bindings, and publish one versioned event.
+  background intent, reject unknown/unauthorized bindings, atomically commit a durable revision,
+  and publish an idempotent wake-up event for that revision.
   - Verify: `tests/api/test_background_binding_admin.py::test_production_enrollment_commands_drive_lifecycle_intent`
 - [ ] Removing the final explicit member persists explicit-empty intent; restart and list remain
   empty/idle and never re-enrol the instance default.
@@ -136,6 +145,11 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
 - [ ] Rebind drains in-flight work on the old generation and routes later work to the new one using
   #3163's production event/reload path.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_rebind_reuses_settings_spine_and_is_generation_clean`
+- [ ] Relocating/removing a registered binding or changing authority-relevant provenance rotates
+  every affected running lifecycle through drain, re-resolution, and re-authorization; a producer
+  crash after registry commit but before event publication still converges from the durable
+  revision cursor without accepting later work on the stale binding.
+  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window`
 - [ ] Zero bindings idle truthfully; one binding preserves current behavior; a failed member is
   loud and cannot redirect or mark the whole set healthy.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_zero_one_many_and_partial_failure_are_truthful`
@@ -168,8 +182,9 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
 Lifecycle instances are rebuildable. On restart the supervisor reconstructs them from explicit
 intent (including durable explicit-empty), or from the one-vault default only while the migrated
 intent mode remains `compatibility_default`, and records fresh generations. It re-authorizes every
-member; request/session selections are ignored. In-flight ephemeral work is retried only under its
-existing idempotency contract, never silently rebound.
+member, records its durable registry revision cursor, and continuously reconciles later revisions;
+events are lossy wake-up hints only. Request/session selections are ignored. In-flight ephemeral
+work is retried only under its existing idempotency contract, never silently rebound.
 
 ## Related Docs
 

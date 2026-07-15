@@ -171,12 +171,18 @@ to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup.
   volume and resolves to the identical store from every enabled process.
 - Request/session selection never auto-enrols a vault into background work. Background lifecycle
   intent is a distinct durable instance-local binding set; each member is re-authorized at start.
+- Background supervisors reconcile durable registry revisions, not event delivery: every affected
+  lifecycle drains and re-resolves after relocation, removal, authority-provenance, default, or
+  intent changes, including when a producer crashes before publishing its wake-up event.
 - Zero, one, and many bindings are all valid. One configured vault behaves as before; no-vault
   behavior remains truthful and idle.
 - The durable registry/default/dimension store is instance-local mechanical state; content and
   human knowledge remain in their content vaults.
 - Multi-vault topology remains reducible to one vault without loss of meaning, attribution, or
   receipts.
+- Rollback to a scalar image from non-scalar state requires one validated explicit target and keeps
+  the complete new-schema lineage intact; ambiguity blocks startup instead of choosing by env or
+  interaction history.
 
 Partial delivery remains fail-closed:
 
