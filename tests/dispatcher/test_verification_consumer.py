@@ -208,6 +208,19 @@ class TransitionTruth:
         return GREEN
 
 
+class TerminalChecksTruth(TransitionTruth):
+    def __init__(self, terminal_checks: list[dict[str, object]]) -> None:
+        super().__init__(merged_pr())
+        self.terminal_checks = terminal_checks
+        self.check_calls = 0
+
+    def checks(self, repository, head_sha):
+        self.check_calls += 1
+        if self.check_calls == 3:
+            return self.terminal_checks
+        return GREEN
+
+
 def eligible_pr(**updates):
     value = {
         "number": 3603, "state": "open", "draft": False, "merged_at": None,
@@ -344,7 +357,14 @@ def merged_pr(**updates: object) -> dict[str, object]:
     return value
 
 
-GREEN = [{"status": "completed", "conclusion": "success"}]
+GREEN = [
+    {
+        "id": 1,
+        "name": "Unit tests (not pg)",
+        "status": "completed",
+        "conclusion": "success",
+    }
+]
 
 
 def artifact_request(**updates: object) -> dict[str, object]:
@@ -699,7 +719,14 @@ def test_human_exception_packet_requires_two_to_three_actionable_options(
 
 def test_pending_repair_checks_persist_repair_before_backoff(tmp_path) -> None:
     new_head = "b" * 40
-    pending = [{"id": 2, "name": "CI", "status": "in_progress", "conclusion": None}]
+    pending = [
+        {
+            "id": 2,
+            "name": "Unit tests (not pg)",
+            "status": "in_progress",
+            "conclusion": None,
+        }
+    ]
     truth = Truth(eligible_pr(), GREEN)
 
     class PendingRepairLauncher(Launcher):
@@ -742,7 +769,14 @@ def test_pending_repair_checks_persist_repair_before_backoff(tmp_path) -> None:
 
 def test_invalid_pending_repair_event_batch_fails_before_backoff(tmp_path) -> None:
     new_head = "b" * 40
-    pending = [{"id": 2, "name": "CI", "status": "in_progress", "conclusion": None}]
+    pending = [
+        {
+            "id": 2,
+            "name": "Unit tests (not pg)",
+            "status": "in_progress",
+            "conclusion": None,
+        }
+    ]
     truth = Truth(eligible_pr(), GREEN)
 
     class InvalidPendingRepairLauncher(Launcher):
@@ -836,7 +870,14 @@ def test_invalid_review_event_batch_terminals_without_stranding_lease(tmp_path) 
 
 def test_pending_repair_replay_preserves_two_plus_two_accounting(tmp_path) -> None:
     new_head = "b" * 40
-    pending = [{"id": 2, "name": "CI", "status": "in_progress", "conclusion": None}]
+    pending = [
+        {
+            "id": 2,
+            "name": "Unit tests (not pg)",
+            "status": "in_progress",
+            "conclusion": None,
+        }
+    ]
     truth = Truth(eligible_pr(), GREEN)
 
     class PendingRepairLauncher(Launcher):
@@ -1028,6 +1069,49 @@ def test_delivered_receipt_accepts_matching_post_merge_live_truth(tmp_path) -> N
 
     assert result.status == "completed"
     assert result.verified_head_sha == HEAD
+
+
+def test_delivered_receipt_rejects_unnamed_or_missing_required_gate(tmp_path) -> None:
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        TerminalChecksTruth(
+            [{"status": "completed", "conclusion": "success"}]
+        ),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "reviews_before_checks_green"
+    assert result.verified_head_sha is None
+
+
+@pytest.mark.parametrize("conclusion", ["skipped", "neutral", "failure", None])
+def test_delivered_receipt_requires_successful_named_unit_typecheck_gate(
+    tmp_path, conclusion
+) -> None:
+    status = "in_progress" if conclusion is None else "completed"
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        TerminalChecksTruth(
+            [
+                {
+                    "id": 2,
+                    "name": "Unit tests (not pg)",
+                    "status": status,
+                    "conclusion": conclusion,
+                }
+            ]
+        ),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "reviews_before_checks_green"
+    assert result.verified_head_sha is None
 
 
 @pytest.mark.parametrize(

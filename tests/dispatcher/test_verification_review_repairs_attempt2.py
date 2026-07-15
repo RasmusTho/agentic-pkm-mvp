@@ -157,8 +157,18 @@ def test_live_truth_uses_latest_check_rerun_by_name(tmp_path) -> None:
     state = ledger(tmp_path)
     run = state.ingest(request())
     checks = [
-        {"id": 10, "name": "Unit", "status": "completed", "conclusion": "failure"},
-        {"id": 11, "name": "Unit", "status": "completed", "conclusion": "success"},
+        {
+            "id": 10,
+            "name": "Unit tests (not pg)",
+            "status": "completed",
+            "conclusion": "failure",
+        },
+        {
+            "id": 11,
+            "name": "Unit tests (not pg)",
+            "status": "completed",
+            "conclusion": "success",
+        },
     ]
 
     assert live_truth_rejection(run, eligible_pr(), checks) is None

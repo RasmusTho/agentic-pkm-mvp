@@ -810,10 +810,13 @@ def delivered_live_truth_rejection(
 def _checks_rejection(checks: Sequence[Mapping[str, object]]) -> str | None:
     if not checks:
         return "missing_checks"
+    required_checks = {"Unit tests (not pg)"}
     latest: dict[str, tuple[tuple[int, str, int], Mapping[str, object]]] = {}
     for index, check in enumerate(checks):
         name = check.get("name")
-        key = name if isinstance(name, str) and name else f"__unnamed_{index}"
+        if not isinstance(name, str) or not name:
+            continue
+        key = name
         check_id = check.get("id")
         rank = (
             check_id if isinstance(check_id, int) and not isinstance(check_id, bool) else -1,
@@ -822,6 +825,12 @@ def _checks_rejection(checks: Sequence[Mapping[str, object]]) -> str | None:
         )
         if key not in latest or rank > latest[key][0]:
             latest[key] = (rank, check)
+    if not required_checks.issubset(latest):
+        return "missing_checks"
+    for required in required_checks:
+        check = latest[required][1]
+        if check.get("status") != "completed" or check.get("conclusion") != "success":
+            return "checks_not_green"
     for _, check in latest.values():
         if check.get("status") != "completed" or check.get("conclusion") not in {
             "success", "neutral", "skipped"
