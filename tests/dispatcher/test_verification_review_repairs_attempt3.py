@@ -62,6 +62,8 @@ def _clean_reviews() -> list[dict[str, object]]:
             "capability": "gpt-5.6-terra",
             "reasoning_effort": "high",
             "outcome": "clean",
+            "finding_id": None,
+            "strongest": None,
         },
         {
             "kind": "review",
@@ -69,6 +71,8 @@ def _clean_reviews() -> list[dict[str, object]]:
             "capability": "gpt-5.6-terra",
             "reasoning_effort": "high",
             "outcome": "clean",
+            "finding_id": None,
+            "strongest": None,
         },
     ]
 
@@ -188,6 +192,7 @@ class RepairedDeliveryLauncher(Launcher):
             "head_sha": NEW_HEAD,
             "summary": "repair pushed and independently re-reviewed",
             "receipt_ids": ["repair-1", "review-1", "review-2"],
+            "retry_after": None,
             "review_events": [
                 {
                     "kind": "repair",
@@ -200,6 +205,7 @@ class RepairedDeliveryLauncher(Launcher):
                 },
                 *_clean_reviews(),
             ],
+            "human_exception": None,
         }
 
 

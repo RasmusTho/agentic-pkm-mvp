@@ -47,6 +47,7 @@ class DeliveredWithReviewsLauncher(Launcher):
             "head_sha": HEAD,
             "summary": "verified",
             "receipt_ids": ["review-1", "review-2"],
+            "retry_after": None,
             "review_events": [
                 {
                     "kind": "review",
@@ -54,6 +55,8 @@ class DeliveredWithReviewsLauncher(Launcher):
                     "capability": "gpt-5.6-terra",
                     "reasoning_effort": "high",
                     "outcome": "clean",
+                    "finding_id": None,
+                    "strongest": None,
                 },
                 {
                     "kind": "review",
@@ -61,8 +64,11 @@ class DeliveredWithReviewsLauncher(Launcher):
                     "capability": "gpt-5.6-terra",
                     "reasoning_effort": "high",
                     "outcome": "clean",
+                    "finding_id": None,
+                    "strongest": None,
                 },
             ],
+            "human_exception": None,
         }
 
 
