@@ -86,6 +86,7 @@ Partial-failure paths:
 - The store is absent, old, or unsupported: query returns a typed error without creating a directory/database/schema/receipt.
 - The declared single-operator access, identity-lifecycle, or retention policy version is missing or unsupported: export/history operations refuse; they do not infer a different policy.
 - A metric definition or detector bundle changes: comparison refuses; it never coerces observations into a trend.
+- Retaining a metric sample fails: the already-returned read result remains unchanged, no partial retained sample is eligible for comparison, and the failure is surfaced explicitly.
 - O1 records an unsupported historical question: the record remains privacy-safe evidence, not authorization for M2. M2 requires an accepted question with source authority and new executable contract.
 - O1 records repeated feature demand: O2 remains a proposal gate; no feature, prediction, automation, or federation work is pre-authorized.
 - O1 event recording fails: the failure follows the authoritative OEF contract, while the already-returned query result/refusal and CKM state remain unchanged.
@@ -97,7 +98,7 @@ Partial-failure paths:
 | 1 | [ESTABLISH_PUBLIC_SNAPSHOT_CONTRACT.md](ESTABLISH_PUBLIC_SNAPSHOT_CONTRACT.md) (Q1a, #3776) | Lifecycle-safe identity, policy-bound DTO/error/envelope schemas, epoch/revision, and complete-snapshot contract | owner decisions recorded; task and Issue contract reconciled | serial |
 | 2 | [DELIVER_SINGLE_TRANSACTION_QUERY_SERVICE.md](DELIVER_SINGLE_TRANSACTION_QUERY_SERVICE.md) (Q1b, #3777) | Working read-only one-transaction bounded complete snapshot service and CLI JSON | #3776 | serial; completes Q1 gate |
 | 3a | [OPTIMIZE_BOUNDED_QUERY_PLANS.md](OPTIMIZE_BOUNDED_QUERY_PLANS.md) (Q2, #3778) | Filters, batch plans, indexes, constant query count, N+1 removal | #3777 | may parallelize after Q1 with M1/O1a if ownership stays isolated |
-| 3b | [DEFINE_METRIC_REGISTRY_AND_OBSERVATIONS.md](DEFINE_METRIC_REGISTRY_AND_OBSERVATIONS.md) (M1, #3779) | Versioned metrics and fully bound observations | #3777 | may parallelize after Q1 with Q2/O1a |
+| 3b | [DEFINE_METRIC_REGISTRY_AND_OBSERVATIONS.md](DEFINE_METRIC_REGISTRY_AND_OBSERVATIONS.md) (M1, #3779) | Versioned metrics, explicitly retained replayable source samples, fully bound observations, storage accounting, and 365-day pruning/correction lifecycle | #3777 | may parallelize after Q1 with Q2/O1a |
 | 3c | [CAPTURE_QUERY_QUESTIONS.md](CAPTURE_QUERY_QUESTIONS.md) (O1a, #3780) | Privacy-safe query/unsupported/question observation | #3777 | may parallelize after Q1; must reconcile any authoritative OEF event contract |
 | 4 | [COMPARE_COMPATIBLE_OBSERVATIONS.md](COMPARE_COMPATIBLE_OBSERVATIONS.md) (O1b, #3781) | Compatible immutable observation comparison | #3779 | may follow M1 independently of Q2 unless live scale disproves the Q1 bound |
 
@@ -131,6 +132,8 @@ Dependency graph:
   Verify: `tests/builderops/ckm/test_query_plans.py`
 - [ ] M1 emits deterministic fully bound descriptive observations with machine-readable Goodhart warnings; any aggregate is `human_advisory_only`, accompanied by its evidence-rich components, and cannot drive machine authority.
   Verify: `tests/builderops/ckm/test_metrics.py`
+- [ ] M1 owns complete sampled-retention delivery: explicit post-read capture of immutable source payload plus observation, 365-day policy binding, count/byte visibility, previewed early pruning, superseding correction, non-content deletion markers, and replay refusal for unavailable payloads.
+  Verify: `tests/builderops/ckm/test_metrics.py::test_retained_samples_apply_storage_accounting_and_pruning_policy`; `tests/builderops/ckm/test_metric_comparison.py::test_unavailable_or_tampered_retained_source_refuses_comparison`
 - [ ] O1a records privacy-safe real questions outside the read path and preserves typed unsupported requests without authorizing new capability.
   Verify: `tests/builderops/ckm/test_observation_capture.py`; validation receipt on the successor parent
 - [ ] O1b compares only compatible immutable observations and refuses every semantics-bearing mismatch; cadence and minimum-snapshot hypotheses remain explicitly unresolved.

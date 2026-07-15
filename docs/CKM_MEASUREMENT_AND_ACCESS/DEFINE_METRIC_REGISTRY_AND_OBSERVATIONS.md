@@ -1,6 +1,6 @@
 ---
 name: Define Metric Registry And Observations
-description: Deliver versioned descriptive CKM metrics and immutable, fully bound observations without ranking or gate authority.
+description: Deliver versioned descriptive CKM metrics, retained replayable samples, and immutable fully bound observations without ranking or gate authority.
 task_id: CKM-MA-M1
 source_anchor: docs/CKM_MEASUREMENT_AND_ACCESS/README.md :: Accepted architecture decisions
 parent_capability: CKM Measurement & Access
@@ -20,11 +20,12 @@ Make CKM measurement reproducible and inspectable while permitting bounded human
 - Define a versioned metric registry with formulas, detector/configuration inputs, output shape, interpretation, intended/prohibited uses, approval owner, limitations, and machine-readable Goodhart warnings.
 - Compute immutable observations through the Q1 query service so each observation binds one complete CKM snapshot and canonical query.
 - Persist or serialize the complete semantics-bearing bundle: snapshot/query digests, schema/taxonomy versions, metric definition/version/digest, formula/detector/configuration digests, watermarks, provenance, and generated time.
+- Outside the read-only query path, retain only explicitly selected immutable snapshot payloads—including their bound watermark and finding-evaluation material—and their metric observations under the versioned 365-day policy; expose retained count/bytes and previewed operator pruning.
 - Represent vector, composition, citation, confidence, and freshness outputs alongside any aggregate maturity value; label the aggregate `human_advisory_only` and never emit it without its evidence-rich components and Goodhart warning.
 
 ## Concretely
 
-The first registry contains no more than six bounded descriptive metric families selected from coverage/composition, freshness, confidence, citation completeness, candidate share, evidence-state distribution, and finding composition. A definition declares intended/prohibited uses, its approval owner, `not_for_gating: true`, and explicit Goodhart warnings. Aggregate maturity may be exposed as a small human-advisory input only when the same result includes the underlying vector, evidence, citations, freshness, confidence, composition, limitations, and `human_advisory_only`. Identical definition plus snapshot plus query produces the same semantic observation. TCD is a registry admission rule: a new or deeper metric is rejected when its expected decision benefit does not justify implementation, review, interpretation, and maintenance cost.
+The first registry contains no more than six bounded descriptive metric families selected from coverage/composition, freshness, confidence, citation completeness, candidate share, evidence-state distribution, and finding composition. A definition declares intended/prohibited uses, its approval owner, `not_for_gating: true`, and explicit Goodhart warnings. Aggregate maturity may be exposed as a small human-advisory input only when the same result includes the underlying vector, evidence, citations, freshness, confidence, composition, limitations, and `human_advisory_only`. Identical definition plus snapshot plus query produces the same semantic observation. When the operator explicitly elects to retain a sample, an outer measurement adapter persists the already-returned immutable snapshot payload and observation together; the query service remains side-effect free. TCD is a registry admission rule: a new or deeper metric is rejected when its expected decision benefit does not justify implementation, review, interpretation, and maintenance cost.
 
 ## Why This Matters
 
@@ -38,6 +39,12 @@ Unversioned formulas and partially bound observations create false trends. A sco
   Verify: `tests/builderops/ckm/test_metrics.py::test_metric_definitions_are_versioned_and_warn_against_gating`
 - [ ] Metric observations bind the complete snapshot, query, schema, taxonomy, definition, formula, detector, configuration, watermark, provenance, and generated-time bundle.
   Verify: `tests/builderops/ckm/test_metrics.py::test_observation_binds_complete_semantic_bundle`
+- [ ] An explicit retain action persists the immutable source snapshot payload, its bound watermark/finding-evaluation material, and its observation only after the read-only query returns; ordinary snapshot/export reads are never retained automatically.
+  Verify: `tests/builderops/ckm/test_metrics.py::test_explicit_retention_runs_outside_read_path_and_binds_source_sample`
+- [ ] Retained samples bind the 365-day policy, expose count/byte usage, become automatically eligible for expiry only at or after 365 days, and support previewed explicit earlier pruning with non-content lifecycle markers.
+  Verify: `tests/builderops/ckm/test_metrics.py::test_retained_samples_apply_storage_accounting_and_pruning_policy`
+- [ ] Corrections append a superseding record; deletion, expiry, or pruning removes payload content without rewriting prior observation identity, and replay reports the source as unavailable.
+  Verify: `tests/builderops/ckm/test_metrics.py::test_retained_sample_correction_and_deletion_preserve_lifecycle_truth`
 - [ ] Identical metric definition, canonical query, and snapshot produce byte-identical semantic observation content aside from explicitly excluded volatile fields.
   Verify: `tests/builderops/ckm/test_metrics.py::test_observation_is_deterministic_for_same_snapshot_and_definition`
 - [ ] Measured zero, missing, unassessed, and unsupported remain distinct in metric outputs, and candidate material cannot be silently combined with confirmed material.
@@ -66,6 +73,7 @@ Unversioned formulas and partially bound observations create false trends. A sco
 - Machine rankings, gates, automated prioritization, agent evaluation, prediction, automation, drift detection, or federation. Human use of the fully explained aggregate as one small advisory input is in scope.
 - General bitemporal history or retroactive provenance.
 - Runtime TCD scoring, cost telemetry, or a second governance registry for metric admission.
+- Automatic retention of every query/export, retention writes inside Q1, or general historical storage beyond explicitly selected samples.
 
 ## Related Docs
 
@@ -75,4 +83,4 @@ Unversioned formulas and partially bound observations create false trends. A sco
 
 ## Related GitHub Issues
 
-Implementation issue #3779 under validation parent #3775, dependency-blocked on #3777 and reconciliation of its Issue contract to the accepted metric-use decision. TCD hint: Terra/high; escalate to Sol/high for semantics, compatibility, or authority-boundary uncertainty.
+Implementation issue #3779 under validation parent #3775, dependency-blocked on #3777 and reconciliation of its Issue contract to the accepted metric-use and retention decisions. M1 owns retained metric-source samples, storage accounting, correction markers, and pruning; O1a separately owns retention of query/question observation events. TCD hint: Terra/high; escalate to Sol/high for semantics, compatibility, persistence, or authority-boundary uncertainty.

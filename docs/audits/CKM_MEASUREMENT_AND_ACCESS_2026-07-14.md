@@ -150,4 +150,6 @@ The owner subsequently resolved all five gates:
 - identifiers are never reused: rename preserves identity, deletion tombstones, split creates new successor identifiers, and merge creates a new identifier with successor aliases from tombstoned inputs;
 - explicitly retained samples default to 365 days, expose count/byte usage, may expire automatically only at or after 365 days, and may be pruned earlier only through a previewed explicit operator action; correction/deletion/pruning preserves non-content lifecycle markers and makes unavailable-source replay refuse.
 
+M1 owns explicitly retained immutable metric-source samples, storage accounting, correction/deletion markers, and pruning; O1a separately owns retention of query/question observation events, and O1b consumes only replayable M1 samples. This prevents the retention decision from falling between delivery slices.
+
 These decisions resolve policy authority but do not resume implementation by themselves. Every affected task and live Issue must first be reconciled and strictly revalidated; PR #3786 remains paused until that work is complete.

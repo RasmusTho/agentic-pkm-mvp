@@ -18,13 +18,13 @@ Provide honest snapshot-to-snapshot descriptive comparison without manufacturing
 ## What This Task Does
 
 - Define a compatibility predicate over every semantics-bearing observation field.
-- Compare two or more immutable observations only after compatibility succeeds.
+- Load two or more M1-retained observations and their immutable source samples, then compare only after replay availability and compatibility succeed.
 - Return component-wise deltas, unchanged components, tagged missing states, citations/provenance, and explicit limitations.
 - Refuse mismatched metric definitions, formulas, detector/configuration bundles, schemas, taxonomy, query semantics, candidate policy, identity policy, access/redaction policy, value-state semantics, or unsupported history modes.
 
 ## Concretely
 
-A comparison is a deterministic derived result over already immutable M1 observations. It names all input observation IDs/digests and the compatibility decision. Two snapshots are the mathematical minimum for a delta, not evidence of a trend or a justified cadence.
+A comparison is a deterministic derived result over M1-retained immutable observations and source samples. It first proves that every source payload is still replayable under the bound retention policy, then names all input observation IDs/digests and the compatibility decision. Two snapshots are the mathematical minimum for a delta, not evidence of a trend or a justified cadence.
 
 ## Why This Matters
 
@@ -38,6 +38,8 @@ Silent comparison across changed definitions or datasets produces persuasive but
   Verify: `tests/builderops/ckm/test_metric_comparison.py::test_compatible_observations_produce_deterministic_bound_delta`
 - [ ] Any semantics-bearing mismatch returns a typed incompatibility/refusal listing the mismatched fields; no fallback, coercion, or partial comparison occurs.
   Verify: `tests/builderops/ckm/test_metric_comparison.py::test_semantic_mismatch_refuses_without_partial_comparison`
+- [ ] Comparison refuses when any M1-retained source sample has expired, been pruned/deleted, lacks its policy version, or cannot reproduce its bound snapshot digest.
+  Verify: `tests/builderops/ckm/test_metric_comparison.py::test_unavailable_or_tampered_retained_source_refuses_comparison`
 - [ ] Measured zero, missing, unassessed, and unsupported transitions remain explicit and cannot be converted into numeric deltas accidentally.
   Verify: `tests/builderops/ckm/test_metric_comparison.py::test_value_state_transitions_are_not_coerced_to_numbers`
 - [ ] Comparison exposes no machine ranking, gate, prioritization, agent score, forecast, causal claim, or automated action. Any aggregate delta is `human_advisory_only`, appears with component-wise deltas and limitations, and is never privileged or sufficient by itself.

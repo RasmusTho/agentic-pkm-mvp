@@ -23,7 +23,7 @@ Validate Q1a/Q1b, Q2, M1, O1a, and O1b as defined in `docs/CKM_MEASUREMENT_AND_A
 - Secondary subsystem(s): OEF consumes descriptive observations; SFC/CES and Correctness Kernel boundaries are explicitly preserved
 - Write class: derived analytical/projection/receipt state
 - Authority impact: none; observation-to-action stays behind normal promotion/Issue/PR authority
-- Persistence impact: rebuildable CKM query state plus durable non-authoritative observation receipts
+- Persistence impact: rebuildable CKM query state plus M1-owned explicitly retained source samples and durable non-authoritative observation receipts under the 365-day policy
 - Derived/rebuildable impact: snapshot/query results are derived; observations are immutable evidence records bound to rebuildable snapshots
 - Human knowledge impact: none
 - Memory impact: none; no runtime/user memory
@@ -55,6 +55,8 @@ Validate Q1a/Q1b, Q2, M1, O1a, and O1b as defined in `docs/CKM_MEASUREMENT_AND_A
   Verify: child delivery receipts plus ledger at `docs/CKM_MEASUREMENT_AND_ACCESS/README.md :: Capability acceptance criteria`
 - [ ] Q1a and Q1b jointly prove the working public contract; schemas alone never satisfy Q1.
   Verify: Q1a/Q1b issue closure receipts and `tests/builderops/ckm/test_query_service.py`
+- [ ] M1 proves the complete sampled-retention owner path and O1b refuses comparison when any retained source is unavailable or incompatible.
+  Verify: #3779/#3781 delivery receipts plus `tests/builderops/ckm/test_metrics.py::test_retained_samples_apply_storage_accounting_and_pruning_policy` and `tests/builderops/ckm/test_metric_comparison.py::test_unavailable_or_tampered_retained_source_refuses_comparison`
 - [ ] All child owner-doc and transition-debt outcomes, D11/D12, and learning candidates are resolved.
   Verify: successor-parent closure ledger
 - [ ] M2 and O2 were not pre-authorized without the required accepted evidence.
