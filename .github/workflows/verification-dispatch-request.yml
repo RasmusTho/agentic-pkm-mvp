@@ -135,7 +135,7 @@ jobs:
             > verification-dispatch/pr.json
           test -f verification-dispatch/issue.json || printf '{}\n' \
             > verification-dispatch/issue.json
-          python3 scripts/build_verification_dispatch_request.py \
+          python3 -m scripts.build_verification_dispatch_request \
             --event-json "$GITHUB_EVENT_PATH" \
             --pr-json verification-dispatch/pr.json \
             --issue-json verification-dispatch/issue.json \
