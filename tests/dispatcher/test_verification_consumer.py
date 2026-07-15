@@ -1864,6 +1864,7 @@ def test_heartbeat_authority_loss_persists_one_backoff_receipt(tmp_path) -> None
             raise CodexExecFailure(
                 {
                     "outcome": "heartbeat_authority_lost",
+                    "failure_class": "authority_loss",
                     "returncode": -15,
                     "stderr": "heartbeat authority lost",
                     "terminal_error": "ValueError: verification heartbeat ownership mismatch",
@@ -1898,6 +1899,7 @@ def test_parent_exit_authority_loss_persists_one_backoff_receipt(tmp_path) -> No
             raise CodexExecFailure(
                 {
                     "outcome": "parent_exit_authority_lost",
+                    "failure_class": "authority_loss",
                     "returncode": 0,
                     "stderr": "coordinator parent exited while stdout remained open",
                     "terminal_error": "RuntimeError: descendant retained stdout",
@@ -2295,3 +2297,72 @@ def test_structured_rate_limit_receipt_replays_without_duplicate_attempt(
             "SELECT attempt_kind, outcome FROM verification_attempts"
         ).fetchall()
     assert [(row[0], row[1]) for row in attempts] == [("verification", "rate_limited")]
+
+
+def _nonzero_codex_launcher(tmp_path, stderr: str) -> CodexExecLauncher:
+    class Result:
+        returncode = 1
+        stdout = '{"type":"thread.started","thread_id":"thread-nonzero"}\n'
+
+        def __init__(self, failure_stderr: str) -> None:
+            self.stderr = failure_stderr
+
+    def runner(*args, **kwargs):
+        return Result(stderr)
+
+    return CodexExecLauncher(
+        tmp_path,
+        Path(__file__).resolve().parents[2]
+        / "app/dispatcher/schemas/verification_closer_receipt.schema.json",
+        tmp_path / "context.json",
+        adapter_path=Path(__file__).resolve().parents[2]
+        / ".codex/agents/verification-closer.toml",
+        runner=runner,
+    )
+
+
+def test_negated_nonzero_rate_limit_text_is_not_backoff_evidence(tmp_path) -> None:
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        _nonzero_codex_launcher(tmp_path, "this is not a rate limit"),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "codex_exec_failed"
+    assert result.terminal_receipt["failure_class"] == "execution"
+    with state.store._connect() as conn:
+        attempts = conn.execute(
+            "SELECT attempt_kind, outcome FROM verification_attempts"
+        ).fetchall()
+    assert [(row[0], row[1]) for row in attempts] == [
+        ("verification", "launch_failed")
+    ]
+
+
+def test_nonzero_structured_rate_limit_signal_backs_off(tmp_path) -> None:
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        _nonzero_codex_launcher(
+            tmp_path,
+            '{"error":{"type":"rate_limit_exceeded","status":429}}',
+        ),
+        "host",
+    ).consume(request())
+
+    assert result.status == "backoff"
+    assert result.terminal_receipt["api_fallback"] is False
+    assert result.terminal_receipt["failure_receipt"]["failure_class"] == "rate_limit"
+    with state.store._connect() as conn:
+        attempts = conn.execute(
+            "SELECT attempt_kind, outcome FROM verification_attempts"
+        ).fetchall()
+    assert [(row[0], row[1]) for row in attempts] == [
+        ("verification", "rate_limited")
+    ]

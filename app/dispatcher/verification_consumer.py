@@ -401,6 +401,69 @@ class CodexExecFailure(RuntimeError):
         )
 
 
+_RATE_LIMIT_CODES = {
+    "credits_exhausted",
+    "insufficient_credit",
+    "insufficient_quota",
+    "quota_exceeded",
+    "rate_limit",
+    "rate_limit_exceeded",
+    "too_many_requests",
+    "usage_limit",
+    "usage_limit_reached",
+}
+
+
+def _is_rate_limit_exec_failure(detail: str) -> bool:
+    """Classify raw process failure once, before it becomes a trusted receipt."""
+
+    def structured_signal(value: object, key: str | None = None) -> bool:
+        if isinstance(value, Mapping):
+            return any(structured_signal(child, str(child_key)) for child_key, child in value.items())
+        if isinstance(value, list):
+            return any(structured_signal(child, key) for child in value)
+        if key in {"status", "status_code", "http_status"} and value == 429:
+            return True
+        if key in {"code", "error_code", "reason", "type"} and isinstance(value, str):
+            return value.strip().lower().replace("-", "_").replace(" ", "_") in _RATE_LIMIT_CODES
+        return False
+
+    for line in detail.splitlines():
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if structured_signal(parsed):
+            return True
+
+    lowered = detail.lower()
+    # Raw provider stderr is not trusted as a receipt field. Negated clauses
+    # are removed before matching so "not a rate limit" cannot mint the
+    # structured failure classification consumed by the ledger.
+    evidence = re.sub(
+        r"\b(?:no|not|never|without)\b[^.;\n]{0,80}"
+        r"\b(?:rate[ _-]?limit|quota|credits?|usage[ _-]?limit)\b",
+        "",
+        lowered,
+    )
+    return "http 429" in evidence or any(
+        token in evidence
+        for token in (
+            "rate limit exceeded",
+            "rate_limit_exceeded",
+            "credit exhausted",
+            "credits exhausted",
+            "insufficient credit",
+            "insufficient_quota",
+            "quota exceeded",
+            "quota_exceeded",
+            "too many requests",
+            "usage limit reached",
+            "usage_limit_reached",
+        )
+    )
+
+
 class CodexExecLauncher:
     """Explicit least-privilege non-interactive verification coordinator."""
 
@@ -707,6 +770,7 @@ class CodexExecLauncher:
             raise CodexExecFailure(
                 {
                     "outcome": authority_loss_outcome,
+                    "failure_class": "authority_loss",
                     "returncode": returncode,
                     "stderr": authority_loss_outcome.replace("_", " "),
                     "terminal_error": f"{type(failure).__name__}: {failure}",
@@ -715,9 +779,13 @@ class CodexExecLauncher:
             )
         if returncode != 0 or terminal_error is not None:
             detail = "".join(stderr_chunks).strip() or terminal_error or "no stderr"
+            failure_class = (
+                "rate_limit" if _is_rate_limit_exec_failure(detail) else "execution"
+            )
             raise CodexExecFailure(
                 {
                     "outcome": "codex_exec_failed",
+                    "failure_class": failure_class,
                     "returncode": returncode,
                     "stderr": detail[-16_384:],
                     "terminal_error": terminal_error,
@@ -904,24 +972,10 @@ class VerificationConsumer:
 
     @staticmethod
     def _rate_limited(receipt: Mapping[str, object]) -> bool:
-        encoded = json.dumps(receipt, sort_keys=True).lower()
-        return any(
-            token in encoded
-            for token in (
-                "rate limit",
-                "rate_limit",
-                "credit exhausted",
-                "credits exhausted",
-                "insufficient credit",
-                "insufficient_quota",
-                "credit balance",
-                "not enough credits",
-                "usage limit",
-                "usage_limit",
-                "quota exceeded",
-                "quota_exceeded",
-                "too many requests",
-            )
+        return receipt.get("failure_class") == "rate_limit" or (
+            receipt.get("verdict") == "retry"
+            and isinstance(receipt.get("retry_after"), str)
+            and bool(str(receipt["retry_after"]).strip())
         )
 
     @staticmethod

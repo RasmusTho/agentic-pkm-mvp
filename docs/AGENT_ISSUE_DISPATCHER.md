@@ -59,9 +59,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   independently bounded before an in-memory request is accepted. A mismatch or oversized artifact
   fails closed before claim or model launch.
 - Missing or pending checks and auth/rate limits enter time-bounded `backoff`; replay cannot launch
-  before `retry_after`. Rate-limit classification requires either a structured `retry` receipt or a
-  non-zero execution-failure signal with rate/quota evidence; arbitrary prose in another terminal
-  verdict cannot select rate-limit backoff. Terminal completion additionally requires two fresh clean
+  before `retry_after`. Rate-limit classification requires either a structured `retry` receipt or the
+  launcher's structured `failure_class=rate_limit`, derived once from a non-zero provider failure;
+  arbitrary or negated terminal/stderr prose cannot select rate-limit backoff. Terminal completion
+  additionally requires two fresh clean
   review receipts after the final durable repair attempt. Standard and strongest-capability repair
   budgets are persisted across restart.
 - Completion never relies on coordinator receipt ids or review-event prose alone. The fresh exact-head
