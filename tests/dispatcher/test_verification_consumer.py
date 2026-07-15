@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 import io
 import json
 import os
@@ -3451,10 +3452,42 @@ def _codex_json_usage_failure_launcher(
     return launcher, calls
 
 
+def _codex_retry_timestamp(value: datetime) -> str:
+    suffix = (
+        "th"
+        if 11 <= value.day % 100 <= 13
+        else {1: "st", 2: "nd", 3: "rd"}.get(value.day % 10, "th")
+    )
+    hour = value.strftime("%I").lstrip("0")
+    return f"{value.strftime('%b')} {value.day}{suffix}, {value.year} {hour}:{value:%M %p}"
+
+
+def _next_leap_retry() -> str:
+    current = datetime.now().astimezone()
+    year = current.year
+    while True:
+        try:
+            candidate = current.replace(
+                year=year, month=2, day=29, hour=11, minute=59
+            )
+        except ValueError:
+            year += 1
+            continue
+        if candidate > current:
+            return _codex_retry_timestamp(candidate)
+        year += 1
+
+
+FUTURE_CODEX_RETRY = _codex_retry_timestamp(
+    datetime.now().astimezone() + timedelta(days=2)
+)
+PAST_CODEX_RETRY = _codex_retry_timestamp(
+    datetime.now().astimezone() - timedelta(days=1)
+)
 CANONICAL_CODEX_USAGE_LIMIT = (
     "You've hit your usage limit. Visit "
     "https://chatgpt.com/codex/settings/usage to purchase more credits "
-    "or try again at 4:30 PM."
+    f"or try again at {FUTURE_CODEX_RETRY}."
 )
 
 
@@ -3471,13 +3504,13 @@ CANONICAL_CODEX_USAGE_LIMIT = (
         ),
         (
             "You've hit your usage limit. To get more access now, send a request "
-            "to your admin or try again at Jul 16th, 2026 4:30 PM."
+            "to your admin or try again later."
         ),
         (
             "You've hit your usage limit. Upgrade to Plus to continue using Codex "
             "(https://chatgpt.com/explore/plus), or try again later."
         ),
-        "You've hit your usage limit. Try again at Feb 29th, 2028 11:59 PM.",
+        f"You've hit your usage limit. Try again at {_next_leap_retry()}.",
     ],
 )
 def test_codex_json_usage_limit_event_enters_durable_backoff(
@@ -3518,6 +3551,8 @@ def test_codex_json_usage_limit_event_enters_durable_backoff(
         ("You've hit your usage limit. . This is not an actual limit.", False, ""),
         ("You've hit your usage limit. Try again at 99:99 PM.", False, ""),
         ("You've hit your usage limit. Try again at 0:00 AM.", False, ""),
+        (f"You've hit your usage limit. Try again at {PAST_CODEX_RETRY}.", False, ""),
+        ("You've hit your usage limit. Try again at Jan 1st, 2020 4:30 PM.", False, ""),
         (
             "You've hit your usage limit. Try again at Feb 99th, 0000 88:77 AM.",
             False,
@@ -3530,6 +3565,21 @@ def test_codex_json_usage_limit_event_enters_durable_backoff(
         ),
         (
             "You've hit your usage limit. Try again at Feb 29th, 2025 4:30 PM.",
+            False,
+            "",
+        ),
+        ("You've hit your uſage limit. Try again later.", False, ""),
+        ("You've hit your usage\u00a0limit. Try again later.", False, ""),
+        (
+            "You've hit your usage limit. To get more acceß now, send a request "
+            "to your admin or try again later.",
+            False,
+            "",
+        ),
+        (
+            "You've hit your usage limit. Visit "
+            "httpſ://chatgpt.com/codex/ſettingſ/uſage to purchase more credits "
+            "or try again later.",
             False,
             "",
         ),

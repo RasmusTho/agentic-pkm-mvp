@@ -1473,15 +1473,23 @@ def _is_valid_codex_retry(retry: str) -> bool:
     if not retry.startswith("at "):
         return False
     timestamp = retry.removeprefix("at ")
+    current = datetime.now().astimezone().replace(
+        tzinfo=None, second=0, microsecond=0
+    )
     try:
-        datetime.strptime(timestamp.upper(), "%I:%M %p")
-        return True
+        parsed_time = datetime.strptime(timestamp, "%I:%M %p")
     except ValueError:
         pass
+    else:
+        candidate = current.replace(
+            hour=parsed_time.hour,
+            minute=parsed_time.minute,
+        )
+        return current <= candidate <= current + timedelta(days=1)
     match = re.fullmatch(
-        r"(?P<month>jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec) "
+        r"(?P<month>Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
         r"(?P<day>[0-9]{1,2})(?P<suffix>st|nd|rd|th), "
-        r"(?P<year>[0-9]{4}) (?P<clock>[0-9]{1,2}:[0-9]{2} (?:am|pm))",
+        r"(?P<year>[0-9]{4}) (?P<clock>[0-9]{1,2}:[0-9]{2} (?:AM|PM))",
         timestamp,
     )
     if match is None:
@@ -1492,19 +1500,19 @@ def _is_valid_codex_retry(retry: str) -> bool:
         if 11 <= day % 100 <= 13
         else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
     )
-    if match.group("suffix") != suffix or int(match.group("year")) < 2000:
+    if match.group("suffix") != suffix:
         return False
     try:
-        datetime.strptime(
+        candidate = datetime.strptime(
             (
                 f"{match.group('month')} {day}, {match.group('year')} "
                 f"{match.group('clock')}"
-            ).upper(),
+            ),
             "%b %d, %Y %I:%M %p",
         )
     except ValueError:
         return False
-    return True
+    return current <= candidate <= current + timedelta(days=5 * 366)
 
 
 def _is_codex_usage_limit_event(event: object) -> bool:
@@ -1513,29 +1521,31 @@ def _is_codex_usage_limit_event(event: object) -> bool:
     if not isinstance(event, Mapping) or event.get("type") != "error":
         return False
     message = event.get("message")
-    if not isinstance(message, str):
+    if not isinstance(message, str) or not message.isascii():
         return False
-    normalized = " ".join(message.strip().split()).casefold()
     retry_time = (
-        r"(?:[0-9]{1,2}:[0-9]{2} (?:am|pm)|"
-        r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec) "
+        r"(?:[0-9]{1,2}:[0-9]{2} (?:AM|PM)|"
+        r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
         r"[0-9]{1,2}(?:st|nd|rd|th), [0-9]{4} [0-9]{1,2}:[0-9]{2} "
-        r"(?:am|pm))"
+        r"(?:AM|PM))"
     )
-    retry = rf"(?P<retry>later|at {retry_time})"
+    retry = rf"(?:later|at {retry_time})"
     plan_copy = (
-        r"(?:upgrade to pro \(https://chatgpt\.com/explore/pro\), visit "
+        r"(?:Upgrade to Pro \(https://chatgpt\.com/explore/pro\), visit "
         r"https://chatgpt\.com/codex/settings/usage to purchase more credits|"
-        r"to get more access now, send a request to your admin|"
-        r"upgrade to plus to continue using codex "
+        r"To get more access now, send a request to your admin|"
+        r"Upgrade to Plus to continue using Codex "
         r"\(https://chatgpt\.com/explore/plus\),|"
-        r"visit https://chatgpt\.com/codex/settings/usage to purchase more credits)"
+        r"Visit https://chatgpt\.com/codex/settings/usage to purchase more credits)"
     )
-    match = re.fullmatch(
-        rf"you've hit your usage limit\. (?:{plan_copy} or )?try again {retry}\.",
-        normalized,
-    )
-    return bool(match is not None and _is_valid_codex_retry(match.group("retry")))
+    for pattern in (
+        rf"You've hit your usage limit\. {plan_copy} or try again (?P<retry>{retry})\.",
+        rf"You've hit your usage limit\. Try again (?P<retry>{retry})\.",
+    ):
+        match = re.fullmatch(pattern, message)
+        if match is not None:
+            return _is_valid_codex_retry(match.group("retry"))
+    return False
 
 
 class CodexExecLauncher:

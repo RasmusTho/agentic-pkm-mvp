@@ -104,8 +104,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   only parsed provider fields such as status 429 or canonical failure codes, inspected independently
   across bounded stderr and structured terminal events, or a full match of the versioned top-level
   Codex CLI `error` event grammar for plan guidance plus its bounded retry suffix, can create that
-  signal. Retry timestamps must also parse as a real 12-hour time or calendar date with the correct
-  ordinal suffix; regex shape alone is insufficient. Prefix-only matches are forbidden. The Codex event envelope
+  signal. The grammar is exact ASCII with canonical case and spacing; Unicode compatibility folding
+  and whitespace normalization are forbidden. Retry timestamps must parse as a real non-past local
+  12-hour time or calendar date within the bounded future window and carry the correct ordinal suffix;
+  regex shape alone is insufficient. Prefix-only matches are forbidden. The Codex event envelope
   is classified while streaming so a later `turn.failed` event cannot erase the earlier signal,
   while free-form, arbitrary, negated, or explicitly false terminal/stderr prose cannot select
   rate-limit backoff. Terminal completion
