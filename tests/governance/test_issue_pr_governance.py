@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -22,6 +24,13 @@ _TIER1_LANE_REGEX = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 _ISSUE_LINK_REGEX = re.compile(r"(Fixes|Closes|Resolves)\s+#\d+", re.IGNORECASE)
+_GOVERNING_ISSUE_LINE_REGEX = re.compile(
+    r"^\s*Governing-Issue\s*:.*$", re.IGNORECASE | re.MULTILINE
+)
+_EXACT_GOVERNING_ISSUE_REGEX = re.compile(
+    r"^\s*Governing-Issue:\s*#([1-9][0-9]*)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def _read_workflow() -> str:
@@ -119,6 +128,44 @@ def _builderops_routing_satisfied(body: str) -> bool:
     )
 
 
+def _governing_issue_identity_satisfied(body: str) -> bool:
+    if _ISSUE_LINK_REGEX.search(body) is None:
+        return True
+    return (
+        len(_GOVERNING_ISSUE_LINE_REGEX.findall(body)) == 1
+        and len(_EXACT_GOVERNING_ISSUE_REGEX.findall(body)) == 1
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Fixes #123",
+        "Governing-Issue: #\nFixes #123",
+        "Governing-Issue: #0\nFixes #123",
+        "Governing-Issue: #-1\nFixes #123",
+        "Governing-Issue: #123\nGoverning-Issue: #456\nFixes #123",
+        "Governing-Issue : #123\nFixes #123",
+    ],
+)
+def test_issue_backed_pr_rejects_missing_ambiguous_or_invalid_governing_identity(
+    body: str,
+) -> None:
+    assert not _governing_issue_identity_satisfied(body)
+
+
+def test_issue_backed_pr_accepts_single_and_multi_issue_authority() -> None:
+    single = "Governing-Issue: #123\n\nFixes #123"
+    multi = "Governing-Issue: #3603\n\nRefs #3603\nFixes #3626\nCloses #3698"
+
+    assert _governing_issue_identity_satisfied(single)
+    assert _governing_issue_identity_satisfied(multi)
+
+
+def test_issue_free_governance_pr_does_not_require_governing_identity() -> None:
+    assert _governing_issue_identity_satisfied("- [x] Governance lane")
+
+
 def test_issue_backed_code_pr_requires_builderops_routing_even_with_tier1_checkbox() -> None:
     body = (
         "Fixes #123\n\n"
@@ -159,6 +206,19 @@ def test_workflow_checks_issue_link_before_allowing_tier1_builderops_omission() 
     assert text.index("const hasIssueLink = issueLinkPattern.test(body);") < text.index(
         "const builderOpsRoutingSatisfied ="
     )
+
+
+def test_workflow_requires_exactly_one_positive_governing_identity_for_issue_backed_prs() -> None:
+    text = _read_workflow()
+
+    for fragment in (
+        "const governingIssueLines =",
+        "const exactGoverningIssueMatches =",
+        "governingIssueLines.length !== 1",
+        "exactGoverningIssueMatches.length !== 1",
+        "exactly one positive `Governing-Issue: #<id>` line",
+    ):
+        assert fragment in text, fragment
 
 
 def test_issue_readiness_workflow_is_strict_for_agent_ready_only() -> None:

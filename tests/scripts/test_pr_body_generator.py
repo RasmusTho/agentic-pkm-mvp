@@ -102,6 +102,15 @@ def test_missing_required_input_fails_fast() -> None:
         generate_pr_body_from_mapping(_fixture("missing_implementation_issue.json"))
 
 
+@pytest.mark.parametrize("issue_number", [0, -1])
+def test_non_positive_issue_number_fails_fast(issue_number: int) -> None:
+    data = _fixture("governance_issue.json")
+    data["issue_number"] = issue_number
+
+    with pytest.raises(PRBodyGeneratorError, match="issue_number must be positive"):
+        generate_pr_body_from_mapping(data)
+
+
 def test_missing_sbs_input_fails_fast() -> None:
     data = _fixture("governance_issue.json")
     sbs = dict(data["sbs_impact"])  # type: ignore[arg-type]

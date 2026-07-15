@@ -146,6 +146,8 @@ jobs:
             const builderOpsRoutingSection = builderOpsRoutingMatch ? builderOpsRoutingMatch[0] : "";
             const issueLinkPattern = /(Fixes|Closes|Resolves)\s+#\d+/i;
             const hasIssueLink = issueLinkPattern.test(body);
+            const governingIssueLines = body.match(/^\s*Governing-Issue\s*:.*$/gim) || [];
+            const exactGoverningIssueMatches = body.match(/^\s*Governing-Issue:\s*#([1-9][0-9]*)\s*$/gim) || [];
             const hasConcreteBuilderOpsValue = (pattern) => {
               const match = builderOpsRoutingSection.match(pattern);
               if (!match) {
@@ -165,6 +167,10 @@ jobs:
               return;
             }
             if (hasIssueLink) {
+              if (governingIssueLines.length !== 1 || exactGoverningIssueMatches.length !== 1) {
+                core.setFailed("Issue-backed PRs must include exactly one positive `Governing-Issue: #<id>` line. The governing issue may differ from closed supporting issues in an approved multi-issue PR.");
+                return;
+              }
               return;
             }
             // Regex handles Direct Repair block in any position:

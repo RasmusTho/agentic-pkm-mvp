@@ -40,8 +40,11 @@ conditional path — only when readiness/repair work is still needed before veri
 
 - Do not expand implementation scope during publication.
 - Do not publish unrelated local changes.
-- For issue-backed PRs, the body must include exactly one `Governing-Issue: #<id>` line and a
-  `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>` closing keyword for that same Issue.
+- For issue-backed PRs, the body must include exactly one `Governing-Issue: #<id>` line and at
+  least one `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>` closing keyword for work fully
+  delivered by the PR. In the normal single-Issue case the identities are the same. In an approved
+  multi-Issue PR, the governing parent may remain open (`Refs #<id>`) while closing keywords name
+  only fully delivered children; follow `docs/development/PR_HOT_PATH.md :: Multi-Issue PR Scope`.
 - For docs-authoring or governance lane PRs, leave the linked Issue blank unless a governing Issue actually exists.
 - PR-body machinery scales with risk tier per `docs/development/GOVERNANCE_PROPORTIONALITY.md`:
   - Tier 2+ PR bodies must include a `## BuilderOps Routing` section that names relevant BuilderOps
@@ -298,7 +301,8 @@ EOF
 Pre-push PR-body contract gate:
 - Before `gh pr create` or `gh pr edit`, verify the body includes exactly one lane classifier:
   - issue-backed lane: exactly one `Governing-Issue: #<id>` plus `Fixes #<id>`, `Closes #<id>`, or
-    `Resolves #<id>` for the same Issue
+    `Resolves #<id>` for fully delivered work; the IDs match for a single-Issue PR, while an
+    approved multi-Issue PR may reference an open governing parent and close delivered children
   - docs lane: `- [x] Docs authoring lane`
   - governance lane: `- [x] Governance lane`
   - direct repair: a complete `## Direct Repair` block with `Type:`, `Reason:`, `Validation:`, and `Issue required: no`
@@ -323,7 +327,9 @@ echo "Handing off to pr-integration skill"
 
 Implementation lane:
 
-- include exactly one `Governing-Issue: #<id>` line and a matching `Fixes #<id>` closing keyword
+- include exactly one `Governing-Issue: #<id>` line and closing keywords only for fully delivered
+  Issues; the normal single-Issue body uses a matching `Fixes #<id>`, while approved multi-Issue
+  delivery may keep the governing parent open and close delivered children
 - summarize the bounded change
 - state focused validation that actually ran
 

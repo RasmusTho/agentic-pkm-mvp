@@ -11,8 +11,8 @@ Governing-Issue: #
 ## Linked Issue
 Fixes #
 
-Both lines are required for issue-backed PRs and must identify the same governing issue. Leave both blank for docs authoring lane.
-Leave blank for governance lane when the PR stays within approved governance surfaces.
+Both lines are required for a single-issue PR and identify the same issue. For an approved multi-issue PR, keep exactly one governing identity, reference the governing parent when it remains open, and use closing keywords only for fully delivered issues.
+Leave both fields blank only when no governing issue exists, including issue-free docs-authoring or governance-lane PRs.
 
 ## SBS Impact
 Classify Product/Runtime System, Builder System, or boundary work per `docs/architecture/SBS_OPERATING_MODEL.md` §3, then fill SBS impact per §4; use "none"/"unaffected" explicitly rather than leaving a field blank.

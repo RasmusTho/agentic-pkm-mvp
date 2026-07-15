@@ -127,6 +127,8 @@ def _inputs_from_mapping(data: Mapping[str, Any]) -> PRBodyInputs:
 def _validate_inputs(inputs: PRBodyInputs) -> None:
     if inputs.lane not in LANES:
         raise PRBodyGeneratorError(f"lane must be one of: {', '.join(sorted(LANES))}")
+    if inputs.issue_number is not None and inputs.issue_number <= 0:
+        raise PRBodyGeneratorError("issue_number must be positive")
     if inputs.lane == "implementation" and inputs.issue_number is None:
         raise PRBodyGeneratorError("implementation lane requires issue_number")
     if inputs.lane == "direct-repair":
