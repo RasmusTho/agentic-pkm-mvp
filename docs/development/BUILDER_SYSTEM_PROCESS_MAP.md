@@ -5,7 +5,7 @@ Owner: Builder System governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: observed repo files and read-only GitHub command output cited inline
-Last reviewed: 2026-07-13
+Last reviewed: 2026-07-15
 
 # Builder System Process Map
 
@@ -215,6 +215,22 @@ Mechanism classification:
 | stale claims detection | deterministic + partial | Dispatcher TTL/heartbeat and reclaim semantics; GitHub-label-only fallback has weaker stale detection | [docs/AGENT_ISSUE_DISPATCHER.md:165-180], [tests/dispatcher/test_leases.py:194-222] |
 | failed work returns to queue | partially implemented | Dispatcher release/block; GitHub labels for blocked; no automated failed-work requeue from CI | [docs/AGENT_ISSUE_DISPATCHER.md:142-150], [`.codex/skills/issue-to-code/SKILL.md`:176-195] |
 | human exception removed from normal queue | deterministic in labels | `agent:needs-human` normally Backlog and not ready | [`.codex/skills/_shared/LABEL_TAXONOMY.md`:18-27] |
+| epic context-budget observation | deterministic + advisory | At slice boundaries, a versioned run-state receipt records explicit context measurement or `unknown`, checkpoint/digest data, cost inputs, and independent lifecycle/execution/model-tier recommendations. It performs no dispatch, spawn, acceptance, CI, review, merge, or closure mutation. | [`app/builderops/epic_run_context_budget.py`], [`tests/builderops/test_epic_run_context_budget.py`], [docs/AGENT_ISSUE_DISPATCHER.md :: Epic-runner context-budget observation] |
+
+The context-budget evaluator is measurement infrastructure, not a routing authority. Its
+`checkpoint_rotate` and `thin_worker` values are recommendations on separate axes: delegating a
+slice does not clear coordinator context, and refreshing changed external state does not alone force
+rotation. The receipt's policy is explicit and versioned, so the three-slice #3229 pilot remains a
+replayable observation (three inline routes, zero implementation-worker starts, long-lived Sol
+coordinator) rather than evidence that Sol or any fixed threshold was cheapest. Missing context,
+token, cost, or human-minute measurements remain `unknown`; available inputs may be reported without
+inventing the rest or fabricating an accepted-slice denominator.
+
+Authority is unchanged. The evaluator's effect lists are empty and its gate invariants retain CI,
+independent review, merge, and closure as separate required surfaces. It neither rotates/compresses a
+coordinator nor starts workers or parallel execution. Dispatcher lease state, live GitHub Issue/PR
+truth, exact branch/SHA, CI, and review state must still be refreshed and acted on through their
+existing owning workflows.
 
 ```mermaid
 flowchart TD

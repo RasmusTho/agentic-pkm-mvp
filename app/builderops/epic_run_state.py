@@ -38,6 +38,7 @@ _LIST_FIELDS = (
     "dispatch_decisions",
     "compact_receipts",
     "ci_handoffs",
+    "context_budget_receipts",
 )
 _MERGE_MAPPING_FIELDS = (
     "issue_mappings",
@@ -117,6 +118,7 @@ def new_epic_run_state(
         "dispatcher_status": {},
         "compact_receipts": [],
         "ci_handoffs": [],
+        "context_budget_receipts": [],
         "last_verified_head_sha": None,
     }
     if updates:
@@ -255,6 +257,22 @@ def record_dispatcher_status(
     """Record a dispatcher status snapshot without importing or changing dispatcher."""
 
     return apply_epic_run_update(state, dispatcher_status=dispatcher_status)
+
+
+def record_context_budget_receipt(
+    state: Mapping[str, Any],
+    receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Record one validated observer-only slice-boundary receipt."""
+
+    from app.builderops.epic_run_context_budget import (
+        normalize_context_budget_receipt,
+    )
+
+    return apply_epic_run_update(
+        state,
+        context_budget_receipts=[normalize_context_budget_receipt(receipt)],
+    )
 
 
 def unresolved_learning_evaluation_candidates(
