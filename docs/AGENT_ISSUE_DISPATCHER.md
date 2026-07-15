@@ -105,6 +105,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   exact live PR head; terminal delivery records the verified head only after two clean reviews on it.
   When the repaired head's checks are still pending, its repair event is persisted before bounded
   backoff so replay cannot bypass the 2+2 ledger; review events are rejected until checks are green.
+  An exact same-session terminal receipt replay reuses its deterministic verification attempt, so
+  already-deduplicated review events retain the same closure anchor. A changed receipt or session
+  creates a new anchor and must earn fresh reviews.
 - `verification-ingest` and `verification-status` are host-neutral dispatcher CLI surfaces. The
   Demerzel enable/disable/poll wrapper and service configuration remain host-local outside Git.
 - GitHub Actions remains artifact-only. The consumer grants no mutation or merge authority beyond

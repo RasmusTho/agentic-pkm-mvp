@@ -7,6 +7,7 @@ dedupe, auth preflight, context minimisation, and launch receipts; the launched
 
 from __future__ import annotations
 
+import hashlib
 import json
 import io
 import os
@@ -64,6 +65,27 @@ _MAX_ARTIFACT_COMPRESSED_BYTES = 2_000_000
 _MAX_ARTIFACT_MEMBERS = 16
 _MAX_ARTIFACT_UNCOMPRESSED_BYTES = 2_000_000
 _MAX_REQUEST_BYTES = 1_000_000
+
+
+def verification_attempt_idempotency_key(
+    session_id: str,
+    capability: str,
+    reasoning_effort: str,
+    receipt: Mapping[str, object],
+) -> str:
+    payload = {
+        "session_id": session_id,
+        "capability": capability,
+        "reasoning_effort": reasoning_effort,
+        "receipt": dict(receipt),
+    }
+    return hashlib.sha256(
+        json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode()
+    ).hexdigest()
+
+
 _UNSUPPORTED_CODEX_SCHEMA_KEYWORDS = frozenset(
     {
         "allOf",
@@ -1083,6 +1105,12 @@ class VerificationConsumer:
             receipt,
             holder=self.holder,
             lease_id=lease_id,
+            idempotency_key=verification_attempt_idempotency_key(
+                session_id,
+                config.model,
+                config.reasoning_effort,
+                receipt,
+            ),
         )
         if self._rate_limited(receipt):
             return self.ledger.backoff(

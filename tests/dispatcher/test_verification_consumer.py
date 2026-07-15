@@ -20,7 +20,9 @@ from app.dispatcher.verification_consumer import (
     GhCliVerificationSource,
     LaunchConfig,
     VerificationConsumer,
+    verification_attempt_idempotency_key,
 )
+from app.dispatcher.verification_agent_loop import VerificationAgentLoop
 from tests.dispatcher.verification_helpers import HEAD, ledger, request
 
 
@@ -696,6 +698,66 @@ def test_pending_repair_replay_preserves_two_plus_two_accounting(tmp_path) -> No
     assert final.status == "completed"
     assert [row["kind"] for row in state.attempts(final.run_id)] == [
         "verification", "standard_repair", "verification", "review", "review"
+    ]
+
+
+def test_exact_terminal_receipt_replay_preserves_closure_anchor(tmp_path) -> None:
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "host")
+    state.start(run.run_id, "host", claimed.lease_id, "coordinator", {})
+    receipt = {"verdict": "delivered", "head_sha": HEAD, "summary": "clean"}
+    key = verification_attempt_idempotency_key(
+        "coordinator", "gpt-5.6-sol", "xhigh", receipt
+    )
+    events = [
+        {
+            "kind": "review", "session_id": "review-1",
+            "capability": "gpt-5.6-sol", "reasoning_effort": "xhigh",
+            "outcome": "clean", "finding_id": None, "strongest": None,
+        },
+        {
+            "kind": "review", "session_id": "review-2",
+            "capability": "gpt-5.6-sol", "reasoning_effort": "xhigh",
+            "outcome": "clean", "finding_id": None, "strongest": None,
+        },
+    ]
+    loop = VerificationAgentLoop(
+        state, run.run_id, holder="host", lease_id=claimed.lease_id
+    )
+
+    for context in ({"head_sha": HEAD}, {"head_sha": "b" * 40}):
+        state.record_attempt(
+            run.run_id, "verification", "coordinator", "gpt-5.6-sol", "xhigh",
+            context, "launched", receipt, holder="host", lease_id=claimed.lease_id,
+            idempotency_key=key,
+        )
+        loop.apply_events(events, context={"head_sha": HEAD})
+
+    assert [row["kind"] for row in state.attempts(run.run_id)] == [
+        "verification", "review", "review"
+    ]
+    assert state.closure_ready(run.run_id) is True
+
+
+def test_changed_terminal_receipt_does_not_deduplicate_verification_anchor(tmp_path) -> None:
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "host")
+    first = {"verdict": "delivered", "head_sha": HEAD, "summary": "first"}
+    changed = {**first, "summary": "changed"}
+
+    for receipt in (first, changed):
+        state.record_attempt(
+            run.run_id, "verification", "coordinator", "gpt-5.6-sol", "xhigh",
+            {}, "launched", receipt, holder="host", lease_id=claimed.lease_id,
+            idempotency_key=verification_attempt_idempotency_key(
+                "coordinator", "gpt-5.6-sol", "xhigh", receipt
+            ),
+        )
+
+    assert [row["kind"] for row in state.attempts(run.run_id)] == [
+        "verification", "verification"
     ]
 
 

@@ -593,13 +593,19 @@ class VerificationDispatchLedger:
         *,
         holder: str,
         lease_id: str,
+        idempotency_key: str | None = None,
     ) -> int:
         limits = {"standard_repair": 2, "escalated_repair": 2}
         allowed = {*limits, "review", "verification"}
         if kind not in allowed:
             raise ValueError("invalid verification attempt kind")
         context_hash = hashlib.sha256(_json(dict(context)).encode()).hexdigest()
-        attempt_id = f"vattempt-{uuid.uuid4().hex[:12]}"
+        attempt_id = (
+            "vattempt-"
+            + hashlib.sha256(f"{run_id}:{idempotency_key}".encode()).hexdigest()[:16]
+            if idempotency_key
+            else f"vattempt-{uuid.uuid4().hex[:12]}"
+        )
         with self.store._connect() as conn:
             now = _begin_immediate_now(conn)
             owner = conn.execute(
@@ -613,6 +619,29 @@ class VerificationDispatchLedger:
             ).fetchone()
             if owner is None:
                 raise ValueError("verification attempt ownership mismatch")
+            if idempotency_key:
+                existing = conn.execute(
+                    "SELECT * FROM verification_attempts WHERE attempt_id=?",
+                    (attempt_id,),
+                ).fetchone()
+                if existing is not None:
+                    row = _attempt(existing)
+                    if (
+                        row["kind"] != kind
+                        or row["session_id"] != session_id
+                        or row["capability"] != capability
+                        or row["reasoning_effort"] != reasoning_effort
+                        or row["outcome"] != outcome
+                        or row["receipt"] != (dict(receipt) if receipt else None)
+                    ):
+                        raise ValueError("verification attempt replay conflicts")
+                    replay_ordinal = row["ordinal"]
+                    if not isinstance(replay_ordinal, int) or isinstance(
+                        replay_ordinal, bool
+                    ):
+                        raise ValueError("verification attempt replay ordinal is malformed")
+                    conn.commit()
+                    return replay_ordinal
             if kind == "review":
                 reused = conn.execute(
                     "SELECT 1 FROM verification_attempts WHERE run_id=? AND session_id=? LIMIT 1",
