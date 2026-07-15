@@ -4,7 +4,11 @@ from copy import deepcopy
 
 import pytest
 
-from tests.companion_ui.live_smoke_contract import assert_operator_health
+from tests.companion_ui.live_smoke_contract import (
+    assert_gateway_identity,
+    assert_operator_channel,
+    assert_operator_health,
+)
 
 
 def _embedding_rebuild_payload() -> dict[str, object]:
@@ -61,3 +65,35 @@ def test_embedding_cutover_accepts_only_rebuild_required_degradation() -> None:
     runtime["db"] = {"ok": False, "status": "unreachable"}
     with pytest.raises(AssertionError, match="runtime failures"):
         assert_operator_health(runtime_failure, allow_embedding_rebuild_required=True)
+
+
+def test_expected_channel_uses_operator_environment_without_active_vault() -> None:
+    assert_operator_channel({"environment": "test"}, expected_channel="test")
+
+
+def test_expected_channel_rejects_missing_or_wrong_operator_environment() -> None:
+    with pytest.raises(AssertionError, match="environment missing"):
+        assert_operator_channel({}, expected_channel="test")
+
+    with pytest.raises(AssertionError, match="did not match"):
+        assert_operator_channel({"environment": "dev"}, expected_channel="test")
+
+
+def test_gateway_identity_rejects_stale_page_with_fresh_backend() -> None:
+    current_sha = "a" * 40
+    stale_sha = "b" * 40
+
+    assert_gateway_identity(
+        actual_channel="test",
+        actual_git_sha=current_sha,
+        expected_channel="test",
+        expected_git_sha=current_sha,
+    )
+
+    with pytest.raises(AssertionError, match="gateway git SHA"):
+        assert_gateway_identity(
+            actual_channel="test",
+            actual_git_sha=stale_sha,
+            expected_channel="test",
+            expected_git_sha=current_sha,
+        )

@@ -42,18 +42,30 @@ except Exception:
 }
 
 run_channel() {
-  local channel="$1" url
+  local channel="$1" url expected_sha pin_file
   case "${channel}" in
     dev) url="${COMPANION_UI_DEV_SMOKE_URL:-http://127.0.0.1:8111/}" ;;
     test) url="${COMPANION_UI_TEST_SMOKE_URL:-http://127.0.0.1:8112/}" ;;
     prod) url="${COMPANION_UI_PROD_SMOKE_URL:-http://127.0.0.1:8113/}" ;;
     *) echo "unknown channel: ${channel}" >&2; return 2 ;;
   esac
+  expected_sha="${COMPANION_UI_EXPECTED_SHA:-}"
+  if [ -z "${expected_sha}" ]; then
+    pin_file="${ROOT}/config/deploy/${channel}.env"
+    if [ -f "${pin_file}" ]; then
+      expected_sha="$(awk -F= '/^APP_IMAGE_TAG=/{print $2; exit}' "${pin_file}")"
+    fi
+  fi
+  if [ -z "${expected_sha}" ]; then
+    echo "missing expected deployed SHA for ${channel} smoke" >&2
+    return 2
+  fi
   echo "[companion-ui:${channel}] post-deploy smoke ${url}"
   (
     cd "${ROOT}" || exit 1
     COMPANION_UI_SMOKE_URL="${url}" \
     COMPANION_UI_EXPECTED_CHANNEL="${channel}" \
+    COMPANION_UI_EXPECTED_SHA="${expected_sha}" \
     "${PYTHON}" -m pytest tests/companion_ui/test_companion_ui_live_smoke.py -q
   )
 }

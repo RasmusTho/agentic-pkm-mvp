@@ -4,6 +4,49 @@ from collections.abc import Mapping
 from typing import Any
 
 
+def assert_operator_channel(
+    payload: Mapping[str, Any],
+    *,
+    expected_channel: str,
+) -> None:
+    """Validate release-channel identity independently of active-vault state."""
+
+    raw_environment = payload.get("environment")
+    assert isinstance(raw_environment, str) and raw_environment.strip(), (
+        "operator health environment missing"
+    )
+    actual_channel = raw_environment.strip().lower()
+    normalized_expected = expected_channel.strip().lower()
+    assert actual_channel == normalized_expected, (
+        f"operator health environment {actual_channel!r} did not match "
+        f"expected channel {normalized_expected!r}"
+    )
+
+
+def assert_gateway_identity(
+    *,
+    actual_channel: str,
+    actual_git_sha: str,
+    expected_channel: str,
+    expected_git_sha: str,
+) -> None:
+    """Validate gateway-owned identity independently of proxied API state."""
+
+    normalized_channel = actual_channel.strip().lower()
+    normalized_expected_channel = expected_channel.strip().lower()
+    assert normalized_channel == normalized_expected_channel, (
+        f"gateway runtime channel {normalized_channel!r} did not match "
+        f"expected channel {normalized_expected_channel!r}"
+    )
+
+    normalized_sha = actual_git_sha.strip().lower()
+    normalized_expected_sha = expected_git_sha.strip().lower()
+    assert normalized_sha == normalized_expected_sha, (
+        f"gateway git SHA {normalized_sha!r} did not match "
+        f"deployed SHA {normalized_expected_sha!r}"
+    )
+
+
 def assert_operator_health(
     payload: Mapping[str, Any],
     *,

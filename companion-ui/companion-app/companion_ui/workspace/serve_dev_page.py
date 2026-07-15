@@ -8540,6 +8540,8 @@ def _render_orientation_index_html(
     vault_browser: Optional[dict] = None,
     vault_browser_error: str = "",
     production_profile: bool = False,
+    runtime_channel: str = "",
+    runtime_git_sha: str = "",
     diagnostics: bool = False,
     ambient_refresh_enabled: bool = False,
     entry_resolution: Optional[EntryStateResolution] = None,
@@ -8957,6 +8959,8 @@ def _render_orientation_index_html(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="pkm-runtime-channel" content="{_e(runtime_channel)}">
+  <meta name="pkm-runtime-git-sha" content="{_e(runtime_git_sha)}">
   <title>Companion UI — Workspace Orientation [{title_suffix}]</title>
   <style>
     :root {{
@@ -10769,6 +10773,8 @@ def render_index_html(
     orientation_vault_browser: Optional[dict] = None,
     orientation_vault_browser_error: str = "",
     production_profile: bool = False,
+    runtime_channel: str = "",
+    runtime_git_sha: str = "",
     diagnostics: bool = False,
     ambient_refresh_enabled: bool = False,
     page_origin_hostname: str = "",
@@ -10827,6 +10833,8 @@ def render_index_html(
             vault_browser=orientation_vault_browser,
             vault_browser_error=orientation_vault_browser_error,
             production_profile=production_profile,
+            runtime_channel=runtime_channel,
+            runtime_git_sha=runtime_git_sha,
             diagnostics=diagnostics,
             ambient_refresh_enabled=ambient_refresh_enabled,
             entry_resolution=entry_resolution,
@@ -10990,6 +10998,8 @@ def render_index_html(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="pkm-runtime-channel" content="{_e(runtime_channel)}">
+  <meta name="pkm-runtime-git-sha" content="{_e(runtime_git_sha)}">
   <title>Companion UI — Real-Note Workspace [{title_suffix}]</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -15552,6 +15562,8 @@ def handle_get(
     client: WorkspaceHttpClient,
     api_base_url: str,
     production_profile: bool = False,
+    runtime_channel: str = "",
+    runtime_git_sha: str = "",
     page_origin_host: str = "",
     day_start_briefing: Optional[dict] = None,
 ) -> str:
@@ -15665,6 +15677,8 @@ def handle_get(
         orientation_vault_browser=orientation_vault_browser,
         orientation_vault_browser_error=orientation_vault_browser_error,
         production_profile=production_profile,
+        runtime_channel=runtime_channel,
+        runtime_git_sha=runtime_git_sha,
         diagnostics=diagnostics,
         ambient_refresh_enabled=orientation_ambient_refresh_enabled(),
         page_origin_hostname=page_origin_host,
@@ -15680,6 +15694,8 @@ def make_handler(
     client: WorkspaceHttpClient,
     api_base_url: str,
     production_profile: bool = False,
+    runtime_channel: str = "",
+    runtime_git_sha: str = "",
     static_assets: dict[str, tuple[str, bytes]] | None = None,
     ask_timeout_seconds: float = _DEFAULT_ASK_TIMEOUT_SECONDS,
 ) -> type:
@@ -15693,11 +15709,21 @@ def make_handler(
     # vendored ESM is always available even when a caller passes no (or its own)
     # static_assets. Caller-supplied entries win on key collision.
     _merged_static_assets = {**vendor_static_assets(), **(static_assets or {})}
+    _resolved_runtime_channel = (
+        runtime_channel
+        or os.getenv("PKM_ENVIRONMENT")
+        or ("prod" if production_profile else "dev")
+    ).strip().lower()
+    _resolved_runtime_git_sha = (
+        runtime_git_sha or os.getenv("VCS_REF") or "unknown"
+    ).strip().lower()
 
     class _Handler(BaseHTTPRequestHandler):
         _client = client
         _api_base_url = api_base_url
         _production_profile = production_profile
+        _runtime_channel = _resolved_runtime_channel
+        _runtime_git_sha = _resolved_runtime_git_sha
         _static_assets = _merged_static_assets
         _ask_timeout_seconds = ask_timeout_seconds
 
@@ -15788,6 +15814,8 @@ def make_handler(
                 api_base_url=self._api_base_url,
                 error="Unknown Companion UI route",
                 production_profile=self._production_profile,
+                runtime_channel=self._runtime_channel,
+                runtime_git_sha=self._runtime_git_sha,
                 route_error=True,
             )
             self._send_html(404, body)
@@ -16146,6 +16174,8 @@ def make_handler(
                 client=self._client,
                 api_base_url=self._api_base_url,
                 production_profile=self._production_profile,
+                runtime_channel=self._runtime_channel,
+                runtime_git_sha=self._runtime_git_sha,
                 # Page origin (the Host the browser used) drives the #2124
                 # remote-vs-local disambiguation — a client/page fact, not a
                 # runtime signal.

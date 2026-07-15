@@ -36,10 +36,15 @@ from urllib.parse import urljoin
 
 import pytest
 
-from tests.companion_ui.live_smoke_contract import assert_operator_health
+from tests.companion_ui.live_smoke_contract import (
+    assert_gateway_identity,
+    assert_operator_channel,
+    assert_operator_health,
+)
 
 _SMOKE_URL = os.environ.get("COMPANION_UI_SMOKE_URL")
 _EXPECTED_CHANNEL = os.environ.get("COMPANION_UI_EXPECTED_CHANNEL")
+_EXPECTED_SHA = os.environ.get("COMPANION_UI_EXPECTED_SHA")
 _ALLOW_EMBEDDING_REBUILD_REQUIRED = (
     os.environ.get("COMPANION_UI_ALLOW_EMBEDDING_REBUILD_REQUIRED") == "1"
 )
@@ -85,12 +90,39 @@ def test_live_gateway_is_healthy_and_not_in_error_state() -> None:
                     _ALLOW_EMBEDDING_REBUILD_REQUIRED
                 ),
             )
+            if _EXPECTED_CHANNEL:
+                assert_operator_channel(
+                    payload,
+                    expected_channel=_EXPECTED_CHANNEL,
+                )
 
             # (b) the rendered entry surface is not stuck in an error state.
             response = page.goto(base, wait_until="domcontentloaded")
             assert response is not None and response.ok, (
                 f"gateway root HTTP {getattr(response, 'status', 'n/a')}"
             )
+            if _EXPECTED_CHANNEL:
+                gateway_marker = page.locator('meta[name="pkm-runtime-channel"]')
+                assert gateway_marker.count() == 1, (
+                    "gateway runtime channel marker missing"
+                )
+                gateway_channel = (
+                    gateway_marker.get_attribute("content") or ""
+                ).strip().lower()
+                gateway_sha_marker = page.locator('meta[name="pkm-runtime-git-sha"]')
+                assert gateway_sha_marker.count() == 1, (
+                    "gateway git SHA marker missing"
+                )
+                gateway_git_sha = (
+                    gateway_sha_marker.get_attribute("content") or ""
+                ).strip().lower()
+                assert _EXPECTED_SHA, "expected deployed SHA missing from smoke contract"
+                assert_gateway_identity(
+                    actual_channel=gateway_channel,
+                    actual_git_sha=gateway_git_sha,
+                    expected_channel=_EXPECTED_CHANNEL,
+                    expected_git_sha=_EXPECTED_SHA,
+                )
             for testid in _ERROR_TESTIDS:
                 count = page.locator(f'[data-testid="{testid}"]').count()
                 assert count == 0, f"gateway rendering error state: {testid}"
@@ -111,13 +143,5 @@ def test_live_gateway_is_healthy_and_not_in_error_state() -> None:
                 "Real-Note Workspace" in title
             ), f"unexpected page title: {title!r}"
 
-            if _EXPECTED_CHANNEL:
-                marker = page.locator('[data-testid="workspace-vault-channel"]').first
-                assert marker.count() == 1, "runtime channel marker missing"
-                marker_text = (marker.text_content() or "").lower()
-                assert _EXPECTED_CHANNEL.lower() in marker_text, (
-                    f"runtime channel marker {marker_text!r} did not match "
-                    f"{_EXPECTED_CHANNEL!r}"
-                )
         finally:
             browser.close()
