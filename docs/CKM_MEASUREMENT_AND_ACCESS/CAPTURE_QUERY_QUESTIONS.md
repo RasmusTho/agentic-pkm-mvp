@@ -21,6 +21,7 @@ Observe what CKM consumers actually ask, including unsupported historical questi
 - Record bounded structural facts such as resource/query family, filter classes, result/refusal kind, truncation, latency bucket, contract versions, and snapshot/query digests without raw free text or resource payloads.
 - Use the authoritative OEF event path where applicable, preserving BuilderOps scope and projection-only status.
 - Produce evidence that can support a future PromotionIntent or bounded issue, never direct feature activation.
+- Apply the accepted retention/correction/deletion policy to every observation record and bind its policy version.
 
 ## Concretely
 
@@ -46,6 +47,8 @@ The architecture inquiry deliberately refused to guess M2 history or O2 product 
   Verify: `tests/builderops/ckm/test_observation_capture.py::test_observation_failure_preserves_returned_query_semantics`
 - [ ] An accepted historical question records its human/source authority and remains insufficient by itself to claim general history support.
   Verify: `tests/builderops/ckm/test_observation_capture.py::test_accepted_question_records_authority_without_enabling_history`
+- [ ] Every retained observation records the applicable retention policy version and follows accepted correction/deletion behavior; absence of that policy refuses persistence.
+  Verify: `tests/builderops/ckm/test_observation_capture.py::test_observation_retention_requires_accepted_policy`
 - [ ] The owner spec records observed question categories while keeping M2 and O2 unfiled until a new source-backed executable contract exists.
   Verify: doc writeback at `docs/CKM_MEASUREMENT_AND_ACCESS/README.md :: Observation-gated future work`
 
@@ -74,4 +77,4 @@ The architecture inquiry deliberately refused to guess M2 history or O2 product 
 
 ## Related GitHub Issues
 
-Implementation issue #3780 under validation parent #3775, dependency-blocked on #3777. Reconcile the live OEF event contract before labeling Ready. TCD hint: Terra/high; escalate for privacy, authority, or event-failure ambiguity.
+Implementation issue #3780 under validation parent #3775, dependency-blocked on #3777 and the access/retention owner gates. Reconcile the live OEF event contract before labeling Ready. TCD hint: Terra/high; escalate for privacy, authority, retention, or event-failure ambiguity.

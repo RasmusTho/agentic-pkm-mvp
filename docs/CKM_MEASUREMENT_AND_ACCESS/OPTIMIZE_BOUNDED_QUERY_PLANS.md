@@ -13,31 +13,31 @@ can_parallelize_with: [Define Metric Registry and Observations, Capture Query Qu
 
 ## Purpose
 
-Make structured access efficient and reusable at live CKM scale without weakening Q1 snapshot, ordering, cursor, truncation, or refusal guarantees.
+Make structured access efficient and reusable at live CKM scale without weakening Q1 snapshot, ordering, completeness, bound, policy, or refusal guarantees.
 
 ## What This Task Does
 
-Add bounded filters and subtree/evidence/assessment/finding/unlinked-artifact read plans, reusable batch loading, supporting indexes, query-plan assertions, and constant query-count targets per page.
+Add bounded filters and subtree/evidence/assessment/finding/unlinked-artifact read plans, reusable batch loading, supporting indexes, query-plan assertions, and constant query-count targets per complete capture.
 
 ## Concretely
 
-Filters are allowlisted and canonicalized. Every query remains hard-limited and keyset-paginated. Batch plans replace per-capability reads; test fixtures assert both result equivalence and bounded SQLite statement counts.
+Filters are allowlisted and canonicalized. Every capture remains hard-bounded, deterministically ordered, and complete for its declared scope or refuses. Batch plans replace per-capability reads; test fixtures assert both result equivalence and bounded SQLite statement counts.
 
 ## Why This Matters
 
-The delivered MVP projections repeat per-capability reads and unbounded scans. A performance fix that changes cursor ordering or silently expands bounds would trade correctness for speed.
+The delivered MVP projections repeat per-capability reads and unbounded scans. A performance fix that hides omissions or silently expands bounds would trade correctness for speed.
 
 ## Acceptance Criteria
 
-- [ ] Allowlisted capability/subtree/evidence/assessment/finding/unlinked filters remain bounded, canonical, and cursor-compatible.
-  Verify: `tests/builderops/ckm/test_query_plans.py::test_bounded_filters_preserve_q1_cursor_contract`
-- [ ] Batch plans return the same snapshot-bound DTOs as the Q1 service with constant query count per page.
+- [ ] Allowlisted capability/subtree/evidence/assessment/finding/unlinked filters remain bounded, canonical, and completeness-accounted.
+  Verify: `tests/builderops/ckm/test_query_plans.py::test_bounded_filters_preserve_q1_completeness_contract`
+- [ ] Batch plans return the same snapshot-bound DTOs as the Q1 service with constant query count per complete capture.
   Verify: `tests/builderops/ckm/test_query_plans.py::test_batch_read_plan_has_constant_query_count`
 - [ ] Required indexes exist and SQLite query plans use indexed predicates for supported live filters.
   Verify: `tests/builderops/ckm/test_query_plans.py::test_supported_filters_use_required_indexes`
 - [ ] Projection/overview consumers using the new batch plan do not perform N+1 reads.
   Verify: `tests/builderops/ckm/test_query_plans.py::test_projection_consumers_do_not_regress_to_n_plus_one`
-- [ ] Unknown/unbounded filters refuse and Q1 hard limits, ordering, truncation, and snapshot-change behavior remain unchanged.
+- [ ] Unknown/unbounded filters refuse and Q1 hard bounds, ordering, completeness, policy, and mixed-epoch behavior remain unchanged.
   Verify: `tests/builderops/ckm/test_query_plans.py::test_query_optimization_cannot_weaken_q1_bounds`
 
 ## How to Verify (Pre-Merge)
@@ -50,8 +50,8 @@ The delivered MVP projections repeat per-capability reads and unbounded scans. A
 
 ## Out of Scope
 
-- Ranking, arbitrary sort, scalar maturity ordering, unbounded export, HTTP/UI, metrics, or observation semantics.
-- Weakening cursor or snapshot refusal to improve speed.
+- Ranking, arbitrary sort, scalar maturity ordering, unbounded export, pagination/cursors, HTTP/UI, metrics, or observation semantics.
+- Weakening completeness, policy, or snapshot refusal to improve speed.
 
 ## Related Docs
 

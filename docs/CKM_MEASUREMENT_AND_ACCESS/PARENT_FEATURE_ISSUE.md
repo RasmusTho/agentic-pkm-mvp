@@ -1,10 +1,10 @@
-State: FILED as GitHub validation-parent issue #3775 with children #3776-#3781. GitHub is the live validation surface; this file is the checked-in parent contract.
+State: FILED as GitHub validation-parent issue #3775 with children #3776-#3781. All children are blocked pending the owner gates in the authoritative specification and Issue-contract reconciliation. GitHub is the live validation surface; this file is the checked-in parent contract.
 
 # CKM Measurement & Access — Parent Validation Hub
 
 ## Context
 
-The accepted CKM MVP predecessor is #3138. The audit `docs/audits/CKM_MEASUREMENT_AND_ACCESS_2026-07-14.md` and consensus inquiry `inq_20260715T062832Z_e73546a2` define the post-MVP structured access, measurement, and observation boundary. This parent is a validation hub, never an implementation pickup issue.
+The accepted CKM MVP predecessor is #3138. The audit `docs/audits/CKM_MEASUREMENT_AND_ACCESS_2026-07-14.md` and consensus inquiries `inq_20260715T062832Z_e73546a2` and `inq_20260715T090347Z_61c6d5e4` define the post-MVP structured access, measurement, and observation boundary. The later inquiry exposed unresolved access, metric-use, longitudinal-scope, identity-lifecycle, and retention decisions; owner direction on 2026-07-15 paused Q1a until this contract is corrected and those gates are resolved. This parent is a validation hub, never an implementation pickup issue.
 
 ## Scope
 
@@ -30,7 +30,7 @@ Validate Q1a/Q1b, Q2, M1, O1a, and O1b as defined in `docs/CKM_MEASUREMENT_AND_A
 - Retrieval/context impact: structured builder query only
 - Sync/deployment impact: none
 - External boundary impact: CLI JSON only; no HTTP/federation
-- New or changed contract: CKM Measurement & Access DTO, query, cursor, metric, and observation contracts
+- New or changed contract: CKM Measurement & Access identity, policy-bound DTO, complete snapshot/query, metric, and observation contracts
 - Owner-doc impact: will-update-in-PR through children and final parent acceptance
 - Transition debt impact: reduces CKM access/measurement ambiguity; D11 preserved and D12 reduced through explicit Builder learning/observation destinations
 - Fitness rule impact: strengthens I-MA1..I-MA13 and associated determinism/provenance rules
@@ -38,13 +38,17 @@ Validate Q1a/Q1b, Q2, M1, O1a, and O1b as defined in `docs/CKM_MEASUREMENT_AND_A
 ## Constraints
 
 - Parent is never claimed.
+- No child becomes Ready until all five owner gates are accepted, its spec/Issue contract is reconciled, and strict readiness validation passes.
 - Q1 is not accepted after schemas alone.
 - Read paths are side-effect free and fail closed.
 - No ranking, gating, prioritization, automation, drift, prediction, or federation.
 - M2/O2 remain observation-gated future work.
+- V1 uses bounded complete capture and has no cursor/pagination contract; later continuation requires size evidence, retained immutable snapshots, and accepted retention semantics.
 
 ## Acceptance Criteria
 
+- [ ] All five pre-implementation owner gates are accepted and every affected child Issue is revalidated against the corrected contract before pickup.
+  Verify: `docs/CKM_MEASUREMENT_AND_ACCESS/README.md :: Pre-implementation owner gates` plus child readiness receipts
 - [ ] Every repo-verifiable capability criterion in the specification README is satisfied.
   Verify: child delivery receipts plus ledger at `docs/CKM_MEASUREMENT_AND_ACCESS/README.md :: Capability acceptance criteria`
 - [ ] Q1a and Q1b jointly prove the working public contract; schemas alone never satisfy Q1.
@@ -67,7 +71,7 @@ Validate Q1a/Q1b, Q2, M1, O1a, and O1b as defined in `docs/CKM_MEASUREMENT_AND_A
 
 ## Verification Path
 
-Each child executes its exact `Verify:` targets, `ruff check app tests`, current-SHA CI, and local review. Receipts accumulate on this parent after each merge.
+After the owner gates and contract/Issue reconciliation, each child executes its exact `Verify:` targets, `ruff check app tests`, current-SHA CI, and local review. Receipts accumulate on this parent after each merge.
 
 ## Validation / Acceptance Path
 
@@ -93,4 +97,4 @@ Re-read current `origin/main`, all children, PRs, claims, receipts, owner-doc ou
 
 ## Applies learning (optional)
 
-BuilderOps inquiry `inq_20260715T062832Z_e73546a2` corrected the audit's Q1 split, identity, state-revision, read-side-effect, cursor, temporal, metrics, and lifecycle assumptions.
+BuilderOps inquiry `inq_20260715T062832Z_e73546a2` corrected the audit's Q1 split, identity, state-revision, read-side-effect, cursor, temporal, metrics, and lifecycle assumptions. Later inquiry `inq_20260715T090347Z_61c6d5e4` further corrected access/retention, identity lifecycle, v1 pagination, completeness, aggregate-maturity, and longitudinal-history boundaries.

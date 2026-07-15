@@ -6,7 +6,7 @@ Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed (GitHub issue contracts + repo governance docs)
 Last reviewed: 2026-07-10
-Last verified against: #617, #621, #622, #623, #624, #625, #637, #639, #640, #561, #3312, AGENTS.md, docs/ARCHITECTURE.md, docs/development/GITHUB_GOVERNANCE_SETUP.md, .github/github-governance.yml
+Last verified against: #617, #621, #622, #623, #624, #625, #637, #639, #640, #561, #3312, #3603, AGENTS.md, docs/ARCHITECTURE.md, docs/development/GITHUB_GOVERNANCE_SETUP.md, .github/github-governance.yml
 
 # Agent Issue Dispatcher (MVP Contract)
 
@@ -34,6 +34,210 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - Fallback to GitHub-label-only claim is always available when dispatcher is unavailable.
 - Three adoption receipts verified and logged on parent feature issue (#636).
 - Existing GitHub issue/PR/label/project governance in `AGENTS.md` and `docs/development/GITHUB_GOVERNANCE_SETUP.md` remains current truth today.
+
+**Verification dispatch consumer: SHIPPED IN REPO (host enablement is separate)**
+
+- `app.dispatcher.verification_dispatch` extends the same SQLite control plane with versioned,
+  idempotent PR/head verification runs, one global active subscription slot, exact lease-token
+  fencing, durable retry timestamps, attempts, receipts, and deduplicated Human Exception packets.
+- Initial verification claims acquire the authoritative SQLite write lock before sampling both
+  eligibility time and lease expiry. Token-authorized mutations use the same post-lock authority
+  clock, so lock waits cannot create already-expired leases or revive expired coordinators.
+- `app.dispatcher.verification_consumer` re-fetches live PR/check truth, requires a successful
+  ChatGPT/keyring auth preflight, builds a minimal immutable context pack, and launches only the
+  registered `verification_closer` adapter with its pinned model, reasoning, sandbox, and developer
+  instructions. Streaming `codex exec --json --output-schema` events persist the thread identity
+  immediately. The consumer independently reloads the canonical schema and applies both structural
+  and semantic receipt validation to every launcher result before persisting attempts, review events,
+  or closure evidence; injected or replacement launchers cannot bypass that trust boundary.
+- Before process start, the launcher rejects output schemas outside the Codex Structured Outputs
+  subset (including conditional composition and object fields that are not required). The provider
+  schema keeps optional values explicitly nullable; local semantic validation still fail-closes a
+  delivered receipt without two review events or a repair event without its finding identity.
+- Artifact ingestion independently authenticates both producer runs before download, dispatcher
+  persistence, or any target-PR read. The artifact uploader run must be the completed/successful
+  `Verification Dispatch Request` workflow at its canonical path, with matching listing run id,
+  attempt, event, head, repository, and head-repository identities. The separately cited source CI
+  workflow is fetched inside that authenticated repository and must match the claimed run id, name,
+  attempt, PR head, pull-request event, completed/success state, and repository identities. Branch
+  refs are collaborator-controlled display text, not dispatch identity; the producer, ledger request,
+  and coordinator context omit them. Authenticated
+  compressed-size metadata is checked before
+  download; the production stream, ZIP member count, aggregate declared size, and request member are
+  independently bounded before an in-memory request is accepted. A mismatch or oversized artifact
+  fails closed before claim or model launch. Invalid, legacy, or malformed candidates are isolated
+  within the bounded artifact listing so one retained artifact cannot suppress a later valid request;
+  an invalid-only poll remains a fail-loud rejection, while GitHub API and artifact-download
+  transport failures still propagate and stop the poll.
+- The authenticated request is projected onto the exact recursive v1 field allowlist before its
+  idempotency identity is used or any JSON reaches SQLite; unknown top-level or nested fields are
+  rejected rather than copied. The auth preflight and coordinator subprocess inherit only the
+  minimal non-secret host environment needed to locate Codex and its ChatGPT/keyring login. Producer
+  authentication alone is historical evidence and never authorizes a head takeover. Before ingestion,
+  the consumer pairs an authenticated artifact with a bounded fresh PR observation containing only
+  repository, PR number, head, lifecycle flags, and the resolved governing/supporting issue identities;
+  the raw PR body is not carried into the ledger. Before that network read, the consumer captures a
+  bounded SHA-256 token over the complete canonical chain rows and their attempt/exception authority.
+  A different-head takeover recomputes and compares that token only after `BEGIN IMMEDIATE`; any
+  intervening head, status, lease, session, terminal, attempt, exception, or cumulative-authority
+  transition rejects the delayed observation without mutation. GitHub network I/O is never held
+  inside the SQLite write transaction. If the observation and canonical token both prove the incoming
+  repaired head is the exact open, unmerged, non-draft live PR head while the prior head's coordinator
+  row still has an expired running lease, ingestion atomically requeues that same run on the new head, clears
+  stale lease/session/terminal state, and retains every existing attempt and the exhausted
+  standard/escalated 2+2 repair budget. An unauthenticated artifact, a missing or mismatched live
+  observation, a live lease, mismatched governing authority, removal/replacement of prior supporting
+  issues in either the incoming request or live PR, or an ambiguous terminal chain fails closed without
+  changing the run. Freshly observed repaired heads may extend the supporting-issue set monotonically
+  as new findings become linked to the same PR. Each accepted extension is committed atomically with
+  the new current head in a separate cumulative authority field; the original request remains
+  immutable audit evidence, and every later active or stale-superseded takeover must contain the full
+  durable cumulative set and independently re-prove it against fresh live PR truth. Initial intake
+  mismatches keep their existing explicit supersession behavior. After a valid takeover becomes
+  terminal, restart and replay of the authenticated exact current-head identity returns the same
+  terminal canonical run without changing the immutable original request/idempotency audit or creating
+  another chain; governing or cumulative-authority drift still fails closed. The live observation
+  becomes mutation authority only for a different-head takeover.
+- Missing or pending checks and auth/rate limits enter time-bounded `backoff`; replay cannot launch
+  before `retry_after`. Rate-limit classification requires either a structured `retry` receipt or the
+  launcher's structured `failure_class=rate_limit`, derived once from a non-zero provider failure;
+  only parsed provider fields such as status 429 or canonical failure codes, inspected independently
+  across bounded stderr and structured terminal events, can create that signal,
+  while free-form, arbitrary, negated, or explicitly false terminal/stderr prose cannot select
+  rate-limit backoff. Terminal completion
+  additionally requires two fresh clean
+  review receipts after the final durable repair attempt. Standard and strongest-capability repair
+  budgets are persisted across restart.
+- Completion never relies on coordinator receipt ids or review-event prose alone. The fresh exact-head
+  GitHub read must contain a named, completed, successful `Unit tests (not pg)` check produced by
+  the authoritative `github-actions` App and authenticated as a pull-request run of
+  `.github/workflows/ci.yml` on that exact head. Its workflow run must correlate to the check run's
+  exact suite before latest-rerun selection; same-name checks from another App, workflow, suite,
+  event, or head are ignored. The required workflow job runs repo-wide `mypy app` before it can
+  publish success. Missing, ambiguous, unnamed, skipped, neutral, pending, or failed required-check
+  evidence cannot open closure.
+- The schema-valid coordinator receipt carries ordered repair/review events into the same
+  lease-fenced ledger as one atomic, deterministically identified batch. Exact receipt replay is a
+  no-op, and a later invalid/conflicting event rolls back the whole batch. A semantic event-batch
+  rejection becomes an exact-lease technical terminal receipt before any pending-check backoff, so
+  invalid review or repair events cannot strand coordinator authority or consume a partial budget;
+  a no-repair delivery still requires two distinct clean review sessions. Schema validity does not
+  make model-produced text durable-safe: raw coordinator prose remains transient and never enters
+  attempts, pending replay receipts, terminal rows, Human Exception packets, or status output. Its
+  only durable text projection is the canonical `[REDACTED]` marker followed by unique, bounded,
+  allowlisted GitHub repository, issue, pull-request, or Actions-run evidence routes that are
+  derived from the authenticated verification request; matching the owner/repository alone is not
+  sufficient. Queries, fragments, percent-encoded paths, foreign repository identities, invented
+  same-repository object ids, unsupported routes, secret-shaped path components, URL userinfo,
+  explicit ports, and non-GitHub origins are never preserved. This
+  allowlist, rather than credential-pattern coverage, establishes the no-secret invariant for
+  free-form coordinator text. Human Exception options cross the same boundary only as the canonical
+  `hold`, `authorize`, and optional `select-alternative` actions with fixed safe labels and
+  consequences; no-action and recommendation relationships are retained. Retry hints are finite,
+  positive, canonical, and duration-capped at one hour before persistence. The projection retains
+  the structured identities and actionable option relationships required for deterministic replay
+  and governed owner decisions, then passes the canonical schema and semantic validation again.
+  Check eligibility selects the latest GitHub rerun per
+  check name. Schema-v3 health, backup, and restore validation covers verification runs, attempts,
+  exceptions, head-audit fields, and their write-critical keys. A deployed pre-head-rebinding v3
+  backup may omit only the two additive current/verified-head columns: recovery preserves that
+  artifact, and the first normal store open atomically backfills the current head from the immutable
+  request head while retaining all prior audit rows. Missing older audit tables, columns, or unique
+  keys still fail closed before migration. Both normal self-migration and explicit initialization
+  validate the complete resulting verification schema inside the migration transaction before the
+  v3 marker can be written or committed. The one recognized pre-trust v3 request shape, deployed
+  before `supporting_issues` and authenticated artifact provenance became request authority, is never
+  upgraded by invention. Its immutable request, terminal receipt, attempts, and exceptions remain
+  audit evidence, while migration marks the run `legacy_untrusted`, clears every lease, session,
+  context, retry, and active projection, and stores no supporting authority. Status may list that
+  inert row, but every mutation and reopen path rejects it. A later authenticated canonical artifact
+  on a new head may start a fresh executable chain beside the retained audit row; any other malformed
+  historical request still rolls the whole additive migration back.
+  If normal stale-head handling supersedes a chain before the repaired-head artifact arrives, only
+  a later artifact with the same repository, PR, stage, and governing issue may reopen that exact
+  chain on the new head. Reopening preserves immutable requested-head audit plus all attempts and
+  2+2 budget, while clearing stale lease, session, context, retry, and terminal state. No other
+  terminal status or supersession reason is reopenable, and a different-head artifact cannot route
+  around that terminal chain by creating an empty run. Exact same-artifact replay is resolved
+  globally before any canonical-chain decision. A stale-head reopen is allowed only when that row
+  is the unambiguous terminal set; another terminal row fails closed without mutation. Further work
+  requires a governed lifecycle decision rather than a budget reset. Any legacy database containing
+  both an active chain and a terminal chain for the same authority is rejected before exact or active
+  replay, so a newer empty run cannot hide older spent budget. More than one active canonical chain
+  for the same repository, pull request, and stage is likewise rejected before exact replay; the
+  dispatcher never selects a newer empty active row over an older row with spent budget.
+- The Codex process boundary drains bounded stderr concurrently and rejects non-zero exits or
+  terminal error events even when stdout contained an otherwise valid receipt. A bounded rate-limit,
+  usage-limit, quota, or credit-exhaustion signal on that non-zero path remains a lease-fenced backoff
+  receipt with no repair-budget use or API-key fallback; either diagnostic channel can supply the
+  structured signal without masking the other. Raw stderr, terminal event content, exception
+  text, paths, and credentials are transient classification input only: durable attempts, terminal
+  receipts, and `verification-status` retain only bounded outcome, return-code, failure-class,
+  error-type, retry, and canonical UUID coordinator-session fields. A zero exit without both thread
+  identity and one schema-valid final receipt also enters exact-lease technical backoff. A returned
+  receipt that fails the consumer's canonical schema or semantic validation terminals technically
+  before attempt, event, or closure persistence; malformed or missing coordinator output can never
+  report delivery or retain an active claim. Every launch carries a
+  launch-scoped process-tree tracker plus a high-entropy tag so bounded cleanup can remove observed
+  descendants even after a `setsid` escape. Before a clean terminal receipt returns, the launcher
+  removes residual private-group members and requires a host containment adapter to prove whole-tree
+  cleanup; tracker/tag-only best-effort cleanup never claims that proof, so an otherwise valid receipt
+  fails technically on an uncontained host.
+- Heartbeat rejection or failure to persist the thread identity under the exact lease is immediate
+  loss of coordinator authority: the consumer terminates the private Codex process group, escalates
+  surviving descendants to a bounded group kill, reaps the direct child, performs tracked whole-tree
+  cleanup, rejects any later stdout,
+  and records one bounded backoff receipt without accepting a terminal result from the
+  authority-lost process. The same technical authority-loss path applies when the direct Codex
+  parent exits but a descendant keeps inherited stdout open beyond the bounded drain grace;
+  heartbeat renewal cannot outlive the direct coordinator.
+- Pre-launch eligibility and post-launch delivery truth are separate gates. Launch still requires an
+  open current-head PR; a `delivered` receipt is accepted only when a fresh GitHub read proves the
+  exact repository, PR, head, merged state, merge timestamp, merge commit, and green checks.
+  A source or contract-parse failure during that post-launch read enters exact-lease bounded
+  technical backoff while retaining the deterministic verification attempt and pending terminal
+  receipt for safe resume/replay. A pending delivered receipt bypasses the ordinary open-only intake
+  gate on retry, but can complete only through a fresh authenticated exact-head merged/check read.
+  When that receipt proves a repaired head, replay requires its durable repair event and performs
+  the same exact-lease/live-PR-fenced head rebind before applying events or terminal state; the
+  requested-head audit stays immutable while current and verified heads converge on the merged
+  receipt head. Its event batch remains exact-replay idempotent.
+  Persisted pending receipts are untrusted replay input: the consumer reloads the canonical schema
+  and reapplies structural and semantic validation before authentication, event application, or
+  completion. Corrupt or schema-unverifiable replay data terminals technically with redacted
+  diagnostics and cannot create review or closure evidence.
+- Governing-Issue authority is live truth, not an artifact-only assertion. Every authority-bearing
+  PR read must still contain exactly the request's explicit governing issue and every original
+  supporting-issue reference. Later bounded repair references may extend that supporting evidence
+  monotonically without becoming governing or closure authority; removing original evidence or
+  changing the governing issue fails closed.
+- Authentication does not extend an earlier live-truth read atomically. After auth and lease claim,
+  the consumer re-fetches head, governing contract, and checks immediately before launch; drift
+  supersedes the claimed run, while missing or non-green checks back off. Both are technical
+  prelaunch outcomes and start no coordinator. A GitHub source or contract-parse exception during
+  that claimed read also enters lease-fenced bounded backoff instead of stranding a live claim.
+- A genuine coordinator `needs_human` verdict crosses the one durable Human Exception boundary:
+  the consumer accepts only one of the four governed failure classes plus the complete canonical
+  owner-decision packet, then records it head- and governing-issue-bound before terminal state.
+  Replay returns the same deduplicated exception without a second packet or launch. Receipt,
+  head, live-truth, invalid-verdict, and closure-proof failures remain technical failures and never
+  select `needs_human` or create an exception packet.
+- The immutable request head remains the run/idempotency audit identity. A repair receipt may advance
+  the separate current head only under the exact active lease after a fresh GitHub read proves that
+  exact live PR head; terminal delivery records the verified head only after two clean reviews on it.
+  A later artifact for that repaired head reuses the same active repository/PR/governing-issue run
+  instead of opening an empty verification chain, so redispatch cannot reset prior attempts or the
+  PR-wide standard/escalated repair and fresh-review accounting. A mismatched head or governing
+  authority fails closed instead of sharing the ledger.
+  When the repaired head's checks are still pending, its repair event is persisted before bounded
+  backoff so replay cannot bypass the 2+2 ledger; review events are rejected until checks are green.
+  An exact same-session terminal receipt replay reuses its deterministic verification attempt, so
+  already-deduplicated review events retain the same closure anchor. A changed receipt or session
+  creates a new anchor and must earn fresh reviews.
+- `verification-ingest` and `verification-status` are host-neutral dispatcher CLI surfaces. The
+  Demerzel enable/disable/poll wrapper and service configuration remain host-local outside Git.
+- GitHub Actions remains artifact-only. The consumer grants no mutation or merge authority beyond
+  `.codex/skills/verification-and-closure/SKILL.md`.
 
 ## Source-of-Truth Boundaries
 

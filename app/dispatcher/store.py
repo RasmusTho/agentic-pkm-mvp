@@ -8,14 +8,21 @@ foundation slice.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import sqlite3
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 from app.dispatcher.events import JsonlEventWriter
 from app.dispatcher.models import EventRecord, LeaseRecord, TaskRecord
-from app.dispatcher.schema import DDL_STATEMENTS, SCHEMA_VERSION
+from app.dispatcher.schema import (
+    DDL_STATEMENTS,
+    LEGACY_UNTRUSTED_VERIFICATION_STATUS,
+    SCHEMA_VERSION,
+    verification_v3_schema_error,
+)
 
 
 class DispatcherStore(Protocol):
@@ -43,6 +50,213 @@ def _loads(value: str | None) -> Any:
     if value is None or value == "":
         return None
     return json.loads(value)
+
+
+_PRE_TRUST_REQUEST_FIELDS = frozenset(
+    {
+        "base_ref",
+        "contract_version",
+        "current_head_sha",
+        "evidence_pack",
+        "generated_at",
+        "head_ref",
+        "idempotency_key",
+        "linked_issue",
+        "live_truth",
+        "pr_number",
+        "repository",
+        "source_workflow",
+        "stage",
+    }
+)
+_PRE_TRUST_NESTED_FIELDS = {
+    "source_workflow": frozenset({"name", "run_id", "run_attempt", "head_sha"}),
+    "evidence_pack": frozenset(
+        {
+            "contract",
+            "workflow_name",
+            "artifact_name",
+            "repository",
+            "pr_number",
+            "head_sha",
+        }
+    ),
+    "live_truth": frozenset(
+        {"repository", "pr_number", "current_head_sha", "source_run_id"}
+    ),
+}
+_CANONICAL_VERIFICATION_STATUSES = frozenset(
+    {
+        "queued",
+        "backoff",
+        "claimed",
+        "running",
+        "completed",
+        "failed",
+        "needs_human",
+        "superseded",
+    }
+)
+
+
+def _positive_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def recognized_pre_trust_verification_request(
+    row: Mapping[str, Any] | sqlite3.Row,
+    request: Mapping[str, object],
+) -> bool:
+    """Recognize the exact request contract deployed before artifact authority.
+
+    These requests are audit evidence only. Recognition never upgrades them to
+    the current closed request contract; it only permits an atomic migration to
+    a permanently inert ledger state.
+    """
+    if (
+        row["request_json"]
+        != json.dumps(
+            request,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        or set(request) != _PRE_TRUST_REQUEST_FIELDS
+    ):
+        return False
+    nested: dict[str, Mapping[str, object]] = {}
+    for field, fields in _PRE_TRUST_NESTED_FIELDS.items():
+        value = request.get(field)
+        if not isinstance(value, Mapping) or set(value) != fields:
+            return False
+        nested[field] = value
+
+    repository = request.get("repository")
+    pr_number = request.get("pr_number")
+    linked_issue = request.get("linked_issue")
+    head_sha = request.get("current_head_sha")
+    idempotency_key = request.get("idempotency_key")
+    if (
+        request.get("contract_version") != "verification_dispatch_request.v1"
+        or request.get("stage") != "verification"
+        or not isinstance(repository, str)
+        or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository)
+        or any(part in {".", ".."} for part in repository.split("/"))
+        or not _positive_int(pr_number)
+        or not _positive_int(linked_issue)
+        or not isinstance(head_sha, str)
+        or not re.fullmatch(r"[0-9a-fA-F]{40}", head_sha)
+        or not isinstance(idempotency_key, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", idempotency_key)
+        or any(
+            not isinstance(request.get(field), str) or not request[field]
+            for field in ("base_ref", "head_ref", "generated_at")
+        )
+    ):
+        return False
+
+    identity = {
+        "contract_version": "verification_dispatch_request.v1",
+        "head_sha": head_sha,
+        "pr_number": pr_number,
+        "repository": repository,
+        "stage": "verification",
+    }
+    expected_idempotency = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    source = nested["source_workflow"]
+    evidence = nested["evidence_pack"]
+    live_truth = nested["live_truth"]
+    return bool(
+        idempotency_key == expected_idempotency
+        and row["run_id"] == f"vrun-{idempotency_key[:16]}"
+        and row["idempotency_key"] == idempotency_key
+        and row["contract_version"] == request["contract_version"]
+        and row["repository"] == repository
+        and row["pr_number"] == pr_number
+        and row["head_sha"] == head_sha
+        and row["stage"] == request["stage"]
+        and source.get("name") == "CI"
+        and _positive_int(source.get("run_id"))
+        and _positive_int(source.get("run_attempt"))
+        and source.get("head_sha") == head_sha
+        and evidence.get("contract") == "pr_evidence_pack"
+        and evidence.get("workflow_name") == "PR Evidence Pack"
+        and evidence.get("artifact_name") == f"pr-evidence-pack-{pr_number}"
+        and evidence.get("repository") == repository
+        and evidence.get("pr_number") == pr_number
+        and evidence.get("head_sha") == head_sha
+        and live_truth.get("repository") == repository
+        and live_truth.get("pr_number") == pr_number
+        and live_truth.get("current_head_sha") == head_sha
+        and live_truth.get("source_run_id") == source.get("run_id")
+    )
+
+
+def _verification_authority_migration(
+    row: sqlite3.Row,
+) -> tuple[str, bool]:
+    """Return the durable authority projection and whether the row is inert."""
+    try:
+        request = json.loads(row["request_json"])
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("verification request audit is malformed") from exc
+    supporting = request.get("supporting_issues") if isinstance(request, dict) else None
+    if (
+        not isinstance(supporting, list)
+        or any(
+            isinstance(issue, bool) or not isinstance(issue, int) or issue <= 0
+            for issue in supporting
+        )
+        or len(set(supporting)) != len(supporting)
+    ):
+        if isinstance(request, Mapping) and recognized_pre_trust_verification_request(
+            row, request
+        ):
+            return "[]", True
+        raise ValueError("verification supporting authority is malformed")
+    return (
+        json.dumps(supporting, separators=(",", ":"), ensure_ascii=False),
+        False,
+    )
+
+
+def _legacy_verification_row_is_quarantined(row: sqlite3.Row) -> bool:
+    try:
+        supporting_authority = json.loads(row["supporting_authority_json"])
+    except (TypeError, json.JSONDecodeError):
+        return False
+    return bool(
+        row["status"] == LEGACY_UNTRUSTED_VERIFICATION_STATUS
+        and supporting_authority == []
+        and row["current_head_sha"] == row["head_sha"]
+        and row["verified_head_sha"] is None
+        and all(
+            row[field] is None
+            for field in (
+                "claimed_by",
+                "lease_id",
+                "lease_expires_at",
+                "last_heartbeat_at",
+                "coordinator_session_id",
+                "context_pack_json",
+                "retry_after",
+            )
+        )
+    )
+
+
+def _validate_canonical_verification_row(row: sqlite3.Row) -> None:
+    """Reuse the ledger's complete request/row contract before schema commit."""
+    if row["status"] not in _CANONICAL_VERIFICATION_STATUSES:
+        raise ValueError("verification canonical run authority is malformed")
+    # Local import avoids a module cycle while retaining one canonical
+    # validator for request shape, nested provenance, identity, heads, and
+    # cumulative supporting authority.
+    from app.dispatcher.verification_dispatch import _validated_row_request
+
+    _validated_row_request(row)
 
 
 class SqliteStore:
@@ -86,7 +300,7 @@ class SqliteStore:
         (e.g. one dispatcher ``pull`` upserting hundreds of issues) pays the
         cheap outer check once per process, not once per row.
 
-        The migration itself (ADD COLUMN + two backfill UPDATEs) runs inside
+        The migration itself (additive DDL plus authority backfills) runs inside
         one explicit ``BEGIN IMMEDIATE`` transaction, committed or rolled back
         together: ``ALTER TABLE`` autocommits immediately outside an explicit
         transaction in Python's sqlite3 driver, so without this a crash
@@ -116,8 +330,51 @@ class SqliteStore:
                 "SELECT value FROM dispatcher_meta WHERE key='schema_version'"
             ).fetchone()
             current_version = None if row is None else str(row["value"])
+        verification_columns: set[str] = set()
+        verification_runs_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='verification_runs'"
+        ).fetchone()
+        if verification_runs_exists is not None:
+            verification_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(verification_runs)")
+            }
+        verification_additive_columns_complete = {
+            "current_head_sha",
+            "verified_head_sha",
+            "supporting_authority_json",
+        }.issubset(verification_columns)
         if "repo" in columns and current_version == str(SCHEMA_VERSION):
-            return
+            schema_error = verification_v3_schema_error(
+                conn, allow_additive_migration=True
+            )
+            if schema_error is not None:
+                raise ValueError(schema_error)
+            if verification_additive_columns_complete:
+                authority_reconciliation_required = False
+                for verification_row in conn.execute(
+                    "SELECT * FROM verification_runs"
+                ).fetchall():
+                    _, is_inert = (
+                        _verification_authority_migration(verification_row)
+                    )
+                    if is_inert:
+                        authority_reconciliation_required = (
+                            authority_reconciliation_required
+                            or not _legacy_verification_row_is_quarantined(
+                                verification_row
+                            )
+                        )
+                    else:
+                        if (
+                            verification_row["status"]
+                            == LEGACY_UNTRUSTED_VERIFICATION_STATUS
+                        ):
+                            raise ValueError(
+                                "legacy verification audit classification is malformed"
+                            )
+                        _validate_canonical_verification_row(verification_row)
+                if not authority_reconciliation_required:
+                    return
 
         # Only the original v1 layout is a supported migration source.  In
         # particular, do not turn a database written by a newer dispatcher
@@ -127,13 +384,11 @@ class SqliteStore:
         # dispatcher_meta, so its absence is recognized only together with
         # the v1-specific missing ``repo`` column.
         is_unversioned_v1 = current_version is None and "repo" not in columns
-        if current_version not in {"1", str(SCHEMA_VERSION)} and not is_unversioned_v1:
+        if current_version not in {"1", "2", str(SCHEMA_VERSION)} and not is_unversioned_v1:
             version = "missing" if current_version is None else repr(current_version)
             raise ValueError(f"unsupported dispatcher schema_version: {version}")
-        if current_version == str(SCHEMA_VERSION):
-            raise ValueError(
-                "dispatcher schema_version 2 is incompatible with the on-disk schema"
-            )
+        if current_version == "2" and "repo" not in columns:
+            raise ValueError("dispatcher schema_version 2 is incompatible with the on-disk schema")
 
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -153,13 +408,106 @@ class SqliteStore:
                 ).fetchone()
                 current_version = None if row is None else str(row["value"])
             is_unversioned_v1 = current_version is None and "repo" not in columns
-            if current_version not in {"1", str(SCHEMA_VERSION)} and not is_unversioned_v1:
+            if current_version not in {"1", "2", str(SCHEMA_VERSION)} and not is_unversioned_v1:
                 version = "missing" if current_version is None else repr(current_version)
                 raise ValueError(f"unsupported dispatcher schema_version: {version}")
             if current_version == str(SCHEMA_VERSION) and "repo" in columns:
+                schema_error = verification_v3_schema_error(
+                    conn, allow_additive_migration=True
+                )
+                if schema_error is not None:
+                    raise ValueError(schema_error)
+                verification_columns = {
+                    row["name"]
+                    for row in conn.execute("PRAGMA table_info(verification_runs)")
+                }
+                if "current_head_sha" not in verification_columns:
+                    conn.execute(
+                        "ALTER TABLE verification_runs ADD COLUMN "
+                        "current_head_sha TEXT NOT NULL DEFAULT ''"
+                    )
+                    conn.execute(
+                        "UPDATE verification_runs SET current_head_sha=head_sha "
+                        "WHERE current_head_sha=''"
+                    )
+                if "verified_head_sha" not in verification_columns:
+                    conn.execute(
+                        "ALTER TABLE verification_runs ADD COLUMN verified_head_sha TEXT"
+                    )
+                supporting_authority_added = (
+                    "supporting_authority_json" not in verification_columns
+                )
+                if supporting_authority_added:
+                    conn.execute(
+                        "ALTER TABLE verification_runs ADD COLUMN "
+                        "supporting_authority_json TEXT NOT NULL DEFAULT '[]'"
+                    )
+                for verification_row in conn.execute(
+                    "SELECT * FROM verification_runs"
+                ).fetchall():
+                    supporting_authority, is_inert = (
+                        _verification_authority_migration(verification_row)
+                    )
+                    if is_inert:
+                        conn.execute(
+                            """
+                            UPDATE verification_runs
+                            SET supporting_authority_json=?, status=?,
+                                current_head_sha=head_sha,
+                                verified_head_sha=NULL, claimed_by=NULL,
+                                lease_id=NULL, lease_expires_at=NULL,
+                                last_heartbeat_at=NULL,
+                                coordinator_session_id=NULL,
+                                context_pack_json=NULL, retry_after=NULL
+                            WHERE run_id=?
+                            """,
+                            (
+                                supporting_authority,
+                                LEGACY_UNTRUSTED_VERIFICATION_STATUS,
+                                verification_row["run_id"],
+                            ),
+                        )
+                    elif supporting_authority_added:
+                        conn.execute(
+                            "UPDATE verification_runs "
+                            "SET supporting_authority_json=? WHERE run_id=?",
+                            (
+                                supporting_authority,
+                                verification_row["run_id"],
+                            ),
+                        )
+                for verification_row in conn.execute(
+                    "SELECT * FROM verification_runs"
+                ).fetchall():
+                    _, is_inert = _verification_authority_migration(
+                        verification_row
+                    )
+                    if is_inert:
+                        if not _legacy_verification_row_is_quarantined(
+                            verification_row
+                        ):
+                            raise ValueError(
+                                "legacy verification audit classification is malformed"
+                            )
+                    else:
+                        if (
+                            verification_row["status"]
+                            == LEGACY_UNTRUSTED_VERIFICATION_STATUS
+                        ):
+                            raise ValueError(
+                                "legacy verification audit classification is malformed"
+                            )
+                        _validate_canonical_verification_row(verification_row)
+                schema_error = verification_v3_schema_error(conn)
+                if schema_error is not None:
+                    raise ValueError(schema_error)
                 conn.commit()
                 return
             if current_version == str(SCHEMA_VERSION):
+                raise ValueError(
+                    f"dispatcher schema_version {SCHEMA_VERSION} is incompatible with the on-disk schema"
+                )
+            if current_version == "2" and "repo" not in columns:
                 raise ValueError(
                     "dispatcher schema_version 2 is incompatible with the on-disk schema"
                 )
@@ -190,6 +538,9 @@ class SqliteStore:
                 )
             for stmt in DDL_STATEMENTS:
                 conn.execute(stmt)
+            schema_error = verification_v3_schema_error(conn)
+            if schema_error is not None:
+                raise ValueError(schema_error)
             conn.execute(
                 "INSERT OR REPLACE INTO dispatcher_meta(key, value) VALUES (?, ?)",
                 ("schema_version", str(SCHEMA_VERSION)),
@@ -201,13 +552,21 @@ class SqliteStore:
 
     def initialize(self) -> None:
         with self._connect() as conn:
-            for stmt in DDL_STATEMENTS:
-                conn.execute(stmt)
-            conn.execute(
-                "INSERT OR REPLACE INTO dispatcher_meta(key, value) VALUES (?, ?)",
-                ("schema_version", str(SCHEMA_VERSION)),
-            )
-            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for stmt in DDL_STATEMENTS:
+                    conn.execute(stmt)
+                schema_error = verification_v3_schema_error(conn)
+                if schema_error is not None:
+                    raise ValueError(schema_error)
+                conn.execute(
+                    "INSERT OR REPLACE INTO dispatcher_meta(key, value) VALUES (?, ?)",
+                    ("schema_version", str(SCHEMA_VERSION)),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
 
     # ----- coordination metadata -----
 
