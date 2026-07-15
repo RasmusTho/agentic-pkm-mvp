@@ -18,6 +18,7 @@ from app.dispatcher.verification_consumer import (
     _governing_contract_matches,
     _trusted_evidence_urls,
 )
+from app.dispatcher.verification_agent_loop import valid_human_exception_packet
 from app.dispatcher.verification_dispatch import (
     VerificationDispatchLedger,
     _live_observed_verification_request,
@@ -555,10 +556,14 @@ def _durable_verification_snapshot(
             """,
             run_ids,
         ).fetchall()
+        run_count = conn.execute(
+            "SELECT COUNT(*) FROM verification_runs"
+        ).fetchone()[0]
     return {
         "runs": [dict(row) for row in chain_runs],
         "attempts": [dict(row) for row in attempts],
         "exceptions": [dict(row) for row in exceptions],
+        "run_count": run_count,
     }
 
 
@@ -622,7 +627,32 @@ def _insert_valid_exception_authority_change(
 ) -> None:
     """Insert the exact durable shape produced by ``ledger.exception``."""
 
-    failure_class = "technical"
+    failure_class = "authority-critical"
+    packet: dict[str, object] = {
+        "failure_class": failure_class,
+        "original_intent": "verify and close the governed pull request",
+        "current_state": "canonical verification authority changed",
+        "tried_actions": ["re-read the canonical verification chain"],
+        "evidence": [f"verification run {run_id}"],
+        "why_unsafe": "continuing would accept stale authority",
+        "options": [
+            {
+                "id": "hold",
+                "label": "Hold",
+                "consequence": "delivery remains paused",
+            },
+            {
+                "id": "restart",
+                "label": "Restart",
+                "consequence": "delivery restarts from live authority",
+            },
+        ],
+        "no_action_option": "hold",
+        "recommended_option": "hold",
+        "recommendation_rationale": "authority must be revalidated first",
+        "consequence_of_doing_nothing": "delivery remains blocked",
+    }
+    assert valid_human_exception_packet(packet)
     exception_id = "vexception-" + hashlib.sha256(
         f"{run_id}:{failure_class}:{HEAD}".encode()
     ).hexdigest()[:16]
@@ -640,7 +670,7 @@ def _insert_valid_exception_authority_change(
                 failure_class,
                 HEAD,
                 json.dumps(
-                    {"failure_class": failure_class},
+                    packet,
                     sort_keys=True,
                     separators=(",", ":"),
                 ),
