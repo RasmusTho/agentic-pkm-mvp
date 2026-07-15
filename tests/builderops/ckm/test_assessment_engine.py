@@ -40,6 +40,7 @@ def store(tmp_path: Path) -> CkmStore:
 
 def _capability(store: CkmStore, name: str = "Retrieval"):
     return store.upsert_capability(
+        identity_key=f"fixture:assessment:{name}",
         name=name,
         definition="Retrieve grounded context.",
         existence_provenance="seeded:docs/CAPABILITY_CONTRACT_MODEL.md :: Retrieval",
@@ -547,6 +548,7 @@ def test_schema_v2_assessment_migrates_with_legacy_formula_provenance(tmp_path: 
             f"INSERT INTO ckm_assessment ({','.join(columns)}) VALUES ({','.join('?' for _ in values)})",
             values,
         )
+        conn.execute("DROP TABLE ckm_state")
 
     store.ensure_schema()
     migrated = store.latest_assessment_for_capability(capability.id)
@@ -610,6 +612,7 @@ def test_live_retrieval_outscores_planned_context(tmp_path: Path) -> None:
 def test_assessment_has_no_capability_name_or_lifecycle_prior(store: CkmStore) -> None:
     first = _capability(store, "Retrieval")
     second = store.upsert_capability(
+        identity_key="fixture:assessment:planned-neutral-twin",
         name="Planned neutral twin",
         definition=first.definition,
         existence_provenance="fixture:neutral",

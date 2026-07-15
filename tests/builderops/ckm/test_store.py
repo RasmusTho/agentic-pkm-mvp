@@ -20,6 +20,7 @@ def store(tmp_path: Path) -> CkmStore:
 
 def _upsert_capability(store: CkmStore, name: str = "semantic-search"):
     return store.upsert_capability(
+        identity_key=f"fixture:store:{name}",
         name=name,
         definition="Retrieve relevant vault content by meaning, not keyword.",
         existence_provenance="docs/CAPABILITY_CONTRACT_MODEL.md#semantic-search",
@@ -132,6 +133,7 @@ def test_schema_migrates_edge_basis_without_losing_rows(tmp_path: Path) -> None:
             """,
             ("edge_legacy_second", artifact.id, capability.id, artifact.source_ref),
         )
+        conn.execute("DROP TABLE ckm_state")
         conn.commit()
 
     store.ensure_schema()

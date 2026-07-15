@@ -35,7 +35,13 @@ from app.builderops.ckm.models import (
     new_id,
     utc_now,
 )
-from app.builderops.ckm.schema import CKM_DDL_STATEMENTS, CKM_SCHEMA_VERSION, CKM_TABLE_NAMES
+from app.builderops.ckm.schema import (
+    CKM_DDL_STATEMENTS,
+    CKM_LEGACY_ADDED_COLUMNS,
+    CKM_REQUIRED_COLUMNS,
+    CKM_SCHEMA_VERSION,
+    CKM_TABLE_NAMES,
+)
 
 JsonDict = dict[str, Any]
 
@@ -101,6 +107,9 @@ class CkmStore:
                 raise CkmValidationError(
                     "unsupported partial CKM schema; refusing to half-initialize identity/state metadata"
                 )
+            legacy = bool(existing_tables) and "ckm_state" not in existing_tables
+            if existing_tables:
+                self._validate_required_columns(conn, legacy=legacy)
             self._add_public_identity_columns(conn)
             self._migrate_evidence_edge_basis(conn)
             self._migrate_assessment_explainability(conn)
@@ -110,8 +119,11 @@ class CkmStore:
                 ):
                     continue
                 conn.execute(statement)
-            self._initialize_or_validate_state(conn, legacy=bool(existing_tables))
-            self._backfill_public_identities(conn)
+            initial_revision = 1 if legacy else 0 if not existing_tables else None
+            self._initialize_or_validate_state(conn, initial_revision=initial_revision)
+            citations_changed = self._backfill_public_identities(conn)
+            if existing_tables and not legacy and citations_changed:
+                self._advance_state_revision(conn)
             for statement in CKM_DDL_STATEMENTS:
                 if "CREATE UNIQUE INDEX" in statement and (
                     "public_id" in statement or "identity_key" in statement
@@ -149,7 +161,9 @@ class CkmStore:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
 
     @staticmethod
-    def _initialize_or_validate_state(conn: sqlite3.Connection, *, legacy: bool) -> None:
+    def _initialize_or_validate_state(
+        conn: sqlite3.Connection, *, initial_revision: int | None
+    ) -> None:
         rows = conn.execute("SELECT * FROM ckm_state").fetchall()
         if len(rows) > 1:
             raise CkmValidationError("CKM state preflight failed: expected exactly one state row")
@@ -160,6 +174,8 @@ class CkmStore:
                     f"unsupported CKM state schema version {version}; expected {CKM_SCHEMA_VERSION}"
                 )
             return
+        if initial_revision is None:
+            raise CkmValidationError("CKM state preflight failed: current schema has no state row")
         now = utc_now()
         conn.execute(
             """
@@ -167,11 +183,11 @@ class CkmStore:
                 (singleton, epoch, state_revision, schema_version, created_at, updated_at)
             VALUES (1, ?, ?, ?, ?, ?)
             """,
-            (f"epoch_{uuid4().hex}", 1 if legacy else 0, CKM_SCHEMA_VERSION, now, now),
+            (f"epoch_{uuid4().hex}", initial_revision, CKM_SCHEMA_VERSION, now, now),
         )
 
     @staticmethod
-    def _backfill_public_identities(conn: sqlite3.Connection) -> None:
+    def _backfill_public_identities(conn: sqlite3.Connection) -> bool:
         seed_identity_by_name: dict[str, str] = {}
         try:
             from app.builderops.ckm.seed import load_manifest
@@ -249,16 +265,18 @@ class CkmStore:
                 conn, row["kind"], row["capability_id"], row["dimension"]
             )
             conn.execute("UPDATE ckm_finding SET public_id = ? WHERE id = ?", (public_id, row["id"]))
-        CkmStore._backfill_serialized_citation_identities(conn)
+        return CkmStore._backfill_serialized_citation_identities(conn)
 
     @staticmethod
-    def _backfill_serialized_citation_identities(conn: sqlite3.Connection) -> None:
+    def _backfill_serialized_citation_identities(conn: sqlite3.Connection) -> bool:
+        changed = False
         for row in conn.execute("SELECT * FROM ckm_assessment ORDER BY id").fetchall():
             for dimension in MATURITY_DIMENSIONS:
                 column = f"{dimension}_citations"
                 original = _loads(row[column])
                 migrated = CkmStore._backfill_citation_value(conn, original)
                 if migrated != original:
+                    changed = True
                     conn.execute(
                         f"UPDATE ckm_assessment SET {column} = ? WHERE id = ?",
                         (_dumps(migrated), row["id"]),
@@ -267,10 +285,12 @@ class CkmStore:
             original = _loads(row["citations"])
             migrated = CkmStore._backfill_citation_value(conn, original)
             if migrated != original:
+                changed = True
                 conn.execute(
                     "UPDATE ckm_finding SET citations = ? WHERE id = ?",
                     (_dumps(migrated), row["id"]),
                 )
+        return changed
 
     @staticmethod
     def _backfill_citation_value(conn: sqlite3.Connection, value: Any) -> Any:
@@ -335,6 +355,7 @@ class CkmStore:
 
     @staticmethod
     def _preflight_schema(conn: sqlite3.Connection) -> None:
+        CkmStore._validate_required_columns(conn, legacy=False)
         state_rows = conn.execute("SELECT * FROM ckm_state").fetchall()
         if len(state_rows) != 1 or int(state_rows[0]["schema_version"]) != CKM_SCHEMA_VERSION:
             raise CkmValidationError("CKM state preflight failed: missing or unsupported state row")
@@ -362,6 +383,22 @@ class CkmStore:
                     raise CkmValidationError(
                         f"CKM identity preflight failed: duplicate {table}.{column}"
                     )
+
+    @staticmethod
+    def _validate_required_columns(conn: sqlite3.Connection, *, legacy: bool) -> None:
+        for table, required in CKM_REQUIRED_COLUMNS.items():
+            if legacy and table == "ckm_state":
+                continue
+            present = {
+                str(row["name"])
+                for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            expected = required - CKM_LEGACY_ADDED_COLUMNS.get(table, frozenset()) if legacy else required
+            missing = sorted(expected - present)
+            if missing:
+                raise CkmValidationError(
+                    f"unsupported CKM schema: {table} missing required column(s): {', '.join(missing)}"
+                )
 
     @staticmethod
     def _advance_state_revision(conn: sqlite3.Connection) -> None:
@@ -587,16 +624,14 @@ class CkmStore:
         name: str,
         definition: str,
         existence_provenance: str,
+        identity_key: str,
         parent_id: str | None = None,
         lifecycle: str = "candidate",
         boundary_ref: str | None = None,
-        identity_key: str | None = None,
     ) -> CkmCapability:
         now = utc_now()
         candidate_id = new_id("cap")
-        resolved_identity_key = identity_key or (
-            f"inferred:{existence_provenance}:{boundary_ref or name}"
-        )
+        resolved_identity_key = identity_key
         public_id = stable_public_id("capability", resolved_identity_key)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")

@@ -31,6 +31,7 @@ def store(tmp_path: Path) -> CkmStore:
 
 def _capability(store: CkmStore):
     return store.upsert_capability(
+        identity_key="fixture:semantic:retrieval",
         name="Retrieval",
         definition="Retrieve relevant material with provenance.",
         existence_provenance="seeded:docs/CAPABILITY_CONTRACT_MODEL.md :: Retrieval",

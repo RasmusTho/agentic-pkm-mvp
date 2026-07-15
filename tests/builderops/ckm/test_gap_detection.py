@@ -44,6 +44,7 @@ def _capability(
         ),
     )
     return store.upsert_capability(
+        identity_key=f"fixture:gap:{name}",
         name=name,
         definition=f"Fixture capability {name}.",
         existence_provenance=f"seeded:{source_ref} :: fixture",

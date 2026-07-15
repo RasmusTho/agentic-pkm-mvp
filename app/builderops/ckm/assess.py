@@ -345,8 +345,8 @@ def assessment_fingerprint(
 ) -> str:
     edge_payload = [
         {
-            "id": edge.id,
-            "artifact_id": edge.artifact_id,
+            "public_id": edge.public_id,
+            "artifact_public_id": artifacts[edge.artifact_id].public_id,
             "basis": edge.basis,
             "kind": edge.evidence_kind,
             "polarity": edge.polarity,
@@ -363,7 +363,7 @@ def assessment_fingerprint(
                 "provenance": artifacts[edge.artifact_id].provenance,
             },
         }
-        for edge in sorted(edges, key=lambda item: (item.artifact_id, item.basis, item.id))
+        for edge in sorted(edges, key=lambda item: item.public_id)
     ]
     formula_payload = {
         formula_id: {

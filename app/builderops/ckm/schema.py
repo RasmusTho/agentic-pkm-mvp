@@ -26,6 +26,75 @@ CKM_TABLE_NAMES = (
     "ckm_watermark",
 )
 
+CKM_REQUIRED_COLUMNS = {
+    "ckm_state": frozenset(
+        {"singleton", "epoch", "state_revision", "schema_version", "created_at", "updated_at"}
+    ),
+    "ckm_capability": frozenset(
+        {
+            "id", "public_id", "identity_key", "name", "definition", "parent_id",
+            "lifecycle", "existence_provenance", "boundary_ref", "created_at", "updated_at",
+        }
+    ),
+    "ckm_artifact": frozenset(
+        {
+            "id", "public_id", "source_ref", "artifact_kind", "source", "watermark",
+            "provenance", "created_at", "updated_at",
+        }
+    ),
+    "ckm_evidence_edge": frozenset(
+        {
+            "id", "public_id", "artifact_id", "capability_id", "evidence_kind", "polarity",
+            "maturity_dimension", "confidence", "extraction_method", "model", "provider",
+            "lifecycle", "source_ref", "basis", "created_at", "updated_at",
+        }
+    ),
+    "ckm_evidence_edge_history": frozenset(
+        {
+            "history_id", "edge_id", "public_id", "artifact_id", "capability_id",
+            "evidence_kind", "polarity", "maturity_dimension", "confidence",
+            "extraction_method", "model", "provider", "lifecycle", "source_ref", "basis",
+            "created_at", "updated_at", "retired_at",
+        }
+    ),
+    "ckm_assessment": frozenset(
+        {
+            "id", "public_id", "capability_id",
+            "functional_completeness", "functional_completeness_citations",
+            "test_completeness", "test_completeness_citations",
+            "documentation_quality", "documentation_quality_citations",
+            "integration_completeness", "integration_completeness_citations",
+            "operational_readiness", "operational_readiness_citations",
+            "architectural_stability", "architectural_stability_citations",
+            "requirement_coverage", "requirement_coverage_citations", "candidate_shares",
+            "formula_ids", "aggregate", "aggregate_formula_id", "low_confidence",
+            "edge_fingerprint", "watermark_set", "valid_from", "asserted_at",
+        }
+    ),
+    "ckm_finding": frozenset(
+        {
+            "id", "public_id", "kind", "capability_id", "dimension", "statement",
+            "citations", "created_at", "updated_at",
+        }
+    ),
+    "ckm_watermark": frozenset({"source", "value", "updated_at"}),
+}
+
+CKM_LEGACY_ADDED_COLUMNS = {
+    "ckm_capability": frozenset({"public_id", "identity_key"}),
+    "ckm_artifact": frozenset({"public_id"}),
+    "ckm_evidence_edge": frozenset({"public_id", "basis"}),
+    "ckm_evidence_edge_history": frozenset({"public_id"}),
+    "ckm_assessment": frozenset(
+        {
+            "public_id", "candidate_shares", "formula_ids", "aggregate_formula_id",
+            "low_confidence", "edge_fingerprint",
+        }
+    ),
+    "ckm_finding": frozenset({"public_id"}),
+    "ckm_watermark": frozenset(),
+}
+
 CKM_DDL_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS ckm_state (

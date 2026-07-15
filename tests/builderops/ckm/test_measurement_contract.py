@@ -8,6 +8,7 @@ from threading import Barrier
 
 import pytest
 
+from app.builderops.ckm.assess import assessment_fingerprint
 from app.builderops.ckm.contracts import (
     CkmContractError,
     CursorPayload,
@@ -17,7 +18,9 @@ from app.builderops.ckm.contracts import (
     SnapshotManifest,
     TaggedValue,
     TruncationMetadata,
+    canonical_digest,
     canonical_query_digest,
+    stable_public_id,
     validate_contract_request,
 )
 from app.builderops.ckm.models import MATURITY_DIMENSIONS, CkmValidationError
@@ -117,6 +120,46 @@ def test_public_identity_survives_rebuild_and_rename(
         existence_provenance="receipt:123",
     )
     assert inferred_renamed.public_id == inferred.public_id
+
+    artifact = _artifact(store)
+    edge = _edge(store, artifact.id, rebuilt.id)
+    scores = {dimension: 0.5 for dimension in MATURITY_DIMENSIONS}
+    citations = {dimension: [edge.to_dict()] for dimension in MATURITY_DIMENSIONS}
+    fingerprint = assessment_fingerprint([edge], {artifact.id: artifact})
+    assessment = store.append_assessment(
+        capability_id=rebuilt.id,
+        scores=scores,
+        citations=citations,
+        aggregate=0.5,
+        edge_fingerprint=fingerprint,
+        watermark_set={"repo": "commit:abc"},
+        valid_from="2026-07-15T00:00:00Z",
+        asserted_at="2026-07-15T00:00:00Z",
+    )
+
+    store.rebuild()
+    rebuilt_again = _capability(store, name="Measurement and Access")
+    rebuilt_artifact = _artifact(store)
+    rebuilt_edge = _edge(store, rebuilt_artifact.id, rebuilt_again.id)
+    rebuilt_fingerprint = assessment_fingerprint(
+        [rebuilt_edge], {rebuilt_artifact.id: rebuilt_artifact}
+    )
+    rebuilt_assessment = store.append_assessment(
+        capability_id=rebuilt_again.id,
+        scores=scores,
+        citations={
+            dimension: [rebuilt_edge.to_dict()] for dimension in MATURITY_DIMENSIONS
+        },
+        aggregate=0.5,
+        edge_fingerprint=rebuilt_fingerprint,
+        watermark_set={"repo": "commit:abc"},
+        valid_from="2026-07-15T00:00:00Z",
+        asserted_at="2026-07-15T00:00:00Z",
+    )
+    assert rebuilt_edge.id != edge.id
+    assert rebuilt_edge.public_id == edge.public_id
+    assert rebuilt_fingerprint == fingerprint
+    assert rebuilt_assessment.public_id == assessment.public_id
 
     first_manifest = tmp_path / "first-capabilities.yaml"
     first_manifest.write_text(
@@ -287,6 +330,7 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
     legacy = CkmStore(db_path)
     legacy.ensure_schema()
     capability = legacy.upsert_capability(
+        identity_key="pre-v5-placeholder",
         name="Legacy inferred capability",
         definition="Pre-Q1 inferred fixture.",
         existence_provenance="receipt:legacy-inference",
@@ -422,13 +466,56 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
         assert conn.execute(
             "SELECT COUNT(*) FROM ckm_evidence_edge_history WHERE public_id = ''"
         ).fetchone()[0] == 0
-        assert conn.execute(
+        migrated_history_public_id = conn.execute(
             "SELECT public_id FROM ckm_evidence_edge_history WHERE edge_id = ?",
             (stale_edge.id,),
-        ).fetchone()[0] == stale_edge.public_id
+        ).fetchone()[0]
+    expected_history_public_id = stable_public_id(
+        "evidence_edge",
+        canonical_digest(
+            {
+                "artifact": stable_public_id("artifact", stale_artifact.source_ref),
+                "capability": migrated_inferred.public_id,
+                "basis": stale_edge.basis,
+            }
+        ),
+    )
+    assert migrated_history_public_id == expected_history_public_id
 
     legacy.ensure_schema()
     assert legacy.state_identity() == migrated_state
+
+    repair_store = CkmStore(tmp_path / "citation-repair.sqlite3")
+    repair_store.ensure_schema()
+    repair_capability = _capability(repair_store)
+    repair_artifact = _artifact(repair_store)
+    repair_edge = _edge(repair_store, repair_artifact.id, repair_capability.id)
+    incomplete_edge_snapshot = repair_edge.to_dict()
+    incomplete_edge_snapshot.pop("public_id")
+    repair_store.append_assessment(
+        capability_id=repair_capability.id,
+        scores={dimension: 0.5 for dimension in MATURITY_DIMENSIONS},
+        citations={
+            dimension: [dict(incomplete_edge_snapshot)] for dimension in MATURITY_DIMENSIONS
+        },
+        aggregate=0.5,
+        watermark_set={"repo": "commit:abc"},
+        valid_from="2026-07-15T00:00:00Z",
+        asserted_at="2026-07-15T00:00:00Z",
+    )
+    before_citation_repair = repair_store.state_identity()
+    repair_store.ensure_schema()
+    after_citation_repair = repair_store.state_identity()
+    assert after_citation_repair.state_revision == before_citation_repair.state_revision + 1
+    repaired_assessment = repair_store.latest_assessment_for_capability(repair_capability.id)
+    assert repaired_assessment is not None
+    assert all(
+        citation.get("public_id")
+        for dimension in MATURITY_DIMENSIONS
+        for citation in repaired_assessment.citations[dimension]
+    )
+    repair_store.ensure_schema()
+    assert repair_store.state_identity() == after_citation_repair
 
     damaged = CkmStore(tmp_path / "damaged.sqlite3")
     damaged.ensure_schema()
@@ -444,11 +531,20 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
     with pytest.raises(CkmValidationError, match="unsupported partial CKM schema"):
         partial.ensure_schema()
 
+    missing_column = CkmStore(tmp_path / "missing-column.sqlite3")
+    missing_column.ensure_schema()
+    with sqlite3.connect(missing_column.db_path) as conn:
+        conn.execute("ALTER TABLE ckm_artifact DROP COLUMN watermark")
+        conn.commit()
+    with pytest.raises(CkmValidationError, match="ckm_artifact.*watermark"):
+        missing_column.ensure_schema()
+
     assert set(legacy.table_names()) == set(CKM_TABLE_NAMES)
 
     migrated_inferred_public_id = migrated_inferred.public_id
     legacy.rebuild()
     rebuilt_inferred = legacy.upsert_capability(
+        identity_key=migrated_inferred.identity_key,
         name="Legacy inferred capability",
         definition="Pre-Q1 inferred fixture.",
         existence_provenance="receipt:legacy-inference",
