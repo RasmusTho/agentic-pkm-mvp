@@ -113,7 +113,10 @@ selection ID is an expiring bearer capability used in addition to #2223 authenti
 server resolves a human or delegated operator-role principal from the auth/GOV boundary and owns
 operational scope; `appInstallId` remains separate instance identity, API keys remain credentials,
 and client identity/scope strings are never trusted. The local-only bootstrap role is explicitly an
-instance-scoped delegated role, not a claim of the human's global identity. Binding plus generation alone is insufficient because two
+instance-scoped delegated role, not a claim of the human's global identity. MVR-03 owns its missing
+producer: existing one-credential installs atomically migrate a credential fingerprint to a private,
+opaque `local_operator_role_id`; channel/native bootstrap and fixtures produce the same auth/GOV
+record before fail-closed principal enforcement. Binding plus generation alone is insufficient because two
 bearer selections may share both while carrying different scopes or filters. Context is never
 carried from one vault to another merely because a selection changed. Cross-vault synthesis
 requires an explicit multi-binding context and preserves per-source provenance.
@@ -201,8 +204,9 @@ to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup.
   scalar pre-MVR rollback, including one-binding instances; rollback must use a compatible image
   and never project shared projection/outbox tables into unsafe scalar semantics.
 - Before MVR-05 records that floor or runs its shared-database migration, the channel deployment
-  fence drains and stops the old scalar API/worker and prevents restart. New-image migration cannot
-  run ahead of force-recreate while incompatible old processes remain live.
+  fence inventories, drains, and stops every old shared-DB/outbox client—including API, worker,
+  watcher, Heimdal/capture, and enabled auxiliary producers—proves their DB sessions gone, and
+  prevents restart. New-image migration cannot run ahead while any incompatible process remains live.
 
 Partial delivery remains fail-closed:
 

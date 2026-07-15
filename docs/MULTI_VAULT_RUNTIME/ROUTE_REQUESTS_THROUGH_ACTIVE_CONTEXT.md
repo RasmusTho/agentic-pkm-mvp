@@ -43,11 +43,14 @@ not background lifecycles.
   legacy binding is provably unique; ambiguous rows are quarantined and rebuilt from their source
   vault under a fail-loud preflight—never copied to several bindings or guessed from a default.
 - Before enabling the first binding-keyed database producer or migrating any row, acquire the
-  channel deployment fence, remove old scalar API ingress, signal the old worker to stop dequeue/ack,
-  drain their in-flight work, and stop both processes. The host-side coordinator does not depend on
-  new-image code executing inside the old containers: after timeout it may terminate them only after
-  proving their database sessions are gone and incomplete transactions rolled back. The migration
-  must prove those process identities and sessions are gone and prevent their restart before it atomically records durable
+  channel deployment fence and enumerate every enabled old process that can query/mutate the shared
+  database or emit an outbox row from compose/runtime producer truth—not a hard-coded API/worker
+  pair. This includes API, worker, watcher, Heimdal/capture services, and any enabled auxiliary
+  producer. Remove API/producer ingress, stop enqueue/dequeue/ack, drain in-flight work, and stop all
+  enumerated processes. The host-side coordinator does not depend on new-image code executing inside
+  old containers: after timeout it may terminate them only after proving their database sessions are
+  gone and incomplete transactions rolled back. The migration must prove every inventoried process
+  identity and session is gone and prevent restart before it atomically records durable
   `minimum_runtime_schema=MVR-05` in instance state and touches the shared database. The pinned-image
   deploy path must run this drain/stop gate before its new-image `migrate` service; its current
   migrate-before-force-recreate ordering is not acceptable for MVR-05. Any failed fence/drain/stop
@@ -143,10 +146,14 @@ call site can leak retrieval context or write to the wrong human artifact surfac
   state is written; scalar rollback then fails before starting an old API/worker, including on a
   one-binding instance, while a compatible roll-forward retains the full lineage.
   - Verify: `tests/migrations/test_multi_vault_projection_backfill.py::test_projection_upgrade_blocks_scalar_rollback_before_first_write`
-- [ ] Pinned-image deployment fences writes/dequeue, drains and stops the old scalar API/worker, and
-  proves neither can restart before setting the floor or running the binding-keyed migration; fault
-  injection at every phase leaves the floor/database untouched or requires compatible roll-forward.
-  - Verify: `tests/ops/test_mvr05_mixed_version_fence.py::test_old_scalar_runtime_is_stopped_before_binding_keyed_migration`
+- [ ] Pinned-image deployment fences writes/dequeue, drains and stops the old scalar API/worker,
+  every enabled watcher, Heimdal, capture, and auxiliary DB/outbox producer, and proves none can
+  restart or retain a DB session before setting the floor or running the binding-keyed migration;
+  fault injection leaves the floor/database untouched or requires compatible roll-forward.
+  - Verify: `tests/ops/test_mvr05_mixed_version_fence.py::test_all_old_scalar_db_clients_are_stopped_before_binding_keyed_migration`
+- [ ] The deployment fence inventory is generated from production compose/runtime producer truth and
+  fails when any enabled process that can call the DB/outbox seam is absent from the drain/stop plan.
+  - Verify: `tests/ops/test_mvr05_mixed_version_fence.py::test_fence_inventory_covers_every_enabled_db_outbox_process`
 - [ ] Production capture/governed-write paths require one explicit authorized target and record
   vault/context provenance in their receipt.
   - Verify: `tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt`
@@ -154,8 +161,14 @@ call site can leak retrieval context or write to the wrong human artifact surfac
   the current DecisionToken/binding revision and blocks the in-flight mutation without writing to
   either the old or replacement root.
   - Verify: `tests/api/test_multi_vault_governed_writes.py::test_authority_or_locator_change_blocks_inflight_write_before_commit`
-- [ ] Every MVR-05 vault-bound producer emits the versioned binding/context routing envelope, and
-  the interim scalar worker dispatches only a row matching its explicit current single-binding
+- [ ] A production producer registry and architecture guard enumerate every vault-bound watcher,
+  API/ingest/capture, Heimdal, and shared outbox call site; no unregistered call site can emit a
+  legacy envelope.
+  - Verify: `tests/architecture/test_multi_vault_context_boundaries.py::test_vault_bound_outbox_producers_cannot_emit_legacy_envelopes`
+- [ ] Invoking every registered production vault-bound producer emits the versioned stable-binding,
+  context, routing-class, and idempotency envelope without fixture-only row construction.
+  - Verify: `tests/integration/test_multi_vault_outbox_producers.py::test_production_call_sites_emit_binding_context_envelopes`
+- [ ] The interim scalar worker dispatches only a row matching its explicit current single-binding
   compatibility context, authorization, revision, and root even when other vaults are remembered;
   it leaves every ambiguous/mismatched row pending/unacknowledged with blocked readiness,
   while global work remains independently processable until MVR-06.
@@ -198,7 +211,7 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/integration/test_multi_vault_resolution.py tests/integration/test_multi_vault_picker_context.py tests/integration/test_multi_vault_projection_isolation.py tests/migrations/test_multi_vault_projection_backfill.py tests/ops/test_mvr05_mixed_version_fence.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/workers/test_multi_vault_partial_delivery_gate.py tests/services/test_multi_vault_outbox_idempotency.py tests/architecture/test_multi_vault_context_boundaries.py`
+- `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/integration/test_multi_vault_resolution.py tests/integration/test_multi_vault_picker_context.py tests/integration/test_multi_vault_projection_isolation.py tests/integration/test_multi_vault_outbox_producers.py tests/migrations/test_multi_vault_projection_backfill.py tests/ops/test_mvr05_mixed_version_fence.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/workers/test_multi_vault_partial_delivery_gate.py tests/services/test_multi_vault_outbox_idempotency.py tests/architecture/test_multi_vault_context_boundaries.py`
 - `ruff check app tests`
 
 ## Restart / Durability Posture

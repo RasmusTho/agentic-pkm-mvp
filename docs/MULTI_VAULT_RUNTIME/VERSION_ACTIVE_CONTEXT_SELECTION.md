@@ -40,6 +40,17 @@ generation unknown. A process-global mutable manager cannot safely represent con
   session selection. The production
   resolver snapshots one context per request without mutating process-global state and GOV
   re-authorizes every binding on every resolution.
+- Own the missing current-runtime producer for that delegated role. On an existing single-user
+  installation, a one-shot auth/GOV bootstrap maps the one configured #2223 credential fingerprint
+  (never the raw key) to a freshly generated opaque `local_operator_role_id` in private mode-`0600`
+  auth state under the MVR-01 instance-state boundary (native installs use private app-data). The
+  record has its own schema, revision, migration provenance, lock/fsync/atomic-write path, and is
+  never derived from `appInstallId` or the credential value. Production API and CLI authentication
+  resolve the same record. Zero/multiple ambiguous credentials, unsafe ownership, missing durable
+  storage, or a partial record fails preflight with an explicit provisioning action; a governed
+  credential rotation preserves the role ID, while an explicitly added human/agent role receives a
+  distinct principal. Update bootstrap, existing-install migration, channel init, and test fixtures
+  in this slice before the fail-closed requirement is enabled.
 - Add production Companion endpoints to create, replace, inspect, and clear a TTL-bound selection.
   Creation returns the server-minted ID; later mutation/read requires that bearer ID plus the
   #2223 gate and the same server-resolved principal/instance/allowed scope. The existing
@@ -131,6 +142,10 @@ retrieval, settings, or write provenance to leak between humans or vaults.
   installations cannot be conflated with two humans, and multiple human/agent roles on one instance
   remain distinct in GOV decisions, cache keys, and receipts.
   - Verify: `tests/api/test_active_context_resolution.py::test_instance_identity_never_substitutes_for_principal_context`
+- [ ] Existing one-credential single-user installs, new channel bootstrap, native init, and fixtures
+  all produce the private versioned delegated-role binding before request selection is enabled;
+  production API/CLI resolve it, rotation preserves it, and ambiguous/missing/unsafe state fails loud.
+  - Verify: `tests/integration/test_local_operator_principal_bootstrap.py::test_existing_single_user_auth_migrates_to_distinct_delegated_role`
 - [ ] Production create/replace/inspect/clear commands drive the selection store, enforce #2223
   authentication and expiry, and never mutate process-global `VaultManager` state.
   - Verify: `tests/api/test_active_context_selection_api.py::test_production_selection_lifecycle_is_scoped_and_global_free`
@@ -149,7 +164,7 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/api/test_active_context_resolution.py tests/api/test_active_context_selection_api.py tests/retrieval/test_active_context_cache_isolation.py tests/integration/test_multi_vault_request_isolation.py`
+- `pytest -q tests/api/test_active_context_resolution.py tests/api/test_active_context_selection_api.py tests/retrieval/test_active_context_cache_isolation.py tests/integration/test_multi_vault_request_isolation.py tests/integration/test_local_operator_principal_bootstrap.py`
 - `ruff check app tests`
 
 ## Restart / Durability Posture
