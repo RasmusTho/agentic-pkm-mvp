@@ -2,10 +2,10 @@ State: ACCEPTED/DELIVERED Capability Knowledge Model (CKM / Kvasir) MVP, enacted
 Doc role: Specification directory (capability breakdown)
 Authority: Owns the MVP task decomposition, execution order, cross-task invariants, and acceptance path for the CKM. Subordinate to ADR-0057 (decisions), ADR-0010 (BuilderOps authority), `docs/research/DEVELOPMENT_KNOWLEDGE_MODEL.md` (grounding SRS), `docs/CAPABILITY_CONTRACT_MODEL.md` and `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` (seed taxonomy owners).
 Owner: BuilderOps governance
-Temporal class: operational (active delivery lane)
+Temporal class: snapshot (accepted/closed contract and delivery history)
 Review cadence: event-driven
 Source of truth: mixed (this directory for task shape; ADR-0057 for decisions)
-Last reviewed: 2026-07-14
+Last reviewed: 2026-07-15
 
 # Capability Knowledge Model (CKM / Kvasir) — MVP Specification
 

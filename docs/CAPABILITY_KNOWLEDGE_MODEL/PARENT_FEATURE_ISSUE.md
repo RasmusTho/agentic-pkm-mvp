@@ -1,5 +1,5 @@
 State: ACCEPTED/CLOSED as GitHub validation parent #3138 (filed 2026-07-07; closed 2026-07-15) after children #3139-#3148 and presentation refinement #3689. GitHub holds the terminal delivery/validation ledger; this file is the archived parent contract. Post-MVP access/measurement work moved to #3775 and `docs/CKM_MEASUREMENT_AND_ACCESS/`.
-Doc role: Parent feature issue draft (BuilderOps lane)
+Doc role: Archived parent feature contract (accepted/closed BuilderOps lane)
 
 # feat: Capability Knowledge Model (CKM / Kvasir) MVP — evidence-backed capability model of the platform
 
@@ -31,7 +31,7 @@ The CKM MVP outcome: CEG in the BuilderOps store, seeded + populated from repo a
 - Sync/deployment impact: none
 - External boundary impact: GitHub REST reads only
 - New or changed contract: CKM object model (specified in `docs/CAPABILITY_KNOWLEDGE_MODEL/`)
-- Owner-doc impact: follow-up owner-doc promotion after acceptance (see Validation path)
+- Owner-doc impact: completed — accepted MVP truth is promoted into `docs/CAPABILITY_KNOWLEDGE_MODEL/README.md` and `docs/DOCS_INDEX.md`
 - Transition debt impact: reduces (replaces hand-maintained matrix upkeep with generated comparison projection)
 - Fitness rule impact: strengthens (adds `evidence_kind` orthogonality fitness check)
 
