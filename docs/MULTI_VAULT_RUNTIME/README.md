@@ -56,6 +56,16 @@ active in dev/test/prod/native simultaneously. Explicit transfer drains/stops th
 commits release, then claims the destination; crashes leave a blocking recoverable reservation,
 never two owners or an unowned running lifecycle.
 
+The first MVR-01 rollout is a host-wide ownership migration, not a per-channel best effort. Before
+any new reservation is accepted, deployment acquires a global bootstrap fence, blocks legacy
+selection/registry ingress, inventories every dev/test/prod Compose deployment and native runtime
+that can reach the host roots, and drains or stops all of their registry and lifecycle writers. It
+then rejects any pre-existing root collision and seeds one ledger generation with every legacy
+channel/native owner before opening claims. A seeded old channel may resume before its own upgrade
+only on that fixed root behind mutation-denying ingress; a native or channel runtime that cannot be
+fenced remains stopped. Missing inventory, a racing writer, ambiguous ownership, or duplicate roots
+blocks every MVR-01 claim rather than letting an upgraded channel race an old image.
+
 Before the first recreate that introduces this volume, the deploy/startup migration gate resolves
 the legacy path and records a preliminary fingerprint inside the still-running old API container.
 It then acquires the channel deployment fence, rejects and drains every registry mutation producer,
@@ -126,9 +136,11 @@ and client identity/scope strings are never trusted. The local-only bootstrap ro
 instance-scoped delegated role, not a claim of the human's global identity. MVR-03 owns its missing
 producer: existing one-credential installs atomically migrate a credential fingerprint to a private,
 opaque `local_operator_role_id`; channel/native bootstrap and fixtures produce the same auth/GOV
-record before fail-closed principal enforcement. Auth-disabled loopback/no-key installs bind that
-role to a server-proven trusted-loopback subject and keep working; any non-loopback posture requires
-governed credential provisioning. Binding plus generation alone is insufficient because two
+record before fail-closed principal enforcement. Auth-disabled/no-key installs bind that role to
+either a server-proven trusted-loopback subject or the existing server-configured, middleware-
+validated Companion proxy subject and keep working; client forwarding headers can establish
+neither. Any other non-loopback posture requires governed credential provisioning. Binding plus
+generation alone is insufficient because two
 bearer selections may share both while carrying different scopes or filters. Context is never
 carried from one vault to another merely because a selection changed. Cross-vault synthesis
 requires an explicit multi-binding context and preserves per-source provenance.
@@ -199,7 +211,9 @@ to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup.
 - Container registry/default/background intent survives force-recreate on a shared instance-state
   volume and resolves to the identical store from every enabled process.
 - Request/session selection never auto-enrols a vault into background work. Background lifecycle
-  intent is a distinct durable instance-local binding set; each member is re-authorized at start.
+  intent is a distinct durable instance-local binding set; each member is re-authorized at start by
+  an auth/GOV-produced, least-privilege instance background-runtime role delegated from the local
+  operator role. Missing, stale, or ambiguous delegation blocks lifecycle startup.
 - Background supervisors reconcile durable registry revisions and auth/GOV decision epochs, not
   event delivery: every affected lifecycle drains and re-resolves after relocation, removal,
   revocation, authority-provenance, default, or intent changes. Picker/default/background producers

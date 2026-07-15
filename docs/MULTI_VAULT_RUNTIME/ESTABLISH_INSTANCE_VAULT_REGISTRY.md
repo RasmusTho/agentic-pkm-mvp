@@ -43,6 +43,14 @@ This slice promotes the existing seed without changing content-vault authority.
   recoverable pending reservation → per-channel registry commit → active lease protocol. A matching
   root already active/pending in another channel fails loud. Explicit transfer drains/stops the old
   channel before release/claim; recovery never permits two active owners.
+- Make the first ledger rollout a host-global legacy-owner bootstrap. Under one deployment/bootstrap
+  fence, block legacy selection and registry ingress; enumerate every dev/test/prod Compose
+  deployment and native runtime that can reach candidate roots; drain/stop all registry and
+  lifecycle writers; capture their final mounted/active canonical roots; reject collisions; and seed
+  every legacy owner in one ledger generation before accepting the first MVR-01 reservation. A
+  seeded old channel may resume before upgrade only fixed to its seeded root behind a mutation-
+  denying gateway; an unfenceable native/runtime owner remains stopped. Incomplete inventory,
+  racing writers, duplicate roots, or ambiguous ownership blocks all claims.
 - Add the pre-recreate migration gate: while the old API is still running, resolve the legacy source
   and record its schema/fingerprint, then acquire the channel deployment fence, reject new picker,
   initialize, and headless-CLI registry mutations, drain in-flight mutations, and stop every old
@@ -186,6 +194,10 @@ single-vault package or can silently lose identity during migration.
   the shared ownership ledger; injected crashes in reserve/commit/activate/transfer recover to at
   most one active owner without exposing raw host paths.
   - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_same_content_root_cannot_be_active_in_two_channels`
+- [ ] Before the first upgraded channel can claim a root, one host-global fenced bootstrap inventories
+  and seeds all legacy dev/test/prod/native owners; missing/racing owners and existing collisions
+  block every claim, while any temporarily resumed old channel is fixed to its seeded root.
+  - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_first_upgrade_seeds_all_legacy_channel_owners_before_claim`
 - [ ] Registry, lock/temporary files, validated snapshots, and rollback exports remain mode `0600`
   under permissive host umasks; parent directories are `0700` and unsafe mode/ownership fails loud.
   - Verify: `tests/instance/test_vault_registry_permissions.py::test_registry_transaction_files_are_private`

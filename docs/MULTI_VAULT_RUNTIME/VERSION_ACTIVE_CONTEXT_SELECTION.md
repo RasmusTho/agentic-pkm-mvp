@@ -46,12 +46,13 @@ generation unknown. A process-global mutable manager cannot safely represent con
   auth state under the MVR-01 instance-state boundary (native installs use private app-data). The
   record has its own schema, revision, migration provenance, lock/fsync/atomic-write path, and is
   never derived from `appInstallId` or the credential value. Production API and CLI authentication
-  resolve the same record. For the supported auth-disabled local posture with no API key, bootstrap
-  binds the role to a `trusted_loopback` auth subject only after proving the effective listener and
-  request path are loopback-local, with no untrusted proxy/non-loopback exposure; this subject is
-  server-derived and cannot be claimed by a header. A later governed move to API-key/non-loopback
-  auth binds the credential fingerprint to the same role and disables trusted-loopback admission in
-  one transaction. Multiple ambiguous credentials, a zero-credential non-loopback posture, unsafe
+  resolve the same record. For supported auth-disabled/no-key postures, bootstrap binds the role to
+  either `trusted_loopback` after proving the effective listener and request path are loopback-local,
+  or `trusted_companion_proxy` only when server configuration identifies the Companion peer and the
+  existing authentication middleware validates that peer. Both subjects are server-derived; proxy,
+  forwarding, or client headers cannot claim them. A later governed move to API-key auth binds the
+  credential fingerprint to the same role and disables both no-key admissions in one transaction.
+  Multiple ambiguous credentials, any other zero-credential non-loopback posture, unsafe
   ownership, missing durable storage, or a partial record fails preflight with an explicit
   provisioning action. A governed credential rotation preserves the role ID, while an explicitly
   added human/agent role receives a distinct principal. Update bootstrap, existing-install migration,
@@ -151,11 +152,13 @@ retrieval, settings, or write provenance to leak between humans or vaults.
   all produce the private versioned delegated-role binding before request selection is enabled;
   production API/CLI resolve it, rotation preserves it, and ambiguous/missing/unsafe state fails loud.
   - Verify: `tests/integration/test_local_operator_principal_bootstrap.py::test_existing_single_user_auth_migrates_to_distinct_delegated_role`
-- [ ] Existing auth-disabled loopback/no-key installations bootstrap the same private delegated-role
-  contract and keep production selection/governed writes working; spoofed forwarding or any
-  non-loopback exposure fails until governed credential provisioning completes.
-  - Verify: `tests/integration/test_local_operator_principal_bootstrap.py::test_zero_key_loopback_bootstraps_trusted_local_role_and_rejects_nonloopback`
-- [ ] Security and ActiveContextSet owner contracts describe the shipped credential/loopback subject
+- [ ] Existing auth-disabled/no-key loopback and server-configured trusted Companion proxy installs
+  bootstrap the same private delegated role and keep production selection/governed writes working;
+  forwarded-header spoofing and every other non-loopback peer fail until governed credential
+  provisioning completes.
+  - Verify: `tests/integration/test_local_operator_principal_bootstrap.py::test_zero_key_loopback_and_trusted_companion_proxy_map_to_local_role`
+  - Verify: `tests/integration/test_local_operator_principal_bootstrap.py::test_zero_key_nontrusted_nonloopback_fails_principal_preflight`
+- [ ] Security and ActiveContextSet owner contracts describe the shipped credential/loopback/proxy subject
   to delegated-role mapping, separate instance identity, and fail-closed principal resolution.
   - Verify: doc writeback at `docs/SECURITY.md :: Security` + doc writeback at
     `docs/contracts/ACTIVE_CONTEXT_SET.md :: ActiveContextSet`

@@ -51,6 +51,15 @@ cross-process truth belong here.
   be cleared safely. Both record redacted receipts and commit a durable change record/revision in
   the same fsync-backed registry transaction. A lifecycle event is only an idempotent wake-up hint for that revision, never the
   sole handoff. Tests must use these production producers rather than seeding the store.
+- Own the background-principal producer rather than inventing identity inside the supervisor. MVR-06
+  creates a distinct opaque `background_runtime_role_id` in private versioned auth/GOV state,
+  delegated from MVR-03's `local_operator_role_id` with schema/revision and delegation provenance.
+  Its least-privilege scopes cover only the watcher, worker, settings, queue, and receipt operations
+  required for an authorized binding; it cannot exceed its delegator and is independent of API-key
+  rotation, human identity, and `appInstallId`. Existing-install migration, channel/native bootstrap,
+  and production fixtures create and validate this role before the supervisor starts. Missing,
+  ambiguous, over-broad, stale, or partially persisted delegation fails preflight; GOV revocation
+  advances the auth epoch and drains affected lifecycles before their next effect.
 - Introduce a lifecycle supervisor that treats the durable set only as intent. At start/rebind it
   derives one immutable full `ActiveContextSet` per lifecycle binding, including context ID,
   generation, stable binding, server-derived instance-background principal, operational scope,
@@ -140,9 +149,11 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
 - Primary subsystem: WSP
 - Secondary subsystem(s): OEF, EBF, PDM, GOV, SFC
 - Write class: existing mechanical/derived background writes only
-- Authority impact: lifecycle creation requires authorized bindings; no authority expansion
-- Persistence impact: durable instance-local background-binding intent plus global/vault-bound
-  routing, binding/context schema migration, and classification for pending queue/outbox rows
+- Authority impact: lifecycle creation uses a distinct least-privilege GOV role delegated from the
+  local operator role; no authority expansion or supervisor-minted identity
+- Persistence impact: durable instance-local background-binding intent and private versioned
+  background-role/delegation state, plus global/vault-bound routing, binding/context schema
+  migration, and classification for pending queue/outbox rows
 - Derived/rebuildable impact: worker/watch instances and health projections are rebuildable
 - Human knowledge impact: background writes preserve target vault attribution
 - Memory impact: background indexing never mixes vault contexts
@@ -150,7 +161,8 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
 - Sync/deployment impact: replaces frozen env snapshot with explicit cross-process binding truth
 - External boundary impact: env remains bootstrap adapter only
 - New or changed contract: per-binding lifecycle supervision through ActiveContextSet and truthful state transitions
-- Owner-doc impact: will-update-in-PR at `docs/ENVIRONMENTS.md` and watcher/settings owner docs
+- Owner-doc impact: will-update-in-PR at `docs/ENVIRONMENTS.md`, `docs/SECURITY.md`,
+  `docs/contracts/GOVERNED_WRITE_PROTOCOL.md`, and watcher/settings owner docs
 - Transition debt impact: reduces D13/D14; residual adapters remain for task 07
 - Fitness rule impact: strengthens lifecycle isolation and truthful health
 
@@ -193,6 +205,10 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
 - [ ] Lifecycle start/rebind refuses a binding whose physical root is leased or pending in another
   release channel, including after relocation and restart.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_lifecycle_requires_matching_channel_ownership_lease`
+- [ ] Existing-install migration, channel/native bootstrap, and fixtures persist one distinct
+  least-privilege background runtime role delegated from the local operator role before lifecycle
+  startup; missing, stale, ambiguous, or over-broad delegation fails preflight and cannot dispatch.
+  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_background_service_role_is_bootstrapped_delegated_and_least_privilege`
 - [ ] Request/session selection does not alter durable background intent; after restart the
   supervisor reconstructs exactly the explicitly enrolled, deduplicated, re-authorized set.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_restart_uses_only_durable_authorized_binding_set`
