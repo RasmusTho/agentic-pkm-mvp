@@ -55,8 +55,8 @@ Validate Q1a/Q1b, Q2, M1, O1a, and O1b as defined in `docs/CKM_MEASUREMENT_AND_A
   Verify: child delivery receipts plus ledger at `docs/CKM_MEASUREMENT_AND_ACCESS/README.md :: Capability acceptance criteria`
 - [ ] Q1a and Q1b jointly prove the working public contract; schemas alone never satisfy Q1.
   Verify: Q1a/Q1b issue closure receipts and `tests/builderops/ckm/test_query_service.py`
-- [ ] M1 proves the complete sampled-retention owner path and O1b refuses comparison when any retained source is unavailable or incompatible.
-  Verify: #3779/#3781 delivery receipts plus `tests/builderops/ckm/test_metrics.py::test_retained_samples_apply_storage_accounting_and_pruning_policy` and `tests/builderops/ckm/test_metric_comparison.py::test_unavailable_or_tampered_retained_source_refuses_comparison`
+- [ ] M1 proves the complete sampled-retention owner path, O1a proves corresponding observation correction/deletion lifecycle truth, and O1b refuses comparison when any retained source is unavailable or incompatible.
+  Verify: #3779/#3780/#3781 delivery receipts plus `tests/builderops/ckm/test_metrics.py::test_explicit_retention_runs_outside_read_path_and_binds_source_sample`; `tests/builderops/ckm/test_metrics.py::test_retained_samples_apply_storage_accounting_and_pruning_policy`; `tests/builderops/ckm/test_metrics.py::test_retained_sample_correction_and_deletion_preserve_lifecycle_truth`; `tests/builderops/ckm/test_observation_capture.py::test_observation_correction_and_deletion_preserve_lifecycle_truth`; `tests/builderops/ckm/test_metric_comparison.py::test_unavailable_or_tampered_retained_source_refuses_comparison`
 - [ ] All child owner-doc and transition-debt outcomes, D11/D12, and learning candidates are resolved.
   Verify: successor-parent closure ledger
 - [ ] M2 and O2 were not pre-authorized without the required accepted evidence.
