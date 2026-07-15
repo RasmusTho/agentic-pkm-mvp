@@ -51,7 +51,7 @@ DEFAULT_PROVISIONAL_RECALL_RECEIPTS_PATH = Path(
     "runtime/agent_memory/provisional_recall_receipts.jsonl"
 )
 PROVISIONAL_RECALL_RECEIPT_EVENT = "agent_memory.provisional_recall.evaluated"
-_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+_TOKEN_RE = re.compile(r"[^\W_]+")
 _STOPWORDS = {
     "a",
     "an",
@@ -447,7 +447,7 @@ def _tokens(value: str) -> set[str]:
     return {
         token
         for match in _TOKEN_RE.finditer(value)
-        if (token := match.group(0).lower()) not in _STOPWORDS
+        if (token := match.group(0).casefold()) not in _STOPWORDS
     }
 
 
