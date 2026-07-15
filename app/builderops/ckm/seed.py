@@ -143,7 +143,8 @@ def seed_capabilities(
         identity_key = f"seed:{entry.stable_key}"
         existing = store.get_capability_by_identity_key(identity_key)
         if existing is not None and (
-            existing.definition == entry.definition
+            existing.name == entry.name
+            and existing.definition == entry.definition
             and existing.parent_id == parent_id
             and existing.lifecycle == "confirmed"
             and existing.existence_provenance == provenance

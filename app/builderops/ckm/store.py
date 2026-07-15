@@ -188,7 +188,7 @@ class CkmStore:
             identity_key = str(row["identity_key"] or "")
             if not identity_key:
                 identity_key = seed_identity_by_name.get(str(row["name"])) or (
-                    f"legacy:{row['existence_provenance']}:{row['id']}"
+                    f"inferred:{row['existence_provenance']}:{row['boundary_ref'] or row['name']}"
                 )
             public_id = str(row["public_id"] or "") or stable_public_id(
                 "capability", identity_key
@@ -425,9 +425,9 @@ class CkmStore:
         self._receipt_store.initialize()
         with self._connect() as conn:
             conn.execute("PRAGMA foreign_keys = OFF")
+            conn.execute("BEGIN IMMEDIATE")
             for table in reversed(CKM_TABLE_NAMES):
                 conn.execute(f"DROP TABLE IF EXISTS {table}")
-            conn.execute("PRAGMA foreign_keys = ON")
             for statement in CKM_DDL_STATEMENTS:
                 conn.execute(statement)
             now = utc_now()
@@ -441,6 +441,7 @@ class CkmStore:
             )
             self._preflight_schema(conn)
             conn.commit()
+            conn.execute("PRAGMA foreign_keys = ON")
         return self._emit_schema_receipt(event_type="ckm_schema_rebuilt", action="rebuild")
 
     def table_names(self) -> list[str]:
@@ -970,20 +971,19 @@ class CkmStore:
         receipt-validating confirmation boundary in ``semantic.py``.
         """
 
-        edge = self.get_active_evidence_edge_by_id(edge_id)
-        if edge is None:
-            raise CkmValidationError(f"evidence edge not found: {edge_id}")
-        if edge.extraction_method != "inferred":
-            raise CkmValidationError("only inferred evidence edges require confirmation")
-        if edge.lifecycle == "confirmed":
-            return edge
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT * FROM ckm_evidence_edge WHERE id = ?", (edge_id,)
             ).fetchone()
-            if row is not None:
-                self._archive_evidence_edges(conn, [row])
+            if row is None:
+                raise CkmValidationError(f"evidence edge not found: {edge_id}")
+            if row["extraction_method"] != "inferred":
+                raise CkmValidationError("only inferred evidence edges require confirmation")
+            if row["lifecycle"] == "confirmed":
+                conn.commit()
+                return CkmEvidenceEdge.from_row(row)
+            self._archive_evidence_edges(conn, [row])
             conn.execute(
                 "UPDATE ckm_evidence_edge SET lifecycle = 'confirmed', updated_at = ? WHERE id = ?",
                 (utc_now(), edge_id),

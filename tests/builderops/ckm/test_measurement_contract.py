@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 
@@ -18,7 +20,7 @@ from app.builderops.ckm.contracts import (
     validate_contract_request,
 )
 from app.builderops.ckm.models import MATURITY_DIMENSIONS, CkmValidationError
-from app.builderops.ckm.schema import CKM_SCHEMA_VERSION, CKM_TABLE_NAMES
+from app.builderops.ckm.schema import CKM_DDL_STATEMENTS, CKM_SCHEMA_VERSION, CKM_TABLE_NAMES
 from app.builderops.ckm.seed import seed_capabilities
 from app.builderops.ckm.store import CkmStore
 
@@ -128,10 +130,14 @@ def test_public_identity_survives_rebuild_and_rename(
         "seed_source: 'docs/CAPABILITY_CONTRACT_MODEL.md :: Examples'}\n",
         encoding="utf-8",
     )
-    seed_capabilities(store, manifest_path=renamed_manifest)
+    before_seed_rename = _revision(store)
+    rename_result = seed_capabilities(store, manifest_path=renamed_manifest)
     renamed_seed = store.get_capability_by_identity_key("seed:permanent-001")
     assert renamed_seed is not None
+    assert rename_result["changed"] == 1
+    assert renamed_seed.name == "Renamed manifest capability"
     assert renamed_seed.public_id == seeded.public_id
+    assert _revision(store) == before_seed_rename + 1
 
     store.rebuild()
     seed_capabilities(store, manifest_path=renamed_manifest)
@@ -140,7 +146,9 @@ def test_public_identity_survives_rebuild_and_rename(
     assert rebuilt_seed.public_id == seeded.public_id
 
 
-def test_all_mutations_advance_state_revision_atomically(store: CkmStore) -> None:
+def test_all_mutations_advance_state_revision_atomically(
+    store: CkmStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
     capability = _assert_one_mutation(store, lambda: _capability(store))
     assert _revision(store) == 1
     _capability(store)
@@ -174,7 +182,22 @@ def test_all_mutations_advance_state_revision_atomically(store: CkmStore) -> Non
             provider="fixture-provider",
         ),
     )
-    _assert_one_mutation(store, lambda: store._set_inferred_edge_confirmed(inferred.id))
+    before_confirmation = _revision(store)
+    barrier = Barrier(2)
+
+    def confirm() -> object:
+        barrier.wait()
+        return store._set_inferred_edge_confirmed(inferred.id)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        confirmed = list(executor.map(lambda _: confirm(), range(2)))
+    assert all(result.lifecycle == "confirmed" for result in confirmed)
+    assert _revision(store) == before_confirmation + 1
+    with sqlite3.connect(store.db_path) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM ckm_evidence_edge_history WHERE edge_id = ?",
+            (inferred.id,),
+        ).fetchone()[0] == 1
 
     scores = {dimension: 0.5 for dimension in MATURITY_DIMENSIONS}
     citations = {dimension: [edge.to_dict()] for dimension in MATURITY_DIMENSIONS}
@@ -233,7 +256,18 @@ def test_all_mutations_advance_state_revision_atomically(store: CkmStore) -> Non
         ),
     )
 
-    old_epoch = store.state_identity().epoch
+    before_failed_rebuild = store.state_identity()
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            "app.builderops.ckm.store.CKM_DDL_STATEMENTS",
+            [*CKM_DDL_STATEMENTS, "INVALID REBUILD DDL"],
+        )
+        with pytest.raises(sqlite3.OperationalError):
+            store.rebuild()
+    assert store.state_identity() == before_failed_rebuild
+    assert store.get_capability(capability.id) is not None
+
+    old_epoch = before_failed_rebuild.epoch
     store.rebuild()
     rebuilt_state = store.state_identity()
     assert rebuilt_state.epoch != old_epoch
@@ -245,6 +279,11 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
     legacy = CkmStore(db_path)
     legacy.ensure_schema()
     capability = _capability(legacy)
+    inferred_capability = legacy.upsert_capability(
+        name="Legacy inferred capability",
+        definition="Pre-Q1 inferred fixture.",
+        existence_provenance="receipt:legacy-inference",
+    )
     artifact = _artifact(legacy)
     edge = _edge(legacy, artifact.id, capability.id)
     legacy.upsert_evidence_edge(
@@ -289,16 +328,19 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
         ):
             conn.execute(f"DROP INDEX {index_name}")
         conn.execute("DROP TABLE ckm_state")
-        conn.execute("UPDATE ckm_capability SET public_id = '', identity_key = ''")
-        conn.execute("UPDATE ckm_artifact SET public_id = ''")
-        conn.execute("UPDATE ckm_evidence_edge SET public_id = ''")
-        conn.execute("UPDATE ckm_evidence_edge_history SET public_id = ''")
-        conn.execute("UPDATE ckm_assessment SET public_id = ''")
-        conn.execute("UPDATE ckm_finding SET public_id = ''")
+        conn.execute("ALTER TABLE ckm_capability DROP COLUMN public_id")
+        conn.execute("ALTER TABLE ckm_capability DROP COLUMN identity_key")
+        conn.execute("ALTER TABLE ckm_artifact DROP COLUMN public_id")
+        conn.execute("ALTER TABLE ckm_evidence_edge DROP COLUMN public_id")
+        conn.execute("ALTER TABLE ckm_evidence_edge_history DROP COLUMN public_id")
+        conn.execute("ALTER TABLE ckm_assessment DROP COLUMN public_id")
+        conn.execute("ALTER TABLE ckm_finding DROP COLUMN public_id")
         conn.commit()
 
     legacy.ensure_schema()
     migrated_state = legacy.state_identity()
+    migrated_inferred = legacy.get_capability(inferred_capability.id)
+    assert migrated_inferred is not None
     assert migrated_state.schema_version == CKM_SCHEMA_VERSION
     assert migrated_state.state_revision == 1
     assert all(item.public_id for item in legacy.list_capabilities())
@@ -330,6 +372,15 @@ def test_identity_revision_migration_updates_every_producer(tmp_path: Path) -> N
         partial.ensure_schema()
 
     assert set(legacy.table_names()) == set(CKM_TABLE_NAMES)
+
+    migrated_inferred_public_id = migrated_inferred.public_id
+    legacy.rebuild()
+    rebuilt_inferred = legacy.upsert_capability(
+        name="Legacy inferred capability",
+        definition="Pre-Q1 inferred fixture.",
+        existence_provenance="receipt:legacy-inference",
+    )
+    assert rebuilt_inferred.public_id == migrated_inferred_public_id
 
 
 def test_envelope_missing_states_and_projection_marker(store: CkmStore) -> None:
