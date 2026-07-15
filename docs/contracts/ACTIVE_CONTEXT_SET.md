@@ -82,8 +82,10 @@ authority decisions/receipts.
 
 - HIX, HKA, SIP, GOV, RCA, MEM, CAO, EXE, SFC, OEF.
 - EBF may consume only the bounded source-binding/topology projection needed to configure an
-  adapter; PDM may consume only context identity/revision needed to namespace and persist mechanical
-  state. Neither receives context as authority, derives principal/permission, or owns WSP semantics.
+  adapter; PDM may consume only context identity/revision plus bounded source-binding identity and
+  binding revision needed to namespace and persist mechanical state. It never receives a host path or
+  treats binding identity as authority. Neither subsystem derives principal/permission or owns WSP
+  semantics.
 
 ## Forbidden Use
 

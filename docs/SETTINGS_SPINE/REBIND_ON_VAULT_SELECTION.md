@@ -4,9 +4,9 @@ description: Selecting or switching a vault durably advances a shared revision t
 task_id: SETTINGS-05
 source_anchor: docs/audits/SETTINGS_ARCHITECTURE_2026-07-07.md :: F4
 parent_capability: Settings Spine
-prerequisites: [SETTINGS-01]
-depends_on: [WIRE_SETTINGS_INGESTION.md]
-can_parallelize_with: [Canonicalize Settings Location, Receipt Every Settings Write]
+prerequisites: [SETTINGS-01, SETTINGS-03, SETTINGS-04]
+depends_on: [WIRE_SETTINGS_INGESTION.md, CANONICALIZE_SETTINGS_LOCATION.md, RECEIPT_EVERY_SETTINGS_WRITE.md]
+can_parallelize_with: []
 ---
 
 # Rebind On Vault Selection
@@ -76,11 +76,12 @@ rationale) to record the supersession rather than leaving it as if still current
   Init/bootstrap scripts, existing-state migration, production fixtures, API/watcher startup, and
   no-lifecycle producers all write/read the same schema.
   The migration atomically records `minimum_settings_rebind_runtime=1` before v1 state can become
-  authoritative. A host-side channel pre-start guard and the native launcher read that durable floor
-  plus the candidate image/runtime capability manifest before starting any API or watcher, so an
-  incompatible pre-#3163 image cannot ignore a prepared/committed handoff. Rollback is therefore to a
-  compatible build or roll-forward; a missing manifest, partial migration, unprovable binding, or
-  mixed API/watcher capability blocks both processes before either resolves a root.
+  authoritative. A host-side channel pre-start guard plus every API, watcher, CLI, bootstrap,
+  reconciliation, compiler/delta, fixture, and direct store/manager entrypoint read that durable floor
+  and the candidate runtime capability manifest before state access or mutation, so an incompatible
+  pre-#3163 writer cannot ignore, recreate, or truncate a prepared/committed handoff. Rollback is
+  therefore to a compatible build or roll-forward; a missing manifest, partial migration, unprovable
+  binding, or mixed writer capability blocks all affected channel entrypoints before state access.
 - Upgrades the advisory `ingest_binding` status (`bound`/`diverged`/`unbound`/`unknown`) so
   `diverged` becomes a transient state that self-heals on rebind, and a rebind failure is loud.
 - Retires the second, unsynchronized "current vault" notion in
@@ -137,10 +138,14 @@ the UI says one vault and ingest watches another — captures silently vanish fr
       partial persistence fails before selection/watcher effects and leaves the old state intact.
   - Verify: `tests/migrations/test_settings_rebind_state.py::test_rebind_schema_migrates_one_provable_binding_or_fails_loud`
 - [ ] The rollout writes `minimum_settings_rebind_runtime=1` before the first authoritative v1 record,
-      updates every init/migration/fixture producer, and the host-side channel guard plus native
-      launcher reject an API/watcher pair whose capability manifest cannot interpret that floor before
-      either process starts or resolves a root.
+      updates every init/migration/fixture producer, and every write-capable process or direct
+      entrypoint rejects a capability manifest that cannot interpret that floor before state access,
+      root resolution, or mutation.
   - Verify: `tests/ops/test_settings_rebind_runtime_floor.py::test_rebind_floor_blocks_incompatible_api_and_watcher_before_start`
+- [ ] After cutover, incompatible headless CLI, bootstrap/reconciliation, compiler/delta, fixture, and
+      direct store/manager callers all fail before protected-state read/write and cannot recreate a
+      legacy payload; compatible callers preserve the same floor and revision.
+  - Verify: `tests/ops/test_settings_rebind_runtime_floor.py::test_rebind_floor_blocks_every_legacy_writer_after_cutover`
 - [ ] Before the floor or first v1 record becomes authoritative, SETTINGS-05 migrates the final
       fenced legacy payload into protected non-project `instance-state`, records a restorable backup,
       and proves that deletion of disposable `runtime-tmp` cannot remove or bypass either the floor or
@@ -175,7 +180,7 @@ the UI says one vault and ingest watches another — captures silently vanish fr
 
 - `pytest -q tests/watcher/test_ingest_binding_follows_selection.py`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_watcher_cross_process_rebind.py::test_prepare_commit_resume_is_failure_atomic tests/integration/test_watcher_cross_process_rebind.py::test_prepare_drains_and_final_scans_old_binding_writes tests/integration/test_watcher_cross_process_rebind.py::test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_binding tests/integration/test_watcher_cross_process_rebind.py::test_committed_revision_survives_event_loss_and_process_restart tests/integration/test_watcher_cross_process_rebind.py::test_disabled_watcher_is_durable_no_lifecycle`
-- `pytest -q tests/migrations/test_settings_rebind_state.py::test_rebind_schema_migrates_one_provable_binding_or_fails_loud tests/migrations/test_settings_rebind_state.py::test_protected_cutover_fences_every_legacy_app_local_writer tests/migrations/test_settings_rebind_state.py::test_registry_first_and_settings_first_orders_converge_to_one_binding_id tests/migrations/test_settings_rebind_state.py::test_registry_first_ignores_stale_disposable_app_local_payload tests/ops/test_settings_rebind_runtime_floor.py::test_rebind_floor_blocks_incompatible_api_and_watcher_before_start tests/ops/test_settings_rebind_protected_state.py::test_floor_and_binding_identity_survive_disposable_volume_loss`
+- `pytest -q tests/migrations/test_settings_rebind_state.py::test_rebind_schema_migrates_one_provable_binding_or_fails_loud tests/migrations/test_settings_rebind_state.py::test_protected_cutover_fences_every_legacy_app_local_writer tests/migrations/test_settings_rebind_state.py::test_registry_first_and_settings_first_orders_converge_to_one_binding_id tests/migrations/test_settings_rebind_state.py::test_registry_first_ignores_stale_disposable_app_local_payload tests/ops/test_settings_rebind_runtime_floor.py::test_rebind_floor_blocks_incompatible_api_and_watcher_before_start tests/ops/test_settings_rebind_runtime_floor.py::test_rebind_floor_blocks_every_legacy_writer_after_cutover tests/ops/test_settings_rebind_protected_state.py::test_floor_and_binding_identity_survive_disposable_volume_loss`
 - `pytest -q -m "not pg"` and `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration -k "watcher or settings"`
   (vault/watcher hot path)
 

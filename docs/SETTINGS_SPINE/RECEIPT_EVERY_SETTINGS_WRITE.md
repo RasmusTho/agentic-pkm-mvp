@@ -6,7 +6,7 @@ source_anchor: docs/audits/SETTINGS_ARCHITECTURE_2026-07-07.md :: F5
 parent_capability: Settings Spine
 prerequisites: [SETTINGS-01]
 depends_on: [WIRE_SETTINGS_INGESTION.md]
-can_parallelize_with: [Canonicalize Settings Location, Rebind On Vault Selection]
+can_parallelize_with: [Canonicalize Settings Location]
 ---
 
 # Receipt Every Settings Write

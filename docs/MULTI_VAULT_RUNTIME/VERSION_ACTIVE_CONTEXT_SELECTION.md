@@ -213,6 +213,10 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 - [ ] Production create/replace/inspect/clear commands drive the selection store, enforce #2223
   authentication and expiry, and never mutate process-global `VaultManager` state.
   - Verify: `tests/api/test_active_context_selection_api.py::test_production_selection_lifecycle_is_scoped_and_global_free`
+- [ ] Production success and failure paths redact the raw selection bearer from access/application
+      logs, validation errors, traces, metrics labels, and receipts; only a non-reversible digest may
+      appear in bounded context identity.
+  - Verify: `tests/api/test_active_context_selection_api.py::test_selection_bearer_is_redacted_from_success_failure_logs_and_receipts`
 - [ ] Cache/retrieval context cannot collide across two bearer selections with the same binding and
   generation but different workspace/no-workspace state, cognitive scope/sphere/situated identity,
   selection-capability digest, or dimension/filter; workspace is never inferred from another field,
@@ -234,7 +238,7 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 
 ## How to Verify (Pre-Merge)
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/instance/test_context_selection_store.py tests/api/test_active_context_resolution.py tests/api/test_active_context_selection_api.py tests/retrieval/test_active_context_cache_isolation.py tests/integration/test_local_operator_principal_bootstrap.py tests/migrations/test_local_operator_principal_upgrade.py`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/instance/test_context_selection_store.py tests/api/test_active_context_resolution.py tests/api/test_active_context_selection_api.py tests/api/test_active_context_selection_api.py::test_selection_bearer_is_redacted_from_success_failure_logs_and_receipts tests/retrieval/test_active_context_cache_isolation.py tests/integration/test_local_operator_principal_bootstrap.py tests/migrations/test_local_operator_principal_upgrade.py`
 - `mypy app`
 - `pytest -q -m "not pg"`
 - `ruff check app tests`

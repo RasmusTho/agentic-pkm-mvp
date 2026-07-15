@@ -307,9 +307,11 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
 - Sync/deployment impact: supports concurrent requests without process rebinding
 - External boundary impact: API input maps to context selectors, not raw trusted paths
 - New or changed contract: request-context propagation and explicit multi-binding write target
-- Owner-doc impact: each owning child updates in its PR: 05A `docs/DB_SCHEMA.md`, deployment, and
-  release channels; 05B `docs/ARCHITECTURE.md` and `docs/SETTINGS.md`; 05C
-  `docs/contracts/GOVERNED_WRITE_PROTOCOL.md`; 05D `docs/EVENTS.md`
+- Owner-doc impact: each owning child updates in its PR: 05A `docs/DB_SCHEMA.md`, the durable envelope
+  and worker-compatibility portions of `docs/EVENTS.md`, deployment, and release channels; 05B
+  `docs/ARCHITECTURE.md` and `docs/SETTINGS.md`; 05C
+  `docs/contracts/GOVERNED_WRITE_PROTOCOL.md`; 05D completes `docs/EVENTS.md` with the later producer,
+  delivery, and idempotency behavior
 - Transition debt impact: reduces D1 and request-side D13 global-binding debt
 - Fitness rule impact: adds production-entrypoint context-boundary guard
 
@@ -532,7 +534,8 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
   all-process fenced cutover in the same PR.
   - Verify: doc writeback at `docs/DB_SCHEMA.md :: DB Schema (Current Reality)` + doc writeback at
     `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments` + doc writeback at
-    `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification`
+    `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification` + doc writeback at
+    `docs/EVENTS.md :: Outbox envelope (canonical)`
 - [ ] **MVR-05B:** The architecture owner contract describes the shipped immutable request context,
   scoped selection/read resolution, and immediately-before-read revision/auth enforcement.
   - Verify: doc writeback at `docs/ARCHITECTURE.md :: Active context and vault bindings`
@@ -563,8 +566,8 @@ maps directly to that child ID; an early child never runs a later slice's accept
 - Dispatch exact-head `.github/workflows/integration-nightly.yaml` job `pg-contracts`, whose asserted
   MVR-05A manifest runs the binding-keyed migration/backfill/dedup targets against provisioned
   PostgreSQL and errors rather than skips; attach its URL and SHA to #2143.
-- Verify the 05A PR diff contains its mapped `docs/DB_SCHEMA.md`, deployment, and release owner-doc
-  writebacks.
+- Verify the 05A PR diff contains its mapped `docs/DB_SCHEMA.md`, `docs/EVENTS.md` durable-envelope,
+  deployment, and release owner-doc writebacks.
 
 ### MVR-05B validation
 
