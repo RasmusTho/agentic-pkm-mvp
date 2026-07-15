@@ -64,10 +64,150 @@ class _AuthenticatedVerificationRequest(dict[str, object]):
     """In-process capability minted only after GitHub producer/source authentication."""
 
 
+@dataclass(frozen=True)
+class _LiveVerificationObservation:
+    """Bounded fresh PR observation carried without retaining the raw PR body."""
+
+    repository: str
+    pr_number: int
+    head_sha: str
+    state: str
+    draft: bool
+    merged_at: str | None
+    linked_issue: int | None
+    supporting_issues: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class _CanonicalVerificationChainToken:
+    """Bounded optimistic token for the canonical chain observed before GitHub I/O."""
+
+    repository: str
+    pr_number: int
+    stage: str
+    linked_issue: int
+    fingerprint: str
+
+
+class _LiveObservedVerificationRequest(_AuthenticatedVerificationRequest):
+    """Authenticated artifact paired with a fresh structured live PR observation."""
+
+    live_observation: _LiveVerificationObservation
+    canonical_chain_token: _CanonicalVerificationChainToken
+
+    def __init__(
+        self,
+        request: Mapping[str, object],
+        live_observation: _LiveVerificationObservation,
+        canonical_chain_token: _CanonicalVerificationChainToken,
+    ) -> None:
+        super().__init__(request)
+        self.live_observation = live_observation
+        self.canonical_chain_token = canonical_chain_token
+
+
 def _authenticated_verification_request(
     request: Mapping[str, object],
 ) -> _AuthenticatedVerificationRequest:
-    return _AuthenticatedVerificationRequest(request)
+    projected = _canonical_request_projection(request)
+    _validate_request(projected)
+    return _AuthenticatedVerificationRequest(projected)
+
+
+def _live_observed_verification_request(
+    request: Mapping[str, object],
+    *,
+    observed_repository: object,
+    observed_pr_number: object,
+    observed_head_sha: object,
+    observed_state: object,
+    observed_merged_at: object,
+    observed_draft: object,
+    observed_linked_issue: object,
+    observed_supporting_issues: object,
+    canonical_chain_token: object,
+) -> _LiveObservedVerificationRequest:
+    """Pair an authenticated artifact with bounded, structurally valid live PR truth."""
+
+    if not isinstance(request, _AuthenticatedVerificationRequest):
+        raise ValueError("verification live PR observation requires authenticated artifact")
+    projected = _canonical_request_projection(request)
+    _validate_request(projected)
+    if (
+        not isinstance(observed_repository, str)
+        or not re.fullmatch(
+            r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", observed_repository
+        )
+        or any(
+            component in {".", ".."} for component in observed_repository.split("/")
+        )
+        or not _positive_int(observed_pr_number)
+        or not isinstance(observed_head_sha, str)
+        or not re.fullmatch(r"[0-9a-fA-F]{40}", observed_head_sha)
+        or not isinstance(observed_state, str)
+        or not observed_state
+        or not isinstance(observed_draft, bool)
+        or (
+            observed_merged_at is not None
+            and (not isinstance(observed_merged_at, str) or not observed_merged_at)
+        )
+        or (
+            observed_linked_issue is not None
+            and not _positive_int(observed_linked_issue)
+        )
+        or (
+            observed_linked_issue is None
+            and observed_supporting_issues is not None
+        )
+        or (
+            observed_linked_issue is not None
+            and (
+                not isinstance(observed_supporting_issues, tuple)
+                or any(
+                    not _positive_int(issue)
+                    for issue in observed_supporting_issues
+                )
+                or len(set(observed_supporting_issues))
+                != len(observed_supporting_issues)
+            )
+        )
+        or not isinstance(
+            canonical_chain_token, _CanonicalVerificationChainToken
+        )
+        or canonical_chain_token.repository != projected.get("repository")
+        or canonical_chain_token.pr_number != projected.get("pr_number")
+        or canonical_chain_token.stage != projected.get("stage")
+        or canonical_chain_token.linked_issue != projected.get("linked_issue")
+        or not re.fullmatch(r"[0-9a-f]{64}", canonical_chain_token.fingerprint)
+    ):
+        raise ValueError("malformed fresh live PR observation")
+    supporting_issues = tuple(
+        issue
+        for issue in (
+            observed_supporting_issues
+            if isinstance(observed_supporting_issues, tuple)
+            else ()
+        )
+        if _positive_int(issue)
+    )
+    observation = _LiveVerificationObservation(
+        repository=observed_repository,
+        pr_number=observed_pr_number,
+        head_sha=observed_head_sha,
+        state=observed_state,
+        draft=observed_draft,
+        merged_at=observed_merged_at,
+        linked_issue=(
+            observed_linked_issue
+            if _positive_int(observed_linked_issue)
+            else None
+        ),
+        supporting_issues=tuple(sorted(supporting_issues)),
+    )
+    assert isinstance(canonical_chain_token, _CanonicalVerificationChainToken)
+    return _LiveObservedVerificationRequest(
+        projected, observation, canonical_chain_token
+    )
 
 
 class VerificationSubscriptionBusy(ValueError):
@@ -346,6 +486,123 @@ def _validated_supporting_authority(
     return loaded
 
 
+def _fingerprint_record(
+    digest: Any, table: str, row: Mapping[str, object]
+) -> None:
+    encoded = _json({"table": table, "row": dict(row)}).encode()
+    digest.update(len(encoded).to_bytes(8, "big"))
+    digest.update(encoded)
+
+
+def _canonical_chain_fingerprint(
+    conn: sqlite3.Connection, request: Mapping[str, object]
+) -> str:
+    """Hash the complete bounded token input without exposing canonical row data."""
+
+    digest = hashlib.sha256()
+    identity = {
+        "repository": request["repository"],
+        "pr_number": request["pr_number"],
+        "stage": request["stage"],
+        "linked_issue": request["linked_issue"],
+    }
+    _fingerprint_record(digest, "identity", identity)
+    rows = conn.execute(
+        """
+        SELECT * FROM verification_runs
+        WHERE repository=? AND pr_number=? AND stage=?
+        ORDER BY created_at ASC, run_id ASC
+        """,
+        (request["repository"], request["pr_number"], request["stage"]),
+    ).fetchall()
+    for row in rows:
+        if row["status"] == LEGACY_UNTRUSTED_VERIFICATION_STATUS:
+            _validated_legacy_row_request(row)
+        else:
+            _validated_row_request(row)
+        _fingerprint_record(digest, "verification_runs", dict(row))
+        for attempt in conn.execute(
+            """
+            SELECT * FROM verification_attempts
+            WHERE run_id=? ORDER BY created_at ASC, attempt_id ASC
+            """,
+            (row["run_id"],),
+        ):
+            _fingerprint_record(digest, "verification_attempts", dict(attempt))
+        for exception in conn.execute(
+            """
+            SELECT * FROM verification_exceptions
+            WHERE run_id=? ORDER BY exception_id ASC
+            """,
+            (row["run_id"],),
+        ):
+            _fingerprint_record(digest, "verification_exceptions", dict(exception))
+    return digest.hexdigest()
+
+
+def _canonical_chain_token_matches(
+    conn: sqlite3.Connection,
+    token: _CanonicalVerificationChainToken | None,
+    request: Mapping[str, object],
+) -> bool:
+    return bool(
+        token is not None
+        and token.repository == request.get("repository")
+        and token.pr_number == request.get("pr_number")
+        and token.stage == request.get("stage")
+        and token.linked_issue == request.get("linked_issue")
+        and token.fingerprint == _canonical_chain_fingerprint(conn, request)
+    )
+
+
+def _live_takeover_authority_matches(
+    observation: _LiveVerificationObservation | None,
+    request: Mapping[str, object],
+    candidate_request: Mapping[str, object],
+    candidate_supporting: Sequence[int],
+) -> bool:
+    """Require exact live head and cumulative contract truth for head takeover."""
+
+    incoming_supporting = request.get("supporting_issues")
+    return bool(
+        observation is not None
+        and observation.state == "open"
+        and observation.merged_at is None
+        and not observation.draft
+        and observation.repository == request.get("repository")
+        and observation.pr_number == request.get("pr_number")
+        and observation.head_sha == request.get("current_head_sha")
+        and observation.linked_issue == request.get("linked_issue")
+        and observation.linked_issue == candidate_request.get("linked_issue")
+        and isinstance(incoming_supporting, list)
+        and set(candidate_supporting).issubset(incoming_supporting)
+        and set(incoming_supporting).issubset(observation.supporting_issues)
+        and set(candidate_supporting).issubset(observation.supporting_issues)
+    )
+
+
+def _terminal_current_head_replay_matches(
+    observation: _LiveVerificationObservation | None,
+    request: Mapping[str, object],
+    candidate_request: Mapping[str, object],
+    candidate_supporting: Sequence[int],
+) -> bool:
+    """Recognize the authenticated current-head identity of a terminal chain."""
+
+    incoming_supporting = request.get("supporting_issues")
+    return bool(
+        observation is not None
+        and observation.repository == request.get("repository")
+        and observation.pr_number == request.get("pr_number")
+        and observation.head_sha == request.get("current_head_sha")
+        and observation.linked_issue == request.get("linked_issue")
+        and observation.linked_issue == candidate_request.get("linked_issue")
+        and isinstance(incoming_supporting, list)
+        and set(incoming_supporting) == set(candidate_supporting)
+        and set(observation.supporting_issues) == set(candidate_supporting)
+    )
+
+
 def _validated_mutation_row(
     conn: sqlite3.Connection, run_id: str
 ) -> sqlite3.Row | None:
@@ -446,8 +703,49 @@ class VerificationDispatchLedger:
         self.store = store
         self.store.initialize()
 
+    def canonical_chain_token(
+        self, request: Mapping[str, object]
+    ) -> _CanonicalVerificationChainToken:
+        """Capture an optimistic canonical-chain token before external observation."""
+
+        if not isinstance(request, _AuthenticatedVerificationRequest):
+            raise ValueError(
+                "verification canonical chain observation requires authenticated artifact"
+            )
+        projected = _canonical_request_projection(request)
+        _validate_request(projected)
+        with self.store._connect() as conn:
+            conn.execute("BEGIN")
+            fingerprint = _canonical_chain_fingerprint(conn, projected)
+            conn.commit()
+        repository = projected["repository"]
+        pr_number = projected["pr_number"]
+        stage = projected["stage"]
+        linked_issue = projected["linked_issue"]
+        assert isinstance(repository, str)
+        assert _positive_int(pr_number)
+        assert isinstance(stage, str)
+        assert _positive_int(linked_issue)
+        return _CanonicalVerificationChainToken(
+            repository=repository,
+            pr_number=pr_number,
+            stage=stage,
+            linked_issue=linked_issue,
+            fingerprint=fingerprint,
+        )
+
     def ingest(self, request: Mapping[str, object]) -> VerificationRun:
         authenticated_artifact = isinstance(request, _AuthenticatedVerificationRequest)
+        live_observation = (
+            request.live_observation
+            if isinstance(request, _LiveObservedVerificationRequest)
+            else None
+        )
+        canonical_chain_token = (
+            request.canonical_chain_token
+            if isinstance(request, _LiveObservedVerificationRequest)
+            else None
+        )
         request = _canonical_request_projection(request)
         _validate_request(request)
         now = _now()
@@ -569,18 +867,23 @@ class VerificationDispatchLedger:
                         candidate, candidate_request
                     )
                     incoming_supporting = request.get("supporting_issues")
-                    supporting_authority_extends = (
-                        isinstance(candidate_supporting, list)
-                        and isinstance(incoming_supporting, list)
-                        and set(candidate_supporting).issubset(incoming_supporting)
-                    )
+                    if live_observation is not None and not _canonical_chain_token_matches(
+                        conn, canonical_chain_token, request
+                    ):
+                        raise ValueError(
+                            "verification canonical authority changed during live observation"
+                        )
                     authority_matches = (
-                        authenticated_artifact
+                        _live_takeover_authority_matches(
+                            live_observation,
+                            request,
+                            candidate_request,
+                            candidate_supporting,
+                        )
                         and candidate["status"] == "running"
                         and isinstance(lease_expires_at, str)
                         and _parse_timestamp(lease_expires_at)
                         <= _parse_timestamp(now)
-                        and supporting_authority_extends
                     )
                     if not authority_matches:
                         raise ValueError(
@@ -634,6 +937,30 @@ class VerificationDispatchLedger:
                 candidate_request = _validated_row_request(candidate)
                 if candidate_request.get("linked_issue") != request.get("linked_issue"):
                     raise ValueError("verification canonical run governing issue mismatch")
+            if len(terminal_candidates) == 1:
+                candidate = terminal_candidates[0]
+                if candidate["current_head_sha"] == request.get("current_head_sha"):
+                    candidate_request = _validated_row_request(candidate)
+                    candidate_supporting = _validated_supporting_authority(
+                        candidate, candidate_request
+                    )
+                    if not _canonical_chain_token_matches(
+                        conn, canonical_chain_token, request
+                    ):
+                        raise ValueError(
+                            "verification canonical authority changed during live observation"
+                        )
+                    if not _terminal_current_head_replay_matches(
+                        live_observation,
+                        request,
+                        candidate_request,
+                        candidate_supporting,
+                    ):
+                        raise ValueError(
+                            "verification terminal replay authority does not match canonical run"
+                        )
+                    conn.commit()
+                    return _run(candidate)
             non_reopenable = [
                 candidate
                 for candidate in terminal_candidates
@@ -663,16 +990,23 @@ class VerificationDispatchLedger:
                 candidate_supporting = _validated_supporting_authority(
                     candidate, candidate_request
                 )
-                incoming_supporting = request.get("supporting_issues")
-                authority_matches = (
-                    authenticated_artifact
-                    and isinstance(incoming_supporting, list)
-                    and set(candidate_supporting).issubset(incoming_supporting)
-                )
-                if not authority_matches:
+                if live_observation is not None and not _canonical_chain_token_matches(
+                    conn, canonical_chain_token, request
+                ):
+                    raise ValueError(
+                        "verification canonical authority changed during live observation"
+                    )
+                if not _live_takeover_authority_matches(
+                    live_observation,
+                    request,
+                    candidate_request,
+                    candidate_supporting,
+                ):
                     raise ValueError(
                         "verification artifact head does not match canonical run"
                     )
+                incoming_supporting = request.get("supporting_issues")
+                assert isinstance(incoming_supporting, list)
                 conn.execute(
                     """
                     UPDATE verification_runs

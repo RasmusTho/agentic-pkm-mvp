@@ -72,19 +72,32 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - The authenticated request is projected onto the exact recursive v1 field allowlist before its
   idempotency identity is used or any JSON reaches SQLite; unknown top-level or nested fields are
   rejected rather than copied. The auth preflight and coordinator subprocess inherit only the
-  minimal non-secret host environment needed to locate Codex and its ChatGPT/keyring login. If the
-  first authenticated artifact for a repaired head arrives while the prior head's coordinator row
-  still has an expired running lease, ingestion atomically requeues that same run on the new head,
-  clears stale lease/session/terminal state, and retains every existing attempt and the exhausted
-  standard/escalated 2+2 repair budget. An unauthenticated artifact, a live lease, mismatched issue
-  authority, removal/replacement of prior supporting issues, or an ambiguous terminal chain fails
-  closed without changing the run; authenticated repaired heads may extend the supporting-issue set
-  monotonically as new findings become linked to the same PR. Each accepted extension is committed
-  atomically with the new current head in a separate cumulative authority field; the original
-  request remains immutable audit evidence, and every later takeover must contain the full durable
-  cumulative set. The same authenticated monotonic gate applies when a stale-head superseded chain
-  reopens. Live governing-contract checks and trusted-evidence projections consume that cumulative
-  field, so evidence accepted by a takeover cannot disappear from later closure gates.
+  minimal non-secret host environment needed to locate Codex and its ChatGPT/keyring login. Producer
+  authentication alone is historical evidence and never authorizes a head takeover. Before ingestion,
+  the consumer pairs an authenticated artifact with a bounded fresh PR observation containing only
+  repository, PR number, head, lifecycle flags, and the resolved governing/supporting issue identities;
+  the raw PR body is not carried into the ledger. Before that network read, the consumer captures a
+  bounded SHA-256 token over the complete canonical chain rows and their attempt/exception authority.
+  A different-head takeover recomputes and compares that token only after `BEGIN IMMEDIATE`; any
+  intervening head, status, lease, session, terminal, attempt, exception, or cumulative-authority
+  transition rejects the delayed observation without mutation. GitHub network I/O is never held
+  inside the SQLite write transaction. If the observation and canonical token both prove the incoming
+  repaired head is the exact open, unmerged, non-draft live PR head while the prior head's coordinator
+  row still has an expired running lease, ingestion atomically requeues that same run on the new head, clears
+  stale lease/session/terminal state, and retains every existing attempt and the exhausted
+  standard/escalated 2+2 repair budget. An unauthenticated artifact, a missing or mismatched live
+  observation, a live lease, mismatched governing authority, removal/replacement of prior supporting
+  issues in either the incoming request or live PR, or an ambiguous terminal chain fails closed without
+  changing the run. Freshly observed repaired heads may extend the supporting-issue set monotonically
+  as new findings become linked to the same PR. Each accepted extension is committed atomically with
+  the new current head in a separate cumulative authority field; the original request remains
+  immutable audit evidence, and every later active or stale-superseded takeover must contain the full
+  durable cumulative set and independently re-prove it against fresh live PR truth. Initial intake
+  mismatches keep their existing explicit supersession behavior. After a valid takeover becomes
+  terminal, restart and replay of the authenticated exact current-head identity returns the same
+  terminal canonical run without changing the immutable original request/idempotency audit or creating
+  another chain; governing or cumulative-authority drift still fails closed. The live observation
+  becomes mutation authority only for a different-head takeover.
 - Missing or pending checks and auth/rate limits enter time-bounded `backoff`; replay cannot launch
   before `retry_after`. Rate-limit classification requires either a structured `retry` receipt or the
   launcher's structured `failure_class=rate_limit`, derived once from a non-zero provider failure;

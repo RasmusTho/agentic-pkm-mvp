@@ -10,7 +10,11 @@ from app.dispatcher.verification_consumer import (
     GhCliVerificationSource,
     VerificationConsumer,
 )
-from app.dispatcher.verification_dispatch import VerificationDispatchLedger
+from app.dispatcher.verification_dispatch import (
+    VerificationDispatchLedger,
+    _authenticated_verification_request,
+    _live_observed_verification_request,
+)
 from tests.dispatcher.test_verification_consumer import (
     Auth,
     Launcher,
@@ -23,6 +27,26 @@ from tests.dispatcher.verification_helpers import HEAD, REPO, ledger, request
 
 
 REPAIRED_HEAD = "b" * 40
+
+
+def _observed_request(
+    state: VerificationDispatchLedger, payload: dict[str, object]
+) -> dict[str, object]:
+    supporting = payload.get("supporting_issues")
+    assert isinstance(supporting, list)
+    authenticated = _authenticated_verification_request(payload)
+    return _live_observed_verification_request(
+        authenticated,
+        observed_repository=payload["repository"],
+        observed_pr_number=payload["pr_number"],
+        observed_head_sha=payload["current_head_sha"],
+        observed_state="open",
+        observed_merged_at=None,
+        observed_draft=False,
+        observed_linked_issue=payload["linked_issue"],
+        observed_supporting_issues=tuple(supporting),
+        canonical_chain_token=state.canonical_chain_token(authenticated),
+    )
 
 
 def _delivered_receipt(
@@ -499,7 +523,7 @@ def test_stale_head_superseded_chain_reopens_without_budget_reset(tmp_path) -> N
     state = ledger(tmp_path)
     run_id = _superseded_exhausted_chain(state)
 
-    reopened = state.ingest(_authenticated_request(request(REPAIRED_HEAD)))
+    reopened = state.ingest(_observed_request(state, request(REPAIRED_HEAD)))
 
     assert reopened.run_id == run_id
     assert reopened.status == "queued"
@@ -515,7 +539,7 @@ def test_reopened_stale_head_chain_clears_stale_execution_state(tmp_path) -> Non
     state = ledger(tmp_path)
     _superseded_exhausted_chain(state)
 
-    reopened = state.ingest(_authenticated_request(request(REPAIRED_HEAD)))
+    reopened = state.ingest(_observed_request(state, request(REPAIRED_HEAD)))
 
     assert reopened.requested_head_sha == HEAD
     assert reopened.current_head_sha == REPAIRED_HEAD
