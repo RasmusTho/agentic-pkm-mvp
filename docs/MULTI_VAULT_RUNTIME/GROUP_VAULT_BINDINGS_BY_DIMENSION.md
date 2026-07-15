@@ -109,6 +109,9 @@ a hidden authority system and can expose material across real confidentiality bo
 - [ ] Roll-forward after the old image removes a dimension member never creates dangling membership,
   silently restores the removed registration, or prunes any unrelated ordered member.
   - Verify: `tests/integration/test_vault_registry_rollback.py::test_mvr04_rollforward_repairs_removed_dimension_member_transactionally`
+- [ ] The topology owner contract describes the shipped non-authoritative dimension metadata,
+  all-or-nothing member resolution, and preserved per-binding provenance in the same PR.
+  - Verify: doc writeback at `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md :: Dimensions`
 
 ## Out of Scope
 
@@ -116,7 +119,7 @@ a hidden authority system and can expose material across real confidentiality bo
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/instance/test_vault_dimensions.py tests/api/test_vault_dimension_admin.py tests/api/test_dimension_context_resolution.py tests/integration/test_multi_vault_dimensions.py tests/integration/test_vault_registry_rollback.py`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/instance/test_vault_dimensions.py tests/api/test_vault_dimension_admin.py tests/api/test_dimension_context_resolution.py tests/integration/test_multi_vault_dimensions.py tests/integration/test_vault_registry_rollback.py`
 - `mypy app`
 - `pytest -q -m "not pg"`
 - `ruff check app tests`

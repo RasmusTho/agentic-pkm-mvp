@@ -125,8 +125,9 @@ Each extracted issue copies a complete canonical Issue contract/SBS block and ca
 acceptance criteria prefixed with its ID:
 
 1. **MVR-05A — binding-keyed persistence cutover:** projection/outbox schema and backfill,
-   idempotency classification, all-process mixed-version fence, minimum-runtime floor, and
-   duplicate-binding projection isolation, with DB/deployment/release owner-doc writebacks.
+   idempotency classification, all-process mixed-version fence, minimum-runtime floor, duplicate-
+   binding projection isolation, and an immediately shipped scalar-worker poll/ack compatibility
+   gate, with DB/deployment/release owner-doc writebacks.
 2. **MVR-05B — request ingress and reads:** production resolver, picker, API/CLI/agent/MCP context
    propagation, retrieval/cache provenance, pre-read revision/auth revalidation, stale selection,
    the temporary #3163 picker bridge, and active-context architecture writeback. Depends on 05A and
@@ -134,19 +135,21 @@ acceptance criteria prefixed with its ID:
 3. **MVR-05C — governed writes:** explicit target selection plus expanded DecisionToken/
    AuthorityReceipt producers, migration, fixtures, preflight, and immediately-before-write race
    enforcement, with governed-write owner-contract writeback. Depends on 05B.
-4. **MVR-05D — outbox producers and interim delivery:** production envelope registry, binding-keyed
-   dedup, scalar-worker partial-delivery guard, event-contract writeback, and aggregate request
+4. **MVR-05D — outbox producers and delivery completion:** production envelope registry, binding-keyed
+   dedup, remaining-producer migration and full worker delivery, event-contract writeback, and aggregate request
    acceptance. Depends on 05C and closes MVR-05.
 
 Every partial state remains fenced as described in `Cross-Task Invariants / Interaction Safety`;
 four distinct merged receipts are required on #2143.
 
 Partial-delivery gates are explicit: after 05A, only the compatible new runtime may use the migrated
-binding-keyed store and old request adapters remain single-binding. The deployment fence continues
+binding-keyed store and its scalar worker may poll/ack only a row matching its explicit current
+single-binding compatibility context, authorization, revision, and root; mismatched/ambiguous rows
+remain pending/unacknowledged with blocked readiness while independent global work continues. The deployment fence continues
 to block every unmigrated vault-bound enqueue producer after migration; 05B enables scoped reads but
 no vault-bound enqueue, and 05C enables only governed write producers that emit the complete
 binding/context envelope in the same slice. Under the same fence, 05D re-runs legacy classification,
-migrates the remaining producers and interim worker, proves no unscoped row appeared, then releases
+migrates the remaining producers and completes worker delivery, proves no unscoped row appeared, then releases
 their ingress. No stage permits a legacy envelope, old scalar process, or un-revalidated read/write
 to cross its floor; independently safe explicit-global work may continue.
 
@@ -220,6 +223,10 @@ to cross its floor; independently safe explicit-global work may continue.
   ingress-fenced across 05A–05C; 05C may enable only complete-envelope producers, and 05D reclassifies
   under the fence before enabling the remaining producers, so no fresh legacy row can appear.
   - Verify: `tests/ops/test_mvr05_mixed_version_fence.py::test_unmigrated_vault_bound_producers_remain_fenced_until_mvr05d`
+- [ ] **MVR-05A:** Before any migrated vault-bound row is polled, the recreated scalar worker validates
+  its explicit compatibility binding, authority, revision, and root; a mismatched or ambiguous row
+  remains pending/unacknowledged with blocked readiness, while explicit-global work remains processable.
+  - Verify: `tests/workers/test_multi_vault_partial_delivery_gate.py::test_mvr05a_scalar_worker_gates_migrated_rows_before_dispatch`
 - [ ] **MVR-05C:** Production capture/governed-write paths require one explicit authorized target and record
   vault/context provenance in their receipt.
   - Verify: `tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt`
@@ -242,11 +249,10 @@ to cross its floor; independently safe explicit-global work may continue.
 - [ ] **MVR-05D:** Invoking every registered production vault-bound producer emits the versioned stable-binding,
   context, routing-class, and idempotency envelope without fixture-only row construction.
   - Verify: `tests/integration/test_multi_vault_outbox_producers.py::test_production_call_sites_emit_binding_context_envelopes`
-- [ ] **MVR-05D:** The interim scalar worker dispatches only a row matching its explicit current single-binding
-  compatibility context, authorization, revision, and root even when other vaults are remembered;
-  it leaves every ambiguous/mismatched row pending/unacknowledged with blocked readiness,
-  while global work remains independently processable until MVR-06.
-  - Verify: `tests/workers/test_multi_vault_partial_delivery_gate.py::test_scalar_worker_dispatches_only_rows_matching_explicit_worker_binding`
+- [ ] **MVR-05D:** After every vault-bound producer is migrated, the worker consumes only complete
+  versioned envelopes under the binding/context delivery contract and retains the 05A fail-closed
+  treatment for corrupt, mismatched, or ambiguous rows.
+  - Verify: `tests/workers/test_multi_vault_partial_delivery_gate.py::test_completed_worker_delivery_retains_mvr05a_fail_closed_gate`
 - [ ] **MVR-05D:** Vault-bound outbox idempotency keys include the stable binding: duplicate logical identities
   in two bindings persist independently, while same-binding retries deduplicate.
   - Verify: `tests/services/test_multi_vault_outbox_idempotency.py::test_duplicate_identity_events_are_deduplicated_per_binding`

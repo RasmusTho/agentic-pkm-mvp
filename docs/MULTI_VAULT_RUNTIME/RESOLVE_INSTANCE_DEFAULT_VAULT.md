@@ -119,6 +119,12 @@ turns an invalid explicit selection into a dangerous silent read/write against t
   old projection uses the validated rollback target while roll-forward restores the authoritative
   default and rejects divergent/ambiguous mutation.
   - Verify: `tests/integration/test_vault_registry_rollback.py::test_mvr02_default_survives_scalar_projection_round_trip`
+- [ ] The environment/vault-context and event owner contracts describe the shipped explicit default,
+  one-time last-active migration, versioned default-mutation event, and compatibility/no-vault posture
+  in the same PR.
+  - Verify: doc writeback at `docs/ENVIRONMENTS.md :: Vault terminology` + doc writeback at
+    `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md :: Service Gating` + doc writeback at
+    `docs/EVENTS.md :: Events`
 
 ## Out of Scope
 
@@ -126,7 +132,7 @@ turns an invalid explicit selection into a dangerous silent read/write against t
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/instance/test_default_vault_resolution.py tests/api/test_default_vault_admin.py tests/integration/test_single_vault_compatibility.py tests/integration/test_vault_registry_container_durability.py tests/integration/test_vault_registry_rollback.py`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/instance/test_default_vault_resolution.py tests/api/test_default_vault_admin.py tests/integration/test_single_vault_compatibility.py tests/integration/test_vault_registry_container_durability.py tests/integration/test_vault_registry_rollback.py`
 - `mypy app`
 - `pytest -q -m "not pg"`
 - `ruff check app tests`
