@@ -100,13 +100,14 @@ This slice promotes the existing seed without changing content-vault authority.
   channel-local binding changes. MVR-01B defines versioned dormant extension points in that journal
   for source-reference repair and source-bound work drain, but does not invent or implement schemas
   owned by later slices. MVR-02 installs the default repair hook, MVR-04 installs the dimension repair
-  hook, and MVR-05A installs the outbox/queue drain hook. MVR-05C is the first slice allowed to require
-  and invoke all three production implementations: before source retirement, the same transaction
+  hook, MVR-05A installs the outbox/queue drain hook, and MVR-05B installs the protected
+  `settings_rebind.v1` compatibility-binding repair hook. MVR-05C is the first slice allowed to require
+  and invoke all four production implementations: before source retirement, the same transaction
   then clears or explicitly replaces the source default, removes the binding from every source
   dimension with its revision/audit receipt, and drains every pending source-bound row to a terminal
   receipted outcome under the source binding. Missing hooks or an unsettled row leave transfer
   capability-not-ready and abort before the source registration or lease changes; no default,
-  dimension membership, or row is implicitly retargeted to the destination.
+  dimension membership, row, or compatibility lifecycle is implicitly retargeted to the destination.
   Only after reference repair, queue drain, source retirement, and destination registration/lineage are durable does
   it replace `transferring` with the destination active lease. A crash resumes or compensates from
   the journal while the reservation blocks both channels; it never admits an ordinary duplicate,

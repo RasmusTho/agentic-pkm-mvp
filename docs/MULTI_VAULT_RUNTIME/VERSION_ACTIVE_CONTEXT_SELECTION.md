@@ -22,7 +22,10 @@ generation unknown. A process-global mutable manager cannot safely represent con
   `generation`, explicit `workspace_id` or typed `no_workspace` state, immutable zero/one/many
   source bindings, selection provenance, optional dimension filter, and the already-delivered
   cognitive `scope`, `sphere_memberships`, `situated_identity`,
-  principal, and topology fields reserved by the contract. Workspace is never inferred from vault,
+  principal, topology, and typed degraded-posture/reason fields reserved by the contract. A healthy
+  zero-binding no-vault context remains distinguishable from an unavailable, invalid, unauthorized,
+  or stale binding, which is degraded and fails effects rather than collapsing to an empty set.
+  Workspace is never inferred from vault,
   path, scope, or principal. These cognitive dimensions remain WSP
   context and are never replaced by an endpoint action/permission name. Every source
   binding also carries its monotonic `binding_revision` (path/device/authority-provenance revision),
@@ -177,6 +180,10 @@ retrieval, settings, or write provenance to leak between humans or vaults.
   - Verify: `tests/api/test_active_context_resolution.py::test_session_expiry_and_restart_are_truthful`
 - [ ] Zero/one/many bindings are valid and each member is independently GOV-authorized.
   - Verify: `tests/api/test_active_context_resolution.py::test_each_binding_is_authorized_independently`
+- [ ] ActiveContextSet V1 retains a typed healthy/degraded posture and bounded reason: valid no-vault
+  is a healthy zero-binding state, while unavailable, invalid, unauthorized, or stale binding state
+  is degraded and cannot authorize an effect or masquerade as ordinary no-vault.
+  - Verify: `tests/api/test_active_context_resolution.py::test_degraded_posture_distinguishes_valid_no_vault_from_unavailable_binding`
 - [ ] Session selection uses an expiring high-entropy server-minted bearer ID in addition to #2223
   authentication, binds to the server-resolved human/delegated-role principal, separate instance
   identity, explicit workspace/no-workspace state, selected bindings, cognitive scope, sphere
@@ -252,7 +259,7 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 
 ## How to Verify (Pre-Merge)
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/instance/test_context_selection_store.py tests/api/test_active_context_resolution.py tests/api/test_active_context_selection_api.py tests/api/test_active_context_selection_api.py::test_selection_bearer_is_redacted_from_success_failure_logs_and_receipts tests/retrieval/test_active_context_cache_isolation.py tests/integration/test_local_operator_principal_bootstrap.py tests/migrations/test_local_operator_principal_upgrade.py tests/ops/test_mvr03_principal_mixed_version_fence.py::test_every_legacy_auth_producer_stops_before_principal_floor_write tests/ops/test_mvr03_principal_mixed_version_fence.py::test_principal_fence_inventory_covers_every_enabled_auth_producer`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/instance/test_context_selection_store.py tests/api/test_active_context_resolution.py tests/api/test_active_context_resolution.py::test_degraded_posture_distinguishes_valid_no_vault_from_unavailable_binding tests/api/test_active_context_selection_api.py tests/api/test_active_context_selection_api.py::test_selection_bearer_is_redacted_from_success_failure_logs_and_receipts tests/retrieval/test_active_context_cache_isolation.py tests/integration/test_local_operator_principal_bootstrap.py tests/migrations/test_local_operator_principal_upgrade.py tests/ops/test_mvr03_principal_mixed_version_fence.py::test_every_legacy_auth_producer_stops_before_principal_floor_write tests/ops/test_mvr03_principal_mixed_version_fence.py::test_principal_fence_inventory_covers_every_enabled_auth_producer`
 - `mypy app`
 - `pytest -q -m "not pg"`
 - `ruff check app tests`

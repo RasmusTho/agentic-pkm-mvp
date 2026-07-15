@@ -64,7 +64,10 @@ That capability specification is subordinate to this contract's WSP/GOV boundary
 authority. V1 requires an opaque context ID, monotonic generation, explicit workspace identity (or
 a typed no-workspace state), zero/one/many immutable source bindings, server-derived principal,
 cognitive operational scope, sphere memberships, situated identity, topology posture, selection provenance,
-expiry where applicable, and non-reversible selection-capability digest. Cache and receipt identity
+expiry where applicable, non-reversible selection-capability digest, and a typed degraded posture
+(`healthy` or `degraded`) with a bounded machine-readable reason when degraded. A zero-binding
+healthy no-vault context is distinct from an unavailable, invalid, unauthorized, or stale binding;
+the latter cannot be represented as an ordinary empty set. Cache and receipt identity
 includes workspace and every scope-affecting input; each binding is independently GOV-authorized. Current-state
 owner docs remain shipped truth until the relevant implementation child writes them back.
 

@@ -20,7 +20,8 @@ producer and consumer has a replacement and proves reversibility to the single-v
 ## What This Task Does
 
 - Inventory HTTP, CLI, agent, MCP, watcher, worker, settings, health, startup, compose, tests, and
-  channel scripts for global `VAULT_ROOT`, `WATCHER_VAULT_PATH`, `VaultManager.active_context`,
+  channel scripts for global `VAULT_ROOT`, `WATCHER_VAULT_PATH`, `VaultManager.context` and its
+  backing `_context`,
   `last_active_vault_ref`, and old `app.vault.app_local` assumptions.
 - Classify each use as explicit bootstrap adapter, request context, lifecycle binding, or invalid
   global access; migrate or remove invalid accesses.
@@ -106,8 +107,10 @@ can break startup or strand durable state. Both failures are latent outages rath
 ## Acceptance Criteria
 
 - [ ] The architecture inventory finds no unapproved production global vault resolution outside
-  named bootstrap/compatibility adapters.
+  named bootstrap/compatibility adapters, including direct or aliased reads of the real
+  `VaultManager.context`/`_context` seam.
   - Verify: `tests/architecture/test_multi_vault_context_boundaries.py::test_production_consumers_use_context_seam`
+  - Verify: `tests/architecture/test_multi_vault_context_boundaries.py::test_real_vault_manager_context_accessor_cannot_escape_inventory`
 - [ ] The test-channel smoke harness exercises two bindings/sessions, one dimension read, one
   governed write, and background health through production entrypoints while emitting a redacted receipt.
   - Verify: `tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_harness_is_production_path_and_redacted`
@@ -146,6 +149,7 @@ can break startup or strand durable state. Both failures are latent outages rath
 - `pytest -q tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_rejects_non_test_manifest_roots_before_registration`
 - `pytest -q tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_restores_prior_test_state_on_success_and_failure`
 - `pytest -q tests/architecture/test_multi_vault_context_boundaries.py tests/integration/test_single_vault_compatibility.py tests/instance/test_vault_registry_migration.py tests/runtime/test_multi_vault_channel_bootstrap.py`
+- `pytest -q tests/architecture/test_multi_vault_context_boundaries.py::test_real_vault_manager_context_accessor_cannot_escape_inventory`
 - `mypy app`
 - `pytest -q -m "not pg"`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/uat/`
