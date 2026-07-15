@@ -36,6 +36,7 @@ from app.expansion.create import (
     sweep_expired_drafts,
 )
 from app.write_guard import WriteGuard
+from app.reasoning.schema import ReasoningOutput
 
 
 def _allow_all_guard() -> WriteGuard:
@@ -155,6 +156,55 @@ def test_no_sources_blocks_loudly(tmp_path: Path) -> None:
 
     with pytest.raises(UnresolvableCitationError):
         run_create_pass(request, vault_root=vault_root, outbox_path=outbox_path, write_guard=_allow_all_guard())
+
+
+def test_create_marks_empty_provider_cognition_degraded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    outbox_path = tmp_path / "outbox.jsonl"
+    sources = (
+        _source("obj-a", "Alpha source text.", "Alpha source text."),
+        _source("obj-b", "Beta source text.", "Beta source text."),
+    )
+    request = CreateRequest(kind=OutputKind.OVERVIEW, title="Degraded collation", sources=sources)
+    monkeypatch.setattr(
+        "app.expansion.create.run_multi_note_reasoning",
+        lambda *_args, **_kwargs: ReasoningOutput(
+            outcome="empty_output", degraded_reason="empty_provider_output"
+        ),
+    )
+
+    report = run_create_pass(
+        request,
+        vault_root=vault_root,
+        outbox_path=outbox_path,
+        write_guard=_allow_all_guard(),
+    )
+
+    assert report.draft_path is not None
+    draft_text = (vault_root / report.draft_path).read_text(encoding="utf-8")
+    assert "Alpha source text." in draft_text
+    assert "Beta source text." in draft_text
+    assert "claims: 0" in draft_text
+    assert "inferences: 0" in draft_text
+    assert "degraded: true" in draft_text
+    assert "degraded_reason: empty_provider_output" in draft_text
+    assert "outcome: empty_output" in draft_text
+
+    proposed = [
+        record
+        for record in _outbox_records(outbox_path)
+        if record.get("event") == "expansion.create.proposed"
+    ]
+    assert proposed[0]["payload"]["cognition_metadata"] == {
+        "claims": 0,
+        "inferences": 0,
+        "degraded": True,
+        "outcome": "empty_output",
+        "degraded_reason": "empty_provider_output",
+    }
 
 
 def test_digest_kind_is_supported_and_produces_a_draft(tmp_path: Path) -> None:

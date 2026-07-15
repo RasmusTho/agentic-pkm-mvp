@@ -8,8 +8,9 @@ import pytest
 
 from app.agents.set_evaluator.agent import run_set_evaluator
 from app.reasoning.multi import run_multi_note_reasoning
-from app.reasoning.provider import get_deliberation_agent
-from app.reasoning.schema import ReasoningInput
+from app.reasoning.models import ReasoningMode
+from app.reasoning.provider import get_deliberation_agent, run_reasoning
+from app.reasoning.schema import Inference, ReasoningInput, ReasoningOutput
 from app.stores import get_object_store, reset_store_backends
 
 
@@ -111,6 +112,189 @@ def test_reasoning_multi_note_logs_real_json(monkeypatch: pytest.MonkeyPatch) ->
     kinds = {entry["kind"] for entry in captured}
     assert "reasoning.claims" in kinds or "reasoning.multi_note" in kinds
     assert all("claims" in entry.get("response_text", "") for entry in captured)
+
+
+def test_multi_note_trace_preserves_degraded_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_reasoning_env(monkeypatch)
+    empty_json = json.dumps({"claims": [], "evidence": [], "inferences": []})
+
+    captured: list[dict] = []
+
+    def fake_log_llm_call(**kwargs):
+        captured.append(kwargs)
+
+    monkeypatch.setattr("app.services.llm.log_llm_call", fake_log_llm_call)
+    monkeypatch.setattr("app.services.llm._ollama_chat", lambda *a, **k: empty_json)
+
+    reset_store_backends()
+    store = get_object_store()
+    obj_ids = [
+        UUID("33333333-3333-3333-3333-333333333333"),
+        UUID("44444444-4444-4444-4444-444444444444"),
+    ]
+    store.put(obj_ids[0], kind="note", source_ref="c.md", payload={"text": "Note C content"})
+    store.put(obj_ids[1], kind="note", source_ref="d.md", payload={"text": "Note D content"})
+
+    output = run_multi_note_reasoning(
+        [str(obj_ids[0]), str(obj_ids[1])], trace_id="T-multi-degraded"
+    )
+
+    assert output.outcome == "empty_output"
+    assert output.degraded is True
+    assert output.degraded_reason == "empty_provider_output"
+    assert output.claims == []
+    assert output.inferences == []
+    assert captured, "trace logging must remain active for empty provider output"
+    assert all(entry["trace_id"] == "T-multi-degraded" for entry in captured)
+
+
+def test_provider_payload_cannot_override_runtime_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_reasoning_env(monkeypatch)
+    provider_json = json.loads(_fake_reasoning_json("55555555-5555-5555-5555-555555555555"))
+    provider_json.update(
+        {"outcome": "provider_failure", "degraded_reason": "provider_says_failure"}
+    )
+    monkeypatch.setattr(
+        "app.services.llm._ollama_chat", lambda *a, **k: json.dumps(provider_json)
+    )
+
+    reset_store_backends()
+    store = get_object_store()
+    object_id = UUID("55555555-5555-5555-5555-555555555555")
+    store.put(object_id, kind="note", source_ref="provider.md", payload={"text": "Provider input"})
+
+    run = run_reasoning(ReasoningMode.CLAIMS, [str(object_id)], trace_id="T-runtime-owned")
+
+    assert run.status == "ok"
+    assert run.error is None
+    assert run.result["outcome"] == "success"
+    assert run.result["degraded_reason"] is None
+    assert run.result["claims"][0]["id"] == "c1"
+
+
+def test_provider_object_cannot_override_runtime_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_reasoning_env(monkeypatch)
+    reset_store_backends()
+    store = get_object_store()
+    object_id = UUID("88888888-8888-8888-8888-888888888888")
+    store.put(object_id, kind="note", source_ref="provider-object.md", payload={"text": "Input"})
+
+    class AdversarialAgent:
+        def reason(self, reasoning_input: ReasoningInput) -> ReasoningOutput:
+            return ReasoningOutput(
+                claims=[
+                    {
+                        "id": "provider-object-claim",
+                        "object_uuid": reasoning_input.object_uuid,
+                        "text": "Real provider cognition",
+                        "modality": "assertion",
+                        "confidence": 0.9,
+                    }
+                ],
+                outcome="provider_failure",
+                degraded_reason="provider-controlled",
+            )
+
+    monkeypatch.setattr(
+        "app.reasoning.provider.get_deliberation_agent", lambda: AdversarialAgent()
+    )
+
+    run = run_reasoning(ReasoningMode.CLAIMS, [str(object_id)])
+
+    assert run.status == "ok"
+    assert run.error is None
+    assert run.result["outcome"] == "success"
+    assert run.result["degraded_reason"] is None
+    assert run.result["claims"][0]["id"] == "provider-object-claim"
+
+
+def test_provider_failure_trace_preserves_degraded_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_reasoning_env(monkeypatch)
+    reset_store_backends()
+    store = get_object_store()
+    object_id = UUID("66666666-6666-6666-6666-666666666666")
+    store.put(object_id, kind="note", source_ref="failure.md", payload={"text": "Failure input"})
+
+    class FailingAgent:
+        def reason(self, reasoning_input: ReasoningInput) -> ReasoningOutput:
+            del reasoning_input
+            raise RuntimeError("provider secret detail")
+
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        "app.reasoning.provider.get_deliberation_agent", lambda: FailingAgent()
+    )
+    monkeypatch.setattr(
+        "app.reasoning.provider.log_llm_call",
+        lambda **kwargs: captured.append(kwargs),
+        raising=False,
+    )
+
+    run = run_reasoning(ReasoningMode.CLAIMS, [str(object_id)], trace_id="T-provider-failure")
+
+    assert run.status == "failed"
+    assert run.result["outcome"] == "provider_failure"
+    assert run.result["degraded_reason"] == "provider_failure"
+    assert captured == [
+        {
+            "provider": "ollama",
+            "model": "llama3.1:8b",
+            "agent": "reasoning",
+            "kind": "reasoning.claims",
+            "messages": [],
+            "response": {
+                "outcome": "provider_failure",
+                "degraded_reason": "provider_failure",
+            },
+            "response_text": json.dumps(
+                {
+                    "outcome": "provider_failure",
+                    "degraded_reason": "provider_failure",
+                },
+                sort_keys=True,
+            ),
+            "trace_id": "T-provider-failure",
+            "status": "failed",
+        }
+    ]
+
+
+def test_inference_only_provider_output_is_not_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_reasoning_env(monkeypatch)
+    reset_store_backends()
+    store = get_object_store()
+    object_id = UUID("77777777-7777-7777-7777-777777777777")
+    store.put(object_id, kind="note", source_ref="inference.md", payload={"text": "Inference input"})
+
+    class InferenceOnlyAgent:
+        def reason(self, reasoning_input: ReasoningInput) -> ReasoningOutput:
+            return ReasoningOutput(
+                inferences=[
+                    Inference(
+                        id="inference-only",
+                        premises=[],
+                        conclusion_id=reasoning_input.object_uuid,
+                        type="observation",
+                        rationale="Structured provider inference",
+                    )
+                ]
+            )
+
+    monkeypatch.setattr(
+        "app.reasoning.provider.get_deliberation_agent", lambda: InferenceOnlyAgent()
+    )
+
+    run = run_reasoning(ReasoningMode.CLAIMS, [str(object_id)])
+
+    assert run.status == "ok"
+    assert run.result["outcome"] == "success"
+    assert run.result["inferences"][0]["id"] == "inference-only"
 
 
 def test_set_evaluator_logs_real_json(monkeypatch: pytest.MonkeyPatch) -> None:
