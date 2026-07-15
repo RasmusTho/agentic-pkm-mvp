@@ -116,6 +116,16 @@ cross-process truth belong here.
   a removed `compatibility_binding_id`; explicit mode retains a now-stale member as loudly failed
   intent until instance-authorized removal, preserving the explicit operator decision. MVR-06 never
   requires MVR-02 to interpret these fields retroactively.
+- During the MVR-06B handoff, atomically replace the transfer journal's retired
+  `settings_rebind.v1` repair hook with a schema-versioned MVR-06 intent hook before the bridge stops
+  being authoritative. A later cross-channel transfer must invoke that hook before source retirement:
+  compatibility mode records an explicitly authorized source replacement or preserves the enabled
+  watcher as durable idle/no-vault, while explicit mode removes only the transferred source member
+  and persists explicit-empty when it was the last member. Neither mode enrols the destination or
+  manufactures `no_lifecycle`. Missing hook capability, an intent revision race, or a failed durable
+  commit aborts the transfer with source ownership unchanged. Crash recovery reconciles the journal
+  and intent revision before restart, so no transferred source binding can remain as stale
+  authoritative intent or restart a lifecycle against a destination-owned root.
 - Before writing the first background role/delegation, background-intent, or compatibility-binding
   field, use the MVR-05 channel fence to atomically advance `minimum_runtime_schema=MVR-06`. A build
   below that floor cannot start watcher/worker/API against the registry; recovery preserves the
@@ -367,6 +377,11 @@ migration, preflight, and fail-loud gate merge together.
   crash after registry commit but before event publication still converges from the durable
   revision cursor without accepting later work on the stale binding.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window`
+- [ ] **MVR-06B:** After the #3163 bridge is retired, cross-channel transfer repairs the authoritative
+  MVR-06 intent before source retirement: compatibility mode records an authorized replacement or
+  enabled idle/no-vault, explicit mode removes only the source member and preserves explicit-empty,
+  and restart cannot resurrect the transferred binding or implicitly enrol the destination.
+  - Verify: `tests/integration/test_multi_vault_channel_transfer_lifecycle.py::test_post_handoff_transfer_repairs_mvr06_intent_before_restart`
 - [ ] **MVR-06B:** Active registration removal becomes available only after every production
   foreground and background consumer participates in the shared/exclusive binding-effect protocol.
   It blocks new acquisition, drains all holders, replaces the live registration with the immutable
@@ -499,6 +514,7 @@ PostgreSQL receipt belongs only to 06D.
 
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_settings_spine_bridge_handoff_is_atomic tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff tests/integration/test_multi_vault_background_lifecycle.py::test_post_handoff_picker_rebind_preserves_two_phase_failure_atomicity tests/integration/test_multi_vault_background_lifecycle.py::test_default_mutation_rebinds_only_compatibility_lifecycle tests/integration/test_multi_vault_background_lifecycle.py::test_rebind_reuses_settings_spine_and_is_generation_clean tests/integration/test_multi_vault_background_lifecycle.py::test_lifecycle_requires_matching_channel_ownership_lease tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window tests/integration/test_multi_vault_background_lifecycle.py::test_registration_removal_activates_after_all_consumer_floors tests/integration/test_multi_vault_background_lifecycle.py::test_removed_binding_rehome_preserves_historical_receipt_audit tests/integration/test_multi_vault_background_lifecycle.py::test_background_effect_fence_closes_authorization_race_window tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback tests/runtime/test_background_binding_handoff.py::test_env_only_single_vault_upgrade_preserves_compatibility_watcher tests/runtime/test_background_binding_handoff.py::test_remove_last_then_restart_preserves_explicit_empty_intent tests/runtime/test_background_binding_handoff.py::test_mvr06b_restart_uses_only_durable_authorized_singleton_or_empty_intent tests/runtime/test_background_binding_handoff.py::test_scalar_worker_handoff_is_atomic_versioned_and_intent_gated tests/runtime/test_background_binding_handoff.py::test_background_context_has_explicit_workspace_and_capability_identity tests/api/test_background_binding_admin.py::test_mvr06b_commands_allow_only_singleton_or_empty_intent tests/api/test_background_binding_admin.py::test_first_explicit_mutation_snapshots_compatibility_singleton_before_apply tests/api/test_background_binding_admin.py::test_stale_binding_intent_can_be_removed_without_content_authority`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_handoff_buffers_direct_filesystem_write_through_commit`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_channel_transfer_lifecycle.py::test_post_handoff_transfer_repairs_mvr06_intent_before_restart`
 - Verify the 06B PR diff contains its mapped vault/settings, Settings Spine, environment, and health
   owner-doc targets.
 

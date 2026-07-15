@@ -110,7 +110,11 @@ This slice promotes the existing seed without changing content-vault authority.
   dimension membership, row, or compatibility lifecycle is implicitly retargeted to the destination.
   If no authorized source replacement exists, an enabled compatibility watcher retains its enabled
   posture but becomes durable idle/no-vault; `no_lifecycle` is legal only when the pre-transfer
-  configuration already declares the watcher disabled or omitted.
+  configuration already declares the watcher disabled or omitted. When MVR-06B retires that bridge,
+  it atomically upgrades the journal extension to repair authoritative MVR-06 compatibility or
+  explicit intent instead: compatibility records replacement or enabled idle/no-vault, while explicit
+  intent removes only the source member and persists explicit-empty when necessary. Transfer remains
+  capability-not-ready if the hook version does not match the currently authoritative intent schema.
   Only after reference repair, queue drain, source retirement, and destination registration/lineage are durable does
   it replace `transferring` with the destination active lease. A crash resumes or compensates from
   the journal while the reservation blocks both channels; it never admits an ordinary duplicate,

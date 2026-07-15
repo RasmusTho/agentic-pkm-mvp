@@ -313,7 +313,9 @@ Partial delivery remains fail-closed:
   released while legacy foreground read/write paths remain unfenced. Once activated, a journaled
   transfer-only reservation excludes the root while source registration is retired to a tombstone and
   destination registration/lineage becomes durable, so ordinary duplicate-root admission is never
-  bypassed and two live registrations/owners never coexist;
+  bypassed and two live registrations/owners never coexist. MVR-06B upgrades the transfer journal
+  before retiring the #3163 bridge so later transfers repair the then-authoritative background intent
+  before source retirement and restart cannot resurrect a transferred binding;
 - after issue 01B and until issue 06B proves both foreground and background consumer floors, active
   registration removal is implemented but production removal fails capability-not-ready without
   changing registry/revision/ownership; only 06B may activate its drain/tombstone/release sequence.
