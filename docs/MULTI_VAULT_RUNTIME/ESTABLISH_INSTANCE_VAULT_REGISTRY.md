@@ -27,8 +27,16 @@ This slice promotes the existing seed without changing content-vault authority.
   `vault_binding_id` separately from path and device provenance.
 - Migrate the existing Markdown payload in place, preserving the installed-instance
   `appInstallId`, every registration, `last_active_vault_ref`, timestamps, and unknown
-  forward-compatible fields.
-- For container deployments, add a channel/instance-scoped `instance-state` volume mounted at
+  forward-compatible fields. If SETTINGS-05 already created `settings_rebind.v1`, the fenced MVR-01
+  migration canonicalizes each recorded legacy reference with the same resolver used by the ownership
+  ledger and atomically adopts its provisional `vault_binding_id` into the matching registration,
+  rewriting prior/candidate/applied references to registry identity in the same commit. A matching
+  existing registration keeps its ID only when it is the provisional ID; aliases coalesce only when
+  they prove the same physical root. Missing, conflicting, relocated-without-lineage, or multiply
+  matching references block registry activation with the original rebind record intact—migration
+  never derives a replacement ID from the current path or attaches lifecycle state by guesswork.
+- For container deployments, adopt the protected SETTINGS-05 `instance-state` volume when it exists,
+  otherwise create the same channel/instance-scoped external volume, mounted at
   `/app/instance-state` in every registry consumer and resolve the production store to
   `/app/instance-state/agentic-pkm/vault-registry.md`. Migrate once from the legacy resolved
   app-local path by atomic validated copy with provenance; never treat the image layer, `$HOME`,
@@ -290,6 +298,11 @@ never encounter and truncate authoritative new-schema state before fork/merge pr
 - [ ] **MVR-01A:** A legacy app-local payload migrates in place without changing `appInstallId` or losing
   registrations, `last_active_vault_ref`, timestamps, or unknown fields.
   - Verify: `tests/instance/test_vault_registry_migration.py::test_legacy_app_local_state_migrates_losslessly`
+- [ ] **MVR-01A:** A pre-existing `settings_rebind.v1` record is atomically translated from its
+  canonical legacy references into registrations that adopt the exact provisional binding IDs;
+  aliases of one physical root coalesce, while missing, conflicting, or ambiguous references leave
+  both registry and rebind state uncommitted and unchanged.
+  - Verify: `tests/instance/test_vault_registry_migration.py::test_settings_rebind_provisional_ids_are_adopted_atomically`
 - [ ] **MVR-01A:** Explicit production picker select/initialize over parse-corrupt registry state backs up the
   original and preserves #2185 legacy/empty recovery without a 500.
   - Verify: `tests/api/test_vault_registry_recovery.py::test_picker_recovers_parse_corrupt_registry_with_backup`
@@ -450,7 +463,7 @@ family-wide command that requires a later sealed slice.
 
 ### MVR-01A validation
 
-- `pytest -q tests/instance/test_vault_registry.py::test_registry_round_trip_preserves_multiple_vaults tests/instance/test_vault_registry_migration.py::test_legacy_app_local_state_migrates_losslessly tests/instance/test_vault_registry_migration.py::test_ambiguous_registry_migration_fails_without_destructive_reset tests/instance/test_vault_registry_concurrency.py::test_production_mutations_are_locked_atomic_and_revision_checked tests/instance/test_vault_registry_permissions.py::test_registry_transaction_files_are_private tests/api/test_vault_registry_recovery.py::test_picker_recovers_parse_corrupt_registry_with_backup tests/api/test_vault_registry_recovery.py::test_populated_registry_corruption_never_reseeds_empty tests/architecture/test_instance_vault_registry_boundary.py::test_production_registry_imports_use_instance_package tests/architecture/test_instance_vault_registry_boundary.py::test_registry_schema_producers_match_runtime_precondition tests/ops/test_instance_state_volume_contract.py::test_mvr01a_schema_activation_requires_rollback_capability`
+- `pytest -q tests/instance/test_vault_registry.py::test_registry_round_trip_preserves_multiple_vaults tests/instance/test_vault_registry_migration.py::test_legacy_app_local_state_migrates_losslessly tests/instance/test_vault_registry_migration.py::test_settings_rebind_provisional_ids_are_adopted_atomically tests/instance/test_vault_registry_migration.py::test_ambiguous_registry_migration_fails_without_destructive_reset tests/instance/test_vault_registry_concurrency.py::test_production_mutations_are_locked_atomic_and_revision_checked tests/instance/test_vault_registry_permissions.py::test_registry_transaction_files_are_private tests/api/test_vault_registry_recovery.py::test_picker_recovers_parse_corrupt_registry_with_backup tests/api/test_vault_registry_recovery.py::test_populated_registry_corruption_never_reseeds_empty tests/architecture/test_instance_vault_registry_boundary.py::test_production_registry_imports_use_instance_package tests/architecture/test_instance_vault_registry_boundary.py::test_registry_schema_producers_match_runtime_precondition tests/ops/test_instance_state_volume_contract.py::test_mvr01a_schema_activation_requires_rollback_capability`
 
 ### MVR-01B validation
 

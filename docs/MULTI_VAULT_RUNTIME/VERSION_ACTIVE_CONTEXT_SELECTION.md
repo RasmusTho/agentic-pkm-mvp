@@ -121,7 +121,7 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 
 ## Source Anchors
 
-- `docs/contracts/ACTIVE_CONTEXT_SET.md :: target contract`
+- `docs/contracts/ACTIVE_CONTEXT_SET.md :: Multi-Vault Runtime V1 Decision`
 - `app/vault/active_context.py :: ActiveContextSet v0 transitional adapter`
 - `docs/SYSTEM_BREAKDOWN_STRUCTURE.md :: WSP active cognitive context`
 - `docs/MULTI_VAULT_RUNTIME/README.md :: Active context and isolation`

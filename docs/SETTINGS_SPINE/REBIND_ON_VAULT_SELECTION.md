@@ -50,12 +50,22 @@ rationale) to record the supersession rather than leaving it as if still current
   an optional same-process wake-up hint; it is not delivery between the API and watcher containers,
   and restart/event loss converges from the durable revision.
 - Version that shared record as `settings_rebind.v1` with schema revision, monotonic desired/applied
-  revisions, phase, prior/candidate binding identity, lifecycle posture, and recovery checksum. Before
+  revisions, phase, prior/candidate binding identity, lifecycle posture, and recovery checksum. The
+  SETTINGS-05 rollout first creates the protected channel/instance-scoped `instance-state` store that
+  MVR-01 later reuses: an external, non-project Compose volume mounted at `/app/instance-state` for
+  containers and owner-only native app data outside temp/runtime directories. Under the host rollout
+  fence it atomically copies and validates the last legacy app-local payload from `runtime-tmp`, writes
+  the floor and v1 record to protected storage, and retains a permission-checked backup/restore copy;
+  only then may the disposable source be retired. Missing, disposable, unrestorable, or divergent
+  protected state blocks API/watcher start even when `runtime-tmp` has been deleted. Before
   the first v1 prepare, a channel/native rollout fence closes selection ingress, drains and stops
   every old API and watcher producer, and migrates only one provable stable binding: last-active and
   watcher-env aliases must canonicalize to the same root, or one side must be truthfully absent/idle;
-  a disagreement fails loud without choosing. Init/bootstrap scripts, existing-state migration,
-  production fixtures, API/watcher startup, and no-lifecycle producers all write/read the same schema.
+  a disagreement fails loud without choosing. That migration mints one provisional stable
+  `vault_binding_id` for each provable canonical binding and records its canonical legacy reference;
+  MVR-01 must adopt that exact ID rather than derive a new identity from a path. Init/bootstrap
+  scripts, existing-state migration, production fixtures, API/watcher startup, and no-lifecycle
+  producers all write/read the same schema.
   The migration atomically records `minimum_settings_rebind_runtime=1` before v1 state can become
   authoritative. A host-side channel pre-start guard and the native launcher read that durable floor
   plus the candidate image/runtime capability manifest before starting any API or watcher, so an
@@ -122,6 +132,12 @@ the UI says one vault and ingest watches another — captures silently vanish fr
       launcher reject an API/watcher pair whose capability manifest cannot interpret that floor before
       either process starts or resolves a root.
   - Verify: `tests/ops/test_settings_rebind_runtime_floor.py::test_rebind_floor_blocks_incompatible_api_and_watcher_before_start`
+- [ ] Before the floor or first v1 record becomes authoritative, SETTINGS-05 migrates the final
+      fenced legacy payload into protected non-project `instance-state`, records a restorable backup,
+      and proves that deletion of disposable `runtime-tmp` cannot remove or bypass either the floor or
+      handoff truth. The one provable legacy binding receives a provisional stable binding ID for
+      later MVR-01 adoption; ambiguous legacy aliases fail without minting an ID.
+  - Verify: `tests/ops/test_settings_rebind_protected_state.py::test_floor_and_binding_identity_survive_disposable_volume_loss`
 - [ ] SET-7 registered in the invariant registry with enforcement `runtime_test`; `app/watcher/config.py`'s
       "document the split, do not converge" docstring is updated to record that #2476's verdict is
       superseded by this task (owner ruling 2026-07-07), not silently left to read as current.
@@ -132,7 +148,7 @@ the UI says one vault and ingest watches another — captures silently vanish fr
 
 - `pytest -q tests/watcher/test_ingest_binding_follows_selection.py`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_watcher_cross_process_rebind.py::test_prepare_commit_resume_is_failure_atomic tests/integration/test_watcher_cross_process_rebind.py::test_prepare_drains_and_final_scans_old_binding_writes tests/integration/test_watcher_cross_process_rebind.py::test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_binding tests/integration/test_watcher_cross_process_rebind.py::test_committed_revision_survives_event_loss_and_process_restart tests/integration/test_watcher_cross_process_rebind.py::test_disabled_watcher_is_durable_no_lifecycle`
-- `pytest -q tests/migrations/test_settings_rebind_state.py::test_rebind_schema_migrates_one_provable_binding_or_fails_loud tests/ops/test_settings_rebind_runtime_floor.py::test_rebind_floor_blocks_incompatible_api_and_watcher_before_start`
+- `pytest -q tests/migrations/test_settings_rebind_state.py::test_rebind_schema_migrates_one_provable_binding_or_fails_loud tests/ops/test_settings_rebind_runtime_floor.py::test_rebind_floor_blocks_incompatible_api_and_watcher_before_start tests/ops/test_settings_rebind_protected_state.py::test_floor_and_binding_identity_survive_disposable_volume_loss`
 - `pytest -q -m "not pg"` and `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration -k "watcher or settings"`
   (vault/watcher hot path)
 
