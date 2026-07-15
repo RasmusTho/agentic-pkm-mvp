@@ -135,7 +135,20 @@ def test_stop_cannot_borrow_live_owner_lease(tmp_path, holder, lease_id) -> None
             outcome="fixed",
         )
     with pytest.raises(ValueError, match="ownership"):
-        loop.stop("authority-critical", {"reason": "test"})
+        loop.stop(
+            "authority-critical",
+            {
+                "failure_class": "authority-critical",
+                "original_intent": "verify and close",
+                "current_state": "authority is missing",
+                "tried_actions": ["checked the governing contract"],
+                "evidence": ["issue #3603"],
+                "why_unsafe": "continuation would expand authority",
+                "options": ["hold", "authorize"],
+                "recommended_option": "hold",
+                "consequence_of_doing_nothing": "delivery remains blocked",
+            },
+        )
     assert state.get(run.run_id).status == "running"  # type: ignore[union-attr]
 
 

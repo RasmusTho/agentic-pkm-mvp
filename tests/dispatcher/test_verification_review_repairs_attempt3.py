@@ -243,7 +243,7 @@ def test_repair_receipt_cannot_rebind_to_non_live_head(tmp_path) -> None:
         "host",
     ).consume(request())
 
-    assert result.status == "needs_human"
+    assert result.status == "failed"
     assert result.stop_reason == "receipt_head_mismatch"
     assert result.requested_head_sha == HEAD
     assert result.head_sha == HEAD

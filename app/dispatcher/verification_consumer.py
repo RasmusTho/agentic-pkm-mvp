@@ -30,7 +30,11 @@ from app.dispatcher.verification_dispatch import (
     VerificationRun,
     VerificationSubscriptionBusy,
 )
-from app.dispatcher.verification_agent_loop import VerificationAgentLoop
+from app.dispatcher.verification_agent_loop import (
+    HUMAN_EXCEPTION_PACKET_FIELDS,
+    VerificationAgentLoop,
+    valid_human_exception_packet,
+)
 from app.dispatcher.verification_contract import resolve_issue_contract
 
 
@@ -60,8 +64,6 @@ _MAX_ARTIFACT_COMPRESSED_BYTES = 2_000_000
 _MAX_ARTIFACT_MEMBERS = 16
 _MAX_ARTIFACT_UNCOMPRESSED_BYTES = 2_000_000
 _MAX_REQUEST_BYTES = 1_000_000
-
-
 _UNSUPPORTED_CODEX_SCHEMA_KEYWORDS = frozenset(
     {
         "allOf",
@@ -124,6 +126,19 @@ def validate_verification_closer_receipt(
 
     jsonschema.validate(receipt, schema)
     review_events = receipt.get("review_events")
+    human_exception = receipt.get("human_exception")
+    if receipt.get("verdict") == "needs_human" and (
+        not isinstance(human_exception, Mapping)
+        or set(human_exception) != HUMAN_EXCEPTION_PACKET_FIELDS
+        or not valid_human_exception_packet(human_exception)
+    ):
+        raise jsonschema.ValidationError(
+            "a needs_human receipt requires one complete canonical Human Exception packet"
+        )
+    if receipt.get("verdict") != "needs_human" and human_exception is not None:
+        raise jsonschema.ValidationError(
+            "only a needs_human receipt may carry a Human Exception packet"
+        )
     if receipt.get("verdict") == "delivered" and (
         not isinstance(review_events, list) or len(review_events) < 2
     ):
@@ -1015,7 +1030,7 @@ class VerificationConsumer:
         ):
             return self.ledger.terminal(
                 claimed.run_id,
-                "needs_human",
+                "failed",
                 dict(receipt),
                 reason="receipt_head_mismatch",
                 holder=self.holder,
@@ -1026,7 +1041,7 @@ class VerificationConsumer:
             if receipt_head != claimed.head_sha:
                 return self.ledger.terminal(
                     claimed.run_id,
-                    "needs_human",
+                    "failed",
                     dict(receipt),
                     reason="receipt_head_mismatch",
                     holder=self.holder,
@@ -1045,7 +1060,7 @@ class VerificationConsumer:
         ):
             return self.ledger.terminal(
                 claimed.run_id,
-                "needs_human",
+                "failed",
                 dict(receipt),
                 reason="receipt_head_mismatch",
                 holder=self.holder,
@@ -1106,7 +1121,7 @@ class VerificationConsumer:
             )
             return self.ledger.terminal(
                 claimed.run_id,
-                "needs_human",
+                "failed",
                 dict(receipt),
                 reason=reason,
                 holder=self.holder,
@@ -1123,9 +1138,26 @@ class VerificationConsumer:
         if events:
             loop.apply_events(events, context=pack)
         if verdict == "needs_human":
+            human_exception = receipt.get("human_exception")
+            if (
+                not isinstance(human_exception, Mapping)
+                or set(human_exception) != HUMAN_EXCEPTION_PACKET_FIELDS
+                or not valid_human_exception_packet(human_exception)
+            ):
+                return self.ledger.terminal(
+                    claimed.run_id,
+                    "failed",
+                    dict(receipt),
+                    reason="invalid_human_exception_packet",
+                    holder=self.holder,
+                    lease_id=lease_id,
+                )
+            assert isinstance(human_exception, Mapping)
+            failure_class = str(human_exception["failure_class"])
             loop.stop(
-                "coordinator_needs_human",
+                failure_class,
                 {
+                    **dict(human_exception),
                     "governing_issue": claimed.request.get("linked_issue"),
                     "head_sha": claimed.head_sha,
                     "receipt_ids": receipt.get("receipt_ids", []),
@@ -1146,7 +1178,7 @@ class VerificationConsumer:
         )
         if status is None:
             return self.ledger.terminal(
-                claimed.run_id, "needs_human", dict(receipt), reason="invalid_verdict",
+                claimed.run_id, "failed", dict(receipt), reason="invalid_verdict",
                 holder=self.holder, lease_id=lease_id,
             )
         try:
@@ -1157,7 +1189,7 @@ class VerificationConsumer:
             if status != "completed" or "two fresh clean reviews" not in str(exc):
                 raise
             return self.ledger.terminal(
-                claimed.run_id, "needs_human", dict(receipt), reason="closure_gate_not_proven",
+                claimed.run_id, "failed", dict(receipt), reason="closure_gate_not_proven",
                 holder=self.holder, lease_id=lease_id,
             )
 

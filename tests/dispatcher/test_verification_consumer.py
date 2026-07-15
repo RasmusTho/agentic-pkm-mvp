@@ -49,7 +49,23 @@ class Launcher:
         session = resume_session_id or "thread-new"
         if on_thread_started: on_thread_started(session)
         if on_heartbeat: on_heartbeat()
-        return session, {"verdict": "needs_human", "head_sha": HEAD, "summary": "test", "receipt_ids": []}
+        return session, {
+            "verdict": "needs_human",
+            "head_sha": HEAD,
+            "summary": "test",
+            "receipt_ids": [],
+            "human_exception": {
+                "failure_class": "authority-critical",
+                "original_intent": "verify and close the governing issue",
+                "current_state": "exact head is green but authority is missing",
+                "tried_actions": ["validated CI and review evidence"],
+                "evidence": ["PR #3620"],
+                "why_unsafe": "continuation requires authority outside the issue",
+                "options": ["hold", "authorize"],
+                "recommended_option": "hold",
+                "consequence_of_doing_nothing": "the delivery remains blocked",
+            },
+        }
 
 
 class RateLimitedLauncher(Launcher):
@@ -427,7 +443,7 @@ def test_needs_human_receipt_persists_deduplicated_exception(tmp_path) -> None:
     ).consume(request())
 
     assert result.status == "needs_human"
-    assert result.stop_reason == "coordinator_needs_human"
+    assert result.stop_reason == "authority-critical"
     assert result.terminal_receipt is not None
     exception_id = result.terminal_receipt["exception_id"]
     with state.store._connect() as conn:
@@ -438,11 +454,67 @@ def test_needs_human_receipt_persists_deduplicated_exception(tmp_path) -> None:
         ).fetchall()
     assert len(rows) == 1
     assert rows[0]["exception_id"] == exception_id
-    assert rows[0]["failure_class"] == "coordinator_needs_human"
+    assert rows[0]["failure_class"] == "authority-critical"
     assert rows[0]["head_sha"] == HEAD
     packet = json.loads(rows[0]["packet_json"])
     assert packet["governing_issue"] == 3603
     assert packet["summary"] == "test"
+    assert packet["recommended_option"] == "hold"
+
+
+def test_needs_human_receipt_requires_valid_complete_owner_packet(tmp_path) -> None:
+    class IncompleteHumanLauncher(Launcher):
+        def launch(self, context_pack, **kwargs):
+            session, receipt = super().launch(context_pack, **kwargs)
+            receipt["human_exception"] = {
+                "failure_class": "coordinator_needs_human",
+            }
+            return session, receipt
+
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state, Truth(eligible_pr(), GREEN), Auth(), IncompleteHumanLauncher(), "host"
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "invalid_human_exception_packet"
+    with state.store._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM verification_exceptions WHERE run_id=?",
+            (result.run_id,),
+        ).fetchone()[0] == 0
+
+
+def test_technical_receipt_failures_never_require_owner(tmp_path) -> None:
+    class InvalidVerdictLauncher(Launcher):
+        def launch(self, context_pack, **kwargs):
+            session, receipt = super().launch(context_pack, **kwargs)
+            receipt["verdict"] = "unknown"
+            receipt["human_exception"] = None
+            return session, receipt
+
+    class InvalidHeadLauncher(Launcher):
+        def launch(self, context_pack, **kwargs):
+            session, receipt = super().launch(context_pack, **kwargs)
+            receipt["head_sha"] = "not-a-sha"
+            return session, receipt
+
+    for launcher, reason in (
+        (InvalidVerdictLauncher(), "invalid_verdict"),
+        (InvalidHeadLauncher(), "receipt_head_mismatch"),
+    ):
+        state = ledger(tmp_path / reason)
+        result = VerificationConsumer(
+            state, Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+        ).consume(request())
+
+        assert result.status == "failed"
+        assert result.stop_reason == reason
+        with state.store._connect() as conn:
+            assert conn.execute(
+                "SELECT COUNT(*) FROM verification_exceptions WHERE run_id=?",
+                (result.run_id,),
+            ).fetchone()[0] == 0
 
 
 def test_needs_human_receipt_replay_is_idempotent(tmp_path) -> None:
@@ -512,7 +584,7 @@ def test_delivered_receipt_rejects_closed_unmerged_or_mismatched_merge(
         "host",
     ).consume(request())
 
-    assert result.status == "needs_human"
+    assert result.status == "failed"
     assert result.stop_reason == reason
 
 
@@ -521,7 +593,7 @@ def test_codex_launcher_uses_explicit_noninteractive_flags_and_no_api_env(tmp_pa
 
     class Result:
         returncode = 0
-        stdout = '{"type":"thread.started","thread_id":"thread-1"}\n{"type":"item.completed","item":{"type":"agent_message","text":"{\\"verdict\\":\\"needs_human\\",\\"head_sha\\":\\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\",\\"summary\\":\\"test\\",\\"receipt_ids\\":[],\\"retry_after\\":null,\\"review_events\\":null}"}}\n'
+        stdout = '{"type":"thread.started","thread_id":"thread-1"}\n{"type":"item.completed","item":{"type":"agent_message","text":"{\\"verdict\\":\\"blocked\\",\\"head_sha\\":\\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\",\\"summary\\":\\"test\\",\\"receipt_ids\\":[],\\"retry_after\\":null,\\"review_events\\":null,\\"human_exception\\":null}"}}\n'
 
     def runner(command, **kwargs):
         calls.append((command, kwargs))
@@ -541,6 +613,7 @@ def test_codex_launcher_uses_explicit_noninteractive_flags_and_no_api_env(tmp_pa
                     "receipt_ids": {"type": "array", "items": {"type": "string"}},
                     "retry_after": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                     "review_events": {"type": "null"},
+                    "human_exception": {"type": "null"},
                 },
                 "required": [
                     "verdict",
@@ -549,6 +622,7 @@ def test_codex_launcher_uses_explicit_noninteractive_flags_and_no_api_env(tmp_pa
                     "receipt_ids",
                     "retry_after",
                     "review_events",
+                    "human_exception",
                 ],
                 "additionalProperties": False,
             }
@@ -1054,6 +1128,7 @@ def test_production_receipt_schema_uses_codex_subset_and_preserves_semantics() -
                 "strongest": None,
             },
         ],
+        "human_exception": None,
     }
     verification_consumer.validate_verification_closer_receipt(valid, schema)
 

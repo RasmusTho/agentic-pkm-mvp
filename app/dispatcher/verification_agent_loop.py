@@ -9,6 +9,60 @@ from typing import Callable, Mapping, Sequence
 from app.dispatcher.verification_dispatch import VerificationDispatchLedger
 
 
+HUMAN_EXCEPTION_FAILURE_CLASSES = frozenset(
+    {
+        "safety-critical",
+        "authority-critical",
+        "intent-critical",
+        "autonomous-failure-critical",
+    }
+)
+HUMAN_EXCEPTION_PACKET_FIELDS = frozenset(
+    {
+        "failure_class",
+        "original_intent",
+        "current_state",
+        "tried_actions",
+        "evidence",
+        "why_unsafe",
+        "options",
+        "recommended_option",
+        "consequence_of_doing_nothing",
+    }
+)
+_HUMAN_EXCEPTION_BINDING_FIELDS = frozenset(
+    {"governing_issue", "head_sha", "receipt_ids", "summary"}
+)
+
+
+def valid_human_exception_packet(packet: object) -> bool:
+    if not isinstance(packet, Mapping):
+        return False
+    keys = set(packet)
+    if not HUMAN_EXCEPTION_PACKET_FIELDS.issubset(keys) or not keys.issubset(
+        HUMAN_EXCEPTION_PACKET_FIELDS | _HUMAN_EXCEPTION_BINDING_FIELDS
+    ):
+        return False
+    if packet.get("failure_class") not in HUMAN_EXCEPTION_FAILURE_CLASSES:
+        return False
+    for field in (
+        "original_intent",
+        "current_state",
+        "why_unsafe",
+        "recommended_option",
+        "consequence_of_doing_nothing",
+    ):
+        if not isinstance(packet.get(field), str) or not packet[field].strip():
+            return False
+    for field in ("tried_actions", "evidence", "options"):
+        values = packet.get(field)
+        if not isinstance(values, list) or any(
+            not isinstance(value, str) or not value.strip() for value in values
+        ):
+            return False
+    return bool(packet["options"])
+
+
 class VerificationAgentLoop:
     # Durable ledger enforcement: independent re-review requires a fresh session.
     def __init__(
@@ -281,6 +335,12 @@ class VerificationAgentLoop:
         return self.ledger.closure_ready(self.run_id)
 
     def stop(self, failure_class: str, packet: Mapping[str, object]) -> str:
+        if (
+            failure_class not in HUMAN_EXCEPTION_FAILURE_CLASSES
+            or packet.get("failure_class") != failure_class
+            or not valid_human_exception_packet(packet)
+        ):
+            raise ValueError("invalid Human Exception failure class or packet")
         exception_id = self.ledger.exception(
             self.run_id,
             failure_class,

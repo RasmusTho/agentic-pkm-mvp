@@ -88,8 +88,11 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   PR read must still contain exactly the request's explicit governing issue and identical bounded
   supporting-issue evidence; body-only missing, conflicting, or changed authority fails closed.
 - A genuine coordinator `needs_human` verdict crosses the one durable Human Exception boundary:
-  the consumer records a head- and governing-issue-bound, deduplicated exception packet before it
-  terminals the run. Replay returns the existing terminal state without a second packet or launch.
+  the consumer accepts only one of the four governed failure classes plus the complete canonical
+  owner-decision packet, then records it head- and governing-issue-bound before terminal state.
+  Replay returns the same deduplicated exception without a second packet or launch. Receipt,
+  head, live-truth, invalid-verdict, and closure-proof failures remain technical failures and never
+  select `needs_human` or create an exception packet.
 - The immutable request head remains the run/idempotency audit identity. A repair receipt may advance
   the separate current head only under the exact active lease after a fresh GitHub read proves that
   exact live PR head; terminal delivery records the verified head only after two clean reviews on it.
