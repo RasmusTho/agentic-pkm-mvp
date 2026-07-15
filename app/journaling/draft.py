@@ -309,7 +309,21 @@ def _locked_draft_process_safe(
 ) -> Iterator[tuple[int, str]]:
     root_fd = os.open(vault_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     current_fd = root_fd
+    bootstrap_fd: int | None = None
+    lock_fd: int | None = None
     try:
+        # The per-draft lock lives in the staging directory, so first use needs
+        # a stable lock anchored in the already-existing vault root. Holding it
+        # through directory creation and acquisition of the per-draft flock
+        # prevents separate processes from racing on bootstrap. It is released
+        # before the transaction body; established drafts still serialize on
+        # their narrower per-draft lock.
+        bootstrap_fd = _open_lock_at(
+            root_fd,
+            ".journal-draft-bootstrap.lock",
+            symlink_message="journal draft bootstrap lock path is a symlink",
+        )
+        fcntl.flock(bootstrap_fd, fcntl.LOCK_EX)
         for component in relative_path.parent.parts:
             try:
                 next_fd = os.open(
@@ -343,27 +357,67 @@ def _locked_draft_process_safe(
             current_fd = next_fd
 
         lock_name = f".{relative_path.name}.lock"
-        try:
-            lock_fd = os.open(
-                lock_name,
-                os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
-                0o600,
-                dir_fd=current_fd,
-            )
-        except OSError as exc:
-            if exc.errno == errno.ELOOP:
-                raise ValueError("journal draft lock path is a symlink") from exc
-            raise
+        lock_fd = _open_lock_at(
+            current_fd,
+            lock_name,
+            symlink_message="journal draft lock path is a symlink",
+        )
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            fcntl.flock(bootstrap_fd, fcntl.LOCK_UN)
+            os.close(bootstrap_fd)
+            bootstrap_fd = None
             yield current_fd, relative_path.name
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
             os.close(lock_fd)
+            lock_fd = None
     finally:
+        if lock_fd is not None:
+            os.close(lock_fd)
+        if bootstrap_fd is not None:
+            fcntl.flock(bootstrap_fd, fcntl.LOCK_UN)
+            os.close(bootstrap_fd)
         if current_fd != root_fd:
             os.close(current_fd)
         os.close(root_fd)
+
+
+def _open_lock_at(
+    directory_fd: int, filename: str, *, symlink_message: str
+) -> int:
+    """Create/open one regular no-follow lock file beneath ``directory_fd``."""
+
+    try:
+        try:
+            descriptor = os.open(
+                filename,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=directory_fd,
+            )
+        except FileExistsError:
+            descriptor = os.open(
+                filename,
+                os.O_RDWR | os.O_NOFOLLOW,
+                dir_fd=directory_fd,
+            )
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+            raise ValueError(symlink_message) from exc
+        raise
+
+    try:
+        opened = os.fstat(descriptor)
+        named = os.stat(filename, dir_fd=directory_fd, follow_symlinks=False)
+        if not stat.S_ISREG(opened.st_mode) or not stat.S_ISREG(named.st_mode):
+            raise ValueError("journal draft lock path is not a regular file")
+        if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
+            raise ValueError("journal draft lock path changed while opening")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
 
 
 def _load_existing_draft_frontmatter_at(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
+import multiprocessing
 from pathlib import Path
 import threading
 
@@ -15,12 +16,40 @@ from app.journaling.draft import (
     resolve_journal_draft_activation_receipt,
 )
 from app.knowledge_acquisition.candidate_writeback import ARTIFACT_CLASS, DEFAULT_SOURCES_DIR
+from app.reasoning.schema import ReasoningOutput
 from app.vault.manager import VaultContext
 from app.write_guard import WriteGuard, WritesBlockedError
 from scripts.yaml_roundtrip import load_frontmatter
 
 
 DAY = date(2026, 7, 15)
+
+
+def _empty_reasoning(_object_ids: object, *, trace_id: str | None = None) -> ReasoningOutput:
+    del trace_id
+    return ReasoningOutput()
+
+
+def _compose_journal_in_process(
+    vault_root: str,
+    session_id: str,
+    start: object,
+    outcomes: object,
+) -> None:
+    try:
+        start.wait(timeout=10)  # type: ignore[attr-defined]
+        result = draft_journal_entry(
+            vault_context=VaultContext(
+                status="selected", active_vault_path=vault_root
+            ),
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+            reasoning_fn=_empty_reasoning,
+        )
+        outcomes.put(("ok", result.path, result.activation_receipt_id))  # type: ignore[attr-defined]
+    except BaseException as exc:
+        outcomes.put(("error", type(exc).__name__, str(exc)))  # type: ignore[attr-defined]
 
 
 def _allowing_guard() -> WriteGuard:
@@ -282,6 +311,48 @@ def test_symlinked_final_target_is_rejected_without_touching_target(
     assert inbox_note.read_text(encoding="utf-8") == "owner content"
 
 
+def test_symlinked_bootstrap_lock_is_rejected_without_touching_target(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    outside = tmp_path / "outside-lock"
+    outside.write_text("owner content", encoding="utf-8")
+    (root / ".journal-draft-bootstrap.lock").symlink_to(outside)
+
+    with pytest.raises(ValueError, match="bootstrap lock path is a symlink"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+    assert outside.read_text(encoding="utf-8") == "owner content"
+
+
+def test_symlinked_per_draft_lock_is_rejected_without_touching_target(
+    tmp_path: Path,
+) -> None:
+    from app.vault.paths import get_vault_system_dir_rel
+
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    outside = tmp_path / "outside-draft-lock"
+    outside.write_text("owner content", encoding="utf-8")
+    journal_dir = root / get_vault_system_dir_rel(root) / "drafts" / "journal"
+    journal_dir.mkdir(parents=True)
+    (journal_dir / ".2026-07-15.md.lock").symlink_to(outside)
+
+    with pytest.raises(ValueError, match="journal draft lock path is a symlink"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+    assert outside.read_text(encoding="utf-8") == "owner content"
+
+
 def test_draft_is_idempotent_same_day(tmp_path: Path) -> None:
     root, context, session_id, _capture = _seed_inputs(tmp_path)
     first = draft_journal_entry(
@@ -358,6 +429,59 @@ session_id: session-later
     }
     assert "I connected several loose ends." in body
     assert "I also made time to write." in body
+
+
+def test_fresh_vault_cross_process_first_use_retains_both_sessions(
+    tmp_path: Path,
+) -> None:
+    root, _context, first_session_id, _capture = _seed_inputs(tmp_path)
+    second_session = root / ".chats" / "reflection" / "2026-07-15-later.md"
+    second_session.write_text(
+        """---
+type: chat-session
+session_id: session-later
+---
+
+**Owner:** I also made time to write.
+""",
+        encoding="utf-8",
+    )
+    assert not list(root.glob("**/drafts/journal"))
+
+    process_context = multiprocessing.get_context("spawn")
+    start = process_context.Barrier(2)
+    outcomes = process_context.Queue()
+    processes = [
+        process_context.Process(
+            target=_compose_journal_in_process,
+            args=(str(root), session_id, start, outcomes),
+        )
+        for session_id in (first_session_id, "session-later")
+    ]
+
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=20)
+        assert not process.is_alive()
+        assert process.exitcode == 0
+
+    results = [outcomes.get(timeout=5) for _process in processes]
+    assert [result[0] for result in results] == ["ok", "ok"], results
+    assert results[0][1] == results[1][1]
+
+    frontmatter, body = _read_result(root, results[0][1])
+    assert set(frontmatter["sources"]) >= {
+        f"session:{first_session_id}",
+        "session:session-later",
+    }
+    assert "I connected several loose ends." in body
+    assert "I also made time to write." in body
+    receipt_ids = {
+        str(receipt["event_id"])
+        for receipt in frontmatter["activation_receipts"]
+    }
+    assert receipt_ids == {result[2] for result in results}
 
 
 def test_default_cognition_uses_resolvable_objects_and_synthesis(
