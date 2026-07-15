@@ -11,6 +11,7 @@ import ctypes
 import hashlib
 import json
 import io
+import math
 import os
 import re
 import secrets
@@ -353,7 +354,11 @@ def validate_verification_closer_receipt(
 
 
 def load_and_validate_verification_closer_receipt(
-    receipt: object, schema_path: Path
+    receipt: object,
+    schema_path: Path,
+    *,
+    trusted_repository: str,
+    trusted_evidence_urls: frozenset[str],
 ) -> Mapping[str, object]:
     """Validate untrusted launcher output against the canonical receipt contract."""
 
@@ -377,7 +382,11 @@ def load_and_validate_verification_closer_receipt(
         validate_verification_closer_receipt(receipt, schema)
     except jsonschema.ValidationError as exc:
         raise ReceiptContractError("verification closer receipt is invalid") from exc
-    sanitized = sanitize_verification_closer_receipt(receipt)
+    sanitized = sanitize_verification_closer_receipt(
+        receipt,
+        trusted_repository=trusted_repository,
+        trusted_evidence_urls=trusted_evidence_urls,
+    )
     try:
         validate_verification_closer_receipt(sanitized, schema)
     except jsonschema.ValidationError as exc:
@@ -774,10 +783,26 @@ _SAFE_REASONING_EFFORTS = frozenset(
     {"minimal", "low", "medium", "high", "xhigh", "max"}
 )
 _SAFE_EVENT_OUTCOMES = frozenset({"blocking", "clean", "fixed", "repaired"})
+_CANONICAL_HUMAN_ACTION_COPY = {
+    "hold": (
+        "Keep delivery blocked",
+        "No gated action is authorized; the linked verification delivery remains blocked.",
+    ),
+    "authorize": (
+        "Authorize the linked gated action",
+        "The linked gated action may proceed only through its remaining recorded gates.",
+    ),
+    "select-alternative": (
+        "Select an alternative on the linked issue",
+        "Delivery remains blocked until a different choice is recorded on the linked issue.",
+    ),
+}
 _HTTPS_URL_CANDIDATE = re.compile(r"https://[^\s,;)\]}\"'<>]+", re.IGNORECASE)
 
 
-def _safe_github_url_projection(value: str) -> str:
+def _safe_github_url_projection(
+    value: str, *, trusted_repository: str | None
+) -> str:
     """Retain only bounded, recognized GitHub evidence routes without secrets."""
 
     try:
@@ -841,7 +866,16 @@ def _safe_github_url_projection(value: str) -> str:
     recognized_route = (
         host == "github.com" and github_route
     ) or (host == "api.github.com" and api_route)
-    if contains_private_component or not recognized_route:
+    repository_components = (
+        segments[:2] if host == "github.com" else segments[1:3]
+    )
+    authenticated_repository = "/".join(repository_components)
+    if (
+        contains_private_component
+        or not recognized_route
+        or trusted_repository is None
+        or authenticated_repository.casefold() != trusted_repository.casefold()
+    ):
         return f"https://{host}/REDACTED"
     return f"https://{host}{parsed.path}"[:256]
 
@@ -865,18 +899,36 @@ def bounded_coordinator_session_id(value: object) -> str | None:
     return canonical if value == canonical else None
 
 
-def _sanitize_receipt_text(value: object, *, limit: int = _MAX_RECEIPT_TEXT) -> str:
+def _sanitize_receipt_text(
+    value: object,
+    *,
+    trusted_repository: str | None,
+    trusted_evidence_urls: frozenset[str] | None = None,
+    limit: int = _MAX_RECEIPT_TEXT,
+) -> str:
     """Project untrusted prose onto canonical redaction plus safe evidence links."""
 
+    canonical_urls = (
+        {url.casefold(): url for url in trusted_evidence_urls}
+        if trusted_evidence_urls is not None
+        else None
+    )
     safe_urls: list[str] = []
     for match in _HTTPS_URL_CANDIDATE.finditer(str(value)):
-        candidate = _safe_github_url_projection(match.group(0))
+        candidate = _safe_github_url_projection(
+            match.group(0), trusted_repository=trusted_repository
+        )
         if candidate in {
             "[REDACTED_URL]",
             "https://github.com/REDACTED",
             "https://api.github.com/REDACTED",
         }:
             continue
+        if canonical_urls is not None:
+            canonical = canonical_urls.get(candidate.casefold())
+            if canonical is None:
+                continue
+            candidate = canonical
         if candidate not in safe_urls:
             safe_urls.append(candidate)
 
@@ -893,23 +945,56 @@ def _sanitize_retry_after(value: object) -> str | float | int | None:
     """Retain only retry values with syntax consumed by the local scheduler."""
 
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return value
+        try:
+            amount = float(value)
+        except OverflowError:
+            return None
+        if not math.isfinite(amount) or amount <= 0:
+            return None
+        bounded = min(amount, 3600.0)
+        return int(bounded) if bounded.is_integer() else bounded
     if not isinstance(value, str):
         return None
     stripped = value.strip()
-    if re.fullmatch(r"\d+(?:\.\d+)?[smh]", stripped, re.IGNORECASE):
-        return stripped.lower()
+    if not stripped or len(stripped) > 128:
+        return None
+    duration = re.fullmatch(
+        r"(?P<amount>\d+(?:\.\d+)?)(?P<unit>[smh])",
+        stripped,
+        re.IGNORECASE,
+    )
+    if duration is not None:
+        amount = float(duration.group("amount"))
+        if not math.isfinite(amount) or amount <= 0:
+            return None
+        seconds = amount * {"s": 1, "m": 60, "h": 3600}[
+            duration.group("unit").lower()
+        ]
+        bounded = min(seconds, 3600.0)
+        return f"{bounded:g}s"
     try:
         parsed = datetime.fromisoformat(stripped.replace("Z", "+00:00"))
     except ValueError:
         return None
     if parsed.tzinfo is None:
         return None
-    return stripped
+    return parsed.astimezone(timezone.utc).isoformat(timespec="microseconds")
 
 
-def _required_receipt_text(value: object) -> str:
-    return _sanitize_receipt_text(value) or "[REDACTED]"
+def _required_receipt_text(
+    value: object,
+    *,
+    trusted_repository: str | None,
+    trusted_evidence_urls: frozenset[str] | None,
+) -> str:
+    return (
+        _sanitize_receipt_text(
+            value,
+            trusted_repository=trusted_repository,
+            trusted_evidence_urls=trusted_evidence_urls,
+        )
+        or "[REDACTED]"
+    )
 
 
 def _pseudonymous_receipt_identifier(value: object, *, prefix: str) -> str:
@@ -960,27 +1045,34 @@ def _sanitize_review_event(event: Mapping[str, object]) -> dict[str, object]:
 
 def _sanitize_human_exception_packet(
     packet: Mapping[str, object],
+    *,
+    trusted_repository: str | None,
+    trusted_evidence_urls: frozenset[str] | None,
 ) -> dict[str, object]:
     raw_options = packet["options"]
     assert isinstance(raw_options, list)
+    raw_no_action = str(packet["no_action_option"])
+    raw_recommended = str(packet["recommended_option"])
     option_ids: dict[str, str] = {}
     options: list[dict[str, object]] = []
     for option in raw_options[:3]:
         assert isinstance(option, Mapping)
         raw_id = str(option["id"])
-        safe_id = (
-            raw_id
-            if _SAFE_DURABLE_IDENTIFIER.fullmatch(raw_id)
-            and _KNOWN_TOKEN_VALUE.search(raw_id) is None
-            and _OPAQUE_SECRET_VALUE.search(raw_id) is None
-            else _pseudonymous_receipt_identifier(raw_id, prefix="option")
-        )
+        if raw_id == raw_no_action:
+            safe_id = "hold"
+        elif raw_id == raw_recommended:
+            safe_id = "authorize"
+        elif raw_recommended == raw_no_action and "authorize" not in option_ids.values():
+            safe_id = "authorize"
+        else:
+            safe_id = "select-alternative"
+        label, consequence = _CANONICAL_HUMAN_ACTION_COPY[safe_id]
         option_ids[raw_id] = safe_id
         options.append(
             {
                 "id": safe_id,
-                "label": _required_receipt_text(option["label"]),
-                "consequence": _required_receipt_text(option["consequence"]),
+                "label": label,
+                "consequence": consequence,
             }
         )
 
@@ -988,31 +1080,52 @@ def _sanitize_human_exception_packet(
         values = packet[field]
         assert isinstance(values, list)
         return [
-            _required_receipt_text(value)
+            _required_receipt_text(
+                value,
+                trusted_repository=trusted_repository,
+                trusted_evidence_urls=trusted_evidence_urls,
+            )
             for value in values[:_MAX_RECEIPT_LIST_ITEMS]
         ]
 
     return {
         "failure_class": packet["failure_class"],
-        "original_intent": _required_receipt_text(packet["original_intent"]),
-        "current_state": _required_receipt_text(packet["current_state"]),
+        "original_intent": _required_receipt_text(
+            packet["original_intent"],
+            trusted_repository=trusted_repository,
+            trusted_evidence_urls=trusted_evidence_urls,
+        ),
+        "current_state": _required_receipt_text(
+            packet["current_state"],
+            trusted_repository=trusted_repository,
+            trusted_evidence_urls=trusted_evidence_urls,
+        ),
         "tried_actions": safe_list("tried_actions"),
         "evidence": safe_list("evidence"),
-        "why_unsafe": _required_receipt_text(packet["why_unsafe"]),
-        "options": options,
-        "no_action_option": option_ids[str(packet["no_action_option"])],
-        "recommended_option": option_ids[str(packet["recommended_option"])],
-        "recommendation_rationale": _required_receipt_text(
-            packet["recommendation_rationale"]
+        "why_unsafe": _required_receipt_text(
+            packet["why_unsafe"],
+            trusted_repository=trusted_repository,
+            trusted_evidence_urls=trusted_evidence_urls,
         ),
-        "consequence_of_doing_nothing": _required_receipt_text(
-            packet["consequence_of_doing_nothing"]
+        "options": options,
+        "no_action_option": option_ids[raw_no_action],
+        "recommended_option": option_ids[raw_recommended],
+        "recommendation_rationale": (
+            "The coordinator selected this canonical action; inspect the linked issue "
+            "evidence before authorizing any gated effect."
+        ),
+        "consequence_of_doing_nothing": (
+            "The verification delivery remains blocked until the linked owner decision "
+            "is recorded."
         ),
     }
 
 
 def sanitize_verification_closer_receipt(
     receipt: Mapping[str, object],
+    *,
+    trusted_repository: str | None = None,
+    trusted_evidence_urls: frozenset[str] | None = None,
 ) -> dict[str, object]:
     """Project one schema-valid coordinator receipt onto its durable-safe form."""
 
@@ -1024,7 +1137,11 @@ def sanitize_verification_closer_receipt(
     return {
         "verdict": receipt["verdict"],
         "head_sha": receipt["head_sha"],
-        "summary": _sanitize_receipt_text(receipt["summary"]),
+        "summary": _sanitize_receipt_text(
+            receipt["summary"],
+            trusted_repository=trusted_repository,
+            trusted_evidence_urls=trusted_evidence_urls,
+        ),
         "receipt_ids": [
             _pseudonymous_receipt_identifier(value, prefix="receipt")
             for value in raw_receipt_ids[:_MAX_RECEIPT_IDS]
@@ -1040,7 +1157,11 @@ def sanitize_verification_closer_receipt(
             else None
         ),
         "human_exception": (
-            _sanitize_human_exception_packet(raw_exception)
+            _sanitize_human_exception_packet(
+                raw_exception,
+                trusted_repository=trusted_repository,
+                trusted_evidence_urls=trusted_evidence_urls,
+            )
             if isinstance(raw_exception, Mapping)
             else None
         ),
@@ -1109,7 +1230,7 @@ def redact_durable_diagnostics(value: object) -> object:
             for child in value[:_MAX_RECEIPT_LIST_ITEMS]
         ]
     if isinstance(value, str):
-        return _sanitize_receipt_text(value)
+        return _sanitize_receipt_text(value, trusted_repository=None)
     return value
 
 
@@ -1580,6 +1701,44 @@ def _nested(mapping: Mapping[str, object], *keys: str) -> object:
     return value
 
 
+def _trusted_evidence_urls(run: VerificationRun) -> frozenset[str]:
+    """Derive the only durable evidence links from authenticated run identity."""
+
+    repository = run.repository
+    web_base = f"https://github.com/{repository}"
+    api_base = f"https://api.github.com/repos/{repository}"
+    urls = {web_base, api_base}
+
+    def positive_int(value: object) -> int | None:
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+        return None
+
+    issue_numbers = [positive_int(run.request.get("linked_issue"))]
+    supporting = run.request.get("supporting_issues")
+    if isinstance(supporting, list):
+        issue_numbers.extend(positive_int(value) for value in supporting)
+    for issue_number in issue_numbers:
+        if issue_number is not None:
+            urls.add(f"{web_base}/issues/{issue_number}")
+            urls.add(f"{api_base}/issues/{issue_number}")
+
+    urls.add(f"{web_base}/pull/{run.pr_number}")
+    urls.add(f"{api_base}/pulls/{run.pr_number}")
+
+    workflow_run_ids = {
+        positive_int(_nested(run.request, "source_workflow", "run_id")),
+        positive_int(_nested(run.request, "live_truth", "source_run_id")),
+        positive_int(_nested(run.request, "artifact_provenance", "workflow_run_id")),
+    }
+    for workflow_run_id in workflow_run_ids:
+        if workflow_run_id is not None:
+            urls.add(f"{web_base}/actions/runs/{workflow_run_id}")
+            urls.add(f"{api_base}/actions/runs/{workflow_run_id}")
+
+    return frozenset(urls)
+
+
 def _governing_contract_matches(run: VerificationRun, pr_body: object) -> bool:
     issue_contract = resolve_issue_contract(pr_body)
     requested_support = run.request.get("supporting_issues")
@@ -1833,7 +1992,10 @@ class VerificationConsumer:
         """Revalidate one persisted delivered receipt through merged live truth."""
         try:
             receipt = load_and_validate_verification_closer_receipt(
-                receipt, self.receipt_schema
+                receipt,
+                self.receipt_schema,
+                trusted_repository=run.repository,
+                trusted_evidence_urls=_trusted_evidence_urls(run),
             )
         except ReceiptContractError as exc:
             try:
@@ -2133,7 +2295,10 @@ class VerificationConsumer:
                 on_heartbeat=heartbeat,
             )
             receipt = load_and_validate_verification_closer_receipt(
-                receipt, self.receipt_schema
+                receipt,
+                self.receipt_schema,
+                trusted_repository=claimed.repository,
+                trusted_evidence_urls=_trusted_evidence_urls(claimed),
             )
             safe_session_id = bounded_coordinator_session_id(session_id)
             if safe_session_id is None:

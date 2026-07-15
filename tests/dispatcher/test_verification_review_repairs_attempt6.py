@@ -7,7 +7,8 @@ from app.dispatcher.cli import _compact_verification_run
 from app.dispatcher.verification_consumer import (
     VerificationConsumer,
     _checks_rejection,
-    sanitize_verification_closer_receipt,
+    _trusted_evidence_urls,
+    sanitize_verification_closer_receipt as _sanitize_verification_closer_receipt,
 )
 from tests.dispatcher.test_verification_consumer import (
     Auth,
@@ -38,8 +39,20 @@ _ADVERSARIAL_PRIVATE_VALUES = (
     "https://[github.com/org/repo",
     "https://github.com：443/org/repo",
     "https://github.com／org/repo",
+    "https://github.com/private-codename-rose/repo/issues/1",
 )
-_SAFE_EVIDENCE_URL = "https://github.com/RasmusTho/agentic-pkm-mvp/pull/3620"
+_TRUSTED_REPOSITORY = "RasmusTho/agentic-pkm-mvp"
+_SAFE_EVIDENCE_URL = f"https://github.com/{_TRUSTED_REPOSITORY}/pull/3603"
+
+
+def sanitize_verification_closer_receipt(
+    receipt: dict[str, object],
+) -> dict[str, object]:
+    """Exercise repository-bound projection; run-bound tests pass exact evidence."""
+
+    return _sanitize_verification_closer_receipt(
+        receipt, trusted_repository=_TRUSTED_REPOSITORY
+    )
 
 
 def _assert_private_text_absent(value: object) -> None:
@@ -244,6 +257,141 @@ def test_allowlisted_text_projection_retains_only_safe_github_evidence() -> None
     assert "/blob/" not in str(sanitized["summary"])
 
 
+def test_allowlisted_urls_require_authenticated_repository_identity() -> None:
+    trusted_url = f"https://github.com/{_TRUSTED_REPOSITORY}/issues/3769"
+    private_identity = "private-codename-rose"
+    foreign_urls = (
+        f"https://github.com/{private_identity}/repo/issues/1",
+        f"https://api.github.com/repos/{private_identity}/repo/issues/1",
+        f"https://github.com/{private_identity}/repo/actions/runs/1",
+    )
+    sanitized = sanitize_verification_closer_receipt(
+        {
+            "verdict": "blocked",
+            "head_sha": HEAD,
+            "summary": " ".join((trusted_url, *foreign_urls)),
+            "receipt_ids": [],
+            "retry_after": None,
+            "review_events": None,
+            "human_exception": None,
+        }
+    )
+
+    summary = str(sanitized["summary"])
+    assert trusted_url in summary
+    assert private_identity not in summary
+
+
+def test_allowlisted_urls_require_authenticated_run_evidence(tmp_path) -> None:
+    run = ledger(tmp_path).ingest(request())
+    trusted = _trusted_evidence_urls(run)
+    expected = {
+        f"https://github.com/{_TRUSTED_REPOSITORY}",
+        f"https://api.github.com/repos/{_TRUSTED_REPOSITORY}",
+        f"https://github.com/{_TRUSTED_REPOSITORY}/issues/3603",
+        f"https://api.github.com/repos/{_TRUSTED_REPOSITORY}/issues/3603",
+        f"https://github.com/{_TRUSTED_REPOSITORY}/pull/3603",
+        f"https://api.github.com/repos/{_TRUSTED_REPOSITORY}/pulls/3603",
+        f"https://github.com/{_TRUSTED_REPOSITORY}/actions/runs/99",
+        f"https://api.github.com/repos/{_TRUSTED_REPOSITORY}/actions/runs/99",
+        f"https://github.com/{_TRUSTED_REPOSITORY}/actions/runs/123",
+        f"https://api.github.com/repos/{_TRUSTED_REPOSITORY}/actions/runs/123",
+    }
+    assert trusted == frozenset(expected)
+
+    arbitrary_same_repo_url = (
+        f"https://github.com/{_TRUSTED_REPOSITORY}/issues/999999999"
+    )
+    sanitized = _sanitize_verification_closer_receipt(
+        {
+            "verdict": "blocked",
+            "head_sha": HEAD,
+            "summary": f"{next(iter(expected))} {arbitrary_same_repo_url}",
+            "receipt_ids": [],
+            "retry_after": None,
+            "review_events": None,
+            "human_exception": None,
+        },
+        trusted_repository=_TRUSTED_REPOSITORY,
+        trusted_evidence_urls=trusted,
+    )
+
+    assert arbitrary_same_repo_url not in str(sanitized["summary"])
+
+
+def test_human_exception_actions_are_canonical_safe_and_actionable() -> None:
+    _, receipt = Launcher().launch({})
+    packet = receipt["human_exception"]
+    assert isinstance(packet, dict)
+    packet["options"] = [
+        {
+            "id": "privatecodename",
+            "label": "Private owner wording",
+            "consequence": "Private consequence",
+        },
+        {
+            "id": "model-authored-action",
+            "label": "Authorize requested action",
+            "consequence": "Continue within linked gates",
+        },
+        {
+            "id": "another-private-option",
+            "label": "Choose a different path",
+            "consequence": "Record a choice on the linked issue",
+        },
+    ]
+    packet["no_action_option"] = "privatecodename"
+    packet["recommended_option"] = "model-authored-action"
+
+    sanitized = sanitize_verification_closer_receipt(receipt)
+    safe_packet = sanitized["human_exception"]
+    assert isinstance(safe_packet, dict)
+    assert [option["id"] for option in safe_packet["options"]] == [
+        "hold",
+        "authorize",
+        "select-alternative",
+    ]
+    assert safe_packet["no_action_option"] == "hold"
+    assert safe_packet["recommended_option"] == "authorize"
+    assert [option["label"] for option in safe_packet["options"]] == [
+        "Keep delivery blocked",
+        "Authorize the linked gated action",
+        "Select an alternative on the linked issue",
+    ]
+    encoded = json.dumps(safe_packet, sort_keys=True)
+    assert "privatecodename" not in encoded
+    assert "model-authored-action" not in encoded
+    assert "another-private-option" not in encoded
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (float("nan"), None),
+        (float("inf"), None),
+        (-1, None),
+        (10**1000, None),
+        (7200, 3600),
+        ("5m", "300s"),
+        ("9" * 10_000 + "h", None),
+        ("2030-01-02T03:04:05", None),
+        (
+            "2030-01-02T03:04:05+02:00",
+            "2030-01-02T01:04:05.000000+00:00",
+        ),
+    ],
+)
+def test_retry_after_is_bounded_and_canonical(
+    value: object, expected: object
+) -> None:
+    _, receipt = Launcher().launch({})
+    receipt["retry_after"] = value
+
+    sanitized = sanitize_verification_closer_receipt(receipt)
+
+    assert sanitized["retry_after"] == expected
+
+
 def test_allowlisted_text_projection_preserves_structural_receipt_fields() -> None:
     _, receipt = Launcher().launch({})
     receipt["retry_after"] = "2030-01-02T03:04:05+00:00"
@@ -253,7 +401,7 @@ def test_allowlisted_text_projection_preserves_structural_receipt_fields() -> No
 
     assert sanitized["verdict"] == "needs_human"
     assert sanitized["head_sha"] == HEAD
-    assert sanitized["retry_after"] == "2030-01-02T03:04:05+00:00"
+    assert sanitized["retry_after"] == "2030-01-02T03:04:05.000000+00:00"
     assert isinstance(packet, dict)
     assert packet["recommended_option"] == "hold"
     assert packet["no_action_option"] == "hold"
@@ -351,7 +499,10 @@ def test_malformed_https_origins_fail_closed(url: str) -> None:
 
 
 def test_quoted_safe_github_urls_and_many_placeholders_remain_actionable() -> None:
-    safe_urls = [f"https://github.com/org/repo/issues/{index}" for index in range(12)]
+    safe_urls = [
+        f"https://github.com/{_TRUSTED_REPOSITORY}/issues/{index}"
+        for index in range(6)
+    ]
     quoted = f'"{safe_urls[0]}"'
     sanitized = sanitize_verification_closer_receipt(
         {
@@ -372,7 +523,7 @@ def test_quoted_safe_github_urls_and_many_placeholders_remain_actionable() -> No
 
 
 def test_raw_placeholder_text_cannot_duplicate_a_preserved_url() -> None:
-    safe_url = "https://github.com/org/repo/issues/3764"
+    safe_url = f"https://github.com/{_TRUSTED_REPOSITORY}/issues/3764"
     sanitized = sanitize_verification_closer_receipt(
         {
             "verdict": "blocked",

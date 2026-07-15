@@ -89,11 +89,16 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   make model-produced text durable-safe: raw coordinator prose remains transient and never enters
   attempts, pending replay receipts, terminal rows, Human Exception packets, or status output. Its
   only durable text projection is the canonical `[REDACTED]` marker followed by unique, bounded,
-  allowlisted GitHub repository, issue, pull-request, or Actions-run evidence routes. Queries,
-  fragments, percent-encoded paths, unsupported routes, secret-shaped path components, URL userinfo,
-  explicit ports, and non-GitHub origins are never preserved. This allowlist, rather than
-  credential-pattern coverage,
-  establishes the no-secret invariant for free-form coordinator text. The projection retains
+  allowlisted GitHub repository, issue, pull-request, or Actions-run evidence routes that are
+  derived from the authenticated verification request; matching the owner/repository alone is not
+  sufficient. Queries, fragments, percent-encoded paths, foreign repository identities, invented
+  same-repository object ids, unsupported routes, secret-shaped path components, URL userinfo,
+  explicit ports, and non-GitHub origins are never preserved. This
+  allowlist, rather than credential-pattern coverage, establishes the no-secret invariant for
+  free-form coordinator text. Human Exception options cross the same boundary only as the canonical
+  `hold`, `authorize`, and optional `select-alternative` actions with fixed safe labels and
+  consequences; no-action and recommendation relationships are retained. Retry hints are finite,
+  positive, canonical, and duration-capped at one hour before persistence. The projection retains
   the structured identities and actionable option relationships required for deterministic replay
   and governed owner decisions, then passes the canonical schema and semantic validation again.
   Check eligibility selects the latest GitHub rerun per
