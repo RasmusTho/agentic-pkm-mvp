@@ -60,12 +60,12 @@
     "dataset": "docs/eval/classification_golden.yaml",
     "replay": "docs/eval/classification_replay.yaml",
     "per_class": {
-      "co_authoring": {"precision": 0.947, "recall": 0.947, "support": 20, "predicted": 19},
-      "governance_bearing": {"precision": 0.933, "recall": 1.0, "support": 15, "predicted": 15},
-      "exploratory": {"precision": 1.0, "recall": 1.0, "support": 25, "predicted": 25}
+      "co_authoring": {"precision": 0.9473684210526315, "recall": 0.9473684210526315, "support": 20, "predicted": 19},
+      "governance_bearing": {"precision": 1.0, "recall": 0.9333333333333333, "support": 15, "predicted": 14},
+      "exploratory": {"precision": 0.9615384615384616, "recall": 1.0, "support": 25, "predicted": 26}
     },
-    "macro_precision": 0.97,
-    "macro_recall": 0.95,
+    "macro_precision": 0.9696356275303644,
+    "macro_recall": 0.960233918128655,
     "pass_rate": 0.96,
     "confusion_matrix": {
       "co_authoring": {"co_authoring": 18, "governance_bearing": 0, "exploratory": 1, "unknown": 1},
@@ -74,7 +74,7 @@
       "unknown": {"co_authoring": 0, "governance_bearing": 0, "exploratory": 0, "unknown": 8}
     },
     "unknown": {"expected": 8, "safe_fail_hits": 8, "read_side_landings": 0, "safe_fail_rate": 1.0},
-    "safe_fail": {"count": 1, "answer_rate": 0.98},
+    "safe_fail": {"count": 1, "answer_rate": 0.9833333333333333},
     "mutation_side_confusions": [],
     "hard_gate_passed": true
   },

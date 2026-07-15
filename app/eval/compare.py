@@ -290,6 +290,114 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
         raise ScorecardCompareError(
             f"classification n_cases contradicts confusion matrix at {label}"
         )
+
+    def _classification_count(value: object, path: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ScorecardCompareError(
+                f"classification count must be a non-negative integer at {path}"
+            )
+        return value
+
+    def _require_metric_match(actual: object, expected: float, path: str) -> None:
+        value = _require_finite(actual, path)
+        if not math.isclose(value, expected, rel_tol=1e-12, abs_tol=1e-12):
+            raise ScorecardCompareError(
+                f"classification metric contradicts confusion matrix at {path}"
+            )
+
+    raw_per_class = _resolve_dict(scorecard, label, ("classification", "per_class"))
+    if set(raw_per_class) != set(EMITTABLE_CLASSES):
+        raise ScorecardCompareError(
+            f"invalid per-class keys at {label}.classification.per_class"
+        )
+    derived_precision: List[float] = []
+    derived_recall: List[float] = []
+    for class_name in EMITTABLE_CLASSES:
+        path = f"{label}.classification.per_class.{class_name}"
+        bucket = raw_per_class[class_name]
+        if not isinstance(bucket, dict) or set(bucket) != {
+            "precision",
+            "recall",
+            "support",
+            "predicted",
+        }:
+            raise ScorecardCompareError(f"invalid per-class bucket at {path}")
+        support = sum(validated_matrix[class_name].values())
+        predicted = sum(
+            validated_matrix[expected][class_name]
+            for expected in classification_classes
+        )
+        answered_support = support - validated_matrix[class_name]["unknown"]
+        true_positive = validated_matrix[class_name][class_name]
+        precision = true_positive / predicted if predicted else 0.0
+        recall = true_positive / answered_support if answered_support else 0.0
+        if _classification_count(bucket["support"], f"{path}.support") != support:
+            raise ScorecardCompareError(f"support contradicts confusion matrix at {path}")
+        if _classification_count(bucket["predicted"], f"{path}.predicted") != predicted:
+            raise ScorecardCompareError(f"predicted contradicts confusion matrix at {path}")
+        _require_metric_match(bucket["precision"], precision, f"{path}.precision")
+        _require_metric_match(bucket["recall"], recall, f"{path}.recall")
+        derived_precision.append(precision)
+        derived_recall.append(recall)
+    _require_metric_match(
+        view["classification_metrics"]["macro_precision"],
+        sum(derived_precision) / len(derived_precision),
+        f"{label}.classification.macro_precision",
+    )
+    _require_metric_match(
+        view["classification_metrics"]["macro_recall"],
+        sum(derived_recall) / len(derived_recall),
+        f"{label}.classification.macro_recall",
+    )
+
+    unknown = _resolve_dict(scorecard, label, ("classification", "unknown"))
+    if set(unknown) != {
+        "expected",
+        "safe_fail_hits",
+        "read_side_landings",
+        "safe_fail_rate",
+    }:
+        raise ScorecardCompareError(f"invalid unknown bucket at {label}.classification.unknown")
+    unknown_expected = sum(validated_matrix["unknown"].values())
+    unknown_hits = validated_matrix["unknown"]["unknown"]
+    unknown_read_side = validated_matrix["unknown"]["exploratory"]
+    for key, expected in (
+        ("expected", unknown_expected),
+        ("safe_fail_hits", unknown_hits),
+        ("read_side_landings", unknown_read_side),
+    ):
+        if _classification_count(
+            unknown[key], f"{label}.classification.unknown.{key}"
+        ) != expected:
+            raise ScorecardCompareError(
+                f"unknown metrics contradict confusion matrix at {label}"
+            )
+    _require_metric_match(
+        unknown["safe_fail_rate"],
+        unknown_hits / unknown_expected if unknown_expected else 0.0,
+        f"{label}.classification.unknown.safe_fail_rate",
+    )
+
+    safe_fail = _resolve_dict(scorecard, label, ("classification", "safe_fail"))
+    if set(safe_fail) != {"count", "answer_rate"}:
+        raise ScorecardCompareError(
+            f"invalid safe-fail bucket at {label}.classification.safe_fail"
+        )
+    safe_fail_count = sum(
+        validated_matrix[class_name]["unknown"] for class_name in EMITTABLE_CLASSES
+    )
+    answerable = classification_n_cases - unknown_expected
+    if _classification_count(
+        safe_fail["count"], f"{label}.classification.safe_fail.count"
+    ) != safe_fail_count:
+        raise ScorecardCompareError(
+            f"safe-fail count contradicts confusion matrix at {label}"
+        )
+    _require_metric_match(
+        safe_fail["answer_rate"],
+        (answerable - safe_fail_count) / answerable if answerable else 0.0,
+        f"{label}.classification.safe_fail.answer_rate",
+    )
     view["confusion_matrix"] = validated_matrix
 
     view["hard_gate_passed"] = _require_bool(

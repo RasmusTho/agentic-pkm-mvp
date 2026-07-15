@@ -35,6 +35,47 @@ def _rows_by_metric(rows: list[dict]) -> dict[str, dict]:
     return {row["metric"]: row for row in rows}
 
 
+def _reconcile_classification_metrics(scorecard: dict) -> None:
+    classification = scorecard["classification"]
+    matrix = classification["confusion_matrix"]
+    classes = ("co_authoring", "governance_bearing", "exploratory")
+    precision: list[float] = []
+    recall: list[float] = []
+    for class_name in classes:
+        support = sum(matrix[class_name].values())
+        predicted = sum(matrix[expected][class_name] for expected in matrix)
+        answered = support - matrix[class_name]["unknown"]
+        true_positive = matrix[class_name][class_name]
+        class_precision = true_positive / predicted if predicted else 0.0
+        class_recall = true_positive / answered if answered else 0.0
+        classification["per_class"][class_name] = {
+            "precision": class_precision,
+            "recall": class_recall,
+            "support": support,
+            "predicted": predicted,
+        }
+        precision.append(class_precision)
+        recall.append(class_recall)
+    classification["macro_precision"] = sum(precision) / len(precision)
+    classification["macro_recall"] = sum(recall) / len(recall)
+    unknown_expected = sum(matrix["unknown"].values())
+    unknown_hits = matrix["unknown"]["unknown"]
+    classification["unknown"] = {
+        "expected": unknown_expected,
+        "safe_fail_hits": unknown_hits,
+        "read_side_landings": matrix["unknown"]["exploratory"],
+        "safe_fail_rate": unknown_hits / unknown_expected if unknown_expected else 0.0,
+    }
+    safe_fail_count = sum(matrix[class_name]["unknown"] for class_name in classes)
+    answerable = classification["n_cases"] - unknown_expected
+    classification["safe_fail"] = {
+        "count": safe_fail_count,
+        "answer_rate": (
+            (answerable - safe_fail_count) / answerable if answerable else 0.0
+        ),
+    }
+
+
 # ── Per-slice deltas ─────────────────────────────────────────────────────
 
 
@@ -90,7 +131,9 @@ def test_per_slice_deltas() -> None:
     # Per-class slice (keyed group, same mechanism as by_language/by_slice).
     assert set(slices["per_class"]) == {"co_authoring", "governance_bearing", "exploratory"}
     exploratory = _rows_by_metric(slices["per_class"]["exploratory"])
-    assert exploratory["precision"]["delta"] == pytest.approx(0.04)
+    assert exploratory["precision"]["delta"] == pytest.approx(
+        0.9615384615384616 - 0.9230769230769231
+    )
     assert exploratory["precision"]["regression"] is False
 
     # Classification confusion slice (KERNEL-13): hard gate + matrix delta.
@@ -174,6 +217,7 @@ def test_verdict_regression_on_mutation_side_hard_gate() -> None:
     candidate["classification"]["confusion_matrix"]["exploratory"][
         "governance_bearing"
     ] += 1
+    _reconcile_classification_metrics(candidate)
     candidate["regression"] = True
     candidate["failures"] = [
         {
@@ -297,6 +341,7 @@ def test_cli_rejects_classification_gate_confusion_contradiction(
     candidate["classification"]["confusion_matrix"]["exploratory"][
         "governance_bearing"
     ] += 1
+    _reconcile_classification_metrics(candidate)
     path = tmp_path / "candidate_contradictory_classification_gate.json"
     path.write_text(json.dumps(candidate), encoding="utf-8")
 
@@ -314,6 +359,7 @@ def test_cli_rejects_matrix_mutation_missing_from_confusion_evidence(
     matrix = candidate["classification"]["confusion_matrix"]["exploratory"]
     matrix["exploratory"] -= 1
     matrix["governance_bearing"] += 1
+    _reconcile_classification_metrics(candidate)
     path = tmp_path / "candidate_matrix_mutation_without_evidence.json"
     path.write_text(json.dumps(candidate), encoding="utf-8")
 
@@ -357,6 +403,23 @@ def test_cli_rejects_classification_case_count_matrix_mismatch(
     assert "n_cases contradicts confusion matrix" in capsys.readouterr().err
 
 
+def test_cli_rejects_classification_metrics_that_contradict_matrix(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    candidate = load_scorecard(CANDIDATE_PATH)
+    row = candidate["classification"]["confusion_matrix"]["co_authoring"]
+    row["exploratory"] += row["co_authoring"]
+    row["co_authoring"] = 0
+    path = tmp_path / "candidate_forged_classification_metrics.json"
+    path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    assert eval_run.main(
+        ["compare", "--baseline", str(BASELINE_PATH), "--candidate", str(path)]
+    ) == 2
+    assert "contradicts confusion matrix" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("gate", ["classification", "provisional"])
 def test_cli_rejects_categorical_metric_nested_evidence_mismatch(
     gate: str,
@@ -379,6 +442,7 @@ def test_cli_rejects_categorical_metric_nested_evidence_mismatch(
         candidate["classification"]["confusion_matrix"]["exploratory"][
             "governance_bearing"
         ] += 1
+        _reconcile_classification_metrics(candidate)
         scope = "classification:hard_gate"
     else:
         boundary = candidate["provisional_memory_boundary"]
@@ -590,22 +654,13 @@ def test_cli_exit_2_on_truncated_scorecard(
     assert "missing required section or key at candidate.classification" in captured.err
 
 
-def test_verdict_regression_on_per_class_disappearance() -> None:
-    """per_class joins the missing-key→regression rule (round-2 review).
-
-    The masking hole round 1 closed for by_language/by_slice must be closed
-    by the same mechanism for classification.per_class.
-    """
+def test_rejects_per_class_disappearance_as_malformed_proof() -> None:
     baseline = load_scorecard(BASELINE_PATH)
     candidate = load_scorecard(CANDIDATE_PATH)
     del candidate["classification"]["per_class"]["exploratory"]
 
-    comparison = compare_scorecards(baseline, candidate)
-    assert comparison["verdict"] == "regression"
-    assert {"group": "per_class", "key": "exploratory"} in comparison["missing_slices"]
-    summary = render_compare_summary(comparison)
-    assert "MISSING in candidate (blocking)" in summary
-    assert "per_class:exploratory" in summary
+    with pytest.raises(ScorecardCompareError, match="invalid per-class keys"):
+        compare_scorecards(baseline, candidate)
 
 
 def test_rejects_nan_confusion_matrix_cell(
