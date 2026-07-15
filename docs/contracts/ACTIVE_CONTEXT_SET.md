@@ -56,6 +56,17 @@ Declare the active cognitive context as a versioned set of bindings rather than 
 - Zero-binding and many-binding modes are valid target states.
 - WSP does not grant permission to act; GOV owns admissibility.
 
+## Multi-Vault Runtime V1 Decision
+
+This owner contract delegates the decided implementation-level V1 schema, transition, persistence,
+and migration details to `docs/MULTI_VAULT_RUNTIME/README.md` and its bounded task specifications.
+That capability specification is subordinate to this contract's WSP/GOV boundary and may not widen
+authority. V1 requires an opaque context ID, monotonic generation, zero/one/many immutable source
+bindings, server-derived principal, operational scope, topology posture, selection provenance,
+expiry where applicable, and non-reversible selection-capability digest. Cache and receipt identity
+includes every scope-affecting input; each binding is independently GOV-authorized. Current-state
+owner docs remain shipped truth until the relevant implementation child writes them back.
+
 ## Allowed Producers
 
 - HIX human selection surfaces.
@@ -84,7 +95,6 @@ Current runtime may still carry active vault/path concepts. New work should wrap
 
 ## Open Questions
 
-- What exact minimal fields are required for ActiveContextSet V1?
 - Which context transitions need human review versus policy-only validation?
 
 ## Linked Source-Of-Truth Docs

@@ -99,6 +99,7 @@ can break startup or strand durable state. Both failures are latent outages rath
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/architecture/test_multi_vault_context_boundaries.py tests/integration/test_single_vault_compatibility.py tests/instance/test_vault_registry_migration.py tests/runtime/test_multi_vault_channel_bootstrap.py`
+- `mypy app`
 - `pytest -q -m "not pg"`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/uat/`
 - `ruff check app tests`

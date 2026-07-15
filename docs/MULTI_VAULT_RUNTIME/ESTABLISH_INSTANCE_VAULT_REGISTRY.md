@@ -43,6 +43,12 @@ This slice promotes the existing seed without changing content-vault authority.
   recoverable pending reservation → per-channel registry commit → active lease protocol. A matching
   root already active/pending in another channel fails loud. Explicit transfer drains/stops the old
   channel before release/claim; recovery never permits two active owners.
+- Produce one host-global ledger HMAC key with a CSPRNG at host bootstrap, store it and its key ID
+  mode `0600` in private host app-data outside per-channel volumes, retain a protected recovery copy,
+  and mount it read-only into every channel/native consumer. Preflight rejects missing, ephemeral,
+  channel-specific, mismatched, or permissive key state. Rotation holds the global fence, drains all
+  owners, re-fingerprints every canonical root, and atomically advances key plus ledger generation;
+  crash recovery selects one complete generation and never resumes with mixed-key comparisons.
 - Make the first ledger rollout a host-global legacy-owner bootstrap. Under one deployment/bootstrap
   fence, block legacy selection and registry ingress; enumerate every dev/test/prod Compose
   deployment and native runtime that can reach candidate roots; drain/stop all registry and
@@ -120,6 +126,27 @@ fails closed, and an ambiguous migration reports the file/error and remains unto
 Request/session selection cannot be trustworthy if its binding catalogue is hidden behind a
 single-vault package or can silently lose identity during migration.
 
+## Bounded implementation issue decomposition
+
+This specification maps to three serial implementation issues; it must never be filed or claimed as
+one monolithic issue. Each extracted issue copies the canonical Context, Scope, Source Anchors, SBS
+Impact, Constraints, Out of Scope, Source Docs, and learning provenance from this specification,
+then carries only its mapped acceptance criteria and validation commands:
+
+1. **MVR-01A — registry core:** package relocation, stable registry identity/schema, lossless
+   migration, corruption recovery, permissions, locking/CAS, producers/fixtures/preflight, and the
+   production picker/store tests. It establishes the local store but does not change deployment.
+2. **MVR-01B — durable deployment and ownership:** per-channel instance-state export/import,
+   cross-process store identity, host-global ledger/key lifecycle, first-rollout legacy-owner
+   bootstrap, channel transfer, and deployment/release owner-doc writebacks. It depends on 01A and
+   does not implement scalar rollback.
+3. **MVR-01C — rollback lineage:** validated rollback export, explicit scalar target, authenticated
+   mutation-filtering gateway/mount restriction, minimum-runtime floor, and roll-forward merge. It
+   depends on 01B and closes the aggregate parent-registry acceptance target.
+
+No issue may borrow an acceptance criterion from a later group merely to bypass its dependency.
+The post-spec issue extraction records three distinct child receipts on #2143.
+
 ## Source Anchors
 
 - `docs/MULTI_VAULT_RUNTIME/README.md :: Persistence and package placement`
@@ -157,77 +184,81 @@ single-vault package or can silently lose identity during migration.
 
 ## Acceptance Criteria
 
-- [ ] The production store loads, writes, and restarts with multiple registrations while preserving
+- [ ] **MVR-01A:** The production store loads, writes, and restarts with multiple registrations while preserving
   stable vault identity and instance provenance.
   - Verify: `tests/instance/test_vault_registry.py::test_registry_round_trip_preserves_multiple_vaults`
-- [ ] A legacy app-local payload migrates in place without changing `appInstallId` or losing
+- [ ] **MVR-01A:** A legacy app-local payload migrates in place without changing `appInstallId` or losing
   registrations, `last_active_vault_ref`, timestamps, or unknown fields.
   - Verify: `tests/instance/test_vault_registry_migration.py::test_legacy_app_local_state_migrates_losslessly`
-- [ ] Explicit production picker select/initialize over parse-corrupt registry state backs up the
+- [ ] **MVR-01A:** Explicit production picker select/initialize over parse-corrupt registry state backs up the
   original and preserves #2185 legacy/empty recovery without a 500.
   - Verify: `tests/api/test_vault_registry_recovery.py::test_picker_recovers_parse_corrupt_registry_with_backup`
-- [ ] Parse corruption in a populated current registry restores the checksum-verified last-good
+- [ ] **MVR-01A:** Parse corruption in a populated current registry restores the checksum-verified last-good
   state before mutation, preserving all registrations/default/dimensions/background intent; when
   no unambiguous snapshot exists it fails closed without committing an empty reset or refreshing
   the rollback export.
   - Verify: `tests/api/test_vault_registry_recovery.py::test_populated_registry_corruption_never_reseeds_empty`
-- [ ] Ambiguous migration, identity collision, or write failure fails closed and leaves the
+- [ ] **MVR-01A:** Ambiguous migration, identity collision, or write failure fails closed and leaves the
   original payload recoverable.
   - Verify: `tests/instance/test_vault_registry_migration.py::test_ambiguous_registry_migration_fails_without_destructive_reset`
-- [ ] Production imports use `app.instance.vault_registry`; the old path is only a tested
+- [ ] **MVR-01A:** Production imports use `app.instance.vault_registry`; the old path is only a tested
   compatibility re-export.
   - Verify: `tests/architecture/test_instance_vault_registry_boundary.py::test_production_registry_imports_use_instance_package`
-- [ ] Store initialization, migration, fixtures, and preflight all produce the current schema.
+- [ ] **MVR-01A:** Store initialization, migration, fixtures, and preflight all produce the current schema.
   - Verify: `tests/architecture/test_instance_vault_registry_boundary.py::test_registry_schema_producers_match_runtime_precondition`
-- [ ] An old-image-to-new-image pinned force-recreate exports before stop and preserves all MVR-01
+- [ ] **MVR-01B:** An old-image-to-new-image pinned force-recreate exports before stop and preserves all MVR-01
   registry state on a per-channel durable volume; API, worker, watcher, and Heimdal resolve and read
   the identical revision after restart.
   - Verify: `tests/integration/test_vault_registry_container_durability.py::test_registry_survives_recreate_and_is_shared_cross_process`
-- [ ] The first-volume upgrade fences and drains every legacy registry writer, stops the old API,
+- [ ] **MVR-01B:** The first-volume upgrade fences and drains every legacy registry writer, stops the old API,
   exports and validates the final post-stop fingerprint, and prevents old-writer restart through
   import; an injected mutation or unfenced writer aborts without importing the stale snapshot.
   - Verify: `tests/ops/test_instance_state_volume_contract.py::test_legacy_registry_export_happens_after_writer_quiescence`
-- [ ] Compose, startup, and migration preflight fail before recreate when the instance-state mount
+- [ ] **MVR-01B:** Compose, startup, and migration preflight fail before recreate when the instance-state mount
   is absent, not writable, channel-colliding, or resolves differently between consumers.
   - Verify: `tests/ops/test_instance_state_volume_contract.py::test_registry_volume_and_preflight_cover_all_consumers`
-- [ ] Registering or starting the same canonical content root in two release channels is rejected by
+- [ ] **MVR-01B:** Registering or starting the same canonical content root in two release channels is rejected by
   the shared ownership ledger; injected crashes in reserve/commit/activate/transfer recover to at
   most one active owner without exposing raw host paths.
   - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_same_content_root_cannot_be_active_in_two_channels`
-- [ ] Before the first upgraded channel can claim a root, one host-global fenced bootstrap inventories
+- [ ] **MVR-01B:** Before the first upgraded channel can claim a root, one host-global fenced bootstrap inventories
   and seeds all legacy dev/test/prod/native owners; missing/racing owners and existing collisions
   block every claim, while any temporarily resumed old channel is fixed to its seeded root.
   - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_first_upgrade_seeds_all_legacy_channel_owners_before_claim`
-- [ ] Registry, lock/temporary files, validated snapshots, and rollback exports remain mode `0600`
+- [ ] **MVR-01B:** Every channel/native consumer uses the same durable private host-global ledger HMAC key across
+  restart; unsafe/mismatched key state blocks claims, and fenced rotation/crash recovery advances all
+  fingerprints and the ledger atomically without mixed-key ownership comparisons.
+  - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_host_global_ledger_key_is_durable_shared_and_rotates_atomically`
+- [ ] **MVR-01A:** Registry, lock/temporary files, validated snapshots, and rollback exports remain mode `0600`
   under permissive host umasks; parent directories are `0700` and unsafe mode/ownership fails loud.
   - Verify: `tests/instance/test_vault_registry_permissions.py::test_registry_transaction_files_are_private`
-- [ ] Concurrent picker/API/CLI registry mutations serialize without lost updates or partial files,
+- [ ] **MVR-01A:** Concurrent picker/API/CLI registry mutations serialize without lost updates or partial files,
   and stale revision CAS fails explicitly before retry.
   - Verify: `tests/instance/test_vault_registry_concurrency.py::test_production_mutations_are_locked_atomic_and_revision_checked`
-- [ ] After a post-migration registry mutation, the supported previous image can be started through
+- [ ] **MVR-01C:** After a post-migration registry mutation, the supported previous image can be started through
   the rollback preflight and reads the latest committed registration and last-active state from its
   legacy path; a missing, stale, or invalid rollback export blocks startup.
   - Verify: `tests/integration/test_vault_registry_rollback.py::test_previous_image_reads_latest_post_migration_registry_state`
-- [ ] Rolling an MVR-01 multi-registration instance into a scalar previous image requires one
+- [ ] **MVR-01C:** Rolling an MVR-01 multi-registration instance into a scalar previous image requires one
   validated explicit rollback binding, constrains legacy startup/selection to that binding, and
   otherwise blocks while preserving the complete MVR-01 registry, unknown fields, and lineage.
   - Verify: `tests/integration/test_vault_registry_rollback.py::test_multi_binding_rollback_requires_one_safe_explicit_target`
-- [ ] The scalar rollback deployment exposes the old API only through the authenticated mutation-
+- [ ] **MVR-01C:** The scalar rollback deployment exposes the old API only through the authenticated mutation-
   filtering gateway, publishes no bypass port, and mounts no content root except the validated
   target; production picker select/initialize calls for another path are rejected.
   - Verify: `tests/ops/test_scalar_rollback_guard.py::test_rollback_gateway_and_mounts_enforce_selected_binding`
-- [ ] A recorded MVR-05-or-later minimum-runtime floor blocks scalar API/worker startup before any
+- [ ] **MVR-01C:** A recorded MVR-05-or-later minimum-runtime floor blocks scalar API/worker startup before any
   database connection or queue acknowledgement, preserving the full lineage for a compatible
   rollback/roll-forward.
   - Verify: `tests/ops/test_scalar_rollback_guard.py::test_binding_keyed_database_floor_blocks_scalar_runtime`
-- [ ] Registrations and last-active changes made by the previous image during rollback are imported
+- [ ] **MVR-01C:** Registrations and last-active changes made by the previous image during rollback are imported
   as the next registry revision on roll-forward; divergent mutation, ambiguous identity, or invalid
   lineage fails before recreate without overwriting either side.
   - Verify: `tests/integration/test_vault_registry_rollback.py::test_rollback_mutations_round_trip_on_roll_forward`
-- [ ] The parent registry acceptance target composes the delivered registry, migration, durability,
+- [ ] **MVR-01C:** The parent registry acceptance target composes the delivered registry, migration, durability,
   concurrency, recovery, and rollback contracts and passes before MVR-01 merges.
   - Verify: `tests/instance/test_vault_registry_migration.py::test_parent_registry_acceptance`
-- [ ] Deployment/release owner docs describe the shipped instance-state volume, quiesced final
+- [ ] **MVR-01C:** Deployment/release owner docs describe the shipped instance-state volume, quiesced final
   export/import, scalar rollback projection, and roll-forward lineage without future-state claims.
   - Verify: doc writeback at `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments` +
     doc writeback at `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification`
@@ -240,6 +271,8 @@ single-vault package or can silently lose identity during migration.
 
 - `pytest -q tests/instance/test_vault_registry.py tests/instance/test_vault_registry_migration.py tests/instance/test_vault_registry_concurrency.py tests/instance/test_vault_registry_permissions.py tests/api/test_vault_registry_recovery.py tests/architecture/test_instance_vault_registry_boundary.py tests/ops/test_instance_state_volume_contract.py tests/ops/test_scalar_rollback_guard.py`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_vault_registry_container_durability.py tests/integration/test_vault_registry_rollback.py tests/integration/test_vault_registry_channel_isolation.py`
+- `mypy app`
+- `pytest -q -m "not pg"`
 - `ruff check app tests`
 
 ## Restart / Durability Posture
@@ -268,7 +301,8 @@ destination recoverable and blocks only unsafe automatic resolution until repair
 
 ## Related GitHub Issues
 
-Create one implementation issue under #2143. It must cite MVR-01, carry the complete Issue
-contract/SBS block above, and use Sol/high because persistence migration and identity loss have a
-high defect cost. Preserve #2185 picker recovery and apply `AGENTS.md :: Invariant → producers
-rule` after #1991/#1997.
+Create the three serial implementation issues defined in `Bounded implementation issue
+decomposition` under #2143. Each must cite MVR-01, carry a complete Issue contract/SBS block and its
+mapped concrete `Verify:` targets, and use Sol/high–xhigh because persistence migration and identity
+loss have a high defect cost. Preserve #2185 picker recovery and apply `AGENTS.md :: Invariant →
+producers rule` after #1991/#1997.

@@ -161,8 +161,10 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
 - Sync/deployment impact: replaces frozen env snapshot with explicit cross-process binding truth
 - External boundary impact: env remains bootstrap adapter only
 - New or changed contract: per-binding lifecycle supervision through ActiveContextSet and truthful state transitions
-- Owner-doc impact: will-update-in-PR at `docs/ENVIRONMENTS.md`, `docs/SECURITY.md`,
-  `docs/contracts/GOVERNED_WRITE_PROTOCOL.md`, and watcher/settings owner docs
+- Owner-doc impact: will-update-in-PR at `docs/ENVIRONMENTS.md :: Runtime Control Surface`,
+  `docs/SECURITY.md :: Auth And Rate Limiting`, `docs/contracts/GOVERNED_WRITE_PROTOCOL.md ::
+  Invariants`, `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md :: Service Gating`, and
+  `docs/SETTINGS_SPINE/REBIND_ON_VAULT_SELECTION.md :: What This Task Does`
 - Transition debt impact: reduces D13/D14; residual adapters remain for task 07
 - Fitness rule impact: strengthens lifecycle isolation and truthful health
 
@@ -265,6 +267,14 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
 - [ ] Production watcher/worker/settings callers consume ActiveContextSet outside named bootstrap
   adapters; no parallel lifecycle context type remains.
   - Verify: `tests/architecture/test_multi_vault_context_boundaries.py::test_background_consumers_use_lifecycle_seam`
+- [ ] Environment, security, governed-write, vault/settings, and Settings Spine owner contracts
+  describe the shipped background-role producer, durable intent, per-binding lifecycle, and
+  authorization/rebind behavior in the same PR without claiming later MVR scope.
+  - Verify: doc writeback at `docs/ENVIRONMENTS.md :: Runtime Control Surface` + doc writeback at
+    `docs/SECURITY.md :: Auth And Rate Limiting` + doc writeback at
+    `docs/contracts/GOVERNED_WRITE_PROTOCOL.md :: Invariants` + doc writeback at
+    `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md :: Service Gating` + doc writeback at
+    `docs/SETTINGS_SPINE/REBIND_ON_VAULT_SELECTION.md :: What This Task Does`
 
 ## Out of Scope
 
@@ -275,7 +285,10 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
 
 - `pytest -q tests/integration/test_multi_vault_background_lifecycle.py tests/integration/test_multi_vault_lifecycle_and_dimension.py tests/runtime/test_background_binding_handoff.py tests/api/test_background_binding_admin.py tests/migrations/test_multi_vault_outbox_upgrade.py tests/migrations/test_multi_vault_background_intent_upgrade.py tests/architecture/test_multi_vault_context_boundaries.py`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration -k "watcher or settings or multi_vault"`
+- `mypy app`
+- `pytest -q -m "not pg"`
 - `ruff check app tests`
+- `python3 scripts/docs_guard.py`
 
 ## Restart / Durability Posture
 

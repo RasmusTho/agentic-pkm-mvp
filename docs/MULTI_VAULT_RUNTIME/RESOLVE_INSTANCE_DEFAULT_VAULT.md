@@ -127,6 +127,8 @@ turns an invalid explicit selection into a dangerous silent read/write against t
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/instance/test_default_vault_resolution.py tests/api/test_default_vault_admin.py tests/integration/test_single_vault_compatibility.py tests/integration/test_vault_registry_container_durability.py tests/integration/test_vault_registry_rollback.py`
+- `mypy app`
+- `pytest -q -m "not pg"`
 - `ruff check app tests`
 
 ## Restart / Durability Posture

@@ -117,6 +117,8 @@ a hidden authority system and can expose material across real confidentiality bo
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/instance/test_vault_dimensions.py tests/api/test_vault_dimension_admin.py tests/api/test_dimension_context_resolution.py tests/integration/test_multi_vault_dimensions.py tests/integration/test_vault_registry_rollback.py`
+- `mypy app`
+- `pytest -q -m "not pg"`
 - `ruff check app tests`
 
 ## Restart / Durability Posture

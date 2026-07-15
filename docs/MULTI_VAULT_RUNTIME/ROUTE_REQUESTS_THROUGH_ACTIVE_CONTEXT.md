@@ -249,6 +249,8 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/integration/test_multi_vault_resolution.py tests/integration/test_multi_vault_picker_context.py tests/integration/test_multi_vault_projection_isolation.py tests/integration/test_multi_vault_outbox_producers.py tests/migrations/test_multi_vault_projection_backfill.py tests/migrations/test_multi_vault_outbox_upgrade.py tests/ops/test_mvr05_mixed_version_fence.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/workers/test_multi_vault_partial_delivery_gate.py tests/services/test_multi_vault_outbox_idempotency.py tests/architecture/test_multi_vault_context_boundaries.py`
+- `mypy app`
+- `pytest -q -m "not pg"`
 - `ruff check app tests`
 
 ## Restart / Durability Posture

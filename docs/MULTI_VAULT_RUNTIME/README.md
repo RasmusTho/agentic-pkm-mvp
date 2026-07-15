@@ -49,7 +49,14 @@ enabled consumer.
 Per-channel registry isolation is not sufficient because current containers can see shared host
 roots. A separate host-local **channel ownership ledger** is mounted consistently into every channel
 and native runtime. Under one global mode-`0600` lock it records `channel_id`, stable binding, and an
-HMAC fingerprint of canonical filesystem identity (never a raw host path). Registration/relocation
+HMAC fingerprint of canonical filesystem identity (never a raw host path). One CSPRNG-generated,
+host-global ledger key lives mode `0600` in private host app-data outside every channel volume and
+is mounted read-only into all channel/native consumers; generation, permissions, durable backup,
+and key ID are host-bootstrap truth. Missing, ephemeral, channel-specific, mismatched, or permissive
+key state blocks claims and lifecycle start. Key rotation holds the global fence, drains all owners,
+re-fingerprints every canonical root, and atomically advances ledger plus key generation before any
+owner resumes; interrupted rotation recovers one complete generation and never compares mixed keys.
+Registration/relocation
 uses a recoverable pending→registry-commit→active reservation protocol; lifecycle start proves the
 active reservation still matches its channel and root. The same physical content root cannot be
 active in dev/test/prod/native simultaneously. Explicit transfer drains/stops the source channel,
@@ -180,14 +187,16 @@ member binding independently. Removing a dimension does not remove its vault reg
 
 | Order | Task | Adds | Dependency | Initial capability |
 | --- | --- | --- | --- | --- |
-| 01 | [ESTABLISH_INSTANCE_VAULT_REGISTRY](ESTABLISH_INSTANCE_VAULT_REGISTRY.md) | first-class durable registry and package relocation | none | Sol/high |
-| 02 | [RESOLVE_INSTANCE_DEFAULT_VAULT](RESOLVE_INSTANCE_DEFAULT_VAULT.md) | explicit default and fail-closed precedence | 01 | Sol/high |
-| 03 | [VERSION_ACTIVE_CONTEXT_SELECTION](VERSION_ACTIVE_CONTEXT_SELECTION.md) | versioned request/session `ActiveContextSet` | 01, 02 | Sol/xhigh |
+| 01A | [ESTABLISH_INSTANCE_VAULT_REGISTRY](ESTABLISH_INSTANCE_VAULT_REGISTRY.md#bounded-implementation-issue-decomposition) | registry identity/store, package relocation, recovery, and concurrency | none | Sol/high |
+| 01B | [ESTABLISH_INSTANCE_VAULT_REGISTRY](ESTABLISH_INSTANCE_VAULT_REGISTRY.md#bounded-implementation-issue-decomposition) | durable volume migration and host-global ownership/key fencing | 01A | Sol/xhigh |
+| 01C | [ESTABLISH_INSTANCE_VAULT_REGISTRY](ESTABLISH_INSTANCE_VAULT_REGISTRY.md#bounded-implementation-issue-decomposition) | scalar rollback gateway, exports, and roll-forward lineage | 01B | Sol/xhigh |
+| 02 | [RESOLVE_INSTANCE_DEFAULT_VAULT](RESOLVE_INSTANCE_DEFAULT_VAULT.md) | explicit default and fail-closed precedence | 01A–01C | Sol/high |
+| 03 | [VERSION_ACTIVE_CONTEXT_SELECTION](VERSION_ACTIVE_CONTEXT_SELECTION.md) | versioned request/session `ActiveContextSet` | 01A–01C, 02 | Sol/xhigh |
 | 04 | [GROUP_VAULT_BINDINGS_BY_DIMENSION](GROUP_VAULT_BINDINGS_BY_DIMENSION.md) | non-authoritative dimension membership and context resolution | 01, 03 | Sol/high design; Terra/high execution after contract freeze |
 | 05 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md) | production picker/HTTP/retrieval/write migration plus binding-scoped projections | 03, 04, #3163 | Sol/high schema/authority; Terra/high mechanical consumers |
 | 06 | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md) | watcher/worker/settings lifecycle bindings and queued-work migration | 02–05, #3163 | Sol/xhigh |
 | 07 | [PRESERVE_SINGLE_VAULT_MIGRATION](PRESERVE_SINGLE_VAULT_MIGRATION.md) | compatibility adapters and migration fitness | 04, 05, 06 | Terra/high |
-| 08 | [PROMOTE_MULTI_VAULT_RUNTIME_TRUTH](PROMOTE_MULTI_VAULT_RUNTIME_TRUTH.md) | integrated proof, owner-doc/debt promotion, parent closure ledger | 01–07 | Terra/high review; Sol/high if residual architecture risk |
+| 08 | [PROMOTE_MULTI_VAULT_RUNTIME_TRUTH](PROMOTE_MULTI_VAULT_RUNTIME_TRUTH.md) | integrated proof, owner-doc/debt promotion, parent closure ledger | 01A–01C, 02–07 | Terra/high review; Sol/high if residual architecture risk |
 
 Execution is serial through task 06: tasks 04 and 06 both evolve the instance-registry schema, task
 05 introduces binding-keyed projection migrations consumed by task 06, and their producer/preflight
@@ -239,7 +248,7 @@ to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup.
 
 Partial delivery remains fail-closed:
 
-- after task 01 but before task 02, registrations exist but `last_active_vault_ref` remains the
+- after issue 01C but before task 02, registrations exist but `last_active_vault_ref` remains the
   compatibility behavior; no registration is silently promoted to default;
 - after task 02 but before task 03, default resolution is available only through explicit
   background/compatibility adapters; requests do not pretend to be session-scoped;

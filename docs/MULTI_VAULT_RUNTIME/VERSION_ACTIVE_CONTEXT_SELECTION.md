@@ -181,6 +181,8 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/api/test_active_context_resolution.py tests/api/test_active_context_selection_api.py tests/retrieval/test_active_context_cache_isolation.py tests/integration/test_multi_vault_request_isolation.py tests/integration/test_local_operator_principal_bootstrap.py`
+- `mypy app`
+- `pytest -q -m "not pg"`
 - `ruff check app tests`
 
 ## Restart / Durability Posture

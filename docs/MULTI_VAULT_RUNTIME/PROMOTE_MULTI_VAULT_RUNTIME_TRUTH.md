@@ -29,7 +29,7 @@ no new runtime behavior.
   distinct UI/Settings scope.
 - In the MVR-08 PR, change README to shipped capability truth and convert the parent reference from a
   blocked/future template into a closure-ready historical ledger. That repo ledger records merged
-  MVR-01–07 receipts plus the MVR-08 PR/head candidate, but explicitly delegates MVR-08's eventual
+  MVR-01A–01C and MVR-02–07 receipts plus the MVR-08 PR/head candidate, but explicitly delegates MVR-08's eventual
   merge SHA and the live open/closed state to GitHub #2143; it never predicts its own merge.
 - After MVR-08 merges, run the merged-head closure gate, append MVR-08's exact merge SHA and every
   final AC/Verify/owner-doc receipt to live #2143, then close it only when no gap remains. No
@@ -107,7 +107,7 @@ operators, or future agents still act on stale single-global-vault truth.
   `docs/architecture/SBS_TRANSITION_DEBT.md :: multi-vault runtime selection` + doc writeback at
   `docs/DOCS_INDEX.md :: v6.0 Capability Specifications`
 - [ ] This capability's own lifecycle surfaces no longer claim future/blocked runtime state: README
-  records shipped scope/residual debt, while the parent reference contains merged MVR-01–07 receipts,
+  records shipped scope/residual debt, while the parent reference contains merged MVR-01A–01C and MVR-02–07 receipts,
   the MVR-08 candidate, and an explicit pointer making live #2143 authoritative for MVR-08 merge SHA
   and closure status. Neither repo file predicts or must later mirror the parent close event.
   - Verify: doc writeback at `docs/MULTI_VAULT_RUNTIME/README.md :: Multi-vault runtime selection` +
@@ -167,6 +167,6 @@ in merged docs, CI/UAT runs, and redacted GitHub receipts.
 
 ## Related GitHub Issues
 
-Create the terminal child under #2143 and keep it blocked until MVR-01–07 merge. Use Terra/high for
+Create the terminal child under #2143 and keep it blocked until MVR-01A–01C and MVR-02–07 merge. Use Terra/high for
 the mechanical ledger and verification; escalate to Sol/high if residual architecture/authority
 risk remains. Reconcile but do not duplicate or auto-close #2566, #3156, or #3163.

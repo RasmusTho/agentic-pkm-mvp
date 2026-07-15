@@ -125,9 +125,11 @@ Preserves the invariant→producers rule from #1991/#1997, the no-silent-fallbac
 
 | Order | Task | Issue | Status |
 | --- | --- | --- | --- |
-| 01 | [ESTABLISH_INSTANCE_VAULT_REGISTRY](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/ESTABLISH_INSTANCE_VAULT_REGISTRY.md) | filed after spec merge | blocked until spec authority merges |
-| 02 | [RESOLVE_INSTANCE_DEFAULT_VAULT](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/RESOLVE_INSTANCE_DEFAULT_VAULT.md) | filed after spec merge | blocked on 01 |
-| 03 | [VERSION_ACTIVE_CONTEXT_SELECTION](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/VERSION_ACTIVE_CONTEXT_SELECTION.md) | filed after spec merge | blocked on 01–02 |
+| 01A | [ESTABLISH_INSTANCE_VAULT_REGISTRY — core](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/ESTABLISH_INSTANCE_VAULT_REGISTRY.md#bounded-implementation-issue-decomposition) | filed after spec merge | blocked until spec authority merges |
+| 01B | [ESTABLISH_INSTANCE_VAULT_REGISTRY — durability/ownership](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/ESTABLISH_INSTANCE_VAULT_REGISTRY.md#bounded-implementation-issue-decomposition) | filed after spec merge | blocked on 01A |
+| 01C | [ESTABLISH_INSTANCE_VAULT_REGISTRY — rollback](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/ESTABLISH_INSTANCE_VAULT_REGISTRY.md#bounded-implementation-issue-decomposition) | filed after spec merge | blocked on 01B |
+| 02 | [RESOLVE_INSTANCE_DEFAULT_VAULT](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/RESOLVE_INSTANCE_DEFAULT_VAULT.md) | filed after spec merge | blocked on 01A–01C |
+| 03 | [VERSION_ACTIVE_CONTEXT_SELECTION](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/VERSION_ACTIVE_CONTEXT_SELECTION.md) | filed after spec merge | blocked on 01A–01C and 02 |
 | 04 | [GROUP_VAULT_BINDINGS_BY_DIMENSION](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/GROUP_VAULT_BINDINGS_BY_DIMENSION.md) | filed after spec merge | blocked on 01 and 03 |
 | 05 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md) | filed after spec merge | blocked on 04 and #3163 |
 | 06 | [BIND_BACKGROUND_LIFECYCLES](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md) | filed after spec merge | blocked on 05 and #3163 |
@@ -149,7 +151,7 @@ live Issues/PRs, and dispatcher truth before the next pickup.
 
 #2143 closes only after:
 
-1. tasks 01–08 have merged and their issues have no residual `agent:*` labels;
+1. issues 01A–01C and tasks 02–08 have merged and their issues have no residual `agent:*` labels;
 2. all capability-acceptance targets in `README.md` pass on merged `origin/main`;
 3. #2566 and #3156/#3163 are reconciled without duplicated scope and their state is truthful;
 4. architecture, ActiveContextSet, topology, settings/context, environment, transition-debt, and
