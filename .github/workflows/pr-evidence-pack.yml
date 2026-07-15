@@ -38,7 +38,7 @@ jobs:
             --jq '.check_runs[]' \
             | jq -s '{check_runs: .}' \
             > pr-evidence-pack/checks.json
-          ISSUE_NUMBER="$(python3 - <<'PY'
+          python3 - <<'PY' > pr-evidence-pack/issue-numbers.txt
           import json
           from pathlib import Path
 
@@ -46,14 +46,21 @@ jobs:
 
           body = json.loads(Path("pr-evidence-pack/pr.json").read_text()).get("body") or ""
           authority = resolve_issue_authority(body)
-          print(authority.governing_issue if authority else "")
+          if authority:
+              for issue_number in sorted(
+                  {authority.governing_issue, *authority.closing_issues}
+              ):
+                  print(issue_number)
           PY
-          )"
-          if [ -n "${ISSUE_NUMBER}" ]; then
-            gh api "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}" \
+          if [ -s pr-evidence-pack/issue-numbers.txt ]; then
+            while IFS= read -r ISSUE_NUMBER; do
+              gh api "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}"
+            done < pr-evidence-pack/issue-numbers.txt \
+              > pr-evidence-pack/issues.jsonl
+            jq -s '.' pr-evidence-pack/issues.jsonl \
               > pr-evidence-pack/issue.json
           else
-            printf '{}\n' > pr-evidence-pack/issue.json
+            printf '[]\n' > pr-evidence-pack/issue.json
           fi
 
       - name: Build PR evidence pack

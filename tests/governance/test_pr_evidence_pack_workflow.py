@@ -55,7 +55,9 @@ def test_workflow_collects_pr_issue_file_and_check_evidence() -> None:
     assert "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}" in text
     assert "python3 -m scripts.build_pr_evidence_pack" in text
     assert "resolve_issue_authority" in text
-    assert "authority.governing_issue" in text
+    assert "{authority.governing_issue, *authority.closing_issues}" in text
+    assert "pr-evidence-pack/issues.jsonl" in text
+    assert "jq -s '.'" in text
     assert "re.search" not in text
 
 
