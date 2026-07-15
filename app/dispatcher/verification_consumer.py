@@ -912,6 +912,25 @@ class VerificationConsumer:
             current = self.ledger.get(run.run_id)
             assert current is not None
             return current
+        return self._launch_after_live_fence(claimed)
+
+    def _launch_after_live_fence(self, claimed: VerificationRun) -> VerificationRun:
+        """Re-read authority after auth and claim, immediately before launch."""
+        pr = self.truth.pull_request(claimed.repository, claimed.pr_number)
+        checks = self.truth.checks(claimed.repository, claimed.head_sha)
+        rejection = live_truth_rejection(claimed, pr, checks)
+        if rejection:
+            lease_id = claimed.lease_id
+            if not lease_id:
+                raise RuntimeError("claimed verification run has no lease token")
+            return self.ledger.terminal(
+                claimed.run_id,
+                "failed",
+                {"outcome": "prelaunch_rejected", "reason": rejection},
+                reason=f"prelaunch_{rejection}",
+                holder=self.holder,
+                lease_id=lease_id,
+            )
         return self._launch(claimed, pr)
 
     def _launch(
@@ -1219,4 +1238,4 @@ class VerificationConsumer:
         if not self.auth.check().ok:
             raise ValueError("verification auth preflight failed")
         claimed = self.ledger.claim(run.run_id, self.holder)
-        return self._launch(claimed, pr)
+        return self._launch_after_live_fence(claimed)

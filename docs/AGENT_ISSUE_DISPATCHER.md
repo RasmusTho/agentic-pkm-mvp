@@ -87,6 +87,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - Governing-Issue authority is live truth, not an artifact-only assertion. Every authority-bearing
   PR read must still contain exactly the request's explicit governing issue and identical bounded
   supporting-issue evidence; body-only missing, conflicting, or changed authority fails closed.
+- Authentication does not extend an earlier live-truth read atomically. After auth and lease claim,
+  the consumer re-fetches head, governing contract, and checks immediately before launch; drift
+  terminals the claimed run as a technical prelaunch failure and starts no coordinator.
 - A genuine coordinator `needs_human` verdict crosses the one durable Human Exception boundary:
   the consumer accepts only one of the four governed failure classes plus the complete canonical
   owner-decision packet, then records it head- and governing-issue-bound before terminal state.

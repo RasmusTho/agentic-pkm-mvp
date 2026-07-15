@@ -229,7 +229,7 @@ def test_repair_rebinds_exact_live_head_and_records_two_clean_reviews(tmp_path) 
         NEW_HEAD,
         NEW_HEAD,
     ]
-    assert truth.checked_heads == [HEAD, NEW_HEAD]
+    assert truth.checked_heads == [HEAD, HEAD, NEW_HEAD]
 
 
 def test_repair_receipt_cannot_rebind_to_non_live_head(tmp_path) -> None:

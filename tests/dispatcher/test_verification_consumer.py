@@ -41,6 +41,17 @@ class Auth:
     def check(self): return AuthReceipt(self.ok, "chatgpt", "keyring", None if self.ok else "auth")
 
 
+class MutatingAuth(Auth):
+    def __init__(self, truth: Truth, replacement_pr: dict[str, object]) -> None:
+        super().__init__(True)
+        self.truth = truth
+        self.replacement_pr = replacement_pr
+
+    def check(self):
+        self.truth.pr = self.replacement_pr
+        return super().check()
+
+
 class Launcher:
     config = LaunchConfig("verification_closer", "gpt-5.6-terra", "high", "workspace-write", "instructions")
     def __init__(self): self.calls = []
@@ -117,7 +128,9 @@ class DeliveredLauncher(Launcher):
 
 class TransitionTruth:
     def __init__(self, terminal_pr: dict[str, object]) -> None:
-        self.prs = iter([eligible_pr(), terminal_pr])
+        # Intake and the post-auth launch fence must both observe stable open
+        # authority before the coordinator's delivered receipt changes truth.
+        self.prs = iter([eligible_pr(), eligible_pr(), terminal_pr])
 
     def pull_request(self, repository, pr_number):
         return next(self.prs)
@@ -146,6 +159,36 @@ def test_live_governing_issue_drift_fails_closed_before_launch(tmp_path) -> None
 
     assert result.status == "superseded"
     assert result.stop_reason == "governing_issue_mismatch"
+    assert launcher.calls == []
+
+
+def test_head_move_during_auth_fails_closed_before_launch(tmp_path) -> None:
+    truth = Truth(eligible_pr(), GREEN)
+    launcher = Launcher()
+    auth = MutatingAuth(truth, eligible_pr(head={"ref": "branch", "sha": "b" * 40}))
+
+    result = VerificationConsumer(ledger(tmp_path), truth, auth, launcher, "host").consume(
+        request()
+    )
+
+    assert result.status == "failed"
+    assert result.stop_reason == "prelaunch_stale_head"
+    assert launcher.calls == []
+
+
+def test_governing_issue_move_during_auth_fails_closed_before_launch(tmp_path) -> None:
+    truth = Truth(eligible_pr(), GREEN)
+    launcher = Launcher()
+    auth = MutatingAuth(
+        truth, eligible_pr(body="Governing-Issue: #3626\n\nFixes #3626")
+    )
+
+    result = VerificationConsumer(ledger(tmp_path), truth, auth, launcher, "host").consume(
+        request()
+    )
+
+    assert result.status == "failed"
+    assert result.stop_reason == "prelaunch_governing_issue_mismatch"
     assert launcher.calls == []
 
 
