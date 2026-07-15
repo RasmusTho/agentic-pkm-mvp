@@ -223,8 +223,8 @@ migration, preflight, and fail-loud gate merge together.
 - External boundary impact: env remains bootstrap adapter only
 - New or changed contract: per-binding lifecycle supervision through ActiveContextSet and truthful state transitions
 - Owner-doc impact: each owning child updates in its PR: 06A security/governed-write plus
-  deployment/release-channel floor truth; 06B
-  vault/settings and Settings Spine; 06C documents the one-binding gated/dormant supervisor;
+  deployment/release-channel floor truth; 06B vault/settings, Settings Spine, environment, and
+  health for the safe singleton/empty supervisor; 06C documents dormant multi-binding and safe relocation;
   06D writes the completed zero/one/many runtime-control and health truth, including many-binding activation
 - Transition debt impact: reduces D13/D14; residual adapters remain for task 07
 - Fitness rule impact: strengthens lifecycle isolation and truthful health
@@ -318,6 +318,11 @@ migration, preflight, and fail-loud gate merge together.
   lease; it waits for prior authorized effects, commits the new root/revision, and no later effect can
   touch the old root.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_relocation_activates_only_after_all_consumer_effect_leases`
+- [ ] **MVR-06C:** Once activated, production relocation racing after request resolution or lifecycle
+  validation cannot cross any foreground read, governed-write, or background effect window: the
+  exclusive relocation waits for an authorized shared effect or advances the locator revision before
+  a stale effect can touch either root.
+  - Verify: `tests/integration/test_multi_vault_write_effect_fence.py::test_relocation_cannot_cross_foreground_or_background_effect_windows_after_activation`
 - [ ] **MVR-06D:** Zero bindings idle truthfully; one binding preserves current behavior; a failed member is
   loud and cannot redirect or mark the whole set healthy.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_zero_one_many_and_partial_failure_are_truthful`
@@ -416,7 +421,7 @@ PostgreSQL receipt belongs only to 06D.
 
 ### MVR-06C validation
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_relocation_activates_only_after_all_consumer_effect_leases tests/api/test_background_binding_admin.py::test_mvr06c_rejects_many_until_mvr06d_dispatch_gate`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_relocation_activates_only_after_all_consumer_effect_leases tests/integration/test_multi_vault_write_effect_fence.py::test_relocation_cannot_cross_foreground_or_background_effect_windows_after_activation tests/api/test_background_binding_admin.py::test_mvr06c_rejects_many_until_mvr06d_dispatch_gate`
 - Verify the 06C PR diff contains its mapped `docs/ENVIRONMENTS.md` and `docs/HEALTH.md` dormant-
   supervisor writebacks.
 
