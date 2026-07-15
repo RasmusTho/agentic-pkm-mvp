@@ -1,4 +1,4 @@
-State: FILED as GitHub issue #3138 (2026-07-07) with children #3139-#3148; the GitHub issue is now the authoritative backlog/validation surface and this file is the archived draft.
+State: ACCEPTED/CLOSED as GitHub validation parent #3138 (filed 2026-07-07; closed 2026-07-15) after children #3139-#3148 and presentation refinement #3689. GitHub holds the terminal delivery/validation ledger; this file is the archived parent contract. Post-MVP access/measurement work moved to #3775 and `docs/CKM_MEASUREMENT_AND_ACCESS/`.
 Doc role: Parent feature issue draft (BuilderOps lane)
 
 # feat: Capability Knowledge Model (CKM / Kvasir) MVP — evidence-backed capability model of the platform
