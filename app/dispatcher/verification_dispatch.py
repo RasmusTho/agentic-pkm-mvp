@@ -342,6 +342,7 @@ class VerificationRun:
     lease_expires_at: str | None
     coordinator_session_id: str | None
     request: dict[str, object]
+    supporting_authority: tuple[int, ...]
     context_pack: dict[str, object] | None
     terminal_receipt: dict[str, object] | None
     stop_reason: str | None
@@ -354,6 +355,7 @@ class VerificationRun:
 
 
 def _run(row: sqlite3.Row) -> VerificationRun:
+    request = _validated_row_request(row)
     return VerificationRun(
         run_id=row["run_id"],
         idempotency_key=row["idempotency_key"],
@@ -368,7 +370,8 @@ def _run(row: sqlite3.Row) -> VerificationRun:
         lease_id=row["lease_id"],
         lease_expires_at=row["lease_expires_at"],
         coordinator_session_id=row["coordinator_session_id"],
-        request=_validated_row_request(row),
+        request=request,
+        supporting_authority=tuple(_validated_supporting_authority(row, request)),
         context_pack=_load(row["context_pack_json"]),
         terminal_receipt=_load(row["terminal_receipt_json"]),
         stop_reason=row["stop_reason"],
@@ -592,10 +595,25 @@ class VerificationDispatchLedger:
                     raise ValueError(
                         "stale-head supersession requires an authoritative new head"
                     )
+                candidate_request = _validated_row_request(candidate)
+                candidate_supporting = _validated_supporting_authority(
+                    candidate, candidate_request
+                )
+                incoming_supporting = request.get("supporting_issues")
+                authority_matches = (
+                    authenticated_artifact
+                    and isinstance(incoming_supporting, list)
+                    and set(candidate_supporting).issubset(incoming_supporting)
+                )
+                if not authority_matches:
+                    raise ValueError(
+                        "verification artifact head does not match canonical run"
+                    )
                 conn.execute(
                     """
                     UPDATE verification_runs
                     SET status='queued', current_head_sha=?, verified_head_sha=NULL,
+                        supporting_authority_json=?,
                         claimed_by=NULL, lease_id=NULL, lease_expires_at=NULL,
                         last_heartbeat_at=NULL, coordinator_session_id=NULL,
                         context_pack_json=NULL, terminal_receipt_json=NULL,
@@ -603,7 +621,12 @@ class VerificationDispatchLedger:
                     WHERE run_id=? AND status='superseded'
                       AND stop_reason='stale_head'
                     """,
-                    (next_head, now, candidate["run_id"]),
+                    (
+                        next_head,
+                        _json(incoming_supporting),
+                        now,
+                        candidate["run_id"],
+                    ),
                 )
                 reopened = conn.execute(
                     "SELECT * FROM verification_runs WHERE run_id=?",

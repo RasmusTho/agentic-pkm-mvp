@@ -311,6 +311,8 @@ def _source(
     authenticated_repository: str = REPO,
     authenticated_run_updates: dict[str, object] | None = None,
 ) -> tuple[GhCliVerificationSource, list[str]]:
+    artifact_head = request_payload["current_head_sha"]
+    assert isinstance(artifact_head, str)
     archive_bytes = io.BytesIO()
     with zipfile.ZipFile(archive_bytes, "w") as archive:
         archive.writestr("verification-dispatch/request.json", json.dumps(request_payload))
@@ -333,14 +335,14 @@ def _source(
                         "artifacts": [
                             {
                                 "id": 7,
-                                "name": f"verification-dispatch-3603-{HEAD}",
+                                "name": f"verification-dispatch-3603-{artifact_head}",
                                 "size_in_bytes": len(archive_bytes.getvalue()),
                                 "expired": False,
                                 "workflow_run": {
                                     "id": 123,
                                     "repository_id": 456,
                                     "head_repository_id": 456,
-                                    "head_sha": "b" * 40,
+                                    "head_sha": artifact_head,
                                 },
                             }
                         ]
@@ -360,7 +362,7 @@ def _source(
                         "event": "workflow_run",
                         "status": "completed",
                         "conclusion": "success",
-                        "head_sha": "b" * 40,
+                        "head_sha": artifact_head,
                         "repository": {"id": 456, "full_name": REPO},
                         "head_repository": {"id": 456, "full_name": REPO},
                     }
@@ -375,7 +377,7 @@ def _source(
                 "event": "pull_request",
                 "status": "completed",
                 "conclusion": "success",
-                "head_sha": HEAD,
+                "head_sha": artifact_head,
                 "repository": {
                     "id": 456,
                     "full_name": authenticated_repository,
@@ -392,6 +394,11 @@ def _source(
         raise AssertionError(f"unexpected GitHub read: {endpoint}")
 
     return GhCliVerificationSource(runner=runner), endpoints
+
+
+def _authenticated_request(payload: dict[str, object]) -> dict[str, object]:
+    source, _ = _source(payload)
+    return source.pending_requests(REPO)[0]
 
 
 @pytest.mark.parametrize(
@@ -492,7 +499,7 @@ def test_stale_head_superseded_chain_reopens_without_budget_reset(tmp_path) -> N
     state = ledger(tmp_path)
     run_id = _superseded_exhausted_chain(state)
 
-    reopened = state.ingest(request(REPAIRED_HEAD))
+    reopened = state.ingest(_authenticated_request(request(REPAIRED_HEAD)))
 
     assert reopened.run_id == run_id
     assert reopened.status == "queued"
@@ -508,7 +515,7 @@ def test_reopened_stale_head_chain_clears_stale_execution_state(tmp_path) -> Non
     state = ledger(tmp_path)
     _superseded_exhausted_chain(state)
 
-    reopened = state.ingest(request(REPAIRED_HEAD))
+    reopened = state.ingest(_authenticated_request(request(REPAIRED_HEAD)))
 
     assert reopened.requested_head_sha == HEAD
     assert reopened.current_head_sha == REPAIRED_HEAD

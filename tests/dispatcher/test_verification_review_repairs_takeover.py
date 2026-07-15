@@ -14,6 +14,8 @@ from app.dispatcher.verification_consumer import (
     CodexExecLauncher,
     GhCliVerificationSource,
     VerificationConsumer,
+    _governing_contract_matches,
+    _trusted_evidence_urls,
 )
 from app.dispatcher.verification_dispatch import VerificationDispatchLedger
 from tests.dispatcher.test_verification_consumer import (
@@ -567,6 +569,75 @@ def test_successive_takeovers_enforce_durable_cumulative_supporting_authority(
         ).fetchone()
     assert durable is not None
     assert json.loads(durable["supporting_authority_json"]) == [3626, 3783, 3784]
+
+
+def test_terminal_stale_head_reopen_enforces_authenticated_cumulative_authority(
+    tmp_path: Path,
+) -> None:
+    state = ledger(tmp_path)
+    original = request()
+    original["supporting_issues"] = [3626]
+    run_id, before = _record_exhausted_chain(state, original)
+    repaired = request(REPAIRED_HEAD)
+    repaired["supporting_issues"] = [3626, 3783]
+    source, _ = _gh_source(repaired)
+    state.ingest(source.pending_requests(REPO)[0])
+    claimed = state.claim(run_id, "head-b-host")
+    lease_id = claimed.lease_id or ""
+    state.backoff(
+        run_id,
+        {"outcome": "deferred", "reason": "checks_not_green"},
+        "2000-01-01T00:00:00+00:00",
+        holder="head-b-host",
+        lease_id=lease_id,
+    )
+    state.supersede_unclaimed(
+        run_id,
+        {"outcome": "noop", "reason": "stale_head"},
+        reason="stale_head",
+    )
+
+    rolled_back = request(SECOND_REPAIRED_HEAD)
+    rolled_back["supporting_issues"] = [3626]
+    with pytest.raises(
+        ValueError, match="verification artifact head does not match canonical run"
+    ):
+        state.ingest(rolled_back)
+    rollback_source, _ = _gh_source(rolled_back)
+    with pytest.raises(
+        ValueError, match="verification artifact head does not match canonical run"
+    ):
+        state.ingest(rollback_source.pending_requests(REPO)[0])
+
+    retained = state.get(run_id)
+    assert retained is not None
+    assert retained.status == "superseded"
+    assert retained.current_head_sha == REPAIRED_HEAD
+    assert retained.supporting_authority == (3626, 3783)
+    assert state.attempts(run_id) == before
+    assert f"https://github.com/{REPO}/issues/3783" in _trusted_evidence_urls(
+        retained
+    )
+    assert _governing_contract_matches(
+        retained,
+        "Governing-Issue: #3603\nFixes #3626\nFixes #3783",
+    )
+    assert not _governing_contract_matches(
+        retained,
+        "Governing-Issue: #3603\nFixes #3626",
+    )
+
+    extended = request(THIRD_REPAIRED_HEAD)
+    extended["supporting_issues"] = [3626, 3783, 3784]
+    extension_source, _ = _gh_source(extended)
+    reopened = state.ingest(extension_source.pending_requests(REPO)[0])
+
+    assert reopened.run_id == run_id
+    assert reopened.status == "queued"
+    assert reopened.requested_head_sha == HEAD
+    assert reopened.current_head_sha == THIRD_REPAIRED_HEAD
+    assert reopened.supporting_authority == (3626, 3783, 3784)
+    assert state.attempts(run_id) == before
 
 
 def test_expired_head_reconciliation_rejects_unauthenticated_valid_artifact(
