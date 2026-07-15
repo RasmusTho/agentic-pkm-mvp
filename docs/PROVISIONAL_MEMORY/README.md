@@ -116,10 +116,10 @@ replace deterministic call-site proof.
 
 Parent validation hub: #2314. Strictly validated task Issues:
 
-1. #3718 — PROVISIONAL-MEMORY-01 (`agent:ready`)
-2. #3719 — PROVISIONAL-MEMORY-02 (`agent:blocked` by #3718)
-3. #3720 — PROVISIONAL-MEMORY-03 (`agent:blocked` by #3719)
-4. #3721 — PROVISIONAL-MEMORY-04 (`agent:blocked` by #3719/#3720)
+1. #3718 — PROVISIONAL-MEMORY-01 (delivered)
+2. #3719 — PROVISIONAL-MEMORY-02 (delivered)
+3. #3720 — PROVISIONAL-MEMORY-03 (implemented; delivery governed by #3720)
+4. #3721 — PROVISIONAL-MEMORY-04 (blocked by #3720 until its merge receipt)
 
 No task may claim #2314 itself. After each merge, the coordinator updates the validation ledger on
 #2314 and recalculates which single dependent Issue can truthfully become ready.
