@@ -175,12 +175,14 @@ def test_live_truth_uses_latest_check_rerun_by_name(tmp_path) -> None:
         {
             "id": 10,
             "name": "Unit tests (not pg)",
+            "app": {"slug": "github-actions"},
             "status": "completed",
             "conclusion": "failure",
         },
         {
             "id": 11,
             "name": "Unit tests (not pg)",
+            "app": {"slug": "github-actions"},
             "status": "completed",
             "conclusion": "success",
         },

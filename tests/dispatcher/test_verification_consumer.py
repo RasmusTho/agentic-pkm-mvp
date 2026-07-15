@@ -606,6 +606,7 @@ GREEN = [
     {
         "id": 1,
         "name": "Unit tests (not pg)",
+        "app": {"slug": "github-actions"},
         "status": "completed",
         "conclusion": "success",
     }
@@ -1035,6 +1036,7 @@ def test_pending_repair_checks_persist_repair_before_backoff(tmp_path) -> None:
         {
             "id": 2,
             "name": "Unit tests (not pg)",
+            "app": {"slug": "github-actions"},
             "status": "in_progress",
             "conclusion": None,
         }
@@ -1089,6 +1091,7 @@ def test_supporting_issue_addition_allows_repair_head_rebind_without_budget_rese
         {
             "id": 2,
             "name": "Unit tests (not pg)",
+            "app": {"slug": "github-actions"},
             "status": "in_progress",
             "conclusion": None,
         }
@@ -1154,6 +1157,7 @@ def test_invalid_pending_repair_event_batch_fails_before_backoff(tmp_path) -> No
         {
             "id": 2,
             "name": "Unit tests (not pg)",
+            "app": {"slug": "github-actions"},
             "status": "in_progress",
             "conclusion": None,
         }
@@ -1261,6 +1265,7 @@ def test_pending_repair_replay_preserves_two_plus_two_accounting(tmp_path) -> No
         {
             "id": 2,
             "name": "Unit tests (not pg)",
+            "app": {"slug": "github-actions"},
             "status": "in_progress",
             "conclusion": None,
         }
@@ -1591,6 +1596,7 @@ def test_delivered_receipt_requires_successful_named_unit_typecheck_gate(
                 {
                     "id": 2,
                     "name": "Unit tests (not pg)",
+                    "app": {"slug": "github-actions"},
                     "status": status,
                     "conclusion": conclusion,
                 }

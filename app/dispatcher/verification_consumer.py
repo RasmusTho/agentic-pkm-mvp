@@ -1308,6 +1308,8 @@ def _checks_rejection(checks: Sequence[Mapping[str, object]]) -> str | None:
     latest: dict[str, tuple[tuple[int, str, int], Mapping[str, object]]] = {}
     for index, check in enumerate(checks):
         name = check.get("name")
+        if name in required_checks and _nested(check, "app", "slug") != "github-actions":
+            continue
         key = name if isinstance(name, str) and name else f"__unnamed_{index}"
         check_id = check.get("id")
         rank = (
