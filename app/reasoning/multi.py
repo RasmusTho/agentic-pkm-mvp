@@ -4,7 +4,7 @@ from typing import Iterable, List, Sequence
 from uuid import UUID
 
 from app.reasoning.provider import run_reasoning_claims_for_object
-from app.reasoning.schema import Claim, Evidence, Inference, ReasoningOutput
+from app.reasoning.schema import Claim, Evidence, Inference, ReasoningOutcome, ReasoningOutput
 from app.stores import get_object_store
 
 
@@ -50,33 +50,53 @@ def run_multi_note_reasoning(object_ids: Sequence[str], *, trace_id: str | None 
     all_claims: List[Claim] = []
     all_evidence: List[Evidence] = []
     all_inferences: List[Inference] = []
+    outcomes: list[ReasoningOutcome] = []
+    if len(texts) < len(object_ids):
+        outcomes.append("missing_input")
     for object_id, text in texts:
         try:
             result = run_reasoning_claims_for_object(object_id, trace_id=trace_id)
         except Exception:
-            result = ReasoningOutput()
+            result = ReasoningOutput(
+                outcome="provider_failure", degraded_reason="provider_failure"
+            )
+        if result.outcome == "success" and not (
+            result.claims or result.evidence or result.inferences
+        ):
+            result = result.model_copy(
+                update={
+                    "outcome": "empty_output",
+                    "degraded_reason": "empty_provider_output",
+                }
+            )
+        outcomes.append(result.outcome)
         all_claims.extend(result.claims)
         all_inferences.extend(result.inferences)
         all_evidence.extend(result.evidence)
-    if not all_claims and texts:
-        for idx, (object_id, text) in enumerate(texts, start=1):
-            snippet = text.strip().splitlines()[0] if text else ""
-            all_claims.append(
-                Claim(
-                    id=f"multi-claim-{idx}",
-                    object_uuid=object_id,
-                    text=snippet or f"Synthesized claim for {object_id}",
-                    modality="assertion",
-                    confidence=0.5,
-                )
-            )
-    synthesis = _build_synthesis_inference(all_claims, [oid for oid, _ in texts])
+
+    outcome: ReasoningOutcome = "success"
+    degraded_reason: str | None = None
+    if "provider_failure" in outcomes:
+        outcome = "provider_failure"
+        degraded_reason = "provider_failure"
+    elif "empty_output" in outcomes:
+        outcome = "empty_output"
+        degraded_reason = "empty_provider_output"
+    elif "missing_input" in outcomes:
+        outcome = "missing_input"
+        degraded_reason = "missing_input"
+
+    synthesis = None
+    if outcome == "success":
+        synthesis = _build_synthesis_inference(all_claims, [oid for oid, _ in texts])
     if synthesis:
         all_inferences.append(synthesis)
     return ReasoningOutput(
         claims=all_claims,
         evidence=all_evidence,
         inferences=all_inferences,
+        outcome=outcome,
+        degraded_reason=degraded_reason,
     )
 
 

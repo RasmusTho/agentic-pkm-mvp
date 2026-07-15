@@ -113,6 +113,40 @@ def test_reasoning_multi_note_logs_real_json(monkeypatch: pytest.MonkeyPatch) ->
     assert all("claims" in entry.get("response_text", "") for entry in captured)
 
 
+def test_multi_note_trace_preserves_degraded_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_reasoning_env(monkeypatch)
+    empty_json = json.dumps({"claims": [], "evidence": [], "inferences": []})
+
+    captured: list[dict] = []
+
+    def fake_log_llm_call(**kwargs):
+        captured.append(kwargs)
+
+    monkeypatch.setattr("app.services.llm.log_llm_call", fake_log_llm_call)
+    monkeypatch.setattr("app.services.llm._ollama_chat", lambda *a, **k: empty_json)
+
+    reset_store_backends()
+    store = get_object_store()
+    obj_ids = [
+        UUID("33333333-3333-3333-3333-333333333333"),
+        UUID("44444444-4444-4444-4444-444444444444"),
+    ]
+    store.put(obj_ids[0], kind="note", source_ref="c.md", payload={"text": "Note C content"})
+    store.put(obj_ids[1], kind="note", source_ref="d.md", payload={"text": "Note D content"})
+
+    output = run_multi_note_reasoning(
+        [str(obj_ids[0]), str(obj_ids[1])], trace_id="T-multi-degraded"
+    )
+
+    assert output.outcome == "empty_output"
+    assert output.degraded is True
+    assert output.degraded_reason == "empty_provider_output"
+    assert output.claims == []
+    assert output.inferences == []
+    assert captured, "trace logging must remain active for empty provider output"
+    assert all(entry["trace_id"] == "T-multi-degraded" for entry in captured)
+
+
 def test_set_evaluator_logs_real_json(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_reasoning_env(monkeypatch)
 

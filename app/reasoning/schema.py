@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, TypeAlias
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -42,10 +42,26 @@ class Inference(BaseModel):
     rationale: str
 
 
+ReasoningOutcome: TypeAlias = Literal[
+    "success",
+    "empty_output",
+    "provider_failure",
+    "missing_input",
+]
+
+
 class ReasoningOutput(BaseModel):
     claims: List[Claim] = Field(default_factory=list)
     evidence: List[Evidence] = Field(default_factory=list)
     inferences: List[Inference] = Field(default_factory=list)
+    outcome: ReasoningOutcome = "success"
+    degraded_reason: str | None = None
+
+    @property
+    def degraded(self) -> bool:
+        """Return degradation truth derived from the execution outcome."""
+
+        return self.outcome != "success"
 
 
 class ReasoningValidationError(RuntimeError):
@@ -66,6 +82,7 @@ __all__ = [
     "Claim",
     "Evidence",
     "Inference",
+    "ReasoningOutcome",
     "ReasoningValidationError",
     "validate_output",
 ]
