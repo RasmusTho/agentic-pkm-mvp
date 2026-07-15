@@ -276,6 +276,10 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
                     f"malformed entry at {confusions_path}[{index}]: missing {key!r}"
                 )
     view["mutation_side_confusions"] = confusions
+    if view["hard_gate_passed"] != (not confusions):
+        raise ScorecardCompareError(
+            f"classification hard-gate state contradicts mutation confusions at {label}"
+        )
 
     provisional = _resolve_dict(scorecard, label, ("provisional_memory_boundary",))
     provisional_path = f"{label}.provisional_memory_boundary"
@@ -441,7 +445,8 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
             )
         if kind == "categorical":
             if (
-                not entry["scope"].endswith(":hard_gate")
+                entry["scope"]
+                not in {"classification:hard_gate", "provisional_memory:hard_gate"}
                 or entry["value"] != 1.0
                 or entry["threshold"] != 0.0
             ):
@@ -457,6 +462,29 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
     if scorecard_regression != bool(failures):
         raise ScorecardCompareError(
             f"scorecard regression flag contradicts failures at {label}"
+        )
+    categorical_scopes = {
+        entry["scope"] for entry in failures if entry["kind"] == "categorical"
+    }
+    required_categorical_scopes = {
+        scope
+        for scope, failed in (
+            ("classification:hard_gate", not view["hard_gate_passed"]),
+            (
+                "provisional_memory:hard_gate",
+                not view["provisional_memory_boundary"]["hard_gate_passed"],
+            ),
+        )
+        if failed
+    }
+    actual_hard_gate_scopes = {
+        scope
+        for scope in categorical_scopes
+        if scope in {"classification:hard_gate", "provisional_memory:hard_gate"}
+    }
+    if actual_hard_gate_scopes != required_categorical_scopes:
+        raise ScorecardCompareError(
+            f"hard-gate evidence contradicts categorical failures at {label}"
         )
     view["floor_regression"] = scorecard_regression
     view["failures"] = failures

@@ -168,6 +168,16 @@ def test_verdict_regression_on_mutation_side_hard_gate() -> None:
             "predicted_intent": "governance_bearing",
         }
     ]
+    candidate["regression"] = True
+    candidate["failures"] = [
+        {
+            "scope": "classification:hard_gate",
+            "metric": "mutation_side_confusion:adv-sv-01->governance_bearing",
+            "value": 1.0,
+            "threshold": 0.0,
+            "kind": "categorical",
+        }
+    ]
     comparison = compare_scorecards(baseline, candidate)
     assert comparison["verdict"] == "regression"
     assert comparison["classification_confusion"]["candidate_hard_gate_passed"] is False
@@ -219,7 +229,16 @@ def test_verdict_regression_on_provisional_memory_hard_gate(
         for case in candidate["provisional_memory_boundary"]["cases"]
         if case["id"] == "cited-proposal-en"
     )["passed"] = False
-    candidate["regression"] = False
+    candidate["regression"] = True
+    candidate["failures"] = [
+        {
+            "scope": "provisional_memory:hard_gate",
+            "metric": "cited-proposal-en:uncited_proposal_admitted",
+            "value": 1.0,
+            "threshold": 0.0,
+            "kind": "categorical",
+        }
+    ]
 
     comparison = compare_scorecards(baseline, candidate)
     summary = render_compare_summary(comparison)
@@ -252,6 +271,27 @@ def test_verdict_regression_on_provisional_memory_hard_gate(
         ]
     ) == 1
     assert "VERDICT: regression" in capsys.readouterr().out
+
+
+def test_cli_rejects_classification_gate_confusion_contradiction(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    candidate = load_scorecard(CANDIDATE_PATH)
+    candidate["classification"]["mutation_side_confusions"] = [
+        {
+            "case_id": "adv-sv-01",
+            "expected_intent": "exploratory",
+            "predicted_intent": "governance_bearing",
+        }
+    ]
+    path = tmp_path / "candidate_contradictory_classification_gate.json"
+    path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    assert eval_run.main(
+        ["compare", "--baseline", str(BASELINE_PATH), "--candidate", str(path)]
+    ) == 2
+    assert "hard-gate state contradicts" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
