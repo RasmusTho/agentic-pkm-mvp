@@ -19,12 +19,14 @@ fi
 usage() {
   cat >&2 <<'EOF'
 usage:
-  scripts/deploy_channel.sh deploy <dev|test|prod> <sha> [--dry-run] [--ack-forward-only]
+  scripts/deploy_channel.sh deploy <dev|test|prod> <sha> [--dry-run] [--ack-forward-only] [--ack-embedding-rebuild-required]
   scripts/deploy_channel.sh rollback <dev|test|prod> [sha] [--dry-run]
 
 Environment:
   DEPLOY_DRY_RUN=1                  print the plan and stop before writes/docker
   DEPLOY_ACK_FORWARD_ONLY=1         acknowledge forward-only migrations
+  DEPLOY_ACK_EMBEDDING_REBUILD_REQUIRED=1
+                                    acknowledge only the embedding-index rebuild transition
   DEPLOY_HEALTH_TIMEOUT_SECONDS=90  health gate timeout
 EOF
 }
@@ -62,10 +64,12 @@ esac
 
 dry_run="${DEPLOY_DRY_RUN:-0}"
 ack_forward_only="${DEPLOY_ACK_FORWARD_ONLY:-0}"
+ack_embedding_rebuild_required="${DEPLOY_ACK_EMBEDDING_REBUILD_REQUIRED:-0}"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run) dry_run=1 ;;
     --ack-forward-only) ack_forward_only=1 ;;
+    --ack-embedding-rebuild-required) ack_embedding_rebuild_required=1 ;;
     *) echo "unknown argument: $1" >&2; usage; exit 2 ;;
   esac
   shift
@@ -208,6 +212,7 @@ PY
   forward_count="$("${PYTHON}" -c 'import json,sys; print(len(json.loads(sys.stdin.read()).get("forward_only", [])))' <<<"${receipt_json}")"
   echo "migration gate ok: ${#migration_paths[@]} migration(s), forward_only=${forward_count}"
   MIGRATION_RECEIPT_JSON="${receipt_json}"
+  export MIGRATION_RECEIPT_JSON
 }
 
 compose() {
@@ -311,8 +316,11 @@ payload = {
     "previous_sha": "${current_sha}",
     "image": "${image_repository}:${target_sha}",
     "recorded_at": "${timestamp}",
-    "migration_receipt": json.loads('''${MIGRATION_RECEIPT_JSON:-{"migrations_checked":0,"reversible":[],"forward_only":[],"classification_decisions":[]}}'''),
+    "migration_receipt": json.loads(os.environ.get("MIGRATION_RECEIPT_JSON", "{}")),
     "fleet_model_fitness": json.loads(os.environ.get("FLEET_MODEL_FITNESS_JSON", "{}")),
+    "embedding_rebuild_required_acknowledged": (
+        os.environ.get("DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK", "0") == "1"
+    ),
 }
 Path(sys.argv[1]).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
 PY
@@ -335,6 +343,14 @@ if [ "${dry_run}" = "1" ]; then
   exit 0
 fi
 
+if ! scripts/companion_ui_postdeploy_smoke.sh preflight; then
+  echo "browser preflight failed before channel mutation" >&2
+  exit 86
+fi
+
+DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK="${ack_embedding_rebuild_required}"
+export DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK
+
 mkdir -p "$(dirname "${pin_file}")"
 if [ -n "${current_sha}" ]; then
   write_pin "${previous_pin_file}" "${current_sha}"
@@ -353,7 +369,8 @@ health_gate || {
 }
 version_gate
 fleet_model_fitness_gate
-scripts/companion_ui_postdeploy_smoke.sh "${channel}"
+COMPANION_UI_ALLOW_EMBEDDING_REBUILD_REQUIRED="${ack_embedding_rebuild_required}" \
+  scripts/companion_ui_postdeploy_smoke.sh "${channel}"
 record_receipt
 capture_watch_gate || {
   echo "deploy: heimdal-capture-watch is not healthy (api/worker left in place and receipt recorded); resolve its config and re-check" >&2

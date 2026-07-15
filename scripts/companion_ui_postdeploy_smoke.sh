@@ -15,6 +15,32 @@ if [ -z "${PYTHON}" ]; then
   fi
 fi
 
+preflight() {
+  "${PYTHON}" -c '
+import sys
+
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    print(
+        "companion UI browser preflight: playwright package is not installed",
+        file=sys.stderr,
+    )
+    raise SystemExit(86)
+
+try:
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        browser.close()
+except Exception:
+    print(
+        "companion UI browser preflight: Playwright Chromium runtime is unavailable",
+        file=sys.stderr,
+    )
+    raise SystemExit(86)
+'
+}
+
 run_channel() {
   local channel="$1" url
   case "${channel}" in
@@ -34,6 +60,9 @@ run_channel() {
 
 target="${1:-all}"
 case "${target}" in
+  preflight)
+    preflight
+    ;;
   all)
     run_channel dev
     run_channel test
@@ -43,7 +72,7 @@ case "${target}" in
     run_channel "${target}"
     ;;
   *)
-    echo "usage: $0 [dev|test|prod|all]" >&2
+    echo "usage: $0 [preflight|dev|test|prod|all]" >&2
     exit 2
     ;;
 esac
