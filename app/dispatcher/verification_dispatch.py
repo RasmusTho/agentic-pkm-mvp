@@ -270,13 +270,29 @@ def _validated_stored_request(value: str | None) -> dict[str, object]:
 
 def _validated_row_request(row: sqlite3.Row) -> dict[str, object]:
     request = _validated_stored_request(row["request_json"])
+    idempotency_key = request["idempotency_key"]
+    assert isinstance(idempotency_key, str)
+    current_head_sha = row["current_head_sha"]
+    verified_head_sha = row["verified_head_sha"]
     if (
-        row["idempotency_key"] != request["idempotency_key"]
+        row["run_id"] != f"vrun-{idempotency_key[:16]}"
+        or row["idempotency_key"] != request["idempotency_key"]
         or row["contract_version"] != request["contract_version"]
         or row["repository"] != request["repository"]
         or row["pr_number"] != request["pr_number"]
         or row["head_sha"] != request["current_head_sha"]
         or row["stage"] != request["stage"]
+    ):
+        raise ValueError("verification canonical run authority is malformed")
+    if not isinstance(current_head_sha, str) or not re.fullmatch(
+        r"[0-9a-fA-F]{40}", current_head_sha
+    ):
+        raise ValueError("verification canonical run authority is malformed")
+    if verified_head_sha is not None and (
+        not isinstance(verified_head_sha, str)
+        or not re.fullmatch(r"[0-9a-fA-F]{40}", verified_head_sha)
+        or verified_head_sha != current_head_sha
+        or row["status"] != "completed"
     ):
         raise ValueError("verification canonical run authority is malformed")
     return request

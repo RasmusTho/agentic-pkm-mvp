@@ -269,6 +269,8 @@ _VERIFICATION_MUTATION_TABLES = (
     ("verification_runs", "run_id"),
     ("verification_attempts", "attempt_id"),
     ("verification_exceptions", "exception_id"),
+    ("dispatcher_events", "event_id"),
+    ("dispatcher_leases", "lease_id"),
 )
 
 
@@ -297,7 +299,23 @@ def _verification_state_snapshot(state) -> dict[str, list[dict[str, object]]]:
         "exception",
     ],
 )
-@pytest.mark.parametrize("corruption", ["unknown_request_field", "row_identity_mismatch"])
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "unknown_request_field",
+        "noncanonical_run_id",
+        "idempotency_key_mismatch",
+        "contract_version_mismatch",
+        "repository_mismatch",
+        "pr_number_mismatch",
+        "head_sha_mismatch",
+        "stage_mismatch",
+        "malformed_current_head_sha",
+        "malformed_verified_head_sha",
+        "inconsistent_verified_current_heads",
+        "verified_head_on_uncompleted_run",
+    ],
+)
 def test_every_ledger_mutation_rejects_corrupted_run_before_durable_change(
     tmp_path, mutation: str, corruption: str
 ) -> None:
@@ -314,6 +332,8 @@ def test_every_ledger_mutation_rejects_corrupted_run_before_durable_change(
         assert claimed.lease_id is not None
 
     secret = "corrupted-row-private-key-must-not-escape"
+    raw_corruption = secret
+    target_run_id = run.run_id
     with state.store._connect() as conn:
         if corruption == "unknown_request_field":
             corrupted_request = dict(run.request)
@@ -322,10 +342,64 @@ def test_every_ledger_mutation_rejects_corrupted_run_before_durable_change(
                 "UPDATE verification_runs SET request_json=? WHERE run_id=?",
                 (json.dumps(corrupted_request), run.run_id),
             )
-        else:
+        elif corruption == "noncanonical_run_id":
+            target_run_id = f"vrun-{secret}"
+            conn.execute(
+                "UPDATE verification_runs SET run_id=? WHERE run_id=?",
+                (target_run_id, run.run_id),
+            )
+        elif corruption == "idempotency_key_mismatch":
+            conn.execute(
+                "UPDATE verification_runs SET idempotency_key=? WHERE run_id=?",
+                (secret, run.run_id),
+            )
+        elif corruption == "contract_version_mismatch":
+            conn.execute(
+                "UPDATE verification_runs SET contract_version=? WHERE run_id=?",
+                (secret, run.run_id),
+            )
+        elif corruption == "repository_mismatch":
             conn.execute(
                 "UPDATE verification_runs SET repository=? WHERE run_id=?",
-                ("attacker/other", run.run_id),
+                (secret, run.run_id),
+            )
+        elif corruption == "pr_number_mismatch":
+            raw_corruption = "999999999"
+            conn.execute(
+                "UPDATE verification_runs SET pr_number=? WHERE run_id=?",
+                (int(raw_corruption), run.run_id),
+            )
+        elif corruption == "head_sha_mismatch":
+            conn.execute(
+                "UPDATE verification_runs SET head_sha=? WHERE run_id=?",
+                (secret, run.run_id),
+            )
+        elif corruption == "stage_mismatch":
+            conn.execute(
+                "UPDATE verification_runs SET stage=? WHERE run_id=?",
+                (secret, run.run_id),
+            )
+        elif corruption == "malformed_current_head_sha":
+            conn.execute(
+                "UPDATE verification_runs SET current_head_sha=? WHERE run_id=?",
+                (secret, run.run_id),
+            )
+        elif corruption == "malformed_verified_head_sha":
+            conn.execute(
+                "UPDATE verification_runs SET verified_head_sha=? WHERE run_id=?",
+                (secret, run.run_id),
+            )
+        else:
+            assert corruption in {
+                "inconsistent_verified_current_heads",
+                "verified_head_on_uncompleted_run",
+            }
+            raw_corruption = (
+                "b" * 40 if corruption.startswith("inconsistent") else run.head_sha
+            )
+            conn.execute(
+                "UPDATE verification_runs SET verified_head_sha=? WHERE run_id=?",
+                (raw_corruption, run.run_id),
             )
         conn.commit()
 
@@ -337,14 +411,20 @@ def test_every_ledger_mutation_rejects_corrupted_run_before_durable_change(
         if mutation == "ingest":
             state.ingest(request())
         elif mutation == "claim":
-            state.claim(run.run_id, "coordinator")
+            state.claim(target_run_id, "coordinator")
         elif mutation == "heartbeat":
-            state.heartbeat(run.run_id, "coordinator", lease_id)
+            state.heartbeat(target_run_id, "coordinator", lease_id)
         elif mutation == "start":
-            state.start(run.run_id, "coordinator", lease_id, "session", {"head": run.head_sha})
+            state.start(
+                target_run_id,
+                "coordinator",
+                lease_id,
+                "session",
+                {"head": run.head_sha},
+            )
         elif mutation == "terminal":
             state.terminal(
-                run.run_id,
+                target_run_id,
                 "failed",
                 {"outcome": "blocked"},
                 holder="coordinator",
@@ -352,7 +432,7 @@ def test_every_ledger_mutation_rejects_corrupted_run_before_durable_change(
             )
         elif mutation == "rebind_head":
             state.rebind_head(
-                run.run_id,
+                target_run_id,
                 "b" * 40,
                 expected_head_sha=run.head_sha,
                 observed_repository=run.repository,
@@ -363,7 +443,7 @@ def test_every_ledger_mutation_rejects_corrupted_run_before_durable_change(
             )
         elif mutation == "backoff":
             state.backoff(
-                run.run_id,
+                target_run_id,
                 {"outcome": "deferred"},
                 "2030-01-01T00:00:00+00:00",
                 holder="coordinator",
@@ -371,17 +451,17 @@ def test_every_ledger_mutation_rejects_corrupted_run_before_durable_change(
             )
         elif mutation == "defer_unclaimed":
             state.defer_unclaimed(
-                run.run_id,
+                target_run_id,
                 {"outcome": "deferred"},
                 "2030-01-01T00:00:00+00:00",
             )
         elif mutation == "supersede_unclaimed":
             state.supersede_unclaimed(
-                run.run_id, {"outcome": "superseded"}, reason="stale_head"
+                target_run_id, {"outcome": "superseded"}, reason="stale_head"
             )
         elif mutation == "record_attempt":
             state.record_attempt(
-                run.run_id,
+                target_run_id,
                 "standard_repair",
                 "session",
                 "sol",
@@ -393,7 +473,7 @@ def test_every_ledger_mutation_rejects_corrupted_run_before_durable_change(
             )
         elif mutation == "record_attempt_batch":
             state.record_attempt_batch(
-                run.run_id,
+                target_run_id,
                 "batch",
                 1,
                 run.head_sha,
@@ -404,7 +484,7 @@ def test_every_ledger_mutation_rejects_corrupted_run_before_durable_change(
         else:
             assert mutation == "exception"
             state.exception(
-                run.run_id,
+                target_run_id,
                 "requires_human",
                 {"summary": "blocked"},
                 holder="coordinator",
@@ -412,6 +492,7 @@ def test_every_ledger_mutation_rejects_corrupted_run_before_durable_change(
             )
 
     assert secret not in str(rejected.value)
+    assert raw_corruption not in str(rejected.value)
     assert _verification_state_snapshot(state) == before
 
 

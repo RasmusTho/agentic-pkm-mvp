@@ -602,7 +602,7 @@ def _insert_legacy_terminal_chain(
     status: str = "failed",
 ) -> str:
     payload = request(head_sha)
-    run_id = f"legacy-terminal-{head_sha[:8]}"
+    run_id = f"vrun-{str(payload['idempotency_key'])[:16]}"
     with state.store._connect() as conn:
         conn.execute(
             """
@@ -694,6 +694,7 @@ def test_legacy_terminal_budget_blocks_exact_empty_active_replay(tmp_path) -> No
             (terminal_run_id,),
         )
         payload = request(REPAIRED_HEAD)
+        active_run_id = f"vrun-{str(payload['idempotency_key'])[:16]}"
         conn.execute(
             """
             INSERT INTO verification_runs (
@@ -703,7 +704,7 @@ def test_legacy_terminal_budget_blocks_exact_empty_active_replay(tmp_path) -> No
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
             """,
             (
-                "legacy-new-active",
+                active_run_id,
                 payload["idempotency_key"],
                 payload["contract_version"],
                 payload["repository"],
@@ -725,7 +726,7 @@ def test_legacy_terminal_budget_blocks_exact_empty_active_replay(tmp_path) -> No
         "standard_repair",
         "standard_repair",
     ]
-    assert state.attempts("legacy-new-active") == []
+    assert state.attempts(active_run_id) == []
 
 
 def _insert_legacy_active_chain(
@@ -737,7 +738,7 @@ def _insert_legacy_active_chain(
     payload = request(head_sha)
     if linked_issue is not None:
         payload["linked_issue"] = linked_issue
-    run_id = f"legacy-active-{head_sha[:8]}"
+    run_id = f"vrun-{str(payload['idempotency_key'])[:16]}"
     with state.store._connect() as conn:
         conn.execute(
             """
