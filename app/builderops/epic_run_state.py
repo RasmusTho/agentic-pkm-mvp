@@ -38,6 +38,7 @@ _LIST_FIELDS = (
     "dispatch_decisions",
     "compact_receipts",
     "ci_handoffs",
+    "context_budget_receipts",
 )
 _MERGE_MAPPING_FIELDS = (
     "issue_mappings",
@@ -117,6 +118,7 @@ def new_epic_run_state(
         "dispatcher_status": {},
         "compact_receipts": [],
         "ci_handoffs": [],
+        "context_budget_receipts": [],
         "last_verified_head_sha": None,
     }
     if updates:
@@ -211,7 +213,10 @@ def apply_epic_run_update(state: Mapping[str, Any], **updates: Any) -> dict[str,
 
     for field in _LIST_FIELDS:
         if field in updates and updates[field] is not None:
-            incoming = _normalize_list(updates[field], field)
+            if field == "context_budget_receipts":
+                incoming = _normalize_context_budget_receipts(updates[field], field)
+            else:
+                incoming = _normalize_list(updates[field], field)
             if field == "learning_evaluation_candidates":
                 normalized[field] = _merge_learning_evaluation_candidates(
                     normalized[field],
@@ -255,6 +260,22 @@ def record_dispatcher_status(
     """Record a dispatcher status snapshot without importing or changing dispatcher."""
 
     return apply_epic_run_update(state, dispatcher_status=dispatcher_status)
+
+
+def record_context_budget_receipt(
+    state: Mapping[str, Any],
+    receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Record one validated observer-only slice-boundary receipt."""
+
+    from app.builderops.epic_run_context_budget import (
+        normalize_context_budget_receipt,
+    )
+
+    return apply_epic_run_update(
+        state,
+        context_budget_receipts=[normalize_context_budget_receipt(receipt)],
+    )
 
 
 def unresolved_learning_evaluation_candidates(
@@ -305,6 +326,8 @@ def normalize_epic_run_state(state: Mapping[str, Any]) -> dict[str, Any]:
 
     if not isinstance(state, Mapping):
         raise EpicRunStateError("run-state must be a JSON object")
+    if "schema_version" in state and type(state["schema_version"]) is not int:
+        raise EpicRunStateError("epic run-state schema_version must be an integer")
     raw = _json_clone(dict(state))
 
     unknown = sorted(set(raw) - set(_STATE_FIELDS))
@@ -312,7 +335,7 @@ def normalize_epic_run_state(state: Mapping[str, Any]) -> dict[str, Any]:
         raise EpicRunStateError(f"unknown run-state field(s): {unknown}")
 
     schema_version = raw.get("schema_version", SCHEMA_VERSION)
-    if schema_version != SCHEMA_VERSION:
+    if type(schema_version) is not int or schema_version != SCHEMA_VERSION:
         raise EpicRunStateError(
             f"unsupported epic run-state schema_version: {schema_version!r}"
         )
@@ -332,6 +355,11 @@ def normalize_epic_run_state(state: Mapping[str, Any]) -> dict[str, Any]:
     for field in _LIST_FIELDS:
         if field == "learning_evaluation_candidates":
             normalized[field] = _normalize_learning_evaluation_candidates(
+                raw.get(field, []),
+                field,
+            )
+        elif field == "context_budget_receipts":
+            normalized[field] = _normalize_context_budget_receipts(
                 raw.get(field, []),
                 field,
             )
@@ -377,6 +405,21 @@ def _normalize_learning_evaluation_candidates(
     return [
         _normalize_learning_evaluation_candidate(item, f"{field}[{index}]")
         for index, item in enumerate(items)
+    ]
+
+
+def _normalize_context_budget_receipts(
+    value: Any,
+    field: str,
+) -> list[dict[str, Any]]:
+    from app.builderops.epic_run_context_budget import (
+        normalize_context_budget_receipt,
+    )
+
+    items = _normalize_list(value, field)
+    return [
+        normalize_context_budget_receipt(item)
+        for item in items
     ]
 
 
