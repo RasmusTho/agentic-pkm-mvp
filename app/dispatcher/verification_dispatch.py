@@ -72,6 +72,8 @@ def _positive_int(value: object) -> bool:
 
 
 def _validate_request(request: Mapping[str, object]) -> None:
+    if "base_ref" in request or "head_ref" in request:
+        raise ValueError("verification request contains untrusted branch refs")
     required_strings = (
         "contract_version",
         "stage",

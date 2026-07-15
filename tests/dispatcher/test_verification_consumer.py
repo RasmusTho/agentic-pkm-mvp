@@ -677,6 +677,7 @@ def test_gh_source_fetches_bounded_artifact_and_live_truth_without_shell(tmp_pat
                                     "id": 123,
                                     "repository_id": 456,
                                     "head_repository_id": 456,
+                                    "head_sha": "b" * 40,
                                 },
                             }
                         ]
@@ -685,6 +686,29 @@ def test_gh_source_fetches_bounded_artifact_and_live_truth_without_shell(tmp_pat
             )
         if endpoint.endswith("artifacts/7/zip"):
             return Result(archive_bytes.getvalue())
+        if endpoint.endswith("actions/runs/123"):
+            return Result(
+                json.dumps(
+                    {
+                        "id": 123,
+                        "run_attempt": 1,
+                        "name": "Verification Dispatch Request",
+                        "path": ".github/workflows/verification-dispatch-request.yml",
+                        "event": "workflow_run",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "head_sha": "b" * 40,
+                        "repository": {
+                            "id": 456,
+                            "full_name": "RasmusTho/agentic-pkm-mvp",
+                        },
+                        "head_repository": {
+                            "id": 456,
+                            "full_name": "RasmusTho/agentic-pkm-mvp",
+                        },
+                    }
+                )
+            )
         if endpoint.endswith("actions/runs/99"):
             return Result(
                 json.dumps(
@@ -820,9 +844,33 @@ def _artifact_source_for_request(payload: dict[str, object], *, workflow_run_id:
                                     "id": workflow_run_id,
                                     "repository_id": 456,
                                     "head_repository_id": 456,
+                                    "head_sha": "b" * 40,
                                 },
                             }
                         ]
+                    }
+                )
+            )
+        if command[-1].endswith(f"actions/runs/{workflow_run_id}"):
+            return Result(
+                json.dumps(
+                    {
+                        "id": workflow_run_id,
+                        "run_attempt": 1,
+                        "name": "Verification Dispatch Request",
+                        "path": ".github/workflows/verification-dispatch-request.yml",
+                        "event": "workflow_run",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "head_sha": "b" * 40,
+                        "repository": {
+                            "id": 456,
+                            "full_name": "RasmusTho/agentic-pkm-mvp",
+                        },
+                        "head_repository": {
+                            "id": 456,
+                            "full_name": "RasmusTho/agentic-pkm-mvp",
+                        },
                     }
                 )
             )
@@ -861,22 +909,44 @@ def test_pending_request_rejects_oversized_archive_before_buffering(
     monkeypatch.setattr(
         source,
         "_json",
-        lambda _endpoint: {
-            "artifacts": [
-                {
-                    "id": 7,
-                    "name": f"verification-dispatch-3603-{HEAD}",
-                    # Even stale or lying metadata cannot bypass the stream cap.
-                    "size_in_bytes": 1,
-                    "expired": False,
-                    "workflow_run": {
-                        "id": 123,
-                        "repository_id": 456,
-                        "head_repository_id": 456,
-                    },
-                }
-            ]
-        },
+        lambda endpoint: (
+            {
+                "artifacts": [
+                    {
+                        "id": 7,
+                        "name": f"verification-dispatch-3603-{HEAD}",
+                        # Even stale or lying metadata cannot bypass the stream cap.
+                        "size_in_bytes": 1,
+                        "expired": False,
+                        "workflow_run": {
+                            "id": 123,
+                            "repository_id": 456,
+                            "head_repository_id": 456,
+                            "head_sha": "b" * 40,
+                        },
+                    }
+                ]
+            }
+            if endpoint.endswith("actions/artifacts?per_page=100")
+            else {
+                "id": 123,
+                "run_attempt": 1,
+                "name": "Verification Dispatch Request",
+                "path": ".github/workflows/verification-dispatch-request.yml",
+                "event": "workflow_run",
+                "status": "completed",
+                "conclusion": "success",
+                "head_sha": "b" * 40,
+                "repository": {
+                    "id": 456,
+                    "full_name": "RasmusTho/agentic-pkm-mvp",
+                },
+                "head_repository": {
+                    "id": 456,
+                    "full_name": "RasmusTho/agentic-pkm-mvp",
+                },
+            }
+        ),
     )
     monkeypatch.setattr(
         verification_consumer.subprocess,
@@ -936,9 +1006,33 @@ def test_pending_request_rejects_oversized_archive_members() -> None:
                                         "id": 123,
                                         "repository_id": 456,
                                         "head_repository_id": 456,
+                                        "head_sha": "b" * 40,
                                     },
                                 }
                             ]
+                        }
+                    )
+                )
+            if command[-1].endswith("actions/runs/123"):
+                return Result(
+                    json.dumps(
+                        {
+                            "id": 123,
+                            "run_attempt": 1,
+                            "name": "Verification Dispatch Request",
+                            "path": ".github/workflows/verification-dispatch-request.yml",
+                            "event": "workflow_run",
+                            "status": "completed",
+                            "conclusion": "success",
+                            "head_sha": "b" * 40,
+                            "repository": {
+                                "id": 456,
+                                "full_name": "RasmusTho/agentic-pkm-mvp",
+                            },
+                            "head_repository": {
+                                "id": 456,
+                                "full_name": "RasmusTho/agentic-pkm-mvp",
+                            },
                         }
                     )
                 )
@@ -958,7 +1052,7 @@ def test_pending_request_rejects_repository_mismatch() -> None:
     with pytest.raises(ValueError, match="artifact repository mismatch"):
         source.pending_requests("RasmusTho/agentic-pkm-mvp")
 
-    assert len(calls) == 2
+    assert len(calls) == 3
 
 
 def test_pending_request_rejects_workflow_run_mismatch() -> None:
@@ -969,7 +1063,7 @@ def test_pending_request_rejects_workflow_run_mismatch() -> None:
     with pytest.raises(ValueError, match="artifact workflow-run mismatch"):
         source.pending_requests("RasmusTho/agentic-pkm-mvp")
 
-    assert len(calls) == 2
+    assert len(calls) == 3
 
 
 @pytest.mark.parametrize("pr,checks,reason", [

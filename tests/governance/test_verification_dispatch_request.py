@@ -64,8 +64,8 @@ def test_request_schema_and_idempotency_are_deterministic() -> None:
     assert first["pr_number"] == 3602
     assert first["linked_issue"] == 3602
     assert first["supporting_issues"] == []
-    assert first["base_ref"] == "main"
-    assert first["head_ref"] == "codex/issue-3602"
+    assert "base_ref" not in first
+    assert "head_ref" not in first
     assert first["current_head_sha"] == HEAD_SHA
     assert first["source_workflow"] == {
         "name": "CI",

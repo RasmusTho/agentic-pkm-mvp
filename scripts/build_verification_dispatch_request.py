@@ -117,8 +117,6 @@ def build_request(
     run_attempt = run.get("run_attempt")
     run_head_sha = run.get("head_sha")
     current_head_sha = _nested_str(pr, "head", "sha")
-    base_ref = _nested_str(pr, "base", "ref")
-    head_ref = _nested_str(pr, "head", "ref")
     generated_at = run.get("updated_at")
     artifact_workflow_run_id = artifact_run.get("id")
     artifact_repository_id = artifact_run.get("repository_id")
@@ -131,8 +129,6 @@ def build_request(
         and isinstance(run_head_sha, str)
         and run_head_sha
         and run_head_sha == current_head_sha
-        and base_ref
-        and head_ref
         and isinstance(generated_at, str)
         and generated_at
         and _is_positive_int(artifact_workflow_run_id)
@@ -156,8 +152,6 @@ def build_request(
         "pr_number": pr_number,
         "linked_issue": linked_issue,
         "supporting_issues": list(supporting_issues),
-        "base_ref": base_ref,
-        "head_ref": head_ref,
         "current_head_sha": current_head_sha,
         "source_workflow": {
             "name": SOURCE_WORKFLOW,

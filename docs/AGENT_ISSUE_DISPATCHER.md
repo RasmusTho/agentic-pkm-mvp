@@ -54,11 +54,14 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   subset (including conditional composition and object fields that are not required). The provider
   schema keeps optional values explicitly nullable; local semantic validation still fail-closes a
   delivered receipt without two review events or a repair event without its finding identity.
-- Artifact ingestion binds the untrusted request repository, artifact name, uploader workflow-run
-  id, repository id, and `source_workflow` identity to authenticated GitHub metadata before
-  dispatcher persistence or any target-PR read. The source workflow is fetched inside the already
-  authenticated artifact repository and must match the claimed run id, name, attempt, head,
-  pull-request event, completed/success state, and repository identities. Authenticated
+- Artifact ingestion independently authenticates both producer runs before download, dispatcher
+  persistence, or any target-PR read. The artifact uploader run must be the completed/successful
+  `Verification Dispatch Request` workflow at its canonical path, with matching listing run id,
+  attempt, event, head, repository, and head-repository identities. The separately cited source CI
+  workflow is fetched inside that authenticated repository and must match the claimed run id, name,
+  attempt, PR head, pull-request event, completed/success state, and repository identities. Branch
+  refs are collaborator-controlled display text, not dispatch identity; the producer, ledger request,
+  and coordinator context omit them. Authenticated
   compressed-size metadata is checked before
   download; the production stream, ZIP member count, aggregate declared size, and request member are
   independently bounded before an in-memory request is accepted. A mismatch or oversized artifact

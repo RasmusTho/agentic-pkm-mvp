@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
+import zipfile
 import pytest
 
 from app.dispatcher.cli import _compact_verification_run
 from app.dispatcher.verification_consumer import (
     CodexExecLauncher,
+    GhCliVerificationSource,
     VerificationConsumer,
     _checks_rejection,
     _trusted_evidence_urls,
+    context_pack,
     sanitize_verification_closer_receipt as _sanitize_verification_closer_receipt,
 )
 from tests.dispatcher.test_verification_consumer import (
@@ -472,6 +476,137 @@ def test_mixed_channel_prose_does_not_authorize_rate_limit_backoff(tmp_path) -> 
     assert result.status == "failed"
     assert result.stop_reason == "codex_exec_failed"
     assert result.terminal_receipt["failure_class"] == "execution"
+
+
+def test_untrusted_branch_refs_never_cross_dispatch_or_context_boundaries(
+    tmp_path,
+) -> None:
+    raw_request = request()
+    assert "base_ref" not in raw_request
+    assert "head_ref" not in raw_request
+    run = ledger(tmp_path).ingest(raw_request)
+    pr = eligible_pr()
+    secret_ref = "codex/ghp_LEAKME1234567890"
+    pr["base"]["ref"] = secret_ref
+    pr["head"]["ref"] = secret_ref
+
+    pack = context_pack(run, pr)
+    encoded = json.dumps({"request": run.request, "pack": pack}, sort_keys=True)
+
+    assert secret_ref not in encoded
+    assert "base_ref" not in pack
+    assert "head_ref" not in pack
+
+
+def test_dispatch_identity_does_not_require_branch_refs(tmp_path) -> None:
+    raw_request = request()
+    raw_request.pop("base_ref", None)
+    raw_request.pop("head_ref", None)
+
+    run = ledger(tmp_path).ingest(raw_request)
+    pack = context_pack(run, eligible_pr())
+
+    assert run.repository == _TRUSTED_REPOSITORY
+    assert run.pr_number == 3603
+    assert run.head_sha == HEAD
+    assert "base_ref" not in pack
+    assert "head_ref" not in pack
+
+
+def _artifact_source_with_authenticated_runs(
+    *, uploader_name: str, uploader_path: str
+) -> tuple[GhCliVerificationSource, list[str], list[int]]:
+    raw_request = request()
+    archive_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w") as archive:
+        archive.writestr("verification-dispatch/request.json", json.dumps(raw_request))
+    calls: list[str] = []
+    downloads: list[int] = []
+    source = GhCliVerificationSource()
+
+    def json_response(endpoint: str) -> object:
+        calls.append(endpoint)
+        if endpoint.endswith("actions/artifacts?per_page=100"):
+            return {
+                "artifacts": [
+                    {
+                        "id": 7,
+                        "name": f"verification-dispatch-3603-{HEAD}",
+                        "size_in_bytes": len(archive_bytes.getvalue()),
+                        "expired": False,
+                        "workflow_run": {
+                            "id": 123,
+                            "repository_id": 456,
+                            "head_repository_id": 456,
+                            "head_sha": "b" * 40,
+                        },
+                    }
+                ]
+            }
+        if endpoint.endswith("actions/runs/123"):
+            return {
+                "id": 123,
+                "name": uploader_name,
+                "path": uploader_path,
+                "event": "workflow_run",
+                "run_attempt": 1,
+                "status": "completed",
+                "conclusion": "success",
+                "head_sha": "b" * 40,
+                "repository": {"id": 456, "full_name": _TRUSTED_REPOSITORY},
+                "head_repository": {
+                    "id": 456,
+                    "full_name": _TRUSTED_REPOSITORY,
+                },
+            }
+        if endpoint.endswith("actions/runs/99"):
+            return {
+                "id": 99,
+                "run_attempt": 1,
+                "name": "CI",
+                "event": "pull_request",
+                "status": "completed",
+                "conclusion": "success",
+                "head_sha": HEAD,
+                "repository": {"id": 456, "full_name": _TRUSTED_REPOSITORY},
+                "head_repository": {
+                    "id": 456,
+                    "full_name": _TRUSTED_REPOSITORY,
+                },
+            }
+        raise AssertionError(f"unexpected GitHub endpoint: {endpoint}")
+
+    def artifact_bytes(_endpoint: str, artifact_id: int) -> bytes:
+        downloads.append(artifact_id)
+        return archive_bytes.getvalue()
+
+    source._json = json_response  # type: ignore[method-assign]
+    source._artifact_bytes = artifact_bytes  # type: ignore[method-assign]
+    return source, calls, downloads
+
+
+def test_foreign_artifact_uploader_workflow_is_rejected_before_persistence() -> None:
+    source, calls, downloads = _artifact_source_with_authenticated_runs(
+        uploader_name="Foreign Artifact Producer",
+        uploader_path=".github/workflows/foreign.yml",
+    )
+
+    with pytest.raises(ValueError, match="artifact uploader workflow identity"):
+        source.pending_requests(_TRUSTED_REPOSITORY)
+
+    assert any(endpoint.endswith("actions/runs/123") for endpoint in calls)
+    assert downloads == []
+
+
+def test_canonical_artifact_uploader_workflow_is_authenticated() -> None:
+    source, calls, downloads = _artifact_source_with_authenticated_runs(
+        uploader_name="Verification Dispatch Request",
+        uploader_path=".github/workflows/verification-dispatch-request.yml",
+    )
+
+    assert source.pending_requests(_TRUSTED_REPOSITORY) == [request()]
+    assert any(endpoint.endswith("actions/runs/123") for endpoint in calls)
+    assert downloads == [7]
 
 
 def test_allowlisted_text_projection_preserves_structural_receipt_fields() -> None:

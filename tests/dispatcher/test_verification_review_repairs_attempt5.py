@@ -340,6 +340,7 @@ def _source(
                                     "id": 123,
                                     "repository_id": 456,
                                     "head_repository_id": 456,
+                                    "head_sha": "b" * 40,
                                 },
                             }
                         ]
@@ -348,6 +349,23 @@ def _source(
             )
         if endpoint.endswith("artifacts/7/zip"):
             return Result(archive_bytes.getvalue())
+        if endpoint.endswith("actions/runs/123"):
+            return Result(
+                json.dumps(
+                    {
+                        "id": 123,
+                        "run_attempt": 1,
+                        "name": "Verification Dispatch Request",
+                        "path": ".github/workflows/verification-dispatch-request.yml",
+                        "event": "workflow_run",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "head_sha": "b" * 40,
+                        "repository": {"id": 456, "full_name": REPO},
+                        "head_repository": {"id": 456, "full_name": REPO},
+                    }
+                )
+            )
         if "/actions/runs/" in endpoint:
             source_run = {
                 "id": authenticated_source_run_id,
@@ -422,6 +440,7 @@ def test_artifact_source_workflow_matching_metadata_is_accepted() -> None:
     assert source.pending_requests(REPO) == [payload]
     assert endpoints == [
         f"repos/{REPO}/actions/artifacts?per_page=100",
+        f"repos/{REPO}/actions/runs/123",
         f"repos/{REPO}/actions/artifacts/7/zip",
         f"repos/{REPO}/actions/runs/99",
     ]

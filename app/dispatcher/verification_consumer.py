@@ -238,6 +238,10 @@ _MAX_ARTIFACT_COMPRESSED_BYTES = 2_000_000
 _MAX_ARTIFACT_MEMBERS = 16
 _MAX_ARTIFACT_UNCOMPRESSED_BYTES = 2_000_000
 _MAX_REQUEST_BYTES = 1_000_000
+_VERIFICATION_REQUEST_WORKFLOW_NAME = "Verification Dispatch Request"
+_VERIFICATION_REQUEST_WORKFLOW_PATH = (
+    ".github/workflows/verification-dispatch-request.yml"
+)
 
 
 def verification_attempt_idempotency_key(
@@ -497,6 +501,64 @@ class GhCliVerificationSource:
                 raise ValueError("verification artifact size metadata is malformed")
             if compressed_size > _MAX_ARTIFACT_COMPRESSED_BYTES:
                 raise ValueError("verification artifact exceeds compressed size limit")
+            workflow_run = artifact.get("workflow_run")
+            if not isinstance(workflow_run, Mapping):
+                raise ValueError("verification artifact workflow-run mismatch")
+            uploader_run_id = workflow_run.get("id")
+            if (
+                not isinstance(uploader_run_id, int)
+                or isinstance(uploader_run_id, bool)
+                or uploader_run_id <= 0
+            ):
+                raise ValueError("verification artifact workflow-run mismatch")
+            uploader_run = self._json(
+                f"repos/{repository}/actions/runs/{uploader_run_id}"
+            )
+            uploader_repository = (
+                uploader_run.get("repository")
+                if isinstance(uploader_run, Mapping)
+                else None
+            )
+            uploader_head_repository = (
+                uploader_run.get("head_repository")
+                if isinstance(uploader_run, Mapping)
+                else None
+            )
+            uploader_head_sha = (
+                uploader_run.get("head_sha")
+                if isinstance(uploader_run, Mapping)
+                else None
+            )
+            uploader_attempt = (
+                uploader_run.get("run_attempt")
+                if isinstance(uploader_run, Mapping)
+                else None
+            )
+            if (
+                not isinstance(uploader_run, Mapping)
+                or not isinstance(uploader_repository, Mapping)
+                or not isinstance(uploader_head_repository, Mapping)
+                or uploader_run.get("id") != uploader_run_id
+                or uploader_run.get("name") != _VERIFICATION_REQUEST_WORKFLOW_NAME
+                or uploader_run.get("path") != _VERIFICATION_REQUEST_WORKFLOW_PATH
+                or uploader_run.get("event") != "workflow_run"
+                or uploader_run.get("status") != "completed"
+                or uploader_run.get("conclusion") != "success"
+                or not isinstance(uploader_attempt, int)
+                or isinstance(uploader_attempt, bool)
+                or uploader_attempt <= 0
+                or not isinstance(uploader_head_sha, str)
+                or not re.fullmatch(r"[0-9a-fA-F]{40}", uploader_head_sha)
+                or uploader_head_sha != workflow_run.get("head_sha")
+                or uploader_repository.get("id") != workflow_run.get("repository_id")
+                or uploader_repository.get("full_name") != repository
+                or uploader_head_repository.get("id")
+                != workflow_run.get("head_repository_id")
+                or uploader_head_repository.get("full_name") != repository
+            ):
+                raise ValueError(
+                    "verification artifact uploader workflow identity mismatch"
+                )
             payload = self._artifact_bytes(
                 f"repos/{repository}/actions/artifacts/{artifact_id}/zip", artifact_id
             )
@@ -522,7 +584,6 @@ class GhCliVerificationSource:
             if request.get("repository") != repository:
                 raise ValueError("verification artifact repository mismatch")
             provenance = request.get("artifact_provenance")
-            workflow_run = artifact.get("workflow_run")
             if not isinstance(provenance, Mapping) or not isinstance(
                 workflow_run, Mapping
             ):
@@ -1871,8 +1932,6 @@ def context_pack(run: VerificationRun, pr: Mapping[str, object]) -> dict[str, ob
         "repository": run.repository,
         "pr_number": run.pr_number,
         "linked_issue": linked_issue if isinstance(linked_issue, int) else None,
-        "base_ref": _nested(pr, "base", "ref"),
-        "head_ref": _nested(pr, "head", "ref"),
         "head_sha": run.head_sha,
         "requested_head_sha": run.requested_head_sha,
         "stage": run.stage,
