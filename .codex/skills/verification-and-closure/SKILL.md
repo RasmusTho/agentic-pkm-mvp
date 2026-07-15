@@ -23,13 +23,16 @@ Test/check failures must be classified, not dismissed as merely "out of scope" w
 - detect false backlog or project states
 - honor automation-driven `Done` projection first, and only fallback-set `Done` when needed
 - merge the PR when the delivery contract is satisfied
-- close the governing Issue and set Project Status to `Done`
+- close exactly the PR's authenticated closing issues and set their Project Status to `Done`; keep
+  a governing parent open when it is not itself named by a closing keyword
 - release the dispatcher lease if one was claimed
 - unblock dependent issues when the delivered work truly satisfies them
 
 ## Inputs to Inspect
 
 - governing GitHub Issue
+- the exact `closing_issues` and cumulative `supporting_issues` authority from a v2 dispatched context;
+  on a manual run, derive the same sets from the live exact-head PR body
 - parent feature issue when the governing issue is a child slice
 - linked PR
 - related closed PRs
@@ -103,6 +106,13 @@ include raw paths, vault names, environment values, DSNs, secrets, or raw startu
 - If the work is a slice under a larger feature, keep post-merge validation evidence on the parent issue
 - If post-merge validation advanced but acceptance is still pending, record the new evidence on the parent issue body or comments
 - If work is incomplete, do not close the loop falsely; create a bounded follow-up Issue instead
+- Treat governing identity and closure identity as separate authority. Re-read the exact-head PR
+  body immediately before merge and again after merge; require it to reproduce the dispatched
+  `governing_issue`, `closing_issues`, and `supporting_issues`. Close only `closing_issues`. When the
+  governing issue is absent from `closing_issues`, leave it open, append the child-delivery and
+  parent-validation evidence there, and evaluate parent closure only through
+  `docs/development/PARENT_ISSUE_CLOSURE.md`. `supporting_issues` preserves the non-governing
+  evidence set, but only its `closing_issues` subset grants closure; `Refs` never do.
 
 ## Direct Repair PRs
 
@@ -140,6 +150,9 @@ Prerequisites for merge:
 - no scope drift remains
 - the PR fits one of the two verification modes above
 - if issue-backed, all acceptance criteria from the governing Issue are satisfied and every AC's `Verify:` target resolves green on the current head SHA
+- if issue-backed, every closing issue's acceptance criteria and `Verify:` targets are satisfied;
+  a governing parent not named for closure is validated as the issue-set contract but is not
+  projected `Done` or closed merely because the PR merges
 - if direct repair, the `Direct Repair` block and `Validation` are satisfied on the current head SHA
 - if the direct repair expands beyond bounded scope, stop and require, create, or link an issue before merge
 

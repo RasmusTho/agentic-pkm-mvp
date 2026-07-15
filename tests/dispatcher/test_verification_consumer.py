@@ -1101,7 +1101,50 @@ def test_eligible_request_invokes_registered_verification_closer_with_minimal_co
     assert resumed is None
     assert pack["agent_adapter"] == ".codex/agents/verification-closer.toml"
     assert pack["verification_skill"] == ".codex/skills/verification-and-closure/SKILL.md"
+    assert pack["governing_issue"] == 3603
+    assert pack["closing_issues"] == [3603]
+    assert pack["supporting_issues"] == []
     assert "body" not in pack and "credentials" not in pack
+
+
+def test_multi_issue_context_separates_parent_closure_and_evidence_authority(
+    tmp_path,
+) -> None:
+    dispatch_request = request()
+    dispatch_request["supporting_issues"] = [3626, 3698, 3705]
+    pr = eligible_pr(
+        body=(
+            "Governing-Issue: #3603\n\nRefs #3705\n"
+            "Fixes #3626\nCloses #3698"
+        )
+    )
+    launcher = Launcher()
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(pr, GREEN), Auth(), launcher, "host"
+    ).consume(dispatch_request)
+
+    assert result.status == "needs_human"
+    pack, _ = launcher.calls[0]
+    assert pack["governing_issue"] == 3603
+    assert pack["closing_issues"] == [3626, 3698]
+    assert pack["supporting_issues"] == [3626, 3698, 3705]
+
+
+@pytest.mark.parametrize("separator", ["\r", "\u2028", "\u2029"])
+def test_unsupported_authority_line_separator_never_launches_consumer(
+    tmp_path, separator
+) -> None:
+    launcher = Launcher()
+    pr = eligible_pr(body=f"Governing-Issue: #3603{separator}Fixes #3603")
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(pr, GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "superseded"
+    assert result.stop_reason == "governing_issue_mismatch"
+    assert launcher.calls == []
 
 
 def test_needs_human_receipt_persists_deduplicated_exception(tmp_path) -> None:

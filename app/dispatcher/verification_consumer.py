@@ -48,7 +48,10 @@ from app.dispatcher.verification_agent_loop import (
     VerificationAgentLoop,
     valid_human_exception_packet,
 )
-from app.dispatcher.verification_contract import resolve_issue_contract
+from app.dispatcher.verification_contract import (
+    resolve_issue_authority,
+    resolve_issue_contract,
+)
 
 
 @dataclass(frozen=True)
@@ -2242,11 +2245,13 @@ def _trusted_evidence_urls(run: VerificationRun) -> frozenset[str]:
 
 
 def _governing_contract_matches(run: VerificationRun, pr_body: object) -> bool:
-    issue_contract = resolve_issue_contract(pr_body)
+    issue_authority = resolve_issue_authority(pr_body)
     return bool(
-        issue_contract is not None
-        and issue_contract[0] == run.request.get("linked_issue")
-        and set(run.supporting_authority).issubset(issue_contract[1])
+        issue_authority is not None
+        and issue_authority.governing_issue == run.request.get("linked_issue")
+        and set(run.supporting_authority).issubset(
+            issue_authority.supporting_issues
+        )
     )
 
 
@@ -2363,12 +2368,24 @@ def context_pack(
 ) -> dict[str, object]:
     """Return the immutable minimum; no issue/diff/log/untrusted body text."""
     linked_issue = run.request.get("linked_issue")
+    issue_authority = resolve_issue_authority(pr.get("body"))
+    if (
+        issue_authority is None
+        or issue_authority.governing_issue != linked_issue
+        or not set(run.supporting_authority).issubset(
+            issue_authority.supporting_issues
+        )
+    ):
+        raise ValueError("verification context authority does not match live PR")
     return {
-        "contract": "verification_closer_dispatch_context.v1",
+        "contract": "verification_closer_dispatch_context.v2",
         "run_id": run.run_id,
         "repository": run.repository,
         "pr_number": run.pr_number,
         "linked_issue": linked_issue if isinstance(linked_issue, int) else None,
+        "governing_issue": issue_authority.governing_issue,
+        "closing_issues": list(issue_authority.closing_issues),
+        "supporting_issues": list(issue_authority.supporting_issues),
         "head_sha": run.head_sha,
         "requested_head_sha": run.requested_head_sha,
         "stage": run.stage,

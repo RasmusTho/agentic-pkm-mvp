@@ -108,6 +108,18 @@ def test_multi_issue_pr_selects_explicit_governing_issue() -> None:
     assert request["supporting_issues"] == [3626, 3698, 3699, 3700, 3705]
 
 
+def test_crlf_authority_is_canonicalized_before_request_emission() -> None:
+    pr = _pr()
+    pr["body"] = "Governing-Issue: #3602\r\nRefs #3603\r\nFixes #3602\r\n"
+
+    request = build_request(event=_event(), pr=pr, issue=_issue())
+
+    assert resolve_issue_contract(pr["body"]) == (3602, (3603,))
+    assert request is not None
+    assert request["linked_issue"] == 3602
+    assert request["supporting_issues"] == [3603]
+
+
 def test_ambiguous_governing_issue_emits_no_request() -> None:
     missing = _pr()
     missing["body"] = "Fixes #3626\nFixes #3603"
@@ -141,6 +153,9 @@ def test_ambiguous_governing_issue_emits_no_request() -> None:
         "Governing-Issue: #3602\nFixes #3602é",
         "Governing-Issue: #3602\nFixeſ #3602",
         "Governıng-Issue: #3602\nFixes #3602",
+        "Governing-Issue: #3602\rFixes #3602",
+        "Governing-Issue: #3602\u2028Fixes #3602",
+        "Governing-Issue: #3602\u2029Fixes #3602",
     ],
 )
 def test_invalid_closing_authority_emits_no_request(body: str) -> None:

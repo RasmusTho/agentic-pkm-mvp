@@ -7,7 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from app.dispatcher.verification_contract import resolve_issue_contract
+from app.dispatcher.verification_contract import (
+    resolve_issue_authority,
+    resolve_issue_contract,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -176,6 +179,11 @@ def test_issue_backed_pr_accepts_single_and_multi_issue_authority() -> None:
 
     assert _governing_issue_identity_satisfied(single)
     assert _governing_issue_identity_satisfied(multi)
+    authority = resolve_issue_authority(multi)
+    assert authority is not None
+    assert authority.governing_issue == 3603
+    assert authority.closing_issues == (3626, 3698)
+    assert authority.supporting_issues == (3626, 3698)
 
 
 @pytest.mark.parametrize(
@@ -200,6 +208,7 @@ def test_issue_free_lanes_do_not_require_governing_identity(body: str) -> None:
     ("body", "accepted"),
     [
         ("Governing-Issue: #123\nFixes #123", True),
+        ("Governing-Issue: #123\r\nFixes #123\r\n", True),
         ("Governing-Issue: #3603\nRefs #3603\nFixes #3626", True),
         ("Governing-Issue: #123", False),
         ("Governing-Issue: #123\nRefs #123", False),
@@ -209,6 +218,9 @@ def test_issue_free_lanes_do_not_require_governing_identity(body: str) -> None:
         ("Governing-Issue: #123\nFixes #123é", False),
         ("Governing-Issue: #123\nFixeſ #123", False),
         ("Governıng-Issue: #123\nFixes #123", False),
+        ("Governing-Issue: #123\rFixes #123", False),
+        ("Governing-Issue: #123\u2028Fixes #123", False),
+        ("Governing-Issue: #123\u2029Fixes #123", False),
     ],
 )
 def test_javascript_and_python_authority_grammar_are_identical(

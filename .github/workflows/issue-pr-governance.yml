@@ -146,25 +146,28 @@ jobs:
             const builderOpsRoutingSection = builderOpsRoutingMatch ? builderOpsRoutingMatch[0] : "";
             // authority-classifier:start
             const classifyIssueAuthority = (candidateBody) => {
+              const hasUnsupportedLineSeparator = /\r(?!\n)|[\u2028\u2029]/.test(candidateBody);
+              const canonicalBody = candidateBody.replace(/\r\n/g, "\n");
               const governingKeyword = "[Gg][Oo][Vv][Ee][Rr][Nn][Ii][Nn][Gg]-[Ii][Ss][Ss][Uu][Ee]";
               const closingKeyword = "(?:[Ff][Ii][Xx][Ee][Ss]|[Cc][Ll][Oo][Ss][Ee][Ss]|[Rr][Ee][Ss][Oo][Ll][Vv][Ee][Ss])";
               const issueTokenPrefix = "(?:^|[^0-9A-Za-z_])";
               const issueTokenTerminator = "(?=$|[ \\t\\r\\n.,;:)\\]}])";
-              const governingIssueLines = candidateBody.match(
+              const governingIssueLines = canonicalBody.match(
                 new RegExp(`^[ \\t]*${governingKeyword}[ \\t]*:.*$`, "gm")
               ) || [];
-              const exactGoverningIssueMatches = candidateBody.match(
+              const exactGoverningIssueMatches = canonicalBody.match(
                 new RegExp(`^[ \\t]*${governingKeyword}:[ \\t]*#([1-9][0-9]*)[ \\t]*$`, "gm")
               ) || [];
-              const issueLinkMentions = candidateBody.match(
+              const issueLinkMentions = canonicalBody.match(
                 new RegExp(`${issueTokenPrefix}${closingKeyword}[ \\t]+#\\S+`, "gm")
               ) || [];
-              const exactIssueLinkMatches = candidateBody.match(
+              const exactIssueLinkMatches = canonicalBody.match(
                 new RegExp(`${issueTokenPrefix}${closingKeyword}[ \\t]+#[1-9][0-9]*${issueTokenTerminator}`, "gm")
               ) || [];
               const hasIssueLink = exactIssueLinkMatches.length > 0;
               const hasIssueAuthority = governingIssueLines.length > 0 || issueLinkMentions.length > 0;
               const valid =
+                !hasUnsupportedLineSeparator &&
                 governingIssueLines.length === 1 &&
                 exactGoverningIssueMatches.length === 1 &&
                 hasIssueLink &&
@@ -175,6 +178,7 @@ jobs:
                 governingIssueLines,
                 hasIssueAuthority,
                 hasIssueLink,
+                hasUnsupportedLineSeparator,
                 issueLinkMentions,
                 valid,
               };
