@@ -74,7 +74,6 @@
               "type": "array",
               "minItems": 2,
               "maxItems": 3,
-              "uniqueItems": true,
               "items": {
                 "type": "object",
                 "properties": {

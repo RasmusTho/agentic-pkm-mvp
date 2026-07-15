@@ -3073,6 +3073,7 @@ def test_production_receipt_schema_uses_codex_subset_and_preserves_semantics() -
     verification_consumer.validate_codex_output_schema(schema)
     assert "allOf" not in json.dumps(schema)
     assert "oneOf" not in json.dumps(schema)
+    assert "uniqueItems" not in json.dumps(schema)
 
     valid = {
         "verdict": "delivered",
@@ -3149,6 +3150,45 @@ def test_codex_launcher_rejects_unsupported_schema_before_process_start(tmp_path
         runner=runner,
     )
     with pytest.raises(ValueError, match=r"unsupported output-schema keyword.*allOf"):
+        launcher.launch({"head_sha": HEAD})
+    assert calls == []
+
+
+def test_codex_launcher_rejects_unique_items_before_process_start(tmp_path) -> None:
+    schema = tmp_path / "receipt.schema.json"
+    schema.write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "properties": {
+                    "receipt_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "uniqueItems": True,
+                    }
+                },
+                "required": ["receipt_ids"],
+                "additionalProperties": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    calls = []
+
+    def runner(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("invalid schema must fail before process start")
+
+    launcher = CodexExecLauncher(
+        tmp_path,
+        schema,
+        tmp_path / "context.json",
+        adapter_path=Path(__file__).resolve().parents[2]
+        / ".codex/agents/verification-closer.toml",
+        runner=runner,
+    )
+    with pytest.raises(ValueError, match=r"unsupported output-schema keyword.*uniqueItems"):
         launcher.launch({"head_sha": HEAD})
     assert calls == []
 
