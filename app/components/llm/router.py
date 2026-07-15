@@ -103,6 +103,31 @@ def _resolve_target_model_id(
     return descriptor.provider, descriptor.model
 
 
+def _is_shipped_default_embedding_target(
+    target: LLMRoutingSettings.RouteTarget | None,
+    *,
+    resolved_provider: str | None,
+    resolved_model: str | None,
+) -> bool:
+    """Whether *target* is the compiled nomic/default placeholder.
+
+    The checked-in routing settings carry this target so an unconfigured
+    deployment stays on the shipped nomic identity. It is not a later
+    operator choice and therefore must not mask an explicit EMBED_PROFILE
+    activation during a governed identity cutover.
+    """
+    if target is None or (target.profile or "").strip().lower() != "default":
+        return False
+    provider = target.provider or resolved_provider
+    model = target.model or resolved_model
+    model_id_is_default = target.model_id in {None, "ollama.embed.nomic_embed_text"}
+    return (
+        model_id_is_default
+        and provider == "ollama"
+        and model in {"nomic-embed-text", "nomic-embed-text:latest"}
+    )
+
+
 class LLMRouter:
     def __init__(self) -> None:
         self._llm_provider_env = os.getenv("LLM_PROVIDER") if "LLM_PROVIDER" in os.environ else None
@@ -206,13 +231,23 @@ class LLMRouter:
         override_provider = None
         override_model = None
         target_provider, target_model = _resolve_target_model_id(target, expected_kind="embedding")
+        env_profile = (os.getenv("EMBED_PROFILE") or "").strip() or None
+        defer_shipped_default_to_env_profile = bool(
+            env_profile
+            and _is_shipped_default_embedding_target(
+                target,
+                resolved_provider=target_provider,
+                resolved_model=target_model,
+            )
+        )
         target_is_explicit = bool(
             target
             and any(
                 (target.model_id, target.provider, target.model, target.profile)
             )
+            and not defer_shipped_default_to_env_profile
         )
-        if target is not None:
+        if target is not None and not defer_shipped_default_to_env_profile:
             profile = target.profile
             override_provider = target.provider or target_provider
             override_model = target.model or target_model
@@ -221,7 +256,7 @@ class LLMRouter:
         # activation into the router instead of pairing the selected profile's
         # dimension with the generic shipped EMBED_MODEL fallback below.
         if profile is None and not target_is_explicit:
-            profile = (os.getenv("EMBED_PROFILE") or "").strip() or None
+            profile = env_profile
         if override_model is None and routing is not None:
             override_model = routing.default_embed_model
         # A configured task/default model remains higher-precedence settings

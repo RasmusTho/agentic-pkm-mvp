@@ -44,10 +44,12 @@ Routing is intentionally deterministic and single-source:
 For embeddings, a blank compiled task target also permits the operator activation seam
 `EMBED_PROFILE` to select one complete named identity (provider, model, dimension, and
 normalization) before the generic `EMBED_MODEL` / `OLLAMA_EMBED_MODEL` environment fallback is
-applied. An explicit compiled `primary.{model_id,provider,model,profile}` target remains
+applied. The checked-in `profile: default` plus `ollama.embed.nomic_embed_text` compiled target is
+the shipped no-activation placeholder, so an explicit `EMBED_PROFILE` replaces that whole target.
+Any other explicit compiled `primary.{model_id,provider,model,profile}` target remains
 higher-precedence settings authority. This prevents a profile activation such as `bge-m3` from
-being combined with the shipped `nomic-embed-text` model fallback into a non-existent hybrid
-identity.
+being blocked by the placeholder or combined with the shipped `nomic-embed-text` model fallback
+into a non-existent hybrid identity.
 
 Current state:
 - Chat, reasoning, eval, and embedding routes can each carry separate preferred model choices.
@@ -63,7 +65,8 @@ Core routing:
 - `LLM_PROVIDER` — default provider (`mock`, `ollama`, `openai`, `deepseek`).
 - `LLM_MODEL` — default chat/completions model.
 - `EMBED_PROFILE` — selects a registered complete embedding identity when the compiled embedding
-  task target is blank (for example `bge-m3` during the governed cutover).
+  task target is blank or is the checked-in `profile: default`/nomic placeholder (for example
+  `bge-m3` during the governed cutover).
 - `EMBED_MODEL` / `OLLAMA_EMBED_MODEL` — embedding model name for embed routes.
 - `LLM_FORCE_PROVIDER` — hard override for router provider (all tasks).
 - `LLM_FORCE_MODEL` — hard override for router model (all tasks).
