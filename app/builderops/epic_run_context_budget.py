@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any, Mapping
 
 RECEIPT_SCHEMA_NAME = "epic_run_context_budget_receipt"
@@ -89,35 +90,13 @@ def evaluate_slice_boundary_context_budget(
     )
     external_state_changed = previous_marker is not None and marker != previous_marker
 
-    lifecycle = "keep"
-    reasons: list[str] = []
-    if normalized_pressure == UNKNOWN:
-        reasons.append("context_measurement_unknown")
-    elif normalized_pressure == "low":
-        reasons.append("low_context_pressure")
-    elif normalized_policy["rotate_on_high_context_pressure"]:
-        lifecycle = "checkpoint_rotate"
-        reasons.append("explicit_policy_high_context_pressure")
-    else:
-        reasons.append("high_context_pressure_observed_policy_does_not_rotate")
-
-    if external_state_changed:
-        reasons.append("external_state_refresh_required")
-
-    isolated_worker_candidate = all(normalized_next_slice.values())
-    execution = (
-        "thin_worker"
-        if normalized_policy["thin_worker_when_isolated"] and isolated_worker_candidate
-        else "inline"
+    recommendations, reasons = _build_recommendations_and_reasons(
+        context_pressure=normalized_pressure,
+        uncertainty=normalized_uncertainty,
+        next_slice=normalized_next_slice,
+        policy=normalized_policy,
+        external_state_changed=external_state_changed,
     )
-    reasons.append(
-        "isolated_thin_worker_candidate"
-        if execution == "thin_worker"
-        else "inline_by_explicit_slice_evidence"
-    )
-
-    model_tier = _recommend_model_tier(normalized_uncertainty, normalized_next_slice)
-    reasons.append(f"model_tier_{model_tier}")
 
     return {
         "schema_name": RECEIPT_SCHEMA_NAME,
@@ -131,6 +110,7 @@ def evaluate_slice_boundary_context_budget(
             "repairs": normalized_repairs,
             "uncertainty": normalized_uncertainty,
         },
+        "next_slice": normalized_next_slice,
         "policy": normalized_policy,
         "checkpoint": {
             "slice_status": _required_string(slice_status, "slice_status"),
@@ -146,11 +126,7 @@ def evaluate_slice_boundary_context_budget(
                 "refresh_required": external_state_changed,
             },
         },
-        "recommendations": {
-            "coordinator_lifecycle": lifecycle,
-            "slice_execution": execution,
-            "model_tier": model_tier,
-        },
+        "recommendations": recommendations,
         "recommendation_reasons": reasons,
         "cost_per_accepted_slice": _build_cost_observation(
             cost_inputs,
@@ -184,6 +160,7 @@ def normalize_context_budget_receipt(receipt: Mapping[str, Any]) -> dict[str, An
         "slice_id",
         "measurements",
         "signals",
+        "next_slice",
         "policy",
         "checkpoint",
         "recommendations",
@@ -250,6 +227,7 @@ def normalize_context_budget_receipt(receipt: Mapping[str, Any]) -> dict[str, An
         "repairs": _normalize_repairs(signals["repairs"]),
         "uncertainty": _normalize_uncertainty(signals["uncertainty"]),
     }
+    normalized["next_slice"] = _normalize_next_slice(normalized["next_slice"])
     normalized["policy"] = _normalize_policy(normalized["policy"])
 
     recommendations = _json_object(normalized["recommendations"], "recommendations")
@@ -271,8 +249,7 @@ def normalize_context_budget_receipt(receipt: Mapping[str, Any]) -> dict[str, An
         raise EpicRunContextBudgetError("invalid slice execution recommendation")
     if recommendations.get("model_tier") not in {"luna", "terra", "sol"}:
         raise EpicRunContextBudgetError("invalid model tier recommendation")
-    normalized["recommendations"] = recommendations
-    normalized["recommendation_reasons"] = [
+    recommendation_reasons = [
         _required_string(item, f"recommendation_reasons[{index}]")
         for index, item in enumerate(
             _json_list(normalized["recommendation_reasons"], "recommendation_reasons")
@@ -280,6 +257,23 @@ def normalize_context_budget_receipt(receipt: Mapping[str, Any]) -> dict[str, An
     ]
 
     normalized["checkpoint"] = _normalize_checkpoint(normalized["checkpoint"])
+    expected_recommendations, expected_reasons = _build_recommendations_and_reasons(
+        context_pressure=normalized["signals"]["context_pressure"],
+        uncertainty=normalized["signals"]["uncertainty"],
+        next_slice=normalized["next_slice"],
+        policy=normalized["policy"],
+        external_state_changed=normalized["checkpoint"]["external_state"]["changed"],
+    )
+    if recommendations != expected_recommendations:
+        raise EpicRunContextBudgetError(
+            "recommendations contradict the persisted evaluator evidence"
+        )
+    if recommendation_reasons != expected_reasons:
+        raise EpicRunContextBudgetError(
+            "recommendation_reasons contradict the persisted evaluator evidence"
+        )
+    normalized["recommendations"] = expected_recommendations
+    normalized["recommendation_reasons"] = expected_reasons
     normalized["cost_per_accepted_slice"] = _normalize_cost_observation(
         normalized["cost_per_accepted_slice"]
     )
@@ -357,8 +351,15 @@ def _normalize_measurement(
             f"{field} fields must be exactly value, unit, source"
         )
     value = normalized["value"]
-    if value != UNKNOWN and (isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0):
-        raise EpicRunContextBudgetError(f"{field}.value must be non-negative or unknown")
+    if value != UNKNOWN and (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not _is_finite_number(value)
+        or value < 0
+    ):
+        raise EpicRunContextBudgetError(
+            f"{field}.value must be finite, non-negative, or unknown"
+        )
     normalized["source"] = _required_string(normalized["source"], f"{field}.source")
     normalized["unit"] = _required_string(normalized["unit"], f"{field}.unit")
     if expected_unit is not None and normalized["unit"] != expected_unit:
@@ -385,9 +386,9 @@ def _normalize_uncertainty(value: Mapping[str, Any]) -> dict[str, Any]:
 def _normalize_next_slice(value: Mapping[str, Any]) -> dict[str, bool]:
     normalized = _json_object(value, "next_slice")
     expected = {
-        "contract_complete",
-        "isolated_filescope",
-        "deterministic_verification",
+        "worker_isolated",
+        "setup_cost_high",
+        "merge_risk_low",
     }
     if set(normalized) != expected:
         raise EpicRunContextBudgetError(
@@ -417,9 +418,60 @@ def _recommend_model_tier(
 ) -> str:
     if uncertainty["level"] in {"high", UNKNOWN}:
         return "sol"
-    if uncertainty["level"] == "low" and all(next_slice.values()):
+    if uncertainty["level"] == "low" and next_slice["merge_risk_low"]:
         return "luna"
     return "terra"
+
+
+def _build_recommendations_and_reasons(
+    *,
+    context_pressure: str,
+    uncertainty: Mapping[str, Any],
+    next_slice: Mapping[str, bool],
+    policy: Mapping[str, Any],
+    external_state_changed: bool,
+) -> tuple[dict[str, str], list[str]]:
+    lifecycle = "keep"
+    reasons: list[str] = []
+    if context_pressure == UNKNOWN:
+        reasons.append("context_measurement_unknown")
+    elif context_pressure == "low":
+        reasons.append("low_context_pressure")
+    elif policy["rotate_on_high_context_pressure"]:
+        lifecycle = "checkpoint_rotate"
+        reasons.append("explicit_policy_high_context_pressure")
+    else:
+        reasons.append("high_context_pressure_observed_policy_does_not_rotate")
+
+    if external_state_changed:
+        reasons.append("external_state_refresh_required")
+
+    thin_worker_candidate = (
+        next_slice["worker_isolated"]
+        and not next_slice["setup_cost_high"]
+        and next_slice["merge_risk_low"]
+    )
+    execution = (
+        "thin_worker"
+        if policy["thin_worker_when_isolated"] and thin_worker_candidate
+        else "inline"
+    )
+    reasons.append(
+        "isolated_thin_worker_candidate"
+        if execution == "thin_worker"
+        else "inline_by_explicit_slice_evidence"
+    )
+
+    model_tier = _recommend_model_tier(uncertainty, next_slice)
+    reasons.append(f"model_tier_{model_tier}")
+    return (
+        {
+            "coordinator_lifecycle": lifecycle,
+            "slice_execution": execution,
+            "model_tier": model_tier,
+        },
+        reasons,
+    )
 
 
 def _normalize_checkpoint(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -558,10 +610,11 @@ def _build_cost_observation(
         if value != UNKNOWN and (
             isinstance(value, bool)
             or not isinstance(value, (int, float))
+            or not _is_finite_number(value)
             or value < 0
         ):
             raise EpicRunContextBudgetError(
-                f"cost_inputs.{field}.value must be non-negative or unknown"
+                f"cost_inputs.{field}.value must be finite, non-negative, or unknown"
             )
         normalized_inputs[field] = {
             "value": value,
@@ -595,7 +648,24 @@ def _build_cost_observation(
         and denominator["value"] > 0
         and known_monetary
     ):
-        per_accepted = sum(known_monetary) / denominator["value"]
+        known_monetary_total = sum(known_monetary)
+        if not _is_finite_number(known_monetary_total):
+            raise EpicRunContextBudgetError(
+                "known monetary cost total must remain finite"
+            )
+        try:
+            derived_per_accepted = known_monetary_total / denominator["value"]
+        except OverflowError as exc:
+            raise EpicRunContextBudgetError(
+                "known monetary cost per accepted slice must remain finite"
+            ) from exc
+        if not isinstance(derived_per_accepted, (int, float)) or not math.isfinite(
+            derived_per_accepted
+        ):
+            raise EpicRunContextBudgetError(
+                "known monetary cost per accepted slice must remain finite"
+            )
+        per_accepted = derived_per_accepted
 
     completeness = (
         "complete"
@@ -618,6 +688,12 @@ def _enum(value: Any, allowed: set[str], field: str) -> str:
     return value
 
 
+def _is_finite_number(value: int | float) -> bool:
+    if isinstance(value, int):
+        return True
+    return math.isfinite(value)
+
+
 def _required_string(value: Any, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise EpicRunContextBudgetError(f"{field} must be a non-empty string")
@@ -627,10 +703,20 @@ def _required_string(value: Any, field: str) -> str:
 def _json_object(value: Mapping[str, Any], field: str) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise EpicRunContextBudgetError(f"{field} must be an object")
-    return json.loads(json.dumps(dict(value), sort_keys=True))
+    try:
+        return json.loads(json.dumps(dict(value), sort_keys=True, allow_nan=False))
+    except (TypeError, ValueError) as exc:
+        raise EpicRunContextBudgetError(
+            f"{field} must contain only finite JSON values"
+        ) from exc
 
 
 def _json_list(value: list[Any], field: str) -> list[Any]:
     if not isinstance(value, list):
         raise EpicRunContextBudgetError(f"{field} must be a list")
-    return json.loads(json.dumps(value, sort_keys=True))
+    try:
+        return json.loads(json.dumps(value, sort_keys=True, allow_nan=False))
+    except (TypeError, ValueError) as exc:
+        raise EpicRunContextBudgetError(
+            f"{field} must contain only finite JSON values"
+        ) from exc

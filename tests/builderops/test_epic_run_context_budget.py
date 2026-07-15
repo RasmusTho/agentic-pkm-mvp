@@ -9,6 +9,7 @@ from app.builderops.epic_run_context_budget import (
     EpicRunContextBudgetError,
     build_3229_pilot_replay,
     evaluate_slice_boundary_context_budget,
+    normalize_context_budget_receipt,
 )
 from app.builderops.epic_run_state import (
     apply_epic_run_update,
@@ -43,9 +44,9 @@ def _evaluate(**overrides: object) -> dict[str, object]:
         "repairs": {"implementation": 1, "ci": 0, "review": 0},
         "uncertainty": {"level": "medium", "reasons": ["first observation"]},
         "next_slice": {
-            "contract_complete": True,
-            "isolated_filescope": True,
-            "deterministic_verification": True,
+            "worker_isolated": True,
+            "setup_cost_high": False,
+            "merge_risk_low": True,
         },
         "policy": {
             "schema_version": 1,
@@ -71,14 +72,17 @@ def test_context_budget_round_trips_in_run_state(tmp_path: Path) -> None:
     assert loaded["dispatcher_status"] == {}
     assert loaded["validation_status"] == {}
     assert loaded["ci_handoffs"] == []
+    assert record_context_budget_receipt(loaded, receipt)["context_budget_receipts"] == [
+        receipt
+    ]
 
 
 def test_lifecycle_and_execution_decisions_are_independent() -> None:
     rotate_inline = _evaluate(
         next_slice={
-            "contract_complete": False,
-            "isolated_filescope": False,
-            "deterministic_verification": False,
+            "worker_isolated": False,
+            "setup_cost_high": True,
+            "merge_risk_low": False,
         }
     )
     keep_worker = _evaluate(context_pressure="low")
@@ -200,6 +204,7 @@ def test_cost_per_accepted_slice_includes_repairs_handoffs_and_unknowns() -> Non
         "missing_measurement",
         "extra_measurement_field",
         "missing_signal",
+        "missing_next_slice_input",
         "extra_policy_field",
         "invalid_recommendation",
         "missing_checkpoint_field",
@@ -223,6 +228,8 @@ def test_malformed_or_authority_bearing_receipts_cannot_persist(
         receipt["measurements"]["context"]["confidence"] = "guessed"
     elif malformation == "missing_signal":
         del receipt["signals"]["repairs"]
+    elif malformation == "missing_next_slice_input":
+        del receipt["next_slice"]["merge_risk_low"]
     elif malformation == "extra_policy_field":
         receipt["policy"]["universal_token_threshold"] = 1000
     elif malformation == "invalid_recommendation":
@@ -271,3 +278,90 @@ def test_zero_accepted_slices_preserves_denominator_without_division() -> None:
     cost = receipt["cost_per_accepted_slice"]
     assert cost["accepted_slice_count"] == {"value": 0, "source": "caller"}
     assert cost["known_monetary_cost_per_accepted_slice_usd"] == "unknown"
+
+
+def test_receipt_recommendations_are_reconstructed_from_persisted_evidence() -> None:
+    receipt = _evaluate(
+        context_pressure="low",
+        uncertainty={"level": "low", "reasons": []},
+    )
+    assert receipt["next_slice"] == {
+        "merge_risk_low": True,
+        "setup_cost_high": False,
+        "worker_isolated": True,
+    }
+    assert receipt["recommendations"] == {
+        "coordinator_lifecycle": "keep",
+        "slice_execution": "thin_worker",
+        "model_tier": "luna",
+    }
+
+    normalized = normalize_context_budget_receipt(receipt)
+    assert normalized == receipt
+    assert normalize_context_budget_receipt(normalized) == normalized
+
+    for field, contradiction in (
+        ("coordinator_lifecycle", "checkpoint_rotate"),
+        ("slice_execution", "inline"),
+        ("model_tier", "sol"),
+    ):
+        contradictory = deepcopy(receipt)
+        contradictory["recommendations"][field] = contradiction
+        state = new_epic_run_state(3229, f"contradict-{field}")
+        with pytest.raises(EpicRunContextBudgetError):
+            apply_epic_run_update(
+                state,
+                context_budget_receipts=[contradictory],
+            )
+        state["context_budget_receipts"] = [contradictory]
+        with pytest.raises(EpicRunContextBudgetError):
+            normalize_epic_run_state(state)
+
+    contradictory_reasons = deepcopy(receipt)
+    contradictory_reasons["recommendation_reasons"] = ["looks_cheaper"]
+    with pytest.raises(EpicRunContextBudgetError):
+        apply_epic_run_update(
+            new_epic_run_state(3229, "contradict-reasons"),
+            context_budget_receipts=[contradictory_reasons],
+        )
+
+
+@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("surface", ["context", "cost"])
+def test_non_finite_numbers_are_rejected_by_evaluator_and_persistence(
+    non_finite: float,
+    surface: str,
+) -> None:
+    if surface == "context":
+        evaluator_overrides = {
+            "context_measurement": {
+                "value": non_finite,
+                "unit": "tokens",
+                "source": "provider_usage",
+            }
+        }
+    else:
+        evaluator_overrides = {
+            "cost_inputs": {
+                "model_cost_usd": {
+                    "value": non_finite,
+                    "source": "provider_receipt",
+                }
+            }
+        }
+    with pytest.raises(EpicRunContextBudgetError):
+        _evaluate(**evaluator_overrides)
+
+    receipt = deepcopy(_evaluate())
+    if surface == "context":
+        receipt["measurements"]["context"]["value"] = non_finite
+    else:
+        receipt["cost_per_accepted_slice"]["inputs"]["model_cost_usd"][
+            "value"
+        ] = non_finite
+    state = new_epic_run_state(3229, f"non-finite-{surface}")
+    with pytest.raises(EpicRunContextBudgetError):
+        apply_epic_run_update(state, context_budget_receipts=[receipt])
+    state["context_budget_receipts"] = [receipt]
+    with pytest.raises(EpicRunContextBudgetError):
+        normalize_epic_run_state(state)

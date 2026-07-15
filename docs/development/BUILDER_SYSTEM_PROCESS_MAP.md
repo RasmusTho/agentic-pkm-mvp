@@ -220,7 +220,10 @@ Mechanism classification:
 The context-budget evaluator is measurement infrastructure, not a routing authority. Its
 `checkpoint_rotate` and `thin_worker` values are recommendations on separate axes: delegating a
 slice does not clear coordinator context, and refreshing changed external state does not alone force
-rotation. The receipt's policy is explicit and versioned, so the three-slice #3229 pilot remains a
+rotation. Persisted worker-isolation, setup-cost, merge-risk, policy, uncertainty, and external-state
+evidence deterministically reconstructs lifecycle, execution, model-tier, and reason fields during
+every generic run-state update or load. The receipt's policy is explicit and versioned, so the
+three-slice #3229 pilot remains a
 replayable observation (three inline routes, zero implementation-worker starts, long-lived Sol
 coordinator) rather than evidence that Sol or any fixed threshold was cheapest. Missing context,
 token, cost, or human-minute measurements remain `unknown`; available inputs may be reported without
