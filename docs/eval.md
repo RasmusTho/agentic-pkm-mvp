@@ -295,7 +295,10 @@ Every numeric leaf the compare touches — including confusion-matrix cells and
 load; the comparison and the renderer consume only the validated view. The
 provisional-memory proof is also structurally reconciled: `n_cases` must match
 the exact normalized case list, IDs must be unique, metadata must match case
-evidence, and every declared family must have both Swedish and English cases.
+evidence, and every canonical family must have both Swedish and English cases.
+Runner and compare share the same v1 evidence validator, which also rejects
+unknown enums/failure reasons, unsafe authority observations marked `passed`,
+and contradictions between case status, categorical failures, and gate state.
 
 Verdict (`regression` / `improved` / `neutral`), printed as `VERDICT: ...` and
 mirrored in the `--output` JSON artifact (`eval_scorecard_compare.v1`):

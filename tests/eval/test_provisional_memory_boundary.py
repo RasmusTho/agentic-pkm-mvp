@@ -13,6 +13,7 @@ from app.eval.provisional_memory_boundary import (
     evaluate_provisional_memory_boundary,
     gate_boundary_observation,
     receipts_are_content_free,
+    validate_boundary_evidence,
 )
 import app.eval.provisional_memory_boundary as boundary_module
 
@@ -27,6 +28,7 @@ def test_bilingual_provisional_memory_boundary() -> None:
     assert result["languages"] == ["en", "sv"]
     assert result["n_cases"] == 16
     assert all(case["passed"] for case in result["cases"])
+    assert validate_boundary_evidence(result).hard_gate_passed is True
 
 
 def _case(authority: ConsumingAuthority, *, admitted: bool) -> ProvisionalBoundaryCase:

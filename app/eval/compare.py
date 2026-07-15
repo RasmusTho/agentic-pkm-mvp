@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 from app.eval.benchmark import compute_metric_delta
+from app.eval.provisional_memory_boundary import validate_boundary_evidence
 
 SCORECARD_SCHEMA_VERSION = "eval_scorecard.v1"
 COMPARE_SCHEMA_VERSION = "eval_scorecard_compare.v1"
@@ -392,11 +393,20 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
         raise ScorecardCompareError(
             f"inconsistent hard-gate state and failures at {provisional_path}"
         )
+    try:
+        canonical_evidence = validate_boundary_evidence(provisional)
+    except ValueError as exc:
+        raise ScorecardCompareError(
+            f"invalid canonical proof at {provisional_path}: {exc}"
+        ) from exc
     view["provisional_memory_boundary"] = {
-        "hard_gate_passed": provisional_hard_gate_passed,
-        "n_cases": int(n_cases),
-        "languages": sorted(set(languages)),
-        "failures": provisional_failures,
+        "hard_gate_passed": canonical_evidence.hard_gate_passed,
+        "n_cases": canonical_evidence.n_cases,
+        "languages": sorted(set(canonical_evidence.languages)),
+        "failures": [
+            failure.model_dump(mode="json")
+            for failure in canonical_evidence.failures
+        ],
     }
 
     view["floor_regression"] = bool(scorecard.get("regression"))

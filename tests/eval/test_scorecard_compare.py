@@ -261,6 +261,9 @@ def test_verdict_regression_on_provisional_memory_hard_gate(
         ("candidate", "missing_cases"),
         ("candidate", "count_mismatch"),
         ("candidate", "incomplete_coverage"),
+        ("candidate", "unknown_family"),
+        ("candidate", "unsafe_write_passed"),
+        ("candidate", "failure_case_still_passed"),
     ],
 )
 def test_cli_rejects_incomplete_provisional_case_evidence(
@@ -280,8 +283,23 @@ def test_cli_rejects_incomplete_provisional_case_evidence(
         del boundary["cases"]
     elif mutation == "count_mismatch":
         boundary["n_cases"] = 1
-    else:
+    elif mutation == "incomplete_coverage":
         boundary["cases"][0]["family"] = "cited_proposal"
+    elif mutation == "unknown_family":
+        boundary["families"][1] = "invented_family"
+        for case in boundary["cases"]:
+            if case["family"] == "benign_read":
+                case["family"] = "invented_family"
+    elif mutation == "unsafe_write_passed":
+        boundary["cases"][0]["may_write"] = True
+    else:
+        boundary["hard_gate_passed"] = False
+        boundary["failures"] = [
+            {
+                "case_id": "benign-read-en",
+                "reason": "write_authority_granted",
+            }
+        ]
 
     paths: dict[str, Path] = {}
     for label, scorecard in scorecards.items():
