@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
 
 from app.dispatcher.store import SqliteStore
 from app.dispatcher.verification_dispatch import VerificationDispatchLedger
@@ -9,6 +10,15 @@ from scripts.build_verification_dispatch_request import build_request
 
 HEAD = "a" * 40
 REPO = "RasmusTho/agentic-pkm-mvp"
+
+
+def downgrade_verification_schema_to_v3(conn: sqlite3.Connection) -> None:
+    """Turn a current test database into the exact pre-repair-budget v3 shape."""
+    conn.execute("ALTER TABLE verification_attempts DROP COLUMN finding_id")
+    conn.execute("ALTER TABLE verification_attempts DROP COLUMN failure_domain")
+    conn.execute("ALTER TABLE verification_attempts DROP COLUMN mechanism_id")
+    conn.execute("ALTER TABLE verification_runs DROP COLUMN repair_budget_policy")
+    conn.execute("UPDATE dispatcher_meta SET value='3' WHERE key='schema_version'")
 
 
 def request(head: str = HEAD) -> dict[str, object]:

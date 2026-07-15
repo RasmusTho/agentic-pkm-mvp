@@ -16,6 +16,7 @@ from app.dispatcher.schema import DDL_STATEMENTS, SCHEMA_VERSION
 from app.dispatcher.store import SqliteStore
 from app.dispatcher.verification_dispatch import VerificationDispatchLedger
 from tests.dispatcher.verification_helpers import (
+    downgrade_verification_schema_to_v3,
     pre_trust_request,
     request as verification_request,
 )
@@ -87,6 +88,7 @@ def _write_pre_repair_v3_state(tmp_path: Path):
         conn.execute("ALTER TABLE verification_runs DROP COLUMN verified_head_sha")
         conn.execute("ALTER TABLE verification_runs DROP COLUMN current_head_sha")
         conn.execute("ALTER TABLE verification_runs DROP COLUMN supporting_authority_json")
+        downgrade_verification_schema_to_v3(conn)
         conn.commit()
     paths.events_path.touch()
     return paths, run
@@ -145,6 +147,7 @@ def _write_pre_trust_v3_state(tmp_path: Path):
             ("exception-pre-trust", run.run_id, run.requested_head_sha),
         )
         conn.execute("ALTER TABLE verification_runs DROP COLUMN supporting_authority_json")
+        downgrade_verification_schema_to_v3(conn)
         conn.commit()
     paths.events_path.touch()
     return paths, run, legacy_request
@@ -345,6 +348,7 @@ def test_noncanonical_current_request_rolls_back_additive_migration(
             ),
         )
         conn.execute("ALTER TABLE verification_runs DROP COLUMN supporting_authority_json")
+        downgrade_verification_schema_to_v3(conn)
         conn.commit()
     before = paths.db_path.read_bytes()
 

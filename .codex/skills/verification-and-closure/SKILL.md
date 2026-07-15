@@ -192,23 +192,29 @@ than independent re-review.
 - **Stop condition:** the gate passes once a round comes back clean (no new findings). For PRs touching
   security/data/migration/auth/concurrency/external-API surfaces (`AGENTS.md :: Total Cost of
   Development` escalation tier), require 2 consecutive clean rounds before passing.
-- Once 2 standard fix attempts have been spent anywhere on the PR and a blocking finding remains or
-  reappears, treat that as a **capability-escalation trigger**, not an automatic owner escalation.
+- Repair budget is per stable failure mechanism and failure domain: two standard repair attempts
+  followed, when needed, by two strongest-capability repair attempts for that same key. The closed
+  domains are review/code correctness, static-quality, lease/concurrency, and
+  deployment/model-schema compatibility. Multiple findings may share one mechanism; the same
+  finding must not be rebound to another mechanism or domain to reset accounting.
+- Once 2 standard fix attempts have been spent on one mechanism/domain key and a blocking finding
+  for that key remains or reappears, treat that as a **capability-escalation trigger**, not an
+  automatic owner escalation.
   Start a fresh repair context at the strongest available capability selected through `AGENTS.md ::
   Total Cost of Development` and the current platform configuration, and pass it all prior findings,
   attempted fixes, changed mechanisms, and relevant evidence. Do not duplicate a provider/model
   ladder here; the canonical policy and live configuration may select any available agent family.
-- Permit at most 2 additional capability-escalated fix attempts **across the whole PR**, not per
-  finding or mechanism. Independently re-review after each substantive attempt, and record the
+- Permit at most 2 additional capability-escalated fix attempts for that same mechanism/domain key.
+  Independently re-review after each substantive attempt, and record the
   selected model/agent family, reasoning level, prior context supplied, fallback (if any), and outcome
   for every escalated round.
-- After the PR-wide budget of 2 standard plus 2 escalated fix attempts is exhausted, or when the
+- After one key's budget of 2 standard plus 2 escalated fix attempts is exhausted, or when the
   strongest available capability cannot run or repeatedly fails, classify the stop under
   `AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier`. Continue with bounded
   technical recovery, backoff, or a blocked-technical receipt when safe; route through
   `owner-decision-brief` only if that classifier identifies an explicit authority/scope category.
-  Do not reset the budget when the finding or mechanism changes, and do not ask the owner merely
-  because the standard-capability attempts failed.
+  Do not reset an existing finding's binding, and do not ask the owner merely because the
+  standard-capability attempts failed. Budget exhaustion alone does not create a Human Exception.
 - Record each round's outcome and the final round count in the delivery receipt so convergence is
   auditable after merge.
 

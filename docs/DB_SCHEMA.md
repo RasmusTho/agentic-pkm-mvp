@@ -29,6 +29,13 @@ Last verified against: app/stores/pg.py + app/alembic/versions/c2766a04d001_kern
   fixtures opt in to create-on-demand via the same `STORE_SCHEMA_AUTOCREATE=1` flag KERNEL-04
   established. Schema parity between the migration and the audited `bootstrap()` shape is asserted by
   `tests/migrations/test_outbox_schema_parity.py`.
+- The active legacy **`decisions`** writer schema is **migration-owned** (#3488): Alembic revision
+  `e1d2c3b4a5f6` carries forward the table's creation, compatibility columns, generated UUID default,
+  and nullable `object_id` / `ON DELETE SET NULL` FK. `app/stores/postgres.py::_ensure_decisions()`
+  now only asserts that shape and directs a stale database to `alembic upgrade head`; it never runs
+  runtime DDL. The migration proof is
+  `tests/migrations/test_decisions_schema_parity.py` and
+  `tests/migrations/test_decisions_fk_set_null.py`.
 - Alembic migrations under `app/alembic/versions/` define the legacy AMG-core
   (`objects`/`chunks`/`embeddings`/...) lineage; see "Historical migration lineage" below. Most of
   these are historical-only, **but `objects` and `decisions` remain on the active runtime path**: vault
@@ -223,8 +230,8 @@ own forward-only migration.
 - `embedding` (either `double precision[]` with a cardinality check, or `vector` when vector extension is enabled in older branches)
 - `created_at` (`timestamptz`, default `now()`)
 
-### `decisions` (legacy)
-- `id` (`uuid`, PK; default varies by migration)
+### `decisions` (legacy, active writer schema)
+- `id` (`uuid`, PK; default `gen_random_uuid()` after `e1d2c3b4a5f6`)
 - `object_id` (`uuid`, nullable, FK → `objects.id`, `ON DELETE SET NULL` — realigned to the
   `audit.object_id` posture by `1a739d9494af_decisions_fk_set_null.py`, #2788; was
   `ON DELETE CASCADE` and `NOT NULL` before this migration, see D-5/D-7 in

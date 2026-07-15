@@ -1,4 +1,4 @@
-"""PR-wide review/repair accounting for verification coordinator hosts."""
+"""Verification review/repair accounting for coordinator hosts."""
 
 from __future__ import annotations
 
@@ -117,6 +117,8 @@ class VerificationAgentLoop:
         self,
         *,
         finding_id: str,
+        failure_domain: str,
+        mechanism_id: str,
         session_id: str,
         capability: str,
         reasoning_effort: str,
@@ -151,7 +153,12 @@ class VerificationAgentLoop:
             reasoning_effort,
             context,
             outcome,
-            {"finding_id": finding_id, "head_sha": self._head()},
+            {
+                "finding_id": finding_id,
+                "failure_domain": failure_domain,
+                "mechanism_id": mechanism_id,
+                "head_sha": self._head(),
+            },
             holder=self.holder,
             lease_id=self.lease_id,
         )
@@ -160,6 +167,9 @@ class VerificationAgentLoop:
     def review(
         self,
         *,
+        finding_id: str | None = None,
+        failure_domain: str | None = None,
+        mechanism_id: str | None = None,
         session_id: str,
         capability: str,
         reasoning_effort: str,
@@ -197,6 +207,9 @@ class VerificationAgentLoop:
                 "reviewed_attempt_id": latest["attempt_id"],
                 "head_sha": self._head(),
                 "verdict": normalized,
+                "finding_id": finding_id,
+                "failure_domain": failure_domain,
+                "mechanism_id": mechanism_id,
             },
             holder=self.holder,
             lease_id=self.lease_id,
@@ -250,6 +263,8 @@ class VerificationAgentLoop:
                 event_kind = event.get("kind")
                 if event_kind == "repair":
                     finding_id = str(event["finding_id"])
+                    failure_domain = event.get("failure_domain")
+                    mechanism_id = event.get("mechanism_id")
                     if not finding_id:
                         raise ValueError("repair requires a stable finding id")
                     repairs = [
@@ -280,18 +295,10 @@ class VerificationAgentLoop:
                         )
                     kind = "escalated_repair" if strongest else "standard_repair"
                     ordinal = sum(row["kind"] == kind for row in working) + 1
-                    if ordinal > 2:
-                        raise ValueError(f"{kind} budget exhausted")
-                    if strongest:
-                        standard = sum(
-                            row["kind"] == "standard_repair" for row in working
-                        )
-                        if standard < 2:
-                            raise ValueError(
-                                "strongest capability is only allowed after two standard attempts"
-                            )
                     receipt: dict[str, object] = {
                         "finding_id": finding_id,
+                        "failure_domain": failure_domain,
+                        "mechanism_id": mechanism_id,
                         "head_sha": head_sha,
                     }
                 elif event_kind == "review":
@@ -330,6 +337,9 @@ class VerificationAgentLoop:
                         "reviewed_attempt_id": latest["attempt_id"],
                         "head_sha": head_sha,
                         "verdict": normalized,
+                        "finding_id": event.get("finding_id"),
+                        "failure_domain": event.get("failure_domain"),
+                        "mechanism_id": event.get("mechanism_id"),
                     }
                 else:
                     raise ValueError("unknown verification review event kind")

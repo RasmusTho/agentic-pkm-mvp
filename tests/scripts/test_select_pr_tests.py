@@ -545,6 +545,26 @@ def test_llm_runtime_configuration_change_selects_llm_coverage() -> None:
     assert "tests/llm" in selection.targets
 
 
+def test_embedding_router_identity_change_selects_complete_llm_coverage() -> None:
+    selection = select_tests(
+        [
+            "app/components/embeddings/legacy.py",
+            "app/components/llm/fabric.py",
+            "app/components/llm/router.py",
+            "docs/LLM_ROUTING.md",
+            "tests/components/llm/test_router.py",
+            "tests/index/test_identity_migration.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("llm_eval",)
+    assert selection.unowned_paths == ()
+    assert "tests/components/embeddings" in selection.targets
+    assert "tests/components/llm" in selection.targets
+    assert "tests/index/test_identity_migration.py" in selection.targets
+
+
 def test_voice_contract_and_runtime_change_selects_voice_coverage() -> None:
     selection = select_tests(
         [

@@ -29,6 +29,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Protocol, Sequence, cast
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 import jsonschema
 
@@ -37,6 +38,7 @@ from app.dispatcher.verification_dispatch import (
     VerificationDispatchLedger,
     VerificationRun,
     VerificationSubscriptionBusy,
+    REPAIR_FAILURE_DOMAINS,
     _AuthenticatedVerificationRequest,
     _authenticated_verification_request,
     _live_observed_verification_request,
@@ -364,7 +366,10 @@ def validate_codex_output_schema(schema: Mapping[str, object]) -> None:
 
 
 def validate_verification_closer_receipt(
-    receipt: Mapping[str, object], schema: Mapping[str, object]
+    receipt: Mapping[str, object],
+    schema: Mapping[str, object],
+    *,
+    allow_legacy_unbound_repairs: bool = False,
 ) -> None:
     """Apply provider-safe structural validation plus local semantic invariants."""
 
@@ -394,11 +399,26 @@ def validate_verification_closer_receipt(
     for index, event in enumerate(review_events):
         if not isinstance(event, Mapping):
             continue
-        if event.get("kind") == "repair" and not (
-            isinstance(event.get("finding_id"), str) and event["finding_id"]
+        binding = (
+            event.get("finding_id"),
+            event.get("failure_domain"),
+            event.get("mechanism_id"),
+        )
+        requires_binding = event.get("kind") == "repair" or (
+            event.get("kind") == "review" and event.get("outcome") == "blocking"
+        )
+        if requires_binding and not allow_legacy_unbound_repairs and not all(
+            isinstance(value, str) and bool(value) for value in binding
         ):
             raise jsonschema.ValidationError(
-                f"repair review event {index} requires finding_id"
+                f"review event {index} requires a stable finding, failure domain, "
+                "and mechanism binding"
+            )
+        if event.get("kind") == "review" and event.get("outcome") == "clean" and any(
+            value is not None for value in binding
+        ):
+            raise jsonschema.ValidationError(
+                f"clean review event {index} cannot carry a failure binding"
             )
 
 
@@ -408,6 +428,7 @@ def load_and_validate_verification_closer_receipt(
     *,
     trusted_repository: str,
     trusted_evidence_urls: frozenset[str],
+    repair_budget_policy: str | None = None,
 ) -> Mapping[str, object]:
     """Validate untrusted launcher output against the canonical receipt contract."""
 
@@ -427,17 +448,40 @@ def load_and_validate_verification_closer_receipt(
         raise ReceiptContractError("verification closer receipt schema is invalid") from exc
     if not isinstance(receipt, Mapping):
         raise ReceiptContractError("verification closer receipt must be an object")
+    candidate = dict(receipt)
+    if repair_budget_policy == "v1" and isinstance(
+        candidate.get("review_events"), list
+    ):
+        candidate["review_events"] = [
+            {
+                **dict(event),
+                "failure_domain": event.get("failure_domain"),
+                "mechanism_id": event.get("mechanism_id"),
+            }
+            if isinstance(event, Mapping)
+            else event
+            for event in candidate["review_events"]
+        ]
+    allow_legacy = repair_budget_policy == "v1"
     try:
-        validate_verification_closer_receipt(receipt, schema)
+        validate_verification_closer_receipt(
+            candidate,
+            schema,
+            allow_legacy_unbound_repairs=allow_legacy,
+        )
     except jsonschema.ValidationError as exc:
         raise ReceiptContractError("verification closer receipt is invalid") from exc
     sanitized = sanitize_verification_closer_receipt(
-        receipt,
+        candidate,
         trusted_repository=trusted_repository,
         trusted_evidence_urls=trusted_evidence_urls,
     )
     try:
-        validate_verification_closer_receipt(sanitized, schema)
+        validate_verification_closer_receipt(
+            sanitized,
+            schema,
+            allow_legacy_unbound_repairs=allow_legacy,
+        )
     except jsonschema.ValidationError as exc:
         raise ReceiptContractError(
             "sanitized verification closer receipt is invalid"
@@ -1219,6 +1263,7 @@ def _allowlisted_receipt_value(
 
 def _sanitize_review_event(event: Mapping[str, object]) -> dict[str, object]:
     finding = event.get("finding_id")
+    mechanism = event.get("mechanism_id")
     return {
         "kind": event["kind"],
         "session_id": _pseudonymous_receipt_identifier(
@@ -1242,6 +1287,20 @@ def _sanitize_review_event(event: Mapping[str, object]) -> dict[str, object]:
         "finding_id": (
             _pseudonymous_receipt_identifier(finding, prefix="finding")
             if finding is not None
+            else None
+        ),
+        "failure_domain": (
+            _allowlisted_receipt_value(
+                event.get("failure_domain"),
+                allowed=REPAIR_FAILURE_DOMAINS,
+                fallback="review_code_correctness",
+            )
+            if event.get("failure_domain") is not None
+            else None
+        ),
+        "mechanism_id": (
+            _pseudonymous_receipt_identifier(mechanism, prefix="mechanism")
+            if mechanism is not None
             else None
         ),
         "strongest": event.get("strongest"),
@@ -1464,6 +1523,161 @@ def _is_rate_limit_exec_failure(detail: str) -> bool:
     # Free-form diagnostics are untrusted and ambiguous: contractions,
     # explicit false values, quoted examples, and provider prose cannot mint a
     # durable backoff classification. Only parsed provider fields above count.
+    return False
+
+
+def _local_now() -> datetime | None:
+    """Return an aware local instant backed by the host's full timezone rules."""
+
+    try:
+        with Path("/etc/localtime").open("rb") as stream:
+            local_zone = ZoneInfo.from_file(stream)
+    except (OSError, ValueError):
+        return None
+    return datetime.now(local_zone)
+
+
+def _is_future_local_wall_time(
+    current: datetime, wall_time: datetime, *, max_delta: timedelta
+) -> bool:
+    """Accept a local wall time when at least one real fold is a future instant."""
+
+    if current.tzinfo is None or wall_time.tzinfo is not None:
+        return False
+    try:
+        current_utc = current.astimezone(timezone.utc)
+        latest_utc = current_utc + max_delta
+    except (OSError, OverflowError, ValueError):
+        return False
+    for fold in (0, 1):
+        try:
+            candidate = wall_time.replace(tzinfo=current.tzinfo, fold=fold)
+            candidate_utc = candidate.astimezone(timezone.utc)
+            round_trip = candidate_utc.astimezone(current.tzinfo)
+        except (OSError, OverflowError, ValueError):
+            continue
+        if round_trip.replace(tzinfo=None) != wall_time:
+            continue
+        if current_utc <= candidate_utc <= latest_utc:
+            return True
+    return False
+
+
+def _is_valid_codex_retry(retry: str) -> bool:
+    if retry == "later":
+        return True
+    if not retry.startswith("at "):
+        return False
+    timestamp = retry.removeprefix("at ")
+    current = _local_now()
+    if current is None:
+        return False
+    current = current.replace(second=0, microsecond=0)
+    clock = re.fullmatch(
+        r"(?P<hour>[1-9]|1[0-2]):(?P<minute>[0-9]{2}) (?P<period>AM|PM)",
+        timestamp,
+    )
+    if clock is not None:
+        hour = int(clock.group("hour"))
+        minute = int(clock.group("minute"))
+        if minute > 59:
+            return False
+        hour = hour % 12 + (12 if clock.group("period") == "PM" else 0)
+        candidate = datetime(
+            current.year,
+            current.month,
+            current.day,
+            hour=hour,
+            minute=minute,
+        )
+        return _is_future_local_wall_time(
+            current, candidate, max_delta=timedelta(days=1)
+        )
+    match = re.fullmatch(
+        r"(?P<month>Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
+        r"(?P<day>[1-9]|[12][0-9]|3[01])(?P<suffix>st|nd|rd|th), "
+        r"(?P<year>[0-9]{4}) (?P<hour>[1-9]|1[0-2]):"
+        r"(?P<minute>[0-9]{2}) (?P<period>AM|PM)",
+        timestamp,
+    )
+    if match is None:
+        return False
+    day = int(match.group("day"))
+    suffix = (
+        "th"
+        if 11 <= day % 100 <= 13
+        else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+    )
+    if match.group("suffix") != suffix:
+        return False
+    minute = int(match.group("minute"))
+    if minute > 59:
+        return False
+    hour = int(match.group("hour")) % 12 + (
+        12 if match.group("period") == "PM" else 0
+    )
+    month = {
+        "Jan": 1,
+        "Feb": 2,
+        "Mar": 3,
+        "Apr": 4,
+        "May": 5,
+        "Jun": 6,
+        "Jul": 7,
+        "Aug": 8,
+        "Sep": 9,
+        "Oct": 10,
+        "Nov": 11,
+        "Dec": 12,
+    }[match.group("month")]
+    try:
+        candidate = datetime(
+            int(match.group("year")), month, day, hour, minute
+        )
+    except ValueError:
+        return False
+    if candidate.date() <= current.date():
+        return False
+    return _is_future_local_wall_time(
+        current, candidate, max_delta=timedelta(days=5 * 366)
+    )
+
+
+def _is_codex_usage_limit_event(event: object) -> bool:
+    """Recognize the bounded Codex CLI envelope for subscription exhaustion."""
+
+    if (
+        not isinstance(event, Mapping)
+        or set(event) != {"type", "message"}
+        or event.get("type") != "error"
+    ):
+        return False
+    message = event.get("message")
+    if not isinstance(message, str) or not message.isascii():
+        return False
+    retry_time = (
+        r"(?:(?:[1-9]|1[0-2]):[0-9]{2} (?:AM|PM)|"
+        r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
+        r"(?:[1-9]|[12][0-9]|3[01])(?:st|nd|rd|th), [0-9]{4} "
+        r"(?:[1-9]|1[0-2]):[0-9]{2} "
+        r"(?:AM|PM))"
+    )
+    retry = rf"(?:later|at {retry_time})"
+    plan_copy = (
+        r"(?:Upgrade to Pro \(https://chatgpt\.com/explore/pro\), visit "
+        r"https://chatgpt\.com/codex/settings/usage to purchase more credits|"
+        r"To get more access now, send a request to your admin|"
+        r"Upgrade to Plus to continue using Codex "
+        r"\(https://chatgpt\.com/explore/plus\),|"
+        r"Visit https://chatgpt\.com/codex/settings/usage to purchase more credits)"
+    )
+    for pattern in (
+        rf"You've hit your usage limit\. {plan_copy} or try again (?P<retry>{retry})\.",
+        rf"You've hit your usage limit\. Try again (?P<retry>{retry})\.",
+    ):
+        match = re.fullmatch(pattern, message)
+        if match is not None:
+            return _is_valid_codex_retry(match.group("retry"))
     return False
 
 
@@ -1777,6 +1991,7 @@ class CodexExecLauncher:
         thread_id: str | None = resume_session_id
         terminal: dict[str, object] | None = None
         terminal_error: str | None = None
+        terminal_rate_limited = False
         try:
             for line in lines:
                 if authority_lost.is_set():
@@ -1787,6 +2002,10 @@ class CodexExecLauncher:
                     continue
                 if event.get("type") in {"turn.failed", "error"}:
                     terminal_error = json.dumps(event, sort_keys=True)
+                    terminal_rate_limited = (
+                        _is_codex_usage_limit_event(event)
+                        or terminal_rate_limited
+                    )
                 if event.get("type") == "thread.started" and isinstance(event.get("thread_id"), str):
                     thread_id = event["thread_id"]
                     if on_thread_started:
@@ -1872,7 +2091,8 @@ class CodexExecLauncher:
             detail = stderr_detail or terminal_error or "no stderr"
             failure_class = (
                 "rate_limit"
-                if any(
+                if terminal_rate_limited
+                or any(
                     _is_rate_limit_exec_failure(candidate)
                     for candidate in (stderr_detail, terminal_error)
                     if candidate
@@ -2059,7 +2279,12 @@ def _checks_rejection(
     return None
 
 
-def context_pack(run: VerificationRun, pr: Mapping[str, object]) -> dict[str, object]:
+def context_pack(
+    run: VerificationRun,
+    pr: Mapping[str, object],
+    *,
+    repair_budget: Mapping[str, object] | None = None,
+) -> dict[str, object]:
     """Return the immutable minimum; no issue/diff/log/untrusted body text."""
     linked_issue = run.request.get("linked_issue")
     return {
@@ -2074,6 +2299,13 @@ def context_pack(run: VerificationRun, pr: Mapping[str, object]) -> dict[str, ob
         "verification_skill": ".codex/skills/verification-and-closure/SKILL.md",
         "agent_adapter": ".codex/agents/verification-closer.toml",
         "idempotency_key": run.idempotency_key,
+        "repair_budget": dict(repair_budget) if repair_budget is not None else {
+            "policy_version": run.repair_budget_policy,
+            "mechanism_count": 0,
+            "truncated": False,
+            "omitted_count": 0,
+            "mechanisms": [],
+        },
     }
 
 
@@ -2198,6 +2430,7 @@ class VerificationConsumer:
                 self.receipt_schema,
                 trusted_repository=run.repository,
                 trusted_evidence_urls=_trusted_evidence_urls(run),
+                repair_budget_policy=run.repair_budget_policy,
             )
         except ReceiptContractError as exc:
             try:
@@ -2346,7 +2579,16 @@ class VerificationConsumer:
         )
         if events:
             try:
-                loop.apply_events(events, context=context_pack(claimed, live_pr))
+                loop.apply_events(
+                    events,
+                    context=context_pack(
+                        claimed,
+                        live_pr,
+                        repair_budget=self.ledger.repair_budget_projection(
+                            claimed.run_id
+                        ),
+                    ),
+                )
             except ValueError as exc:
                 return self._terminal_event_application_failure(
                     claimed, lease_id, exc
@@ -2494,7 +2736,11 @@ class VerificationConsumer:
         lease_id = claimed.lease_id
         if not lease_id:
             raise RuntimeError("claimed verification run has no lease token")
-        pack = context_pack(claimed, pr)
+        pack = context_pack(
+            claimed,
+            pr,
+            repair_budget=self.ledger.repair_budget_projection(claimed.run_id),
+        )
 
         def started(session_id: str) -> None:
             safe_session_id = bounded_coordinator_session_id(session_id)
@@ -2533,6 +2779,7 @@ class VerificationConsumer:
                 self.receipt_schema,
                 trusted_repository=claimed.repository,
                 trusted_evidence_urls=_trusted_evidence_urls(claimed),
+                repair_budget_policy=claimed.repair_budget_policy,
             )
             safe_session_id = bounded_coordinator_session_id(session_id)
             if safe_session_id is None:
@@ -2798,7 +3045,13 @@ class VerificationConsumer:
                         lease_id=lease_id,
                     )
                 if repair_events:
-                    pack = context_pack(claimed, live_pr)
+                    pack = context_pack(
+                        claimed,
+                        live_pr,
+                        repair_budget=self.ledger.repair_budget_projection(
+                            claimed.run_id
+                        ),
+                    )
                     try:
                         VerificationAgentLoop(
                             self.ledger,
@@ -2835,7 +3088,11 @@ class VerificationConsumer:
                 lease_id=lease_id,
             )
 
-        pack = context_pack(claimed, live_pr)
+        pack = context_pack(
+            claimed,
+            live_pr,
+            repair_budget=self.ledger.repair_budget_projection(claimed.run_id),
+        )
         loop = VerificationAgentLoop(
             self.ledger,
             claimed.run_id,

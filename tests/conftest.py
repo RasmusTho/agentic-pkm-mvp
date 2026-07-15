@@ -129,6 +129,7 @@ def clean_llm_env(monkeypatch: pytest.MonkeyPatch):
     keys = [
         "LLM_PROVIDER",
         "LLM_MODEL",
+        "EMBED_PROFILE",
         "EMBED_MODEL",
         "LLM_FORCE_PROVIDER",
         "LLM_FORCE_MODEL",

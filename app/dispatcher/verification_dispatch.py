@@ -21,6 +21,18 @@ from app.dispatcher.store import (
 CONTRACT_VERSION = "verification_dispatch_request.v1"
 TERMINAL_STATES = frozenset({"completed", "failed", "needs_human", "superseded"})
 ACTIVE_STATES = frozenset({"claimed", "running"})
+REPAIR_BUDGET_POLICY_LEGACY = "v1"
+REPAIR_BUDGET_POLICY_MECHANISM = "v2"
+REPAIR_ATTEMPT_LIMITS = {"standard_repair": 2, "escalated_repair": 2}
+REPAIR_FAILURE_DOMAINS = frozenset(
+    {
+        "review_code_correctness",
+        "static_quality",
+        "lease_concurrency",
+        "deployment_model_schema",
+    }
+)
+_STABLE_MECHANISM_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}\Z")
 _REQUEST_FIELDS = (
     "contract_version",
     "stage",
@@ -636,6 +648,7 @@ class VerificationRun:
     coordinator_session_id: str | None
     request: dict[str, object]
     supporting_authority: tuple[int, ...]
+    repair_budget_policy: str
     context_pack: dict[str, object] | None
     terminal_receipt: dict[str, object] | None
     stop_reason: str | None
@@ -657,6 +670,12 @@ def _run(row: sqlite3.Row) -> VerificationRun:
     supporting_authority = (
         [] if is_legacy else _validated_supporting_authority(row, request)
     )
+    repair_budget_policy = row["repair_budget_policy"]
+    if repair_budget_policy not in {
+        REPAIR_BUDGET_POLICY_LEGACY,
+        REPAIR_BUDGET_POLICY_MECHANISM,
+    }:
+        raise ValueError("invalid verification repair budget policy")
     return VerificationRun(
         run_id=row["run_id"],
         idempotency_key=row["idempotency_key"],
@@ -676,6 +695,7 @@ def _run(row: sqlite3.Row) -> VerificationRun:
         coordinator_session_id=row["coordinator_session_id"],
         request=request,
         supporting_authority=tuple(supporting_authority),
+        repair_budget_policy=repair_budget_policy,
         context_pack=_load(row["context_pack_json"]),
         terminal_receipt=_load(row["terminal_receipt_json"]),
         stop_reason=row["stop_reason"],
@@ -692,8 +712,122 @@ def _attempt(row: sqlite3.Row) -> dict[str, object]:
         "capability": row["capability"],
         "reasoning_effort": row["reasoning_effort"],
         "outcome": row["outcome"],
+        "finding_id": row["finding_id"],
+        "failure_domain": row["failure_domain"],
+        "mechanism_id": row["mechanism_id"],
         "receipt": _load(row["receipt_json"]),
     }
+
+
+def _validated_attempt_identity(
+    attempts: Sequence[Mapping[str, object]],
+    *,
+    kind: str,
+    outcome: str,
+    receipt: Mapping[str, object] | None,
+    policy: str,
+) -> tuple[str | None, str | None, str | None]:
+    if policy not in {REPAIR_BUDGET_POLICY_LEGACY, REPAIR_BUDGET_POLICY_MECHANISM}:
+        raise ValueError("invalid verification repair budget policy")
+    if kind not in {*REPAIR_ATTEMPT_LIMITS, "review"}:
+        return None, None, None
+
+    # Runs migrated from v3 retain the original global v1 accounting model.
+    # Their historical receipts may carry a finding without the domain and
+    # mechanism fields introduced by v2, so identity must remain unbound.
+    if policy == REPAIR_BUDGET_POLICY_LEGACY:
+        return None, None, None
+
+    finding = receipt.get("finding_id") if receipt is not None else None
+    domain = receipt.get("failure_domain") if receipt is not None else None
+    mechanism = receipt.get("mechanism_id") if receipt is not None else None
+    identity = (finding, domain, mechanism)
+    identity_present = any(value is not None for value in identity)
+    requires_identity = kind in REPAIR_ATTEMPT_LIMITS or (
+        kind == "review" and outcome == "blocking"
+    )
+    if policy == REPAIR_BUDGET_POLICY_MECHANISM and requires_identity and not all(
+        isinstance(value, str) and bool(value) for value in identity
+    ):
+        raise ValueError(
+            "repair and blocking review require a stable finding, failure domain, "
+            "and mechanism binding"
+        )
+    if not identity_present:
+        return None, None, None
+    if not all(isinstance(value, str) and bool(value) for value in identity):
+        raise ValueError("verification finding binding is incomplete")
+    assert isinstance(finding, str)
+    assert isinstance(domain, str)
+    assert isinstance(mechanism, str)
+    if domain not in REPAIR_FAILURE_DOMAINS:
+        raise ValueError("invalid verification failure domain")
+    if _STABLE_MECHANISM_ID.fullmatch(mechanism) is None:
+        raise ValueError("invalid stable verification mechanism id")
+    for attempt in attempts:
+        if attempt.get("finding_id") != finding:
+            continue
+        if (
+            attempt.get("failure_domain") != domain
+            or attempt.get("mechanism_id") != mechanism
+        ):
+            raise ValueError("verification finding binding cannot be changed")
+    return finding, domain, mechanism
+
+
+def _attempt_plan(
+    attempts: Sequence[Mapping[str, object]],
+    *,
+    kind: str,
+    outcome: str,
+    receipt: Mapping[str, object] | None,
+    policy: str,
+) -> tuple[int, str | None, str | None, str | None]:
+    finding, domain, mechanism = _validated_attempt_identity(
+        attempts,
+        kind=kind,
+        outcome=outcome,
+        receipt=receipt,
+        policy=policy,
+    )
+    ordinal = sum(row.get("kind") == kind for row in attempts) + 1
+    if kind not in REPAIR_ATTEMPT_LIMITS:
+        return ordinal, finding, domain, mechanism
+    if policy == REPAIR_BUDGET_POLICY_LEGACY:
+        keyed = [row for row in attempts if row.get("kind") == kind]
+        standard = [
+            row for row in attempts if row.get("kind") == "standard_repair"
+        ]
+    else:
+        keyed = [
+            row
+            for row in attempts
+            if row.get("kind") == kind
+            and row.get("failure_domain") == domain
+            and row.get("mechanism_id") == mechanism
+        ]
+        standard = [
+            row
+            for row in attempts
+            if row.get("kind") == "standard_repair"
+            and row.get("failure_domain") == domain
+            and row.get("mechanism_id") == mechanism
+        ]
+    if len(keyed) >= REPAIR_ATTEMPT_LIMITS[kind]:
+        raise ValueError(f"{kind} budget exhausted")
+    if kind == "escalated_repair" and len(standard) < 2:
+        raise ValueError(
+            "strongest capability is only allowed after two standard attempts "
+            "for the same failure mechanism"
+        )
+    return ordinal, finding, domain, mechanism
+
+
+def _projected_mechanism_id(mechanism_id: str) -> str:
+    if re.fullmatch(r"mechanism-[0-9a-f]{16}", mechanism_id):
+        return mechanism_id
+    digest = hashlib.sha256(mechanism_id.encode()).hexdigest()[:16]
+    return f"mechanism-{digest}"
 
 
 class VerificationDispatchLedger:
@@ -1052,9 +1186,9 @@ class VerificationDispatchLedger:
                 INSERT OR IGNORE INTO verification_runs (
                     run_id, idempotency_key, contract_version, repository,
                     pr_number, head_sha, current_head_sha, stage, request_json,
-                    supporting_authority_json, status,
+                    supporting_authority_json, repair_budget_policy, status,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
                 """,
                 (
                     run_id,
@@ -1067,6 +1201,7 @@ class VerificationDispatchLedger:
                     request["stage"],
                     _json(request),
                     _json(request["supporting_issues"]),
+                    REPAIR_BUDGET_POLICY_MECHANISM,
                     now,
                     now,
                 ),
@@ -1434,8 +1569,7 @@ class VerificationDispatchLedger:
         lease_id: str,
         idempotency_key: str | None = None,
     ) -> int:
-        limits = {"standard_repair": 2, "escalated_repair": 2}
-        allowed = {*limits, "review", "verification"}
+        allowed = {*REPAIR_ATTEMPT_LIMITS, "review", "verification"}
         if kind not in allowed:
             raise ValueError("invalid verification attempt kind")
         context_hash = hashlib.sha256(_json(dict(context)).encode()).hexdigest()
@@ -1487,32 +1621,26 @@ class VerificationDispatchLedger:
                 ).fetchone()
                 if reused is not None:
                     raise ValueError("independent re-review requires a fresh session")
-            count = conn.execute(
-                "SELECT COUNT(*) FROM verification_attempts WHERE run_id=? AND attempt_kind=?",
-                (run_id, kind),
-            ).fetchone()[0]
-            ordinal = count + 1
-            if kind in limits and ordinal > limits[kind]:
-                raise ValueError(f"{kind} budget exhausted")
-            if kind == "escalated_repair":
-                standard = conn.execute(
-                    "SELECT COUNT(*) FROM verification_attempts "
-                    "WHERE run_id=? AND attempt_kind='standard_repair'",
-                    (run_id,),
-                ).fetchone()[0]
-                if standard < 2:
-                    raise ValueError("strongest capability is only allowed after two standard attempts")
+            attempts = self._attempts(conn, run_id)
+            ordinal, finding_id, failure_domain, mechanism_id = _attempt_plan(
+                attempts,
+                kind=kind,
+                outcome=outcome,
+                receipt=receipt,
+                policy=owner["repair_budget_policy"],
+            )
             conn.execute(
                 """
                 INSERT INTO verification_attempts (
                     attempt_id, run_id, attempt_kind, ordinal, session_id,
                     capability, reasoning_effort, context_hash, outcome,
-                    receipt_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    finding_id, failure_domain, mechanism_id, receipt_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     attempt_id, run_id, kind, ordinal,
                     session_id, capability, reasoning_effort, context_hash, outcome,
+                    finding_id, failure_domain, mechanism_id,
                     _json(dict(receipt)) if receipt else None, now,
                 ),
             )
@@ -1592,8 +1720,33 @@ class VerificationDispatchLedger:
             planned = list(planner(attempts, attempt_id))
             if len(planned) != batch_size:
                 raise ValueError("verification event batch plan size mismatch")
+            working = list(attempts)
+            validated: builtins.list[dict[str, object]] = []
+            for item in planned:
+                item_receipt = item["receipt"]
+                if not isinstance(item_receipt, Mapping):
+                    raise ValueError("verification event batch receipt is malformed")
+                ordinal, finding_id, failure_domain, mechanism_id = _attempt_plan(
+                    working,
+                    kind=str(item["kind"]),
+                    outcome=str(item["outcome"]),
+                    receipt=item_receipt,
+                    policy=owner["repair_budget_policy"],
+                )
+                if item.get("ordinal") != ordinal:
+                    raise ValueError("verification event batch ordinal is malformed")
+                projected = dict(item)
+                projected.update(
+                    {
+                        "finding_id": finding_id,
+                        "failure_domain": failure_domain,
+                        "mechanism_id": mechanism_id,
+                    }
+                )
+                working.append(projected)
+                validated.append(projected)
             batch_started = datetime.now(timezone.utc)
-            for index, item in enumerate(planned):
+            for index, item in enumerate(validated):
                 item_receipt = item["receipt"]
                 if not isinstance(item_receipt, Mapping):
                     raise ValueError("verification event batch receipt is malformed")
@@ -1610,8 +1763,9 @@ class VerificationDispatchLedger:
                     INSERT INTO verification_attempts (
                         attempt_id, run_id, attempt_kind, ordinal, session_id,
                         capability, reasoning_effort, context_hash, outcome,
+                        finding_id, failure_domain, mechanism_id,
                         receipt_json, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         item["attempt_id"],
@@ -1623,6 +1777,9 @@ class VerificationDispatchLedger:
                         item["reasoning_effort"],
                         item["context_hash"],
                         item["outcome"],
+                        item["finding_id"],
+                        item["failure_domain"],
+                        item["mechanism_id"],
                         _json(receipt),
                         (batch_started + timedelta(microseconds=index)).isoformat(
                             timespec="microseconds"
@@ -1630,7 +1787,7 @@ class VerificationDispatchLedger:
                     ),
                 )
             conn.commit()
-        return len(planned)
+        return len(validated)
 
     def _attempts(
         self, conn: sqlite3.Connection, run_id: str
@@ -1644,6 +1801,89 @@ class VerificationDispatchLedger:
     def attempts(self, run_id: str) -> builtins.list[dict[str, object]]:
         with self.store._connect() as conn:
             return self._attempts(conn, run_id)
+
+    def repair_budget_projection(self, run_id: str) -> dict[str, object]:
+        """Return a bounded coordinator-safe view without finding identities."""
+        with self.store._connect() as conn:
+            run = conn.execute(
+                "SELECT repair_budget_policy FROM verification_runs WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            if run is None:
+                raise ValueError("verification run not found")
+            policy = str(run["repair_budget_policy"])
+            attempts = self._attempts(conn, run_id)
+        if policy == REPAIR_BUDGET_POLICY_LEGACY:
+            standard = sum(
+                row["kind"] == "standard_repair" for row in attempts
+            )
+            escalated = sum(
+                row["kind"] == "escalated_repair" for row in attempts
+            )
+            return {
+                "policy_version": policy,
+                "mechanism_count": 1,
+                "truncated": False,
+                "omitted_count": 0,
+                "mechanisms": [
+                    {
+                        "failure_domain": "legacy_global",
+                        "mechanism_id": "legacy-global",
+                        "standard_used": standard,
+                        "standard_remaining": max(0, 2 - standard),
+                        "escalated_used": escalated,
+                        "escalated_remaining": max(0, 2 - escalated),
+                    }
+                ],
+            }
+        if policy != REPAIR_BUDGET_POLICY_MECHANISM:
+            raise ValueError("invalid verification repair budget policy")
+        last_seen: dict[tuple[str, str], int] = {}
+        for index, row in enumerate(attempts):
+            if (
+                row["kind"] in REPAIR_ATTEMPT_LIMITS
+                and isinstance(row["failure_domain"], str)
+                and isinstance(row["mechanism_id"], str)
+            ):
+                last_seen[(row["failure_domain"], row["mechanism_id"])] = index
+        ordered_keys = sorted(
+            last_seen,
+            key=lambda key: (-last_seen[key], key),
+        )
+        mechanism_count = len(ordered_keys)
+        keys = ordered_keys[:32]
+        mechanisms: builtins.list[dict[str, object]] = []
+        for domain, mechanism in keys:
+            standard = sum(
+                row["kind"] == "standard_repair"
+                and row["failure_domain"] == domain
+                and row["mechanism_id"] == mechanism
+                for row in attempts
+            )
+            escalated = sum(
+                row["kind"] == "escalated_repair"
+                and row["failure_domain"] == domain
+                and row["mechanism_id"] == mechanism
+                for row in attempts
+            )
+            mechanisms.append(
+                {
+                    "failure_domain": domain,
+                    "mechanism_id": _projected_mechanism_id(mechanism),
+                    "standard_used": standard,
+                    "standard_remaining": max(0, 2 - standard),
+                    "escalated_used": escalated,
+                    "escalated_remaining": max(0, 2 - escalated),
+                }
+            )
+        omitted_count = mechanism_count - len(mechanisms)
+        return {
+            "policy_version": policy,
+            "mechanism_count": mechanism_count,
+            "truncated": omitted_count > 0,
+            "omitted_count": omitted_count,
+            "mechanisms": mechanisms,
+        }
 
     def _closure_ready(
         self, conn: sqlite3.Connection, run_id: str, current_head_sha: str
