@@ -100,6 +100,7 @@ operators, or future agents still act on stale single-global-vault truth.
   `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md :: Future Multi-Vault` + doc writeback at
   `docs/SETTINGS.md :: Multi-vault settings resolution` + doc writeback at
   `docs/ENVIRONMENTS.md :: Vault terminology` + doc writeback at
+  `docs/HEALTH.md :: Runtime health` + doc writeback at
   `docs/SECURITY.md :: Security` + doc writeback at
   `docs/EVENTS.md :: Events` + doc writeback at
   `docs/DB_SCHEMA.md :: DB Schema (Current Reality)` + doc writeback at

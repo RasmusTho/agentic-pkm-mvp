@@ -37,6 +37,12 @@ This slice promotes the existing seed without changing content-vault authority.
   validated snapshots, and rollback exports as owner-only mode `0600` (directories `0700`) on
   native hosts and shared volumes. Preflight rejects permissive or unfixable ownership/mode before
   exposing absolute content-root paths or device provenance.
+- For prod, the authoritative `instance-state` store is a protected external Docker volume (not a
+  project-scoped `down -v` volume), with a versioned encrypted/permission-checked backup and restore
+  procedure. Preflight rejects a disposable prod volume, missing/restoration-incompatible backup,
+  or a restore whose revision/checksum/lineage disagrees with the shared database floor; a `down -v`
+  or host-loss drill restores registry, defaults, dimensions, principal/background state, and floors
+  before any API/worker starts.
 - Add the host-local cross-channel ownership ledger shared by dev/test/prod/native registration and
   lifecycle preflight. It stores channel plus stable binding and an HMAC fingerprint of canonical
   filesystem identity, not raw paths. Registration/relocation holds its global lock and uses a
@@ -147,7 +153,7 @@ then carries only its mapped acceptance criteria and validation commands:
 2. **MVR-01B — durable deployment and ownership:** per-channel instance-state export/import,
    cross-process store identity, host-global ledger/key lifecycle, first-rollout legacy-owner
    bootstrap, channel transfer, latest-revision legacy export/transformer for scalar-representable
-   state, guarded previous-image startup, and cutover owner-doc writebacks. It depends on 01A. If
+   state, protected prod-volume backup/restore, guarded previous-image startup, and cutover owner-doc writebacks. It depends on 01A. If
    more than one registration exists, active volume cutover remains dormant until 01C is present.
 3. **MVR-01C — multi-registration rollback lineage:** explicit scalar target, authenticated
    mutation-filtering gateway/mount restriction, minimum-runtime floor, and roll-forward merge. It
@@ -236,6 +242,10 @@ never encounter and truncate authoritative new-schema state before fork/merge pr
 - [ ] **MVR-01B:** Compose, startup, and migration preflight fail before recreate when the instance-state mount
   is absent, not writable, channel-colliding, or resolves differently between consumers.
   - Verify: `tests/ops/test_instance_state_volume_contract.py::test_registry_volume_and_preflight_cover_all_consumers`
+- [ ] **MVR-01B:** Prod uses a protected external instance-state volume; a `down -v`/volume-loss drill
+  restores the newest checksum-verified registry, default, dimension, principal/background state,
+  and runtime floors before API/worker startup, while a missing or divergent backup fails closed.
+  - Verify: `tests/ops/test_instance_state_volume_contract.py::test_prod_instance_state_survives_volume_loss_with_verified_restore`
 - [ ] **MVR-01B:** Registering or starting the same canonical content root in two release channels is rejected by
   the shared ownership ledger; injected crashes in reserve/commit/activate/transfer recover to at
   most one active owner without exposing raw host paths.

@@ -165,8 +165,9 @@ Partial-delivery gates are explicit: after 06A, durable intent/auth schema exist
 single-watcher bridge remains authoritative and every add/remove or other intent-changing command
 returns `capability_not_ready`; list/inspect is read-only. 06B atomically replaces the bridge with the revision-reconciling single-binding
 compatibility supervisor and permits only empty/singleton intent; a second binding is rejected.
-06C lifts the capability gate for explicit zero/one/many lifecycles; 06D
-enables multi-binding queued dispatch only after the MVR-05 classification receipt and current
+06C implements and proves the dormant multi-binding supervisor but keeps enrollment/start sealed;
+06D atomically enables zero/one/many enrollment, lifecycle start, and queued dispatch only after the
+MVR-05 classification receipt and current
 binding/authority checks pass. A later stage never becomes observable before its producer,
 migration, preflight, and fail-loud gate merge together.
 
@@ -233,7 +234,7 @@ migration, preflight, and fail-loud gate merge together.
   wake-up hint; event loss and crashes before/after publication restart on the committed binding and
   never the previous one.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_picker_commit_precedes_hint_and_survives_event_loss`
-- [ ] **MVR-06C:** The production supervisor runs independent watcher/worker lifecycles for two bindings and
+- [ ] **MVR-06D:** The production supervisor runs independent watcher/worker lifecycles for two bindings and
   attributes ingest, queues, settings, health, and receipts to the correct immutable
   ActiveContextSet/vault/generation.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_two_bindings_run_isolated_lifecycles`
@@ -278,13 +279,16 @@ migration, preflight, and fail-loud gate merge together.
 - [ ] **MVR-06C:** A pure GOV verdict/role revocation with no registry mutation advances the auth epoch, drains the
   affected running lifecycle, and blocks its next read/write/outbox/dispatch operation before effect.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_authorization_epoch_revokes_running_lifecycle_before_next_effect`
-- [ ] **MVR-06C:** Zero bindings idle truthfully; one binding preserves current behavior; a failed member is
+- [ ] **MVR-06D:** Zero bindings idle truthfully; one binding preserves current behavior; a failed member is
   loud and cannot redirect or mark the whole set healthy.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_zero_one_many_and_partial_failure_are_truthful`
-- [ ] **MVR-06C:** Governed production enrollment may first persist a two-or-more binding explicit set only
-  after the multi-binding supervisor exists; restart reconstructs exactly that deduplicated,
-  re-authorized set.
-  - Verify: `tests/api/test_background_binding_admin.py::test_mvr06c_enrollment_enables_many_only_with_supervisor`
+- [ ] **MVR-06C:** The implemented multi-binding supervisor remains dormant: production enrollment/start
+  rejects a second binding until 06D atomically enables its matching queue-dispatch contract.
+  - Verify: `tests/api/test_background_binding_admin.py::test_mvr06c_rejects_many_until_mvr06d_dispatch_gate`
+- [ ] **MVR-06D:** Governed production enrollment may first persist and start a two-or-more binding explicit
+  set only when the matching multi-binding queue-dispatch contract is enabled; restart reconstructs
+  exactly that deduplicated, re-authorized set.
+  - Verify: `tests/api/test_background_binding_admin.py::test_mvr06d_enrollment_enables_many_with_dispatch`
 - [ ] **MVR-06D:** The parent lifecycle-and-dimension acceptance target composes the MVR-04 dimension authority
   contract with isolated zero/one/many watcher and worker behavior before MVR-06 merges.
   - Verify: `tests/integration/test_multi_vault_lifecycle_and_dimension.py::test_parent_dimension_background_acceptance`
@@ -323,7 +327,8 @@ migration, preflight, and fail-loud gate merge together.
     writeback at `docs/SETTINGS_SPINE/REBIND_ON_VAULT_SELECTION.md :: What This Task Does`
 - [ ] **MVR-06C:** The environment owner contract describes shipped zero/one/many per-binding
   lifecycle supervision, ownership/auth checks, truthful health, and cross-process binding state.
-  - Verify: doc writeback at `docs/ENVIRONMENTS.md :: Runtime Control Surface`
+  - Verify: doc writeback at `docs/ENVIRONMENTS.md :: Runtime Control Surface` + doc writeback at
+    `docs/HEALTH.md :: Runtime health`
 
 ## Out of Scope
 

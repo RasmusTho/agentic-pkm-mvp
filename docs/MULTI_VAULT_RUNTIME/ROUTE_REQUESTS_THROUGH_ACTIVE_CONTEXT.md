@@ -145,12 +145,13 @@ four distinct merged receipts are required on #2143.
 Partial-delivery gates are explicit: after 05A, only the compatible new runtime may use the migrated
 binding-keyed store and its scalar worker may poll/ack only a row matching its explicit current
 single-binding compatibility context, authorization, revision, and root; mismatched/ambiguous rows
-remain pending/unacknowledged with blocked readiness while independent global work continues. The deployment fence continues
-to block every unmigrated vault-bound enqueue producer after migration; 05B enables scoped reads but
-no vault-bound enqueue, and 05C enables only governed write producers that emit the complete
-binding/context envelope in the same slice. Under the same fence, 05D re-runs legacy classification,
-migrates the remaining producers and completes worker delivery, proves no unscoped row appeared, then releases
-their ingress. No stage permits a legacy envelope, old scalar process, or un-revalidated read/write
+remain pending/unacknowledged with blocked readiness while independent global work continues. Existing
+single-vault watcher/ingest/capture/Heimdal producers remain live throughout 05A–05D through the 05A
+compatibility ingress translator: it derives their one authoritative compatibility binding, validates
+authority/revision/root immediately, and writes a complete versioned envelope (or fails that request
+loudly), never a fresh legacy row. 05B enables scoped reads; 05C enables governed writes with their
+native envelope; 05D removes the translator only after every producer has migrated and proves no
+unscoped row appeared. No stage permits a legacy envelope, old scalar process, or un-revalidated read/write
 to cross its floor; independently safe explicit-global work may continue.
 
 ## Source Anchors
@@ -219,10 +220,11 @@ to cross its floor; independently safe explicit-global work may continue.
 - [ ] **MVR-05A:** The deployment fence inventory is generated from production compose/runtime producer truth and
   fails when any enabled process that can call the DB/outbox seam is absent from the drain/stop plan.
   - Verify: `tests/ops/test_mvr05_mixed_version_fence.py::test_fence_inventory_covers_every_enabled_db_outbox_process`
-- [ ] **MVR-05A:** After the binding-keyed migration, every unmigrated vault-bound producer remains
-  ingress-fenced across 05A–05C; 05C may enable only complete-envelope producers, and 05D reclassifies
-  under the fence before enabling the remaining producers, so no fresh legacy row can appear.
-  - Verify: `tests/ops/test_mvr05_mixed_version_fence.py::test_unmigrated_vault_bound_producers_remain_fenced_until_mvr05d`
+- [ ] **MVR-05A:** Every existing single-vault watcher/ingest/capture/Heimdal producer remains live
+  across 05A–05D through the production compatibility ingress translator, which derives its one
+  authorized compatibility binding and emits a complete versioned envelope or fails loud; no fresh
+  legacy row can appear while later native producer migrations remain pending.
+  - Verify: `tests/ops/test_mvr05_mixed_version_fence.py::test_compatibility_translator_keeps_existing_producers_live_without_legacy_rows`
 - [ ] **MVR-05A:** Before any migrated vault-bound row is polled, the recreated scalar worker validates
   its explicit compatibility binding, authority, revision, and root; a mismatched or ambiguous row
   remains pending/unacknowledged with blocked readiness, while explicit-global work remains processable.
