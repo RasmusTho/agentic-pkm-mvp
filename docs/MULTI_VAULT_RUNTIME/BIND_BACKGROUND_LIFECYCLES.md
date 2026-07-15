@@ -47,12 +47,16 @@ cross-process truth belong here.
   into health, receipts, settings reload, and work queues.
 - Make cross-process consumers receive/re-resolve versioned binding state rather than sharing an
   untracked env snapshot.
-- Version queued work and outbox rows with binding/context identity and make polling/ack ownership
-  binding-scoped. Before enabling more than one lifecycle, a fail-loud upgrade gate classifies every
-  undelivered legacy row: backfill only when its producer evidence and the prior single-vault
-  binding prove one target; otherwise quarantine it for explicit recovery without dispatch or ack.
-  An unclassified row blocks multi-binding startup and is never consumed by whichever worker polls
-  first or stranded silently by a binding filter.
+- Version queued work and outbox rows with an explicit routing class:
+  `global` for handlers that touch no content vault, or `vault_bound` with binding/context identity.
+  Global rows remain singleton work and require no invented vault. Vault-bound polling/ack ownership
+  is binding-scoped. Before enabling more than one lifecycle, a fail-loud upgrade gate uses the
+  versioned topic/handler routing registry to classify every undelivered legacy row: known global
+  topics remain global; known vault-bound topics backfill only when producer evidence and the prior
+  single-vault binding prove one target; unknown topics or ambiguous vault-bound rows quarantine for
+  explicit recovery without dispatch or ack. A quarantined unsafe row makes the affected worker
+  readiness degraded/blocked but a valid global row never blocks multi-binding startup merely for
+  lacking a binding.
 
 ## Concretely
 
@@ -80,8 +84,8 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
 - Secondary subsystem(s): OEF, EBF, PDM, GOV, SFC
 - Write class: existing mechanical/derived background writes only
 - Authority impact: lifecycle creation requires authorized bindings; no authority expansion
-- Persistence impact: durable instance-local background-binding intent plus binding/context schema
-  migration and classification for pending queue/outbox rows
+- Persistence impact: durable instance-local background-binding intent plus global/vault-bound
+  routing, binding/context schema migration, and classification for pending queue/outbox rows
 - Derived/rebuildable impact: worker/watch instances and health projections are rebuildable
 - Human knowledge impact: background writes preserve target vault attribution
 - Memory impact: background indexing never mixes vault contexts
@@ -131,9 +135,10 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
   process-global/env snapshot, and resolves it into the full background ActiveContextSet before
   work starts.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_worker_handoff_is_versioned_and_explicit`
-- [ ] Pending pre-upgrade outbox work is assigned only from provable prior binding evidence;
-  ambiguous rows quarantine and block multi-binding startup without dispatch or acknowledgement,
-  while new polling and ack are binding-scoped.
+- [ ] Pending pre-upgrade outbox work is classified through the production handler registry: global
+  topics continue exactly once without a binding, vault-bound rows are assigned only from provable
+  prior evidence, and unknown/ambiguous rows quarantine without dispatch or acknowledgement; new
+  vault polling and ack are binding-scoped.
   - Verify: `tests/migrations/test_multi_vault_outbox_upgrade.py::test_legacy_pending_rows_backfill_or_quarantine_fail_loud`
 - [ ] Production watcher/worker/settings callers consume ActiveContextSet outside named bootstrap
   adapters; no parallel lifecycle context type remains.

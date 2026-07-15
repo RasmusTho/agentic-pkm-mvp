@@ -33,6 +33,10 @@ This slice promotes the existing seed without changing content-vault authority.
   `/app/instance-state/agentic-pkm/vault-registry.md`. Migrate once from the legacy resolved
   app-local path by atomic validated copy with provenance; never treat the image layer, `$HOME`,
   `/app/tmp`, or `/app/runtime` as durable registry storage.
+- Create and maintain the authoritative registry, lock metadata, transaction temporary files,
+  validated snapshots, and rollback exports as owner-only mode `0600` (directories `0700`) on
+  native hosts and shared volumes. Preflight rejects permissive or unfixable ownership/mode before
+  exposing absolute content-root paths or device provenance.
 - Add the pre-recreate migration gate: resolve and export the legacy registry from the running old
   API container into mode-`0600` channel staging, validate it before stopping that container, then
   import through a new-image one-shot migrator with the durable volume mounted. No old container is
@@ -51,9 +55,14 @@ This slice promotes the existing seed without changing content-vault authority.
 - Serialize every mutation with a shared-volume file lock, monotonic revision/CAS reload, and
   same-directory temp-file + `fsync` + atomic replace + directory `fsync`. Readers observe complete
   revisions; all production writers reuse this store transaction boundary.
-- Preserve #2185 recovery: parse corruption encountered by explicit picker select/initialize is
-  backed up for forensics and reseeded so recovery does not 500. Ambiguous schema migrations,
-  identity collisions, and write failures fail closed without overwriting the original.
+- Preserve #2185 without erasing later state: parse corruption encountered by explicit picker
+  select/initialize is backed up for forensics. The legacy backup/reseed behavior is allowed only
+  when the source is provably pre-MVR/empty and no validated populated snapshot exists. A populated
+  current-schema registry is restored from its checksum-verified last-good snapshot and then the
+  requested mutation is applied under the normal transaction; if no unambiguous snapshot exists,
+  picker mutation fails closed with an explicit recovery path. No empty reset is committed, and the
+  rollback export is refreshed only after a validated non-destructive commit. Ambiguous schema
+  migrations, identity collisions, and write failures likewise preserve every source.
 
 ## Concretely
 
@@ -110,8 +119,13 @@ single-vault package or can silently lose identity during migration.
   registrations, `last_active_vault_ref`, timestamps, or unknown fields.
   - Verify: `tests/instance/test_vault_registry_migration.py::test_legacy_app_local_state_migrates_losslessly`
 - [ ] Explicit production picker select/initialize over parse-corrupt registry state backs up the
-  original and reseeds without a 500, preserving #2185 recovery.
+  original and preserves #2185 legacy/empty recovery without a 500.
   - Verify: `tests/api/test_vault_registry_recovery.py::test_picker_recovers_parse_corrupt_registry_with_backup`
+- [ ] Parse corruption in a populated current registry restores the checksum-verified last-good
+  state before mutation, preserving all registrations/default/dimensions/background intent; when
+  no unambiguous snapshot exists it fails closed without committing an empty reset or refreshing
+  the rollback export.
+  - Verify: `tests/api/test_vault_registry_recovery.py::test_populated_registry_corruption_never_reseeds_empty`
 - [ ] Ambiguous migration, identity collision, or write failure fails closed and leaves the
   original payload recoverable.
   - Verify: `tests/instance/test_vault_registry_migration.py::test_ambiguous_registry_migration_fails_without_destructive_reset`
@@ -127,6 +141,9 @@ single-vault package or can silently lose identity during migration.
 - [ ] Compose, startup, and migration preflight fail before recreate when the instance-state mount
   is absent, not writable, channel-colliding, or resolves differently between consumers.
   - Verify: `tests/ops/test_instance_state_volume_contract.py::test_registry_volume_and_preflight_cover_all_consumers`
+- [ ] Registry, lock/temporary files, validated snapshots, and rollback exports remain mode `0600`
+  under permissive host umasks; parent directories are `0700` and unsafe mode/ownership fails loud.
+  - Verify: `tests/instance/test_vault_registry_permissions.py::test_registry_transaction_files_are_private`
 - [ ] Concurrent picker/API/CLI registry mutations serialize without lost updates or partial files,
   and stale revision CAS fails explicitly before retry.
   - Verify: `tests/instance/test_vault_registry_concurrency.py::test_production_mutations_are_locked_atomic_and_revision_checked`
@@ -145,7 +162,7 @@ single-vault package or can silently lose identity during migration.
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/instance/test_vault_registry.py tests/instance/test_vault_registry_migration.py tests/instance/test_vault_registry_concurrency.py tests/api/test_vault_registry_recovery.py tests/architecture/test_instance_vault_registry_boundary.py tests/ops/test_instance_state_volume_contract.py`
+- `pytest -q tests/instance/test_vault_registry.py tests/instance/test_vault_registry_migration.py tests/instance/test_vault_registry_concurrency.py tests/instance/test_vault_registry_permissions.py tests/api/test_vault_registry_recovery.py tests/architecture/test_instance_vault_registry_boundary.py tests/ops/test_instance_state_volume_contract.py`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_vault_registry_container_durability.py tests/integration/test_vault_registry_rollback.py`
 - `ruff check app tests`
 
@@ -160,9 +177,10 @@ locked, revision-checked, and atomically replaced, and each commit refreshes the
 export consumed by the old-image pre-start transformer. A later roll-forward re-exports the running
 old image and reconciles its rollback-period changes against the recorded fork revision before the
 new image starts; divergent lineages fail closed with both sources intact. Parse
-corruption remains recoverable through the shipped picker backup/reseed path; an ambiguous
-migration or write failure leaves prior payload, staging, and destination recoverable and blocks
-only unsafe automatic resolution until repaired or explicitly recovered.
+corruption remains recoverable through legacy/empty backup-reseed or populated last-good-snapshot
+restore; it never commits an empty replacement for populated state. An ambiguous recovery,
+migration, or write failure leaves prior payload, snapshot, staging, rollback export, and
+destination recoverable and blocks only unsafe automatic resolution until repaired.
 
 ## Related Docs
 
