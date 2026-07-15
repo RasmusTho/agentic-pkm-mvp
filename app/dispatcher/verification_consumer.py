@@ -920,16 +920,22 @@ class VerificationConsumer:
         checks = self.truth.checks(claimed.repository, claimed.head_sha)
         rejection = live_truth_rejection(claimed, pr, checks)
         if rejection:
-            lease_id = claimed.lease_id
-            if not lease_id:
-                raise RuntimeError("claimed verification run has no lease token")
+            receipt = {"outcome": "launch_rejected", "reason": rejection}
+            if rejection in {"missing_checks", "checks_not_green"}:
+                return self.ledger.backoff(
+                    claimed.run_id,
+                    receipt,
+                    _retry_at(),
+                    holder=self.holder,
+                    lease_id=claimed.lease_id or "",
+                )
             return self.ledger.terminal(
                 claimed.run_id,
-                "failed",
-                {"outcome": "prelaunch_rejected", "reason": rejection},
-                reason=f"prelaunch_{rejection}",
+                "superseded",
+                receipt,
+                reason=rejection,
                 holder=self.holder,
-                lease_id=lease_id,
+                lease_id=claimed.lease_id or "",
             )
         return self._launch(claimed, pr)
 

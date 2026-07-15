@@ -171,8 +171,8 @@ def test_head_move_during_auth_fails_closed_before_launch(tmp_path) -> None:
         request()
     )
 
-    assert result.status == "failed"
-    assert result.stop_reason == "prelaunch_stale_head"
+    assert result.status == "superseded"
+    assert result.stop_reason == "stale_head"
     assert launcher.calls == []
 
 
@@ -187,8 +187,8 @@ def test_governing_issue_move_during_auth_fails_closed_before_launch(tmp_path) -
         request()
     )
 
-    assert result.status == "failed"
-    assert result.stop_reason == "prelaunch_governing_issue_mismatch"
+    assert result.status == "superseded"
+    assert result.stop_reason == "governing_issue_mismatch"
     assert launcher.calls == []
 
 
