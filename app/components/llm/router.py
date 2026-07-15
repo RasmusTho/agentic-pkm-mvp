@@ -270,7 +270,7 @@ class LLMRouter:
         # dimension with the generic shipped EMBED_MODEL fallback below.
         if profile is None and not target_is_explicit:
             profile = activated_profile
-        if override_model is None and routing is not None:
+        if override_model is None and profile is None and routing is not None:
             override_model = routing.default_embed_model
         # A configured task/default model remains higher-precedence settings
         # authority. The generic environment/built-in model is only a fallback
