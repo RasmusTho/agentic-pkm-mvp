@@ -225,6 +225,12 @@ class VerificationDispatchLedger:
             ).fetchone()
             if existing is not None:
                 existing_request = _load(existing["request_json"])
+                active_status = existing["status"] in {
+                    "queued",
+                    "backoff",
+                    "claimed",
+                    "running",
+                }
                 if (
                     not isinstance(existing_request, Mapping)
                     or existing["repository"] != request["repository"]
@@ -234,16 +240,19 @@ class VerificationDispatchLedger:
                 ):
                     raise ValueError("verification idempotency authority conflict")
                 if existing_request.get("linked_issue") != request.get("linked_issue"):
-                    if existing["status"] in {
-                        "queued",
-                        "backoff",
-                        "claimed",
-                        "running",
-                    }:
+                    if active_status:
                         raise ValueError(
                             "verification canonical run governing issue mismatch"
                         )
                     raise ValueError("verification idempotency authority conflict")
+                if (
+                    active_status
+                    and existing["current_head_sha"]
+                    != request.get("current_head_sha")
+                ):
+                    raise ValueError(
+                        "verification artifact head does not match canonical run"
+                    )
                 conn.commit()
                 return _run(existing)
             for candidate in conn.execute(

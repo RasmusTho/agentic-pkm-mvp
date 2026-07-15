@@ -646,3 +646,18 @@ def test_exact_terminal_replay_wins_over_older_terminal_rows(tmp_path) -> None:
     assert stale is not None
     assert stale.status == "superseded"
     assert stale.current_head_sha == HEAD
+
+
+def test_active_rebound_chain_rejects_original_artifact_replay(tmp_path) -> None:
+    state = ledger(tmp_path)
+    original = state.ingest(request())
+    _record_exhausted_repair_budget(state, original.run_id)
+
+    with pytest.raises(ValueError, match="artifact head does not match canonical run"):
+        state.ingest(request())
+
+    retained = state.get(original.run_id)
+    assert retained is not None
+    assert retained.status == "backoff"
+    assert retained.requested_head_sha == HEAD
+    assert retained.current_head_sha == REPAIRED_HEAD
