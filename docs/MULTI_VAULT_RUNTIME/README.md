@@ -134,7 +134,10 @@ required by #2143 without pretending that the move has shipped.
   mutate the default;
 - on a fresh empty registry, the first initialize or first open-existing transaction records its
   stable initialized/provisional binding as the default exactly once, preserving restart without
-  turning later picker or last-active changes into default mutations;
+  turning later picker or last-active changes into default mutations. In 05B, first initialize uses
+  a single-use authenticated bootstrap precondition bound to the canonical target, empty registry
+  revision, and no-compatibility posture; it revalidates under the ownership/registry lock and is
+  failure-atomic rather than depending on a compatibility binding that does not yet exist;
 - a one-request `X-Active-Context-Override` selection outranks the retained
   `X-Active-Context-Session` selection; session selection outranks the instance default; default
   outranks an explicit legacy bootstrap adapter; absence resolves to no-vault. The override is
@@ -330,6 +333,10 @@ Partial delivery remains fail-closed:
   scoped/coalesced under the DB fence; identical retries preserve one canonical lineage and
   ambiguous/conflicting rows quarantine. Issue 05D retires the compatibility translator only after
   native producer migration, and issue 06D cannot backfill a duplicate;
+- before issue 05A enables scalar vault-bound dispatch, every enabled GOV-revocation producer uses
+  the host-global ownership fence and matching exclusive binding lease. The 05A worker holds the
+  shared lease through dispatch/ack/receipt, so revocation cannot cross that effect window; 05B
+  extends the already-live fence to foreground read producers;
 - after issue 06B, legacy choose/open and default set/clear continue to rebind only `compatibility`
   lifecycle intent with the same mutation-gate/pre-commit scan+buffer/quiesce → commit →
   post-commit old-root scan+buffer drain → resume transaction. Default clear re-runs the canonical

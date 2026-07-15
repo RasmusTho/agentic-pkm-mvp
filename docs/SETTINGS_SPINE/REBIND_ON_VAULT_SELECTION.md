@@ -97,6 +97,9 @@ the UI says one vault and ingest watches another — captures silently vanish fr
 - [ ] No-vault → selected transition and selected → no-vault (vault removed) both land in truthful
       idle/bound states, never a crash or a stale binding reported healthy.
   - Verify: `tests/watcher/test_ingest_binding_follows_selection.py::test_novault_transitions_truthful`
+- [ ] Lost wake-up events and independent API/watcher restarts converge from durable phase/revision
+      truth without stale-old or premature-candidate effects.
+  - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_committed_revision_survives_event_loss_and_process_restart`
 - [ ] SET-7 registered in the invariant registry with enforcement `runtime_test`; `app/watcher/config.py`'s
       "document the split, do not converge" docstring is updated to record that #2476's verdict is
       superseded by this task (owner ruling 2026-07-07), not silently left to read as current.
@@ -106,7 +109,7 @@ the UI says one vault and ingest watches another — captures silently vanish fr
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/watcher/test_ingest_binding_follows_selection.py`
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_watcher_cross_process_rebind.py::test_prepare_commit_resume_is_failure_atomic tests/integration/test_watcher_cross_process_rebind.py::test_prepare_drains_and_final_scans_old_binding_writes tests/integration/test_watcher_cross_process_rebind.py::test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_binding tests/integration/test_watcher_cross_process_rebind.py::test_disabled_watcher_is_durable_no_lifecycle`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_watcher_cross_process_rebind.py::test_prepare_commit_resume_is_failure_atomic tests/integration/test_watcher_cross_process_rebind.py::test_prepare_drains_and_final_scans_old_binding_writes tests/integration/test_watcher_cross_process_rebind.py::test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_binding tests/integration/test_watcher_cross_process_rebind.py::test_committed_revision_survives_event_loss_and_process_restart tests/integration/test_watcher_cross_process_rebind.py::test_disabled_watcher_is_durable_no_lifecycle`
 - `pytest -q -m "not pg"` and `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration -k "watcher or settings"`
   (vault/watcher hot path)
 

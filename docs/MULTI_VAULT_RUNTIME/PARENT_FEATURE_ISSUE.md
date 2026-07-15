@@ -86,8 +86,11 @@ consumer migration and validation after those contracts are frozen.
 - [ ] No-vault and one-vault startup, picker, last-active restart migration, watcher idle/bind,
   requests, CLI/agents/MCP, receipts, and test-channel bootstrap preserve shipped behavior.
   - Verify: `tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`
-- [ ] Every child receipt and parent Verify target is proven on merged `origin/main`; owner docs and
-  transition debt match shipped reality with #2566/#3156/#3163 reconciled.
+- [ ] Every child receipt and parent Verify target is proven on merged `origin/main`; after MVR-08
+  merges, the isolated test-channel journey records a redacted receipt on #2143 for two vault
+  bindings, two sessions, one dimension read, one governed write, and truthful background health on
+  that exact merged SHA. Owner docs and transition debt match shipped reality with
+  #2566/#3156/#3163 reconciled.
   - Verify: runtime receipt on GitHub issue `#2143` + doc writeback at
   `docs/MULTI_VAULT_RUNTIME/PROMOTE_MULTI_VAULT_RUNTIME_TRUTH.md :: Acceptance Criteria`
 

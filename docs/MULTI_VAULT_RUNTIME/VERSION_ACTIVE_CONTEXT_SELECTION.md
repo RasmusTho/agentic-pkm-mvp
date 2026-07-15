@@ -220,10 +220,12 @@ retrieval, settings, or write provenance to leak between humans or vaults.
   and the typed principal field stays in the key for future
   authenticated-principal expansion.
   - Verify: `tests/retrieval/test_active_context_cache_isolation.py::test_cache_keys_include_full_context_identity`
-- [ ] A changed binding revision or authority verdict makes the MVR-03 selection resolver return a
-  new immutable generation plus cache-invalidation descriptor before the next snapshot is issued,
-  without bypassing the still-sealed HTTP carrier or relocation production gates. MVR-05B/06C own
-  the later production request and relocation call-site proof.
+- [ ] A changed binding revision or still-authorizing authority verdict makes the MVR-03 selection
+  resolver rotate to a new immutable generation plus cache-invalidation descriptor before the next
+  snapshot is issued. A deny verdict instead invalidates the selection and returns an explicit
+  authorization error with cache invalidation; no ActiveContextSet containing the denied binding is
+  reissued. Neither branch bypasses the still-sealed HTTP carrier or relocation production gates.
+  MVR-05B/06C own the later production request and relocation call-site proof.
   - Verify: `tests/instance/test_context_selection_store.py::test_binding_revision_rotates_resolver_generation`
 
 ## Out of Scope

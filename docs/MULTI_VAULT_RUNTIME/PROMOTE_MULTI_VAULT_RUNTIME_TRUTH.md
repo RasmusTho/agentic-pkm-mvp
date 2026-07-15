@@ -88,11 +88,6 @@ operators, or future agents still act on stale single-global-vault truth.
   - Verify: `tests/integration/test_multi_vault_capability_acceptance.py::test_merged_multi_vault_capability`
 - [ ] No-vault and one-vault compatibility targets pass on the same MVR-08 candidate head.
   - Verify: `tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`
-- [ ] The isolated test-channel journey records a redacted receipt for two vault bindings, two
-  sessions, one dimension read, one governed write, and truthful background health on the exact
-  merged `origin/main` SHA. This is a parent-closure receipt after the MVR-08 merge, not an
-  unsatisfiable pre-merge pinned-image gate.
-  - Verify: runtime receipt on GitHub issue `#2143`
 - [ ] Architecture/context/topology/settings/environment owner docs and transition debt match
   shipped behavior; every spec file remains indexed.
   - Verify: doc writeback at `docs/ARCHITECTURE.md :: Active context and vault bindings` + doc
