@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from app.episodes import closure, segmenter
-from app.episodes.stream_registry import STATUS_LIVE, StreamRegistry, StreamRegistryEntry
+from app.episodes.stream_registry import STATUS_LIVE, StreamRegistry, StreamRegistryEntry, load_registry
 from app.write_guard import WriteGuard
 
 
@@ -221,16 +221,22 @@ def test_new_stream_joins_via_registry_and_adapter_only(tmp_path: Path) -> None:
         write_guard=_guard(),
     )
     assert result["consumed"] == {entry.stream_id: 3}
-    assert result["no_adapter"] == []
 
 
-def test_unadapted_live_stream_reported_not_dropped(tmp_path: Path) -> None:
+def test_every_live_entry_resolves_to_an_adapter() -> None:
+    registry = load_registry()
+
+    for entry in registry.live_entries():
+        assert segmenter.resolve_stream_adapter(entry) is not None
+
+
+def test_live_without_adapter_fails_loud_at_tick(tmp_path: Path) -> None:
     entry = _entry("fixture.unadapted")
-    result = segmenter.run_segmentation_tick(
-        vault_root=tmp_path,
-        registry=StreamRegistry({entry.stream_id: entry}),
-        adapters={},
-        write_guard=_guard(),
-    )
-    assert result["consumed"] == {}
-    assert result["no_adapter"] == [entry.stream_id]
+
+    with pytest.raises(RuntimeError, match=r"fixture\.unadapted.*live.*no adapter"):
+        segmenter.run_segmentation_tick(
+            vault_root=tmp_path,
+            registry=StreamRegistry({entry.stream_id: entry}),
+            adapters={},
+            write_guard=_guard(),
+        )

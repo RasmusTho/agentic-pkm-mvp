@@ -33,7 +33,8 @@ from pathlib import Path
 import pytest
 
 from app.context_dimensions import ContextDimensions
-from app.episodes import segmenter, stream_registry as sr
+from app.episodes import closure, segmenter, stream_registry as sr
+from app.write_guard import WriteGuard
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 README_PATH = REPO_ROOT / "docs" / "EPISODE_RESOLUTION_ENGINE" / "README.md"
@@ -318,14 +319,56 @@ def test_registry_matches_readme_inventory() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_engine_consumes_only_registered_streams() -> None:
-    # the production call site, with no fixture registry, enumerates the
-    # real seeded live streams -- proving it is registry-driven, not a
-    # hardcoded list living inside the segmenter module
-    real_live = segmenter.run_segmenter_stub()
+def test_engine_consumes_only_registered_streams(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class EmptyAdapter:
+        def read(self, ctx: segmenter.TickContext) -> segmenter.ReadResult:
+            return segmenter.ReadResult(rows=[])
+
+        def normalize(
+            self, row: object, ctx: segmenter.TickContext
+        ) -> segmenter.SegmentationSignal | None:
+            raise AssertionError("an empty adapter must not normalize rows")
+
+        def advance_cursor(self, rows: list[object], ctx: segmenter.TickContext) -> None:
+            assert rows == []
+
     registry = sr.load_registry()
-    assert set(entry.stream_id for entry in real_live) == {e.stream_id for e in registry.live_entries()}
-    assert real_live, "expected at least one live stream enumerated at the entrypoint"
+    adapters = {
+        entry.stream_id: EmptyAdapter()
+        for entry in registry.live_entries()
+        if segmenter.resolve_stream_adapter(entry) is not None
+    }
+
+    monkeypatch.setattr(segmenter.engine_state, "all_state_with_prefix", lambda prefix: {})
+    monkeypatch.setattr(
+        segmenter,
+        "_emit_proposals_with_fusion_gate",
+        lambda *a, **k: {"proposed": [], "fused": [], "fusions_denied": 0},
+    )
+    monkeypatch.setattr(segmenter, "artifact_candidates_from_signals", lambda signals: [])
+    monkeypatch.setattr(segmenter, "episode_bounds_from_closed_segments", lambda *a, **k: [])
+    monkeypatch.setattr(segmenter, "read_candidate_episodes_for_scopes", lambda scopes: [])
+    monkeypatch.setattr(segmenter, "read_existing_bindings", lambda refs: {})
+    monkeypatch.setattr(segmenter, "read_existing_bindings_for_episodes", lambda episode_ids: {})
+    monkeypatch.setattr(
+        segmenter,
+        "commit_assignment_diff",
+        lambda *a, **k: {"pending": 0, "corrected": 0},
+    )
+    monkeypatch.setattr(
+        closure, "run_closure_tick", lambda **k: {"closed": [], "events_emitted": 0}
+    )
+
+    result = segmenter.run_segmentation_tick(
+        vault_root=tmp_path,
+        registry=registry,
+        adapters=adapters,
+        write_guard=WriteGuard(lambda: {"state": "healthy", "reason": None}),
+    )
+
+    assert set(result["consumed"]) == {entry.stream_id for entry in registry.live_entries()}
 
     # swap in a fixture registry: the entrypoint must reflect *that* registry's
     # live entries exactly, never a value baked into the segmenter module

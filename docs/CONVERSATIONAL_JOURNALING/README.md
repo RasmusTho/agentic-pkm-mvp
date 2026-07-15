@@ -32,7 +32,7 @@ The owner is dyslexic and Swedish/English mixed; every read/type surface works a
 | commitments touched/completed today | **live** (new read shape) | `app/domain/commitments.py` state set via `app/services/commitment_persistence.py::load_commitments`, filtered to today's persisted-artifact change window — a broader read than Daily Briefing's forward-looking `query_next_and_waiting_commitments`, because reflection needs what *changed*, not only what is outstanding | `commitment_id`, `target_ref`, before/after state |
 | decision receipts of the day | **live** | `app/receipts/decision_receipt_log.py::iter_decision_receipts`, filtered to today | receipt entry (`object_id`, `vault_uuid`, `key`, `created_at`) |
 | captures/observations of the day | **live** (new read shape) | new-today candidate/inbox artifacts written to the vault, e.g. `app/knowledge_acquisition/candidate_writeback.py::write_candidate_note` output filtered to today's creation timestamp | candidate/source note ref |
-| chat sessions (the reflection conversation itself) | **live** | existing chat-session surface (`app/chat/session_log.py`); see Seams / in-flight dependency note on #2805/#2807 | `session_id`, transcript ref |
+| chat sessions (the reflection conversation itself) | **live artifact surface; ERE adapter planned** | existing chat-session surface (`app/chat/session_log.py`); ERE does not consume it until the `chat.sessions` adapter lands | `session_id`, transcript ref |
 | episode debriefs | **future** (spec'd in `docs/EPISODE_DEBRIEF/`, same wave; delivery blocked on ERE core) | named as a future enrichment seam only — not a dependency | n/a |
 | Heimdal screen-stream time-spans | **future** (spec'd in `docs/HEIMDAL_SCREEN_STREAM/`, same wave) | named as a future enrichment seam only — not a dependency | n/a |
 
@@ -108,6 +108,6 @@ This capability composes with four sibling capabilities without depending on any
 - `docs/COMMITMENT_SURFACING/README.md` — commitment domain model, read-only/degrade-honestly precedent, and the strict-dependency-chain breakdown style this capability mirrors
 - `docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md` — the Create engine draft-lifecycle (staging → acceptance) this capability's governed-write tasks reuse
 - `docs/CANVAS_CHAT_SURFACE/` (`#2805`/`#2806`/`#2807`) — the chat-session durability seam JRNL-02 names but does not block on
-- `docs/EPISODE_RESOLUTION_ENGINE/STREAM_REGISTRY_AND_SIGNAL_CONTRACT.md` — registers `chat.sessions` as a live stream; reflection conversations become episode signal for free
+- `docs/EPISODE_RESOLUTION_ENGINE/STREAM_REGISTRY_AND_SIGNAL_CONTRACT.md` — declares `chat.sessions` planned until its adapter lands; reflection transcripts preserve that future seam
 - `docs/SETTINGS_SPINE/README.md`, `docs/SETTINGS_SPINE/SINGLE_DEFAULT_REGISTRY.md` — the tunables posture the evening-nudge trigger and conversation-length default provisionally follow
 - `docs/COGNITIVE_PROSTHESIS_CHARTER.md` §2 — the Reflect arc stage this capability serves

@@ -1217,15 +1217,25 @@ def run_segmentation_tick(
     consumed: dict[str, int] = {}
     skipped_no_observation_time: dict[str, int] = {}
     degraded: list[str] = []
-    no_adapter: list[str] = []
     signals: list[SegmentationSignal] = []
     pending_cursor_advances: list[tuple[StreamAdapter, list[Any]]] = []
 
-    for entry in enumerate_consumable_streams(registry=registry):
-        adapter = resolve_stream_adapter(entry, adapters=adapters)
-        if adapter is None:
-            no_adapter.append(entry.stream_id)
-            continue
+    live_entries = enumerate_consumable_streams(registry=registry)
+    resolved_adapters = [
+        (entry, resolve_stream_adapter(entry, adapters=adapters)) for entry in live_entries
+    ]
+    missing_adapter_ids = [
+        entry.stream_id for entry, adapter in resolved_adapters if adapter is None
+    ]
+    if missing_adapter_ids:
+        missing = ", ".join(repr(stream_id) for stream_id in missing_adapter_ids)
+        raise RuntimeError(
+            f"stream(s) {missing} are status=live but resolve to no adapter; "
+            "every live stream must have exactly one adapter"
+        )
+
+    for entry, adapter in resolved_adapters:
+        assert adapter is not None  # narrowed by the fail-loud correspondence guard above
         read_result = adapter.read(ctx)
         rows = list(read_result.rows)
         consumed[entry.stream_id] = len(rows)
@@ -1398,7 +1408,6 @@ def run_segmentation_tick(
         # degraded softly this tick -- never raised out of this function,
         # never stalls segmentation on the remaining streams.
         "degraded": degraded,
-        "no_adapter": no_adapter,
     }
 
 

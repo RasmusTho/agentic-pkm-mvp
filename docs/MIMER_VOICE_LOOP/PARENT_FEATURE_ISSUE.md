@@ -17,7 +17,7 @@ This parent is the **live validation hub**: children post validation receipts he
 
 ## Scope
 
-The capability outcome — not one PR: a client-agnostic voice-ask turn (STT → grounded ASK → SpeechPlan/audio), one shared transcription engine across the capture and voice paths (no fork), a companion-UI push-to-talk surface with zero typing, and in-session follow-up context whose transcript persists through the existing chat-session path (an ERE `chat.sessions` stream, so voice conversations become episode signal for free). Turn-based and read-only end to end. Mobile/Watch surfaces, wake word, and the durable cross-session hot cache are explicitly out of scope.
+The capability outcome — not one PR: a client-agnostic voice-ask turn (STT → grounded ASK → SpeechPlan/audio), one shared transcription engine across the capture and voice paths (no fork), a companion-UI push-to-talk surface with zero typing, and in-session follow-up context whose transcript persists through the existing chat-session path. ERE keeps `chat.sessions` declared as `planned` until its adapter lands, so episode consumption is a named future seam rather than a free current behavior. Turn-based and read-only end to end. Mobile/Watch surfaces, wake word, and the durable cross-session hot cache are explicitly out of scope.
 
 ## Source Anchors
 
@@ -28,7 +28,7 @@ The capability outcome — not one PR: a client-agnostic voice-ask turn (STT →
 ## SBS Impact
 
 - Primary subsystem: HIX (human interaction & intent — a new interface surface over shipped cognition)
-- Secondary subsystem(s): RCA/CAO (the ASK synthesis it wraps), EXE (local STT/TTS capabilities), HKA (append-only chat-session transcript — the only vault write), SIP (voice turns become `chat.sessions` episode signal)
+- Secondary subsystem(s): RCA/CAO (the ASK synthesis it wraps), EXE (local STT/TTS capabilities), HKA (append-only chat-session transcript — the only vault write), SIP (future `chat.sessions` adapter boundary; not consumed while planned)
 - Write class: read-only end-to-end **except** the append-only chat-session transcript (mechanical, append-only class per ADR-0055; not authority-bearing, not a human-note content write)
 - Authority impact: none — voice-ask never promotes or mutates human knowledge; capture intent is surfaced, not written
 - Persistence impact: no new persistence primitive — transcript uses the shipped `SessionLogWriter` (`vault/.chats/`); in-session context is in-memory (lost on restart, stated)
