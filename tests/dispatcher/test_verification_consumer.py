@@ -117,7 +117,7 @@ class DeliveredLauncher(Launcher):
 
 class TransitionTruth:
     def __init__(self, terminal_pr: dict[str, object]) -> None:
-        self.prs = iter([eligible_pr(), terminal_pr])
+        self.prs = iter([eligible_pr(), eligible_pr(), terminal_pr])
 
     def pull_request(self, repository, pr_number):
         return next(self.prs)
@@ -142,6 +142,44 @@ def test_live_governing_issue_drift_fails_closed_before_launch(tmp_path) -> None
 
     result = VerificationConsumer(
         ledger(tmp_path), Truth(pr, GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "superseded"
+    assert result.stop_reason == "governing_issue_mismatch"
+    assert launcher.calls == []
+
+
+def test_head_move_during_auth_fails_closed_before_launch(tmp_path) -> None:
+    truth = Truth(eligible_pr(), GREEN)
+    launcher = Launcher()
+
+    class MovingAuth(Auth):
+        def check(self):
+            truth.pr = eligible_pr(head={"ref": "branch", "sha": "b" * 40})
+            return super().check()
+
+    result = VerificationConsumer(
+        ledger(tmp_path), truth, MovingAuth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "superseded"
+    assert result.stop_reason == "stale_head"
+    assert launcher.calls == []
+
+
+def test_governing_issue_move_during_auth_fails_closed_before_launch(tmp_path) -> None:
+    truth = Truth(eligible_pr(), GREEN)
+    launcher = Launcher()
+
+    class MovingAuth(Auth):
+        def check(self):
+            truth.pr = eligible_pr(
+                body="Governing-Issue: #3626\n\nFixes #3626"
+            )
+            return super().check()
+
+    result = VerificationConsumer(
+        ledger(tmp_path), truth, MovingAuth(), launcher, "host"
     ).consume(request())
 
     assert result.status == "superseded"

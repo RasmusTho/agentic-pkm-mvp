@@ -81,6 +81,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   surviving descendants to a bounded group kill, reaps the direct child, rejects any later stdout,
   and records one bounded backoff receipt without accepting a terminal result from the
   authority-lost process.
+- Coordinator launch is fenced by a second authenticated PR/head/governing-Issue/check read after
+  both auth preflight and SQLite claim acquisition. Drift during either wait supersedes or backs off
+  the claimed run technically before the child process receives any context.
 - Pre-launch eligibility and post-launch delivery truth are separate gates. Launch still requires an
   open current-head PR; a `delivered` receipt is accepted only when a fresh GitHub read proves the
   exact repository, PR, head, merged state, merge timestamp, merge commit, and green checks.

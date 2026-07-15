@@ -912,7 +912,32 @@ class VerificationConsumer:
             current = self.ledger.get(run.run_id)
             assert current is not None
             return current
-        return self._launch(claimed, pr)
+        # Authentication and SQLite claim acquisition can both outlive the
+        # GitHub truth read above. Fence launch with a fresh authoritative
+        # read after both steps so a coordinator never starts from head-A or
+        # governing-Issue context after either has moved to B.
+        launch_pr = self.truth.pull_request(claimed.repository, claimed.pr_number)
+        launch_checks = self.truth.checks(claimed.repository, claimed.head_sha)
+        launch_rejection = live_truth_rejection(claimed, launch_pr, launch_checks)
+        if launch_rejection:
+            receipt = {"outcome": "launch_rejected", "reason": launch_rejection}
+            if launch_rejection in {"missing_checks", "checks_not_green"}:
+                return self.ledger.backoff(
+                    claimed.run_id,
+                    receipt,
+                    _retry_at(),
+                    holder=self.holder,
+                    lease_id=claimed.lease_id or "",
+                )
+            return self.ledger.terminal(
+                claimed.run_id,
+                "superseded",
+                receipt,
+                reason=launch_rejection,
+                holder=self.holder,
+                lease_id=claimed.lease_id or "",
+            )
+        return self._launch(claimed, launch_pr)
 
     def _launch(
         self, claimed: VerificationRun, pr: Mapping[str, object]
