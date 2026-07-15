@@ -3632,6 +3632,48 @@ def test_noncanonical_or_nonexistent_local_retry_cannot_mint_backoff(
     assert result.terminal_receipt["failure_class"] == "execution"
 
 
+def test_retry_timestamp_fails_closed_without_rule_bearing_local_timezone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(verification_consumer, "_local_now", lambda: None)
+    launcher, _ = _codex_json_usage_failure_launcher(
+        tmp_path,
+        message=f"You've hit your usage limit. Try again at {FUTURE_CODEX_RETRY}.",
+    )
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "codex_exec_failed"
+    assert result.terminal_receipt["failure_class"] == "execution"
+
+
+def test_unrepresentable_retry_timestamp_cannot_mint_technical_backoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    current = datetime(
+        2026, 7, 15, 12, 0, tzinfo=ZoneInfo("America/New_York")
+    )
+    monkeypatch.setattr(verification_consumer, "_local_now", lambda: current)
+    launcher, _ = _codex_json_usage_failure_launcher(
+        tmp_path,
+        message=(
+            "You've hit your usage limit. Try again at "
+            "Dec 31st, 9999 11:59 PM."
+        ),
+    )
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "codex_exec_failed"
+    assert result.terminal_receipt["failure_class"] == "execution"
+
+
 @pytest.mark.parametrize(
     ("message", "nested", "stderr"),
     [

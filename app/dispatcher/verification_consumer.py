@@ -1468,14 +1468,14 @@ def _is_rate_limit_exec_failure(detail: str) -> bool:
     return False
 
 
-def _local_now() -> datetime:
+def _local_now() -> datetime | None:
     """Return an aware local instant backed by the host's full timezone rules."""
 
     try:
         with Path("/etc/localtime").open("rb") as stream:
             local_zone = ZoneInfo.from_file(stream)
     except (OSError, ValueError):
-        return datetime.now().astimezone()
+        return None
     return datetime.now(local_zone)
 
 
@@ -1486,12 +1486,18 @@ def _is_future_local_wall_time(
 
     if current.tzinfo is None or wall_time.tzinfo is not None:
         return False
-    current_utc = current.astimezone(timezone.utc)
-    latest_utc = current_utc + max_delta
+    try:
+        current_utc = current.astimezone(timezone.utc)
+        latest_utc = current_utc + max_delta
+    except (OSError, OverflowError, ValueError):
+        return False
     for fold in (0, 1):
-        candidate = wall_time.replace(tzinfo=current.tzinfo, fold=fold)
-        candidate_utc = candidate.astimezone(timezone.utc)
-        round_trip = candidate_utc.astimezone(current.tzinfo)
+        try:
+            candidate = wall_time.replace(tzinfo=current.tzinfo, fold=fold)
+            candidate_utc = candidate.astimezone(timezone.utc)
+            round_trip = candidate_utc.astimezone(current.tzinfo)
+        except (OSError, OverflowError, ValueError):
+            continue
         if round_trip.replace(tzinfo=None) != wall_time:
             continue
         if current_utc <= candidate_utc <= latest_utc:
@@ -1505,7 +1511,10 @@ def _is_valid_codex_retry(retry: str) -> bool:
     if not retry.startswith("at "):
         return False
     timestamp = retry.removeprefix("at ")
-    current = _local_now().replace(second=0, microsecond=0)
+    current = _local_now()
+    if current is None:
+        return False
+    current = current.replace(second=0, microsecond=0)
     clock = re.fullmatch(
         r"(?P<hour>[1-9]|1[0-2]):(?P<minute>[0-9]{2}) (?P<period>AM|PM)",
         timestamp,
