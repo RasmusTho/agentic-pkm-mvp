@@ -66,6 +66,32 @@ class FailingSecondReadTruth(Truth):
         return super().pull_request(repository, pr_number)
 
 
+class FailingPostLaunchPrTruth(Truth):
+    def __init__(self) -> None:
+        super().__init__(eligible_pr(), GREEN)
+        self.pull_calls = 0
+
+    def pull_request(self, repository, pr_number):
+        self.pull_calls += 1
+        if self.pull_calls == 3:
+            raise RuntimeError("simulated post-launch GitHub PR outage")
+        return super().pull_request(repository, pr_number)
+
+
+class FailingPostLaunchCheckTruth(Truth):
+    def __init__(self) -> None:
+        super().__init__(eligible_pr(), GREEN)
+        self.check_calls = 0
+        self.fail_once = True
+
+    def checks(self, repository, head_sha):
+        self.check_calls += 1
+        if self.fail_once and self.check_calls == 3:
+            self.fail_once = False
+            raise RuntimeError("simulated post-launch GitHub check outage")
+        return super().checks(repository, head_sha)
+
+
 class Launcher:
     config = LaunchConfig("verification_closer", "gpt-5.6-terra", "high", "workspace-write", "instructions")
     def __init__(self): self.calls = []
@@ -223,6 +249,56 @@ def test_post_auth_live_truth_error_backs_off_claimed_run(tmp_path) -> None:
     }
     assert truth.pull_calls == 2
     assert launcher.calls == []
+
+
+def test_post_launch_live_truth_error_backs_off_running_run(tmp_path) -> None:
+    state = ledger(tmp_path)
+    truth = FailingPostLaunchPrTruth()
+    launcher = Launcher()
+
+    result = VerificationConsumer(state, truth, Auth(), launcher, "host").consume(
+        request()
+    )
+
+    assert result.status == "backoff"
+    assert result.claimed_by is None
+    assert result.lease_id is None
+    assert result.terminal_receipt == {
+        "outcome": "blocked",
+        "reason": "postlaunch_live_truth_unavailable",
+        "error_type": "RuntimeError",
+    }
+    assert [row["kind"] for row in state.attempts(result.run_id)] == ["verification"]
+    assert len(launcher.calls) == 1
+    with state.store._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM verification_exceptions WHERE run_id=?",
+            (result.run_id,),
+        ).fetchone()[0] == 0
+
+
+def test_post_launch_check_error_preserves_verification_anchor(tmp_path) -> None:
+    state = ledger(tmp_path)
+    truth = FailingPostLaunchCheckTruth()
+    launcher = Launcher()
+    consumer = VerificationConsumer(state, truth, Auth(), launcher, "host")
+
+    first = consumer.consume(request())
+    assert first.status == "backoff"
+    assert [row["kind"] for row in state.attempts(first.run_id)] == ["verification"]
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET retry_after='2000-01-01T00:00:00+00:00' "
+            "WHERE run_id=?",
+            (first.run_id,),
+        )
+        conn.commit()
+
+    final = consumer.consume(request())
+
+    assert final.status == "needs_human"
+    assert [row["kind"] for row in state.attempts(final.run_id)] == ["verification"]
+    assert [call[1] for call in launcher.calls] == [None, "thread-new"]
 
 
 def merged_pr(**updates: object) -> dict[str, object]:

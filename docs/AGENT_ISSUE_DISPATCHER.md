@@ -86,6 +86,8 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - Pre-launch eligibility and post-launch delivery truth are separate gates. Launch still requires an
   open current-head PR; a `delivered` receipt is accepted only when a fresh GitHub read proves the
   exact repository, PR, head, merged state, merge timestamp, merge commit, and green checks.
+  A source or contract-parse failure during that post-launch read enters exact-lease bounded
+  technical backoff while retaining the deterministic verification attempt for safe resume/replay.
 - Governing-Issue authority is live truth, not an artifact-only assertion. Every authority-bearing
   PR read must still contain exactly the request's explicit governing issue and identical bounded
   supporting-issue evidence; body-only missing, conflicting, or changed authority fails closed.

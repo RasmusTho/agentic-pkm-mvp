@@ -1166,23 +1166,36 @@ class VerificationConsumer:
         # Receipt acceptance is tied to a fresh authenticated GitHub read. A
         # repair may advance only to the exact current PR head; arbitrary or
         # stale receipt heads never reach the review ledger.
-        live_pr = self.truth.pull_request(claimed.repository, claimed.pr_number)
-        live_checks = self.truth.checks(claimed.repository, receipt_head)
-        rejection = (
-            delivered_live_truth_rejection(
-                claimed,
-                live_pr,
-                live_checks,
-                expected_head_sha=receipt_head,
+        try:
+            live_pr = self.truth.pull_request(claimed.repository, claimed.pr_number)
+            live_checks = self.truth.checks(claimed.repository, receipt_head)
+            rejection = (
+                delivered_live_truth_rejection(
+                    claimed,
+                    live_pr,
+                    live_checks,
+                    expected_head_sha=receipt_head,
+                )
+                if verdict == "delivered"
+                else live_truth_rejection(
+                    claimed,
+                    live_pr,
+                    live_checks,
+                    expected_head_sha=receipt_head,
+                )
             )
-            if verdict == "delivered"
-            else live_truth_rejection(
-                claimed,
-                live_pr,
-                live_checks,
-                expected_head_sha=receipt_head,
+        except Exception as exc:
+            return self.ledger.backoff(
+                claimed.run_id,
+                {
+                    "outcome": "blocked",
+                    "reason": "postlaunch_live_truth_unavailable",
+                    "error_type": type(exc).__name__,
+                },
+                _retry_at(),
+                holder=self.holder,
+                lease_id=lease_id,
             )
-        )
         transient = rejection in {"missing_checks", "checks_not_green"}
         if changed_head and (rejection is None or transient):
             live_pr_number = live_pr.get("number")
