@@ -3676,7 +3676,9 @@ def test_codex_json_usage_limit_backoff_replay_is_idempotent(tmp_path) -> None:
         assert conn.execute("SELECT COUNT(*) FROM verification_attempts").fetchone()[0] == 1
 
 
-def test_codex_json_usage_limit_event_is_not_durable(tmp_path) -> None:
+def test_codex_json_usage_limit_event_is_not_durable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     marker = CANONICAL_CODEX_USAGE_LIMIT
     state = ledger(tmp_path)
     launcher, _ = _codex_json_usage_failure_launcher(tmp_path, message=marker)
@@ -3684,6 +3686,7 @@ def test_codex_json_usage_limit_event_is_not_durable(tmp_path) -> None:
     result = VerificationConsumer(
         state, Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
     ).consume(request())
+    captured = capsys.readouterr()
     backup = tmp_path / "dispatcher-backup.sqlite3"
     with state.store._connect() as source, sqlite3.connect(backup) as destination:
         source.backup(destination)
@@ -3697,6 +3700,8 @@ def test_codex_json_usage_limit_event_is_not_durable(tmp_path) -> None:
         sort_keys=True,
     )
     assert marker not in durable
+    assert marker not in captured.out
+    assert marker not in captured.err
     assert marker.encode() not in state.store.db_path.read_bytes()
     assert marker.encode() not in backup.read_bytes()
 
