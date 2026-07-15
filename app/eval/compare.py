@@ -103,7 +103,7 @@ CONFUSION_ENTRY_KEYS = ("case_id", "expected_intent", "predicted_intent")
 
 # Keys every threshold-failure entry must carry (they are rendered); the
 # numeric ones are finiteness-checked because the renderer formats them.
-FAILURE_ENTRY_KEYS = ("scope", "metric", "value", "threshold")
+FAILURE_ENTRY_KEYS = ("scope", "metric", "value", "threshold", "kind")
 FAILURE_ENTRY_NUMERIC_KEYS = ("value", "threshold")
 PROVISIONAL_BOUNDARY_SCHEMA_VERSION = "provisional_memory_boundary.v1"
 PROVISIONAL_FAILURE_ENTRY_KEYS = ("case_id", "reason")
@@ -429,6 +429,31 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
                 )
         for key in FAILURE_ENTRY_NUMERIC_KEYS:
             _require_finite(entry[key], f"{failures_path}[{index}].{key}")
+        for key in ("scope", "metric"):
+            if not isinstance(entry[key], str) or not entry[key]:
+                raise ScorecardCompareError(
+                    f"malformed entry at {failures_path}[{index}]: invalid {key!r}"
+                )
+        kind = entry["kind"]
+        if kind not in {"threshold_floor", "categorical"}:
+            raise ScorecardCompareError(
+                f"malformed entry at {failures_path}[{index}]: invalid 'kind'"
+            )
+        if kind == "categorical":
+            if (
+                not entry["scope"].endswith(":hard_gate")
+                or entry["value"] != 1.0
+                or entry["threshold"] != 0.0
+            ):
+                raise ScorecardCompareError(
+                    f"categorical failure semantics are inconsistent at "
+                    f"{failures_path}[{index}]"
+                )
+        elif entry["value"] >= entry["threshold"]:
+            raise ScorecardCompareError(
+                f"threshold-floor failure does not violate its floor at "
+                f"{failures_path}[{index}]"
+            )
     if scorecard_regression != bool(failures):
         raise ScorecardCompareError(
             f"scorecard regression flag contradicts failures at {label}"

@@ -506,6 +506,33 @@ def test_cli_rejects_non_boolean_regression_flag(
     assert "non-boolean gate value at candidate.regression" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("kind", [None, "bogus", 1, "__missing__"])
+def test_cli_rejects_invalid_failure_kind(
+    kind: object,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    candidate = load_scorecard(CANDIDATE_PATH)
+    failure: dict[str, object] = {
+        "scope": "aggregate",
+        "metric": "precision_at_k",
+        "value": 0.1,
+        "threshold": 0.15,
+        "kind": kind,
+    }
+    if kind == "__missing__":
+        del failure["kind"]
+    candidate["regression"] = True
+    candidate["failures"] = [failure]
+    path = tmp_path / "candidate_bad_failure_kind.json"
+    path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    assert eval_run.main(
+        ["compare", "--baseline", str(BASELINE_PATH), "--candidate", str(path)]
+    ) == 2
+    assert "error:" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     "regression,failures",
     [
@@ -549,7 +576,13 @@ def test_verdict_regression_when_candidate_fails_own_floors() -> None:
     # build time) even though no relative delta exceeds the tolerance.
     candidate["regression"] = True
     candidate["failures"] = [
-        {"scope": "aggregate", "metric": "precision_at_k", "value": 0.1, "threshold": 0.15}
+        {
+            "scope": "aggregate",
+            "metric": "precision_at_k",
+            "value": 0.1,
+            "threshold": 0.15,
+            "kind": "threshold_floor",
+        }
     ]
     comparison = compare_scorecards(baseline, candidate)
     assert comparison["verdict"] == "regression"
