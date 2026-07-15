@@ -27,3 +27,11 @@ def test_workflow_does_not_create_docs_pr_issue_label_project_or_close() -> None
     assert "gh project" not in lowered
     assert "createcomment" not in lowered
     assert "issues.createcomment" not in lowered
+
+
+def test_workflow_uses_canonical_governing_issue_parser() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "resolve_issue_authority" in text
+    assert "authority.governing_issue" in text
+    assert "re.search" not in text

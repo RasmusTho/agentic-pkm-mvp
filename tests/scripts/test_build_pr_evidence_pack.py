@@ -12,7 +12,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _pr_body(owner_doc_line: str = "- [x] No owner-doc change implied.") -> str:
-    return f"""Closes #3214
+    return f"""Governing-Issue: #3214
+
+Closes #3214
 
 - [x] Governance lane
 
@@ -84,7 +86,8 @@ def test_pack_builder_emits_markdown_and_json(tmp_path: Path) -> None:
     subprocess.run(
         [
             sys.executable,
-            "scripts/build_pr_evidence_pack.py",
+            "-m",
+            "scripts.build_pr_evidence_pack",
             "--pr-json",
             str(pr_json),
             "--files-json",
@@ -175,6 +178,23 @@ def test_evidence_pack_fixture_matrix(tmp_path: Path) -> None:
     )
     assert authority_risk.human_exception_required is True
     assert authority_risk.risk_hints == ["codeowner_required:docker-compose.prod.yml:@RasmusTho"]
+
+
+def test_evidence_pack_uses_canonical_closing_keyword_variants() -> None:
+    pack = build_pack(
+        pr={
+            "number": 102,
+            "title": "variant",
+            "body": _pr_body().replace("Closes #3214", "Fixed: #3214"),
+            "head": {"sha": "abc123"},
+            "base": {"ref": "main"},
+        },
+        files_payload=[{"filename": "app/runtime.py"}],
+        checks_payload={"check_runs": []},
+        issue={"state": "open", "labels": [{"name": "agent:ready"}]},
+    )
+
+    assert pack.linked_issues == [3214]
 
 
 def test_missing_data_is_reported_as_unknown_not_guessed() -> None:

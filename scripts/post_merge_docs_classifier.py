@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Sequence
 
+from app.dispatcher.verification_contract import resolve_issue_authority
+
 
 CLASSIFICATIONS: tuple[str, ...] = (
     "no_change_likely",
@@ -70,10 +72,8 @@ def _nested_str(data: dict[str, object], *keys: str) -> str:
 
 
 def _linked_issues(body: str, issue: dict[str, object]) -> list[int]:
-    numbers = {
-        int(match.group(2))
-        for match in re.finditer(r"\b(Fixes|Closes|Resolves)\s+#(\d+)\b", body, flags=re.I)
-    }
+    authority = resolve_issue_authority(body)
+    numbers = set(authority.closing_issues) if authority is not None else set()
     issue_number = issue.get("number")
     if isinstance(issue_number, int):
         numbers.add(issue_number)

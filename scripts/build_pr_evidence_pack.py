@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Sequence
 
+from app.dispatcher.verification_contract import resolve_issue_authority
+
 
 @dataclass(frozen=True)
 class CheckSummary:
@@ -65,13 +67,8 @@ def _nested_str(data: dict[str, object], *keys: str) -> str:
 
 
 def _linked_issues(body: str) -> list[int]:
-    numbers = {
-        int(match.group(2))
-        for match in re.finditer(
-            r"\b(Fixes|Closes|Resolves)\s+#(\d+)\b", body, flags=re.I
-        )
-    }
-    return sorted(numbers)
+    authority = resolve_issue_authority(body)
+    return list(authority.closing_issues) if authority is not None else []
 
 
 def _labels(issue: dict[str, object]) -> list[str]:

@@ -34,7 +34,8 @@ Three tiers. When in doubt, classify up. A PR that mixes tiers takes the highest
 
 **Required machinery (the current contract, unchanged):**
 
-- `Fixes #<id>` linking the governing Issue
+- exactly one `Governing-Issue: #<id>` plus at least one closing-keyword line for fully delivered
+  work (the identities match in the normal single-Issue case)
 - `## BuilderOps Routing` section with concrete `Records/projections/receipts:` and `Reason:` lines
 - every Acceptance Criterion's `Verify:` target resolved before merge
 - standard receipts (delivery receipt, post-merge owner-doc check)

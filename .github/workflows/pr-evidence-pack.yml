@@ -40,12 +40,13 @@ jobs:
             > pr-evidence-pack/checks.json
           ISSUE_NUMBER="$(python3 - <<'PY'
           import json
-          import re
           from pathlib import Path
 
+          from app.dispatcher.verification_contract import resolve_issue_authority
+
           body = json.loads(Path("pr-evidence-pack/pr.json").read_text()).get("body") or ""
-          match = re.search(r"\b(?:Fixes|Closes|Resolves)\s+#(\d+)\b", body, re.I)
-          print(match.group(1) if match else "")
+          authority = resolve_issue_authority(body)
+          print(authority.governing_issue if authority else "")
           PY
           )"
           if [ -n "${ISSUE_NUMBER}" ]; then
@@ -57,7 +58,7 @@ jobs:
 
       - name: Build PR evidence pack
         run: |
-          python3 scripts/build_pr_evidence_pack.py \
+          python3 -m scripts.build_pr_evidence_pack \
             --pr-json pr-evidence-pack/pr.json \
             --files-json pr-evidence-pack/files.json \
             --checks-json pr-evidence-pack/checks.json \

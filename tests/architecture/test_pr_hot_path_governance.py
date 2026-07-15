@@ -104,6 +104,18 @@ def test_issue_to_code_skill_accepts_direct_repair_without_unconditional_issue_t
         assert fragment in text, fragment
 
 
+def test_issue_to_code_requires_canonical_issue_authority_at_publication() -> None:
+    text = _read(".codex/skills/issue-to-code/SKILL.md")
+
+    for fragment in (
+        "exactly one `Governing-Issue: #<issue>` line",
+        "closing-keyword line for fully delivered work",
+        "approved multi-Issue PR",
+        "PR_HOT_PATH.md :: Multi-Issue PR Scope",
+    ):
+        assert fragment in " ".join(text.split())
+
+
 def test_issue_pr_governance_accepts_direct_repair_block_without_lane_checkbox() -> None:
     text = _read(".github/workflows/issue-pr-governance.yml")
 

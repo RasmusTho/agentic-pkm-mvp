@@ -22,7 +22,9 @@ def _pr(body: str, *, title: str = "Test PR") -> dict[str, object]:
 
 
 def _body(owner_doc_line: str, extra: str = "") -> str:
-    return f"""Closes #3217
+    return f"""Governing-Issue: #3217
+
+Closes #3217
 
 ## Owner-Doc Writeback
 - [ ] No owner-doc change implied.
@@ -51,7 +53,8 @@ def test_classifier_emits_markdown_and_json(tmp_path: Path) -> None:
     subprocess.run(
         [
             sys.executable,
-            "scripts/post_merge_docs_classifier.py",
+            "-m",
+            "scripts.post_merge_docs_classifier",
             "--pr-json",
             str(pr_json),
             "--files-json",
@@ -115,6 +118,20 @@ def test_unknown_data_is_marked_unknown_not_guessed() -> None:
     assert "PR payload unavailable" in result.unknowns_missing_evidence
     assert "changed files unavailable" in result.unknowns_missing_evidence
     assert "insufficient evidence" in " ".join(result.evidence)
+
+
+def test_classifier_uses_canonical_closing_keyword_variants() -> None:
+    result = classify(
+        pr=_pr(
+            _body("- [x] No owner-doc change implied.").replace(
+                "Closes #3217", "Resolve: #3217"
+            )
+        ),
+        files_payload=["tests/governance/test_policy.py"],
+        issue={"number": 3217},
+    )
+
+    assert result.linked_issues == [3217]
 
 
 def test_human_exception_requires_authority_or_contradiction_evidence() -> None:

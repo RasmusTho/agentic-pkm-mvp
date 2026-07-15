@@ -35,12 +35,13 @@ jobs:
             > post-merge-docs-classifier/files.json
           ISSUE_NUMBER="$(python3 - <<'PY'
           import json
-          import re
           from pathlib import Path
 
+          from app.dispatcher.verification_contract import resolve_issue_authority
+
           body = json.loads(Path("post-merge-docs-classifier/pr.json").read_text()).get("body") or ""
-          match = re.search(r"\b(?:Fixes|Closes|Resolves)\s+#(\d+)\b", body, re.I)
-          print(match.group(1) if match else "")
+          authority = resolve_issue_authority(body)
+          print(authority.governing_issue if authority else "")
           PY
           )"
           if [ -n "${ISSUE_NUMBER}" ]; then
@@ -52,7 +53,7 @@ jobs:
 
       - name: Build post-merge docs classifier artifacts
         run: |
-          python3 scripts/post_merge_docs_classifier.py \
+          python3 -m scripts.post_merge_docs_classifier \
             --pr-json post-merge-docs-classifier/pr.json \
             --files-json post-merge-docs-classifier/files.json \
             --issue-json post-merge-docs-classifier/issue.json \
