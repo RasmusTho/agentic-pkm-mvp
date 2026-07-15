@@ -91,7 +91,8 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   and machine-local paths may enter attempts, pending replay receipts, terminal rows, Human Exception
   packets, or status output. GitHub evidence links retain only bounded repository, issue, pull-request,
   or Actions-run routes without query or fragment; an unsupported route or a secret-shaped path
-  component becomes a redacted GitHub URL before persistence. The projection retains
+  component becomes a redacted GitHub URL before persistence. Percent-encoded paths, URL userinfo,
+  explicit ports, and non-GitHub origins are never preserved. The projection retains
   the structured identities and actionable option relationships required for deterministic replay
   and governed owner decisions, then passes the canonical schema and semantic validation again.
   Check eligibility selects the latest GitHub rerun per

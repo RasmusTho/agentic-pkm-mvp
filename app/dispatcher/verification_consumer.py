@@ -774,17 +774,22 @@ _SAFE_REASONING_EFFORTS = frozenset(
     {"minimal", "low", "medium", "high", "xhigh", "max"}
 )
 _SAFE_EVENT_OUTCOMES = frozenset({"blocking", "clean", "fixed", "repaired"})
-_SAFE_GITHUB_URL = re.compile(
-    r"https://(?:github\.com|api\.github\.com)(?:/[^\s,;)\]}\"'<>]*)?",
-    re.IGNORECASE,
-)
+_HTTPS_URL_CANDIDATE = re.compile(r"https://[^\s,;)\]}\"'<>]+", re.IGNORECASE)
 
 
 def _safe_github_url_projection(value: str) -> str:
     """Retain only bounded, recognized GitHub evidence routes without secrets."""
 
     parsed = urlsplit(value)
-    host = parsed.netloc.lower()
+    host = parsed.hostname.lower() if parsed.hostname is not None else ""
+    try:
+        port = parsed.port
+    except ValueError:
+        return "[REDACTED_URL]"
+    if host not in {"github.com", "api.github.com"}:
+        return "[REDACTED_URL]"
+    if parsed.username is not None or parsed.password is not None or port is not None:
+        return f"https://{host}/REDACTED"
     if "%" in parsed.path:
         return f"https://{host}/REDACTED"
     segments = [segment for segment in parsed.path.split("/") if segment]
@@ -875,7 +880,7 @@ def _sanitize_receipt_text(value: object, *, limit: int = _MAX_RECEIPT_TEXT) -> 
         safe_urls.append(url)
         return placeholder
 
-    text = _SAFE_GITHUB_URL.sub(preserve_url, text)
+    text = _HTTPS_URL_CANDIDATE.sub(preserve_url, text)
     text = _CREDENTIAL_ASSIGNMENT.sub(
         lambda match: f"{match.group('key')}=[REDACTED]", text
     )
