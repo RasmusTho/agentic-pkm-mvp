@@ -191,12 +191,24 @@ def test_all_mutations_advance_state_revision_atomically(store: CkmStore) -> Non
         ),
     )
 
+    finding_citations = [{"artifact": artifact.to_dict(), "artifact_id": artifact.id}]
+    _assert_one_mutation(
+        store,
+        lambda: store.upsert_finding(
+            kind="gap",
+            capability_id=capability.id,
+            dimension="requirement_coverage",
+            statement="No direct requirement evidence.",
+            citations=finding_citations,
+        ),
+    )
+
     finding = {
         "kind": "gap",
         "capability_id": capability.id,
         "dimension": "test_completeness",
         "statement": "No focused measurement contract test.",
-        "citations": [{"artifact": artifact.to_dict(), "artifact_id": artifact.id}],
+        "citations": finding_citations,
     }
     _assert_one_mutation(store, lambda: store.replace_findings([finding]))
     unchanged_revision = _revision(store)
