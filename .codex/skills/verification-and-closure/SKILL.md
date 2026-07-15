@@ -266,9 +266,17 @@ Rules:
 
 When all prerequisites are met:
 
-1. confirm the PR head SHA has not changed since verification started
-2. merge the PR
+1. confirm the PR head SHA has not changed since verification started; re-read the live PR title and
+   reject any canonical closing-keyword attempt in it, even if an earlier `pr-contract` run was green
+2. merge the PR through the exact-head REST merge endpoint with the verified SHA and an explicit,
+   fixed non-closing commit title and message (for example `PR #<n> verified delivery` and
+   `Exact-head delivery; closure authority remains in the authenticated PR body.`). Never let GitHub
+   synthesize the merge commit from the PR title/body, and never accept caller-supplied free-form
+   `commit_title` or `commit_message`; the PR body's authenticated `closing_issues` remains the only
+   closure-authority surface
 3. verify merge succeeded
+   and re-fetch the generated merge commit to prove its title/message contains no canonical or
+   malformed closing-keyword attempt
 4. if issue-backed, re-read the merged PR body and require its governing and closing identities to
    match the authenticated context exactly; require the live supporting set to contain every
    authenticated supporting identity, accept any bounded monotonic additions as the cumulative

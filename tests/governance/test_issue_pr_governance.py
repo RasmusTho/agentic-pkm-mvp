@@ -276,6 +276,14 @@ def test_pr_contract_rejects_commit_message_closure_authority() -> None:
     assert "commit-message closing references are forbidden" in workflow
 
 
+def test_pr_contract_rejects_title_closure_authority() -> None:
+    workflow = _read_workflow()
+
+    assert "const titleClosureAttempt = classifyIssueAuthority(" in workflow
+    assert 'pullRequest.title || ""' in workflow
+    assert "Closing keywords are forbidden in the PR title" in workflow
+
+
 def test_pr_contract_rejects_repository_qualified_closure_authority() -> None:
     workflow = _read_workflow()
 

@@ -251,9 +251,56 @@ def _verification_authority_migration(
         ):
             return "[]", True
         raise ValueError("verification supporting authority is malformed")
+    if isinstance(request, Mapping) and recognized_ambiguous_v1_closure_request(
+        row, request
+    ):
+        return "[]", True
     return (
         json.dumps(supporting, separators=(",", ":"), ensure_ascii=False),
         False,
+    )
+
+
+def recognized_ambiguous_v1_closure_request(
+    row: Mapping[str, Any] | sqlite3.Row,
+    request: Mapping[str, object],
+) -> bool:
+    """Recognize a canonical v1 request whose multi-issue closure is unknowable."""
+    supporting = request.get("supporting_issues")
+    if (
+        request.get("contract_version") != "verification_dispatch_request.v1"
+        or not isinstance(supporting, list)
+        or not supporting
+    ):
+        return False
+    try:
+        from app.dispatcher.verification_dispatch import (
+            _canonical_request_projection,
+            _validate_request,
+        )
+
+        projected = _canonical_request_projection(request)
+        _validate_request(projected)
+    except (KeyError, TypeError, ValueError):
+        return False
+    idempotency_key = request.get("idempotency_key")
+    if not isinstance(idempotency_key, str):
+        return False
+    return bool(
+        row["request_json"]
+        == json.dumps(
+            projected,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        and row["run_id"] == f"vrun-{idempotency_key[:16]}"
+        and row["idempotency_key"] == idempotency_key
+        and row["contract_version"] == request["contract_version"]
+        and row["repository"] == request["repository"]
+        and row["pr_number"] == request["pr_number"]
+        and row["head_sha"] == request["current_head_sha"]
+        and row["stage"] == request["stage"]
     )
 
 
@@ -265,7 +312,9 @@ def _verification_closing_authority_migration(row: sqlite3.Row) -> str:
         raise ValueError("verification request audit is malformed") from exc
     if not isinstance(request, Mapping):
         raise ValueError("verification closing authority is malformed")
-    if recognized_pre_trust_verification_request(row, request):
+    if recognized_pre_trust_verification_request(
+        row, request
+    ) or recognized_ambiguous_v1_closure_request(row, request):
         return "[]"
     linked_issue = request.get("linked_issue")
     supporting = request.get("supporting_issues")
@@ -553,7 +602,8 @@ class SqliteStore:
                         conn.execute(
                             """
                             UPDATE verification_runs
-                            SET supporting_authority_json=?, status=?,
+                            SET supporting_authority_json=?,
+                                closing_authority_json='[]', status=?,
                                 current_head_sha=head_sha,
                                 verified_head_sha=NULL, claimed_by=NULL,
                                 lease_id=NULL, lease_expires_at=NULL,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+import hashlib
 import json
 import sqlite3
 from threading import Event, Lock, Thread
@@ -946,6 +947,76 @@ def test_schema_v4_backfills_closing_authority_without_resetting_chain(
     assert migrated is not None
     assert migrated.closing_authority == (3603,)
     assert migrated.status == "running"
+    assert migrated.repair_budget_policy == "v2"
+    assert migrated_state.attempts(original.run_id) == before_attempts
+
+
+@pytest.mark.parametrize("existing_schema", ["4", "5"])
+def test_schema_reconciliation_quarantines_ambiguous_v1_multi_issue_closure(
+    tmp_path, existing_schema: str
+) -> None:
+    payload = request()
+    payload["contract_version"] = "verification_dispatch_request.v1"
+    payload.pop("closing_issues")
+    payload["supporting_issues"] = [3626]
+    identity = {
+        "contract_version": payload["contract_version"],
+        "head_sha": payload["current_head_sha"],
+        "pr_number": payload["pr_number"],
+        "repository": payload["repository"],
+        "stage": payload["stage"],
+    }
+    payload["idempotency_key"] = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+    state = ledger(tmp_path)
+    original = state.ingest(payload)
+    claim = state.claim(original.run_id, "host")
+    assert claim.lease_id is not None
+    state.start(
+        original.run_id,
+        "host",
+        claim.lease_id,
+        "01900000-0000-7000-8000-000000000002",
+        {"head_sha": original.head_sha},
+    )
+    state.record_attempt(
+        original.run_id,
+        "standard_repair",
+        "01900000-0000-7000-8000-000000000002",
+        "gpt-5.6-terra",
+        "high",
+        {"head_sha": original.head_sha},
+        "fixed",
+        {
+            "finding_id": "F-v1-ambiguous",
+            "failure_domain": "review_code_correctness",
+            "mechanism_id": "legacy-closing-authority",
+        },
+        holder="host",
+        lease_id=claim.lease_id,
+    )
+    before_attempts = state.attempts(original.run_id)
+    if existing_schema == "4":
+        with sqlite3.connect(state.store.db_path) as conn:
+            conn.execute(
+                "ALTER TABLE verification_runs DROP COLUMN closing_authority_json"
+            )
+            conn.execute("UPDATE dispatcher_meta SET value='4' WHERE key='schema_version'")
+            conn.commit()
+
+    migrated_state = ledger(tmp_path)
+    migrated = migrated_state.get(original.run_id)
+
+    assert migrated is not None
+    assert migrated.status == "legacy_untrusted"
+    assert migrated.authority_state == "legacy_untrusted"
+    assert migrated.supporting_authority == ()
+    assert migrated.closing_authority == ()
+    assert migrated.claimed_by is None
+    assert migrated.lease_id is None
+    assert migrated.coordinator_session_id is None
     assert migrated.repair_budget_policy == "v2"
     assert migrated_state.attempts(original.run_id) == before_attempts
 

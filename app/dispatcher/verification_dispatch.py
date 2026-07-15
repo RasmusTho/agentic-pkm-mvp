@@ -15,6 +15,7 @@ from typing import Any, Callable, Mapping, Sequence, TypeGuard
 from app.dispatcher.schema import LEGACY_UNTRUSTED_VERIFICATION_STATUS
 from app.dispatcher.store import (
     SqliteStore,
+    recognized_ambiguous_v1_closure_request,
     recognized_pre_trust_verification_request,
 )
 
@@ -510,7 +511,10 @@ def _validated_legacy_row_request(row: sqlite3.Row) -> dict[str, object]:
     if (
         row["status"] != LEGACY_UNTRUSTED_VERIFICATION_STATUS
         or not isinstance(loaded, Mapping)
-        or not recognized_pre_trust_verification_request(row, loaded)
+        or not (
+            recognized_pre_trust_verification_request(row, loaded)
+            or recognized_ambiguous_v1_closure_request(row, loaded)
+        )
         or _load(row["supporting_authority_json"]) != []
         or _load(row["closing_authority_json"]) != []
         or row["current_head_sha"] != row["head_sha"]

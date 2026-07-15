@@ -77,6 +77,22 @@ def test_verification_execution_checklist_uses_exact_closing_issue_set() -> None
         assert fragment in text
 
 
+def test_verification_merge_uses_fixed_non_closing_commit_identity() -> None:
+    text = _read(".codex/skills/verification-and-closure/SKILL.md")
+    normalized_text = " ".join(text.split())
+
+    for fragment in (
+        "reject any canonical closing-keyword attempt",
+        "exact-head REST merge endpoint with the verified SHA",
+        "explicit, fixed non-closing commit title and message",
+        "Never let GitHub synthesize the merge commit from the PR title/body",
+        "never accept caller-supplied free-form",
+        "prove its title/message contains no canonical or",
+        "malformed closing-keyword attempt",
+    ):
+        assert fragment in normalized_text
+
+
 def test_issue_to_code_skill_accepts_direct_repair_without_unconditional_issue_traceability() -> None:
     text = _read(".codex/skills/issue-to-code/SKILL.md")
 

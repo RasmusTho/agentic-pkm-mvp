@@ -190,6 +190,13 @@ jobs:
             // authority-classifier:end
             const issueAuthority = classifyIssueAuthority(body);
             const hasIssueAuthority = issueAuthority.hasIssueAuthority;
+            const titleClosureAttempt = classifyIssueAuthority(
+              pullRequest.title || ""
+            ).issueLinkMentions.length > 0;
+            if (titleClosureAttempt) {
+              core.setFailed("Closing keywords are forbidden in the PR title because GitHub may copy the title into a generated merge commit outside the authenticated PR-body closing set.");
+              return;
+            }
             const commits = await github.paginate(github.rest.pulls.listCommits, {
               owner: context.repo.owner,
               repo: context.repo.repo,
