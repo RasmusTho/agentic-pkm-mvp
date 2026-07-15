@@ -32,6 +32,22 @@ _REQUEST_FIELDS = (
     "generated_at",
     "idempotency_key",
 )
+_LEGACY_REQUEST_FIELDS = (
+    "contract_version",
+    "stage",
+    "repository",
+    "pr_number",
+    "linked_issue",
+    "base_ref",
+    "head_ref",
+    "current_head_sha",
+    "source_workflow",
+    "evidence_pack",
+    "live_truth",
+    "generated_at",
+    "idempotency_key",
+)
+_TRANSITIONAL_REQUEST_FIELDS = (*_LEGACY_REQUEST_FIELDS, "artifact_provenance")
 _NESTED_REQUEST_FIELDS = {
     "source_workflow": ("name", "run_id", "run_attempt", "head_sha"),
     "artifact_provenance": (
@@ -171,7 +187,9 @@ def _required_positive_int(request: Mapping[str, object], field: str) -> int:
     return value
 
 
-def _validate_request(request: Mapping[str, object]) -> None:
+def _validate_request(
+    request: Mapping[str, object], *, require_artifact_provenance: bool = True
+) -> None:
     if "base_ref" in request or "head_ref" in request:
         raise ValueError("verification request contains untrusted branch refs")
     required_strings = {
@@ -210,13 +228,14 @@ def _validate_request(request: Mapping[str, object]) -> None:
     source_head_sha = _required_string(source, "head_sha")
     if source_name != "CI" or source_head_sha != head_sha:
         raise ValueError("malformed verification source identity")
-    artifact_provenance = _required_mapping(request, "artifact_provenance")
-    _required_positive_int(artifact_provenance, "workflow_run_id")
-    _required_positive_int(artifact_provenance, "repository_id")
-    artifact_name = _required_string(artifact_provenance, "artifact_name")
-    expected_artifact_name = f"verification-dispatch-{pr_number}-{head_sha}"
-    if artifact_name != expected_artifact_name:
-        raise ValueError("malformed verification artifact provenance")
+    if require_artifact_provenance:
+        artifact_provenance = _required_mapping(request, "artifact_provenance")
+        _required_positive_int(artifact_provenance, "workflow_run_id")
+        _required_positive_int(artifact_provenance, "repository_id")
+        artifact_name = _required_string(artifact_provenance, "artifact_name")
+        expected_artifact_name = f"verification-dispatch-{pr_number}-{head_sha}"
+        if artifact_name != expected_artifact_name:
+            raise ValueError("malformed verification artifact provenance")
     evidence_pack = _required_mapping(request, "evidence_pack")
     evidence_contract = _required_string(evidence_pack, "contract")
     evidence_workflow = _required_string(evidence_pack, "workflow_name")
@@ -261,6 +280,43 @@ def _validated_stored_request(value: str | None) -> dict[str, object]:
     loaded = _load(value)
     if not isinstance(loaded, Mapping):
         raise ValueError("verification canonical run authority is malformed")
+    if "supporting_issues" not in loaded:
+        has_legacy_refs = "base_ref" in loaded or "head_ref" in loaded
+        has_artifact_provenance = "artifact_provenance" in loaded
+        if has_artifact_provenance and not has_legacy_refs:
+            transitional = dict(loaded)
+            transitional["supporting_issues"] = []
+            projected = _canonical_request_projection(transitional)
+            _validate_request(projected)
+            return projected
+        legacy_fields = (
+            _TRANSITIONAL_REQUEST_FIELDS
+            if has_artifact_provenance
+            else _LEGACY_REQUEST_FIELDS
+        )
+        projected = _closed_projection(
+            loaded, fields=legacy_fields, location="legacy request"
+        )
+        for field in ("base_ref", "head_ref"):
+            _required_string(projected, field)
+        for field, nested_fields in _NESTED_REQUEST_FIELDS.items():
+            if field == "artifact_provenance":
+                continue
+            nested = projected.get(field)
+            if not isinstance(nested, Mapping):
+                raise ValueError(
+                    f"malformed verification {field.replace('_', '-')} identity"
+                )
+            projected[field] = _closed_projection(
+                nested, fields=nested_fields, location=field
+            )
+        projected.pop("base_ref")
+        projected.pop("head_ref")
+        projected["supporting_issues"] = []
+        _validate_request(
+            projected, require_artifact_provenance=has_artifact_provenance
+        )
+        return projected
     projected = _canonical_request_projection(loaded)
     _validate_request(projected)
     return projected

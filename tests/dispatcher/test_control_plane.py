@@ -176,6 +176,66 @@ def test_pre_repair_v3_backup_restore_self_migrates_without_data_loss(
     assert control_plane.health(restored)["ok"] is True
 
 
+def test_pre_supporting_issue_v3_host_startup_migrates_without_data_loss(
+    tmp_path: Path,
+) -> None:
+    paths, original = _write_pre_repair_v3_state(tmp_path)
+    with sqlite3.connect(paths.db_path) as conn:
+        stored = json.loads(
+            conn.execute(
+                "SELECT request_json FROM verification_runs WHERE run_id=?",
+                (original.run_id,),
+            ).fetchone()[0]
+        )
+        stored.pop("supporting_issues")
+        stored.pop("artifact_provenance")
+        stored["base_ref"] = "main"
+        stored["head_ref"] = "codex/legacy-verification"
+        legacy_audit = json.dumps(stored, sort_keys=True)
+        conn.execute(
+            "UPDATE verification_runs SET request_json=? WHERE run_id=?",
+            (legacy_audit, original.run_id),
+        )
+        run_before = conn.execute(
+            "SELECT run_id, head_sha, status FROM verification_runs"
+        ).fetchone()
+        attempt_before = conn.execute(
+            "SELECT attempt_id, run_id, receipt_json FROM verification_attempts"
+        ).fetchone()
+        exception_before = conn.execute(
+            "SELECT exception_id, run_id, packet_json FROM verification_exceptions"
+        ).fetchone()
+        conn.commit()
+
+    state = VerificationDispatchLedger(SqliteStore(paths.db_path))
+    migrated = state.get(original.run_id)
+
+    assert migrated is not None
+    assert migrated.request["supporting_issues"] == []
+    assert migrated.supporting_authority == ()
+    with sqlite3.connect(paths.db_path) as conn:
+        run_after = conn.execute(
+            "SELECT run_id, head_sha, status FROM verification_runs"
+        ).fetchone()
+        attempt_after = conn.execute(
+            "SELECT attempt_id, run_id, receipt_json FROM verification_attempts"
+        ).fetchone()
+        exception_after = conn.execute(
+            "SELECT exception_id, run_id, packet_json FROM verification_exceptions"
+        ).fetchone()
+        request_after, supporting_after = conn.execute(
+            "SELECT request_json, supporting_authority_json FROM verification_runs "
+            "WHERE run_id=?",
+            (original.run_id,),
+        ).fetchone()
+    assert run_after == run_before
+    assert attempt_after == attempt_before
+    assert exception_after == exception_before
+    assert request_after == legacy_audit
+    assert supporting_after == "[]"
+    assert control_plane.health(paths)["ok"] is True
+
+
 @pytest.mark.parametrize(
     "corruption_sql, expected_error",
     [

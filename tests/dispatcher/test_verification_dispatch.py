@@ -689,6 +689,133 @@ def test_existing_schema_v3_backfills_current_head_without_losing_request_audit(
     assert json.loads(supporting_authority) == original.request["supporting_issues"]
 
 
+def test_existing_schema_v3_backfills_missing_legacy_supporting_authority_as_empty(
+    tmp_path,
+) -> None:
+    db = tmp_path / "dispatcher.sqlite3"
+    state = ledger(tmp_path)
+    original = state.ingest(request())
+    with sqlite3.connect(db) as conn:
+        stored = json.loads(
+            conn.execute(
+                "SELECT request_json FROM verification_runs WHERE run_id=?",
+                (original.run_id,),
+            ).fetchone()[0]
+        )
+        stored.pop("supporting_issues")
+        stored.pop("artifact_provenance")
+        stored["base_ref"] = "main"
+        stored["head_ref"] = "codex/legacy-verification"
+        legacy_audit = json.dumps(stored, sort_keys=True)
+        conn.execute(
+            "UPDATE verification_runs SET request_json=? WHERE run_id=?",
+            (legacy_audit, original.run_id),
+        )
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN verified_head_sha")
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN current_head_sha")
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN supporting_authority_json")
+        conn.commit()
+
+    migrated = ledger(tmp_path).get(original.run_id)
+
+    assert migrated is not None
+    assert migrated.request["supporting_issues"] == []
+    assert migrated.supporting_authority == ()
+    with sqlite3.connect(db) as conn:
+        row = conn.execute(
+            "SELECT request_json, supporting_authority_json FROM verification_runs "
+            "WHERE run_id=?",
+            (original.run_id,),
+        ).fetchone()
+    assert row == (legacy_audit, "[]")
+
+
+def test_existing_schema_v3_backfills_transitional_provenance_with_legacy_refs(
+    tmp_path,
+) -> None:
+    db = tmp_path / "dispatcher.sqlite3"
+    state = ledger(tmp_path)
+    original = state.ingest(request())
+    with sqlite3.connect(db) as conn:
+        stored = json.loads(
+            conn.execute(
+                "SELECT request_json FROM verification_runs WHERE run_id=?",
+                (original.run_id,),
+            ).fetchone()[0]
+        )
+        stored.pop("supporting_issues")
+        stored["base_ref"] = "main"
+        stored["head_ref"] = "codex/transitional-verification"
+        transitional_audit = json.dumps(stored, sort_keys=True)
+        conn.execute(
+            "UPDATE verification_runs SET request_json=? WHERE run_id=?",
+            (transitional_audit, original.run_id),
+        )
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN verified_head_sha")
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN current_head_sha")
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN supporting_authority_json")
+        conn.commit()
+
+    migrated = ledger(tmp_path).get(original.run_id)
+
+    assert migrated is not None
+    assert migrated.request["supporting_issues"] == []
+    assert migrated.request["artifact_provenance"] == original.request[
+        "artifact_provenance"
+    ]
+    assert migrated.supporting_authority == ()
+    with sqlite3.connect(db) as conn:
+        row = conn.execute(
+            "SELECT request_json, supporting_authority_json FROM verification_runs "
+            "WHERE run_id=?",
+            (original.run_id,),
+        ).fetchone()
+    assert row == (transitional_audit, "[]")
+
+
+def test_existing_schema_v3_rejects_present_malformed_supporting_authority_atomically(
+    tmp_path,
+) -> None:
+    db = tmp_path / "dispatcher.sqlite3"
+    state = ledger(tmp_path)
+    original = state.ingest(request())
+    with sqlite3.connect(db) as conn:
+        stored = json.loads(
+            conn.execute(
+                "SELECT request_json FROM verification_runs WHERE run_id=?",
+                (original.run_id,),
+            ).fetchone()[0]
+        )
+        stored["supporting_issues"] = "not-a-list"
+        malformed_audit = json.dumps(stored, sort_keys=True)
+        conn.execute(
+            "UPDATE verification_runs SET request_json=? WHERE run_id=?",
+            (malformed_audit, original.run_id),
+        )
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN verified_head_sha")
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN current_head_sha")
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN supporting_authority_json")
+        conn.commit()
+
+    with pytest.raises(ValueError, match="supporting authority is malformed"):
+        SqliteStore(db).initialize()
+
+    with sqlite3.connect(db) as conn:
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(verification_runs)")
+        }
+        request_audit = conn.execute(
+            "SELECT request_json FROM verification_runs WHERE run_id=?",
+            (original.run_id,),
+        ).fetchone()[0]
+    assert {
+        "current_head_sha",
+        "verified_head_sha",
+        "supporting_authority_json",
+    }.isdisjoint(columns)
+    assert request_audit == malformed_audit
+
+
 def test_ingest_claim_and_terminal_lifecycle_is_idempotent(tmp_path) -> None:
     state = ledger(tmp_path)
     first = state.ingest(request())

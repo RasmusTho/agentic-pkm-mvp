@@ -392,6 +392,12 @@ uses this sequence: `disabled -> preflight -> observe-only -> pilot ->
 limited-enable -> enabled`. Preflight and pilot are non-mutating: they validate
 the installed commit, schema/profile compatibility, authentication posture, and
 receipt parsing before a request is claimed or any GitHub mutation is possible.
+A schema compatibility migration preserves historical request-audit bytes and
+may project an absent, pre-contract `supporting_issues` field to the empty
+supporting-authority baseline in memory and in the additive authority column;
+a present malformed field or any request shape outside the closed historical
+allowlists remains fail-closed. Current artifact ingress never uses this legacy
+adapter and still requires authenticated artifact provenance.
 A failed preflight or pilot returns to `disabled` as `blocked_technical`; it
 creates an evidence-backed compatibility recovery path and does not create a
 Human Exception merely because a retry budget is exhausted. The only route to

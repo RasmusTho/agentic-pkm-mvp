@@ -55,7 +55,9 @@ def _supporting_authority_from_request_json(value: str) -> str:
         request = json.loads(value)
     except (TypeError, json.JSONDecodeError) as exc:
         raise ValueError("verification request audit is malformed") from exc
-    supporting = request.get("supporting_issues") if isinstance(request, dict) else None
+    if not isinstance(request, dict):
+        raise ValueError("verification request audit is malformed")
+    supporting = request.get("supporting_issues", [])
     if (
         not isinstance(supporting, list)
         or any(
