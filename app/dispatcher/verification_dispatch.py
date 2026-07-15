@@ -18,7 +18,8 @@ from app.dispatcher.store import (
     recognized_pre_trust_verification_request,
 )
 
-CONTRACT_VERSION = "verification_dispatch_request.v1"
+LEGACY_CONTRACT_VERSION = "verification_dispatch_request.v1"
+CONTRACT_VERSION = "verification_dispatch_request.v2"
 TERMINAL_STATES = frozenset({"completed", "failed", "needs_human", "superseded"})
 ACTIVE_STATES = frozenset({"claimed", "running"})
 REPAIR_BUDGET_POLICY_LEGACY = "v1"
@@ -33,7 +34,7 @@ REPAIR_FAILURE_DOMAINS = frozenset(
     }
 )
 _STABLE_MECHANISM_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}\Z")
-_REQUEST_FIELDS = (
+_REQUEST_FIELDS_V1 = (
     "contract_version",
     "stage",
     "repository",
@@ -47,6 +48,11 @@ _REQUEST_FIELDS = (
     "live_truth",
     "generated_at",
     "idempotency_key",
+)
+_REQUEST_FIELDS = (
+    *_REQUEST_FIELDS_V1[:5],
+    "closing_issues",
+    *_REQUEST_FIELDS_V1[5:],
 )
 _NESTED_REQUEST_FIELDS = {
     "source_workflow": ("name", "run_id", "run_attempt", "head_sha"),
@@ -87,6 +93,7 @@ class _LiveVerificationObservation:
     draft: bool
     merged_at: str | None
     linked_issue: int | None
+    closing_issues: tuple[int, ...]
     supporting_issues: tuple[int, ...]
 
 
@@ -136,6 +143,7 @@ def _live_observed_verification_request(
     observed_merged_at: object,
     observed_draft: object,
     observed_linked_issue: object,
+    observed_closing_issues: object,
     observed_supporting_issues: object,
     canonical_chain_token: object,
 ) -> _LiveObservedVerificationRequest:
@@ -169,12 +177,21 @@ def _live_observed_verification_request(
         )
         or (
             observed_linked_issue is None
-            and observed_supporting_issues is not None
+            and (
+                observed_closing_issues is not None
+                or observed_supporting_issues is not None
+            )
         )
         or (
             observed_linked_issue is not None
             and (
                 not isinstance(observed_supporting_issues, tuple)
+                or not isinstance(observed_closing_issues, tuple)
+                or not observed_closing_issues
+                or any(
+                    not _positive_int(issue) for issue in observed_closing_issues
+                )
+                or len(set(observed_closing_issues)) != len(observed_closing_issues)
                 or any(
                     not _positive_int(issue)
                     for issue in observed_supporting_issues
@@ -202,6 +219,15 @@ def _live_observed_verification_request(
         )
         if _positive_int(issue)
     )
+    closing_issues = tuple(
+        issue
+        for issue in (
+            observed_closing_issues
+            if isinstance(observed_closing_issues, tuple)
+            else ()
+        )
+        if _positive_int(issue)
+    )
     observation = _LiveVerificationObservation(
         repository=observed_repository,
         pr_number=observed_pr_number,
@@ -214,6 +240,7 @@ def _live_observed_verification_request(
             if _positive_int(observed_linked_issue)
             else None
         ),
+        closing_issues=tuple(sorted(closing_issues)),
         supporting_issues=tuple(sorted(supporting_issues)),
     )
     assert isinstance(canonical_chain_token, _CanonicalVerificationChainToken)
@@ -290,7 +317,12 @@ def _closed_projection(
 
 def _canonical_request_projection(request: Mapping[str, object]) -> dict[str, object]:
     """Return the only request shape permitted to cross into durable state."""
-    projected = _closed_projection(request, fields=_REQUEST_FIELDS, location="request")
+    fields = (
+        _REQUEST_FIELDS_V1
+        if request.get("contract_version") == LEGACY_CONTRACT_VERSION
+        else _REQUEST_FIELDS
+    )
+    projected = _closed_projection(request, fields=fields, location="request")
     for field, nested_fields in _NESTED_REQUEST_FIELDS.items():
         value = projected.get(field)
         if not isinstance(value, Mapping):
@@ -301,6 +333,9 @@ def _canonical_request_projection(request: Mapping[str, object]) -> dict[str, ob
     supporting_issues = projected.get("supporting_issues")
     if isinstance(supporting_issues, list):
         projected["supporting_issues"] = list(supporting_issues)
+    closing_issues = projected.get("closing_issues")
+    if isinstance(closing_issues, list):
+        projected["closing_issues"] = list(closing_issues)
     return projected
 
 
@@ -339,7 +374,10 @@ def _validate_request(request: Mapping[str, object]) -> None:
         "generated_at",
     }
     strings = {field: _required_string(request, field) for field in required_strings}
-    if request["contract_version"] != CONTRACT_VERSION or request["stage"] != "verification":
+    if request["contract_version"] not in {
+        LEGACY_CONTRACT_VERSION,
+        CONTRACT_VERSION,
+    } or request["stage"] != "verification":
         raise ValueError("unsupported verification dispatch request")
     pr_number = _required_positive_int(request, "pr_number")
     linked_issue = _required_positive_int(request, "linked_issue")
@@ -351,6 +389,17 @@ def _validate_request(request: Mapping[str, object]) -> None:
         or linked_issue in supporting_issues
     ):
         raise ValueError("verification request supporting issues are malformed")
+    closing_issues = request.get("closing_issues")
+    if request["contract_version"] == LEGACY_CONTRACT_VERSION:
+        closing_issues = [linked_issue]
+    if (
+        not isinstance(closing_issues, list)
+        or not closing_issues
+        or any(not _positive_int(value) for value in closing_issues)
+        or len(set(closing_issues)) != len(closing_issues)
+        or not set(closing_issues).issubset({linked_issue, *supporting_issues})
+    ):
+        raise ValueError("verification request closing issues are malformed")
     repository = strings["repository"]
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or any(
         component in {".", ".."} for component in repository.split("/")
@@ -402,7 +451,7 @@ def _validate_request(request: Mapping[str, object]) -> None:
     ):
         raise ValueError("verification live truth does not match request identity")
     identity = {
-        "contract_version": CONTRACT_VERSION,
+        "contract_version": strings["contract_version"],
         "head_sha": head_sha,
         "pr_number": pr_number,
         "repository": repository,
@@ -452,6 +501,7 @@ def _validated_row_request(row: sqlite3.Row) -> dict[str, object]:
     ):
         raise ValueError("verification canonical run authority is malformed")
     _validated_supporting_authority(row, request)
+    _validated_closing_authority(row, request)
     return request
 
 
@@ -462,6 +512,7 @@ def _validated_legacy_row_request(row: sqlite3.Row) -> dict[str, object]:
         or not isinstance(loaded, Mapping)
         or not recognized_pre_trust_verification_request(row, loaded)
         or _load(row["supporting_authority_json"]) != []
+        or _load(row["closing_authority_json"]) != []
         or row["current_head_sha"] != row["head_sha"]
         or row["verified_head_sha"] is not None
         or any(
@@ -495,6 +546,33 @@ def _validated_supporting_authority(
         or not set(requested).issubset(loaded)
     ):
         raise ValueError("verification canonical supporting authority is malformed")
+    return loaded
+
+
+def _request_closing_authority(request: Mapping[str, object]) -> list[int]:
+    linked_issue = request.get("linked_issue")
+    if request.get("contract_version") == LEGACY_CONTRACT_VERSION:
+        if not _positive_int(linked_issue):
+            raise ValueError("verification closing authority is malformed")
+        return [linked_issue]
+    closing = request.get("closing_issues")
+    if not isinstance(closing, list):
+        raise ValueError("verification closing authority is malformed")
+    return list(closing)
+
+
+def _validated_closing_authority(
+    row: sqlite3.Row, request: Mapping[str, object]
+) -> list[int]:
+    loaded = _load(row["closing_authority_json"])
+    requested = _request_closing_authority(request)
+    if (
+        not isinstance(loaded, list)
+        or any(not _positive_int(issue) for issue in loaded)
+        or len(set(loaded)) != len(loaded)
+        or loaded != requested
+    ):
+        raise ValueError("verification canonical closing authority is malformed")
     return loaded
 
 
@@ -576,6 +654,8 @@ def _live_takeover_authority_matches(
     """Require exact live head and cumulative contract truth for head takeover."""
 
     incoming_supporting = request.get("supporting_issues")
+    incoming_closing = _request_closing_authority(request)
+    candidate_closing = _request_closing_authority(candidate_request)
     return bool(
         observation is not None
         and observation.state == "open"
@@ -590,6 +670,8 @@ def _live_takeover_authority_matches(
         and set(candidate_supporting).issubset(incoming_supporting)
         and set(incoming_supporting).issubset(observation.supporting_issues)
         and set(candidate_supporting).issubset(observation.supporting_issues)
+        and set(incoming_closing) == set(candidate_closing)
+        and set(incoming_closing) == set(observation.closing_issues)
     )
 
 
@@ -602,6 +684,8 @@ def _terminal_current_head_replay_matches(
     """Recognize the authenticated current-head identity of a terminal chain."""
 
     incoming_supporting = request.get("supporting_issues")
+    incoming_closing = _request_closing_authority(request)
+    candidate_closing = _request_closing_authority(candidate_request)
     return bool(
         observation is not None
         and observation.repository == request.get("repository")
@@ -612,6 +696,8 @@ def _terminal_current_head_replay_matches(
         and isinstance(incoming_supporting, list)
         and set(incoming_supporting) == set(candidate_supporting)
         and set(observation.supporting_issues) == set(candidate_supporting)
+        and set(incoming_closing) == set(candidate_closing)
+        and set(incoming_closing) == set(observation.closing_issues)
     )
 
 
@@ -648,6 +734,7 @@ class VerificationRun:
     coordinator_session_id: str | None
     request: dict[str, object]
     supporting_authority: tuple[int, ...]
+    closing_authority: tuple[int, ...]
     repair_budget_policy: str
     context_pack: dict[str, object] | None
     terminal_receipt: dict[str, object] | None
@@ -669,6 +756,9 @@ def _run(row: sqlite3.Row) -> VerificationRun:
     )
     supporting_authority = (
         [] if is_legacy else _validated_supporting_authority(row, request)
+    )
+    closing_authority = (
+        [] if is_legacy else _validated_closing_authority(row, request)
     )
     repair_budget_policy = row["repair_budget_policy"]
     if repair_budget_policy not in {
@@ -695,6 +785,7 @@ def _run(row: sqlite3.Row) -> VerificationRun:
         coordinator_session_id=row["coordinator_session_id"],
         request=request,
         supporting_authority=tuple(supporting_authority),
+        closing_authority=tuple(closing_authority),
         repair_budget_policy=repair_budget_policy,
         context_pack=_load(row["context_pack_json"]),
         terminal_receipt=_load(row["terminal_receipt_json"]),
@@ -903,6 +994,24 @@ class VerificationDispatchLedger:
                 raise ValueError(
                     "legacy verification audit requires an authenticated artifact"
                 )
+            if inert_audit_exists is not None and authenticated_artifact:
+                inert_same_head = conn.execute(
+                    """
+                    SELECT 1 FROM verification_runs
+                    WHERE repository=? AND pr_number=? AND stage=? AND status=?
+                      AND head_sha=?
+                    LIMIT 1
+                    """,
+                    (
+                        request["repository"],
+                        request["pr_number"],
+                        request["stage"],
+                        LEGACY_UNTRUSTED_VERIFICATION_STATUS,
+                        request["current_head_sha"],
+                    ),
+                ).fetchone()
+                if inert_same_head is not None:
+                    raise ValueError("legacy verification audit is not executable")
             active_before_exact = list(
                 conn.execute(
                     """
@@ -1186,9 +1295,10 @@ class VerificationDispatchLedger:
                 INSERT OR IGNORE INTO verification_runs (
                     run_id, idempotency_key, contract_version, repository,
                     pr_number, head_sha, current_head_sha, stage, request_json,
-                    supporting_authority_json, repair_budget_policy, status,
+                    supporting_authority_json, closing_authority_json,
+                    repair_budget_policy, status,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
                 """,
                 (
                     run_id,
@@ -1201,6 +1311,7 @@ class VerificationDispatchLedger:
                     request["stage"],
                     _json(request),
                     _json(request["supporting_issues"]),
+                    _json(_request_closing_authority(request)),
                     REPAIR_BUDGET_POLICY_MECHANISM,
                     now,
                     now,

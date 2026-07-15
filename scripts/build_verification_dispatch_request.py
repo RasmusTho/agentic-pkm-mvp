@@ -9,10 +9,13 @@ import json
 from pathlib import Path
 from typing import Sequence, TypeGuard
 
-from app.dispatcher.verification_contract import resolve_issue_contract
+from app.dispatcher.verification_contract import (
+    resolve_issue_authority,
+    resolve_issue_contract,
+)
 
 
-CONTRACT_VERSION = "verification_dispatch_request.v1"
+CONTRACT_VERSION = "verification_dispatch_request.v2"
 STAGE = "verification"
 SOURCE_WORKFLOW = "CI"
 EVIDENCE_WORKFLOW = "PR Evidence Pack"
@@ -136,13 +139,12 @@ def build_request(
     ):
         return None
 
-    issue_contract = resolve_issue_contract(pr.get("body"))
-    if issue_contract is None:
+    issue_authority = resolve_issue_authority(pr.get("body"))
+    if issue_authority is None:
         return None
-    governing_issue, supporting_issues = issue_contract
     issue_data = issue or {}
     linked_issue = issue_data.get("number")
-    if linked_issue != governing_issue:
+    if linked_issue != issue_authority.governing_issue:
         return None
 
     return {
@@ -151,7 +153,8 @@ def build_request(
         "repository": repository,
         "pr_number": pr_number,
         "linked_issue": linked_issue,
-        "supporting_issues": list(supporting_issues),
+        "closing_issues": list(issue_authority.closing_issues),
+        "supporting_issues": list(issue_authority.supporting_issues),
         "current_head_sha": current_head_sha,
         "source_workflow": {
             "name": SOURCE_WORKFLOW,

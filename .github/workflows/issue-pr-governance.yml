@@ -149,9 +149,12 @@ jobs:
               const hasUnsupportedLineSeparator = /\r(?!\n)|[\u2028\u2029]/.test(candidateBody);
               const canonicalBody = candidateBody.replace(/\r\n/g, "\n");
               const governingKeyword = "[Gg][Oo][Vv][Ee][Rr][Nn][Ii][Nn][Gg]-[Ii][Ss][Ss][Uu][Ee]";
-              const closingKeyword = "(?:[Ff][Ii][Xx][Ee][Ss]|[Cc][Ll][Oo][Ss][Ee][Ss]|[Rr][Ee][Ss][Oo][Ll][Vv][Ee][Ss])";
+              const closingKeyword = "(?:[Ff][Ii][Xx](?:[Ee][Ss]|[Ee][Dd])?|[Cc][Ll][Oo][Ss][Ee](?:[Ss]|[Dd])?|[Rr][Ee][Ss][Oo][Ll][Vv][Ee](?:[Ss]|[Dd])?)";
               const issueTokenPrefix = "(?:^|[^0-9A-Za-z_])";
               const issueTokenTerminator = "(?=$|[ \\t\\r\\n.,;:)\\]}])";
+              const asciiClosingSeparator = "(?:[ \\t]+|[ \\t]*:[ \\t]*)";
+              const explicitWhitespace = "[ \\t\\n\\v\\f\\r\\x85\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]";
+              const closingAttemptSeparator = `(?:${explicitWhitespace}+|${explicitWhitespace}*:${explicitWhitespace}*)`;
               const governingIssueLines = canonicalBody.match(
                 new RegExp(`^[ \\t]*${governingKeyword}[ \\t]*:.*$`, "gm")
               ) || [];
@@ -159,10 +162,10 @@ jobs:
                 new RegExp(`^[ \\t]*${governingKeyword}:[ \\t]*#([1-9][0-9]*)[ \\t]*$`, "gm")
               ) || [];
               const issueLinkMentions = canonicalBody.match(
-                new RegExp(`${issueTokenPrefix}${closingKeyword}[ \\t]+#\\S+`, "gm")
+                new RegExp(`${issueTokenPrefix}${closingKeyword}${closingAttemptSeparator}#`, "gm")
               ) || [];
               const exactIssueLinkMatches = canonicalBody.match(
-                new RegExp(`${issueTokenPrefix}${closingKeyword}[ \\t]+#[1-9][0-9]*${issueTokenTerminator}`, "gm")
+                new RegExp(`${issueTokenPrefix}${closingKeyword}${asciiClosingSeparator}#[1-9][0-9]*${issueTokenTerminator}`, "gm")
               ) || [];
               const hasIssueLink = exactIssueLinkMatches.length > 0;
               const hasIssueAuthority = governingIssueLines.length > 0 || issueLinkMentions.length > 0;
@@ -186,6 +189,22 @@ jobs:
             // authority-classifier:end
             const issueAuthority = classifyIssueAuthority(body);
             const hasIssueAuthority = issueAuthority.hasIssueAuthority;
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+            const commitClosureAttempt = commits.some((item) => {
+              const message = item && item.commit && item.commit.message
+                ? item.commit.message
+                : "";
+              return classifyIssueAuthority(message).issueLinkMentions.length > 0;
+            });
+            if (commitClosureAttempt) {
+              core.setFailed("Closing keywords belong only in the authenticated PR-body authority contract; commit-message closing references are forbidden because GitHub can apply them outside the persisted closing set.");
+              return;
+            }
             const hasConcreteBuilderOpsValue = (pattern) => {
               const match = builderOpsRoutingSection.match(pattern);
               if (!match) {

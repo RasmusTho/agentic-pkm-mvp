@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 LEGACY_UNTRUSTED_VERIFICATION_STATUS = "legacy_untrusted"
 
@@ -60,6 +60,9 @@ VERIFICATION_V4_ADDITIVE_COLUMNS = {
     "verification_attempts": frozenset(
         {"finding_id", "failure_domain", "mechanism_id"}
     ),
+}
+VERIFICATION_V5_ADDITIVE_COLUMNS = {
+    "verification_runs": frozenset({"closing_authority_json"}),
 }
 def has_unique_key(
     conn: sqlite3.Connection, table: str, required_key: tuple[str, ...]
@@ -150,6 +153,33 @@ def verification_v4_schema_error(
             )
     return None
 
+
+def verification_v5_schema_error(
+    conn: sqlite3.Connection,
+    *,
+    allow_additive_migration: bool = False,
+) -> str | None:
+    """Validate v5 exact closing-authority persistence."""
+    inherited = verification_v4_schema_error(
+        conn, allow_additive_migration=allow_additive_migration
+    )
+    if inherited is not None:
+        return inherited
+    for table, required in VERIFICATION_V5_ADDITIVE_COLUMNS.items():
+        columns = {
+            str(row[1])
+            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        missing_columns = required - columns
+        if allow_additive_migration:
+            missing_columns = frozenset()
+        if missing_columns:
+            return (
+                f"missing dispatcher columns in {table}: "
+                f"{', '.join(sorted(missing_columns))}"
+            )
+    return None
+
 DDL_STATEMENTS: tuple[str, ...] = (
     """
     CREATE TABLE IF NOT EXISTS dispatcher_tasks (
@@ -214,6 +244,7 @@ DDL_STATEMENTS: tuple[str, ...] = (
         stage TEXT NOT NULL,
         request_json TEXT NOT NULL,
         supporting_authority_json TEXT NOT NULL DEFAULT '[]',
+        closing_authority_json TEXT NOT NULL DEFAULT '[]',
         repair_budget_policy TEXT NOT NULL DEFAULT 'v2',
         status TEXT NOT NULL,
         claimed_by TEXT,

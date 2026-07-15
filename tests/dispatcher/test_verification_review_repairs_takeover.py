@@ -370,7 +370,9 @@ def _live_observed_artifact(
     authenticated = source.pending_requests(REPO)[0]
     canonical_chain_token = state.canonical_chain_token(authenticated)
     supporting = payload.get("supporting_issues")
+    closing = payload.get("closing_issues")
     assert isinstance(supporting, list)
+    assert isinstance(closing, list)
     return _live_observed_verification_request(
         authenticated,
         observed_repository=payload["repository"],
@@ -380,6 +382,7 @@ def _live_observed_artifact(
         observed_merged_at=None,
         observed_draft=False,
         observed_linked_issue=payload["linked_issue"],
+        observed_closing_issues=tuple(closing),
         observed_supporting_issues=(
             observed_supporting_issues
             if observed_supporting_issues is not None
@@ -894,6 +897,7 @@ def test_backoff_head_rebind_rejects_untrusted_or_premature_transition(
             observed_merged_at=None,
             observed_draft=False,
             observed_linked_issue=payload["linked_issue"],
+            observed_closing_issues=tuple(payload["closing_issues"]),
             observed_supporting_issues=(),
             canonical_chain_token=token,
         )
@@ -924,6 +928,7 @@ def test_expired_backoff_rebind_rejects_authority_drift(
 
     wrong_governor = request(REPAIRED_HEAD)
     wrong_governor["linked_issue"] = 999999
+    wrong_governor["closing_issues"] = [999999]
     with pytest.raises(ValueError, match="governing issue mismatch"):
         state.ingest(_live_observed_artifact(state, wrong_governor))
 
@@ -1122,8 +1127,8 @@ def test_takeover_updates_cumulative_authority_projection(tmp_path: Path) -> Non
     repaired = request(REPAIRED_HEAD)
     repaired["supporting_issues"] = [3626, 3783]
     reopened = state.ingest(_live_observed_artifact(state, repaired))
-    complete_body = "Governing-Issue: #3603\n\nFixes #3626\nFixes #3783"
-    missing_extension = "Governing-Issue: #3603\n\nFixes #3626"
+    complete_body = "Governing-Issue: #3603\n\nFixes #3603\nRefs #3626\nRefs #3783"
+    missing_extension = "Governing-Issue: #3603\n\nFixes #3603\nRefs #3626"
 
     assert reopened.run_id == run_id
     assert reopened.request["supporting_issues"] == [3626]
@@ -1183,11 +1188,11 @@ def test_terminal_stale_head_reopen_enforces_authenticated_cumulative_authority(
     )
     assert _governing_contract_matches(
         retained,
-        "Governing-Issue: #3603\nFixes #3626\nFixes #3783",
+        "Governing-Issue: #3603\nFixes #3603\nRefs #3626\nRefs #3783",
     )
     assert not _governing_contract_matches(
         retained,
-        "Governing-Issue: #3603\nFixes #3626",
+        "Governing-Issue: #3603\nFixes #3603\nRefs #3626",
     )
 
     extended = request(THIRD_REPAIRED_HEAD)
@@ -1270,7 +1275,9 @@ def test_expired_head_reconciliation_rejects_supporting_issue_removal_or_replace
 @pytest.mark.parametrize(
     "mutate",
     [
-        lambda payload: payload.update(linked_issue=999999),
+        lambda payload: payload.update(
+            linked_issue=999999, closing_issues=[999999]
+        ),
         lambda payload: payload.update(repository="other/repository"),
     ],
 )
@@ -1306,9 +1313,9 @@ def test_expired_head_reconciliation_rejects_ambiguous_terminal_authority(
             """
             INSERT INTO verification_runs (
                 run_id, idempotency_key, contract_version, repository,
-                pr_number, head_sha, current_head_sha, stage, request_json,
-                status, stop_reason, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'failed', 'synthetic_terminal', ?, ?)
+                    pr_number, head_sha, current_head_sha, stage, request_json,
+                    closing_authority_json, status, stop_reason, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'failed', 'synthetic_terminal', ?, ?)
             """,
             (
                 f"vrun-{str(payload['idempotency_key'])[:16]}",
@@ -1319,7 +1326,8 @@ def test_expired_head_reconciliation_rejects_ambiguous_terminal_authority(
                 REPAIRED_HEAD,
                 REPAIRED_HEAD,
                 payload["stage"],
-                json.dumps(payload),
+                    json.dumps(payload),
+                    json.dumps(payload["closing_issues"]),
                 "2000-01-01T00:00:00+00:00",
                 "2000-01-01T00:00:00+00:00",
             ),
@@ -1562,7 +1570,7 @@ def test_live_supporting_authority_drift_rejects_takeover_before_mutation(
     authenticated = source.pending_requests(REPO)[0]
     live_pr = eligible_pr(
         head={"ref": "branch", "sha": REPAIRED_HEAD},
-        body="Governing-Issue: #3603\n\nFixes #3626",
+        body="Governing-Issue: #3603\n\nFixes #3603\nRefs #3626",
     )
     before = _durable_verification_snapshot(state, run_id)
     launcher = Launcher()

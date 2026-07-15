@@ -210,6 +210,8 @@ def test_issue_free_lanes_do_not_require_governing_identity(body: str) -> None:
         ("Governing-Issue: #123\nFixes #123", True),
         ("Governing-Issue: #123\r\nFixes #123\r\n", True),
         ("Governing-Issue: #3603\nRefs #3603\nFixes #3626", True),
+        ("Governing-Issue: #3603\nFixed #3626\nCloses: #3698", True),
+        ("Governing-Issue: #3603\nfix #3626\nresolved: #3698", True),
         ("Governing-Issue: #123", False),
         ("Governing-Issue: #123\nRefs #123", False),
         ("Governing-Issue: #123\nGoverning-Issue : #456\nFixes #123", False),
@@ -221,6 +223,11 @@ def test_issue_free_lanes_do_not_require_governing_identity(body: str) -> None:
         ("Governing-Issue: #123\rFixes #123", False),
         ("Governing-Issue: #123\u2028Fixes #123", False),
         ("Governing-Issue: #123\u2029Fixes #123", False),
+        ("Governing-Issue: #123\nFixes #123\nCloses #", False),
+        ("Governing-Issue: #123\nFixes #123\nCloses # 456", False),
+        ("Governing-Issue: #123\nFixes #123\nCloses #\u00a0", False),
+        ("Governing-Issue: #123\nFixes #123\nCloses #\u0085", False),
+        ("Governing-Issue: #123\nFixes #123\nCloses #\ufeff", False),
     ],
 )
 def test_javascript_and_python_authority_grammar_are_identical(
@@ -240,6 +247,14 @@ def test_issue_backed_code_pr_requires_builderops_routing_even_with_tier1_checkb
     )
 
     assert not _builderops_routing_satisfied(body)
+
+
+def test_pr_contract_rejects_commit_message_closure_authority() -> None:
+    workflow = _read_workflow()
+
+    assert "github.rest.pulls.listCommits" in workflow
+    assert "commitClosureAttempt" in workflow
+    assert "commit-message closing references are forbidden" in workflow
 
 
 def test_mixed_tier_pr_uses_highest_required_tier() -> None:

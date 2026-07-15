@@ -50,7 +50,6 @@ from app.dispatcher.verification_agent_loop import (
 )
 from app.dispatcher.verification_contract import (
     resolve_issue_authority,
-    resolve_issue_contract,
 )
 
 
@@ -2223,6 +2222,7 @@ def _trusted_evidence_urls(run: VerificationRun) -> frozenset[str]:
 
     issue_numbers = [positive_int(run.request.get("linked_issue"))]
     issue_numbers.extend(positive_int(value) for value in run.supporting_authority)
+    issue_numbers.extend(positive_int(value) for value in run.closing_authority)
     for issue_number in issue_numbers:
         if issue_number is not None:
             urls.add(f"{web_base}/issues/{issue_number}")
@@ -2249,6 +2249,7 @@ def _governing_contract_matches(run: VerificationRun, pr_body: object) -> bool:
     return bool(
         issue_authority is not None
         and issue_authority.governing_issue == run.request.get("linked_issue")
+        and set(run.closing_authority) == set(issue_authority.closing_issues)
         and set(run.supporting_authority).issubset(
             issue_authority.supporting_issues
         )
@@ -2372,6 +2373,7 @@ def context_pack(
     if (
         issue_authority is None
         or issue_authority.governing_issue != linked_issue
+        or set(issue_authority.closing_issues) != set(run.closing_authority)
         or not set(run.supporting_authority).issubset(
             issue_authority.supporting_issues
         )
@@ -2384,7 +2386,7 @@ def context_pack(
         "pr_number": run.pr_number,
         "linked_issue": linked_issue if isinstance(linked_issue, int) else None,
         "governing_issue": issue_authority.governing_issue,
-        "closing_issues": list(issue_authority.closing_issues),
+        "closing_issues": list(run.closing_authority),
         "supporting_issues": list(issue_authority.supporting_issues),
         "head_sha": run.head_sha,
         "requested_head_sha": run.requested_head_sha,
@@ -2720,7 +2722,7 @@ class VerificationConsumer:
                 raise ValueError("malformed authenticated verification request")
             canonical_chain_token = self.ledger.canonical_chain_token(request)
             intake_pr = self.truth.pull_request(repository, pr_number)
-            issue_contract = resolve_issue_contract(intake_pr.get("body"))
+            issue_authority = resolve_issue_authority(intake_pr.get("body"))
             request = _live_observed_verification_request(
                 request,
                 observed_repository=_nested(
@@ -2732,10 +2734,19 @@ class VerificationConsumer:
                 observed_merged_at=intake_pr.get("merged_at"),
                 observed_draft=intake_pr.get("draft"),
                 observed_linked_issue=(
-                    issue_contract[0] if issue_contract is not None else None
+                    issue_authority.governing_issue
+                    if issue_authority is not None
+                    else None
+                ),
+                observed_closing_issues=(
+                    issue_authority.closing_issues
+                    if issue_authority is not None
+                    else None
                 ),
                 observed_supporting_issues=(
-                    issue_contract[1] if issue_contract is not None else None
+                    issue_authority.supporting_issues
+                    if issue_authority is not None
+                    else None
                 ),
                 canonical_chain_token=canonical_chain_token,
             )

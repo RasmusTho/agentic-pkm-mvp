@@ -30,10 +30,17 @@ def _migrated_legacy_ledger(tmp_path, legacy_request: dict | None = None):
     original = state.ingest(request())
     if legacy_request is None:
         legacy_request = pre_trust_request()
+    legacy_key = legacy_request["idempotency_key"]
+    assert isinstance(legacy_key, str)
+    legacy_run_id = f"vrun-{legacy_key[:16]}"
     with sqlite3.connect(state.store.db_path) as conn:
         conn.execute(
-            "UPDATE verification_runs SET request_json=? WHERE run_id=?",
+            "UPDATE verification_runs SET run_id=?, idempotency_key=?, "
+            "contract_version=?, request_json=? WHERE run_id=?",
             (
+                legacy_run_id,
+                legacy_key,
+                legacy_request["contract_version"],
                 json.dumps(
                     legacy_request,
                     sort_keys=True,
@@ -49,7 +56,7 @@ def _migrated_legacy_ledger(tmp_path, legacy_request: dict | None = None):
     migrated = verification_dispatch.VerificationDispatchLedger(
         SqliteStore(state.store.db_path)
     )
-    legacy = migrated.get(original.run_id)
+    legacy = migrated.get(legacy_run_id)
     assert legacy is not None
     assert legacy.status == "legacy_untrusted"
     return migrated, legacy
@@ -841,7 +848,7 @@ def test_claim_lock_wait_never_commits_already_expired_lease(
     assert claimed.lease_expires_at == expected_expiry
 
 
-def test_existing_schema_v2_upgrades_to_verification_schema_v4(tmp_path) -> None:
+def test_existing_schema_v2_upgrades_to_verification_schema_v5(tmp_path) -> None:
     db = tmp_path / "dispatcher.sqlite3"
     initial = SqliteStore(db)
     initial.initialize()
@@ -864,7 +871,7 @@ def test_existing_schema_v2_upgrades_to_verification_schema_v4(tmp_path) -> None
                 "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'verification_%'"
             )
         }
-    assert version == "4"
+    assert version == "5"
     assert tables == {"verification_runs", "verification_attempts", "verification_exceptions"}
 
 
@@ -888,11 +895,59 @@ def test_existing_schema_v3_backfills_current_head_without_losing_request_audit(
     assert migrated.head_sha == original.requested_head_sha
     assert migrated.verified_head_sha is None
     with sqlite3.connect(db) as conn:
-        supporting_authority = conn.execute(
-            "SELECT supporting_authority_json FROM verification_runs WHERE run_id=?",
+        supporting_authority, closing_authority = conn.execute(
+            "SELECT supporting_authority_json, closing_authority_json "
+            "FROM verification_runs WHERE run_id=?",
             (original.run_id,),
-        ).fetchone()[0]
+        ).fetchone()
     assert json.loads(supporting_authority) == original.request["supporting_issues"]
+    assert json.loads(closing_authority) == original.request["closing_issues"]
+
+
+def test_schema_v4_backfills_closing_authority_without_resetting_chain(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    original = state.ingest(request())
+    claim = state.claim(original.run_id, "host")
+    assert claim.lease_id is not None
+    state.start(
+        original.run_id,
+        "host",
+        claim.lease_id,
+        "01900000-0000-7000-8000-000000000001",
+        {"head_sha": original.head_sha},
+    )
+    state.record_attempt(
+        original.run_id,
+        "standard_repair",
+        "01900000-0000-7000-8000-000000000001",
+        "gpt-5.6-terra",
+        "high",
+        {"head_sha": original.head_sha},
+        "fixed",
+        {
+            "finding_id": "F-v4",
+            "failure_domain": "review_code_correctness",
+            "mechanism_id": "closing-authority",
+        },
+        holder="host",
+        lease_id=claim.lease_id,
+    )
+    before_attempts = state.attempts(original.run_id)
+    with sqlite3.connect(state.store.db_path) as conn:
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN closing_authority_json")
+        conn.execute("UPDATE dispatcher_meta SET value='4' WHERE key='schema_version'")
+        conn.commit()
+
+    migrated_state = ledger(tmp_path)
+    migrated = migrated_state.get(original.run_id)
+
+    assert migrated is not None
+    assert migrated.closing_authority == (3603,)
+    assert migrated.status == "running"
+    assert migrated.repair_budget_policy == "v2"
+    assert migrated_state.attempts(original.run_id) == before_attempts
 
 
 def test_ingest_claim_and_terminal_lifecycle_is_idempotent(tmp_path) -> None:

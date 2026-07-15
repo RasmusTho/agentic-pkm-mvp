@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -106,11 +108,15 @@ def _write_pre_trust_v3_state(tmp_path: Path, legacy_request: dict | None = None
     run = VerificationDispatchLedger(store).ingest(verification_request())
     if legacy_request is None:
         legacy_request = pre_trust_request()
+    legacy_key = legacy_request["idempotency_key"]
+    assert isinstance(legacy_key, str)
+    legacy_run_id = f"vrun-{legacy_key[:16]}"
     with sqlite3.connect(paths.db_path) as conn:
         conn.execute(
             """
             UPDATE verification_runs
-            SET request_json=?, status='backoff', last_heartbeat_at=?,
+            SET run_id=?, idempotency_key=?, contract_version=?, request_json=?,
+                status='backoff', last_heartbeat_at=?,
                 coordinator_session_id='legacy-session',
                 context_pack_json='{"legacy":"context"}',
                 terminal_receipt_json='{"legacy":"terminal"}',
@@ -118,6 +124,9 @@ def _write_pre_trust_v3_state(tmp_path: Path, legacy_request: dict | None = None
             WHERE run_id=?
             """,
             (
+                legacy_run_id,
+                legacy_key,
+                legacy_request["contract_version"],
                 json.dumps(
                     legacy_request,
                     sort_keys=True,
@@ -139,7 +148,7 @@ def _write_pre_trust_v3_state(tmp_path: Path, legacy_request: dict | None = None
                       'legacy-context-hash', 'clean', '{"legacy":true}',
                       '2026-07-13T12:00:01+00:00')
             """,
-            ("attempt-pre-trust", run.run_id),
+            ("attempt-pre-trust", legacy_run_id),
         )
         conn.execute(
             """
@@ -150,12 +159,18 @@ def _write_pre_trust_v3_state(tmp_path: Path, legacy_request: dict | None = None
                       '2026-07-13T12:00:02+00:00',
                       '2026-07-13T12:00:02+00:00')
             """,
-            ("exception-pre-trust", run.run_id, run.requested_head_sha),
+            ("exception-pre-trust", legacy_run_id, run.requested_head_sha),
         )
         conn.execute("ALTER TABLE verification_runs DROP COLUMN supporting_authority_json")
         downgrade_verification_schema_to_v3(conn)
         conn.commit()
     paths.events_path.touch()
+    run = replace(
+        run,
+        run_id=legacy_run_id,
+        idempotency_key=legacy_key,
+        request=legacy_request,
+    )
     return paths, run, legacy_request
 
 

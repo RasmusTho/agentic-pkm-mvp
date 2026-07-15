@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
+import json
 import sqlite3
 
 from app.dispatcher.store import SqliteStore
@@ -18,6 +20,7 @@ def downgrade_verification_schema_to_v3(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE verification_attempts DROP COLUMN failure_domain")
     conn.execute("ALTER TABLE verification_attempts DROP COLUMN mechanism_id")
     conn.execute("ALTER TABLE verification_runs DROP COLUMN repair_budget_policy")
+    conn.execute("ALTER TABLE verification_runs DROP COLUMN closing_authority_json")
     conn.execute("UPDATE dispatcher_meta SET value='3' WHERE key='schema_version'")
 
 
@@ -52,6 +55,18 @@ def request(head: str = HEAD) -> dict[str, object]:
 def pre_trust_request(head: str = HEAD) -> dict[str, object]:
     """Return the exact producer shape deployed before artifact authority."""
     result = request(head)
+    result["contract_version"] = "verification_dispatch_request.v1"
+    identity = {
+        "contract_version": result["contract_version"],
+        "head_sha": result["current_head_sha"],
+        "pr_number": result["pr_number"],
+        "repository": result["repository"],
+        "stage": result["stage"],
+    }
+    result["idempotency_key"] = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    result.pop("closing_issues")
     result.pop("supporting_issues")
     result.pop("artifact_provenance")
     result["base_ref"] = "main"

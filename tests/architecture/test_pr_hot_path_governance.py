@@ -63,6 +63,18 @@ def test_verification_skill_distinguishes_issue_backed_and_direct_repair_modes()
         assert fragment in text, fragment
 
 
+def test_verification_execution_checklist_uses_exact_closing_issue_set() -> None:
+    text = _read(".codex/skills/verification-and-closure/SKILL.md")
+
+    for fragment in (
+        "close every and only `closing_issues`",
+        "remove all agent labels from every closed issue",
+        "never project an unclosed governing parent `Done`",
+        "receipt on every\n    closed issue",
+    ):
+        assert fragment in text
+
+
 def test_issue_to_code_skill_accepts_direct_repair_without_unconditional_issue_traceability() -> None:
     text = _read(".codex/skills/issue-to-code/SKILL.md")
 

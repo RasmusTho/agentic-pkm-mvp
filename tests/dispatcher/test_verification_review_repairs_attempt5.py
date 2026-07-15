@@ -33,7 +33,9 @@ def _observed_request(
     state: VerificationDispatchLedger, payload: dict[str, object]
 ) -> dict[str, object]:
     supporting = payload.get("supporting_issues")
+    closing = payload.get("closing_issues")
     assert isinstance(supporting, list)
+    assert isinstance(closing, list)
     authenticated = _authenticated_verification_request(payload)
     return _live_observed_verification_request(
         authenticated,
@@ -44,6 +46,7 @@ def _observed_request(
         observed_merged_at=None,
         observed_draft=False,
         observed_linked_issue=payload["linked_issue"],
+        observed_closing_issues=tuple(closing),
         observed_supporting_issues=tuple(supporting),
         canonical_chain_token=state.canonical_chain_token(authenticated),
     )
@@ -318,6 +321,7 @@ def test_repaired_head_artifact_cannot_merge_unrelated_authority(tmp_path) -> No
     _record_exhausted_repair_budget(state, original.run_id)
     unrelated = request(REPAIRED_HEAD)
     unrelated["linked_issue"] = 9999
+    unrelated["closing_issues"] = [9999]
 
     with pytest.raises(ValueError, match="governing issue mismatch"):
         state.ingest(unrelated)
@@ -575,6 +579,7 @@ def test_stale_head_superseded_chain_rejects_unrelated_authority(tmp_path) -> No
     run_id = _superseded_exhausted_chain(state)
     unrelated = request(REPAIRED_HEAD)
     unrelated["linked_issue"] = 9999
+    unrelated["closing_issues"] = [9999]
 
     with pytest.raises(ValueError, match="governing issue mismatch"):
         state.ingest(unrelated)
@@ -656,8 +661,9 @@ def _insert_legacy_terminal_chain(
             INSERT INTO verification_runs (
                 run_id, idempotency_key, contract_version, repository,
                 pr_number, head_sha, current_head_sha, stage, request_json,
-                status, terminal_receipt_json, stop_reason, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                closing_authority_json, status, terminal_receipt_json,
+                stop_reason, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -669,6 +675,7 @@ def _insert_legacy_terminal_chain(
                 head_sha,
                 payload["stage"],
                 json.dumps(payload),
+                json.dumps(payload["closing_issues"]),
                 status,
                 '{"outcome":"terminal"}',
                 "technical_failure",
@@ -747,8 +754,8 @@ def test_legacy_terminal_budget_blocks_exact_empty_active_replay(tmp_path) -> No
             INSERT INTO verification_runs (
                 run_id, idempotency_key, contract_version, repository,
                 pr_number, head_sha, current_head_sha, stage, request_json,
-                status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
+                closing_authority_json, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
             """,
             (
                 active_run_id,
@@ -760,6 +767,7 @@ def test_legacy_terminal_budget_blocks_exact_empty_active_replay(tmp_path) -> No
                 REPAIRED_HEAD,
                 payload["stage"],
                 json.dumps(payload),
+                json.dumps(payload["closing_issues"]),
                 "2999-01-02T00:00:00+00:00",
                 "2999-01-02T00:00:00+00:00",
             ),
@@ -785,6 +793,7 @@ def _insert_legacy_active_chain(
     payload = request(head_sha)
     if linked_issue is not None:
         payload["linked_issue"] = linked_issue
+        payload["closing_issues"] = [linked_issue]
     run_id = f"vrun-{str(payload['idempotency_key'])[:16]}"
     with state.store._connect() as conn:
         conn.execute(
@@ -792,8 +801,8 @@ def _insert_legacy_active_chain(
             INSERT INTO verification_runs (
                 run_id, idempotency_key, contract_version, repository,
                 pr_number, head_sha, current_head_sha, stage, request_json,
-                status, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
+                closing_authority_json, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
             """,
             (
                 run_id,
@@ -805,6 +814,7 @@ def _insert_legacy_active_chain(
                 head_sha,
                 payload["stage"],
                 json.dumps(payload),
+                json.dumps(payload["closing_issues"]),
                 "2999-01-02T00:00:00+00:00",
                 "2999-01-02T00:00:00+00:00",
             ),

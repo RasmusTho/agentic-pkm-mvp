@@ -269,14 +269,21 @@ When all prerequisites are met:
 1. confirm the PR head SHA has not changed since verification started
 2. merge the PR
 3. verify merge succeeded
-4. if issue-backed, close the Issue
-5. if issue-backed, complete or release the dispatcher task if applicable
-6. if issue-backed, remove all agent labels from the Issue
-7. if issue-backed, set Issue and PR Project Status to `Done` if automation has not already projected it
-8. if issue-backed, for each spec file named in the Issue's `Source Anchors`, restore any stale `State: Not yet implemented` line to `State: Implemented. Delivered by PR #<PR> (issue #<N>, <YYYY-MM-DD>).`
+4. if issue-backed, re-read the merged PR body and require its exact governing, closing, and
+   supporting identities to match the authenticated context; close every and only `closing_issues`
+5. if issue-backed, complete or release each applicable closing-issue dispatcher task
+6. if issue-backed, remove all agent labels from every closed issue; do not remove active-state
+   labels from a distinct governing parent unless its own lifecycle contract is complete
+7. if issue-backed, set every closing Issue and the PR Project Status to `Done` when automation has
+   not already projected it; never project an unclosed governing parent `Done`
+8. if issue-backed, update spec files named by each closing issue's `Source Anchors` from stale
+   `State: Not yet implemented` to `State: Implemented. Delivered by PR #<PR> (issue #<N>, <YYYY-MM-DD>).`
+   Record child-delivery validation evidence on any distinct open governing parent
 9. verify final state
-10. invoke `post-merge-owner-doc` on the merged PR. For issue-backed PRs, the receipt belongs on the closed issue; for direct-repair, docs-lane, or governance-lane PRs with no closing issue, the receipt belongs on the PR comment thread.
-11. assert the `post-merge owner-doc check:` receipt exists before emitting a delivery receipt; watchdog reminders or pending reminders are not closure receipts. For direct-repair, docs-lane, or governance-lane PRs with no closing issue, verify the receipt on the PR comment thread. [owner-doc-receipt-gate]
+10. invoke `post-merge-owner-doc` on the merged PR. For issue-backed PRs, write the receipt on every
+    closed issue and also on a distinct open governing parent; for issue-free lanes, use the PR thread
+11. assert each required `post-merge owner-doc check:` receipt exists before emitting a delivery
+    receipt; watchdog or pending reminders are not closure receipts. [owner-doc-receipt-gate]
 12. if direct repair, write a direct repair delivery receipt instead of issue-closure state changes
 
 ## When Not to Merge

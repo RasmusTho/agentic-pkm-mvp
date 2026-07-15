@@ -23,6 +23,7 @@ from app.dispatcher.schema import (
     SCHEMA_VERSION,
     verification_v3_schema_error,
     verification_v4_schema_error,
+    verification_v5_schema_error,
 )
 
 
@@ -256,14 +257,49 @@ def _verification_authority_migration(
     )
 
 
+def _verification_closing_authority_migration(row: sqlite3.Row) -> str:
+    """Backfill v1 conservatively; preserve exact v2 closure authority."""
+    try:
+        request = json.loads(row["request_json"])
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("verification request audit is malformed") from exc
+    if not isinstance(request, Mapping):
+        raise ValueError("verification closing authority is malformed")
+    if recognized_pre_trust_verification_request(row, request):
+        return "[]"
+    linked_issue = request.get("linked_issue")
+    supporting = request.get("supporting_issues")
+    if not _positive_int(linked_issue) or not isinstance(supporting, list):
+        raise ValueError("verification closing authority is malformed")
+    version = request.get("contract_version")
+    closing = request.get("closing_issues")
+    if version == "verification_dispatch_request.v1":
+        closing = [linked_issue]
+    if (
+        version not in {
+            "verification_dispatch_request.v1",
+            "verification_dispatch_request.v2",
+        }
+        or not isinstance(closing, list)
+        or not closing
+        or any(not _positive_int(issue) for issue in closing)
+        or len(set(closing)) != len(closing)
+        or not set(closing).issubset({linked_issue, *supporting})
+    ):
+        raise ValueError("verification closing authority is malformed")
+    return json.dumps(closing, separators=(",", ":"), ensure_ascii=False)
+
+
 def _legacy_verification_row_is_quarantined(row: sqlite3.Row) -> bool:
     try:
         supporting_authority = json.loads(row["supporting_authority_json"])
+        closing_authority = json.loads(row["closing_authority_json"])
     except (TypeError, json.JSONDecodeError):
         return False
     return bool(
         row["status"] == LEGACY_UNTRUSTED_VERIFICATION_STATUS
         and supporting_authority == []
+        and closing_authority == []
         and row["current_head_sha"] == row["head_sha"]
         and row["verified_head_sha"] is None
         and all(
@@ -368,7 +404,7 @@ class SqliteStore:
             # A database declaring the current version must already have the
             # complete current shape. Missing v4 identity columns cannot be
             # reconstructed without resetting keyed repair accounting.
-            schema_error = verification_v4_schema_error(conn)
+            schema_error = verification_v5_schema_error(conn)
             if schema_error is not None:
                 raise ValueError(schema_error)
             authority_reconciliation_required = False
@@ -403,7 +439,7 @@ class SqliteStore:
         # dispatcher_meta, so its absence is recognized only together with
         # the v1-specific missing ``repo`` column.
         is_unversioned_v1 = current_version is None and "repo" not in columns
-        if current_version not in {"1", "2", "3", str(SCHEMA_VERSION)} and not is_unversioned_v1:
+        if current_version not in {"1", "2", "3", "4", str(SCHEMA_VERSION)} and not is_unversioned_v1:
             version = "missing" if current_version is None else repr(current_version)
             raise ValueError(f"unsupported dispatcher schema_version: {version}")
         if current_version == "2" and "repo" not in columns:
@@ -427,16 +463,20 @@ class SqliteStore:
                 ).fetchone()
                 current_version = None if row is None else str(row["value"])
             is_unversioned_v1 = current_version is None and "repo" not in columns
-            if current_version not in {"1", "2", "3", str(SCHEMA_VERSION)} and not is_unversioned_v1:
+            if current_version not in {"1", "2", "3", "4", str(SCHEMA_VERSION)} and not is_unversioned_v1:
                 version = "missing" if current_version is None else repr(current_version)
                 raise ValueError(f"unsupported dispatcher schema_version: {version}")
-            if current_version in {"3", str(SCHEMA_VERSION)} and "repo" in columns:
+            if current_version in {"3", "4", str(SCHEMA_VERSION)} and "repo" in columns:
                 schema_error = (
                     verification_v3_schema_error(
                         conn, allow_additive_migration=True
                     )
                     if current_version == "3"
-                    else verification_v4_schema_error(conn)
+                    else (
+                        verification_v4_schema_error(conn)
+                        if current_version == "4"
+                        else verification_v5_schema_error(conn)
+                    )
                 )
                 if schema_error is not None:
                     raise ValueError(schema_error)
@@ -471,6 +511,15 @@ class SqliteStore:
                     conn.execute(
                         "ALTER TABLE verification_runs ADD COLUMN "
                         "supporting_authority_json TEXT NOT NULL DEFAULT '[]'"
+                    )
+                closing_authority_added = (
+                    current_version in {"3", "4"}
+                    and "closing_authority_json" not in verification_columns
+                )
+                if closing_authority_added:
+                    conn.execute(
+                        "ALTER TABLE verification_runs ADD COLUMN "
+                        "closing_authority_json TEXT NOT NULL DEFAULT '[]'"
                     )
                 if (
                     current_version == "3"
@@ -528,6 +577,17 @@ class SqliteStore:
                                 verification_row["run_id"],
                             ),
                         )
+                    if closing_authority_added:
+                        conn.execute(
+                            "UPDATE verification_runs "
+                            "SET closing_authority_json=? WHERE run_id=?",
+                            (
+                                _verification_closing_authority_migration(
+                                    verification_row
+                                ),
+                                verification_row["run_id"],
+                            ),
+                        )
                 for verification_row in conn.execute(
                     "SELECT * FROM verification_runs"
                 ).fetchall():
@@ -550,7 +610,7 @@ class SqliteStore:
                                 "legacy verification audit classification is malformed"
                             )
                         _validate_canonical_verification_row(verification_row)
-                schema_error = verification_v4_schema_error(conn)
+                schema_error = verification_v5_schema_error(conn)
                 if schema_error is not None:
                     raise ValueError(schema_error)
                 conn.execute(
@@ -594,7 +654,7 @@ class SqliteStore:
                 )
             for stmt in DDL_STATEMENTS:
                 conn.execute(stmt)
-            schema_error = verification_v4_schema_error(conn)
+            schema_error = verification_v5_schema_error(conn)
             if schema_error is not None:
                 raise ValueError(schema_error)
             conn.execute(
@@ -612,7 +672,7 @@ class SqliteStore:
             try:
                 for stmt in DDL_STATEMENTS:
                     conn.execute(stmt)
-                schema_error = verification_v4_schema_error(conn)
+                schema_error = verification_v5_schema_error(conn)
                 if schema_error is not None:
                     raise ValueError(schema_error)
                 conn.execute(

@@ -58,7 +58,8 @@ def test_request_schema_and_idempotency_are_deterministic() -> None:
     assert first == second
     assert first is not None
     assert first == json.loads(json.dumps(first, sort_keys=True))
-    assert first["contract_version"] == "verification_dispatch_request.v1"
+    assert first["contract_version"] == "verification_dispatch_request.v2"
+    assert first["closing_issues"] == [3602]
     assert first["stage"] == "verification"
     assert first["repository"] == REPOSITORY
     assert first["pr_number"] == 3602
@@ -105,6 +106,7 @@ def test_multi_issue_pr_selects_explicit_governing_issue() -> None:
 
     assert request is not None
     assert request["linked_issue"] == 3603
+    assert request["closing_issues"] == [3626, 3698, 3699, 3700, 3705]
     assert request["supporting_issues"] == [3626, 3698, 3699, 3700, 3705]
 
 
@@ -153,6 +155,11 @@ def test_ambiguous_governing_issue_emits_no_request() -> None:
         "Governing-Issue: #3602\nFixes #3602é",
         "Governing-Issue: #3602\nFixeſ #3602",
         "Governıng-Issue: #3602\nFixes #3602",
+        "Governing-Issue: #3602\nFixes #3602\nCloses #",
+        "Governing-Issue: #3602\nFixes #3602\nCloses # 456",
+        "Governing-Issue: #3602\nFixes #3602\nCloses #\u00a0",
+        "Governing-Issue: #3602\nFixes #3602\nCloses #\u0085",
+        "Governing-Issue: #3602\nFixes #3602\nCloses #\ufeff",
         "Governing-Issue: #3602\rFixes #3602",
         "Governing-Issue: #3602\u2028Fixes #3602",
         "Governing-Issue: #3602\u2029Fixes #3602",
@@ -164,6 +171,19 @@ def test_invalid_closing_authority_emits_no_request(body: str) -> None:
 
     assert resolve_issue_contract(body) is None
     assert build_request(event=_event(), pr=pr, issue=_issue()) is None
+
+
+def test_github_closing_keyword_variants_bind_exact_closure_authority() -> None:
+    pr = _pr()
+    pr["body"] = (
+        "Governing-Issue: #3602\nFix #3602\nFixed: #3603\n"
+        "Closed #3604\nResolve: #3605\nResolved #3606"
+    )
+
+    request = build_request(event=_event(), pr=pr, issue=_issue())
+
+    assert request is not None
+    assert request["closing_issues"] == [3602, 3603, 3604, 3605, 3606]
 
 
 def test_associated_pr_must_still_be_open() -> None:

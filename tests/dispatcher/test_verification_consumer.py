@@ -298,7 +298,7 @@ def test_supporting_issue_addition_during_repair_preserves_governing_authority(
     dispatch_request = request()
     dispatch_request["supporting_issues"] = [3626]
     pr = eligible_pr(
-        body="Governing-Issue: #3603\n\nRefs #3603\nFixes #3626\nFixes #3745"
+        body="Governing-Issue: #3603\n\nFixes #3603\nRefs #3626\nRefs #3745"
     )
 
     result = VerificationConsumer(
@@ -1112,6 +1112,7 @@ def test_multi_issue_context_separates_parent_closure_and_evidence_authority(
 ) -> None:
     dispatch_request = request()
     dispatch_request["supporting_issues"] = [3626, 3698, 3705]
+    dispatch_request["closing_issues"] = [3626, 3698]
     pr = eligible_pr(
         body=(
             "Governing-Issue: #3603\n\nRefs #3705\n"
@@ -1129,6 +1130,27 @@ def test_multi_issue_context_separates_parent_closure_and_evidence_authority(
     assert pack["governing_issue"] == 3603
     assert pack["closing_issues"] == [3626, 3698]
     assert pack["supporting_issues"] == [3626, 3698, 3705]
+
+
+def test_live_body_cannot_expand_authenticated_closing_authority(tmp_path) -> None:
+    dispatch_request = request()
+    dispatch_request["closing_issues"] = [3626]
+    dispatch_request["supporting_issues"] = [3626]
+    pr = eligible_pr(
+        body=(
+            "Governing-Issue: #3603\nFixes #3626\n"
+            "Refs #9999\nCloses #9999"
+        )
+    )
+    launcher = Launcher()
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(pr, GREEN), Auth(), launcher, "host"
+    ).consume(dispatch_request)
+
+    assert result.status == "superseded"
+    assert result.stop_reason == "governing_issue_mismatch"
+    assert launcher.calls == []
 
 
 @pytest.mark.parametrize("separator", ["\r", "\u2028", "\u2029"])
@@ -1345,7 +1367,7 @@ def test_supporting_issue_addition_allows_repair_head_rebind_without_budget_rese
     ]
     original_head = HEAD
     truth = Truth(
-        eligible_pr(body="Governing-Issue: #3603\n\nRefs #3603\nFixes #3626"),
+        eligible_pr(body="Governing-Issue: #3603\n\nFixes #3603\nRefs #3626"),
         GREEN,
     )
 
@@ -1356,7 +1378,7 @@ def test_supporting_issue_addition_allows_repair_head_rebind_without_budget_rese
             truth.pr = eligible_pr(
                 body=(
                     "Governing-Issue: #3603\n\nRefs #3603\n"
-                    "Fixes #3626\nFixes #3745"
+                    "Fixes #3603\nRefs #3626\nRefs #3745"
                 ),
                 head={"ref": "branch", "sha": new_head},
             )
@@ -1809,12 +1831,12 @@ def test_delivered_truth_accepts_added_supporting_repair_issue(tmp_path) -> None
     dispatch_request = request()
     dispatch_request["supporting_issues"] = [3626]
     original_pr = eligible_pr(
-        body="Governing-Issue: #3603\n\nRefs #3603\nFixes #3626"
+        body="Governing-Issue: #3603\n\nFixes #3603\nRefs #3626"
     )
     terminal_pr = merged_pr(
         body=(
             "Governing-Issue: #3603\n\nRefs #3603\n"
-            "Fixes #3626\nFixes #3745"
+            "Fixes #3603\nRefs #3626\nRefs #3745"
         )
     )
     truth = TransitionTruth(terminal_pr)
