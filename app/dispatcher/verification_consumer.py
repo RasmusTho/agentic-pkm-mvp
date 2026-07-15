@@ -21,6 +21,7 @@ import tempfile
 import threading
 import time
 import tomllib
+import uuid
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -557,8 +558,8 @@ class CodexExecFailure(RuntimeError):
     def __init__(self, receipt: Mapping[str, object]) -> None:
         self.receipt = dict(receipt)
         super().__init__(
-            f"codex exec failed closed (exit={receipt.get('returncode')}): "
-            f"{receipt.get('stderr') or receipt.get('terminal_error') or 'no stderr'}"
+            f"codex exec failed closed (exit={receipt.get('returncode')}, "
+            f"class={receipt.get('failure_class') or 'execution'})"
         )
 
 
@@ -573,6 +574,117 @@ _RATE_LIMIT_CODES = {
     "usage_limit",
     "usage_limit_reached",
 }
+
+_SAFE_FAILURE_OUTCOMES = frozenset(
+    {
+        "codex_exec_failed",
+        "heartbeat_authority_lost",
+        "parent_exit_authority_lost",
+        "thread_start_authority_lost",
+    }
+)
+_SAFE_FAILURE_CLASSES = frozenset({"authority_loss", "execution", "rate_limit"})
+_SAFE_ERROR_TYPE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]{0,55}(?:Error|Exception)\Z"
+)
+_UNSAFE_DIAGNOSTIC_KEYS = frozenset(
+    {
+        "api_key",
+        "credential",
+        "credentials",
+        "error",
+        "exception",
+        "exception_text",
+        "path",
+        "raw",
+        "raw_event",
+        "stderr",
+        "terminal_error",
+        "terminal_event",
+        "token",
+        "traceback",
+    }
+)
+
+
+def bounded_error_type(value: object) -> str | None:
+    if isinstance(value, str) and _SAFE_ERROR_TYPE.fullmatch(value):
+        return value
+    return None
+
+
+def bounded_coordinator_session_id(value: object) -> str | None:
+    """Accept only the canonical UUID identity emitted by Codex threads."""
+
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = uuid.UUID(value)
+    except (ValueError, AttributeError):
+        return None
+    canonical = str(parsed)
+    return canonical if value == canonical else None
+
+
+def sanitize_codex_failure_receipt(
+    receipt: Mapping[str, object],
+    *,
+    failure_class: str | None = None,
+) -> dict[str, object]:
+    """Return the bounded failure fields permitted to cross durable boundaries."""
+
+    raw_outcome = receipt.get("outcome")
+    outcome = (
+        raw_outcome
+        if isinstance(raw_outcome, str) and raw_outcome in _SAFE_FAILURE_OUTCOMES
+        else "codex_exec_failed"
+    )
+    raw_class = failure_class or receipt.get("failure_class")
+    if not isinstance(raw_class, str) or raw_class not in _SAFE_FAILURE_CLASSES:
+        raw_class = "authority_loss" if outcome.endswith("_authority_lost") else "execution"
+    safe: dict[str, object] = {"outcome": outcome, "failure_class": raw_class}
+    returncode = receipt.get("returncode")
+    if isinstance(returncode, int) and not isinstance(returncode, bool):
+        safe["returncode"] = returncode
+    error_type = bounded_error_type(receipt.get("error_type"))
+    if error_type is not None:
+        safe["error_type"] = error_type
+    session_id = bounded_coordinator_session_id(receipt.get("session_id"))
+    if session_id is not None:
+        safe["session_id"] = session_id
+    return safe
+
+
+def redact_durable_diagnostics(value: object) -> object:
+    """Defence-in-depth redaction for status reads of pre-fix durable rows."""
+
+    if isinstance(value, Mapping):
+        redacted: dict[str, object] = {}
+        for raw_key, child in value.items():
+            key = str(raw_key)
+            normalized = key.lower()
+            if (
+                normalized in _UNSAFE_DIAGNOSTIC_KEYS
+                or normalized.endswith("_path")
+                or normalized.endswith("_token")
+                or "credential" in normalized
+            ):
+                continue
+            if normalized == "session_id":
+                safe_session_id = bounded_coordinator_session_id(child)
+                if safe_session_id is not None:
+                    redacted[key] = safe_session_id
+                continue
+            if normalized == "error_type":
+                safe_error_type = bounded_error_type(child)
+                if safe_error_type is not None:
+                    redacted[key] = safe_error_type
+                continue
+            redacted[key] = redact_durable_diagnostics(child)
+        return redacted
+    if isinstance(value, list):
+        return [redact_durable_diagnostics(child) for child in value]
+    return value
 
 
 def _is_rate_limit_exec_failure(detail: str) -> bool:
@@ -636,12 +748,16 @@ class CodexExecLauncher:
         adapter_path: Path | None = None,
         runner: ProcessRunner | None = None,
         containment_factory: Callable[[], WholeTreeContainment] | None = None,
+        cleanup_tracker_factory: Callable[[], WholeTreeContainment] | None = None,
     ) -> None:
         self.worktree = worktree
         self.receipt_schema = receipt_schema
         self.context_path = context_path
         self.runner = runner if runner is not None else cast(ProcessRunner, subprocess.run)
         self.containment_factory = containment_factory or TaggedProcessTreeCleanup
+        self.cleanup_tracker_factory = (
+            cleanup_tracker_factory or TaggedProcessTreeCleanup
+        )
         self.adapter_path = adapter_path or worktree / ".codex/agents/verification-closer.toml"
         try:
             adapter = tomllib.loads(self.adapter_path.read_text(encoding="utf-8"))
@@ -711,14 +827,23 @@ class CodexExecLauncher:
         self.context_path.write_text(
             json.dumps(context_pack, sort_keys=True, indent=2) + "\n", encoding="utf-8"
         )
-        containment = self.containment_factory()
-        env = containment.environment(
-            {
-                k: v
-                for k, v in os.environ.items()
-                if k not in {"OPENAI_API_KEY", "CODEX_API_KEY"}
-            }
-        )
+        base_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in {"OPENAI_API_KEY", "CODEX_API_KEY"}
+        }
+        try:
+            containment = self.containment_factory()
+            cleanup_tracker = (
+                containment
+                if isinstance(containment, TaggedProcessTreeCleanup)
+                else self.cleanup_tracker_factory()
+            )
+            env = containment.environment(base_env)
+            if cleanup_tracker is not containment:
+                env = cleanup_tracker.environment(env)
+        except Exception:
+            raise RuntimeError("verification containment setup failed") from None
         stop_heartbeat = threading.Event()
         stdout_complete = threading.Event()
         authority_lost = threading.Event()
@@ -756,42 +881,71 @@ class CodexExecLauncher:
                 return True
             return True
 
+        def cleanup_process_tree() -> bool:
+            if cleanup_tracker is not containment:
+                try:
+                    cleanup_tracker.cleanup()
+                except Exception:
+                    pass
+            try:
+                return bool(containment.cleanup())
+            except Exception:
+                return False
+
         def terminate_and_reap_child() -> None:
             nonlocal containment_proven, process_group_id
             with process_lock:
                 if process is None:
                     return
-                if process_group_id is not None:
-                    signal_process_group(signal.SIGTERM)
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        signal_process_group(signal.SIGKILL)
-                        process.wait(timeout=5)
-                    else:
-                        # The direct child may exit while a descendant keeps
-                        # the inherited stdout pipe and execution authority.
-                        # The private process group lets us remove that
-                        # residual without signalling unrelated processes.
-                        if process_group_is_alive():
-                            signal_process_group(signal.SIGKILL)
-                    process_group_id = None
-                    containment_proven = containment.cleanup() or containment_proven
-                    return
-                if process.poll() is None:
-                    try:
-                        process.terminate()
-                    except ProcessLookupError:
-                        pass
                 try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
+                    if process_group_id is not None:
+                        signal_process_group(signal.SIGTERM)
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            signal_process_group(signal.SIGKILL)
+                            process.wait(timeout=5)
+                        else:
+                            # The direct child may exit while a descendant keeps
+                            # the inherited stdout pipe and execution authority.
+                            # The private process group lets us remove that
+                            # residual without signalling unrelated processes.
+                            if process_group_is_alive():
+                                signal_process_group(signal.SIGKILL)
+                    else:
+                        if process.poll() is None:
+                            try:
+                                process.terminate()
+                            except ProcessLookupError:
+                                pass
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            try:
+                                process.kill()
+                            except ProcessLookupError:
+                                pass
+                            process.wait(timeout=5)
+                except Exception:
+                    # A broken process adapter must not replace the safe
+                    # launcher failure or skip bounded emergency cleanup.
+                    try:
+                        signal_process_group(signal.SIGKILL)
+                    except Exception:
+                        pass
                     try:
                         process.kill()
-                    except ProcessLookupError:
+                    except Exception:
                         pass
-                    process.wait(timeout=5)
-                containment_proven = containment.cleanup() or containment_proven
+                    try:
+                        process.wait(timeout=5)
+                    except Exception:
+                        pass
+                finally:
+                    process_group_id = None
+                    containment_proven = (
+                        cleanup_process_tree() or containment_proven
+                    )
 
         def record_authority_loss(
             exc: Exception, *, outcome: str = "heartbeat_authority_lost"
@@ -813,13 +967,19 @@ class CodexExecLauncher:
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 start_new_session=True,
             )
-            process_group_id = getattr(process, "pid", None)
-            if process_group_id is not None:
-                containment.attach(process_group_id)
-            assert process.stdout is not None
-            lines = process.stdout
-            stderr = process.stderr
-            assert stderr is not None
+            try:
+                process_group_id = getattr(process, "pid", None)
+                if process_group_id is not None:
+                    if cleanup_tracker is not containment:
+                        cleanup_tracker.attach(process_group_id)
+                    containment.attach(process_group_id)
+                if process.stdout is None or process.stderr is None:
+                    raise RuntimeError("coordinator process pipes unavailable")
+                lines = process.stdout
+                stderr = process.stderr
+            except Exception:
+                terminate_and_reap_child()
+                raise RuntimeError("verification coordinator setup failed") from None
 
             def drain_stderr() -> None:
                 while chunk := stderr.read(4096):
@@ -827,8 +987,13 @@ class CodexExecLauncher:
                     if sum(map(len, stderr_chunks)) > 16_384:
                         stderr_chunks[:] = ["".join(stderr_chunks)[-16_384:]]
 
-            stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
-            stderr_thread.start()
+            try:
+                stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+                stderr_thread.start()
+            except Exception:
+                stop_heartbeat.set()
+                terminate_and_reap_child()
+                raise RuntimeError("verification coordinator setup failed") from None
 
             def watch_parent_liveness() -> None:
                 while not stop_heartbeat.wait(0.25):
@@ -850,10 +1015,15 @@ class CodexExecLauncher:
                         )
                     return
 
-            parent_watchdog_thread = threading.Thread(
-                target=watch_parent_liveness, daemon=True
-            )
-            parent_watchdog_thread.start()
+            try:
+                parent_watchdog_thread = threading.Thread(
+                    target=watch_parent_liveness, daemon=True
+                )
+                parent_watchdog_thread.start()
+            except Exception:
+                stop_heartbeat.set()
+                terminate_and_reap_child()
+                raise RuntimeError("verification coordinator setup failed") from None
             if on_heartbeat:
                 def pulse() -> None:
                     while not stop_heartbeat.wait(30):
@@ -862,8 +1032,15 @@ class CodexExecLauncher:
                         except Exception as exc:
                             record_authority_loss(exc)
                             return
-                heartbeat_thread = threading.Thread(target=pulse, daemon=True)
-                heartbeat_thread.start()
+                try:
+                    heartbeat_thread = threading.Thread(target=pulse, daemon=True)
+                    heartbeat_thread.start()
+                except Exception:
+                    stop_heartbeat.set()
+                    terminate_and_reap_child()
+                    raise RuntimeError(
+                        "verification coordinator setup failed"
+                    ) from None
         else:
             result = self.runner(
                 self.command(resume_session_id), cwd=self.worktree, env=env,
@@ -874,61 +1051,71 @@ class CodexExecLauncher:
         thread_id: str | None = resume_session_id
         terminal: dict[str, object] | None = None
         terminal_error: str | None = None
-        for line in lines:
-            if authority_lost.is_set():
-                break
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if event.get("type") in {"turn.failed", "error"}:
-                terminal_error = json.dumps(event, sort_keys=True)
-            if event.get("type") == "thread.started" and isinstance(event.get("thread_id"), str):
-                thread_id = event["thread_id"]
-                if on_thread_started:
-                    try:
-                        on_thread_started(event["thread_id"])
-                    except Exception as exc:
-                        record_authority_loss(
-                            exc, outcome="thread_start_authority_lost"
-                        )
-                        break
-            if on_heartbeat:
-                try:
-                    on_heartbeat()
-                except Exception as exc:
-                    record_authority_loss(exc)
+        try:
+            for line in lines:
+                if authority_lost.is_set():
                     break
-            if authority_lost.is_set():
-                break
-            if event.get("type") == "item.completed":
-                item = event.get("item")
-                if isinstance(item, Mapping) and item.get("type") == "agent_message":
-                    text = item.get("text")
-                    if isinstance(text, str):
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") in {"turn.failed", "error"}:
+                    terminal_error = json.dumps(event, sort_keys=True)
+                if event.get("type") == "thread.started" and isinstance(event.get("thread_id"), str):
+                    thread_id = event["thread_id"]
+                    if on_thread_started:
                         try:
-                            candidate = json.loads(text)
-                            validate_verification_closer_receipt(candidate, schema)
-                        except (json.JSONDecodeError, jsonschema.ValidationError):
-                            continue
-                        terminal = candidate
+                            on_thread_started(event["thread_id"])
+                        except Exception as exc:
+                            record_authority_loss(
+                                exc, outcome="thread_start_authority_lost"
+                            )
+                            break
+                if on_heartbeat:
+                    try:
+                        on_heartbeat()
+                    except Exception as exc:
+                        record_authority_loss(exc)
+                        break
+                if authority_lost.is_set():
+                    break
+                if event.get("type") == "item.completed":
+                    item = event.get("item")
+                    if isinstance(item, Mapping) and item.get("type") == "agent_message":
+                        text = item.get("text")
+                        if isinstance(text, str):
+                            try:
+                                candidate = json.loads(text)
+                                validate_verification_closer_receipt(candidate, schema)
+                            except (json.JSONDecodeError, jsonschema.ValidationError):
+                                continue
+                            terminal = candidate
+        except Exception:
+            stop_heartbeat.set()
+            terminate_and_reap_child()
+            raise RuntimeError("verification coordinator stream failed") from None
         stdout_complete.set()
         if self.runner is subprocess.run:
             assert process is not None
-            if authority_lost.is_set():
-                stop_heartbeat.set()
-                terminate_and_reap_child()
-            else:
-                process.wait()
-                # A clean direct-parent exit is not sufficient to release
-                # coordinator authority: descendants can detach their stdio
-                # yet remain in the private process group. Remove any such
-                # residual group before a valid terminal receipt may return.
-                if process_group_is_alive():
+            try:
+                if authority_lost.is_set():
+                    stop_heartbeat.set()
                     terminate_and_reap_child()
                 else:
-                    process_group_id = None
-                    containment_proven = containment.cleanup()
+                    process.wait()
+                    # A clean direct-parent exit is not sufficient to release
+                    # coordinator authority: descendants can detach their stdio
+                    # yet remain in the private process group. Remove any such
+                    # residual without accepting a terminal receipt early.
+                    if process_group_is_alive():
+                        terminate_and_reap_child()
+                    else:
+                        process_group_id = None
+                        containment_proven = cleanup_process_tree()
+            except Exception:
+                stop_heartbeat.set()
+                terminate_and_reap_child()
+                raise RuntimeError("verification coordinator process failed") from None
             if stderr_thread:
                 stderr_thread.join(timeout=1)
             returncode = process.returncode
@@ -947,6 +1134,7 @@ class CodexExecLauncher:
                 {
                     "outcome": authority_loss_outcome,
                     "failure_class": "authority_loss",
+                    "error_type": type(failure).__name__,
                     "returncode": returncode,
                     "stderr": authority_loss_outcome.replace("_", " "),
                     "terminal_error": f"{type(failure).__name__}: {failure}",
@@ -1430,26 +1618,63 @@ class VerificationConsumer:
         pack = context_pack(claimed, pr)
 
         def started(session_id: str) -> None:
+            safe_session_id = bounded_coordinator_session_id(session_id)
+            if safe_session_id is None:
+                raise ValueError("invalid coordinator session identity")
             current = self.ledger.get(claimed.run_id)
             if current is not None and current.status == "claimed":
-                self.ledger.start(claimed.run_id, self.holder, lease_id, session_id, pack)
+                self.ledger.start(
+                    claimed.run_id,
+                    self.holder,
+                    lease_id,
+                    safe_session_id,
+                    pack,
+                )
 
         def heartbeat() -> None:
             self.ledger.heartbeat(claimed.run_id, self.holder, lease_id)
 
         try:
+            resume_session_id = bounded_coordinator_session_id(
+                claimed.coordinator_session_id
+            )
+            if (
+                claimed.coordinator_session_id is not None
+                and resume_session_id is None
+            ):
+                raise ValueError("invalid stored coordinator session identity")
             session_id, receipt = self.launcher.launch(
                 pack,
-                resume_session_id=claimed.coordinator_session_id,
+                resume_session_id=resume_session_id,
                 on_thread_started=started,
                 on_heartbeat=heartbeat,
             )
+            safe_session_id = bounded_coordinator_session_id(session_id)
+            if safe_session_id is None:
+                raise ValueError("invalid returned coordinator session identity")
+            current = self.ledger.get(claimed.run_id)
+            if current is not None and current.status == "claimed":
+                started(safe_session_id)
+                current = self.ledger.get(claimed.run_id)
+            if (
+                current is not None
+                and current.coordinator_session_id != safe_session_id
+            ):
+                raise ValueError("coordinator session identity mismatch")
+            session_id = safe_session_id
         except CodexExecFailure as exc:
-            failed_session = exc.receipt.get("session_id")
-            if str(exc.receipt.get("outcome", "")).endswith("_authority_lost"):
+            raw_failure = exc.receipt
+            rate_limited = self._rate_limited(raw_failure)
+            retry_hint = self._retry_hint(raw_failure) if rate_limited else None
+            failure_receipt = sanitize_codex_failure_receipt(
+                raw_failure,
+                failure_class="rate_limit" if rate_limited else None,
+            )
+            failed_session = failure_receipt.get("session_id")
+            if str(failure_receipt.get("outcome", "")).endswith("_authority_lost"):
                 retry_after = _retry_at()
                 failure_receipt = {
-                    **exc.receipt,
+                    **failure_receipt,
                     "api_fallback": False,
                     "retry_after": retry_after,
                 }
@@ -1471,7 +1696,6 @@ class VerificationConsumer:
                         if current is not None:
                             return current
                         raise
-            rate_limited = self._rate_limited(exc.receipt)
             if isinstance(failed_session, str) and failed_session:
                 self.ledger.record_attempt(
                     claimed.run_id,
@@ -1481,19 +1705,19 @@ class VerificationConsumer:
                     self.launcher.config.reasoning_effort,
                     pack,
                     "rate_limited" if rate_limited else "launch_failed",
-                    exc.receipt,
+                    failure_receipt,
                     holder=self.holder,
                     lease_id=lease_id,
                 )
             if rate_limited:
-                retry_after = _retry_at(self._retry_hint(exc.receipt))
+                retry_after = _retry_at(retry_hint)
                 return self.ledger.backoff(
                     claimed.run_id,
                     {
                         "outcome": "rate_limited",
                         "api_fallback": False,
                         "retry_after": retry_after,
-                        "failure_receipt": exc.receipt,
+                        "failure_receipt": failure_receipt,
                     },
                     retry_after=retry_after,
                     holder=self.holder,
@@ -1502,14 +1726,15 @@ class VerificationConsumer:
             return self.ledger.terminal(
                 claimed.run_id,
                 "failed",
-                exc.receipt,
+                failure_receipt,
                 reason="codex_exec_failed",
                 holder=self.holder,
                 lease_id=lease_id,
             )
-        except (RuntimeError, ValueError) as exc:
+        except Exception as exc:
             # A zero-exit launcher can still fail its terminal contract (for
-            # example, no thread identity or no schema-valid final receipt).
+            # example, no thread identity, a process OS error, or no
+            # schema-valid final receipt).
             # Once claim/start has happened that failure needs the same exact
             # lease-fenced outcome as every other post-claim technical seam;
             # otherwise a malformed coordinator response strands a live run.
@@ -1537,9 +1762,6 @@ class VerificationConsumer:
                 if current is not None:
                     return current
                 raise
-        current = self.ledger.get(claimed.run_id)
-        if current is not None and current.status == "claimed":
-            started(session_id)
         config = self.launcher.config
         structured_rate_limit = (
             receipt.get("verdict") == "retry" and self._rate_limited(receipt)

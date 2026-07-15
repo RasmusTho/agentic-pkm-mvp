@@ -39,7 +39,7 @@ class DeliveredWithReviewsLauncher(Launcher):
         on_heartbeat=None,
     ):
         self.calls.append((context_pack, resume_session_id))
-        session = resume_session_id or "coordinator"
+        session = resume_session_id or "01900000-0000-7000-8000-000000000009"
         if on_thread_started:
             on_thread_started(session)
         return session, {
@@ -76,7 +76,7 @@ class FailedExecLauncher(Launcher):
         on_heartbeat=None,
     ):
         if on_thread_started:
-            on_thread_started("failed-thread")
+            on_thread_started("01900000-0000-7000-8000-000000000019")
         raise CodexExecFailure(
             {
                 "outcome": "codex_exec_failed",
@@ -84,7 +84,7 @@ class FailedExecLauncher(Launcher):
                 "returncode": 1,
                 "stderr": "bounded diagnostic",
                 "terminal_error": None,
-                "session_id": "failed-thread",
+                "session_id": "01900000-0000-7000-8000-000000000019",
             }
         )
 
@@ -119,7 +119,7 @@ def test_stop_cannot_borrow_live_owner_lease(tmp_path, holder, lease_id) -> None
         run.run_id,
         "real-owner",
         claimed.lease_id,
-        "coordinator",
+        "01900000-0000-7000-8000-000000000009",
         {"head_sha": HEAD},
     )
     loop = VerificationAgentLoop(
@@ -222,7 +222,7 @@ def test_codex_nonzero_exit_drains_stderr_and_rejects_valid_receipt(
     class Process:
         stdout = iter(
             [
-                json.dumps({"type": "thread.started", "thread_id": "thread-1"}) + "\n",
+                json.dumps({"type": "thread.started", "thread_id": "01900000-0000-7000-8000-000000000010"}) + "\n",
                 json.dumps(
                     {
                         "type": "item.completed",
@@ -264,11 +264,12 @@ def test_codex_nonzero_exit_drains_stderr_and_rejects_valid_receipt(
         containment_factory=ProvenContainment,
     )
 
-    with pytest.raises(RuntimeError, match="diagnostic"):
+    with pytest.raises(CodexExecFailure, match="class=execution") as exc_info:
         launcher.launch({"head_sha": HEAD})
+    assert str(exc_info.value.receipt["stderr"]).startswith("diagnostic")
 
 
-def test_consumer_persists_bounded_codex_failure_receipt(tmp_path) -> None:
+def test_consumer_persists_sanitized_codex_failure_receipt(tmp_path) -> None:
     state = ledger(tmp_path)
     result = VerificationConsumer(
         state,
@@ -280,5 +281,10 @@ def test_consumer_persists_bounded_codex_failure_receipt(tmp_path) -> None:
 
     assert result.status == "failed"
     assert result.stop_reason == "codex_exec_failed"
-    assert result.terminal_receipt["stderr"] == "bounded diagnostic"  # type: ignore[index]
+    assert result.terminal_receipt == {
+        "outcome": "codex_exec_failed",
+        "failure_class": "execution",
+        "returncode": 1,
+        "session_id": "01900000-0000-7000-8000-000000000019",
+    }
     assert state.attempts(result.run_id)[-1]["outcome"] == "launch_failed"

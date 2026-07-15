@@ -16,6 +16,7 @@ import jsonschema
 
 import app.dispatcher.verification_consumer as verification_consumer
 
+from app.dispatcher.cli import _compact_verification_run
 from app.dispatcher.verification_consumer import (
     AuthReceipt,
     CodexChatGPTAuthPreflight,
@@ -118,7 +119,7 @@ class Launcher:
     def __init__(self): self.calls = []
     def launch(self, context_pack, *, resume_session_id=None, on_thread_started=None, on_heartbeat=None):
         self.calls.append((context_pack, resume_session_id))
-        session = resume_session_id or "thread-new"
+        session = resume_session_id or "01900000-0000-7000-8000-000000000001"
         if on_thread_started: on_thread_started(session)
         if on_heartbeat: on_heartbeat()
         return session, {
@@ -156,7 +157,7 @@ class Launcher:
 class RateLimitedLauncher(Launcher):
     def launch(self, context_pack, *, resume_session_id=None, on_thread_started=None, on_heartbeat=None):
         self.calls.append((context_pack, resume_session_id))
-        session = resume_session_id or "thread-rate"
+        session = resume_session_id or "01900000-0000-7000-8000-000000000002"
         if on_thread_started: on_thread_started(session)
         return session, {
             "verdict": "retry", "head_sha": HEAD, "summary": "rate limit exhausted", "receipt_ids": [], "retry_after": "1h"
@@ -173,7 +174,7 @@ class NegatedRateLimitLauncher(Launcher):
         on_heartbeat=None,
     ):
         self.calls.append((context_pack, resume_session_id))
-        session = resume_session_id or "thread-not-rate-limited"
+        session = resume_session_id or "01900000-0000-7000-8000-000000000003"
         if on_thread_started:
             on_thread_started(session)
         return session, {
@@ -197,7 +198,7 @@ class DeliveredLauncher(Launcher):
         on_heartbeat=None,
     ):
         self.calls.append((context_pack, resume_session_id))
-        session = resume_session_id or "thread-delivered"
+        session = resume_session_id or "01900000-0000-7000-8000-000000000004"
         if on_thread_started:
             on_thread_started(session)
         return session, {
@@ -406,7 +407,7 @@ def test_post_launch_check_error_preserves_verification_anchor(tmp_path) -> None
 
     assert final.status == "needs_human"
     assert [row["kind"] for row in state.attempts(final.run_id)] == ["verification"]
-    assert [call[1] for call in launcher.calls] == [None, "thread-new"]
+    assert [call[1] for call in launcher.calls] == [None, "01900000-0000-7000-8000-000000000001"]
 
 
 def test_post_merge_terminal_read_outage_replays_exact_delivered_receipt(
@@ -905,10 +906,10 @@ def test_pending_repair_checks_persist_repair_before_backoff(tmp_path) -> None:
         def launch(self, context_pack, **kwargs):
             self.calls.append((context_pack, kwargs.get("resume_session_id")))
             if callback := kwargs.get("on_thread_started"):
-                callback("repair-session")
+                callback("01900000-0000-7000-8000-000000000005")
             truth.pr = eligible_pr(head={"ref": "branch", "sha": new_head})
             truth.check_rows = pending
-            return "repair-session", {
+            return "01900000-0000-7000-8000-000000000005", {
                 "verdict": "blocked",
                 "head_sha": new_head,
                 "summary": "repair pushed; checks pending",
@@ -960,7 +961,7 @@ def test_supporting_issue_addition_allows_repair_head_rebind_without_budget_rese
     class SupportingRepairLauncher(Launcher):
         def launch(self, context_pack, **kwargs):
             if callback := kwargs.get("on_thread_started"):
-                callback("supporting-repair-session")
+                callback("01900000-0000-7000-8000-000000000006")
             truth.pr = eligible_pr(
                 body=(
                     "Governing-Issue: #3603\n\nRefs #3603\n"
@@ -969,7 +970,7 @@ def test_supporting_issue_addition_allows_repair_head_rebind_without_budget_rese
                 head={"ref": "branch", "sha": new_head},
             )
             truth.check_rows = pending
-            return "supporting-repair-session", {
+            return "01900000-0000-7000-8000-000000000006", {
                 "verdict": "blocked",
                 "head_sha": new_head,
                 "summary": "bounded repair published",
@@ -1019,10 +1020,10 @@ def test_invalid_pending_repair_event_batch_fails_before_backoff(tmp_path) -> No
     class InvalidPendingRepairLauncher(Launcher):
         def launch(self, context_pack, **kwargs):
             if callback := kwargs.get("on_thread_started"):
-                callback("invalid-repair-session")
+                callback("01900000-0000-7000-8000-000000000007")
             truth.pr = eligible_pr(head={"ref": "branch", "sha": new_head})
             truth.check_rows = pending
-            return "invalid-repair-session", {
+            return "01900000-0000-7000-8000-000000000007", {
                 "verdict": "blocked",
                 "head_sha": new_head,
                 "summary": "schema-valid but semantically invalid repair",
@@ -1063,8 +1064,8 @@ def test_invalid_review_event_batch_terminals_without_stranding_lease(tmp_path) 
     class OverBudgetReviewLauncher(Launcher):
         def launch(self, context_pack, **kwargs):
             if callback := kwargs.get("on_thread_started"):
-                callback("over-budget-review-session")
-            return "over-budget-review-session", {
+                callback("01900000-0000-7000-8000-000000000008")
+            return "01900000-0000-7000-8000-000000000008", {
                 "verdict": "blocked",
                 "head_sha": HEAD,
                 "summary": "three clean reviews exceed the durable budget",
@@ -1121,10 +1122,10 @@ def test_pending_repair_replay_preserves_two_plus_two_accounting(tmp_path) -> No
         def launch(self, context_pack, **kwargs):
             self.calls.append((context_pack, kwargs.get("resume_session_id")))
             if callback := kwargs.get("on_thread_started"):
-                callback("repair-session")
+                callback("01900000-0000-7000-8000-000000000005")
             truth.pr = eligible_pr(head={"ref": "branch", "sha": new_head})
             truth.check_rows = pending
-            return "repair-session", {
+            return "01900000-0000-7000-8000-000000000005", {
                 "verdict": "blocked",
                 "head_sha": new_head,
                 "summary": "repair pushed; checks pending",
@@ -1140,7 +1141,7 @@ def test_pending_repair_replay_preserves_two_plus_two_accounting(tmp_path) -> No
         def launch(self, context_pack, **kwargs):
             self.calls.append((context_pack, kwargs.get("resume_session_id")))
             truth.pr = merged_pr(head={"ref": "branch", "sha": new_head})
-            return "delivery-session", {
+            return "01900000-0000-7000-8000-000000000020", {
                 "verdict": "delivered",
                 "head_sha": new_head,
                 "summary": "checks green and reviews clean",
@@ -1187,10 +1188,10 @@ def test_exact_terminal_receipt_replay_preserves_closure_anchor(tmp_path) -> Non
     state = ledger(tmp_path)
     run = state.ingest(request())
     claimed = state.claim(run.run_id, "host")
-    state.start(run.run_id, "host", claimed.lease_id, "coordinator", {})
+    state.start(run.run_id, "host", claimed.lease_id, "01900000-0000-7000-8000-000000000009", {})
     receipt = {"verdict": "delivered", "head_sha": HEAD, "summary": "clean"}
     key = verification_attempt_idempotency_key(
-        "coordinator", "gpt-5.6-sol", "xhigh", receipt
+        "01900000-0000-7000-8000-000000000009", "gpt-5.6-sol", "xhigh", receipt
     )
     events = [
         {
@@ -1210,7 +1211,7 @@ def test_exact_terminal_receipt_replay_preserves_closure_anchor(tmp_path) -> Non
 
     for context in ({"head_sha": HEAD}, {"head_sha": "b" * 40}):
         state.record_attempt(
-            run.run_id, "verification", "coordinator", "gpt-5.6-sol", "xhigh",
+            run.run_id, "verification", "01900000-0000-7000-8000-000000000009", "gpt-5.6-sol", "xhigh",
             context, "launched", receipt, holder="host", lease_id=claimed.lease_id,
             idempotency_key=key,
         )
@@ -1231,10 +1232,10 @@ def test_changed_terminal_receipt_does_not_deduplicate_verification_anchor(tmp_p
 
     for receipt in (first, changed):
         state.record_attempt(
-            run.run_id, "verification", "coordinator", "gpt-5.6-sol", "xhigh",
+            run.run_id, "verification", "01900000-0000-7000-8000-000000000009", "gpt-5.6-sol", "xhigh",
             {}, "launched", receipt, holder="host", lease_id=claimed.lease_id,
             idempotency_key=verification_attempt_idempotency_key(
-                "coordinator", "gpt-5.6-sol", "xhigh", receipt
+                "01900000-0000-7000-8000-000000000009", "gpt-5.6-sol", "xhigh", receipt
             ),
         )
 
@@ -1445,7 +1446,7 @@ def test_codex_launcher_uses_explicit_noninteractive_flags_and_no_api_env(tmp_pa
 
     class Result:
         returncode = 0
-        stdout = '{"type":"thread.started","thread_id":"thread-1"}\n{"type":"item.completed","item":{"type":"agent_message","text":"{\\"verdict\\":\\"blocked\\",\\"head_sha\\":\\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\",\\"summary\\":\\"test\\",\\"receipt_ids\\":[],\\"retry_after\\":null,\\"review_events\\":null,\\"human_exception\\":null}"}}\n'
+        stdout = '{"type":"thread.started","thread_id":"01900000-0000-7000-8000-000000000010"}\n{"type":"item.completed","item":{"type":"agent_message","text":"{\\"verdict\\":\\"blocked\\",\\"head_sha\\":\\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\",\\"summary\\":\\"test\\",\\"receipt_ids\\":[],\\"retry_after\\":null,\\"review_events\\":null,\\"human_exception\\":null}"}}\n'
 
     def runner(command, **kwargs):
         calls.append((command, kwargs))
@@ -1484,14 +1485,14 @@ def test_codex_launcher_uses_explicit_noninteractive_flags_and_no_api_env(tmp_pa
     launcher = CodexExecLauncher(tmp_path, schema, tmp_path / "context.json", adapter_path=Path(__file__).resolve().parents[2] / ".codex/agents/verification-closer.toml", runner=runner)
     session, _ = launcher.launch({"head_sha": HEAD})
     command, kwargs = calls[0]
-    assert session == "thread-1"
+    assert session == "01900000-0000-7000-8000-000000000010"
     assert command[:2] == ["codex", "exec"]
     assert command[2:5] == ["--json", "--sandbox", "workspace-write"]
     assert "OPENAI_API_KEY" not in kwargs["env"]
     assert "CODEX_API_KEY" not in kwargs["env"]
-    resumed = launcher.command("thread-1")
+    resumed = launcher.command("01900000-0000-7000-8000-000000000010")
     assert resumed[:11] == command[:11]
-    assert "resume" in resumed and resumed[resumed.index("resume") + 1] == "thread-1"
+    assert "resume" in resumed and resumed[resumed.index("resume") + 1] == "01900000-0000-7000-8000-000000000010"
 
 
 class _AuthorityLossOutput:
@@ -1635,7 +1636,7 @@ class _CleanExitDetachedDescendantProcess:
             "human_exception": None,
         }
         self.stdout = io.StringIO(
-            json.dumps({"type": "thread.started", "thread_id": "thread-clean"})
+            json.dumps({"type": "thread.started", "thread_id": "01900000-0000-7000-8000-000000000011"})
             + "\n"
             + json.dumps(
                 {
@@ -1670,6 +1671,55 @@ class _CleanExitDetachedDescendantProcess:
             self.descendant_alive = False
 
 
+class _PostSpawnOsFailureProcess:
+    def __init__(self) -> None:
+        private = "credential=SHOULD_NOT_PERSIST /Users/operator/private-vault"
+
+        class Output:
+            def __init__(self) -> None:
+                self.index = 0
+
+            def __iter__(self):
+                return self
+
+            def __next__(self) -> str:
+                self.index += 1
+                if self.index == 1:
+                    return json.dumps(
+                        {
+                            "type": "thread.started",
+                            "thread_id": "01900000-0000-7000-8000-000000000023",
+                        }
+                    )
+                raise OSError(private)
+
+        self.stdout = Output()
+        self.stderr = io.StringIO("")
+        self.returncode: int | None = None
+        self.pid = 42_025
+        self.descendant_alive = True
+        self.terminate_calls = 0
+        self.kill_calls = 0
+        self.wait_calls = 0
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.terminate_calls += 1
+
+    def kill(self) -> None:
+        self.kill_calls += 1
+        self.returncode = -9
+        self.descendant_alive = False
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.wait_calls += 1
+        if self.returncode is None:
+            raise verification_consumer.subprocess.TimeoutExpired("codex", timeout)
+        return self.returncode
+
+
 class _ProvenContainment:
     def environment(self, base: Mapping[str, str]) -> dict[str, str]:
         return dict(base)
@@ -1693,9 +1743,32 @@ class _EscapedDescendantContainment(_ProvenContainment):
         return self.proven
 
 
+class _FailingContainment(_ProvenContainment):
+    def __init__(self, *, fail_at: str) -> None:
+        self.fail_at = fail_at
+
+    def attach(self, root_pid: int) -> None:
+        if self.fail_at == "attach":
+            raise PermissionError(
+                "credential=SHOULD_NOT_PERSIST /Users/operator/private-vault"
+            )
+        super().attach(root_pid)
+
+    def cleanup(self) -> bool:
+        if self.fail_at == "cleanup":
+            raise PermissionError(
+                "credential=SHOULD_NOT_PERSIST /Users/operator/private-vault"
+            )
+        return True
+
+
 def _authority_loss_launcher(
     tmp_path: Path,
     containment_factory: Callable[[], verification_consumer.WholeTreeContainment]
+    | None = None,
+    cleanup_tracker_factory: Callable[
+        [], verification_consumer.WholeTreeContainment
+    ]
     | None = None,
 ) -> CodexExecLauncher:
     return CodexExecLauncher(
@@ -1706,6 +1779,9 @@ def _authority_loss_launcher(
         adapter_path=Path(__file__).resolve().parents[2]
         / ".codex/agents/verification-closer.toml",
         containment_factory=containment_factory or _ProvenContainment,
+        cleanup_tracker_factory=(
+            cleanup_tracker_factory or verification_consumer.TaggedProcessTreeCleanup
+        ),
     )
 
 
@@ -1719,7 +1795,7 @@ def _late_terminal_lines() -> list[str]:
         "review_events": None,
     }
     return [
-        json.dumps({"type": "thread.started", "thread_id": "thread-lost"}) + "\n",
+        json.dumps({"type": "thread.started", "thread_id": "01900000-0000-7000-8000-000000000012"}) + "\n",
         json.dumps(
             {
                 "type": "item.completed",
@@ -1992,7 +2068,7 @@ def _clean_parent_exit_with_detached_descendant(
         {"head_sha": HEAD}
     )
 
-    assert session_id == "thread-clean"
+    assert session_id == "01900000-0000-7000-8000-000000000011"
     return process, receipt
 
 
@@ -2044,7 +2120,7 @@ def test_new_session_descendant_cannot_outlive_launcher(
         tmp_path, containment_factory=lambda: containment
     ).launch({"head_sha": HEAD})
 
-    assert session_id == "thread-clean"
+    assert session_id == "01900000-0000-7000-8000-000000000011"
     assert receipt["verdict"] == "blocked"
     assert not process.descendant_alive
     assert containment.cleanup_calls == 1
@@ -2073,6 +2149,131 @@ def test_terminal_receipt_fails_closed_without_process_tree_containment(
 
     assert not process.descendant_alive
     assert containment.cleanup_calls == 1
+
+
+@pytest.mark.parametrize("fail_at", ["attach", "cleanup"])
+def test_containment_adapter_failure_reaps_and_persists_only_safe_receipt(
+    tmp_path,
+    monkeypatch,
+    fail_at: str,
+) -> None:
+    private = "credential=SHOULD_NOT_PERSIST /Users/operator/private-vault"
+    process = _CleanExitDetachedDescendantProcess()
+    tracker = _EscapedDescendantContainment(process, proven=False)
+    monkeypatch.setattr(
+        verification_consumer.subprocess, "Popen", lambda *args, **kwargs: process
+    )
+    monkeypatch.setattr(
+        verification_consumer.os,
+        "killpg",
+        lambda process_group_id, sig: (_ for _ in ()).throw(
+            ProcessLookupError(process_group_id)
+        ),
+    )
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        _authority_loss_launcher(
+            tmp_path,
+            containment_factory=lambda: _FailingContainment(fail_at=fail_at),
+            cleanup_tracker_factory=lambda: tracker,
+        ),
+        "host",
+    ).consume(request())
+
+    durable = json.dumps(
+        {
+            "attempts": state.attempts(result.run_id),
+            "terminal": result.terminal_receipt,
+            "status": _compact_verification_run(result),
+        },
+        sort_keys=True,
+    )
+    assert result.status == "backoff"
+    assert result.claimed_by is None
+    assert result.lease_id is None
+    assert result.terminal_receipt["outcome"] == "launcher_contract_failed"
+    assert result.terminal_receipt["error_type"] == "RuntimeError"
+    assert private not in durable
+    assert "PermissionError" not in durable
+    assert not process.descendant_alive
+    assert process.wait_calls >= 1
+    assert tracker.cleanup_calls >= 1
+
+
+def test_popen_os_failure_releases_lease_with_safe_status(tmp_path, monkeypatch) -> None:
+    private = "credential=SHOULD_NOT_PERSIST /Users/operator/private-vault"
+    monkeypatch.setattr(
+        verification_consumer.subprocess,
+        "Popen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError(private)),
+    )
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        _authority_loss_launcher(tmp_path),
+        "host",
+    ).consume(request())
+
+    durable = json.dumps(_compact_verification_run(result), sort_keys=True)
+    assert result.status == "backoff"
+    assert result.claimed_by is None
+    assert result.lease_id is None
+    assert result.terminal_receipt["outcome"] == "launcher_contract_failed"
+    assert result.terminal_receipt["error_type"] == "FileNotFoundError"
+    assert private not in durable
+
+
+def test_post_spawn_stream_failure_reaps_tree_and_sanitizes_status(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    private = "credential=SHOULD_NOT_PERSIST /Users/operator/private-vault"
+    process = _PostSpawnOsFailureProcess()
+    tracker = _EscapedDescendantContainment(process, proven=False)
+    monkeypatch.setattr(
+        verification_consumer.subprocess, "Popen", lambda *args, **kwargs: process
+    )
+    monkeypatch.setattr(
+        verification_consumer.os,
+        "killpg",
+        lambda process_group_id, sig: (_ for _ in ()).throw(
+            ProcessLookupError(process_group_id)
+        ),
+    )
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        _authority_loss_launcher(
+            tmp_path,
+            cleanup_tracker_factory=lambda: tracker,
+        ),
+        "host",
+    ).consume(request())
+
+    durable = json.dumps(
+        {
+            "attempts": state.attempts(result.run_id),
+            "status": _compact_verification_run(result),
+        },
+        sort_keys=True,
+    )
+    assert result.status == "backoff"
+    assert result.claimed_by is None
+    assert result.lease_id is None
+    assert result.terminal_receipt["outcome"] == "launcher_contract_failed"
+    assert result.terminal_receipt["error_type"] == "RuntimeError"
+    assert private not in durable
+    assert not process.descendant_alive
+    assert process.kill_calls == 1
+    assert process.wait_calls >= 2
+    assert tracker.cleanup_calls >= 1
 
 
 def test_tagged_cleanup_reaps_setsid_descendant() -> None:
@@ -2135,12 +2336,13 @@ def test_authority_lost_child_output_is_rejected(tmp_path, monkeypatch) -> None:
     process = _AuthorityLossProcess(_late_terminal_lines())
     monkeypatch.setattr(verification_consumer.subprocess, "Popen", lambda *args, **kwargs: process)
 
-    with pytest.raises(CodexExecFailure, match="heartbeat authority lost"):
+    with pytest.raises(CodexExecFailure, match="class=authority_loss") as exc_info:
         _authority_loss_launcher(tmp_path).launch(
             {"head_sha": HEAD},
             on_heartbeat=lambda: (_ for _ in ()).throw(RuntimeError("lease lost")),
         )
 
+    assert exc_info.value.receipt["outcome"] == "heartbeat_authority_lost"
     assert process.stdout.reads == 1
 
 
@@ -2157,7 +2359,7 @@ def test_heartbeat_authority_loss_persists_one_backoff_receipt(tmp_path) -> None
             on_heartbeat=None,
         ):
             if on_thread_started:
-                on_thread_started("thread-lost")
+                on_thread_started("01900000-0000-7000-8000-000000000012")
             with state.store._connect() as conn:
                 conn.execute(
                     "UPDATE verification_runs "
@@ -2171,7 +2373,7 @@ def test_heartbeat_authority_loss_persists_one_backoff_receipt(tmp_path) -> None
                     "returncode": -15,
                     "stderr": "heartbeat authority lost",
                     "terminal_error": "ValueError: verification heartbeat ownership mismatch",
-                    "session_id": "thread-lost",
+                    "session_id": "01900000-0000-7000-8000-000000000012",
                 }
             )
 
@@ -2235,7 +2437,7 @@ def test_schema_invalid_terminal_output_records_technical_backoff(tmp_path) -> N
             on_heartbeat=None,
         ):
             if on_thread_started:
-                on_thread_started("thread-invalid")
+                on_thread_started("01900000-0000-7000-8000-000000000013")
             raise RuntimeError("codex exec produced no schema-valid final agent receipt")
 
     state = ledger(tmp_path)
@@ -2432,7 +2634,7 @@ def test_restart_recovers_without_duplicate_agent_or_mutation(tmp_path) -> None:
     consumer = VerificationConsumer(state, Truth(eligible_pr(), GREEN), Auth(), launcher, "host")
     run = state.ingest(request())
     claimed = state.claim(run.run_id, "original")
-    running = state.start(run.run_id, "original", claimed.lease_id, "thread-new", {"head_sha": HEAD})
+    running = state.start(run.run_id, "original", claimed.lease_id, "01900000-0000-7000-8000-000000000001", {"head_sha": HEAD})
     assert consumer.recover(running.run_id).run_id == running.run_id
     assert launcher.calls == []
 
@@ -2445,7 +2647,7 @@ def test_restart_recovers_without_duplicate_agent_or_mutation(tmp_path) -> None:
         conn.commit()
     resumed = consumer.recover(running.run_id)
     assert resumed.status == "needs_human"
-    assert launcher.calls[-1][1] == "thread-new"
+    assert launcher.calls[-1][1] == "01900000-0000-7000-8000-000000000001"
 
 
 def test_recovery_live_truth_error_backs_off_claimed_run(tmp_path) -> None:
@@ -2458,7 +2660,7 @@ def test_recovery_live_truth_error_backs_off_claimed_run(tmp_path) -> None:
         run.run_id,
         "original",
         claimed.lease_id,
-        "old-session",
+        "01900000-0000-7000-8000-000000000014",
         {"head_sha": HEAD},
     )
     with state.store._connect() as conn:
@@ -2474,7 +2676,7 @@ def test_recovery_live_truth_error_backs_off_claimed_run(tmp_path) -> None:
     ).recover(running.run_id)
 
     assert result.status == "backoff"
-    assert result.coordinator_session_id == "old-session"
+    assert result.coordinator_session_id == "01900000-0000-7000-8000-000000000014"
     assert truth.pull_calls == 2
     assert launcher.calls == []
 
@@ -2513,7 +2715,7 @@ def test_recover_rejects_live_head_movement_before_resume(tmp_path) -> None:
         run.run_id,
         "original",
         claimed.lease_id,
-        "old-session",
+        "01900000-0000-7000-8000-000000000014",
         {"head_sha": HEAD},
     )
     with state.store._connect() as conn:
@@ -2532,7 +2734,7 @@ def test_recover_rejects_live_head_movement_before_resume(tmp_path) -> None:
     assert current is not None
     assert current.status == "running"
     assert current.head_sha == HEAD
-    assert current.coordinator_session_id == "old-session"
+    assert current.coordinator_session_id == "01900000-0000-7000-8000-000000000014"
     assert truth.pull_calls == 1
     assert truth.check_calls == 0
     assert auth.calls == 0
@@ -2605,7 +2807,7 @@ def test_structured_rate_limit_receipt_replays_without_duplicate_attempt(
 def _nonzero_codex_launcher(tmp_path, stderr: str) -> CodexExecLauncher:
     class Result:
         returncode = 1
-        stdout = '{"type":"thread.started","thread_id":"thread-nonzero"}\n'
+        stdout = '{"type":"thread.started","thread_id":"01900000-0000-7000-8000-000000000015"}\n'
 
         def __init__(self, failure_stderr: str) -> None:
             self.stderr = failure_stderr
@@ -2669,3 +2871,228 @@ def test_nonzero_structured_rate_limit_signal_backs_off(tmp_path) -> None:
     assert [(row[0], row[1]) for row in attempts] == [
         ("verification", "rate_limited")
     ]
+
+
+class RawDiagnosticFailureLauncher(Launcher):
+    def __init__(self, receipt: Mapping[str, object]) -> None:
+        super().__init__()
+        self.receipt = dict(receipt)
+
+    def launch(self, context_pack, **kwargs):
+        self.calls.append((context_pack, kwargs.get("resume_session_id")))
+        if callback := kwargs.get("on_thread_started"):
+            callback(str(self.receipt.get("session_id") or "01900000-0000-7000-8000-000000000016"))
+        raise CodexExecFailure(self.receipt)
+
+
+def test_codex_failure_receipt_redacts_stderr_before_persistence_and_status(
+    tmp_path,
+) -> None:
+    private = "credential=SHOULD_NOT_PERSIST /Users/operator/private-vault"
+    state = ledger(tmp_path)
+    launcher = RawDiagnosticFailureLauncher(
+        {
+            "outcome": "codex_exec_failed",
+            "failure_class": "execution",
+            "error_type": "ghp_SHOULD_NOT_PERSIST",
+            "returncode": 1,
+            "stderr": private,
+            "terminal_error": '{"message":"token=also-private"}',
+            "session_id": "01900000-0000-7000-8000-000000000016",
+        }
+    )
+
+    result = VerificationConsumer(
+        state, Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    durable = json.dumps(
+        {
+            "attempts": state.attempts(result.run_id),
+            "terminal": result.terminal_receipt,
+            "status": _compact_verification_run(result),
+        },
+        sort_keys=True,
+    )
+    assert result.status == "failed"
+    assert private not in durable
+    assert "token=also-private" not in durable
+    assert "ghp_SHOULD_NOT_PERSIST" not in durable
+    assert "stderr" not in durable
+    assert "terminal_error" not in durable
+    assert result.terminal_receipt == {
+        "outcome": "codex_exec_failed",
+        "failure_class": "execution",
+        "returncode": 1,
+        "session_id": "01900000-0000-7000-8000-000000000016",
+    }
+
+
+def test_untrusted_session_identity_never_reaches_ledger_or_status(tmp_path) -> None:
+    private = "thread credential=SHOULD_NOT_PERSIST /Users/operator/private-vault"
+    for token_shaped in (
+        "sk-proj-SHOULD_NOT_PERSIST",
+        "ghp_SHOULD_NOT_PERSIST",
+    ):
+        assert verification_consumer.bounded_coordinator_session_id(token_shaped) is None
+        assert verification_consumer.bounded_error_type(token_shaped) is None
+
+    class UnsafeSessionLauncher(Launcher):
+        def launch(self, context_pack, **kwargs):
+            if callback := kwargs.get("on_thread_started"):
+                callback(private)
+            raise AssertionError("unsafe session identity must stop the launcher")
+
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state, Truth(eligible_pr(), GREEN), Auth(), UnsafeSessionLauncher(), "host"
+    ).consume(request())
+
+    assert result.status == "backoff"
+    assert result.coordinator_session_id is None
+    assert private not in json.dumps(_compact_verification_run(result), sort_keys=True)
+
+    class MismatchedReturnLauncher(Launcher):
+        def launch(self, context_pack, **kwargs):
+            if callback := kwargs.get("on_thread_started"):
+                callback("01900000-0000-7000-8000-000000000017")
+            return private, {
+                "verdict": "blocked",
+                "head_sha": HEAD,
+                "summary": "must not be recorded",
+                "receipt_ids": [],
+                "retry_after": None,
+                "review_events": None,
+                "human_exception": None,
+            }
+
+    mismatch_state = ledger(tmp_path / "mismatch")
+    mismatch = VerificationConsumer(
+        mismatch_state,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        MismatchedReturnLauncher(),
+        "host",
+    ).consume(request())
+    assert mismatch.status == "backoff"
+    assert mismatch.coordinator_session_id == "01900000-0000-7000-8000-000000000017"
+    assert mismatch_state.attempts(mismatch.run_id) == []
+    assert private not in json.dumps(_compact_verification_run(mismatch), sort_keys=True)
+
+    # Status also fails closed for a legacy row written before this boundary.
+    legacy_state = ledger(tmp_path / "legacy")
+    ingested = legacy_state.ingest(request())
+    claimed = legacy_state.claim(ingested.run_id, "legacy")
+    legacy_state.start(
+        ingested.run_id,
+        "legacy",
+        claimed.lease_id or "",
+        private,
+        {"head_sha": HEAD},
+    )
+    legacy = legacy_state.terminal(
+        ingested.run_id,
+        "failed",
+        {
+            "outcome": "codex_exec_failed",
+            "failure_class": "execution",
+            "error_type": "sk-proj-SHOULD_NOT_PERSIST",
+            "returncode": 1,
+            "session_id": private,
+            "stderr": private,
+            "terminal_error": private,
+        },
+        reason="codex_exec_failed",
+        holder="legacy",
+        lease_id=claimed.lease_id or "",
+    )
+    compact = _compact_verification_run(legacy)
+    assert compact["coordinator_session_id"] is None
+    assert "session_id" not in compact["terminal_receipt"]
+    assert "error_type" not in compact["terminal_receipt"]
+    assert private not in json.dumps(compact, sort_keys=True)
+
+
+def test_redacted_nonzero_rate_limit_still_enters_bounded_backoff(tmp_path) -> None:
+    private = "credential=SHOULD_NOT_PERSIST /Users/operator/private-vault"
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        _nonzero_codex_launcher(
+            tmp_path,
+            '{"error":{"type":"rate_limit_exceeded","status":429}} '
+            + private,
+        ),
+        "host",
+    ).consume(request())
+
+    durable = json.dumps(
+        {"attempts": state.attempts(result.run_id), "terminal": result.terminal_receipt},
+        sort_keys=True,
+    )
+    assert result.status == "backoff"
+    assert result.terminal_receipt["failure_receipt"]["failure_class"] == "rate_limit"
+    assert result.terminal_receipt["api_fallback"] is False
+    assert private not in durable
+    assert "stderr" not in durable
+    assert "terminal_error" not in durable
+
+
+def test_authority_loss_receipt_persists_only_safe_fields(tmp_path) -> None:
+    private = "RuntimeError: /Users/operator/private-vault token=SHOULD_NOT_PERSIST"
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        RawDiagnosticFailureLauncher(
+            {
+                "outcome": "heartbeat_authority_lost",
+                "failure_class": "authority_loss",
+                "error_type": "RuntimeError",
+                "returncode": -15,
+                "stderr": "heartbeat authority lost",
+                "terminal_error": private,
+                "session_id": "01900000-0000-7000-8000-000000000012",
+            }
+        ),
+        "host",
+    ).consume(request())
+
+    durable = json.dumps(result.terminal_receipt, sort_keys=True)
+    assert result.status == "backoff"
+    assert result.terminal_receipt["failure_class"] == "authority_loss"
+    assert result.terminal_receipt["error_type"] == "RuntimeError"
+    assert private not in durable
+    assert "stderr" not in durable
+    assert "terminal_error" not in durable
+
+
+def test_redacted_failure_replay_remains_deduplicated(tmp_path) -> None:
+    private = "credential=SHOULD_NOT_PERSIST /Users/operator/private-vault"
+    state = ledger(tmp_path)
+    launcher = RawDiagnosticFailureLauncher(
+        {
+            "outcome": "codex_exec_failed",
+            "failure_class": "execution",
+            "returncode": 1,
+            "stderr": private,
+            "terminal_error": private,
+            "session_id": "01900000-0000-7000-8000-000000000018",
+        }
+    )
+    consumer = VerificationConsumer(
+        state, Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    )
+
+    first = consumer.consume(request())
+    replay = consumer.consume(request())
+
+    assert replay == first
+    assert len(launcher.calls) == 1
+    assert len(state.attempts(first.run_id)) == 1
+    assert private not in json.dumps(
+        {"attempts": state.attempts(first.run_id), "terminal": first.terminal_receipt},
+        sort_keys=True,
+    )

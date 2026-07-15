@@ -86,8 +86,11 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - The Codex process boundary drains bounded stderr concurrently and rejects non-zero exits or
   terminal error events even when stdout contained an otherwise valid receipt. A bounded rate-limit,
   usage-limit, quota, or credit-exhaustion signal on that non-zero path remains a lease-fenced backoff
-  receipt with no repair-budget use or API-key fallback. A zero exit without both thread identity
-  and one schema-valid final receipt also enters exact-lease technical backoff; malformed or missing
+  receipt with no repair-budget use or API-key fallback. Raw stderr, terminal event content, exception
+  text, paths, and credentials are transient classification input only: durable attempts, terminal
+  receipts, and `verification-status` retain only bounded outcome, return-code, failure-class,
+  error-type, retry, and canonical UUID coordinator-session fields. A zero exit without both thread
+  identity and one schema-valid final receipt also enters exact-lease technical backoff; malformed or missing
   coordinator output can neither terminal the run nor retain an active claim. Every launch carries a
   launch-scoped process-tree tracker plus a high-entropy tag so bounded cleanup can remove observed
   descendants even after a `setsid` escape. Before a clean terminal receipt returns, the launcher

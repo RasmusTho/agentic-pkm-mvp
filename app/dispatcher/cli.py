@@ -349,6 +349,11 @@ def _cmd_status(args: argparse.Namespace, store: SqliteStore) -> int:
 
 
 def _compact_verification_run(run: Any) -> dict[str, Any]:
+    from app.dispatcher.verification_consumer import (
+        bounded_coordinator_session_id,
+        redact_durable_diagnostics,
+    )
+
     return {
         "run_id": run.run_id,
         "idempotency_key": run.idempotency_key,
@@ -363,9 +368,11 @@ def _compact_verification_run(run: Any) -> dict[str, Any]:
         "claimed_by": run.claimed_by,
         "lease_id": run.lease_id,
         "lease_expires_at": run.lease_expires_at,
-        "coordinator_session_id": run.coordinator_session_id,
+        "coordinator_session_id": bounded_coordinator_session_id(
+            run.coordinator_session_id
+        ),
         "retry_after": run.retry_after,
-        "terminal_receipt": run.terminal_receipt,
+        "terminal_receipt": redact_durable_diagnostics(run.terminal_receipt),
     }
 
 

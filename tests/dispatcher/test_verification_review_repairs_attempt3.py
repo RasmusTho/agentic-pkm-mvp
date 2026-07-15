@@ -31,13 +31,13 @@ def _running_loop(tmp_path):
         run.run_id,
         "host",
         claimed.lease_id,
-        "coordinator",
+        "01900000-0000-7000-8000-000000000022",
         {"head_sha": HEAD},
     )
     state.record_attempt(
         run.run_id,
         "verification",
-        "coordinator",
+        "01900000-0000-7000-8000-000000000022",
         "gpt-5.6-terra",
         "high",
         {"head_sha": HEAD},
@@ -107,7 +107,7 @@ class NonzeroRateLimitedLauncher(Launcher):
     ):
         self.calls.append((context_pack, resume_session_id))
         if on_thread_started:
-            on_thread_started("rate-limited-thread")
+            on_thread_started("01900000-0000-7000-8000-000000000021")
         raise CodexExecFailure(
             {
                 "outcome": "codex_exec_failed",
@@ -115,7 +115,7 @@ class NonzeroRateLimitedLauncher(Launcher):
                 "returncode": 1,
                 "stderr": "rate limit exceeded; retry after 900s",
                 "terminal_error": '{"type":"error","message":"credit exhausted"}',
-                "session_id": "rate-limited-thread",
+                "session_id": "01900000-0000-7000-8000-000000000021",
             }
         )
 
@@ -180,10 +180,10 @@ class RepairedDeliveryLauncher(Launcher):
     ):
         self.calls.append((context_pack, resume_session_id))
         if on_thread_started:
-            on_thread_started("coordinator")
+            on_thread_started("01900000-0000-7000-8000-000000000022")
         self.truth.head = self.live_head
         self.truth.merged = True
-        return "coordinator", {
+        return "01900000-0000-7000-8000-000000000022", {
             "verdict": "delivered",
             "head_sha": NEW_HEAD,
             "summary": "repair pushed and independently re-reviewed",
