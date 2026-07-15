@@ -46,12 +46,13 @@ generation unknown. A process-global mutable manager cannot safely represent con
   auth state under the MVR-01 instance-state boundary (native installs use private app-data). The
   record has its own schema, revision, migration provenance, lock/fsync/atomic-write path, and is
   never derived from `appInstallId` or the credential value. Production API and CLI authentication
-  resolve the same record. For supported auth-disabled/no-key postures, bootstrap binds the role to
-  either `trusted_loopback` after proving the effective listener and request path are loopback-local,
-  or `trusted_companion_proxy` only when server configuration identifies the Companion peer and the
-  existing authentication middleware validates that peer. Both subjects are server-derived; proxy,
-  forwarding, or client headers cannot claim them. A later governed move to API-key auth binds the
-  credential fingerprint to the same role and disables both no-key admissions in one transaction.
+  resolve the same record. Bootstrap binds the same local role to `trusted_loopback` after proving
+  the effective listener and request path are loopback-local, and to `trusted_companion_proxy` only
+  when server configuration identifies the Companion peer and existing middleware validates it,
+  regardless of whether an API key is also configured. Both subjects are server-derived; proxy,
+  forwarding, or client headers cannot claim them. Provisioning or rotating API-key auth binds the
+  credential fingerprint to the same role without disabling the already-supported loopback/proxy
+  subjects; only an explicit governed posture change may revoke one atomically.
   Multiple ambiguous credentials, any other zero-credential non-loopback posture, unsafe
   ownership, missing durable storage, or a partial record fails preflight with an explicit
   provisioning action. A governed credential rotation preserves the role ID, while an explicitly
@@ -169,6 +170,9 @@ retrieval, settings, or write provenance to leak between humans or vaults.
   provisioning completes.
   - Verify: `tests/integration/test_local_operator_principal_bootstrap.py::test_zero_key_loopback_and_trusted_companion_proxy_map_to_local_role`
   - Verify: `tests/integration/test_local_operator_principal_bootstrap.py::test_zero_key_nontrusted_nonloopback_fails_principal_preflight`
+- [ ] A configured-key installation still maps middleware-admitted keyless loopback and trusted
+  Companion-proxy requests to the same local delegated role, while nontrusted peers require the key.
+  - Verify: `tests/integration/test_local_operator_principal_bootstrap.py::test_configured_key_preserves_local_and_trusted_proxy_subjects`
 - [ ] Security and ActiveContextSet owner contracts describe the shipped credential/loopback/proxy subject
   to delegated-role mapping, separate instance identity, and fail-closed principal resolution.
   - Verify: doc writeback at `docs/SECURITY.md :: Security` + doc writeback at

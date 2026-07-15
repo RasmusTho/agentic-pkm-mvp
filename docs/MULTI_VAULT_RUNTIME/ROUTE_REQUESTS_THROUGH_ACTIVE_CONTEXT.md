@@ -223,10 +223,11 @@ to cross its floor; independently safe explicit-global work may continue.
 - [ ] **MVR-05A:** The deployment fence inventory is generated from production compose/runtime producer truth and
   fails when any enabled process that can call the DB/outbox seam is absent from the drain/stop plan.
   - Verify: `tests/ops/test_mvr05_mixed_version_fence.py::test_fence_inventory_covers_every_enabled_db_outbox_process`
-- [ ] **MVR-05A:** Every existing single-vault watcher/ingest/capture/Heimdal producer remains live
-  across 05A–05D through the production compatibility ingress translator, which derives its one
-  authorized compatibility binding and emits a complete versioned envelope or fails loud; no fresh
-  legacy row can appear while later native producer migrations remain pending.
+- [ ] **MVR-05A:** Existing vault-bound watcher/ingest and Heimdal vault-note projection producers
+  remain live across 05A–05D through the compatibility ingress translator, which derives one
+  authorized binding and emits a complete versioned envelope or fails loud. Vault-independent raw
+  Heimdal capture/observation remains explicitly `global` and needs no invented vault binding; no
+  fresh legacy row can appear while later native producer migrations remain pending.
   - Verify: `tests/ops/test_mvr05_mixed_version_fence.py::test_compatibility_translator_keeps_existing_producers_live_without_legacy_rows`
 - [ ] **MVR-05A:** Before any migrated vault-bound row is polled, the recreated scalar worker validates
   its explicit compatibility binding, authority, revision, and root; a mismatched or ambiguous row

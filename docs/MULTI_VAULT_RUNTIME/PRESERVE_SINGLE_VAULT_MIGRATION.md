@@ -28,6 +28,9 @@ producer and consumer has a replacement and proves reversibility to the single-v
   otherwise record one named removal issue/deadline rather than hiding debt.
 - Prove no-vault and one-vault startup, picker, restart, watcher-idle, requests, CLI, agents, MCP,
   receipts, and promotion-channel behavior.
+- Add the deterministic `scripts/multi_vault_test_channel_smoke.py` harness consumed by MVR-08; it
+  accepts only an explicit redacted fixture manifest and exercises production APIs without logging
+  paths, names, tokens, or content.
 
 ## Concretely
 
@@ -79,6 +82,9 @@ can break startup or strand durable state. Both failures are latent outages rath
 - [ ] The architecture inventory finds no unapproved production global vault resolution outside
   named bootstrap/compatibility adapters.
   - Verify: `tests/architecture/test_multi_vault_context_boundaries.py::test_production_consumers_use_context_seam`
+- [ ] The test-channel smoke harness exercises two bindings/sessions, one dimension read, one
+  governed write, and background health through production entrypoints while emitting a redacted receipt.
+  - Verify: `tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_harness_is_production_path_and_redacted`
 - [ ] Existing no-vault and one-vault journeys preserve startup, picker, request, restart, watcher
   idle/bind, CLI/agent/MCP, retrieval, governed-write, and receipt behavior.
   - Verify: `tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`

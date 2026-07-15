@@ -140,6 +140,15 @@ operators, or future agents still act on stale single-global-vault truth.
   not the merged-head closure receipt.
 - `pytest -q tests/integration/test_multi_vault_capability_acceptance.py::test_merged_multi_vault_capability tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/uat/`
+- Deploy the exact candidate through the governed test-channel path:
+  `scripts/deploy_channel.sh deploy test "$MVR08_CANDIDATE_SHA"`; fail if the selected deployment
+  model cannot resolve that exact artifact/checkout SHA.
+- With two isolated disposable test bindings declared in the redacted fixture manifest, run
+  `python3 scripts/multi_vault_test_channel_smoke.py --channel test --fixture-manifest "$MVR_TEST_FIXTURE_MANIFEST" --json`.
+  The MVR-07 compatibility slice owns this harness and its production-path test. It must assert two
+  registered bindings, two independent sessions, one dimension read, one governed write to the
+  explicit target, and per-binding background health, then emit only SHA, opaque fixture IDs,
+  boolean outcomes, and receipt IDs for the #2143 comment—never paths, names, tokens, or content.
 - `python3 scripts/docs_guard.py`
 - Live REST inspection of #2143, all child issues/PRs, #2566, #3156, and #3163
 

@@ -107,10 +107,11 @@ a hidden authority system and can expose material across real confidentiality bo
 - [ ] The parent dimension contract proves that stored membership preserves each binding's
   independent authority and provenance and never upgrades access through grouping.
   - Verify: `tests/integration/test_multi_vault_dimensions.py::test_dimension_preserves_per_binding_authority_and_provenance`
-- [ ] A rollback through a pre-MVR-04 compatible scalar image preserves dimension metadata and
-  ordered membership; unchanged registrations restore exactly, while a valid rollback-period
-  registration removal transactionally removes that member from every dimension with a receipt.
-  - Verify: `tests/integration/test_vault_registry_rollback.py::test_mvr04_dimensions_survive_scalar_projection_round_trip`
+- [ ] A rollback through an MVR-03-capable pre-MVR-04 image (never below the principal floor)
+  preserves unknown dimension metadata and ordered membership in the authoritative lineage;
+  unchanged registrations restore exactly, while a valid rollback-period registration removal
+  transactionally removes that member from every dimension with a receipt.
+  - Verify: `tests/integration/test_vault_registry_rollback.py::test_mvr04_dimensions_survive_principal_capable_rollback_round_trip`
 - [ ] Roll-forward after the old image removes a dimension member never creates dangling membership,
   silently restores the removed registration, or prunes any unrelated ordered member.
   - Verify: `tests/integration/test_vault_registry_rollback.py::test_mvr04_rollforward_repairs_removed_dimension_member_transactionally`

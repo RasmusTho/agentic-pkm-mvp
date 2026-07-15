@@ -53,6 +53,11 @@ This slice promotes the existing seed without changing content-vault authority.
   recoverable pending reservation → per-channel registry commit → active lease protocol. A matching
   root already active/pending in another channel fails loud. Explicit transfer drains/stops the old
   channel before release/claim; recovery never permits two active owners.
+- Registration removal uses a crash-safe `draining_removal` ledger transition under the global
+  fence: reject new request/lifecycle acquisition, drain or fail every consumer holding the binding,
+  commit the per-channel registry removal, then release the ownership lease in one recoverable
+  sequence. A crash resumes from the recorded phase; it never releases before drain+commit and never
+  strands a deleted registration behind an unrecoverable active lease.
 - Produce one host-global ledger HMAC key with a CSPRNG at host bootstrap, store it and its key ID
   mode `0600` in private host app-data outside per-channel volumes, retain a protected recovery copy,
   and mount it read-only into every channel/native consumer. Preflight rejects missing, ephemeral,
@@ -258,6 +263,10 @@ never encounter and truncate authoritative new-schema state before fork/merge pr
   the shared ownership ledger; injected crashes in reserve/commit/activate/transfer recover to at
   most one active owner without exposing raw host paths.
   - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_same_content_root_cannot_be_active_in_two_channels`
+- [ ] **MVR-01B:** Removing an actively leased registration enters a recoverable draining state,
+  blocks new consumers, drains existing request/lifecycle holders, commits removal, and only then
+  releases ownership; crash injection at each phase yields neither dual ownership nor a stranded lease.
+  - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_registration_removal_drains_before_ownership_release`
 - [ ] **MVR-01B:** Before the first upgraded channel can claim a root, one host-global fenced bootstrap inventories
   and seeds all legacy dev/test/prod/native owners; missing/racing owners and existing collisions
   block every claim, while any temporarily resumed old channel is fixed to its seeded root.
