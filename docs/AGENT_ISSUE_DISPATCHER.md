@@ -74,10 +74,12 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   budgets are persisted across restart.
 - Completion never relies on coordinator receipt ids or review-event prose alone. The fresh exact-head
   GitHub read must contain a named, completed, successful `Unit tests (not pg)` check produced by
-  the authoritative `github-actions` App; same-name checks from another or unidentified producer
-  are ignored before latest-rerun selection. The required workflow job runs repo-wide `mypy app`
-  before it can publish success. Missing, unnamed, skipped, neutral, pending, or failed
-  required-check evidence cannot open closure.
+  the authoritative `github-actions` App and authenticated as a pull-request run of
+  `.github/workflows/ci.yml` on that exact head. Its workflow run must correlate to the check run's
+  exact suite before latest-rerun selection; same-name checks from another App, workflow, suite,
+  event, or head are ignored. The required workflow job runs repo-wide `mypy app` before it can
+  publish success. Missing, ambiguous, unnamed, skipped, neutral, pending, or failed required-check
+  evidence cannot open closure.
 - The schema-valid coordinator receipt carries ordered repair/review events into the same
   lease-fenced ledger as one atomic, deterministically identified batch. Exact receipt replay is a
   no-op, and a later invalid/conflicting event rolls back the whole batch. A semantic event-batch

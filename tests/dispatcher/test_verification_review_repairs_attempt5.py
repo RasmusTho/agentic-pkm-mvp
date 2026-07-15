@@ -12,11 +12,11 @@ from app.dispatcher.verification_consumer import (
 )
 from app.dispatcher.verification_dispatch import VerificationDispatchLedger
 from tests.dispatcher.test_verification_consumer import (
-    GREEN,
     Auth,
     Launcher,
     Truth,
     artifact_request,
+    green_checks,
     merged_pr,
 )
 from tests.dispatcher.verification_helpers import HEAD, REPO, ledger, request
@@ -115,7 +115,7 @@ def test_pending_delivered_replay_rebinds_to_merged_receipt_head(tmp_path) -> No
     run_id, _ = _pending_delivered_run(state)
     truth = Truth(
         merged_pr(head={"ref": "branch", "sha": REPAIRED_HEAD}),
-        GREEN,
+        green_checks(REPAIRED_HEAD),
     )
 
     completed = VerificationConsumer(
@@ -147,7 +147,7 @@ def test_pending_delivered_replay_rejects_head_change_without_repair_event(
     )
     truth = Truth(
         merged_pr(head={"ref": "branch", "sha": REPAIRED_HEAD}),
-        GREEN,
+        green_checks(REPAIRED_HEAD),
     )
 
     rejected = VerificationConsumer(
@@ -169,7 +169,7 @@ def test_pending_delivered_replay_lost_lease_cannot_rebind_or_apply_events(
     run_id, _ = _pending_delivered_run(state)
     truth = Truth(
         merged_pr(head={"ref": "branch", "sha": REPAIRED_HEAD}),
-        GREEN,
+        green_checks(REPAIRED_HEAD),
     )
     original_rebind = state.rebind_head
 
@@ -204,7 +204,7 @@ def test_pending_delivered_replay_rejects_unauthorized_head_rebind(tmp_path) -> 
             head={"ref": "branch", "sha": REPAIRED_HEAD},
             body="Governing-Issue: #9999\n\nFixes #9999",
         ),
-        GREEN,
+        green_checks(REPAIRED_HEAD),
     )
 
     rejected = VerificationConsumer(

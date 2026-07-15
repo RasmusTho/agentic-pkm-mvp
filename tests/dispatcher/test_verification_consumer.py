@@ -602,15 +602,37 @@ def merged_pr(**updates: object) -> dict[str, object]:
     return value
 
 
-GREEN = [
-    {
-        "id": 1,
-        "name": "Unit tests (not pg)",
-        "app": {"slug": "github-actions"},
-        "status": "completed",
-        "conclusion": "success",
+def _required_check_authority(
+    head_sha: str = HEAD, *, suite_id: int = 1
+) -> dict[str, object]:
+    return {
+        "check_suite": {"id": suite_id},
+        "workflow_run": {
+            "id": 1000 + suite_id,
+            "workflow_id": 198962230,
+            "path": ".github/workflows/ci.yml",
+            "event": "pull_request",
+            "head_sha": head_sha,
+            "check_suite_id": suite_id,
+            "run_attempt": 1,
+        },
     }
-]
+
+
+def green_checks(head_sha: str = HEAD) -> list[dict[str, object]]:
+    return [
+        {
+            "id": 1,
+            "name": "Unit tests (not pg)",
+            "app": {"slug": "github-actions"},
+            **_required_check_authority(head_sha),
+            "status": "completed",
+            "conclusion": "success",
+        }
+    ]
+
+
+GREEN = green_checks()
 
 
 def artifact_request(**updates: object) -> dict[str, object]:
@@ -687,6 +709,8 @@ def test_gh_source_fetches_bounded_artifact_and_live_truth_without_shell(tmp_pat
             )
         if "/pulls/3603" in endpoint:
             return Result(json.dumps(eligible_pr()))
+        if "/actions/runs?head_sha=" in endpoint:
+            return Result(json.dumps({"workflow_runs": [GREEN[0]["workflow_run"]]}))
         return Result(json.dumps({"check_runs": GREEN}))
 
     source = GhCliVerificationSource(runner=runner)
@@ -694,6 +718,78 @@ def test_gh_source_fetches_bounded_artifact_and_live_truth_without_shell(tmp_pat
     assert source.pull_request("RasmusTho/agentic-pkm-mvp", 3603)["number"] == 3603
     assert source.checks("RasmusTho/agentic-pkm-mvp", HEAD) == GREEN
     assert all(call[:2] == ["gh", "api"] for call in calls)
+
+
+def test_gh_source_authenticates_check_workflow_suite_identity() -> None:
+    raw_checks = [
+        {
+            "id": 10,
+            "name": "Unit tests (not pg)",
+            "app": {"slug": "github-actions"},
+            "check_suite": {"id": 77},
+            "status": "completed",
+            "conclusion": "success",
+        },
+        {
+            "id": 11,
+            "name": "Unit tests (not pg)",
+            "app": {"slug": "github-actions"},
+            "check_suite": {"id": 88},
+            "workflow_run": {
+                "path": ".github/workflows/ci.yml",
+                "check_suite_id": 88,
+            },
+            "status": "completed",
+            "conclusion": "success",
+        },
+    ]
+
+    class Result:
+        returncode = 0
+
+        def __init__(self, stdout: str) -> None:
+            self.stdout = stdout
+
+    def runner(command, **_kwargs):
+        endpoint = command[-1]
+        if "/actions/runs?head_sha=" in endpoint:
+            return Result(
+                json.dumps(
+                    {
+                        "workflow_runs": [
+                            {
+                                "id": 123,
+                                "workflow_id": 198962230,
+                                "path": ".github/workflows/ci.yml",
+                                "event": "pull_request",
+                                "head_sha": HEAD,
+                                "check_suite_id": 77,
+                                "run_attempt": 1,
+                            }
+                        ]
+                    }
+                )
+            )
+        return Result(json.dumps({"check_runs": raw_checks}))
+
+    checks = GhCliVerificationSource(runner=runner).checks(
+        "RasmusTho/agentic-pkm-mvp", HEAD
+    )
+
+    assert checks[0]["workflow_run"] == {
+        "id": 123,
+        "workflow_id": 198962230,
+        "path": ".github/workflows/ci.yml",
+        "event": "pull_request",
+        "head_sha": HEAD,
+        "check_suite_id": 77,
+        "run_attempt": 1,
+    }
+    assert "workflow_run" not in checks[1]
+    assert (
+        verification_consumer._checks_rejection(checks, expected_head_sha=HEAD)
+        is None
+    )
 
 
 def _artifact_source_for_request(payload: dict[str, object], *, workflow_run_id: int = 123):
@@ -1037,6 +1133,7 @@ def test_pending_repair_checks_persist_repair_before_backoff(tmp_path) -> None:
             "id": 2,
             "name": "Unit tests (not pg)",
             "app": {"slug": "github-actions"},
+            **_required_check_authority(new_head, suite_id=2),
             "status": "in_progress",
             "conclusion": None,
         }
@@ -1092,6 +1189,7 @@ def test_supporting_issue_addition_allows_repair_head_rebind_without_budget_rese
             "id": 2,
             "name": "Unit tests (not pg)",
             "app": {"slug": "github-actions"},
+            **_required_check_authority(new_head, suite_id=2),
             "status": "in_progress",
             "conclusion": None,
         }
@@ -1158,6 +1256,7 @@ def test_invalid_pending_repair_event_batch_fails_before_backoff(tmp_path) -> No
             "id": 2,
             "name": "Unit tests (not pg)",
             "app": {"slug": "github-actions"},
+            **_required_check_authority(new_head, suite_id=2),
             "status": "in_progress",
             "conclusion": None,
         }
@@ -1266,6 +1365,7 @@ def test_pending_repair_replay_preserves_two_plus_two_accounting(tmp_path) -> No
             "id": 2,
             "name": "Unit tests (not pg)",
             "app": {"slug": "github-actions"},
+            **_required_check_authority(new_head, suite_id=2),
             "status": "in_progress",
             "conclusion": None,
         }
@@ -1330,7 +1430,7 @@ def test_pending_repair_replay_preserves_two_plus_two_accounting(tmp_path) -> No
         )
         conn.commit()
     truth.pr = eligible_pr(head={"ref": "branch", "sha": new_head})
-    truth.check_rows = GREEN
+    truth.check_rows = green_checks(new_head)
 
     final = VerificationConsumer(
         state, truth, Auth(), ReviewOnlyDeliveryLauncher(), "host"
@@ -1597,6 +1697,7 @@ def test_delivered_receipt_requires_successful_named_unit_typecheck_gate(
                     "id": 2,
                     "name": "Unit tests (not pg)",
                     "app": {"slug": "github-actions"},
+                    **_required_check_authority(suite_id=2),
                     "status": status,
                     "conclusion": conclusion,
                 }
