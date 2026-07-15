@@ -247,6 +247,11 @@ def test_default_template_preserves_issue_free_lane_authority() -> None:
             "Closes: octo-org/octo-repo#456",
             False,
         ),
+        (
+            "Governing-Issue: #123\nFixes #123\n"
+            "Resolves https://github.com/octo-org/octo-repo/issues/456",
+            False,
+        ),
     ],
 )
 def test_javascript_and_python_authority_grammar_are_identical(
@@ -297,6 +302,32 @@ def test_pr_contract_rejects_repository_qualified_closure_authority() -> None:
 
     assert "closingAttemptTarget" in workflow
     assert "[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+#" in workflow
+
+
+@pytest.mark.parametrize("surface", ["body", "title", "commit"])
+def test_pr_contract_rejects_github_url_closure_on_every_production_surface(
+    surface: str,
+) -> None:
+    url_attempt = "Fixes https://github.com/octo-org/octo-repo/issues/456"
+    candidate = (
+        f"Governing-Issue: #123\nFixes #123\n{url_attempt}"
+        if surface == "body"
+        else url_attempt
+    )
+
+    authority = _js_issue_authority(candidate)
+
+    assert authority["hasIssueAuthority"] is True
+    assert authority["issueLinkMentions"]
+    if surface == "body":
+        assert authority["valid"] is False
+    else:
+        workflow = _read_workflow()
+        production_check = {
+            "title": "titleClosureAttempt",
+            "commit": "commitClosureAttempt",
+        }[surface]
+        assert production_check in workflow
 
 
 def test_mixed_tier_pr_uses_highest_required_tier() -> None:

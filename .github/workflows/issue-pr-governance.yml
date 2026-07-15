@@ -155,7 +155,8 @@ jobs:
               const asciiClosingSeparator = "(?:[ \\t]+|[ \\t]*:[ \\t]*)";
               const explicitWhitespace = "[ \\t\\n\\v\\f\\r\\x85\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]";
               const closingAttemptSeparator = `(?:${explicitWhitespace}+|${explicitWhitespace}*:${explicitWhitespace}*)`;
-              const closingAttemptTarget = "(?:#|[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+#)";
+              const githubIssueUrlTarget = "[Hh][Tt][Tt][Pp][Ss]?://[Gg][Ii][Tt][Hh][Uu][Bb][.][Cc][Oo][Mm]/[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+/[Ii][Ss][Ss][Uu][Ee][Ss]/";
+              const closingAttemptTarget = `(?:#|[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+#|${githubIssueUrlTarget})`;
               const governingIssueLines = canonicalBody.match(
                 new RegExp(`^[ \\t]*${governingKeyword}[ \\t]*:.*$`, "gm")
               ) || [];

@@ -1074,6 +1074,14 @@ class VerificationDispatchLedger:
             ).fetchone()
             if existing is not None:
                 existing_request = _validated_row_request(existing)
+                # The stable idempotency identity intentionally omits closure authority,
+                # so replay must compare the incoming set with the durable canonical set.
+                stored_closing = _validated_closing_authority(
+                    existing, existing_request
+                )
+                incoming_closing = _request_closing_authority(request)
+                if set(incoming_closing) != set(stored_closing):
+                    raise ValueError("verification idempotency authority conflict")
                 active_status = existing["status"] in {
                     "queued",
                     "backoff",

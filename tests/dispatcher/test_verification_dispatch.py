@@ -1081,6 +1081,41 @@ def test_ingest_claim_and_terminal_lifecycle_is_idempotent(tmp_path) -> None:
         state.ingest(request("b" * 40))
 
 
+def test_same_head_terminal_replay_rejects_conflicting_closing_set(tmp_path) -> None:
+    state = ledger(tmp_path)
+    original_request = request()
+    original_request["supporting_issues"] = [3626]
+    first = state.ingest(original_request)
+    claimed = state.claim(first.run_id, "coordinator")
+    assert claimed.lease_id is not None
+    state.start(
+        first.run_id,
+        "coordinator",
+        claimed.lease_id,
+        "thread-closing-authority",
+        {"head": first.head_sha},
+    )
+    state.terminal(
+        first.run_id,
+        "failed",
+        {"outcome": "blocked"},
+        holder="coordinator",
+        lease_id=claimed.lease_id,
+    )
+    conflicting_request = json.loads(json.dumps(original_request))
+    conflicting_request["closing_issues"] = [3626]
+
+    with pytest.raises(ValueError, match="idempotency authority conflict"):
+        state.ingest(conflicting_request)
+
+    stored = state.get(first.run_id)
+    assert stored is not None
+    assert stored.status == "failed"
+    assert stored.closing_authority == (3603,)
+    with state.store._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM verification_runs").fetchone()[0] == 1
+
+
 def test_duplicate_and_concurrent_claims_start_one_run(tmp_path) -> None:
     state = ledger(tmp_path)
     with ThreadPoolExecutor(max_workers=4) as pool:

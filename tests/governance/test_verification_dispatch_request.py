@@ -202,6 +202,17 @@ def test_repository_qualified_closer_emits_no_request() -> None:
     assert build_request(event=_event(), pr=qualified, issue=_issue()) is None
 
 
+def test_github_url_closer_emits_no_request() -> None:
+    qualified = _pr()
+    qualified["body"] = (
+        "Governing-Issue: #3602\nFixes #3602\n"
+        "Fixes https://github.com/RasmusTho/agentic-pkm-mvp/issues/9999"
+    )
+
+    assert resolve_issue_contract(qualified["body"]) is None
+    assert build_request(event=_event(), pr=qualified, issue=_issue()) is None
+
+
 @pytest.mark.parametrize(
     "body",
     [

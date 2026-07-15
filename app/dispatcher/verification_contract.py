@@ -24,7 +24,14 @@ _CLOSING_ATTEMPT_SEPARATOR = (
     rf"(?:{_EXPLICIT_WHITESPACE}+|{_EXPLICIT_WHITESPACE}*:"
     rf"{_EXPLICIT_WHITESPACE}*)"
 )
-_CLOSING_ATTEMPT_TARGET = r"(?:#|[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+#)"
+_GITHUB_ISSUE_URL_ATTEMPT_TARGET = (
+    r"[Hh][Tt][Tt][Pp][Ss]?://[Gg][Ii][Tt][Hh][Uu][Bb][.][Cc][Oo][Mm]/"
+    r"[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+/[Ii][Ss][Ss][Uu][Ee][Ss]/"
+)
+_CLOSING_ATTEMPT_TARGET = (
+    rf"(?:#|[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+#|"
+    rf"{_GITHUB_ISSUE_URL_ATTEMPT_TARGET})"
+)
 
 GOVERNING_ISSUE_LINE_PATTERN = re.compile(
     rf"(?m)^[ \t]*{_GOVERNING_KEYWORD}[ \t]*:.*$"
