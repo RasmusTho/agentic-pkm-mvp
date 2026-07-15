@@ -116,3 +116,11 @@ This is a feature-breakdown handoff, not filed work.
 ## 8. Independent-model inquiry charter
 
 A Sol/Fable architecture inquiry is justified because Q1/M1/M2 jointly set durable public semantics and carry Goodhart and temporal-model risk. Ask the models to challenge—not implement—the minimal kernel, especially whether a snapshot-first CLI contract is sufficient, which history is truly necessary, and how to prevent metrics from becoming targets. Inquiry output remains advisory and must reconcile back into this audit before feature-breakdown.
+
+## 9. Reconciliation outcome (2026-07-15)
+
+BuilderOps inquiry `inq_20260715T062832Z_e73546a2` completed with consensus receipt `receipt_inq_20260715T062832Z_e73546a2_run_terminal`. The authoritative implementation contract is now `docs/CKM_MEASUREMENT_AND_ACCESS/`; this audit remains advisory.
+
+The reconciliation keeps the audit's projection-only, bounded-read, Goodhart, history-honesty, and promotion boundaries, and tightens them in four ways: Q1 is contract plus a minimum working one-transaction query surface rather than schema alone; public identity must survive rebuild and rename; every CKM mutation advances an atomic state revision; and cursor, observation, and comparison semantics fail explicitly on any version/snapshot/query mismatch. M2 general history and O2 feature expansion remain observation-gated and are not filed by this breakdown.
+
+Feature-breakdown resolved the earlier hub question by accepting #3138 as the completed MVP validation hub and defining one separate post-MVP successor capability. Its initial graph is Q1a → Q1b → {Q2, M1, O1a}, with M1 → O1b. Successor issue numbers and delivery state are recorded in the authoritative specification directory.
