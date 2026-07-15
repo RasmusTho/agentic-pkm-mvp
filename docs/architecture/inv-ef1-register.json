@@ -331,6 +331,13 @@
       "issue": "#3788"
     },
     {
+      "artifact": "docs/BUILDEROPS_CONTROL_PLANE/OWNER_DOC_ENACTMENT_AND_CLOSURE.md",
+      "category": "iii",
+      "why_load_bearing": "BuilderOps closure contract names the owner-settled control-plane host so recovery and owner-doc evidence bind the intended deployment.",
+      "disposition": "stay",
+      "issue": "#3788"
+    },
+    {
       "artifact": "docs/BUILDEROPS_CONTROL_PLANE/PARENT_FEATURE_ISSUE.md",
       "category": "iii",
       "why_load_bearing": "BuilderOps validation contract names the owner-settled control-plane host so acceptance evidence binds the intended deployment.",
