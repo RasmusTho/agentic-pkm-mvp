@@ -6,7 +6,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_live_smoke_asserts_render_and_channel_marker() -> None:
+def test_live_smoke_asserts_runtime_channel_without_vault_marker() -> None:
     smoke_script = (REPO_ROOT / "scripts/companion_ui_postdeploy_smoke.sh").read_text(
         encoding="utf-8"
     )
@@ -20,6 +20,7 @@ def test_live_smoke_asserts_render_and_channel_marker() -> None:
 
     assert "COMPANION_UI_SMOKE_URL" in smoke_script
     assert "COMPANION_UI_EXPECTED_CHANNEL" in smoke_script
-    assert "workspace-vault-channel" in live_test
+    assert "assert_operator_channel(" in live_test
+    assert "assert_operator_channel(\n                    payload," in live_test
+    assert "workspace-vault-channel" not in live_test
     assert "connection refused" in live_test.lower() or "response is not None" in live_test
-    assert "runtime channel marker" in live_test

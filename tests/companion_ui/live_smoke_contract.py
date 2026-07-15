@@ -4,6 +4,25 @@ from collections.abc import Mapping
 from typing import Any
 
 
+def assert_operator_channel(
+    payload: Mapping[str, Any],
+    *,
+    expected_channel: str,
+) -> None:
+    """Validate release-channel identity independently of active-vault state."""
+
+    raw_environment = payload.get("environment")
+    assert isinstance(raw_environment, str) and raw_environment.strip(), (
+        "operator health environment missing"
+    )
+    actual_channel = raw_environment.strip().lower()
+    normalized_expected = expected_channel.strip().lower()
+    assert actual_channel == normalized_expected, (
+        f"operator health environment {actual_channel!r} did not match "
+        f"expected channel {normalized_expected!r}"
+    )
+
+
 def assert_operator_health(
     payload: Mapping[str, Any],
     *,
