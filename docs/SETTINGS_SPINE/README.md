@@ -114,8 +114,8 @@ respectively — task 8 marks them so.
 
 While ruling on SETTINGS-05 (rebind on vault selection), the owner flagged a larger wanted
 capability: spinning up additional, time-limited watchers on demand (not just one watcher
-following one active selection). SETTINGS-05's rebind mechanism (subscribe to
-`VaultChangedEvent`, re-resolve, resume) is the reusable building block a future multi-watcher
+following one active selection). SETTINGS-05's rebind mechanism (commit a shared monotonic
+selection revision, reconcile it cross-process, re-resolve, resume) is the reusable building block a future multi-watcher
 task would instantiate per watcher, but running more than one watcher concurrently is a distinct
 capability (watcher lifecycle management: spin up, tear down, scope, resource limits) and is
 explicitly out of scope here. Worth its own bounded issue once SETTINGS-05 ships and the

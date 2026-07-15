@@ -1,6 +1,6 @@
 ---
 name: Rebind On Vault Selection
-description: Selecting or switching a vault rebinds every vault-scoped settings consumer — watcher ingest binding included — via VaultChangedEvent
+description: Selecting or switching a vault durably advances a shared revision that rebinds every vault-scoped settings consumer, including the separately deployed watcher
 task_id: SETTINGS-05
 source_anchor: docs/audits/SETTINGS_ARCHITECTURE_2026-07-07.md :: F4
 parent_capability: Settings Spine
@@ -30,11 +30,13 @@ rationale) to record the supersession rather than leaving it as if still current
 
 ## What This Task Does
 
-- Subscribes the watcher's ingest binding to `VaultChangedEvent` (emitted by
-  `VaultManager._emit_changed`, `app/vault/manager.py`) so selection/switch rebinding happens in
-  the running process: re-resolve vault root → reload vault-scoped settings via the SETTINGS-01
-  reload path (one loader, not a second one — see capability Cross-Task Invariants) → resume
-  ingest against the new root.
+- Commits selection/switch plus a monotonic rebind revision atomically in the shared app-local
+  selection state before returning success. The separately deployed watcher reconciles that
+  revision from the shared seam, then re-resolves the root → reloads vault-scoped settings via the
+  SETTINGS-01 path (one loader, not a second one — see capability Cross-Task Invariants) → resumes
+  ingest against the new root. `VaultChangedEvent` (emitted by `VaultManager._emit_changed`) remains
+  an optional same-process wake-up hint; it is not delivery between the API and watcher containers,
+  and restart/event loss converges from the durable revision.
 - Upgrades the advisory `ingest_binding` status (`bound`/`diverged`/`unbound`/`unknown`) so
   `diverged` becomes a transient state that self-heals on rebind, and a rebind failure is loud.
 - Retires the second, unsynchronized "current vault" notion in
@@ -59,10 +61,11 @@ the UI says one vault and ingest watches another — captures silently vanish fr
 ## Acceptance Criteria
 
 - [ ] Selecting a vault via the production selection path rebinds the watcher ingest root in the
-      running process; a file created in the newly selected vault is picked up by the next tick.
+      separately deployed watcher process; a file created in the newly selected vault is picked up
+      by the next tick.
   - Verify: `tests/watcher/test_ingest_binding_follows_selection.py::test_selection_rebinds_ingest`
-    (enforcement AC — drives `VaultManager.select_vault` and asserts the watcher subscriber fires
-    from the production event, not a direct call to the rebind helper)
+    (enforcement AC — drives the production API process and a separate watcher process/container,
+    asserts commit-before-success plus revision reconciliation, and never calls the rebind helper)
 - [ ] Switching vaults mid-run rebinds cleanly: in-flight tick completes against the old root, next
       tick runs against the new root, `ingest_binding` reflects each state truthfully.
   - Verify: `tests/watcher/test_ingest_binding_follows_selection.py::test_switch_is_clean_and_truthful`
@@ -90,7 +93,7 @@ the UI says one vault and ingest watches another — captures silently vanish fr
   demand — the owner has flagged this as a wanted future capability (see the Settings Spine
   README follow-up note), but it is a distinct, larger capability (multi-watcher lifecycle
   management) than "the one watcher follows the one active selection." This task's rebind
-  mechanism (subscribe-to-`VaultChangedEvent`, re-resolve, resume) is the building block a future
+  mechanism (commit shared revision, reconcile, re-resolve, resume) is the building block a future
   multi-watcher task would reuse per-instance, but instantiating multiple watchers is not this
   task's scope.
 - Multi-active-vault epic #2143 in the sense of concurrently serving more than one selected vault
@@ -102,10 +105,10 @@ the UI says one vault and ingest watches another — captures silently vanish fr
 
 ## Restart / Durability Posture
 
-The binding is in-memory; on restart the watcher rebinds from the durable selection
-(`AppLocalSettingsStore.last_active_vault_ref`) rather than from env-only state, so a restart
-lands on the same vault the human last selected. If no durable selection exists, env bootstrap
-applies and the binding status says so.
+The applied binding is in-memory, but its monotonic desired revision is durable in the shared
+app-local selection seam. On restart the watcher reconciles that record rather than relying on an
+event or process-local manager state, so it lands on the same vault the human last selected. If no
+durable selection exists, env bootstrap applies and the binding status says so.
 
 ## Related Docs
 

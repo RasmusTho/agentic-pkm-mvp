@@ -66,11 +66,14 @@ This slice promotes the existing seed without changing content-vault authority.
   remains capability-gated until MVR-05C proves production foreground read and write lease fencing;
   before that floor every transfer request fails `capability_not_ready`. Once enabled, transfer
   drains/stops the old channel before release/claim; recovery never permits two active owners.
-- Registration removal uses a crash-safe `draining_removal` ledger transition under the global
-  fence: reject new request/lifecycle acquisition, drain or fail every consumer holding the binding,
-  commit the per-channel registry removal, then release the ownership lease in one recoverable
-  sequence. A crash resumes from the recorded phase; it never releases before drain+commit and never
-  strands a deleted registration behind an unrecoverable active lease.
+- Registration removal is wired to a crash-safe `draining_removal` ledger transition under the
+  global fence, but every production removal request remains `capability_not_ready` and leaves
+  registry/lease state unchanged until MVR-06B proves both the MVR-05 foreground and MVR-06
+  background consumer floors. Once activated there, it rejects new request/lifecycle acquisition,
+  drains or fails every consumer holding the binding, commits the per-channel registry removal, then
+  releases the ownership lease in one recoverable sequence. A crash resumes from the recorded phase;
+  it never releases before drain+commit and never strands a deleted registration behind an
+  unrecoverable active lease.
 - Produce one host-global ledger HMAC key with a CSPRNG at host bootstrap, store it and its key ID
   mode `0600` in private host app-data outside per-channel volumes, retain a protected recovery copy,
   and mount it read-only into every channel/native consumer. Preflight rejects missing, ephemeral,
@@ -310,10 +313,10 @@ never encounter and truncate authoritative new-schema state before fork/merge pr
   proves foreground plus background shared-effect fencing and activates the matching exclusive
   relocation path.
   - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_relocation_is_dormant_until_all_consumer_effect_leases`
-- [ ] **MVR-01B:** Removing an actively leased registration enters a recoverable draining state,
-  blocks new consumers, drains existing request/lifecycle holders, commits removal, and only then
-  releases ownership; crash injection at each phase yields neither dual ownership nor a stranded lease.
-  - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_registration_removal_drains_before_ownership_release`
+- [ ] **MVR-01B:** Active registration removal is dormant after its recoverable draining protocol
+  ships: every production request fails capability-not-ready and leaves registry/revision/ownership
+  unchanged until MVR-06B proves every foreground/background consumer can be blocked and drained.
+  - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_registration_removal_is_dormant_until_all_consumer_floors`
 - [ ] **MVR-01B:** Before the first upgraded channel can claim a root, one host-global fenced bootstrap inventories
   and seeds all legacy dev/test/prod/native owners; missing/racing owners and existing collisions
   block every claim, while any temporarily resumed old channel is fixed to its seeded root.
@@ -393,7 +396,7 @@ family-wide command that requires a later sealed slice.
 
 ### MVR-01B validation
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_vault_registry_container_durability.py::test_registry_survives_recreate_and_is_shared_cross_process tests/integration/test_vault_registry_channel_isolation.py::test_overlapping_content_roots_cannot_be_active_in_two_channels tests/integration/test_vault_registry_channel_isolation.py::test_same_channel_nested_vaults_preserve_child_boundary tests/integration/test_vault_registry_channel_isolation.py::test_transfer_is_dormant_until_foreground_ownership_floor tests/integration/test_vault_registry_channel_isolation.py::test_relocation_is_dormant_until_all_consumer_effect_leases tests/integration/test_vault_registry_channel_isolation.py::test_registration_removal_drains_before_ownership_release tests/integration/test_vault_registry_channel_isolation.py::test_first_upgrade_seeds_all_legacy_channel_owners_before_claim tests/integration/test_vault_registry_channel_isolation.py::test_env_only_bootstrap_atomically_enrolls_one_stable_binding_or_fails_closed tests/integration/test_vault_registry_channel_isolation.py::test_uninitialized_env_upgrade_preserves_read_only_binding_without_writes tests/integration/test_vault_registry_channel_isolation.py::test_host_global_ledger_key_is_durable_shared_and_rotates_atomically tests/integration/test_vault_registry_rollback.py::test_previous_image_reads_latest_post_migration_registry_state tests/ops/test_instance_state_volume_contract.py::test_legacy_registry_export_happens_after_writer_quiescence tests/ops/test_instance_state_volume_contract.py::test_registry_volume_and_preflight_cover_all_consumers tests/ops/test_instance_state_volume_contract.py::test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restore`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_vault_registry_container_durability.py::test_registry_survives_recreate_and_is_shared_cross_process tests/integration/test_vault_registry_channel_isolation.py::test_overlapping_content_roots_cannot_be_active_in_two_channels tests/integration/test_vault_registry_channel_isolation.py::test_same_channel_nested_vaults_preserve_child_boundary tests/integration/test_vault_registry_channel_isolation.py::test_transfer_is_dormant_until_foreground_ownership_floor tests/integration/test_vault_registry_channel_isolation.py::test_relocation_is_dormant_until_all_consumer_effect_leases tests/integration/test_vault_registry_channel_isolation.py::test_registration_removal_is_dormant_until_all_consumer_floors tests/integration/test_vault_registry_channel_isolation.py::test_first_upgrade_seeds_all_legacy_channel_owners_before_claim tests/integration/test_vault_registry_channel_isolation.py::test_env_only_bootstrap_atomically_enrolls_one_stable_binding_or_fails_closed tests/integration/test_vault_registry_channel_isolation.py::test_uninitialized_env_upgrade_preserves_read_only_binding_without_writes tests/integration/test_vault_registry_channel_isolation.py::test_host_global_ledger_key_is_durable_shared_and_rotates_atomically tests/integration/test_vault_registry_rollback.py::test_previous_image_reads_latest_post_migration_registry_state tests/ops/test_instance_state_volume_contract.py::test_legacy_registry_export_happens_after_writer_quiescence tests/ops/test_instance_state_volume_contract.py::test_registry_volume_and_preflight_cover_all_consumers tests/ops/test_instance_state_volume_contract.py::test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restore`
 - Verify the 01B PR diff contains its mapped owner-doc targets in
   `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md`,
   `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, and `docs/RELEASE_CHANNELS/README.md`.

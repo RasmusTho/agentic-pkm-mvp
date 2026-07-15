@@ -34,13 +34,18 @@ producer and consumer has a replacement and proves reversibility to the single-v
 - Before registering either fixture, canonicalize every manifest root and prove it is a distinct
   descendant of the configured test-sandbox root. Reject overlap with the prod/dev/native vault
   roots known to channel preflight, overlap between fixture roots, an unresolvable root, or any
-  symlink/path escape before the first registration or write. Checking only the singular
+  symlink/path escape before the first registration or write. Each manifest root must also be
+  absent before the invocation. The harness atomically creates it itself and writes a private
+  ownership marker containing the current invocation nonce before any fixture content. A
+  pre-existing directory/file, raced creation, missing/mismatched marker, or marker symlink fails
+  closed; caller-supplied sandbox descendants are never adopted. Checking only the singular
   `TEST_VAULT_ROOT` is insufficient.
 - Run each smoke invocation in a unique disposable fixture namespace and record the pre-run test
   registry/default/dimension/background-intent/projection plus host-ledger baseline. A failure-safe
   teardown always drains fixture lifecycles, removes fixture projections through their production
   cleanup contract, removes dimensions/default/registrations, releases fixture ownership leases,
-  deletes only canonicalized sandbox descendants, and proves the non-fixture baseline is restored.
+  deletes a sandbox root only when its canonical identity and private ownership marker still match
+  this invocation, and proves the non-fixture baseline is restored.
   Cleanup runs after both PASS and injected failure; a cleanup error makes the smoke receipt FAIL and
   blocks later deployment/parent closure. No prior test-channel registration or operator state may be
   overwritten as a shortcut.
@@ -100,7 +105,9 @@ can break startup or strand durable state. Both failures are latent outages rath
   - Verify: `tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_harness_is_production_path_and_redacted`
 - [ ] The smoke harness rejects either manifest binding when its canonical root is outside the
   declared test sandbox, overlaps a known prod/dev/native root, aliases the other fixture, or escapes
-  through a symlink, and performs zero registrations/writes on rejection.
+  through a symlink. It also rejects every pre-existing/raced root or missing/mismatched ownership
+  marker, performs zero registrations/content writes on rejection, and never deletes a root it did
+  not atomically create and mark for the current invocation.
   - Verify: `tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_rejects_non_test_manifest_roots_before_registration`
 - [ ] Successful and failure-injected smoke runs drain and remove every fixture lifecycle,
   projection, dimension/default/registration, sandbox root, and host-global ownership lease, then

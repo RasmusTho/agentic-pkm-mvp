@@ -62,10 +62,15 @@ This owner contract delegates the decided implementation-level V1 schema, transi
 and migration details to `docs/MULTI_VAULT_RUNTIME/README.md` and its bounded task specifications.
 That capability specification is subordinate to this contract's WSP/GOV boundary and may not widen
 authority. V1 requires an opaque context ID, monotonic generation, zero/one/many immutable source
-bindings, server-derived principal, operational scope, topology posture, selection provenance,
+bindings, server-derived principal, cognitive operational scope, sphere memberships, situated
+identity, topology posture, selection provenance,
 expiry where applicable, and non-reversible selection-capability digest. Cache and receipt identity
 includes every scope-affecting input; each binding is independently GOV-authorized. Current-state
 owner docs remain shipped truth until the relevant implementation child writes them back.
+
+Endpoint action, write class, and required permission are separate GOV decision inputs. They are
+not WSP `scope`, do not mutate the selected cognitive context, and are recorded separately in
+authority decisions/receipts.
 
 ## Allowed Producers
 
@@ -76,6 +81,9 @@ owner docs remain shipped truth until the relevant implementation child writes t
 ## Allowed Consumers
 
 - HIX, HKA, SIP, GOV, RCA, MEM, CAO, EXE, SFC, OEF.
+- EBF may consume only the bounded source-binding/topology projection needed to configure an
+  adapter; PDM may consume only context identity/revision needed to namespace and persist mechanical
+  state. Neither receives context as authority, derives principal/permission, or owns WSP semantics.
 
 ## Forbidden Use
 

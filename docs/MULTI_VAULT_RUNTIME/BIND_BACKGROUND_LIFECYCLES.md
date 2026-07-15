@@ -19,7 +19,9 @@ cross-process truth belong here.
 
 ## What This Task Does
 
-- Reuse #3163's selection-event/settings-reload mechanism; do not duplicate it.
+- Reuse #3163's durable monotonic cross-process selection revision plus its one settings-reload/
+  rebind mechanism; do not duplicate it. `VaultChangedEvent` remains only a same-process wake-up
+  hint and is never treated as delivery between the API and watcher containers.
 - At the MVR-06 migration boundary, read the live binding owned by MVR-05's named legacy-picker
   bridge, materialize that binding as durable `compatibility_binding_id` in compatibility mode,
   start the revision-reconciling supervisor, and disable the bridge in one fail-closed cutover. Roll back
@@ -64,10 +66,13 @@ cross-process truth belong here.
   advances the auth epoch and drains affected lifecycles before their next effect.
 - Introduce a lifecycle supervisor that treats the durable set only as intent. At start/rebind it
   derives one immutable full `ActiveContextSet` per lifecycle binding, including context ID,
-  generation, stable binding, server-derived instance-background principal, operational scope,
-  topology posture, and `background_intent`, `compatibility_handoff`, or `compatibility_default`
-  provenance. Watcher, worker, settings, queues, health, and receipts propagate that context rather than a rival
-  binding-plus-generation model. For migrated one-vault installs with no explicit set, the captured
+  generation, stable binding, server-derived instance-background principal, explicit cognitive
+  scope/sphere/situated-identity values, topology posture, and `background_intent`,
+  `compatibility_handoff`, or `compatibility_default` provenance. Each lifecycle operation passes
+  its action/write class/permission separately to GOV. Watcher, worker, settings, queues, health,
+  and receipts propagate the bounded context projection authorized for their EBF/PDM mechanism
+  rather than a rival binding-plus-generation model. For migrated one-vault installs with no
+  explicit set, the captured
   live bridge binding—or, absent that, the instance default/legacy bootstrap—yields exactly
   one durable compatibility context; no later request/session state participates.
 - Before every lifecycle start/rebind, require the MVR-01 shared channel-ownership ledger to show an
@@ -168,7 +173,9 @@ acceptance criteria prefixed with its ID:
    them. Before any singleton activation it proves the exact channel/root ownership lease, binding
    revision, and auth epoch; continuously reconciles their durable changes; and holds the shared
    per-binding effect lease through every watcher/worker/settings I/O, dispatch/ack, and receipt.
-   Existing removal/revocation producers take the matching exclusive lease. A second enrollment and
+   Existing GOV-revocation producers take the matching exclusive lease. Only after those background
+   leases and the already-merged MVR-05 foreground leases are proven does 06B activate MVR-01B
+   registration removal through its recoverable drain/commit/release path. A second enrollment and
    every many-binding transition remain capability-gated through 06C
    and until 06D atomically enables the matching queue-dispatch contract.
    It updates the vault/settings and Settings Spine owners. Depends on 06A and #3163.
@@ -308,6 +315,12 @@ migration, preflight, and fail-loud gate merge together.
   crash after registry commit but before event publication still converges from the durable
   revision cursor without accepting later work on the stale binding.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window`
+- [ ] **MVR-06B:** Active registration removal becomes available only after every production
+  foreground and background consumer participates in the shared/exclusive binding-effect protocol.
+  It blocks new acquisition, drains all holders, commits registry removal, and only then releases
+  ownership; crash injection at each phase yields neither continued legacy access, dual ownership,
+  nor a stranded lease.
+  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_registration_removal_activates_after_all_consumer_floors`
 - [ ] **MVR-06B:** A pure GOV verdict/role revocation with no registry mutation advances the auth epoch, drains the
   affected lifecycle through the ownership-fence → exclusive binding-lease order. Every background
   operation holds the matching shared lease from final validation through I/O, dispatch/ack, and
@@ -415,7 +428,7 @@ PostgreSQL receipt belongs only to 06D.
 
 ### MVR-06B validation
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_settings_spine_bridge_handoff_is_atomic tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff tests/integration/test_multi_vault_background_lifecycle.py::test_picker_commit_precedes_hint_and_survives_event_loss tests/integration/test_multi_vault_background_lifecycle.py::test_default_mutation_rebinds_only_compatibility_lifecycle tests/integration/test_multi_vault_background_lifecycle.py::test_rebind_reuses_settings_spine_and_is_generation_clean tests/integration/test_multi_vault_background_lifecycle.py::test_lifecycle_requires_matching_channel_ownership_lease tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window tests/integration/test_multi_vault_background_lifecycle.py::test_background_effect_fence_closes_authorization_race_window tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback tests/runtime/test_background_binding_handoff.py::test_env_only_single_vault_upgrade_preserves_compatibility_watcher tests/runtime/test_background_binding_handoff.py::test_remove_last_then_restart_preserves_explicit_empty_intent tests/runtime/test_background_binding_handoff.py::test_mvr06b_restart_uses_only_durable_authorized_singleton_or_empty_intent tests/runtime/test_background_binding_handoff.py::test_scalar_worker_handoff_is_atomic_versioned_and_intent_gated tests/api/test_background_binding_admin.py::test_mvr06b_commands_allow_only_singleton_or_empty_intent tests/api/test_background_binding_admin.py::test_stale_binding_intent_can_be_removed_without_content_authority`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_settings_spine_bridge_handoff_is_atomic tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff tests/integration/test_multi_vault_background_lifecycle.py::test_picker_commit_precedes_hint_and_survives_event_loss tests/integration/test_multi_vault_background_lifecycle.py::test_default_mutation_rebinds_only_compatibility_lifecycle tests/integration/test_multi_vault_background_lifecycle.py::test_rebind_reuses_settings_spine_and_is_generation_clean tests/integration/test_multi_vault_background_lifecycle.py::test_lifecycle_requires_matching_channel_ownership_lease tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window tests/integration/test_multi_vault_background_lifecycle.py::test_registration_removal_activates_after_all_consumer_floors tests/integration/test_multi_vault_background_lifecycle.py::test_background_effect_fence_closes_authorization_race_window tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback tests/runtime/test_background_binding_handoff.py::test_env_only_single_vault_upgrade_preserves_compatibility_watcher tests/runtime/test_background_binding_handoff.py::test_remove_last_then_restart_preserves_explicit_empty_intent tests/runtime/test_background_binding_handoff.py::test_mvr06b_restart_uses_only_durable_authorized_singleton_or_empty_intent tests/runtime/test_background_binding_handoff.py::test_scalar_worker_handoff_is_atomic_versioned_and_intent_gated tests/api/test_background_binding_admin.py::test_mvr06b_commands_allow_only_singleton_or_empty_intent tests/api/test_background_binding_admin.py::test_stale_binding_intent_can_be_removed_without_content_authority`
 - Verify the 06B PR diff contains its mapped vault/settings, Settings Spine, environment, and health
   owner-doc targets.
 

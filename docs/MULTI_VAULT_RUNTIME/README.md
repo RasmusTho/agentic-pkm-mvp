@@ -149,14 +149,16 @@ provenance. A request resolves one snapshot and all downstream work for that req
 
 Changing a session selection creates a new generation. In-flight work completes against its old
 snapshot; later work sees the new generation. Caches, retrieval results, and settings bundles are
-keyed by `context_id` plus generation and every scope-affecting input (server-derived principal,
-operational scope, non-reversible selection-capability digest, dimension/filter, and binding set); receipts and writes
+keyed by `context_id` plus generation and every context-affecting input (server-derived principal,
+cognitive operational scope, sphere memberships, situated identity, non-reversible selection-
+capability digest, dimension/filter, and binding set); receipts and writes
 record that identity and their target binding. In the current single-user runtime the opaque
   selection ID is an expiring bearer capability used in addition to #2223 authentication, while the
   server resolves a human or delegated operator-role principal from the auth/GOV boundary and owns
-  operational scope per request. The selection record binds principal/instance/bindings but stores
-  no operation authority; the same selection can support separately authorized read and write calls
-  without widening either. `appInstallId` remains separate instance identity, API keys remain credentials,
+  action, write class, and required permission per request. The selection record binds principal/
+  instance/bindings plus its cognitive dimensions but stores no operation authority; the same
+  selection can support separately authorized read and write calls without mutating WSP scope or
+  widening either. `appInstallId` remains separate instance identity, API keys remain credentials,
 and client identity/scope strings are never trusted. The local-only bootstrap role is explicitly an
 instance-scoped delegated role, not a claim of the human's global identity. MVR-03 owns its missing
 producer: existing one-credential installs atomically migrate a credential fingerprint to a private,
@@ -291,13 +293,18 @@ Partial delivery remains fail-closed:
 - after issue 01B and until issue 05C advances the foreground-ownership floor, cross-channel transfer
   is implemented but production transfer requests fail capability-not-ready; the source lease cannot be
   released while legacy foreground read/write paths remain unfenced;
+- after issue 01B and until issue 06B proves both foreground and background consumer floors, active
+  registration removal is implemented but production removal fails capability-not-ready without
+  changing registry/revision/ownership; only 06B may activate its drain/commit/release sequence;
 - after task 02 but before task 03, default resolution is available only through explicit
   background/compatibility adapters; requests do not pretend to be session-scoped;
 - after task 03 but before issues 05A–06D, migrated callers may use ActiveContextSet while unmigrated
   callers stay on named single-vault adapters; the architecture guard records the mixed state and
   no global "multi-vault delivered" claim is allowed;
-- after issue 05B but before issue 06B, the existing picker alone continues to drive #3163's named
-  single-watcher bridge while scoped request/session selection does not; issue 06B atomically hands
+- after issue 05B but before issue 06B, the existing picker alone commits #3163's named monotonic
+  cross-process compatibility revision, which the separately deployed watcher reconciles before its
+  single-watcher reload/rebind; an in-process event is only a hint and scoped request/session
+  selection does not mutate the record. Issue 06B atomically hands
   that live binding plus the MVR-05 scalar worker to versioned durable singleton/empty state before
   disabling the bridge or enabling intent mutation;
 - after issue 05B but before issue 05C, scoped session/override writes and any write whose resolved

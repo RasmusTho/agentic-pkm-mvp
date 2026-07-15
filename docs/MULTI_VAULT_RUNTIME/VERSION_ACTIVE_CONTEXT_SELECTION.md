@@ -20,7 +20,9 @@ generation unknown. A process-global mutable manager cannot safely represent con
 
 - Define the minimal runtime-capable `ActiveContextSet` schema: `context_id`, monotonic
   `generation`, immutable zero/one/many source bindings, selection provenance, optional dimension
-  filter, and principal/scope/topology fields already reserved by the contract. Every source
+  filter, and the already-delivered cognitive `scope`, `sphere_memberships`, `situated_identity`,
+  principal, and topology fields reserved by the contract. These cognitive dimensions remain WSP
+  context and are never replaced by an endpoint action/permission name. Every source
   binding also carries its monotonic `binding_revision` (path/device/authority-provenance revision),
   and the snapshot carries the registry revision plus a non-secret authorization-decision epoch or
   fingerprint.
@@ -29,18 +31,21 @@ generation unknown. A process-global mutable manager cannot safely represent con
   capability, not a claim of multi-user identity: every operation also passes the existing #2223
   Companion authentication gate. The server resolves `principal_context` from an authenticated
   human principal or a server-owned delegated operator-role principal supplied by the auth/GOV
-  boundary. Each later request derives its operational scope independently from the server-owned
-  endpoint/command contract; a selection never grants or stores operation authority. The current local-only
+  boundary. The selection stores the explicitly resolved cognitive scope/sphere/situated-identity
+  payload but never grants or stores operation authority. Each later request derives its action,
+  write class, and required permission independently from the server-owned endpoint/command
+  contract and passes those as separate GOV decision inputs. The current local-only
   bootstrap may use a private `local_operator_role_id` owned by that boundary; it denotes an
   instance-scoped delegated role, not the human's global identity. `appInstallId` is carried
   separately as instance identity and can never derive, equal, or substitute for a principal. API
   keys are credentials rather than principals; paths, correlation IDs, and client-supplied
   principal/scope strings never become identity or authority. A governed operation with no resolved
   principal/delegated role fails closed. The selection record is bound to that principal, instance,
-  and selected binding set, not to an endpoint scope. Possession of a different selection ID is
-  required to access a different session selection. At later request resolution the server derives
-  the operation scope for that call, GOV authorizes the principal/bindings/operation independently,
-  and the resulting immutable context snapshot carries that per-call scope. The same selection may
+  selected binding set, and validated cognitive dimensions, not to an endpoint permission/action.
+  Possession of a different selection ID is
+  required to access a different session selection. At later request resolution GOV authorizes the
+  principal/bindings/action independently while the immutable snapshot retains the selection's
+  cognitive dimensions unchanged. The same selection may
   therefore support an authorized read and governed write without either an over-broad stored scope
   or a scope mismatch; an unauthorized operation still fails closed.
 - Own the missing current-runtime producer for that delegated role. On an existing single-user
@@ -91,9 +96,11 @@ generation unknown. A process-global mutable manager cannot safely represent con
   with the prior snapshot. Relocation, removal, authority-provenance, or verdict change invalidates
   affected cache entries and rotates generation before downstream work starts.
 - Key/invalidate caches and downstream context artifacts by `context_id`, generation,
-  registry/binding revisions, authorization epoch/fingerprint, principal, scope, a non-reversible
-  selection-capability digest, dimension/filter, and binding set; never by binding plus generation
-  alone. Raw bearer IDs are never logged, receipted, or embedded in cache keys.
+  registry/binding revisions, authorization epoch/fingerprint, principal, cognitive scope,
+  sphere memberships, situated identity, a non-reversible selection-capability digest,
+  dimension/filter, and binding set; never by binding plus generation alone. Action/write class and
+  permission remain separate GOV inputs/receipt fields rather than being written into WSP scope.
+  Raw bearer IDs are never logged, receipted, or embedded in cache keys.
 - Enforce GOV authorization independently for every resolved binding.
 
 ## Concretely
@@ -161,10 +168,12 @@ retrieval, settings, or write provenance to leak between humans or vaults.
   - Verify: `tests/api/test_active_context_resolution.py::test_each_binding_is_authorized_independently`
 - [ ] Session selection uses an expiring high-entropy server-minted bearer ID in addition to #2223
   authentication, binds to the server-resolved human/delegated-role principal, separate instance
-  identity, and selected bindings—but stores no operational authority. The resolver derives scope
-  per call, permits the same selection for separately authorized read/write operations, and rejects
-  arbitrary client correlation/principal/scope inputs, unauthorized operations, or a different ID.
-  `appInstallId` is never principal identity.
+  identity, selected bindings, cognitive scope, sphere memberships, and situated identity—but stores
+  no operation authority. The resolver preserves those cognitive dimensions while deriving action,
+  write class, and required permission separately per call for GOV; it permits the same selection
+  for separately authorized read/write operations and rejects arbitrary client correlation/
+  principal/context/permission inputs, unauthorized operations, or a different ID. `appInstallId`
+  is never principal identity.
   - Verify: `tests/api/test_active_context_resolution.py::test_selection_id_is_single_user_bearer_with_server_derived_context`
 - [ ] Principal derivation uses only the auth/GOV-owned human or delegated-role record; two
   installations cannot be conflated with two humans, and multiple human/agent roles on one instance
@@ -200,8 +209,9 @@ retrieval, settings, or write provenance to leak between humans or vaults.
   authentication and expiry, and never mutate process-global `VaultManager` state.
   - Verify: `tests/api/test_active_context_selection_api.py::test_production_selection_lifecycle_is_scoped_and_global_free`
 - [ ] Cache/retrieval context cannot collide across two bearer selections with the same binding and
-  generation but different server-derived scope, selection-capability digest, or dimension/filter;
-  raw bearer IDs remain secret and the typed principal field stays in the key for future
+  generation but different cognitive scope/sphere/situated identity, selection-capability digest,
+  or dimension/filter; action/permission stays a separate GOV input, raw bearer IDs remain secret,
+  and the typed principal field stays in the key for future
   authenticated-principal expansion.
   - Verify: `tests/retrieval/test_active_context_cache_isolation.py::test_cache_keys_include_full_context_identity`
 - [ ] Relocating a binding or changing its authority provenance/verdict rotates the production
