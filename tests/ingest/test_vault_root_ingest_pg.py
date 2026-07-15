@@ -32,14 +32,35 @@ def _bootstrap_pg_tables_if_missing(dsn: str) -> None:
                 """
                 SELECT
                     to_regclass('public.objects') IS NOT NULL,
-                    to_regclass('public.store_objects') IS NOT NULL
+                    to_regclass('public.store_objects') IS NOT NULL,
+                    to_regclass('public.decisions') IS NOT NULL,
+                    to_regclass('public.alembic_version') IS NOT NULL
                 """
             )
-            objects_ready, store_objects_ready = cur.fetchone()
+            objects_ready, store_objects_ready, decisions_ready, alembic_version_ready = cur.fetchone()
 
     if not objects_ready:
         with conn_rw():
             pass
+
+    if not decisions_ready:
+        with psycopg.connect(dsn, autocommit=True) as conn:
+            conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+
+        from alembic import command
+        from alembic.config import Config
+
+        repo_root = Path(__file__).resolve().parents[2]
+        cfg = Config(str(repo_root / "alembic.ini"))
+        cfg.set_main_option("script_location", str(repo_root / "app" / "alembic"))
+        if not alembic_version_ready:
+            # This UAT fixture historically bootstraps the legacy `objects`
+            # table through conn_rw(), rather than from the full Alembic
+            # lineage. Stamp that known predecessor so the #3488 migration is
+            # the sole schema producer for `decisions` in this harness.
+            command.stamp(cfg, "4d1e0c9a3329")
+        command.upgrade(cfg, "head")
+
     if not store_objects_ready:
         pg_store._TABLES_READY = False
         pg_store._ensure_tables()

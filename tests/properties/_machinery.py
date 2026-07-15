@@ -1480,7 +1480,7 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "backing store.put -> store_objects; the caller that builds obj.payload carries episode_ref "
         "(every save_object caller is itself a classified producer above)."
     ),
-    ("app/stores/postgres.py", 100): (
+    ("app/stores/postgres.py", 67): (
         "transport_passthrough: PgObjects.upsert forwards its caller-supplied payload arg to "
         "canonical_store.put (PgObjectStore.put) -> store_objects; the caller (vault_root:92/96) "
         "carries episode_ref in canonical_payload."
