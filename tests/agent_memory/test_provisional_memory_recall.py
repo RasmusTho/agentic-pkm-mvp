@@ -99,11 +99,11 @@ def test_read_context_preserves_low_trust_posture(tmp_path: Path) -> None:
 def test_stopwords_do_not_create_provisional_recall_match(tmp_path: Path) -> None:
     vault, store = _write_provisional(
         tmp_path,
-        content="The and of to in with for. För och på.",
+        content="The and of to in with for. Fo\u0308r och pa\u030a.",
     )
 
     search = retrieve_relevant_provisional(
-        "the and of för på",
+        "the and of fo\u0308r pa\u030a",
         vault_root=vault,
         receipt_store=store,
         active_scope_id="scope-personal",

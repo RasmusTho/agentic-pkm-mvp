@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import unicodedata
 from uuid import UUID, uuid4
 
 from app.activation.gate import (
@@ -446,7 +447,7 @@ def _tier_rank(tier: AdmissionTier) -> int:
 def _tokens(value: str) -> set[str]:
     return {
         token
-        for match in _TOKEN_RE.finditer(value)
+        for match in _TOKEN_RE.finditer(unicodedata.normalize("NFC", value))
         if (token := match.group(0).casefold()) not in _STOPWORDS
     }
 
