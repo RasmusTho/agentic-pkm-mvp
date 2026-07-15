@@ -64,8 +64,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   persisted across restart.
 - The schema-valid coordinator receipt carries ordered repair/review events into the same
   lease-fenced ledger as one atomic, deterministically identified batch. Exact receipt replay is a
-  no-op, and a later invalid/conflicting event rolls back the whole batch; a no-repair delivery still
-  requires two distinct clean review sessions. Check eligibility selects the latest GitHub rerun per
+  no-op, and a later invalid/conflicting event rolls back the whole batch. A semantic event-batch
+  rejection becomes an exact-lease technical terminal receipt before any pending-check backoff, so
+  invalid review or repair events cannot strand coordinator authority or consume a partial budget;
+  a no-repair delivery still requires two distinct clean review sessions. Check eligibility selects the latest GitHub rerun per
   check name. Schema-v3 health, backup, and restore validation covers verification runs, attempts,
   exceptions, head-audit fields, and their write-critical keys. A deployed pre-head-rebinding v3
   backup may omit only the two additive current/verified-head columns: recovery preserves that

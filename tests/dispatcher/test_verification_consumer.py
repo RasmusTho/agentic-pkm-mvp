@@ -706,6 +706,100 @@ def test_pending_repair_checks_persist_repair_before_backoff(tmp_path) -> None:
     ]
 
 
+def test_invalid_pending_repair_event_batch_fails_before_backoff(tmp_path) -> None:
+    new_head = "b" * 40
+    pending = [{"id": 2, "name": "CI", "status": "in_progress", "conclusion": None}]
+    truth = Truth(eligible_pr(), GREEN)
+
+    class InvalidPendingRepairLauncher(Launcher):
+        def launch(self, context_pack, **kwargs):
+            if callback := kwargs.get("on_thread_started"):
+                callback("invalid-repair-session")
+            truth.pr = eligible_pr(head={"ref": "branch", "sha": new_head})
+            truth.check_rows = pending
+            return "invalid-repair-session", {
+                "verdict": "blocked",
+                "head_sha": new_head,
+                "summary": "schema-valid but semantically invalid repair",
+                "receipt_ids": ["repair-1"],
+                "review_events": [
+                    {
+                        "kind": "repair",
+                        "session_id": "repair-1",
+                        "capability": "gpt-5.6-terra",
+                        "reasoning_effort": "high",
+                        "outcome": "fixed",
+                        "finding_id": "F1",
+                        "strongest": True,
+                    }
+                ],
+            }
+
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state, truth, Auth(), InvalidPendingRepairLauncher(), "host"
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "receipt_event_application_failed"
+    assert result.claimed_by is None
+    assert result.lease_id is None
+    assert result.terminal_receipt == {
+        "outcome": "receipt_event_application_failed",
+        "error_type": "ValueError",
+        "head_sha": new_head,
+    }
+    assert [row["kind"] for row in state.attempts(result.run_id)] == [
+        "verification"
+    ]
+
+
+def test_invalid_review_event_batch_terminals_without_stranding_lease(tmp_path) -> None:
+    class OverBudgetReviewLauncher(Launcher):
+        def launch(self, context_pack, **kwargs):
+            if callback := kwargs.get("on_thread_started"):
+                callback("over-budget-review-session")
+            return "over-budget-review-session", {
+                "verdict": "blocked",
+                "head_sha": HEAD,
+                "summary": "three clean reviews exceed the durable budget",
+                "receipt_ids": ["review-1", "review-2", "review-3"],
+                "review_events": [
+                    {
+                        "kind": "review",
+                        "session_id": f"review-{index}",
+                        "capability": "gpt-5.6-sol",
+                        "reasoning_effort": "xhigh",
+                        "outcome": "clean",
+                    }
+                    for index in range(1, 4)
+                ],
+            }
+
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state, Truth(eligible_pr(), GREEN), Auth(), OverBudgetReviewLauncher(), "host"
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "receipt_event_application_failed"
+    assert result.claimed_by is None
+    assert result.lease_id is None
+    assert result.terminal_receipt == {
+        "outcome": "receipt_event_application_failed",
+        "error_type": "ValueError",
+        "head_sha": HEAD,
+    }
+    assert [row["kind"] for row in state.attempts(result.run_id)] == [
+        "verification"
+    ]
+    with state.store._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM verification_exceptions WHERE run_id=?",
+            (result.run_id,),
+        ).fetchone()[0] == 0
+
+
 def test_pending_repair_replay_preserves_two_plus_two_accounting(tmp_path) -> None:
     new_head = "b" * 40
     pending = [{"id": 2, "name": "CI", "status": "in_progress", "conclusion": None}]

@@ -922,6 +922,35 @@ class VerificationConsumer:
         unit = match.group(2)[0]
         return f"{match.group(1)}{unit}"
 
+    def _terminal_event_application_failure(
+        self,
+        run: VerificationRun,
+        lease_id: str,
+        exc: ValueError,
+    ) -> VerificationRun:
+        receipt = {
+            "outcome": "receipt_event_application_failed",
+            "error_type": type(exc).__name__,
+            "head_sha": run.head_sha,
+        }
+        try:
+            return self.ledger.terminal(
+                run.run_id,
+                "failed",
+                receipt,
+                reason="receipt_event_application_failed",
+                holder=self.holder,
+                lease_id=lease_id,
+            )
+        except ValueError:
+            # Event application and terminal fencing share the exact lease.
+            # If ownership changed between them, preserve the newer live truth
+            # rather than mutating under an expired or replacement token.
+            current = self.ledger.get(run.run_id)
+            if current is not None:
+                return current
+            raise
+
     def consume(self, request: Mapping[str, object]) -> VerificationRun:
         run = self.ledger.ingest(request)
         if run.status in {"completed", "failed", "needs_human", "superseded"}:
@@ -1258,12 +1287,17 @@ class VerificationConsumer:
                     )
                 if repair_events:
                     pack = context_pack(claimed, live_pr)
-                    VerificationAgentLoop(
-                        self.ledger,
-                        claimed.run_id,
-                        holder=self.holder,
-                        lease_id=lease_id,
-                    ).apply_events(repair_events, context=pack)
+                    try:
+                        VerificationAgentLoop(
+                            self.ledger,
+                            claimed.run_id,
+                            holder=self.holder,
+                            lease_id=lease_id,
+                        ).apply_events(repair_events, context=pack)
+                    except ValueError as exc:
+                        return self._terminal_event_application_failure(
+                            claimed, lease_id, exc
+                        )
                 return self.ledger.backoff(
                     claimed.run_id,
                     {
@@ -1297,7 +1331,12 @@ class VerificationConsumer:
             lease_id=lease_id,
         )
         if events:
-            loop.apply_events(events, context=pack)
+            try:
+                loop.apply_events(events, context=pack)
+            except ValueError as exc:
+                return self._terminal_event_application_failure(
+                    claimed, lease_id, exc
+                )
         if verdict == "needs_human":
             human_exception = receipt.get("human_exception")
             if (
