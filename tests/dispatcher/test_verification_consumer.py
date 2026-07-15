@@ -3541,6 +3541,10 @@ CANONICAL_CODEX_USAGE_LIMIT = (
     "https://chatgpt.com/codex/settings/usage to purchase more credits "
     f"or try again at {FUTURE_CODEX_RETRY}."
 )
+MODEL_SPECIFIC_CODEX_USAGE_LIMIT = (
+    "You've hit your usage limit for gpt-5.6-terra. "
+    "Switch to another model now, or try again later."
+)
 
 
 @pytest.mark.parametrize(
@@ -3590,6 +3594,179 @@ def test_codex_json_usage_limit_event_enters_durable_backoff(
     assert [(row[0], row[1]) for row in attempts] == [
         ("verification", "rate_limited")
     ]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        MODEL_SPECIFIC_CODEX_USAGE_LIMIT,
+        (
+            "You've hit your usage limit for codex_other. "
+            f"Switch to another model now, or try again at {FUTURE_CODEX_RETRY}."
+        ),
+    ],
+)
+def test_model_specific_codex_usage_limit_event_enters_durable_backoff(
+    tmp_path: Path, message: str
+) -> None:
+    state = ledger(tmp_path)
+    launcher, calls = _codex_json_usage_failure_launcher(
+        tmp_path,
+        message=message,
+    )
+
+    result = VerificationConsumer(
+        state, Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "backoff"
+    assert result.terminal_receipt["outcome"] == "rate_limited"
+    assert result.terminal_receipt["api_fallback"] is False
+    assert result.terminal_receipt["failure_receipt"]["failure_class"] == "rate_limit"
+    assert len(calls) == 1
+    with state.store._connect() as conn:
+        attempts = conn.execute(
+            "SELECT attempt_kind, outcome FROM verification_attempts"
+        ).fetchall()
+    assert [(row[0], row[1]) for row in attempts] == [
+        ("verification", "rate_limited")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("message", "nested", "stderr"),
+    [
+        (
+            "You've hit your usage limit for codex. "
+            "Switch to another model now, or try again later.",
+            False,
+            "",
+        ),
+        (
+            "You've hit your usage limit for gpt 5.6. "
+            "Switch to another model now, or try again later.",
+            False,
+            "",
+        ),
+        (
+            "You've hit your usage limit for gpt-5.6-terra! "
+            "Switch to another model now, or try again later.",
+            False,
+            "",
+        ),
+        (
+            "You've hit your usage limit for gpt-5.6-terra. "
+            "Switch to another model now, or try again at 99:99 PM.",
+            False,
+            "",
+        ),
+        (
+            "You've hit your usage limit for gpt-5.6-terra-extra-long-"
+            "identifier-that-exceeds-the-bounded-sixty-four-byte-contract. "
+            "Switch to another model now, or try again later.",
+            False,
+            "",
+        ),
+        (
+            "You've hit your usage limit for gpt-5.6-terra. "
+            "Switch to another model now, or try again later.\" is an example.",
+            False,
+            "",
+        ),
+        (
+            "You've hit your usage limit for gpt-5.6-terrа. "
+            "Switch to another model now, or try again later.",
+            False,
+            "",
+        ),
+        (MODEL_SPECIFIC_CODEX_USAGE_LIMIT, True, ""),
+        ("synthetic execution failure", False, MODEL_SPECIFIC_CODEX_USAGE_LIMIT),
+        (
+            "synthetic execution failure",
+            False,
+            json.dumps(
+                {"type": "error", "message": MODEL_SPECIFIC_CODEX_USAGE_LIMIT}
+            ),
+        ),
+        (
+            "You've hit your usage limit. Managed plan promotion, "
+            "or try again later.",
+            False,
+            "",
+        ),
+    ],
+)
+def test_untrusted_model_specific_usage_limit_text_cannot_mint_backoff(
+    tmp_path: Path, message: str, nested: bool, stderr: str
+) -> None:
+    launcher, _ = _codex_json_usage_failure_launcher(
+        tmp_path, message=message, nested=nested, stderr=stderr
+    )
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "codex_exec_failed"
+    assert result.terminal_receipt["failure_class"] == "execution"
+
+
+def test_model_specific_usage_limit_backoff_replay_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    state = ledger(tmp_path)
+    launcher, calls = _codex_json_usage_failure_launcher(
+        tmp_path,
+        message=MODEL_SPECIFIC_CODEX_USAGE_LIMIT,
+    )
+    consumer = VerificationConsumer(
+        state, Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    )
+
+    first = consumer.consume(request())
+    replay = consumer.consume(request())
+
+    assert first.run_id == replay.run_id
+    assert first.status == replay.status == "backoff"
+    assert len(calls) == 1
+    with state.store._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM verification_runs").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM verification_attempts").fetchone()[0] == 1
+
+
+def test_model_specific_usage_limit_event_is_not_durable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    marker = "gpt-5.6-terra-private"
+    message = (
+        f"You've hit your usage limit for {marker}. "
+        "Switch to another model now, or try again later."
+    )
+    state = ledger(tmp_path)
+    launcher, _ = _codex_json_usage_failure_launcher(tmp_path, message=message)
+
+    result = VerificationConsumer(
+        state, Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+    captured = capsys.readouterr()
+    backup = tmp_path / "dispatcher-backup.sqlite3"
+    with state.store._connect() as source, sqlite3.connect(backup) as destination:
+        source.backup(destination)
+
+    durable = json.dumps(
+        {
+            "attempts": state.attempts(result.run_id),
+            "terminal": result.terminal_receipt,
+            "status": _compact_verification_run(result),
+        },
+        sort_keys=True,
+    )
+    assert marker not in durable
+    assert message not in captured.out
+    assert message not in captured.err
+    assert marker.encode() not in state.store.db_path.read_bytes()
+    assert marker.encode() not in backup.read_bytes()
 
 
 def test_codex_time_only_retry_accepts_future_fall_back_fold(
