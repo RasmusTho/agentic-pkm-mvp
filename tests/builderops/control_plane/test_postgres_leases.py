@@ -53,6 +53,26 @@ def test_stale_fencing_token_cannot_mutate_after_reassignment(
             request={"command": "claim"},
         )
 
+    create_barrier = Barrier(2)
+
+    def concurrent_unleased_create(key: str):
+        contender = type(store)(store.dsn)
+        create_barrier.wait()
+        try:
+            return contender.commit_transition(
+                envelope=envelope,
+                task_id="concurrent-create-task",
+                to_state=key,
+                idempotency_key=key,
+                request={"command": key},
+            )
+        except LeaseRequired as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        create_outcomes = list(pool.map(concurrent_unleased_create, ("creator-a", "creator-b")))
+    assert sum(isinstance(outcome, LeaseRequired) for outcome in create_outcomes) == 1
+
     first = store.claim_lease(
         envelope=envelope,
         resource_id="task-3792",

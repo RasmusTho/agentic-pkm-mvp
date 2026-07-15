@@ -68,22 +68,14 @@ def test_unknown_external_effect_requires_readback_before_retry(
         now=now,
     )
     restarted_store = type(control_plane_store)(control_plane_store.dsn)
-    with pytest.raises(UnknownEffectNeedsReconciliation):
-        restarted_store.claim_outbox(
-            envelope=envelope,
-            operation_key=result.operation_key,
-            worker_id="executor-2",
-            watermark=intent_watermark,
-            now=now + timedelta(seconds=2),
-        )
-    assert restarted_store.outbox_status(envelope.repository, result.operation_key) == "unknown"
     orphaned_claim = restarted_store.outbox_claim(envelope.repository, result.operation_key)
+    assert restarted_store.outbox_status(envelope.repository, result.operation_key) == "unknown"
     assert orphaned_claim == first_claim
     assert (
         restarted_store.effect_eligible(
             first_claim,
             watermark=_observed_claim(intent_watermark, first_claim),
-            now=now + timedelta(seconds=2),
+            now=now,
         )
         is False
     )
@@ -120,3 +112,75 @@ def test_unknown_external_effect_requires_readback_before_retry(
 
     restarted_store.reconcile_outbox(claim, observed_applied=True, evidence={"merge_sha": "a" * 40})
     assert restarted_store.outbox_status(envelope.repository, result.operation_key) == "succeeded"
+
+
+def test_claim_crash_before_lsn_binding_is_recoverable(control_plane_store, envelope) -> None:
+    result = control_plane_store.commit_transition(
+        envelope=envelope,
+        task_id="claim-binding-crash",
+        to_state="merge_pending",
+        idempotency_key="claim-binding-crash",
+        request={"command": "claim"},
+        outbox={"effect_type": "github.merge", "payload": {"pr": 3852}},
+    )
+    intent_watermark = _observed_transition(result)
+
+    with pytest.raises(RuntimeError, match="after_claim_commit"):
+        control_plane_store.claim_outbox(
+            envelope=envelope,
+            operation_key=result.operation_key,
+            worker_id="crashed-executor",
+            watermark=intent_watermark,
+            fault_at="after_claim_commit",
+        )
+
+    recovered = type(control_plane_store)(control_plane_store.dsn)
+    orphaned_claim = recovered.outbox_claim(envelope.repository, result.operation_key)
+    assert orphaned_claim.claim_lsn == "0/0"
+    assert recovered.outbox_status(envelope.repository, result.operation_key) == "unknown"
+    assert recovered.effect_eligible(orphaned_claim, watermark=RecoveryWatermark.stalled()) is False
+    recovered.reconcile_outbox(
+        orphaned_claim,
+        observed_applied=False,
+        evidence={"readback": "not-found"},
+    )
+    retried = recovered.claim_outbox(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="replacement-executor",
+        watermark=intent_watermark,
+    )
+    assert retried.fencing_token > orphaned_claim.fencing_token
+
+
+def test_expired_claim_cannot_be_directly_reassigned(control_plane_store, envelope) -> None:
+    result = control_plane_store.commit_transition(
+        envelope=envelope,
+        task_id="expired-claim",
+        to_state="merge_pending",
+        idempotency_key="expired-claim",
+        request={"command": "claim"},
+        outbox={"effect_type": "github.merge", "payload": {"pr": 3852}},
+    )
+    intent_watermark = _observed_transition(result)
+    now = datetime.now(timezone.utc)
+    first = control_plane_store.claim_outbox(
+        envelope=envelope,
+        operation_key=result.operation_key,
+        worker_id="expired-executor",
+        watermark=intent_watermark,
+        claim_ttl_seconds=1,
+        now=now,
+    )
+
+    with pytest.raises(UnknownEffectNeedsReconciliation):
+        control_plane_store.claim_outbox(
+            envelope=envelope,
+            operation_key=result.operation_key,
+            worker_id="replacement-executor",
+            watermark=intent_watermark,
+            now=now + timedelta(seconds=2),
+        )
+    recovered = control_plane_store.outbox_claim(envelope.repository, result.operation_key)
+    assert recovered == first
+    assert control_plane_store.outbox_status(envelope.repository, result.operation_key) == "unknown"
