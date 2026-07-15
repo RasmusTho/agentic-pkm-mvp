@@ -102,7 +102,13 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   before `retry_after`. Rate-limit classification requires either a structured `retry` receipt or the
   launcher's structured `failure_class=rate_limit`, derived once from a non-zero provider failure;
   only parsed provider fields such as status 429 or canonical failure codes, inspected independently
-  across bounded stderr and structured terminal events, can create that signal,
+  across bounded stderr and structured terminal events, or a full match of the versioned top-level
+  Codex CLI `error` event grammar for plan guidance plus its bounded retry suffix, can create that
+  signal. The grammar is exact ASCII with canonical case and spacing; Unicode compatibility folding
+  and whitespace normalization are forbidden. Retry timestamps must parse as a real non-past local
+  12-hour time or calendar date within the bounded future window and carry the correct ordinal suffix;
+  regex shape alone is insufficient. Prefix-only matches are forbidden. The Codex event envelope
+  is classified while streaming so a later `turn.failed` event cannot erase the earlier signal,
   while free-form, arbitrary, negated, or explicitly false terminal/stderr prose cannot select
   rate-limit backoff. Terminal completion
   additionally requires two fresh clean
@@ -175,7 +181,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   terminal error events even when stdout contained an otherwise valid receipt. A bounded rate-limit,
   usage-limit, quota, or credit-exhaustion signal on that non-zero path remains a lease-fenced backoff
   receipt with no repair-budget use or API-key fallback; either diagnostic channel can supply the
-  structured signal without masking the other. Raw stderr, terminal event content, exception
+  structured provider signal without masking the other, while the canonical Codex usage-limit
+  message is trusted only in a top-level CLI `error` event and never from stderr, nested model/tool
+  output, quoted examples, or arbitrary prose. Raw stderr, terminal event content, exception
   text, paths, and credentials are transient classification input only: durable attempts, terminal
   receipts, and `verification-status` retain only bounded outcome, return-code, failure-class,
   error-type, retry, and canonical UUID coordinator-session fields. A zero exit without both thread

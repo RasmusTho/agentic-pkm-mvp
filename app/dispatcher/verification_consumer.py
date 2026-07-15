@@ -29,6 +29,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Protocol, Sequence, cast
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 import jsonschema
 
@@ -1467,6 +1468,161 @@ def _is_rate_limit_exec_failure(detail: str) -> bool:
     return False
 
 
+def _local_now() -> datetime | None:
+    """Return an aware local instant backed by the host's full timezone rules."""
+
+    try:
+        with Path("/etc/localtime").open("rb") as stream:
+            local_zone = ZoneInfo.from_file(stream)
+    except (OSError, ValueError):
+        return None
+    return datetime.now(local_zone)
+
+
+def _is_future_local_wall_time(
+    current: datetime, wall_time: datetime, *, max_delta: timedelta
+) -> bool:
+    """Accept a local wall time when at least one real fold is a future instant."""
+
+    if current.tzinfo is None or wall_time.tzinfo is not None:
+        return False
+    try:
+        current_utc = current.astimezone(timezone.utc)
+        latest_utc = current_utc + max_delta
+    except (OSError, OverflowError, ValueError):
+        return False
+    for fold in (0, 1):
+        try:
+            candidate = wall_time.replace(tzinfo=current.tzinfo, fold=fold)
+            candidate_utc = candidate.astimezone(timezone.utc)
+            round_trip = candidate_utc.astimezone(current.tzinfo)
+        except (OSError, OverflowError, ValueError):
+            continue
+        if round_trip.replace(tzinfo=None) != wall_time:
+            continue
+        if current_utc <= candidate_utc <= latest_utc:
+            return True
+    return False
+
+
+def _is_valid_codex_retry(retry: str) -> bool:
+    if retry == "later":
+        return True
+    if not retry.startswith("at "):
+        return False
+    timestamp = retry.removeprefix("at ")
+    current = _local_now()
+    if current is None:
+        return False
+    current = current.replace(second=0, microsecond=0)
+    clock = re.fullmatch(
+        r"(?P<hour>[1-9]|1[0-2]):(?P<minute>[0-9]{2}) (?P<period>AM|PM)",
+        timestamp,
+    )
+    if clock is not None:
+        hour = int(clock.group("hour"))
+        minute = int(clock.group("minute"))
+        if minute > 59:
+            return False
+        hour = hour % 12 + (12 if clock.group("period") == "PM" else 0)
+        candidate = datetime(
+            current.year,
+            current.month,
+            current.day,
+            hour=hour,
+            minute=minute,
+        )
+        return _is_future_local_wall_time(
+            current, candidate, max_delta=timedelta(days=1)
+        )
+    match = re.fullmatch(
+        r"(?P<month>Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
+        r"(?P<day>[1-9]|[12][0-9]|3[01])(?P<suffix>st|nd|rd|th), "
+        r"(?P<year>[0-9]{4}) (?P<hour>[1-9]|1[0-2]):"
+        r"(?P<minute>[0-9]{2}) (?P<period>AM|PM)",
+        timestamp,
+    )
+    if match is None:
+        return False
+    day = int(match.group("day"))
+    suffix = (
+        "th"
+        if 11 <= day % 100 <= 13
+        else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+    )
+    if match.group("suffix") != suffix:
+        return False
+    minute = int(match.group("minute"))
+    if minute > 59:
+        return False
+    hour = int(match.group("hour")) % 12 + (
+        12 if match.group("period") == "PM" else 0
+    )
+    month = {
+        "Jan": 1,
+        "Feb": 2,
+        "Mar": 3,
+        "Apr": 4,
+        "May": 5,
+        "Jun": 6,
+        "Jul": 7,
+        "Aug": 8,
+        "Sep": 9,
+        "Oct": 10,
+        "Nov": 11,
+        "Dec": 12,
+    }[match.group("month")]
+    try:
+        candidate = datetime(
+            int(match.group("year")), month, day, hour, minute
+        )
+    except ValueError:
+        return False
+    if candidate.date() <= current.date():
+        return False
+    return _is_future_local_wall_time(
+        current, candidate, max_delta=timedelta(days=5 * 366)
+    )
+
+
+def _is_codex_usage_limit_event(event: object) -> bool:
+    """Recognize the bounded Codex CLI envelope for subscription exhaustion."""
+
+    if (
+        not isinstance(event, Mapping)
+        or set(event) != {"type", "message"}
+        or event.get("type") != "error"
+    ):
+        return False
+    message = event.get("message")
+    if not isinstance(message, str) or not message.isascii():
+        return False
+    retry_time = (
+        r"(?:(?:[1-9]|1[0-2]):[0-9]{2} (?:AM|PM)|"
+        r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
+        r"(?:[1-9]|[12][0-9]|3[01])(?:st|nd|rd|th), [0-9]{4} "
+        r"(?:[1-9]|1[0-2]):[0-9]{2} "
+        r"(?:AM|PM))"
+    )
+    retry = rf"(?:later|at {retry_time})"
+    plan_copy = (
+        r"(?:Upgrade to Pro \(https://chatgpt\.com/explore/pro\), visit "
+        r"https://chatgpt\.com/codex/settings/usage to purchase more credits|"
+        r"To get more access now, send a request to your admin|"
+        r"Upgrade to Plus to continue using Codex "
+        r"\(https://chatgpt\.com/explore/plus\),|"
+        r"Visit https://chatgpt\.com/codex/settings/usage to purchase more credits)"
+    )
+    for pattern in (
+        rf"You've hit your usage limit\. {plan_copy} or try again (?P<retry>{retry})\.",
+        rf"You've hit your usage limit\. Try again (?P<retry>{retry})\.",
+    ):
+        match = re.fullmatch(pattern, message)
+        if match is not None:
+            return _is_valid_codex_retry(match.group("retry"))
+    return False
+
+
 class CodexExecLauncher:
     """Explicit least-privilege non-interactive verification coordinator."""
 
@@ -1777,6 +1933,7 @@ class CodexExecLauncher:
         thread_id: str | None = resume_session_id
         terminal: dict[str, object] | None = None
         terminal_error: str | None = None
+        terminal_rate_limited = False
         try:
             for line in lines:
                 if authority_lost.is_set():
@@ -1787,6 +1944,10 @@ class CodexExecLauncher:
                     continue
                 if event.get("type") in {"turn.failed", "error"}:
                     terminal_error = json.dumps(event, sort_keys=True)
+                    terminal_rate_limited = (
+                        _is_codex_usage_limit_event(event)
+                        or terminal_rate_limited
+                    )
                 if event.get("type") == "thread.started" and isinstance(event.get("thread_id"), str):
                     thread_id = event["thread_id"]
                     if on_thread_started:
@@ -1872,7 +2033,8 @@ class CodexExecLauncher:
             detail = stderr_detail or terminal_error or "no stderr"
             failure_class = (
                 "rate_limit"
-                if any(
+                if terminal_rate_limited
+                or any(
                     _is_rate_limit_exec_failure(candidate)
                     for candidate in (stderr_detail, terminal_error)
                     if candidate

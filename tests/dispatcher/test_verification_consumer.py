@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 import io
 import json
 import os
 from pathlib import Path
+import re
+import sqlite3
 import subprocess
 import sys
 from threading import Condition, Thread
 from typing import Callable, Mapping
 import zipfile
+from zoneinfo import ZoneInfo
 
 import pytest
 import jsonschema
@@ -3389,6 +3393,455 @@ def _nonzero_codex_launcher(tmp_path, stderr: str) -> CodexExecLauncher:
         / ".codex/agents/verification-closer.toml",
         runner=runner,
     )
+
+
+def _codex_json_usage_failure_launcher(
+    tmp_path: Path,
+    *,
+    message: str,
+    nested: bool = False,
+    stderr: str = "",
+    extra_event_fields: Mapping[str, object] | None = None,
+) -> tuple[CodexExecLauncher, list[list[str]]]:
+    class Result:
+        returncode = 1
+
+        def __init__(self) -> None:
+            event = (
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "agent_message",
+                        "text": json.dumps({"type": "error", "message": message}),
+                    },
+                }
+                if nested
+                else {
+                    "type": "error",
+                    "message": message,
+                    **(extra_event_fields or {}),
+                }
+            )
+            self.stdout = "\n".join(
+                (
+                    json.dumps(
+                        {
+                            "type": "thread.started",
+                            "thread_id": "01900000-0000-7000-8000-000000000017",
+                        }
+                    ),
+                    json.dumps(event),
+                    json.dumps(
+                        {
+                            "type": "turn.failed",
+                            "error": {"message": "synthetic execution failure"},
+                        }
+                    ),
+                )
+            )
+            self.stderr = stderr
+
+    calls: list[list[str]] = []
+
+    def runner(command: list[str], **_kwargs: object) -> Result:
+        calls.append(command)
+        return Result()
+
+    launcher = CodexExecLauncher(
+        tmp_path,
+        Path(__file__).resolve().parents[2]
+        / "app/dispatcher/schemas/verification_closer_receipt.schema.json",
+        tmp_path / "context.json",
+        adapter_path=Path(__file__).resolve().parents[2]
+        / ".codex/agents/verification-closer.toml",
+        runner=runner,
+    )
+    return launcher, calls
+
+
+def _codex_retry_timestamp(value: datetime) -> str:
+    suffix = (
+        "th"
+        if 11 <= value.day % 100 <= 13
+        else {1: "st", 2: "nd", 3: "rd"}.get(value.day % 10, "th")
+    )
+    hour = value.strftime("%I").lstrip("0")
+    return f"{value.strftime('%b')} {value.day}{suffix}, {value.year} {hour}:{value:%M %p}"
+
+
+def _next_leap_retry() -> str:
+    current = datetime.now().astimezone()
+    year = current.year
+    while True:
+        try:
+            candidate = current.replace(
+                year=year, month=2, day=29, hour=11, minute=59
+            )
+        except ValueError:
+            year += 1
+            continue
+        if candidate > current:
+            return _codex_retry_timestamp(candidate)
+        year += 1
+
+
+FUTURE_CODEX_RETRY = _codex_retry_timestamp(
+    datetime.now().astimezone() + timedelta(days=2)
+)
+PAST_CODEX_RETRY = _codex_retry_timestamp(
+    datetime.now().astimezone() - timedelta(days=1)
+)
+
+
+def _future_single_digit_day_retry() -> str:
+    candidate = datetime.now().astimezone() + timedelta(days=1)
+    while candidate.day >= 10:
+        candidate += timedelta(days=1)
+    return _codex_retry_timestamp(candidate)
+
+
+PADDED_HOUR_CODEX_RETRY = re.sub(
+    r" (?P<hour>[1-9]):(?P<minute>[0-9]{2}) (?P<period>AM|PM)$",
+    r" 0\g<hour>:\g<minute> \g<period>",
+    _codex_retry_timestamp(
+        (datetime.now().astimezone() + timedelta(days=2)).replace(hour=9)
+    ),
+)
+PADDED_DAY_CODEX_RETRY = re.sub(
+    r"^(?P<month>[A-Z][a-z]{2}) (?P<day>[1-9])(?P<suffix>st|nd|rd|th),",
+    r"\g<month> 0\g<day>\g<suffix>,",
+    _future_single_digit_day_retry(),
+)
+CANONICAL_CODEX_USAGE_LIMIT = (
+    "You've hit your usage limit. Visit "
+    "https://chatgpt.com/codex/settings/usage to purchase more credits "
+    f"or try again at {FUTURE_CODEX_RETRY}."
+)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        CANONICAL_CODEX_USAGE_LIMIT,
+        "You've hit your usage limit. Try again later.",
+        (
+            "You've hit your usage limit. Upgrade to Pro "
+            "(https://chatgpt.com/explore/pro), visit "
+            "https://chatgpt.com/codex/settings/usage to purchase more credits "
+            "or try again later."
+        ),
+        (
+            "You've hit your usage limit. To get more access now, send a request "
+            "to your admin or try again later."
+        ),
+        (
+            "You've hit your usage limit. Upgrade to Plus to continue using Codex "
+            "(https://chatgpt.com/explore/plus), or try again later."
+        ),
+        f"You've hit your usage limit. Try again at {_next_leap_retry()}.",
+    ],
+)
+def test_codex_json_usage_limit_event_enters_durable_backoff(
+    tmp_path, message: str
+) -> None:
+    state = ledger(tmp_path)
+    launcher, calls = _codex_json_usage_failure_launcher(
+        tmp_path,
+        message=message,
+    )
+
+    result = VerificationConsumer(
+        state, Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "backoff"
+    assert result.terminal_receipt["outcome"] == "rate_limited"
+    assert result.terminal_receipt["api_fallback"] is False
+    assert result.terminal_receipt["failure_receipt"]["failure_class"] == "rate_limit"
+    assert len(calls) == 1
+    with state.store._connect() as conn:
+        attempts = conn.execute(
+            "SELECT attempt_kind, outcome FROM verification_attempts"
+        ).fetchall()
+    assert [(row[0], row[1]) for row in attempts] == [
+        ("verification", "rate_limited")
+    ]
+
+
+def test_codex_time_only_retry_accepts_future_fall_back_fold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stockholm = ZoneInfo("Europe/Stockholm")
+    current = datetime(2026, 10, 25, 2, 30, tzinfo=stockholm, fold=0)
+    monkeypatch.setattr(
+        verification_consumer, "_local_now", lambda: current, raising=False
+    )
+    launcher, _ = _codex_json_usage_failure_launcher(
+        tmp_path,
+        message="You've hit your usage limit. Try again at 2:15 AM.",
+    )
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "backoff"
+    assert result.terminal_receipt["outcome"] == "rate_limited"
+
+
+@pytest.mark.parametrize(
+    ("current", "retry"),
+    [
+        (
+            datetime(
+                2026,
+                10,
+                25,
+                2,
+                0,
+                tzinfo=ZoneInfo("Europe/Stockholm"),
+                fold=0,
+            ),
+            "Oct 25th, 2026 2:45 AM",
+        ),
+        (
+            datetime(
+                2026, 3, 28, 12, 0, tzinfo=ZoneInfo("Europe/Stockholm")
+            ),
+            "Mar 29th, 2026 2:30 AM",
+        ),
+    ],
+)
+def test_noncanonical_or_nonexistent_local_retry_cannot_mint_backoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    current: datetime,
+    retry: str,
+) -> None:
+    monkeypatch.setattr(verification_consumer, "_local_now", lambda: current)
+    launcher, _ = _codex_json_usage_failure_launcher(
+        tmp_path,
+        message=f"You've hit your usage limit. Try again at {retry}.",
+    )
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.terminal_receipt["failure_class"] == "execution"
+
+
+def test_retry_timestamp_fails_closed_without_rule_bearing_local_timezone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(verification_consumer, "_local_now", lambda: None)
+    launcher, _ = _codex_json_usage_failure_launcher(
+        tmp_path,
+        message=f"You've hit your usage limit. Try again at {FUTURE_CODEX_RETRY}.",
+    )
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "codex_exec_failed"
+    assert result.terminal_receipt["failure_class"] == "execution"
+
+
+def test_unrepresentable_retry_timestamp_cannot_mint_technical_backoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    current = datetime(
+        2026, 7, 15, 12, 0, tzinfo=ZoneInfo("America/New_York")
+    )
+    monkeypatch.setattr(verification_consumer, "_local_now", lambda: current)
+    launcher, _ = _codex_json_usage_failure_launcher(
+        tmp_path,
+        message=(
+            "You've hit your usage limit. Try again at "
+            "Dec 31st, 9999 11:59 PM."
+        ),
+    )
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "codex_exec_failed"
+    assert result.terminal_receipt["failure_class"] == "execution"
+
+
+@pytest.mark.parametrize(
+    ("message", "nested", "stderr"),
+    [
+        ("This is not a usage limit.", False, ""),
+        ("Example: You've hit your usage limit.", False, ""),
+        ("You've hit your usage limit: false", False, ""),
+        ("You've hit your usage limit. false", False, ""),
+        ("You've hit your usage limit! false", False, ""),
+        ("You've hit your usage limit. . This is not an actual limit.", False, ""),
+        ("You've hit your usage limit. Try again at 99:99 PM.", False, ""),
+        ("You've hit your usage limit. Try again at 0:00 AM.", False, ""),
+        ("You've hit your usage limit. Try again at 09:30 PM.", False, ""),
+        (
+            f"You've hit your usage limit. Try again at {PADDED_HOUR_CODEX_RETRY}.",
+            False,
+            "",
+        ),
+        (
+            f"You've hit your usage limit. Try again at {PADDED_DAY_CODEX_RETRY}.",
+            False,
+            "",
+        ),
+        (f"You've hit your usage limit. Try again at {PAST_CODEX_RETRY}.", False, ""),
+        ("You've hit your usage limit. Try again at Jan 1st, 2020 4:30 PM.", False, ""),
+        (
+            "You've hit your usage limit. Try again at Feb 99th, 0000 88:77 AM.",
+            False,
+            "",
+        ),
+        (
+            "You've hit your usage limit. Try again at Jul 11st, 2026 4:30 PM.",
+            False,
+            "",
+        ),
+        (
+            "You've hit your usage limit. Try again at Feb 29th, 2025 4:30 PM.",
+            False,
+            "",
+        ),
+        ("You've hit your uſage limit. Try again later.", False, ""),
+        ("You've hit your usage\u00a0limit. Try again later.", False, ""),
+        (
+            "You've hit your usage limit. To get more acceß now, send a request "
+            "to your admin or try again later.",
+            False,
+            "",
+        ),
+        (
+            "You've hit your usage limit. Visit "
+            "httpſ://chatgpt.com/codex/ſettingſ/uſage to purchase more credits "
+            "or try again later.",
+            False,
+            "",
+        ),
+        (
+            "You've hit your usage limit. Try again later.\" is only an example.",
+            False,
+            "",
+        ),
+        (CANONICAL_CODEX_USAGE_LIMIT, True, ""),
+        (
+            "synthetic execution failure",
+            False,
+            CANONICAL_CODEX_USAGE_LIMIT,
+        ),
+        (
+            "synthetic execution failure",
+            False,
+            json.dumps(
+                {
+                    "type": "error",
+                    "message": CANONICAL_CODEX_USAGE_LIMIT,
+                }
+            ),
+        ),
+    ],
+)
+def test_untrusted_usage_limit_text_cannot_mint_backoff(
+    tmp_path: Path, message: str, nested: bool, stderr: str
+) -> None:
+    launcher, _ = _codex_json_usage_failure_launcher(
+        tmp_path, message=message, nested=nested, stderr=stderr
+    )
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "codex_exec_failed"
+    assert result.terminal_receipt["failure_class"] == "execution"
+
+
+@pytest.mark.parametrize(
+    "extra_event_fields",
+    [
+        {"usage_limit": False},
+        {"source": "model"},
+        {"payload": {"type": "agent_message", "usage_limit": True}},
+    ],
+)
+def test_noncanonical_codex_usage_limit_event_envelope_cannot_mint_backoff(
+    tmp_path: Path, extra_event_fields: Mapping[str, object]
+) -> None:
+    launcher, _ = _codex_json_usage_failure_launcher(
+        tmp_path,
+        message=CANONICAL_CODEX_USAGE_LIMIT,
+        extra_event_fields=extra_event_fields,
+    )
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "codex_exec_failed"
+    assert result.terminal_receipt["failure_class"] == "execution"
+
+
+def test_codex_json_usage_limit_backoff_replay_is_idempotent(tmp_path) -> None:
+    state = ledger(tmp_path)
+    launcher, calls = _codex_json_usage_failure_launcher(
+        tmp_path,
+        message=CANONICAL_CODEX_USAGE_LIMIT,
+    )
+    consumer = VerificationConsumer(
+        state, Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    )
+
+    first = consumer.consume(request())
+    replay = consumer.consume(request())
+
+    assert first.run_id == replay.run_id
+    assert first.status == replay.status == "backoff"
+    assert len(calls) == 1
+    with state.store._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM verification_runs").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM verification_attempts").fetchone()[0] == 1
+
+
+def test_codex_json_usage_limit_event_is_not_durable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    marker = CANONICAL_CODEX_USAGE_LIMIT
+    state = ledger(tmp_path)
+    launcher, _ = _codex_json_usage_failure_launcher(tmp_path, message=marker)
+
+    result = VerificationConsumer(
+        state, Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+    captured = capsys.readouterr()
+    backup = tmp_path / "dispatcher-backup.sqlite3"
+    with state.store._connect() as source, sqlite3.connect(backup) as destination:
+        source.backup(destination)
+
+    durable = json.dumps(
+        {
+            "attempts": state.attempts(result.run_id),
+            "terminal": result.terminal_receipt,
+            "status": _compact_verification_run(result),
+        },
+        sort_keys=True,
+    )
+    assert marker not in durable
+    assert marker not in captured.out
+    assert marker not in captured.err
+    assert marker.encode() not in state.store.db_path.read_bytes()
+    assert marker.encode() not in backup.read_bytes()
 
 
 def test_negated_nonzero_rate_limit_text_is_not_backoff_evidence(tmp_path) -> None:
