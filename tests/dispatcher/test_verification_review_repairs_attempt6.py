@@ -118,6 +118,7 @@ def test_secret_shaped_github_urls_are_sanitized_before_persistence() -> None:
         f"https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/123/{jwt}",
         "https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/123/credential=vault-secret",
         "https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/Users/operator/private-vault",
+        "https://operator:hunter2@github.com/RasmusTho/agentic-pkm-mvp",
     ]
     safe_projection = sanitize_verification_closer_receipt(
         {
@@ -137,7 +138,7 @@ def test_secret_shaped_github_urls_are_sanitized_before_persistence() -> None:
         assert safe_url in safe_summary
     for unsafe_url, private_value in zip(
         unsafe_urls,
-        (aws_key, jwt, "vault-secret", "/Users/operator/private-vault"),
+        (aws_key, jwt, "vault-secret", "/Users/operator/private-vault", "hunter2"),
         strict=True,
     ):
         unsafe_projection = sanitize_verification_closer_receipt(
