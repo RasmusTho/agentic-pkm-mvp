@@ -132,9 +132,11 @@ member binding independently. Removing a dimension does not remove its vault reg
 - **#3156 / #3163** own the Settings Spine and the single-watcher-follows-single-selection
   rebind. MVR-05 temporarily preserves that production behavior only for the legacy picker action;
   generic scoped selections do not drive it. MVR-06 reuses #3163's reload machinery, atomically
-  imports the live watcher binding into durable lifecycle intent, then retires the single-selection
-  bridge in favor of explicit background administration. #3163 is not a multi-active
-  implementation, and no duplicate watcher-rebind issue is created here.
+  imports the live watcher binding into durable compatibility intent, then retires the bridge while
+  the supervisor continues consuming legacy choose/open events in compatibility mode. Governed
+  background administration explicitly transitions to multi-binding `explicit` mode; only then do
+  picker/default events stop changing lifecycle intent. #3163 is not a multi-active implementation,
+  and no duplicate watcher-rebind issue is created here.
 - **#2003 / #2311** delivered no-vault startup, runtime switching foundations, and removal of
   silent `./vault` fallback. This capability preserves those contracts.
 - **#2356** delivered the v0 `ActiveContextSet` containment adapter. Task 03 evolves that seam;
@@ -186,9 +188,10 @@ to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup.
   human knowledge remain in their content vaults.
 - Multi-vault topology remains reducible to one vault without loss of meaning, attribution, or
   receipts.
-- Rollback to a scalar image from non-scalar state requires one validated explicit target and keeps
-  the complete new-schema lineage intact; ambiguity blocks startup instead of choosing by env or
-  interaction history.
+- MVR-01 owns scalar rollback only for its registry/multi-registration schema: it requires one
+  validated explicit target and keeps unknown fields plus complete lineage intact. Each later task
+  extends rollback preservation or advances the minimum-runtime floor for the state it introduces;
+  no earlier child must interpret future default, dimension, or background-intent schemas.
 - Once MVR-05 enables binding-keyed database state, a durable minimum-runtime floor blocks every
   scalar pre-MVR rollback, including one-binding instances; rollback must use a compatible image
   and never project shared projection/outbox tables into unsafe scalar semantics.
@@ -208,6 +211,9 @@ Partial delivery remains fail-closed:
 - after task 05 but before task 06, the existing picker alone continues to drive #3163's named
   single-watcher bridge while scoped request/session selection does not; task 06 atomically hands
   that live binding to the durable supervisor before disabling the bridge;
+- after task 06, legacy choose/open continues to rebind only `compatibility` lifecycle intent through
+  the supervisor; the first governed background add/remove enters `explicit` mode, after which picker
+  and default changes cannot mutate the explicit background set;
 - after task 05 but before task 06, the interim scalar worker dispatches a versioned vault-bound row
   only when registry, authorization, binding revision, and resolved root prove one matching
   singleton; ambiguous/mismatched rows remain pending and unacknowledged, safe global work

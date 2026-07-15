@@ -23,8 +23,11 @@ cross-process truth belong here.
 - At the MVR-06 migration boundary, read the live binding owned by MVR-05's named legacy-picker
   bridge, materialize that binding as durable `compatibility_binding_id` in compatibility mode,
   start the revision-reconciling supervisor, and disable the bridge in one fail-closed cutover. Roll back
-  the cutover if either handoff step fails. Afterward, picker/session selection never changes
-  background intent; operators use the governed background administration surface.
+  the cutover if either handoff step fails. Afterward, the supervisor—not the retired bridge—keeps
+  consuming #3163's legacy choose/open picker event while mode remains `compatibility`, atomically
+  updating `compatibility_binding_id` and rebind generation. Generic request/session selection never
+  changes background intent. Once a governed add/remove command enters `explicit` mode, picker and
+  default changes cannot alter the explicit set.
 - Add a durable, mechanical instance-local `background_vault_binding_ids` intent set. Request or
   session selection never auto-enrols a member. Each unique binding is re-resolved and
   re-authorized at lifecycle start; a missing/unauthorized member remains explicitly failed.
@@ -32,8 +35,9 @@ cross-process truth belong here.
   is initialized exactly once as compatibility mode: MVR-06 snapshots the live bridge binding when
   present, otherwise the current default/no-vault result, into nullable durable
   `compatibility_binding_id`. Restart reuses that exact binding and never re-derives another from
-  interaction history or default. While mode remains compatibility, an explicit MVR-02 default
-  set/clear atomically replaces/clears this field and triggers rebind. Any governed add/remove command
+  unrecorded interaction history or default. While mode remains compatibility, a production legacy
+  choose/open event or explicit MVR-02 default set/clear atomically replaces/clears this field and
+  triggers rebind; the event provenance is stored with the revision. Any governed add/remove command
   transitions to explicit mode. `explicit` with an empty binding list is durable and means idle—it
   must never re-enrol the default after restart. This state mutates through MVR-01's locked,
   revision-checked atomic registry transaction.
@@ -59,6 +63,10 @@ cross-process truth belong here.
   state before later work is accepted.
   The same event cannot alter an `explicit` intent set. A default mutation may not leave a running
   compatibility lifecycle silently bound to the prior vault or rely on process restart.
+- Before writing the first background-intent or compatibility-binding field, use the MVR-05 channel
+  fence to atomically advance `minimum_runtime_schema=MVR-06`. A build below that floor cannot start
+  watcher/worker/API against the registry; recovery preserves the complete lineage and uses an
+  MVR-06-compatible roll-forward/rollback, never a projection that discards background intent.
 - Reconcile durable registry revisions at supervisor startup and continuously while running, with
   idempotent event hints only accelerating that reconciliation. For every unseen revision, diff
   registration path/device/authority provenance, removal, default, and background intent. Drain,
@@ -153,9 +161,13 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
   the old bridge authoritative and never enables two or zero watcher owners.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_settings_spine_bridge_handoff_is_atomic`
 - [ ] The imported live compatibility binding survives restart even when it differs from the
-  instance default; only an explicit default set/clear while still in compatibility mode or a
-  governed transition to explicit background intent changes it.
+  instance default; a later legacy choose/open picker event or explicit default set/clear changes it
+  while compatibility mode remains active, and governed background administration enters explicit mode.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback`
+- [ ] After bridge retirement, a legacy choose/open picker change still atomically updates the
+  compatibility binding and drains/rebinds the supervisor; generic scoped selection and every picker
+  event after explicit-mode transition leave background intent unchanged.
+  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff`
 - [ ] The production supervisor runs independent watcher/worker lifecycles for two bindings and
   attributes ingest, queues, settings, health, and receipts to the correct immutable
   ActiveContextSet/vault/generation.
@@ -199,6 +211,10 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
   prior evidence, and unknown/ambiguous rows quarantine without dispatch or acknowledgement; new
   vault polling and ack are binding-scoped.
   - Verify: `tests/migrations/test_multi_vault_outbox_upgrade.py::test_legacy_pending_rows_backfill_or_quarantine_fail_loud`
+- [ ] The MVR-06 minimum-runtime floor commits before the first background-intent field and blocks
+  every older API/watcher/worker before registry access; fault injection leaves either untouched
+  MVR-05 state or an MVR-06-compatible lineage.
+  - Verify: `tests/migrations/test_multi_vault_background_intent_upgrade.py::test_background_intent_sets_mvr06_floor_before_first_write`
 - [ ] Pending vault-bound rows are revalidated before dispatch; lifecycle removal, lost authority,
   or incompatible binding/locator change quarantines them durably without dispatch/ack, and governed reissue can
   target only the same re-authorized stable binding with lineage/idempotency preserved.
@@ -218,7 +234,7 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/integration/test_multi_vault_background_lifecycle.py tests/integration/test_multi_vault_lifecycle_and_dimension.py tests/runtime/test_background_binding_handoff.py tests/api/test_background_binding_admin.py tests/migrations/test_multi_vault_outbox_upgrade.py tests/architecture/test_multi_vault_context_boundaries.py`
+- `pytest -q tests/integration/test_multi_vault_background_lifecycle.py tests/integration/test_multi_vault_lifecycle_and_dimension.py tests/runtime/test_background_binding_handoff.py tests/api/test_background_binding_admin.py tests/migrations/test_multi_vault_outbox_upgrade.py tests/migrations/test_multi_vault_background_intent_upgrade.py tests/architecture/test_multi_vault_context_boundaries.py`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration -k "watcher or settings or multi_vault"`
 - `ruff check app tests`
 

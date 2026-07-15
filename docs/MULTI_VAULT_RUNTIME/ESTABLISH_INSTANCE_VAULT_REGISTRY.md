@@ -58,14 +58,14 @@ This slice promotes the existing seed without changing content-vault authority.
   old image starts. A rollback must therefore see the latest committed registrations and
   last-active state, not merely the pre-migration snapshot. This compatibility exporter/transformer
   remains required until MVR-07 proves that no supported rollback reader needs it.
-- Treat rollback into a scalar previous image as an explicit authority boundary. If current state
-  has multiple registrations, a non-default explicit background set, dimensions, or any other
-  state the previous image cannot represent, rollback preflight requires one operator-supplied
+- Treat rollback into a scalar previous image as an explicit authority boundary for the registry
+  state MVR-01 introduces. If current state has multiple registrations, rollback preflight requires one operator-supplied
   `rollback_vault_binding_id`; it validates that exact registration and materializes a constrained
   legacy payload/bootstrap whose sole selectable and startup target is that binding. Missing,
   stale, unauthorized, or ambiguous target blocks the old image. The complete new-schema registry,
-  snapshots, and lineage remain immutable beside the projection for later roll-forward; scalar
-  rollback cannot discard or reinterpret default, dimension, or background-intent truth.
+  snapshots, unknown forward-compatible fields, and lineage remain immutable beside the projection
+  for later roll-forward. Each later slice owns rollback/floor handling for the state it introduces;
+  MVR-01 does not interpret future default, dimension, or background-intent schemas.
 - Enforce that target in deployment, not only in the legacy payload: the rollback compose overlay
   removes the old API's direct published port, exposes it only through an authenticated gateway
   that denies picker select/initialize mutations, and mounts only the chosen content root at the
@@ -185,9 +185,9 @@ single-vault package or can silently lose identity during migration.
   the rollback preflight and reads the latest committed registration and last-active state from its
   legacy path; a missing, stale, or invalid rollback export blocks startup.
   - Verify: `tests/integration/test_vault_registry_rollback.py::test_previous_image_reads_latest_post_migration_registry_state`
-- [ ] Rolling a multi-binding or explicit-background instance into a scalar previous image requires
-  one validated explicit rollback binding, constrains legacy startup/selection to that binding,
-  and otherwise blocks while preserving the complete new-schema registry and lineage.
+- [ ] Rolling an MVR-01 multi-registration instance into a scalar previous image requires one
+  validated explicit rollback binding, constrains legacy startup/selection to that binding, and
+  otherwise blocks while preserving the complete MVR-01 registry, unknown fields, and lineage.
   - Verify: `tests/integration/test_vault_registry_rollback.py::test_multi_binding_rollback_requires_one_safe_explicit_target`
 - [ ] The scalar rollback deployment exposes the old API only through the authenticated mutation-
   filtering gateway, publishes no bypass port, and mounts no content root except the validated

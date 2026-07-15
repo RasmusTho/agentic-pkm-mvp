@@ -32,6 +32,10 @@ non-authoritative registry grouping.
   but that inspection is not an ActiveContextSet or permission result.
 - Remove dangling membership transactionally when a registration is removed, while keeping
   removal of a dimension non-destructive to registrations/content.
+- Extend the MVR-01 rollback lineage for the additive dimension schema: a pre-MVR-04 image cannot
+  read or mutate dimensions, so its scalar projection omits them while the complete dimension state
+  remains immutable and is restored on roll-forward. Divergent current-schema mutation blocks merge
+  rather than dropping or guessing membership.
 
 ## Concretely
 
@@ -94,6 +98,9 @@ a hidden authority system and can expose material across real confidentiality bo
 - [ ] The parent dimension contract proves that stored membership preserves each binding's
   independent authority and provenance and never upgrades access through grouping.
   - Verify: `tests/integration/test_multi_vault_dimensions.py::test_dimension_preserves_per_binding_authority_and_provenance`
+- [ ] A rollback through a pre-MVR-04 compatible scalar image preserves dimension metadata and
+  ordered membership in the authoritative lineage and restores it unchanged on roll-forward.
+  - Verify: `tests/integration/test_vault_registry_rollback.py::test_mvr04_dimensions_survive_scalar_projection_round_trip`
 
 ## Out of Scope
 
@@ -101,7 +108,7 @@ a hidden authority system and can expose material across real confidentiality bo
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/instance/test_vault_dimensions.py tests/api/test_vault_dimension_admin.py tests/api/test_dimension_context_resolution.py tests/integration/test_multi_vault_dimensions.py`
+- `pytest -q tests/instance/test_vault_dimensions.py tests/api/test_vault_dimension_admin.py tests/api/test_dimension_context_resolution.py tests/integration/test_multi_vault_dimensions.py tests/integration/test_vault_registry_rollback.py`
 - `ruff check app tests`
 
 ## Restart / Durability Posture

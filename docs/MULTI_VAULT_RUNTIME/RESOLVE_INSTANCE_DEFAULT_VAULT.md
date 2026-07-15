@@ -28,6 +28,11 @@ fail-closed precedence resolver.
   `last_active_vault_ref` as the default when no default exists, recording
   `legacy_last_active_migration` provenance. Subsequent last-active changes never update default.
 - Expose authenticated Companion API and headless CLI get/set/clear commands through one service.
+- Extend the MVR-01 rollback projection/roll-forward merge for the default schema introduced here:
+  a scalar previous image receives only the already validated explicit rollback target, never an
+  inferred default, while the authoritative `default_vault_binding_id` remains immutable in the
+  new-schema lineage and is restored unchanged on roll-forward unless a valid current-schema
+  mutation replaced/cleared it before rollback.
   They validate registration and authority, use MVR-01's locked transaction, emit redacted
   receipts, and never mutate last-active. Tests drive these production commands rather than seeding
   the store or invoking an internal setter directly.
@@ -111,6 +116,10 @@ turns an invalid explicit selection into a dangerous silent read/write against t
 - [ ] The explicit default persists on the MVR-01 instance-state volume across a pinned-image
   force-recreate and resolves identically in every enabled registry consumer.
   - Verify: `tests/integration/test_vault_registry_container_durability.py::test_default_survives_recreate_after_mvr02`
+- [ ] Scalar rollback never converts explicit default into last-active or silently changes it; the
+  old projection uses the validated rollback target while roll-forward restores the authoritative
+  default and rejects divergent/ambiguous mutation.
+  - Verify: `tests/integration/test_vault_registry_rollback.py::test_mvr02_default_survives_scalar_projection_round_trip`
 
 ## Out of Scope
 
@@ -118,7 +127,7 @@ turns an invalid explicit selection into a dangerous silent read/write against t
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/instance/test_default_vault_resolution.py tests/api/test_default_vault_admin.py tests/integration/test_single_vault_compatibility.py tests/integration/test_vault_registry_container_durability.py`
+- `pytest -q tests/instance/test_default_vault_resolution.py tests/api/test_default_vault_admin.py tests/integration/test_single_vault_compatibility.py tests/integration/test_vault_registry_container_durability.py tests/integration/test_vault_registry_rollback.py`
 - `ruff check app tests`
 
 ## Restart / Durability Posture
