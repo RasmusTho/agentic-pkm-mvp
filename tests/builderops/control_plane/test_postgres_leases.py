@@ -6,7 +6,7 @@ from threading import Barrier
 
 import pytest
 
-from app.builderops.control_plane import Lease, LeaseUnavailable, StaleFencingToken
+from app.builderops.control_plane import Lease, LeaseRequired, LeaseUnavailable, StaleFencingToken
 
 pytestmark = pytest.mark.pg
 
@@ -36,6 +36,22 @@ def test_stale_fencing_token_cannot_mutate_after_reassignment(
         outcomes = list(pool.map(concurrent_claim, ("worker-a", "worker-b")))
     assert sum(isinstance(outcome, Lease) for outcome in outcomes) == 1
     assert sum(isinstance(outcome, LeaseUnavailable) for outcome in outcomes) == 1
+
+    store.commit_transition(
+        envelope=envelope,
+        task_id="lease-required-task",
+        to_state="ready",
+        idempotency_key="create-before-lease",
+        request={"command": "create"},
+    )
+    with pytest.raises(LeaseRequired):
+        store.commit_transition(
+            envelope=envelope,
+            task_id="lease-required-task",
+            to_state="claimed",
+            idempotency_key="unfenced-overwrite",
+            request={"command": "claim"},
+        )
 
     first = store.claim_lease(
         envelope=envelope,

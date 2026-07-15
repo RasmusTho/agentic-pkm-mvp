@@ -108,11 +108,13 @@ CREATE TABLE IF NOT EXISTS builderops_outbox (
     payload jsonb NOT NULL,
     status text NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending','claimed','unknown','succeeded','dead_letter')),
+    intent_receipt_sequence bigint NOT NULL,
     intent_lsn pg_lsn,
     worker_id text,
     claim_fencing_token bigint NOT NULL DEFAULT 0,
     claim_expires_at timestamptz,
     claim_lsn pg_lsn,
+    claim_receipt_sequence bigint,
     unknown_detail text,
     reconciliation_evidence jsonb,
     authority_envelope jsonb NOT NULL,

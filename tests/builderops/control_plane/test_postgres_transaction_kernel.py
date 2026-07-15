@@ -10,10 +10,12 @@ from app.builderops.control_plane import IdempotencyConflict
 pytestmark = pytest.mark.pg
 
 
-def _commit(store, envelope, *, key="request-1", state="claimed", fault_at=None):
+def _commit(
+    store, envelope, *, key="request-1", state="claimed", task_id="task-3792", fault_at=None
+):
     return store.commit_transition(
         envelope=envelope,
-        task_id="task-3792",
+        task_id=task_id,
         to_state=state,
         idempotency_key=key,
         request={"command": "claim", "expected": "ready"},
@@ -61,7 +63,12 @@ def test_idempotency_replay_and_conflict(control_plane_store, envelope) -> None:
     def concurrent_retry(_: int):
         contender = type(control_plane_store)(control_plane_store.dsn)
         barrier.wait()
-        return _commit(contender, envelope, key="concurrent-request")
+        return _commit(
+            contender,
+            envelope,
+            key="concurrent-request",
+            task_id="concurrent-task",
+        )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         concurrent = list(pool.map(concurrent_retry, (1, 2)))
@@ -69,8 +76,19 @@ def test_idempotency_replay_and_conflict(control_plane_store, envelope) -> None:
     assert sum(result.replayed for result in concurrent) == 1
 
     with pytest.raises(RuntimeError, match="after_commit"):
-        _commit(control_plane_store, envelope, key="response-lost", fault_at="after_commit")
-    recovered = _commit(control_plane_store, envelope, key="response-lost")
+        _commit(
+            control_plane_store,
+            envelope,
+            key="response-lost",
+            task_id="response-lost-task",
+            fault_at="after_commit",
+        )
+    recovered = _commit(
+        control_plane_store,
+        envelope,
+        key="response-lost",
+        task_id="response-lost-task",
+    )
     assert recovered.replayed is True
     assert recovered.recovery_lsn != "0/0"
 

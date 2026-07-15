@@ -24,6 +24,10 @@ class LeaseUnavailable(ControlPlaneError):
     """Raised when another non-expired lease owns a resource."""
 
 
+class LeaseRequired(ControlPlaneError):
+    """Raised when an existing authority row is mutated without a lease."""
+
+
 class StaleFencingToken(ControlPlaneError):
     """Raised when an expired or superseded lease attempts a mutation."""
 
@@ -102,6 +106,65 @@ class OutboxClaim:
     fencing_token: int
     intent_lsn: str
     claim_lsn: str
+    receipt_sequence: int
+    expires_at: datetime
+
+
+def _lsn_value(lsn: str) -> int:
+    try:
+        high, low = lsn.split("/", 1)
+        return (int(high, 16) << 32) + int(low, 16)
+    except (ValueError, AttributeError) as exc:
+        raise ValueError(f"invalid PostgreSQL LSN: {lsn!r}") from exc
+
+
+@dataclass(frozen=True)
+class RecoveryWatermark:
+    """Independent recovery readback, not a client-asserted scalar LSN.
+
+    BCP-02 will construct this proof by reading the independent recovery target.
+    BCP-01 consumes it only after the named receipt/outbox/claim row is visible
+    there, preventing an LSN sampled before a binding write from authorizing work.
+    """
+
+    recovered_through: str
+    observed_receipts: frozenset[tuple[str, int, str]] = frozenset()
+    observed_intents: frozenset[tuple[str, str, str]] = frozenset()
+    observed_claims: frozenset[tuple[str, str, int, int, str]] = frozenset()
+
+    @classmethod
+    def stalled(cls) -> RecoveryWatermark:
+        return cls(recovered_through="0/0")
+
+    def covers_transition(self, result: TransactionResult) -> bool:
+        return bool(
+            _lsn_value(self.recovered_through) >= _lsn_value(result.recovery_lsn)
+            and (result.repository, result.receipt_sequence, result.recovery_lsn)
+            in self.observed_receipts
+        )
+
+    def covers_intent(self, result: TransactionResult) -> bool:
+        return bool(
+            result.operation_key
+            and self.covers_transition(result)
+            and (result.repository, result.operation_key, result.recovery_lsn)
+            in self.observed_intents
+        )
+
+    def covers_claim(self, claim: OutboxClaim) -> bool:
+        identity = (
+            claim.repository,
+            claim.operation_key,
+            claim.fencing_token,
+            claim.receipt_sequence,
+            claim.claim_lsn,
+        )
+        return bool(
+            _lsn_value(self.recovered_through) >= _lsn_value(claim.claim_lsn)
+            and identity in self.observed_claims
+            and (claim.repository, claim.receipt_sequence, claim.claim_lsn)
+            in self.observed_receipts
+        )
 
 
 class StorePort(Protocol):

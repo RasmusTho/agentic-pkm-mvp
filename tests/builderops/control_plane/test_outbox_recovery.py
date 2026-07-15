@@ -4,9 +4,46 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.builderops.control_plane import StaleFencingToken, UnknownEffectNeedsReconciliation
+from app.builderops.control_plane import (
+    RecoveryWatermark,
+    StaleFencingToken,
+    UnknownEffectNeedsReconciliation,
+)
 
 pytestmark = pytest.mark.pg
+
+
+def _observed_transition(result) -> RecoveryWatermark:
+    assert result.operation_key is not None
+    return RecoveryWatermark(
+        recovered_through=result.recovery_lsn,
+        observed_receipts=frozenset(
+            {(result.repository, result.receipt_sequence, result.recovery_lsn)}
+        ),
+        observed_intents=frozenset(
+            {(result.repository, result.operation_key, result.recovery_lsn)}
+        ),
+    )
+
+
+def _observed_claim(intent: RecoveryWatermark, claim) -> RecoveryWatermark:
+    return RecoveryWatermark(
+        recovered_through=claim.claim_lsn,
+        observed_receipts=intent.observed_receipts
+        | {(claim.repository, claim.receipt_sequence, claim.claim_lsn)},
+        observed_intents=intent.observed_intents,
+        observed_claims=frozenset(
+            {
+                (
+                    claim.repository,
+                    claim.operation_key,
+                    claim.fencing_token,
+                    claim.receipt_sequence,
+                    claim.claim_lsn,
+                )
+            }
+        ),
+    )
 
 
 def test_unknown_external_effect_requires_readback_before_retry(
@@ -20,24 +57,55 @@ def test_unknown_external_effect_requires_readback_before_retry(
         request={"command": "claim"},
         outbox={"effect_type": "github.merge", "payload": {"pr": 4000}},
     )
+    intent_watermark = _observed_transition(result)
     now = datetime.now(timezone.utc)
     first_claim = control_plane_store.claim_outbox(
         envelope=envelope,
         operation_key=result.operation_key,
         worker_id="executor-1",
-        recovered_through=result.recovery_lsn,
+        watermark=intent_watermark,
         claim_ttl_seconds=1,
         now=now,
     )
     restarted_store = type(control_plane_store)(control_plane_store.dsn)
+    with pytest.raises(UnknownEffectNeedsReconciliation):
+        restarted_store.claim_outbox(
+            envelope=envelope,
+            operation_key=result.operation_key,
+            worker_id="executor-2",
+            watermark=intent_watermark,
+            now=now + timedelta(seconds=2),
+        )
+    assert restarted_store.outbox_status(envelope.repository, result.operation_key) == "unknown"
+    orphaned_claim = restarted_store.outbox_claim(envelope.repository, result.operation_key)
+    assert orphaned_claim == first_claim
+    assert (
+        restarted_store.effect_eligible(
+            first_claim,
+            watermark=_observed_claim(intent_watermark, first_claim),
+            now=now + timedelta(seconds=2),
+        )
+        is False
+    )
+    restarted_store.reconcile_outbox(
+        orphaned_claim, observed_applied=False, evidence={"readback": "not-found"}
+    )
     claim = restarted_store.claim_outbox(
         envelope=envelope,
         operation_key=result.operation_key,
         worker_id="executor-2",
-        recovered_through=first_claim.claim_lsn,
+        watermark=intent_watermark,
         now=now + timedelta(seconds=2),
     )
     assert claim.fencing_token > first_claim.fencing_token
+    assert (
+        restarted_store.effect_eligible(
+            first_claim,
+            watermark=_observed_claim(intent_watermark, first_claim),
+            now=now + timedelta(seconds=2),
+        )
+        is False
+    )
     with pytest.raises(StaleFencingToken):
         control_plane_store.mark_effect_unknown(first_claim, detail="late stale worker")
     restarted_store.mark_effect_unknown(claim, detail="network timeout after request")
@@ -47,7 +115,7 @@ def test_unknown_external_effect_requires_readback_before_retry(
             envelope=envelope,
             operation_key=result.operation_key,
             worker_id="executor-2",
-            recovered_through=claim.claim_lsn,
+            watermark=intent_watermark,
         )
 
     restarted_store.reconcile_outbox(claim, observed_applied=True, evidence={"merge_sha": "a" * 40})

@@ -18,8 +18,10 @@ from app.builderops.control_plane.models import (
     DurabilityPending,
     IdempotencyConflict,
     Lease,
+    LeaseRequired,
     LeaseUnavailable,
     OutboxClaim,
+    RecoveryWatermark,
     StaleFencingToken,
     TransactionResult,
     UnknownEffectNeedsReconciliation,
@@ -38,18 +40,6 @@ def _operation_key(repository: str, idempotency_key: str, effect_type: str) -> s
     return _hash(
         {"repository": repository, "idempotency_key": idempotency_key, "effect_type": effect_type}
     )
-
-
-def _lsn_value(lsn: str) -> int:
-    try:
-        high, low = lsn.split("/", 1)
-        return (int(high, 16) << 32) + int(low, 16)
-    except (ValueError, AttributeError) as exc:
-        raise ValueError(f"invalid PostgreSQL LSN: {lsn!r}") from exc
-
-
-def _covered(recovered_through: str, required: str) -> bool:
-    return _lsn_value(recovered_through) >= _lsn_value(required)
 
 
 class PostgresBuilderOpsStore:
@@ -154,9 +144,11 @@ class PostgresBuilderOpsStore:
                 if lease is not None:
                     self._assert_lease(conn, envelope.repository, task_id, lease)
                 previous = conn.execute(
-                    "SELECT state FROM builderops_tasks WHERE repository = %s AND task_id = %s",
+                    "SELECT state FROM builderops_tasks WHERE repository = %s AND task_id = %s FOR UPDATE",
                     (envelope.repository, task_id),
                 ).fetchone()
+                if previous is not None and lease is None:
+                    raise LeaseRequired("an existing task mutation requires a fenced lease")
                 conn.execute(
                     "INSERT INTO builderops_tasks(repository, task_id, state, payload, authority_envelope) "
                     "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (repository, task_id) DO UPDATE SET "
@@ -205,14 +197,15 @@ class PostgresBuilderOpsStore:
                         envelope.repository, idempotency_key, effect_type
                     )
                     conn.execute(
-                        "INSERT INTO builderops_outbox(repository, operation_key, task_id, effect_type, payload, authority_envelope) "
-                        "VALUES (%s, %s, %s, %s, %s, %s)",
+                        "INSERT INTO builderops_outbox(repository, operation_key, task_id, effect_type, payload, "
+                        "intent_receipt_sequence, authority_envelope) VALUES (%s, %s, %s, %s, %s, %s, %s)",
                         (
                             envelope.repository,
                             operation_key,
                             task_id,
                             effect_type,
                             Jsonb(dict(outbox.get("payload", {}))),
+                            receipt_sequence,
                             envelope_json,
                         ),
                     )
@@ -319,7 +312,7 @@ class PostgresBuilderOpsStore:
         )
 
     def replay(
-        self, repository: str, idempotency_key: str, *, recovered_through: str
+        self, repository: str, idempotency_key: str, *, watermark: RecoveryWatermark
     ) -> TransactionResult | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -327,13 +320,10 @@ class PostgresBuilderOpsStore:
                 "WHERE repository = %s AND idempotency_key = %s",
                 (repository, idempotency_key),
             ).fetchone()
-        if (
-            row is None
-            or row["result"] is None
-            or not _covered(recovered_through, row["recovery_lsn"])
-        ):
+        if row is None or row["result"] is None:
             return None
-        return self._result(row["result"], replayed=True)
+        result = self._result(row["result"], replayed=True)
+        return result if watermark.covers_transition(result) else None
 
     def claim_lease(
         self,
@@ -427,7 +417,7 @@ class PostgresBuilderOpsStore:
         envelope: AuthorityEnvelope,
         operation_key: str | None,
         worker_id: str,
-        recovered_through: str,
+        watermark: RecoveryWatermark,
         claim_ttl_seconds: int = 300,
         now: datetime | None = None,
     ) -> OutboxClaim:
@@ -435,10 +425,12 @@ class PostgresBuilderOpsStore:
             raise ValueError(
                 "operation_key, worker_id, and positive claim_ttl_seconds are mandatory"
             )
+        expired_attempt = False
         with self._connect() as conn:
             conn.execute("SET LOCAL synchronous_commit = on")
             row = conn.execute(
-                "SELECT status, intent_lsn::text AS intent_lsn, claim_fencing_token, claim_expires_at "
+                "SELECT task_id, status, intent_receipt_sequence, intent_lsn::text AS intent_lsn, "
+                "claim_fencing_token, claim_expires_at "
                 "FROM builderops_outbox WHERE repository = %s AND operation_key = %s FOR UPDATE",
                 (envelope.repository, operation_key),
             ).fetchone()
@@ -450,28 +442,61 @@ class PostgresBuilderOpsStore:
                 )
             if row["status"] in {"succeeded", "dead_letter"}:
                 raise LeaseUnavailable(f"outbox operation is terminal: {row['status']}")
-            if not _covered(recovered_through, row["intent_lsn"]):
+            intent = TransactionResult(
+                repository=envelope.repository,
+                task_id=str(row["task_id"]),
+                state="outbox_pending",
+                receipt_sequence=int(row["intent_receipt_sequence"]),
+                recovery_lsn=str(row["intent_lsn"]),
+                operation_key=operation_key,
+            )
+            if not watermark.covers_intent(intent):
                 raise DurabilityPending("outbox intent has not reached the recovery watermark")
             effective_now = now or datetime.now(timezone.utc)
-            if (
-                row["status"] == "claimed"
-                and row["claim_expires_at"]
-                and row["claim_expires_at"] > effective_now
-            ):
-                raise LeaseUnavailable("outbox operation already has an active claim")
-            token = int(row["claim_fencing_token"]) + 1
-            conn.execute(
-                "UPDATE builderops_outbox SET status = 'claimed', worker_id = %s, claim_fencing_token = %s, "
-                "claim_expires_at = %s, claim_lsn = NULL, authority_envelope = %s, updated_at = clock_timestamp() "
-                "WHERE repository = %s AND operation_key = %s",
-                (
-                    worker_id,
-                    token,
-                    effective_now + timedelta(seconds=claim_ttl_seconds),
-                    Jsonb(envelope.as_json()),
-                    envelope.repository,
-                    operation_key,
-                ),
+            if row["status"] == "claimed":
+                if row["claim_expires_at"] and row["claim_expires_at"] > effective_now:
+                    raise LeaseUnavailable("outbox operation already has an active claim")
+                conn.execute(
+                    "UPDATE builderops_outbox SET status = 'unknown', "
+                    "unknown_detail = 'pre-effect claim expired; external readback required', "
+                    "updated_at = clock_timestamp() WHERE repository = %s AND operation_key = %s",
+                    (envelope.repository, operation_key),
+                )
+                expired_attempt = True
+            else:
+                token = int(row["claim_fencing_token"]) + 1
+                expires_at = effective_now + timedelta(seconds=claim_ttl_seconds)
+                receipt = conn.execute(
+                    "INSERT INTO builderops_receipts(repository, task_id, event_type, idempotency_key, "
+                    "authority_envelope) VALUES (%s, %s, 'outbox.claimed', %s, %s) "
+                    "RETURNING receipt_sequence",
+                    (
+                        envelope.repository,
+                        row["task_id"],
+                        f"outbox:{operation_key}:claim:{token}",
+                        Jsonb(envelope.as_json()),
+                    ),
+                ).fetchone()
+                assert receipt is not None
+                receipt_sequence = int(receipt["receipt_sequence"])
+                conn.execute(
+                    "UPDATE builderops_outbox SET status = 'claimed', worker_id = %s, claim_fencing_token = %s, "
+                    "claim_expires_at = %s, claim_lsn = NULL, claim_receipt_sequence = %s, "
+                    "authority_envelope = %s, "
+                    "updated_at = clock_timestamp() WHERE repository = %s AND operation_key = %s",
+                    (
+                        worker_id,
+                        token,
+                        expires_at,
+                        receipt_sequence,
+                        Jsonb(envelope.as_json()),
+                        envelope.repository,
+                        operation_key,
+                    ),
+                )
+        if expired_attempt:
+            raise UnknownEffectNeedsReconciliation(
+                "expired pre-effect claim may have executed; external readback required"
             )
         claim_lsn = self._flushed_lsn()
         with self._connect() as conn:
@@ -482,14 +507,74 @@ class PostgresBuilderOpsStore:
             ).fetchone()
             if finalized is None:
                 raise StaleFencingToken("outbox claim was superseded before durability binding")
+            conn.execute(
+                "UPDATE builderops_receipts SET recovery_lsn = %s WHERE receipt_sequence = %s",
+                (claim_lsn, receipt_sequence),
+            )
         return OutboxClaim(
-            envelope.repository, operation_key, worker_id, token, row["intent_lsn"], claim_lsn
+            envelope.repository,
+            operation_key,
+            worker_id,
+            token,
+            str(row["intent_lsn"]),
+            claim_lsn,
+            receipt_sequence,
+            expires_at,
         )
 
-    @staticmethod
-    def effect_eligible(claim: OutboxClaim, *, recovered_through: str) -> bool:
-        return _covered(recovered_through, claim.intent_lsn) and _covered(
-            recovered_through, claim.claim_lsn
+    def outbox_claim(self, repository: str, operation_key: str) -> OutboxClaim:
+        """Rehydrate a persisted pre-effect attempt after worker process loss."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT worker_id, claim_fencing_token, intent_lsn::text AS intent_lsn, "
+                "claim_lsn::text AS claim_lsn, claim_receipt_sequence, claim_expires_at "
+                "FROM builderops_outbox WHERE repository = %s AND operation_key = %s "
+                "AND status IN ('claimed', 'unknown')",
+                (repository, operation_key),
+            ).fetchone()
+        if (
+            row is None
+            or row["worker_id"] is None
+            or row["claim_lsn"] is None
+            or row["claim_receipt_sequence"] is None
+            or row["claim_expires_at"] is None
+        ):
+            raise KeyError(operation_key)
+        return OutboxClaim(
+            repository=repository,
+            operation_key=operation_key,
+            worker_id=str(row["worker_id"]),
+            fencing_token=int(row["claim_fencing_token"]),
+            intent_lsn=str(row["intent_lsn"]),
+            claim_lsn=str(row["claim_lsn"]),
+            receipt_sequence=int(row["claim_receipt_sequence"]),
+            expires_at=row["claim_expires_at"],
+        )
+
+    def effect_eligible(
+        self,
+        claim: OutboxClaim,
+        *,
+        watermark: RecoveryWatermark,
+        now: datetime | None = None,
+    ) -> bool:
+        if not watermark.covers_claim(claim):
+            return False
+        effective_now = now or datetime.now(timezone.utc)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT status, worker_id, claim_fencing_token, claim_expires_at, "
+                "claim_lsn::text AS claim_lsn FROM builderops_outbox "
+                "WHERE repository = %s AND operation_key = %s",
+                (claim.repository, claim.operation_key),
+            ).fetchone()
+        return bool(
+            row is not None
+            and row["status"] == "claimed"
+            and row["worker_id"] == claim.worker_id
+            and int(row["claim_fencing_token"]) == claim.fencing_token
+            and row["claim_lsn"] == claim.claim_lsn
+            and row["claim_expires_at"] > effective_now
         )
 
     def mark_effect_unknown(self, claim: OutboxClaim, *, detail: str) -> None:

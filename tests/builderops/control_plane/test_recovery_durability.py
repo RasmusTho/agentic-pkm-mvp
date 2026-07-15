@@ -2,9 +2,42 @@ from __future__ import annotations
 
 import pytest
 
-from app.builderops.control_plane import DurabilityPending
+from app.builderops.control_plane import DurabilityPending, RecoveryWatermark
 
 pytestmark = pytest.mark.pg
+
+
+def _observed_transition(result) -> RecoveryWatermark:
+    assert result.operation_key is not None
+    return RecoveryWatermark(
+        recovered_through=result.recovery_lsn,
+        observed_receipts=frozenset(
+            {(result.repository, result.receipt_sequence, result.recovery_lsn)}
+        ),
+        observed_intents=frozenset(
+            {(result.repository, result.operation_key, result.recovery_lsn)}
+        ),
+    )
+
+
+def _observed_claim(intent: RecoveryWatermark, claim) -> RecoveryWatermark:
+    return RecoveryWatermark(
+        recovered_through=claim.claim_lsn,
+        observed_receipts=intent.observed_receipts
+        | {(claim.repository, claim.receipt_sequence, claim.claim_lsn)},
+        observed_intents=intent.observed_intents,
+        observed_claims=frozenset(
+            {
+                (
+                    claim.repository,
+                    claim.operation_key,
+                    claim.fencing_token,
+                    claim.receipt_sequence,
+                    claim.claim_lsn,
+                )
+            }
+        ),
+    )
 
 
 def test_external_effect_waits_for_intent_and_claim_recovery_lsn(
@@ -20,25 +53,40 @@ def test_external_effect_waits_for_intent_and_claim_recovery_lsn(
         outbox={"effect_type": "github.comment", "payload": {"issue": 3792}},
     )
     calls: list[str] = []
-    assert store.replay(envelope.repository, "durability-gate", recovered_through="0/0") is None
+    stalled = RecoveryWatermark.stalled()
+    scalar_only = RecoveryWatermark(recovered_through=result.recovery_lsn)
+    assert store.replay(envelope.repository, "durability-gate", watermark=stalled) is None
+    assert store.replay(envelope.repository, "durability-gate", watermark=scalar_only) is None
     with pytest.raises(DurabilityPending):
         store.claim_outbox(
             envelope=envelope,
             operation_key=result.operation_key,
             worker_id="executor",
-            recovered_through="0/0",
+            watermark=stalled,
+        )
+    with pytest.raises(DurabilityPending):
+        store.claim_outbox(
+            envelope=envelope,
+            operation_key=result.operation_key,
+            worker_id="executor",
+            watermark=scalar_only,
         )
     assert calls == []
 
+    intent_watermark = _observed_transition(result)
+    assert store.replay(envelope.repository, "durability-gate", watermark=intent_watermark)
     claim = store.claim_outbox(
         envelope=envelope,
         operation_key=result.operation_key,
         worker_id="executor",
-        recovered_through=result.recovery_lsn,
+        watermark=intent_watermark,
     )
-    assert store.effect_eligible(claim, recovered_through=result.recovery_lsn) is False
+    assert store.effect_eligible(claim, watermark=intent_watermark) is False
+    claim_scalar_only = RecoveryWatermark(recovered_through=claim.claim_lsn)
+    assert store.effect_eligible(claim, watermark=claim_scalar_only) is False
     assert calls == []
-    assert store.effect_eligible(claim, recovered_through=claim.claim_lsn) is True
+    claim_watermark = _observed_claim(intent_watermark, claim)
+    assert store.effect_eligible(claim, watermark=claim_watermark) is True
     calls.append(claim.operation_key)
     store.mark_effect_unknown(claim, detail="response lost")
     store.reconcile_outbox(claim, observed_applied=True, evidence={"readback": "found"})
