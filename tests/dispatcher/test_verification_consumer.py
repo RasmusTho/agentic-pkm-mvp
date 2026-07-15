@@ -1022,7 +1022,7 @@ def test_needs_human_receipt_persists_deduplicated_exception(tmp_path) -> None:
     assert rows[0]["head_sha"] == HEAD
     packet = json.loads(rows[0]["packet_json"])
     assert packet["governing_issue"] == 3603
-    assert packet["summary"] == "test"
+    assert packet["summary"] == "[REDACTED]"
     assert packet["recommended_option"] == "hold"
 
 
@@ -3103,7 +3103,7 @@ def test_negated_rate_limit_summary_does_not_enter_rate_limit_backoff(tmp_path) 
     ).consume(request())
 
     assert result.status == "failed"
-    assert result.terminal_receipt["summary"].startswith("No rate limit")
+    assert result.terminal_receipt["summary"] == "[REDACTED]"
     with state.store._connect() as conn:
         attempts = conn.execute(
             "SELECT attempt_kind, outcome FROM verification_attempts"

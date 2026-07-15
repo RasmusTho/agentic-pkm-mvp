@@ -76,7 +76,7 @@ def test_quoted_credential_assignments_are_sanitized_before_persistence(
     encoded = json.dumps(sanitized, sort_keys=True)
     assert "hunter2" not in encoded
     assert "vault-secret" not in encoded
-    assert encoded.count("[REDACTED]") == 2
+    assert sanitized["summary"] == "[REDACTED]"
 
 
 @pytest.mark.parametrize("quote", ['"', "'"])
@@ -153,7 +153,83 @@ def test_secret_shaped_github_urls_are_sanitized_before_persistence() -> None:
             }
         )
         assert private_value not in str(unsafe_projection["summary"])
-        assert unsafe_projection["summary"] == "https://github.com/REDACTED"
+        assert unsafe_projection["summary"] == "[REDACTED]"
+
+
+def test_free_form_coordinator_text_is_allowlisted_before_persistence() -> None:
+    private_values = (
+        "Basic YWRtaW46c2VjcmV0",
+        "short-private-material",
+        "novel-secret-value",
+    )
+    sanitized = sanitize_verification_closer_receipt(
+        {
+            "verdict": "blocked",
+            "head_sha": HEAD,
+            "summary": (
+                "Authorization: Basic YWRtaW46c2VjcmV0; "
+                "private_key: short-private-material; "
+                "unclassified_material: novel-secret-value"
+            ),
+            "receipt_ids": [],
+            "retry_after": None,
+            "review_events": None,
+            "human_exception": None,
+        }
+    )
+
+    assert sanitized["summary"] == "[REDACTED]"
+    encoded = json.dumps(sanitized, sort_keys=True)
+    for private_value in private_values:
+        assert private_value not in encoded
+
+
+def test_allowlisted_text_projection_retains_only_safe_github_evidence() -> None:
+    safe_urls = (
+        "https://github.com/RasmusTho/agentic-pkm-mvp",
+        "https://github.com/RasmusTho/agentic-pkm-mvp/issues/3768",
+        "https://github.com/RasmusTho/agentic-pkm-mvp/pull/3620",
+        "https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/123",
+    )
+    sanitized = sanitize_verification_closer_receipt(
+        {
+            "verdict": "blocked",
+            "head_sha": HEAD,
+            "summary": (
+                "private narrative "
+                + " ".join(safe_urls)
+                + " https://example.com/private https://github.com/org/repo/blob/main/private"
+            ),
+            "receipt_ids": [],
+            "retry_after": None,
+            "review_events": None,
+            "human_exception": None,
+        }
+    )
+
+    assert sanitized["summary"] == "[REDACTED] " + " ".join(safe_urls)
+    assert "private narrative" not in str(sanitized["summary"])
+    assert "example.com" not in str(sanitized["summary"])
+    assert "/blob/" not in str(sanitized["summary"])
+
+
+def test_allowlisted_text_projection_preserves_structural_receipt_fields() -> None:
+    _, receipt = Launcher().launch({})
+    receipt["retry_after"] = "2030-01-02T03:04:05+00:00"
+
+    sanitized = sanitize_verification_closer_receipt(receipt)
+    packet = sanitized["human_exception"]
+
+    assert sanitized["verdict"] == "needs_human"
+    assert sanitized["head_sha"] == HEAD
+    assert sanitized["retry_after"] == "2030-01-02T03:04:05+00:00"
+    assert isinstance(packet, dict)
+    assert packet["recommended_option"] == "hold"
+    assert packet["no_action_option"] == "hold"
+    assert [option["id"] for option in packet["options"]] == ["hold", "authorize"]
+
+    receipt["retry_after"] = "Authorization: Basic YWRtaW46c2VjcmV0"
+    assert sanitize_verification_closer_receipt(receipt)["retry_after"] is None
 
 
 def _check(

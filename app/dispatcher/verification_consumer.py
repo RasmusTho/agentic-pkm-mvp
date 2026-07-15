@@ -863,29 +863,46 @@ def bounded_coordinator_session_id(value: object) -> str | None:
 
 
 def _sanitize_receipt_text(value: object, *, limit: int = _MAX_RECEIPT_TEXT) -> str:
-    """Redact machine-local/sensitive text and enforce one durable size bound."""
+    """Project untrusted prose onto canonical redaction plus safe evidence links."""
 
-    text = str(value)
     safe_urls: list[str] = []
+    for match in _HTTPS_URL_CANDIDATE.finditer(str(value)):
+        candidate = _safe_github_url_projection(match.group(0))
+        if candidate in {
+            "[REDACTED_URL]",
+            "https://github.com/REDACTED",
+            "https://api.github.com/REDACTED",
+        }:
+            continue
+        if candidate not in safe_urls:
+            safe_urls.append(candidate)
 
-    def preserve_url(match: re.Match[str]) -> str:
-        url = _safe_github_url_projection(match.group(0))
-        placeholder = f"SAFELINK{len(safe_urls)}"
-        safe_urls.append(url)
-        return placeholder
+    projection = "[REDACTED]"
+    for url in safe_urls:
+        extended = f"{projection} {url}"
+        if len(extended) > limit:
+            break
+        projection = extended
+    return projection[:limit]
 
-    text = _HTTPS_URL_CANDIDATE.sub(preserve_url, text)
-    text = _CREDENTIAL_ASSIGNMENT.sub(
-        lambda match: f"{match.group('key')}=[REDACTED]", text
-    )
-    text = _BEARER_VALUE.sub("Bearer [REDACTED]", text)
-    text = _KNOWN_TOKEN_VALUE.sub("[REDACTED]", text)
-    text = _JWT_VALUE.sub("[REDACTED]", text)
-    text = _ABSOLUTE_MACHINE_PATH.sub("[REDACTED_PATH]", text)
-    text = _OPAQUE_SECRET_VALUE.sub("[REDACTED]", text)
-    for index, url in enumerate(safe_urls):
-        text = text.replace(f"SAFELINK{index}", url)
-    return text.strip()[:limit]
+
+def _sanitize_retry_after(value: object) -> str | float | int | None:
+    """Retain only retry values with syntax consumed by the local scheduler."""
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if re.fullmatch(r"\d+(?:\.\d+)?[smh]", stripped, re.IGNORECASE):
+        return stripped.lower()
+    try:
+        parsed = datetime.fromisoformat(stripped.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return stripped
 
 
 def _required_receipt_text(value: object) -> str:
@@ -1000,9 +1017,7 @@ def sanitize_verification_closer_receipt(
     assert isinstance(raw_receipt_ids, list)
     raw_events = receipt.get("review_events")
     raw_exception = receipt.get("human_exception")
-    retry_after = receipt.get("retry_after")
-    if isinstance(retry_after, str):
-        retry_after = _sanitize_receipt_text(retry_after, limit=128)
+    retry_after = _sanitize_retry_after(receipt.get("retry_after"))
     return {
         "verdict": receipt["verdict"],
         "head_sha": receipt["head_sha"],

@@ -86,13 +86,13 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   rejection becomes an exact-lease technical terminal receipt before any pending-check backoff, so
   invalid review or repair events cannot strand coordinator authority or consume a partial budget;
   a no-repair delivery still requires two distinct clean review sessions. Schema validity does not
-  make model-produced text durable-safe: raw coordinator output remains transient, and only the
-  bounded projection that redacts credentials—including assignments with quoted JSON/mapping keys—
-  and machine-local paths may enter attempts, pending replay receipts, terminal rows, Human Exception
-  packets, or status output. GitHub evidence links retain only bounded repository, issue, pull-request,
-  or Actions-run routes without query or fragment; an unsupported route or a secret-shaped path
-  component becomes a redacted GitHub URL before persistence. URL userinfo, explicit ports, and
-  non-GitHub origins are never preserved. The projection retains
+  make model-produced text durable-safe: raw coordinator prose remains transient and never enters
+  attempts, pending replay receipts, terminal rows, Human Exception packets, or status output. Its
+  only durable text projection is the canonical `[REDACTED]` marker followed by unique, bounded,
+  allowlisted GitHub repository, issue, pull-request, or Actions-run evidence routes. Queries,
+  fragments, unsupported routes, secret-shaped path components, URL userinfo, explicit ports, and
+  non-GitHub origins are never preserved. This allowlist, rather than credential-pattern coverage,
+  establishes the no-secret invariant for free-form coordinator text. The projection retains
   the structured identities and actionable option relationships required for deterministic replay
   and governed owner decisions, then passes the canonical schema and semantic validation again.
   Check eligibility selects the latest GitHub rerun per
