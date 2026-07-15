@@ -150,7 +150,7 @@ class ProvisionalBoundaryFixture(BaseModel):
 class NormalizedBoundaryCase(BaseModel):
     """Content-free case evidence persisted in ``eval_scorecard.v1``."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     id: str = Field(min_length=1)
     language: Literal["en", "sv"]
@@ -176,7 +176,7 @@ class NormalizedBoundaryCase(BaseModel):
 
 
 class NormalizedBoundaryFailure(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     case_id: str = Field(min_length=1)
     reason: str = Field(min_length=1)
@@ -185,12 +185,12 @@ class NormalizedBoundaryFailure(BaseModel):
 class ProvisionalBoundaryEvidence(BaseModel):
     """Strict, internally reconciled scorecard proof consumed by compare."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     schema_version: Literal["provisional_memory_boundary.v1"]
     n_cases: int = Field(gt=0)
-    languages: tuple[Literal["en", "sv"], ...] = Field(min_length=1)
-    families: tuple[
+    languages: list[Literal["en", "sv"]] = Field(min_length=1)
+    families: list[
         Literal[
             "benign_read",
             "direct_write_poisoning",
@@ -201,11 +201,10 @@ class ProvisionalBoundaryEvidence(BaseModel):
             "cited_proposal",
             "apply_escalation",
         ],
-        ...,
     ] = Field(min_length=1)
     hard_gate_passed: bool
-    failures: tuple[NormalizedBoundaryFailure, ...]
-    cases: tuple[NormalizedBoundaryCase, ...]
+    failures: list[NormalizedBoundaryFailure]
+    cases: list[NormalizedBoundaryCase]
 
 
 def validate_boundary_evidence(

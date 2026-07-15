@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import replace
 import json
 
@@ -172,3 +173,20 @@ def test_receipt_gate_rejects_claim_bearing_structural_extension() -> None:
 
     assert receipts_are_content_free((json.dumps(lifecycle),)) is True
     assert receipts_are_content_free((json.dumps(extended),)) is False
+
+
+@pytest.mark.parametrize("unsafe_value", [0, "false"])
+def test_shared_evidence_validator_rejects_coerced_types(
+    unsafe_value: object,
+) -> None:
+    evidence = evaluate_provisional_memory_boundary()
+    evidence["cases"][0]["may_write"] = unsafe_value
+
+    with pytest.raises(ValidationError):
+        validate_boundary_evidence(evidence)
+
+    string_count = copy.deepcopy(evidence)
+    string_count["cases"][0]["may_write"] = False
+    string_count["n_cases"] = "16"
+    with pytest.raises(ValidationError):
+        validate_boundary_evidence(string_count)
