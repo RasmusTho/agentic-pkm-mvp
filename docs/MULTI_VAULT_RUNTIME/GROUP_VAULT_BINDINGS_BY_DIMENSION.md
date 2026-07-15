@@ -23,8 +23,10 @@ non-authoritative registry grouping.
   `vault_binding_id` values to the instance registry.
 - Provide add/remove/list/filter operations and resolve a dimension into explicit source bindings.
 - Provide authenticated Companion API and headless CLI create/rename/set-members/delete/list/resolve
-  commands through the same locked registry service. Mutations validate every binding, emit
-  redacted receipts, and are the production producers exercised by tests; no store seeding counts.
+  commands through the same locked registry service. Additions/replacements validate every proposed
+  binding and content authority; instance-authorized remove-member/delete may clear stale or
+  unauthorized stored membership without resolving it. All mutations emit redacted receipts and
+  are the production producers exercised by tests; no store seeding counts.
 - Preserve per-binding identity, provenance, and GOV evaluation in multi-binding contexts.
 - Make production dimension-to-context resolution all-or-nothing: an unknown, stale, removed, or
   unauthorized member fails the entire resolution with a redacted member-specific error. It never
@@ -99,6 +101,9 @@ a hidden authority system and can expose material across real confidentiality bo
 - [ ] Removing a dimension preserves registrations/content; removing a registration repairs
   dangling membership transactionally.
   - Verify: `tests/instance/test_vault_dimensions.py::test_dimension_and_registration_removal_are_safe`
+- [ ] Instance-authorized administration can remove a stale or unauthorized stored member (or delete
+  its dimension) without resolving an authorized subset; additions and resolution still fail closed.
+  - Verify: `tests/api/test_vault_dimension_admin.py::test_admin_can_repair_stale_dimension_membership`
 - [ ] The parent dimension contract proves that stored membership preserves each binding's
   independent authority and provenance and never upgrades access through grouping.
   - Verify: `tests/integration/test_multi_vault_dimensions.py::test_dimension_preserves_per_binding_authority_and_provenance`

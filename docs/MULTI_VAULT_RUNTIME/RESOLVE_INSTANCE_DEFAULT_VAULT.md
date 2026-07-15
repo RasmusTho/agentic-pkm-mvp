@@ -27,6 +27,10 @@ fail-closed precedence resolver.
 - During the one-time schema migration only, materialize a valid legacy
   `last_active_vault_ref` as the default when no default exists, recording
   `legacy_last_active_migration` provenance. Subsequent last-active changes never update default.
+- Make first-vault initialization a distinct MVR-02 default producer: if the registry has no
+  registration/default, its locked registration transaction atomically sets that new binding as the
+  explicit default with `first_vault_initialize` provenance. Later picker/last-active writes still
+  never infer a default.
 - Expose authenticated Companion API and headless CLI get/set/clear commands through one service.
 - Extend the MVR-01 rollback projection/roll-forward merge for the default schema introduced here:
   a scalar previous image receives only the already validated explicit rollback target, never an
@@ -109,6 +113,9 @@ turns an invalid explicit selection into a dangerous silent read/write against t
 - [ ] A picker-only one-vault legacy store with no explicit default restarts on the same binding
   through the one-time provenance-tagged migration; later selections do not mutate that default.
   - Verify: `tests/instance/test_default_vault_resolution.py::test_legacy_last_active_materializes_default_once`
+- [ ] A no-vault installation that initializes its first vault after MVR-02 atomically records that
+  binding as its explicit default; subsequent last-active changes do not alter it.
+  - Verify: `tests/instance/test_default_vault_resolution.py::test_first_vault_initialize_materializes_default_once`
 - [ ] Existing no-vault and single-vault bootstrap paths remain truthful.
   - Verify: `tests/integration/test_single_vault_compatibility.py::test_default_adapter_preserves_bootstrap_and_no_vault`
 - [ ] Removing the current default is rejected unless the production mutation explicitly clears or

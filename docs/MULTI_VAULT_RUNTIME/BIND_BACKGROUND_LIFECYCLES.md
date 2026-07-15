@@ -152,12 +152,12 @@ acceptance criteria prefixed with its ID:
    activation only of governed singleton/explicit-empty transitions after the supervisor can honor
    them. A second enrollment and every many-binding transition remain capability-gated until 06C.
    It updates the vault/settings and Settings Spine owners. Depends on 06A and #3163.
-3. **MVR-06C — isolated lifecycle supervision:** zero/one/many per-binding watcher/worker/settings
-   lifecycles, ownership-lease checks, revision/auth-epoch reconciliation, truthful health, and
-   cross-process ActiveContextSet handoff, with environment runtime-control writeback. Depends on 06B.
+3. **MVR-06C — isolated lifecycle supervision:** zero/one/many-capable per-binding watcher/worker/settings
+   supervisor, ownership-lease checks, revision/auth-epoch reconciliation, truthful gated health, and
+   cross-process ActiveContextSet handoff; its multi-binding activation remains dormant. Depends on 06B.
 4. **MVR-06D — queued-work convergence and aggregate proof:** validate MVR-05 classification, preserve or
-   quarantine pending rows under current authority/binding, architecture boundary, aggregate
-   lifecycle acceptance, and final family proof. Depends on 06C and closes MVR-06.
+   quarantine pending rows under current authority/binding, atomically activate zero/one/many controls,
+   write environment/health truth, and complete aggregate lifecycle proof. Depends on 06C and closes MVR-06.
 
 Four distinct merged receipts are required on #2143; no child recreates #3163 or #3156.
 
@@ -197,8 +197,8 @@ migration, preflight, and fail-loud gate merge together.
 - External boundary impact: env remains bootstrap adapter only
 - New or changed contract: per-binding lifecycle supervision through ActiveContextSet and truthful state transitions
 - Owner-doc impact: each owning child updates in its PR: 06A security/governed-write; 06B
-  vault/settings and Settings Spine; 06C environment runtime control; 06D adds no deferred runtime
-  truth
+  vault/settings and Settings Spine; 06C documents the one-binding gated/dormant supervisor;
+  06D writes the activated zero/one/many runtime-control and health truth
 - Transition debt impact: reduces D13/D14; residual adapters remain for task 07
 - Fitness rule impact: strengthens lifecycle isolation and truthful health
 
@@ -325,8 +325,13 @@ migration, preflight, and fail-loud gate merge together.
   behavior in the same PR.
   - Verify: doc writeback at `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md :: Service Gating` + doc
     writeback at `docs/SETTINGS_SPINE/REBIND_ON_VAULT_SELECTION.md :: What This Task Does`
-- [ ] **MVR-06C:** The environment owner contract describes shipped zero/one/many per-binding
-  lifecycle supervision, ownership/auth checks, truthful health, and cross-process binding state.
+- [ ] **MVR-06C:** The environment owner contract describes the shipped one-binding lifecycle and the
+  dormant, capability-gated multi-binding supervisor, including truthful health and cross-process
+  binding state; it does not claim many-binding activation.
+  - Verify: doc writeback at `docs/ENVIRONMENTS.md :: Runtime Control Surface` + doc writeback at
+    `docs/HEALTH.md :: Runtime health`
+- [ ] **MVR-06D:** Environment and health owner contracts describe activated zero/one/many lifecycle
+  controls only after queued binding classification and current authority checks succeed.
   - Verify: doc writeback at `docs/ENVIRONMENTS.md :: Runtime Control Surface` + doc writeback at
     `docs/HEALTH.md :: Runtime health`
 

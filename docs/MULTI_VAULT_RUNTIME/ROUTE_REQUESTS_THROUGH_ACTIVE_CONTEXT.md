@@ -265,10 +265,12 @@ to cross its floor; independently safe explicit-global work may continue.
   never serves default, last-active, CWD, or another binding.
   - Verify: `tests/api/test_multi_vault_request_fail_closed.py::test_invalid_selection_never_falls_back`
 - [ ] **MVR-05B:** The shipped Companion picker creates/replaces a scoped selection and its client sends that
-  bearer ID through production read and governed-write requests; choosing B changes later requests
-  to B, and stale-ID recovery with zero, many, ambiguous, or default-mismatched bindings visibly
-  asks for reselection.
+  bearer ID through production read requests; choosing B changes later reads to B, and stale-ID
+  recovery with zero, many, ambiguous, or default-mismatched bindings visibly asks for reselection.
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_existing_picker_drives_scoped_request_context`
+- [ ] **MVR-05C:** The scoped picker client sends its bearer context through a production governed-write
+  request, which targets the selected binding only after MVR-05C's DecisionToken/authority gate.
+  - Verify: `tests/integration/test_multi_vault_picker_context.py::test_scoped_picker_governed_write_targets_selected_binding`
 - [ ] **MVR-05B:** A fresh no-vault production initialize registers the binding, atomically establishes
   the explicit one-vault default where applicable, returns/persists a scoped selection, and lets the
   immediately following vault-bound request resolve that binding without last-active fallback.

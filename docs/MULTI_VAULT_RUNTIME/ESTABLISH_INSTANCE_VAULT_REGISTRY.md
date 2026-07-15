@@ -235,9 +235,10 @@ never encounter and truncate authoritative new-schema state before fork/merge pr
   proves the 01B rollback exporter/transformer capability; an 01A-only rollback picker write can
   touch only the still-authoritative legacy state and cannot discard new binding/schema fields.
   - Verify: `tests/ops/test_instance_state_volume_contract.py::test_mvr01a_schema_activation_requires_rollback_capability`
-- [ ] **MVR-01B:** An old-image-to-new-image pinned force-recreate exports before stop and preserves all MVR-01
-  registry state on a per-channel durable volume; API, worker, watcher, and Heimdal resolve and read
-  the identical revision after restart.
+- [ ] **MVR-01B:** An old-image-to-new-image pinned force-recreate fences/drains writers, stops the old
+  image, then exports the final authoritative registry revision before recreate and preserves it on
+  a per-channel durable volume; API, worker, watcher, and Heimdal resolve and read the identical
+  revision after restart. A pre-stop snapshot is diagnostic only and is never imported.
   - Verify: `tests/integration/test_vault_registry_container_durability.py::test_registry_survives_recreate_and_is_shared_cross_process`
 - [ ] **MVR-01B:** The first-volume upgrade fences and drains every legacy registry writer, stops the old API,
   exports and validates the final post-stop fingerprint, and prevents old-writer restart through
