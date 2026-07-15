@@ -28,6 +28,7 @@ from tests.dispatcher.test_verification_consumer import (
     Truth,
     eligible_pr,
 )
+from tests.dispatcher.test_verification_dispatch import _migrated_legacy_ledger
 from tests.dispatcher.verification_helpers import HEAD, REPO, ledger, request
 
 
@@ -995,6 +996,29 @@ def test_authenticated_intake_refetches_live_pr_after_ingest_before_rejection(
     assert result.status == "backoff"
     assert result.stop_reason is None
     assert launcher.calls == []
+
+
+def test_consumer_starts_authenticated_new_head_beside_inert_legacy_audit(
+    tmp_path: Path,
+) -> None:
+    state, legacy = _migrated_legacy_ledger(tmp_path)
+    source, _ = _gh_source(request(REPAIRED_HEAD))
+    authenticated = source.pending_requests(REPO)[0]
+
+    result = VerificationConsumer(
+        state,
+        Truth(eligible_pr(head={"ref": "branch", "sha": REPAIRED_HEAD}), GREEN),
+        Auth(ok=False),
+        Launcher(),
+        "host",
+    ).consume(authenticated)
+
+    assert result.status == "backoff"
+    assert result.authority_state == "canonical"
+    assert result.current_head_sha == REPAIRED_HEAD
+    assert result.run_id != legacy.run_id
+    assert state.get(legacy.run_id) == legacy
+    assert {run.run_id for run in state.list()} == {legacy.run_id, result.run_id}
 
 
 def test_reconciled_new_head_replay_is_idempotent(tmp_path: Path) -> None:

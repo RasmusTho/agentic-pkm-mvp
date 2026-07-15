@@ -516,7 +516,10 @@ def _canonical_chain_fingerprint(
         (request["repository"], request["pr_number"], request["stage"]),
     ).fetchall()
     for row in rows:
-        _validated_row_request(row)
+        if row["status"] == LEGACY_UNTRUSTED_VERIFICATION_STATUS:
+            _validated_legacy_row_request(row)
+        else:
+            _validated_row_request(row)
         _fingerprint_record(digest, "verification_runs", dict(row))
         for attempt in conn.execute(
             """
