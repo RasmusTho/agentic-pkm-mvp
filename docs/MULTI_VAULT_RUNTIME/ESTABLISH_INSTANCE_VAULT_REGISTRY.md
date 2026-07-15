@@ -25,8 +25,9 @@ This slice promotes the existing seed without changing content-vault authority.
   `app/vault/app_local.py` as a deprecated compatibility re-export.
 - Preserve logical `vault_id`, local-clone `local_instance_id`, and stable registration
   `vault_binding_id` separately from path and device provenance.
-- Migrate the existing Markdown payload in place, preserving every registration,
-  `last_active_vault_ref`, timestamps, and unknown forward-compatible fields.
+- Migrate the existing Markdown payload in place, preserving the installed-instance
+  `appInstallId`, every registration, `last_active_vault_ref`, timestamps, and unknown
+  forward-compatible fields.
 - For container deployments, add a channel/instance-scoped `instance-state` volume mounted at
   `/app/instance-state` in every registry consumer and resolve the production store to
   `/app/instance-state/agentic-pkm/vault-registry.md`. Migrate once from the legacy resolved
@@ -42,6 +43,11 @@ This slice promotes the existing seed without changing content-vault authority.
   old image starts. A rollback must therefore see the latest committed registrations and
   last-active state, not merely the pre-migration snapshot. This compatibility exporter/transformer
   remains required until MVR-07 proves that no supported rollback reader needs it.
+- Before rolling forward again from the previous image, export and validate its latest legacy
+  payload while it is still running, compare its recorded fork/base revision with the durable
+  registry lineage, and transform rollback-period mutations into the next locked monotonic registry
+  revision. If both sides changed from the recorded fork, identity mapping is ambiguous, or the
+  legacy export is missing/invalid, fail before recreate and preserve both copies for recovery.
 - Serialize every mutation with a shared-volume file lock, monotonic revision/CAS reload, and
   same-directory temp-file + `fsync` + atomic replace + directory `fsync`. Readers observe complete
   revisions; all production writers reuse this store transaction boundary.
@@ -100,8 +106,8 @@ single-vault package or can silently lose identity during migration.
 - [ ] The production store loads, writes, and restarts with multiple registrations while preserving
   stable vault identity and instance provenance.
   - Verify: `tests/instance/test_vault_registry.py::test_registry_round_trip_preserves_multiple_vaults`
-- [ ] A legacy app-local payload migrates in place without losing registrations,
-  `last_active_vault_ref`, timestamps, or unknown fields.
+- [ ] A legacy app-local payload migrates in place without changing `appInstallId` or losing
+  registrations, `last_active_vault_ref`, timestamps, or unknown fields.
   - Verify: `tests/instance/test_vault_registry_migration.py::test_legacy_app_local_state_migrates_losslessly`
 - [ ] Explicit production picker select/initialize over parse-corrupt registry state backs up the
   original and reseeds without a 500, preserving #2185 recovery.
@@ -128,6 +134,10 @@ single-vault package or can silently lose identity during migration.
   the rollback preflight and reads the latest committed registration and last-active state from its
   legacy path; a missing, stale, or invalid rollback export blocks startup.
   - Verify: `tests/integration/test_vault_registry_rollback.py::test_previous_image_reads_latest_post_migration_registry_state`
+- [ ] Registrations and last-active changes made by the previous image during rollback are imported
+  as the next registry revision on roll-forward; divergent mutation, ambiguous identity, or invalid
+  lineage fails before recreate without overwriting either side.
+  - Verify: `tests/integration/test_vault_registry_rollback.py::test_rollback_mutations_round_trip_on_roll_forward`
 
 ## Out of Scope
 
@@ -147,7 +157,9 @@ native installs use their app-data directory. The old-container export happens b
 recreate, and mode-`0600` staging remains until the new revision is verified across all four
 consumers; an independently durable legacy source is also retained when one exists. Mutations are
 locked, revision-checked, and atomically replaced, and each commit refreshes the validated rollback
-export consumed by the old-image pre-start transformer. Parse
+export consumed by the old-image pre-start transformer. A later roll-forward re-exports the running
+old image and reconciles its rollback-period changes against the recorded fork revision before the
+new image starts; divergent lineages fail closed with both sources intact. Parse
 corruption remains recoverable through the shipped picker backup/reseed path; an ambiguous
 migration or write failure leaves prior payload, staging, and destination recoverable and blocks
 only unsafe automatic resolution until repaired or explicitly recovered.

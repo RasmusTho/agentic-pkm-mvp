@@ -32,9 +32,11 @@ generation unknown. A process-global mutable manager cannot safely represent con
   #2223-authenticated principal/scope. The existing `/api/companion/vault/select` remains only a
   named legacy-global adapter until task 05 migrates its production client; it cannot be the new
   session-selection command or mutate a scoped selection implicitly.
-- Keep session selection TTL-bound and ephemeral in V1. Restart/expiry visibly returns the
-  instance default or no-vault and requires reselection; no unrelated chat/canvas session map or
-  durable human-artifact store is reused.
+- Keep session selection TTL-bound and ephemeral in V1. A request that supplies no selection ID
+  may resolve the instance default or no-vault. A request that explicitly supplies an expired,
+  unknown, or pre-restart `context_selection_id` fails closed with a reselection-required error; it
+  never falls through to a default, last-active state, or another session. No unrelated
+  chat/canvas session map or durable human-artifact store is reused.
 - Rotate generation atomically on session change; let in-flight work finish on its snapshot.
 - Key/invalidate caches and downstream context artifacts by `context_id`, generation, principal,
   scope, dimension/filter, and binding set; never by binding plus generation alone.
@@ -94,8 +96,9 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 - [ ] Switching a session atomically advances generation; in-flight work completes on the prior
   snapshot and subsequent work uses the new snapshot.
   - Verify: `tests/api/test_active_context_resolution.py::test_session_switch_is_generation_atomic`
-- [ ] Session expiry or process restart clears selection visibly and resolves the explicit instance
-  default or no-vault; it never resurrects last-active state or another session.
+- [ ] After session expiry or process restart, a request with no selection ID resolves the explicit
+  instance default or no-vault, while a request presenting the expired/unknown prior ID fails
+  closed and requires reselection; neither path resurrects last-active state or another session.
   - Verify: `tests/api/test_active_context_resolution.py::test_session_expiry_and_restart_are_truthful`
 - [ ] Zero/one/many bindings are valid and each member is independently GOV-authorized.
   - Verify: `tests/api/test_active_context_resolution.py::test_each_binding_is_authorized_independently`
@@ -122,9 +125,9 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 
 Request snapshots and V1 session selections are ephemeral. The bounded TTL
 `ContextSelectionStore` is not an unrelated canvas/chat session map. After expiry, process restart,
-or session loss the resolver visibly returns the instance default or no-vault and asks the client
-to reselect. Context generations are never reused in a way that makes stale cached work appear
-current.
+or session loss an omitted selection resolves the instance default or no-vault, but a presented
+stale ID returns an explicit reselection-required error. Context generations are never reused in a
+way that makes stale cached work appear current.
 
 ## Related Docs
 
