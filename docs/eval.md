@@ -119,6 +119,18 @@ intent-classification golden set (`app.eval.classification`), reusing
 eval framework. It never calls a live LLM; DeepEval/Ragas suites stay opt-in
 behind `@pytest.mark.eval` and are a separate, non-default path.
 
+The same runner also executes the categorical provisional-memory authority gate from
+`tests/eval/fixtures/provisional_memory_boundary.yaml` through
+`app.eval.provisional_memory_boundary`. Its 16 deterministic Swedish/English cases cover benign
+read and cited-proposal use plus direct-write poisoning, prompt injection, false authority claims,
+provenance loss, citation omission, and attempted APPLY escalation. Any action-tier admission,
+uncited proposal influence, hidden trust/review/provenance, write authority, artifact mutation, or
+claim-bearing receipt is a hard `provisional_memory:hard_gate` failure. This section is not
+threshold-relative and calls no live model; the scorecard records only normalized outcomes, never
+random artifact ids or claim text. The composed production API → Markdown/receipt → guarded
+recall/ContextEnvelope path is separately locked by
+`tests/agent_memory/test_provisional_memory_end_to_end.py`.
+
 What it reports, all computed over the W2-EVAL-01 bilingual seed
 (`docs/eval/retrieval_bilingual_seed.yaml` +
 `data/golden/bilingual_corpus.jsonl` / `data/golden/bilingual_judgments.json`):
@@ -217,6 +229,14 @@ re-measuring the golden set — never to make a regression pass.
   "by_slice": {"exact_lexical": {"...": "..."}, "...": "..."},
   "memory_recall": {"precision@k": 0.20, "ndcg@k": 1.0, "count": 5},
   "memory_recall_route_intents": ["low_trust_citation", "recall_into_ask"],
+  "provisional_memory_boundary": {
+    "schema_version": "provisional_memory_boundary.v1",
+    "n_cases": 16,
+    "languages": ["en", "sv"],
+    "hard_gate_passed": true,
+    "failures": [],
+    "cases": [{"...": "normalized categorical outcome"}]
+  },
   "classification": {
     "mode": "replay",
     "n_cases": 68,
@@ -266,17 +286,26 @@ What it reports — per-slice deltas (baseline → candidate, delta, delta %):
   answer rate, unknown safe-fail rate), **per-class** precision/recall
   (`classification.per_class`, keyed like `by_language`/`by_slice`), plus the
   KERNEL-13 **confusion slice**: hard-gate state on both sides, candidate
-  mutation-side confusions, and the non-zero confusion-matrix cell deltas.
+  mutation-side confusions, and the non-zero confusion-matrix cell deltas;
+- **provisional-memory authority** hard-gate state on both sides, including
+  the candidate's normalized categorical failures and bilingual case count.
 
 Every numeric leaf the compare touches — including confusion-matrix cells and
 `failures` entries — is checked by a single spec-driven validation walker on
-load; the comparison and the renderer consume only the validated view.
+load; the comparison and the renderer consume only the validated view. The
+provisional-memory proof is also structurally reconciled: `n_cases` must match
+the exact normalized case list, IDs must be unique, metadata must match case
+evidence, and every canonical family must have both Swedish and English cases.
+Runner and compare share the same v1 evidence validator, which also rejects
+unknown enums/failure reasons, unsafe authority observations marked `passed`,
+and contradictions between case status, categorical failures, and gate state.
 
 Verdict (`regression` / `improved` / `neutral`), printed as `VERDICT: ...` and
 mirrored in the `--output` JSON artifact (`eval_scorecard_compare.v1`):
 
 - `regression` (exit code 1) when any of: the candidate trips the KERNEL-13
-  mutation-side hard gate (blocking, never tolerance-relative); the candidate
+  mutation-side hard gate or the provisional-memory authority hard gate
+  (blocking, never tolerance-relative); the candidate
   scorecard failed its own configured floors (`regression: true` — the floors
   come from `config/eval_thresholds.yaml` at scorecard build time, which is how
   compare consumes them); any compared metric worsened by more than the
@@ -287,7 +316,8 @@ mirrored in the `--output` JSON artifact (`eval_scorecard_compare.v1`):
 - `improved` (exit 0) when no regression and at least one metric improved
   beyond the tolerance.
 - `neutral` (exit 0) otherwise.
-- Malformed input (missing sections or keys, non-numeric or NaN/±inf values
+- Malformed input (including a missing or invalid
+  `provisional_memory_boundary`, missing sections or keys, non-numeric or NaN/±inf values
   anywhere in the compared surface, malformed confusion/failure entries, wrong
   `schema_version`) is exit code **2** with an `error:` message naming the
   offending path — never conflated with a regression verdict.

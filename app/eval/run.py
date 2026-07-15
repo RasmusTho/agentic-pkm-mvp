@@ -22,7 +22,7 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Mapping
+from typing import Dict, List, Literal, Mapping
 
 import yaml
 
@@ -34,6 +34,7 @@ from app.eval.compare import (
     render_compare_summary,
 )
 from app.eval.golden import MEMORY_RECALL_ROUTE_INTENTS, evaluate_bilingual_golden_set
+from app.eval.provisional_memory_boundary import evaluate_provisional_memory_boundary
 
 THRESHOLDS_PATH = Path("config") / "eval_thresholds.yaml"
 SCORECARD_PATH = Path("runtime") / "eval" / "scorecard.json"
@@ -45,8 +46,11 @@ class ThresholdFailure:
     metric: str
     value: float
     threshold: float
+    kind: Literal["threshold_floor", "categorical"] = "threshold_floor"
 
     def __str__(self) -> str:
+        if self.kind == "categorical":
+            return f"{self.scope}: categorical violation: {self.metric}"
         return f"{self.scope}: {self.metric}={self.value:.4f} < required {self.threshold:.4f}"
 
 
@@ -94,6 +98,7 @@ def _check_classification(
                 ),
                 value=1.0,
                 threshold=0.0,
+                kind="categorical",
             )
         )
     return failures
@@ -111,6 +116,7 @@ def build_scorecard(
     classification = evaluate_classification_golden_set(
         completions=classification_completions
     )
+    provisional_memory_boundary = evaluate_provisional_memory_boundary()
 
     failures: List[ThresholdFailure] = []
     failures += _check_bucket("aggregate", result["aggregate"], thresholds.get("aggregate"))
@@ -118,6 +124,16 @@ def build_scorecard(
         failures += _check_bucket(f"language:{lang}", metrics, thresholds.get("per_language"))
     failures += _check_bucket("memory_recall", result["memory_recall"], thresholds.get("memory_recall"))
     failures += _check_classification(classification, thresholds.get("classification"))
+    for failure in provisional_memory_boundary["failures"]:
+        failures.append(
+            ThresholdFailure(
+                scope="provisional_memory:hard_gate",
+                metric=f"{failure['case_id']}:{failure['reason']}",
+                value=1.0,
+                threshold=0.0,
+                kind="categorical",
+            )
+        )
 
     scorecard = {
         "schema_version": "eval_scorecard.v1",
@@ -128,11 +144,18 @@ def build_scorecard(
         "by_slice": result["by_slice"],
         "memory_recall": result["memory_recall"],
         "memory_recall_route_intents": sorted(MEMORY_RECALL_ROUTE_INTENTS),
+        "provisional_memory_boundary": provisional_memory_boundary,
         "classification": classification,
         "queries": result["queries"],
         "regression": bool(failures),
         "failures": [
-            {"scope": f.scope, "metric": f.metric, "value": f.value, "threshold": f.threshold}
+            {
+                "scope": f.scope,
+                "metric": f.metric,
+                "value": f.value,
+                "threshold": f.threshold,
+                "kind": f.kind,
+            }
             for f in failures
         ],
     }
@@ -173,6 +196,20 @@ def render_summary(scorecard: dict) -> str:
         f"precision@k={mr['precision@k']:.4f} ndcg@k={mr['ndcg@k']:.4f} (n={mr['count']})"
     )
     lines.append("")
+    boundary = scorecard["provisional_memory_boundary"]
+    lines.append(
+        "Provisional-memory boundary "
+        f"(offline bilingual hard gate, n={boundary['n_cases']}):"
+    )
+    lines.append(
+        "  languages="
+        + ",".join(boundary["languages"])
+        + " hard_gate="
+        + ("pass" if boundary["hard_gate_passed"] else "FAIL")
+    )
+    for failure in boundary["failures"]:
+        lines.append(f"  - {failure['case_id']}: {failure['reason']}")
+    lines.append("")
     cls = scorecard["classification"]
     lines.append(f"Intent-classification slice ({cls['mode']}, n={cls['n_cases']}):")
     for name, metrics in cls["per_class"].items():
@@ -207,10 +244,16 @@ def render_summary(scorecard: dict) -> str:
     if scorecard["regression"]:
         lines.append("REGRESSION DETECTED:")
         for failure in scorecard["failures"]:
-            lines.append(
-                f"  - {failure['scope']}: {failure['metric']}={failure['value']:.4f} "
-                f"< required {failure['threshold']:.4f}"
-            )
+            if failure.get("kind") == "categorical":
+                lines.append(
+                    f"  - {failure['scope']}: categorical violation: "
+                    f"{failure['metric']}"
+                )
+            else:
+                lines.append(
+                    f"  - {failure['scope']}: {failure['metric']}="
+                    f"{failure['value']:.4f} < required {failure['threshold']:.4f}"
+                )
     else:
         lines.append("All sliced metrics meet configured thresholds.")
     return "\n".join(lines)

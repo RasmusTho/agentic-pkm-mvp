@@ -25,7 +25,8 @@ ever consume the validated view, never the raw input.
 Verdict semantics:
 
 - ``regression`` — any of:
-  1. the candidate trips the KERNEL-13 mutation-side hard gate
+  1. the candidate trips either the KERNEL-13 mutation-side hard gate or the
+     provisional-memory authority hard gate
      (``classification.hard_gate_passed`` is false) — blocking, never
      tolerance-relative;
   2. the candidate scorecard failed its own configured floors
@@ -45,12 +46,19 @@ Verdict semantics:
 
 from __future__ import annotations
 
+from collections import Counter
 import json
 import math
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 from app.eval.benchmark import compute_metric_delta
+from app.eval.classification import (
+    ACTION_CAPABLE_CLASSES,
+    EMITTABLE_CLASSES,
+    HARD_GATE_EXPECTED_CLASSES,
+)
+from app.eval.provisional_memory_boundary import validate_boundary_evidence
 
 SCORECARD_SCHEMA_VERSION = "eval_scorecard.v1"
 COMPARE_SCHEMA_VERSION = "eval_scorecard_compare.v1"
@@ -101,8 +109,42 @@ CONFUSION_ENTRY_KEYS = ("case_id", "expected_intent", "predicted_intent")
 
 # Keys every threshold-failure entry must carry (they are rendered); the
 # numeric ones are finiteness-checked because the renderer formats them.
-FAILURE_ENTRY_KEYS = ("scope", "metric", "value", "threshold")
+FAILURE_ENTRY_KEYS = ("scope", "metric", "value", "threshold", "kind")
 FAILURE_ENTRY_NUMERIC_KEYS = ("value", "threshold")
+THRESHOLD_SECTION_KEYS = {
+    "schema_version",
+    "aggregate",
+    "per_language",
+    "memory_recall",
+    "classification",
+    "k",
+}
+PROVISIONAL_BOUNDARY_SCHEMA_VERSION = "provisional_memory_boundary.v1"
+PROVISIONAL_FAILURE_ENTRY_KEYS = ("case_id", "reason")
+PROVISIONAL_CASE_KEYS = {
+    "id",
+    "language",
+    "family",
+    "admitted",
+    "may_answer",
+    "may_propose",
+    "may_write",
+    "excluded_reason",
+    "trust_visible",
+    "provenance_visible",
+    "action_blocked",
+    "passed",
+}
+PROVISIONAL_CASE_BOOL_KEYS = {
+    "admitted",
+    "may_answer",
+    "may_propose",
+    "may_write",
+    "trust_visible",
+    "provenance_visible",
+    "action_blocked",
+    "passed",
+}
 
 
 class ScorecardCompareError(ValueError):
@@ -161,6 +203,12 @@ def _require_finite(value: object, path: str) -> float:
     return float(value)
 
 
+def _require_bool(value: object, path: str) -> bool:
+    if not isinstance(value, bool):
+        raise ScorecardCompareError(f"non-boolean gate value at {path}: {value!r}")
+    return value
+
+
 def _validated_bucket(
     bucket: object, path: str, metrics: Tuple[str, ...]
 ) -> Dict[str, float]:
@@ -207,6 +255,9 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
 
     matrix = _resolve_dict(scorecard, label, ("classification", "confusion_matrix"))
     matrix_path = f"{label}.classification.confusion_matrix"
+    classification_classes = {*EMITTABLE_CLASSES, "unknown"}
+    if set(matrix) != classification_classes:
+        raise ScorecardCompareError(f"invalid classification rows at {matrix_path}")
     validated_matrix: Dict[str, Dict[str, int]] = {}
     for expected in sorted(matrix):
         row = matrix[expected]
@@ -214,16 +265,144 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
             raise ScorecardCompareError(
                 f"scorecard bucket at {matrix_path}.{expected} is not an object"
             )
-        validated_matrix[expected] = {
-            predicted: int(
-                _require_finite(row[predicted], f"{matrix_path}.{expected}.{predicted}")
+        if set(row) != classification_classes:
+            raise ScorecardCompareError(
+                f"invalid classification columns at {matrix_path}.{expected}"
             )
-            for predicted in sorted(row)
-        }
+        validated_row: Dict[str, int] = {}
+        for predicted in sorted(row):
+            path = f"{matrix_path}.{expected}.{predicted}"
+            value = _require_finite(row[predicted], path)
+            if not value.is_integer() or value < 0:
+                raise ScorecardCompareError(
+                    f"confusion-matrix count must be a non-negative integer at {path}"
+                )
+            validated_row[predicted] = int(value)
+        validated_matrix[expected] = validated_row
+    classification_n_cases = _resolve(scorecard, label, ("classification", "n_cases"))
+    if (
+        isinstance(classification_n_cases, bool)
+        or not isinstance(classification_n_cases, int)
+        or classification_n_cases <= 0
+        or classification_n_cases
+        != sum(sum(row.values()) for row in validated_matrix.values())
+    ):
+        raise ScorecardCompareError(
+            f"classification n_cases contradicts confusion matrix at {label}"
+        )
+
+    def _classification_count(value: object, path: str) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ScorecardCompareError(
+                f"classification count must be a non-negative integer at {path}"
+            )
+        return value
+
+    def _require_metric_match(actual: object, expected: float, path: str) -> None:
+        value = _require_finite(actual, path)
+        if not math.isclose(value, expected, rel_tol=1e-12, abs_tol=1e-12):
+            raise ScorecardCompareError(
+                f"classification metric contradicts confusion matrix at {path}"
+            )
+
+    raw_per_class = _resolve_dict(scorecard, label, ("classification", "per_class"))
+    if set(raw_per_class) != set(EMITTABLE_CLASSES):
+        raise ScorecardCompareError(
+            f"invalid per-class keys at {label}.classification.per_class"
+        )
+    derived_precision: List[float] = []
+    derived_recall: List[float] = []
+    for class_name in EMITTABLE_CLASSES:
+        path = f"{label}.classification.per_class.{class_name}"
+        bucket = raw_per_class[class_name]
+        if not isinstance(bucket, dict) or set(bucket) != {
+            "precision",
+            "recall",
+            "support",
+            "predicted",
+        }:
+            raise ScorecardCompareError(f"invalid per-class bucket at {path}")
+        support = sum(validated_matrix[class_name].values())
+        predicted = sum(
+            validated_matrix[expected][class_name]
+            for expected in classification_classes
+        )
+        answered_support = support - validated_matrix[class_name]["unknown"]
+        true_positive = validated_matrix[class_name][class_name]
+        precision = true_positive / predicted if predicted else 0.0
+        recall = true_positive / answered_support if answered_support else 0.0
+        if _classification_count(bucket["support"], f"{path}.support") != support:
+            raise ScorecardCompareError(f"support contradicts confusion matrix at {path}")
+        if _classification_count(bucket["predicted"], f"{path}.predicted") != predicted:
+            raise ScorecardCompareError(f"predicted contradicts confusion matrix at {path}")
+        _require_metric_match(bucket["precision"], precision, f"{path}.precision")
+        _require_metric_match(bucket["recall"], recall, f"{path}.recall")
+        derived_precision.append(precision)
+        derived_recall.append(recall)
+    _require_metric_match(
+        view["classification_metrics"]["macro_precision"],
+        sum(derived_precision) / len(derived_precision),
+        f"{label}.classification.macro_precision",
+    )
+    _require_metric_match(
+        view["classification_metrics"]["macro_recall"],
+        sum(derived_recall) / len(derived_recall),
+        f"{label}.classification.macro_recall",
+    )
+
+    unknown = _resolve_dict(scorecard, label, ("classification", "unknown"))
+    if set(unknown) != {
+        "expected",
+        "safe_fail_hits",
+        "read_side_landings",
+        "safe_fail_rate",
+    }:
+        raise ScorecardCompareError(f"invalid unknown bucket at {label}.classification.unknown")
+    unknown_expected = sum(validated_matrix["unknown"].values())
+    unknown_hits = validated_matrix["unknown"]["unknown"]
+    unknown_read_side = validated_matrix["unknown"]["exploratory"]
+    for key, expected in (
+        ("expected", unknown_expected),
+        ("safe_fail_hits", unknown_hits),
+        ("read_side_landings", unknown_read_side),
+    ):
+        if _classification_count(
+            unknown[key], f"{label}.classification.unknown.{key}"
+        ) != expected:
+            raise ScorecardCompareError(
+                f"unknown metrics contradict confusion matrix at {label}"
+            )
+    _require_metric_match(
+        unknown["safe_fail_rate"],
+        unknown_hits / unknown_expected if unknown_expected else 0.0,
+        f"{label}.classification.unknown.safe_fail_rate",
+    )
+
+    safe_fail = _resolve_dict(scorecard, label, ("classification", "safe_fail"))
+    if set(safe_fail) != {"count", "answer_rate"}:
+        raise ScorecardCompareError(
+            f"invalid safe-fail bucket at {label}.classification.safe_fail"
+        )
+    safe_fail_count = sum(
+        validated_matrix[class_name]["unknown"] for class_name in EMITTABLE_CLASSES
+    )
+    answerable = classification_n_cases - unknown_expected
+    if _classification_count(
+        safe_fail["count"], f"{label}.classification.safe_fail.count"
+    ) != safe_fail_count:
+        raise ScorecardCompareError(
+            f"safe-fail count contradicts confusion matrix at {label}"
+        )
+    _require_metric_match(
+        safe_fail["answer_rate"],
+        (answerable - safe_fail_count) / answerable if answerable else 0.0,
+        f"{label}.classification.safe_fail.answer_rate",
+    )
     view["confusion_matrix"] = validated_matrix
 
-    view["hard_gate_passed"] = bool(
-        _resolve(scorecard, label, ("classification", "hard_gate_passed"))
+    view["hard_gate_passed"] = _require_bool(
+        _resolve(scorecard, label, ("classification", "hard_gate_passed")),
+        f"{label}.classification.hard_gate_passed",
     )
 
     confusions = _resolve(scorecard, label, ("classification", "mutation_side_confusions"))
@@ -240,10 +419,245 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
                 raise ScorecardCompareError(
                     f"malformed entry at {confusions_path}[{index}]: missing {key!r}"
                 )
+            if not isinstance(entry[key], str) or not entry[key]:
+                raise ScorecardCompareError(
+                    f"malformed entry at {confusions_path}[{index}]: invalid {key!r}"
+                )
+    confusion_signatures = {
+        tuple(entry[key] for key in CONFUSION_ENTRY_KEYS) for entry in confusions
+    }
+    if len(confusion_signatures) != len(confusions):
+        raise ScorecardCompareError(
+            f"duplicate mutation-side confusion at {confusions_path}"
+        )
+    matrix_mutation_counts = {
+        (expected, predicted): validated_matrix[expected][predicted]
+        for expected in HARD_GATE_EXPECTED_CLASSES
+        for predicted in ACTION_CAPABLE_CLASSES
+        if validated_matrix[expected][predicted]
+    }
+    listed_mutation_counts = Counter(
+        (entry["expected_intent"], entry["predicted_intent"])
+        for entry in confusions
+    )
+    if dict(listed_mutation_counts) != matrix_mutation_counts:
+        raise ScorecardCompareError(
+            f"classification matrix contradicts mutation confusions at {label}"
+        )
     view["mutation_side_confusions"] = confusions
+    if view["hard_gate_passed"] != (not confusions):
+        raise ScorecardCompareError(
+            f"classification hard-gate state contradicts mutation confusions at {label}"
+        )
 
-    view["floor_regression"] = bool(scorecard.get("regression"))
-    failures = scorecard.get("failures", [])
+    provisional = _resolve_dict(scorecard, label, ("provisional_memory_boundary",))
+    provisional_path = f"{label}.provisional_memory_boundary"
+    if provisional.get("schema_version") != PROVISIONAL_BOUNDARY_SCHEMA_VERSION:
+        raise ScorecardCompareError(
+            f"unsupported provisional-memory boundary schema_version "
+            f"{provisional.get('schema_version')!r} at {provisional_path}.schema_version"
+        )
+    n_cases = _require_finite(provisional.get("n_cases"), f"{provisional_path}.n_cases")
+    if not n_cases.is_integer() or n_cases <= 0:
+        raise ScorecardCompareError(
+            f"provisional-memory boundary case count must be a positive integer at "
+            f"{provisional_path}.n_cases"
+        )
+    languages = provisional.get("languages")
+    if not isinstance(languages, list) or not all(
+        isinstance(language, str) for language in languages
+    ):
+        raise ScorecardCompareError(
+            f"scorecard section at {provisional_path}.languages is not a string list"
+        )
+    if not {"en", "sv"} <= set(languages):
+        raise ScorecardCompareError(
+            f"scorecard is missing required bilingual coverage at "
+            f"{provisional_path}.languages"
+        )
+    families = provisional.get("families")
+    if not isinstance(families, list) or not families or not all(
+        isinstance(family, str) and family for family in families
+    ):
+        raise ScorecardCompareError(
+            f"scorecard section at {provisional_path}.families is not a non-empty "
+            "string list"
+        )
+    cases = provisional.get("cases")
+    if not isinstance(cases, list):
+        raise ScorecardCompareError(
+            f"scorecard section at {provisional_path}.cases is not a list"
+        )
+    if len(cases) != int(n_cases):
+        raise ScorecardCompareError(
+            f"case count mismatch at {provisional_path}: n_cases={int(n_cases)} "
+            f"but cases has {len(cases)} entries"
+        )
+    case_ids: set[str] = set()
+    coverage: set[tuple[str, str]] = set()
+    all_cases_passed = True
+    for index, case in enumerate(cases):
+        case_path = f"{provisional_path}.cases[{index}]"
+        if not isinstance(case, dict) or set(case) != PROVISIONAL_CASE_KEYS:
+            raise ScorecardCompareError(
+                f"malformed normalized case at {case_path}: expected exact v1 keys"
+            )
+        for key in ("id", "language", "family"):
+            if not isinstance(case[key], str) or not case[key]:
+                raise ScorecardCompareError(
+                    f"malformed normalized case at {case_path}: invalid {key!r}"
+                )
+        for key in PROVISIONAL_CASE_BOOL_KEYS:
+            _require_bool(case[key], f"{case_path}.{key}")
+        if case["excluded_reason"] is not None and not isinstance(
+            case["excluded_reason"], str
+        ):
+            raise ScorecardCompareError(
+                f"malformed normalized case at {case_path}: invalid 'excluded_reason'"
+            )
+        if case["id"] in case_ids:
+            raise ScorecardCompareError(
+                f"duplicate provisional-memory case id at {case_path}.id: {case['id']}"
+            )
+        case_ids.add(case["id"])
+        coverage.add((case["language"], case["family"]))
+        all_cases_passed = all_cases_passed and case["passed"]
+    if set(languages) != {language for language, _ in coverage}:
+        raise ScorecardCompareError(
+            f"language metadata does not match case evidence at {provisional_path}"
+        )
+    if set(families) != {family for _, family in coverage}:
+        raise ScorecardCompareError(
+            f"family metadata does not match case evidence at {provisional_path}"
+        )
+    expected_coverage = {
+        (language, family) for language in languages for family in families
+    }
+    if coverage != expected_coverage:
+        raise ScorecardCompareError(
+            f"incomplete bilingual family coverage at {provisional_path}.cases"
+        )
+    provisional_failures = provisional.get("failures")
+    if not isinstance(provisional_failures, list):
+        raise ScorecardCompareError(
+            f"scorecard section at {provisional_path}.failures is not a list"
+        )
+    for index, entry in enumerate(provisional_failures):
+        if not isinstance(entry, dict):
+            raise ScorecardCompareError(
+                f"malformed entry at {provisional_path}.failures[{index}]: not an object"
+            )
+        for key in PROVISIONAL_FAILURE_ENTRY_KEYS:
+            if not isinstance(entry.get(key), str) or not entry[key]:
+                raise ScorecardCompareError(
+                    f"malformed entry at {provisional_path}.failures[{index}]: "
+                    f"missing non-empty {key!r}"
+                )
+        if entry["case_id"] != "fixture" and entry["case_id"] not in case_ids:
+            raise ScorecardCompareError(
+                f"unknown case_id at {provisional_path}.failures[{index}]"
+            )
+    provisional_hard_gate_passed = _require_bool(
+        provisional.get("hard_gate_passed"),
+        f"{provisional_path}.hard_gate_passed",
+    )
+    evidence_passed = not provisional_failures and all_cases_passed
+    if provisional_hard_gate_passed != evidence_passed:
+        raise ScorecardCompareError(
+            f"inconsistent hard-gate state and failures at {provisional_path}"
+        )
+    try:
+        canonical_evidence = validate_boundary_evidence(provisional)
+    except ValueError as exc:
+        raise ScorecardCompareError(
+            f"invalid canonical proof at {provisional_path}: {exc}"
+        ) from exc
+    view["provisional_memory_boundary"] = {
+        "hard_gate_passed": canonical_evidence.hard_gate_passed,
+        "n_cases": canonical_evidence.n_cases,
+        "languages": sorted(set(canonical_evidence.languages)),
+        "failures": [
+            failure.model_dump(mode="json")
+            for failure in canonical_evidence.failures
+        ],
+    }
+
+    thresholds = _resolve_dict(scorecard, label, ("thresholds",))
+    if set(thresholds) != THRESHOLD_SECTION_KEYS:
+        raise ScorecardCompareError(f"invalid threshold schema keys at {label}.thresholds")
+    if thresholds["schema_version"] != "eval_thresholds.v1":
+        raise ScorecardCompareError(
+            f"unsupported threshold schema at {label}.thresholds.schema_version"
+        )
+    scorecard_k = _resolve(scorecard, label, ("k",))
+    threshold_k = thresholds["k"]
+    if (
+        isinstance(scorecard_k, bool)
+        or not isinstance(scorecard_k, int)
+        or isinstance(threshold_k, bool)
+        or not isinstance(threshold_k, int)
+        or scorecard_k != threshold_k
+        or scorecard_k <= 0
+    ):
+        raise ScorecardCompareError(f"invalid or inconsistent k at {label}")
+
+    def _floors(bucket_name: str, metric_names: tuple[str, ...]) -> Dict[str, float]:
+        bucket = thresholds[bucket_name]
+        path = f"{label}.thresholds.{bucket_name}"
+        if not isinstance(bucket, dict) or set(bucket) != set(metric_names):
+            raise ScorecardCompareError(f"invalid threshold bucket at {path}")
+        validated = {
+            metric: _require_finite(bucket[metric], f"{path}.{metric}")
+            for metric in metric_names
+        }
+        if any(floor < 0.0 or floor > 1.0 for floor in validated.values()):
+            raise ScorecardCompareError(f"threshold floor outside [0, 1] at {path}")
+        return validated
+
+    retrieval_floor_names = ("precision_at_k", "ndcg_at_k")
+    aggregate_floors = _floors("aggregate", retrieval_floor_names)
+    language_floors = _floors("per_language", retrieval_floor_names)
+    memory_floors = _floors("memory_recall", retrieval_floor_names)
+    classification_floors = _floors("classification", CLASSIFICATION_METRICS)
+    expected_threshold_failures: List[tuple[str, str, float, float, str]] = []
+
+    def _derive_floor_failures(
+        scope: str,
+        metrics: Dict[str, float],
+        floors: Dict[str, float],
+        aliases: Dict[str, str] | None = None,
+    ) -> None:
+        aliases = aliases or {}
+        for floor_name, floor in floors.items():
+            actual = metrics[aliases.get(floor_name, floor_name)]
+            if actual < floor:
+                expected_threshold_failures.append(
+                    (scope, floor_name, actual, floor, "threshold_floor")
+                )
+
+    retrieval_aliases = {"precision_at_k": "precision@k", "ndcg_at_k": "ndcg@k"}
+    _derive_floor_failures(
+        "aggregate", view["flat"]["aggregate"], aggregate_floors, retrieval_aliases
+    )
+    for language, metrics in view["keyed"]["by_language"].items():
+        _derive_floor_failures(
+            f"language:{language}", metrics, language_floors, retrieval_aliases
+        )
+    _derive_floor_failures(
+        "memory_recall",
+        view["flat"]["memory_recall"],
+        memory_floors,
+        retrieval_aliases,
+    )
+    _derive_floor_failures(
+        "classification", view["classification_metrics"], classification_floors
+    )
+
+    scorecard_regression = _require_bool(
+        _resolve(scorecard, label, ("regression",)),
+        f"{label}.regression",
+    )
+    failures = _resolve(scorecard, label, ("failures",))
     failures_path = f"{label}.failures"
     if not isinstance(failures, list):
         raise ScorecardCompareError(f"scorecard section at {failures_path} is not a list")
@@ -259,6 +673,110 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
                 )
         for key in FAILURE_ENTRY_NUMERIC_KEYS:
             _require_finite(entry[key], f"{failures_path}[{index}].{key}")
+        for key in ("scope", "metric"):
+            if not isinstance(entry[key], str) or not entry[key]:
+                raise ScorecardCompareError(
+                    f"malformed entry at {failures_path}[{index}]: invalid {key!r}"
+                )
+        kind = entry["kind"]
+        if kind not in {"threshold_floor", "categorical"}:
+            raise ScorecardCompareError(
+                f"malformed entry at {failures_path}[{index}]: invalid 'kind'"
+            )
+        if kind == "categorical":
+            if (
+                entry["scope"]
+                not in {"classification:hard_gate", "provisional_memory:hard_gate"}
+                or entry["value"] != 1.0
+                or entry["threshold"] != 0.0
+            ):
+                raise ScorecardCompareError(
+                    f"categorical failure semantics are inconsistent at "
+                    f"{failures_path}[{index}]"
+                )
+        else:
+            if entry["scope"] in {
+                "classification:hard_gate",
+                "provisional_memory:hard_gate",
+            }:
+                raise ScorecardCompareError(
+                    f"hard-gate scope cannot be threshold-relative at "
+                    f"{failures_path}[{index}]"
+                )
+            if entry["value"] >= entry["threshold"]:
+                raise ScorecardCompareError(
+                    f"threshold-floor failure does not violate its floor at "
+                    f"{failures_path}[{index}]"
+                )
+    if scorecard_regression != bool(failures):
+        raise ScorecardCompareError(
+            f"scorecard regression flag contradicts failures at {label}"
+        )
+    categorical_scopes = {
+        entry["scope"] for entry in failures if entry["kind"] == "categorical"
+    }
+    required_categorical_scopes = {
+        scope
+        for scope, failed in (
+            ("classification:hard_gate", not view["hard_gate_passed"]),
+            (
+                "provisional_memory:hard_gate",
+                not view["provisional_memory_boundary"]["hard_gate_passed"],
+            ),
+        )
+        if failed
+    }
+    actual_hard_gate_scopes = {
+        scope
+        for scope in categorical_scopes
+        if scope in {"classification:hard_gate", "provisional_memory:hard_gate"}
+    }
+    if actual_hard_gate_scopes != required_categorical_scopes:
+        raise ScorecardCompareError(
+            f"hard-gate evidence contradicts categorical failures at {label}"
+        )
+    expected_categorical_metrics = {
+        "classification:hard_gate": sorted(
+            "mutation_side_confusion:"
+            f"{entry['case_id']}->{entry['predicted_intent']}"
+            for entry in confusions
+        ),
+        "provisional_memory:hard_gate": sorted(
+            f"{entry['case_id']}:{entry['reason']}"
+            for entry in view["provisional_memory_boundary"]["failures"]
+        ),
+    }
+    for scope, expected_metrics in expected_categorical_metrics.items():
+        actual_metrics = sorted(
+            entry["metric"]
+            for entry in failures
+            if entry["kind"] == "categorical" and entry["scope"] == scope
+        )
+        if actual_metrics != expected_metrics:
+            raise ScorecardCompareError(
+                f"categorical metrics contradict nested evidence for {label}.{scope}"
+            )
+    failure_signatures = {
+        (entry["scope"], entry["metric"], entry["kind"]) for entry in failures
+    }
+    if len(failure_signatures) != len(failures):
+        raise ScorecardCompareError(f"duplicate scorecard failure at {label}.failures")
+    actual_threshold_failures = sorted(
+        (
+            entry["scope"],
+            entry["metric"],
+            float(entry["value"]),
+            float(entry["threshold"]),
+            entry["kind"],
+        )
+        for entry in failures
+        if entry["kind"] == "threshold_floor"
+    )
+    if actual_threshold_failures != sorted(expected_threshold_failures):
+        raise ScorecardCompareError(
+            f"threshold failures contradict configured floors at {label}"
+        )
+    view["floor_regression"] = scorecard_regression
     view["failures"] = failures
 
     return view
@@ -401,6 +919,17 @@ def _compare_validated(baseline: Dict, candidate: Dict, tolerance: float) -> Dic
             baseline["confusion_matrix"], candidate["confusion_matrix"]
         ),
     }
+    provisional_memory_boundary = {
+        "baseline_hard_gate_passed": baseline["provisional_memory_boundary"][
+            "hard_gate_passed"
+        ],
+        "candidate_hard_gate_passed": candidate["provisional_memory_boundary"][
+            "hard_gate_passed"
+        ],
+        "candidate_failures": candidate["provisional_memory_boundary"]["failures"],
+        "candidate_n_cases": candidate["provisional_memory_boundary"]["n_cases"],
+        "candidate_languages": candidate["provisional_memory_boundary"]["languages"],
+    }
 
     def _flag(kind: str) -> List[Dict]:
         flagged: List[Dict] = []
@@ -421,7 +950,10 @@ def _compare_validated(baseline: Dict, candidate: Dict, tolerance: float) -> Dic
     regressions = _flag("regression")
     improvements = _flag("improved")
 
-    hard_gate_regression = not classification_confusion["candidate_hard_gate_passed"]
+    hard_gate_regression = (
+        not classification_confusion["candidate_hard_gate_passed"]
+        or not provisional_memory_boundary["candidate_hard_gate_passed"]
+    )
     candidate_floor_regression = candidate["floor_regression"]
 
     if hard_gate_regression or candidate_floor_regression or missing_slices or regressions:
@@ -436,6 +968,7 @@ def _compare_validated(baseline: Dict, candidate: Dict, tolerance: float) -> Dic
         "tolerance": tolerance,
         "slices": slices,
         "classification_confusion": classification_confusion,
+        "provisional_memory_boundary": provisional_memory_boundary,
         "candidate_gate": {
             "regression": candidate_floor_regression,
             "failures": candidate["failures"],
@@ -544,6 +1077,21 @@ def render_compare_summary(comparison: Dict) -> str:
     else:
         lines.append("  Confusion-matrix delta: none.")
 
+    boundary = comparison["provisional_memory_boundary"]
+    lines.append("")
+    lines.append("Provisional-memory authority hard gate:")
+    lines.append(
+        "  baseline="
+        f"{'pass' if boundary['baseline_hard_gate_passed'] else 'FAIL'} "
+        f"candidate={'pass' if boundary['candidate_hard_gate_passed'] else 'FAIL'} "
+        f"(n={boundary['candidate_n_cases']}; "
+        f"languages={','.join(boundary['candidate_languages'])})"
+    )
+    if boundary["candidate_failures"]:
+        lines.append("  HARD GATE VIOLATIONS in candidate (blocking):")
+        for failure in boundary["candidate_failures"]:
+            lines.append(f"    - {failure['case_id']}: {failure['reason']}")
+
     if comparison["missing_slices"]:
         lines.append("")
         lines.append("Slices present in baseline but MISSING in candidate (blocking):")
@@ -566,10 +1114,16 @@ def render_compare_summary(comparison: Dict) -> str:
         lines.append("")
         lines.append("Candidate scorecard failed its own configured floors:")
         for failure in comparison["candidate_gate"]["failures"]:
-            lines.append(
-                f"  - {failure['scope']}: {failure['metric']}={failure['value']:.4f} "
-                f"< required {failure['threshold']:.4f}"
-            )
+            if failure.get("kind") == "categorical":
+                lines.append(
+                    f"  - {failure['scope']}: categorical violation: "
+                    f"{failure['metric']}"
+                )
+            else:
+                lines.append(
+                    f"  - {failure['scope']}: {failure['metric']}="
+                    f"{failure['value']:.4f} < required {failure['threshold']:.4f}"
+                )
 
     lines.append("")
     lines.append(f"VERDICT: {comparison['verdict']}")

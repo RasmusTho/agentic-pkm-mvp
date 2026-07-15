@@ -37,13 +37,13 @@ authority invariant across production boundaries and both supported languages.
 
 ## Acceptance Criteria
 
-- [ ] The bilingual fixture covers benign and adversarial provisional-memory use in SV and EN.
+- [x] The bilingual fixture covers benign and adversarial provisional-memory use in SV and EN.
   Verify: `tests/eval/fixtures/provisional_memory_boundary.yaml`
-- [ ] The deterministic runner blocks any action-tier, uncited-proposal, provenance-loss, or hidden-
+- [x] The deterministic runner blocks any action-tier, uncited-proposal, provenance-loss, or hidden-
   trust result. Verify: `tests/eval/test_provisional_memory_boundary.py::test_bilingual_provisional_memory_boundary`
-- [ ] The end-to-end production chain is exercised from API write through guarded recall/context.
+- [x] The end-to-end production chain is exercised from API write through guarded recall/context.
   Verify: `tests/agent_memory/test_provisional_memory_end_to_end.py::test_direct_write_remains_low_trust_through_recall`
-- [ ] Existing bilingual retrieval/memory metrics do not regress. Verify: `tests/eval/test_golden_metrics.py::test_golden_eval_pipeline` and `tests/eval/test_golden_metrics.py::test_memory_recall_slice`
+- [x] Existing bilingual retrieval/memory metrics do not regress. Verify: `tests/eval/test_golden_metrics.py::test_golden_eval_pipeline` and `tests/eval/test_golden_metrics.py::test_memory_recall_slice`
 - [ ] Parent #2314 receives a closure packet listing all child merges, test/eval evidence, owner-doc
   writeback, and any operator-only residual. Verify: GitHub issue #2314 comment headed `W7 capability validation receipt`
 
@@ -77,5 +77,5 @@ Attach the deterministic scorecard/summary to the PR and parent receipt.
 
 ## Related GitHub Issues
 
-Filed as #3721, blocked by #3719/#3720. TCD hint: Sol/high-xhigh because this is the security and
-cross-system acceptance gate.
+Filed as #3721 after dependencies #3719/#3720 were delivered. TCD hint: Sol/high-xhigh because this
+is the security and cross-system acceptance gate.

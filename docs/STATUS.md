@@ -259,6 +259,11 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   support. It cannot become action-authorizing, set `may_write`, trigger APPLY, or mutate canonical
   Vault Markdown; malformed artifact identities and governed-execution attempts fail closed with
   content-free exclusion/recall receipts.
+- The provisional-memory authority boundary is covered by a deterministic 16-case Swedish/English
+  hard gate in the default eval scorecard (#3721). Its frozen-baseline compare path validates the
+  complete canonical case proof (identity, enums, bilingual family coverage, authority semantics,
+  categorical failures, and gate consistency) and fails closed on truncated or contradictory
+  scorecards; the proof remains derived evidence and carries no memory authority.
 - Runtime AgentState contract unification is shipped for the current ASK, generic graph, reasoning
   graph-builder, and PanelAgent state surfaces: `app/agents/runtime_state.py` defines the shared
   trace/authority/proposal/receipt linkage fields and the existing state classes now expose or adapt
