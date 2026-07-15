@@ -31,7 +31,7 @@ from app.dispatcher.verification_agent_loop import (
     VerificationAgentLoop,
     valid_human_exception_packet,
 )
-from tests.dispatcher.verification_helpers import HEAD, ledger, request
+from tests.dispatcher.verification_helpers import HEAD, REPO, ledger, request
 
 
 @dataclass
@@ -263,7 +263,8 @@ def eligible_pr(**updates):
     value = {
         "number": 3603, "state": "open", "draft": False, "merged_at": None,
         "body": "Governing-Issue: #3603\n\nRefs #3603",
-        "base": {"ref": "main"}, "head": {"ref": "branch", "sha": HEAD},
+        "base": {"ref": "main", "repo": {"full_name": REPO}},
+        "head": {"ref": "branch", "sha": HEAD},
     }
     value.update(updates)
     return value

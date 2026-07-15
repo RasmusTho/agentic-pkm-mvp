@@ -37,7 +37,9 @@ from app.dispatcher.verification_dispatch import (
     VerificationDispatchLedger,
     VerificationRun,
     VerificationSubscriptionBusy,
+    _AuthenticatedVerificationRequest,
     _authenticated_verification_request,
+    _live_observed_verification_request,
 )
 from app.dispatcher.verification_agent_loop import (
     HUMAN_EXCEPTION_PACKET_FIELDS,
@@ -2369,6 +2371,36 @@ class VerificationConsumer:
             )
 
     def consume(self, request: Mapping[str, object]) -> VerificationRun:
+        intake_pr: Mapping[str, object] | None = None
+        if isinstance(request, _AuthenticatedVerificationRequest):
+            repository = request.get("repository")
+            pr_number = request.get("pr_number")
+            if (
+                not isinstance(repository, str)
+                or not isinstance(pr_number, int)
+                or isinstance(pr_number, bool)
+                or pr_number <= 0
+            ):
+                raise ValueError("malformed authenticated verification request")
+            intake_pr = self.truth.pull_request(repository, pr_number)
+            issue_contract = resolve_issue_contract(intake_pr.get("body"))
+            request = _live_observed_verification_request(
+                request,
+                observed_repository=_nested(
+                    intake_pr, "base", "repo", "full_name"
+                ),
+                observed_pr_number=intake_pr.get("number"),
+                observed_head_sha=_nested(intake_pr, "head", "sha"),
+                observed_state=intake_pr.get("state"),
+                observed_merged_at=intake_pr.get("merged_at"),
+                observed_draft=intake_pr.get("draft"),
+                observed_linked_issue=(
+                    issue_contract[0] if issue_contract is not None else None
+                ),
+                observed_supporting_issues=(
+                    issue_contract[1] if issue_contract is not None else None
+                ),
+            )
         run = self.ledger.ingest(request)
         if run.status in {"completed", "failed", "needs_human", "superseded"}:
             return run
@@ -2379,7 +2411,7 @@ class VerificationConsumer:
         pending_delivered = self._pending_delivered_receipt(run)
         if pending_delivered is not None:
             return self._replay_pending_delivered(run, pending_delivered)
-        pr = self.truth.pull_request(run.repository, run.pr_number)
+        pr = intake_pr or self.truth.pull_request(run.repository, run.pr_number)
         checks = self.truth.checks(run.repository, run.head_sha)
         rejection = live_truth_rejection(run, pr, checks)
         if rejection:
