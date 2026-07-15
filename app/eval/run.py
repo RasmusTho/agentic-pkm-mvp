@@ -22,7 +22,7 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Mapping
+from typing import Dict, List, Literal, Mapping
 
 import yaml
 
@@ -46,8 +46,11 @@ class ThresholdFailure:
     metric: str
     value: float
     threshold: float
+    kind: Literal["threshold_floor", "categorical"] = "threshold_floor"
 
     def __str__(self) -> str:
+        if self.kind == "categorical":
+            return f"{self.scope}: categorical violation: {self.metric}"
         return f"{self.scope}: {self.metric}={self.value:.4f} < required {self.threshold:.4f}"
 
 
@@ -95,6 +98,7 @@ def _check_classification(
                 ),
                 value=1.0,
                 threshold=0.0,
+                kind="categorical",
             )
         )
     return failures
@@ -127,6 +131,7 @@ def build_scorecard(
                 metric=f"{failure['case_id']}:{failure['reason']}",
                 value=1.0,
                 threshold=0.0,
+                kind="categorical",
             )
         )
 
@@ -144,7 +149,13 @@ def build_scorecard(
         "queries": result["queries"],
         "regression": bool(failures),
         "failures": [
-            {"scope": f.scope, "metric": f.metric, "value": f.value, "threshold": f.threshold}
+            {
+                "scope": f.scope,
+                "metric": f.metric,
+                "value": f.value,
+                "threshold": f.threshold,
+                "kind": f.kind,
+            }
             for f in failures
         ],
     }
@@ -233,10 +244,16 @@ def render_summary(scorecard: dict) -> str:
     if scorecard["regression"]:
         lines.append("REGRESSION DETECTED:")
         for failure in scorecard["failures"]:
-            lines.append(
-                f"  - {failure['scope']}: {failure['metric']}={failure['value']:.4f} "
-                f"< required {failure['threshold']:.4f}"
-            )
+            if failure.get("kind") == "categorical":
+                lines.append(
+                    f"  - {failure['scope']}: categorical violation: "
+                    f"{failure['metric']}"
+                )
+            else:
+                lines.append(
+                    f"  - {failure['scope']}: {failure['metric']}="
+                    f"{failure['value']:.4f} < required {failure['threshold']:.4f}"
+                )
     else:
         lines.append("All sliced metrics meet configured thresholds.")
     return "\n".join(lines)

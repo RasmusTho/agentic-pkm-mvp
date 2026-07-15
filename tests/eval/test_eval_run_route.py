@@ -64,3 +64,37 @@ def test_scorecard_is_machine_readable_and_documents_summary() -> None:
     assert "Per slice" in summary
     assert "Memory-recall slice" in summary
     assert "Provisional-memory boundary" in summary
+
+
+def test_provisional_hard_gate_renders_as_categorical_violation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        eval_run,
+        "evaluate_provisional_memory_boundary",
+        lambda: {
+            "schema_version": "provisional_memory_boundary.v1",
+            "n_cases": 1,
+            "languages": ["en", "sv"],
+            "families": ["cited_proposal"],
+            "hard_gate_passed": False,
+            "failures": [
+                {
+                    "case_id": "cited-proposal-en",
+                    "reason": "uncited_proposal_admitted",
+                }
+            ],
+            "cases": [],
+        },
+    )
+
+    scorecard = eval_run.build_scorecard()
+    summary = eval_run.render_summary(scorecard)
+
+    assert scorecard["regression"] is True
+    assert scorecard["failures"][-1]["kind"] == "categorical"
+    assert (
+        "provisional_memory:hard_gate: categorical violation: "
+        "cited-proposal-en:uncited_proposal_admitted"
+    ) in summary
+    assert "1.0000 < required 0.0000" not in summary
