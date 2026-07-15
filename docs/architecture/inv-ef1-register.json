@@ -296,6 +296,62 @@
       "issue": "#2892"
     },
     {
+      "artifact": "docs/BUILDEROPS_CONTROL_PLANE/API_ONLY_CLIENT_CUTOVER.md",
+      "category": "iii",
+      "why_load_bearing": "BuilderOps specification names the owner-settled control-plane host role to keep the deployment and client boundary unambiguous.",
+      "disposition": "stay",
+      "issue": "#3788"
+    },
+    {
+      "artifact": "docs/BUILDEROPS_CONTROL_PLANE/AUTHORITY_CUTOVER_PRODUCT_SEPARATION.md",
+      "category": "iii",
+      "why_load_bearing": "BuilderOps specification names the owner-settled control-plane host role to keep the cutover and executor boundary unambiguous.",
+      "disposition": "stay",
+      "issue": "#3788"
+    },
+    {
+      "artifact": "docs/BUILDEROPS_CONTROL_PLANE/DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md",
+      "category": "iii",
+      "why_load_bearing": "BuilderOps specification names the owner-settled control-plane host role to reconcile the existing host-bound orchestration work.",
+      "disposition": "stay",
+      "issue": "#3788"
+    },
+    {
+      "artifact": "docs/BUILDEROPS_CONTROL_PLANE/INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md",
+      "category": "iii",
+      "why_load_bearing": "BuilderOps specification names the owner-settled control-plane host role to define the independent deployment lifecycle.",
+      "disposition": "stay",
+      "issue": "#3788"
+    },
+    {
+      "artifact": "docs/BUILDEROPS_CONTROL_PLANE/LEGACY_AUTHORITY_MIGRATION.md",
+      "category": "iii",
+      "why_load_bearing": "BuilderOps specification names the authorized host roots that must be inventoried during authority migration.",
+      "disposition": "stay",
+      "issue": "#3788"
+    },
+    {
+      "artifact": "docs/BUILDEROPS_CONTROL_PLANE/PARENT_FEATURE_ISSUE.md",
+      "category": "iii",
+      "why_load_bearing": "BuilderOps validation contract names the owner-settled control-plane host so acceptance evidence binds the intended deployment.",
+      "disposition": "stay",
+      "issue": "#3788"
+    },
+    {
+      "artifact": "docs/BUILDEROPS_CONTROL_PLANE/POSTGRES_TRANSACTION_KERNEL.md",
+      "category": "iii",
+      "why_load_bearing": "BuilderOps specification names the owner-settled client/host boundary while excluding deployment work from the storage slice.",
+      "disposition": "stay",
+      "issue": "#3788"
+    },
+    {
+      "artifact": "docs/BUILDEROPS_CONTROL_PLANE/README.md",
+      "category": "iii",
+      "why_load_bearing": "BuilderOps capability specification names the owner-settled control-plane host throughout topology, ordering, and acceptance.",
+      "disposition": "stay",
+      "issue": "#3788"
+    },
+    {
       "artifact": "docs/CAPABILITY_KNOWLEDGE_MODEL/DEV_OVERVIEW_HTML_PROJECTION.md",
       "category": "iv",
       "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
@@ -1178,6 +1234,27 @@
       "issue": "#2892"
     },
     {
+      "artifact": "docs/adr/ADR-0062-builderops-ecosystem-wide-enabling-system.md",
+      "category": "ii",
+      "why_load_bearing": "The governance decision record preserves its accountable owner attribution.",
+      "disposition": "stay",
+      "issue": "#3788"
+    },
+    {
+      "artifact": "docs/adr/ADR-0062-builderops-ecosystem-wide-enabling-system.md",
+      "category": "iii",
+      "why_load_bearing": "The governance decision names the owner-settled control-plane host and client-machine topology.",
+      "disposition": "stay",
+      "issue": "#3788"
+    },
+    {
+      "artifact": "docs/adr/ADR-0062-builderops-ecosystem-wide-enabling-system.md",
+      "category": "iv",
+      "why_load_bearing": "The governance decision names the existing ecosystem consumer repository whose multi-repo scope is load-bearing.",
+      "disposition": "stay",
+      "issue": "#3788"
+    },
+    {
       "artifact": "docs/adr/INDEX.md",
       "category": "iv",
       "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
@@ -1218,6 +1295,13 @@
       "why_load_bearing": "Documentation preserves a truthful historical or operational reference for the Builder System.",
       "disposition": "stay",
       "issue": "#2892"
+    },
+    {
+      "artifact": "docs/audits/BUILDEROPS_CONTROL_PLANE_2026-07-15.md",
+      "category": "iii",
+      "why_load_bearing": "The evidence snapshot names the observed and target control-plane host to reconcile current deployment with the owner-settled topology.",
+      "disposition": "stay",
+      "issue": "#3788"
     },
     {
       "artifact": "docs/audits/MIMER_WHOLE_SYSTEM_INTEGRATION_2026-07-05.md",
