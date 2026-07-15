@@ -34,6 +34,7 @@ from app.eval.compare import (
     render_compare_summary,
 )
 from app.eval.golden import MEMORY_RECALL_ROUTE_INTENTS, evaluate_bilingual_golden_set
+from app.eval.provisional_memory_boundary import evaluate_provisional_memory_boundary
 
 THRESHOLDS_PATH = Path("config") / "eval_thresholds.yaml"
 SCORECARD_PATH = Path("runtime") / "eval" / "scorecard.json"
@@ -111,6 +112,7 @@ def build_scorecard(
     classification = evaluate_classification_golden_set(
         completions=classification_completions
     )
+    provisional_memory_boundary = evaluate_provisional_memory_boundary()
 
     failures: List[ThresholdFailure] = []
     failures += _check_bucket("aggregate", result["aggregate"], thresholds.get("aggregate"))
@@ -118,6 +120,15 @@ def build_scorecard(
         failures += _check_bucket(f"language:{lang}", metrics, thresholds.get("per_language"))
     failures += _check_bucket("memory_recall", result["memory_recall"], thresholds.get("memory_recall"))
     failures += _check_classification(classification, thresholds.get("classification"))
+    for failure in provisional_memory_boundary["failures"]:
+        failures.append(
+            ThresholdFailure(
+                scope="provisional_memory:hard_gate",
+                metric=f"{failure['case_id']}:{failure['reason']}",
+                value=1.0,
+                threshold=0.0,
+            )
+        )
 
     scorecard = {
         "schema_version": "eval_scorecard.v1",
@@ -128,6 +139,7 @@ def build_scorecard(
         "by_slice": result["by_slice"],
         "memory_recall": result["memory_recall"],
         "memory_recall_route_intents": sorted(MEMORY_RECALL_ROUTE_INTENTS),
+        "provisional_memory_boundary": provisional_memory_boundary,
         "classification": classification,
         "queries": result["queries"],
         "regression": bool(failures),
@@ -172,6 +184,20 @@ def render_summary(scorecard: dict) -> str:
         f"Memory-recall slice ({'+'.join(scorecard['memory_recall_route_intents'])}): "
         f"precision@k={mr['precision@k']:.4f} ndcg@k={mr['ndcg@k']:.4f} (n={mr['count']})"
     )
+    lines.append("")
+    boundary = scorecard["provisional_memory_boundary"]
+    lines.append(
+        "Provisional-memory boundary "
+        f"(offline bilingual hard gate, n={boundary['n_cases']}):"
+    )
+    lines.append(
+        "  languages="
+        + ",".join(boundary["languages"])
+        + " hard_gate="
+        + ("pass" if boundary["hard_gate_passed"] else "FAIL")
+    )
+    for failure in boundary["failures"]:
+        lines.append(f"  - {failure['case_id']}: {failure['reason']}")
     lines.append("")
     cls = scorecard["classification"]
     lines.append(f"Intent-classification slice ({cls['mode']}, n={cls['n_cases']}):")

@@ -56,9 +56,11 @@ def test_scorecard_is_machine_readable_and_documents_summary() -> None:
     assert "by_language" in scorecard
     assert "by_slice" in scorecard
     assert "memory_recall" in scorecard
+    assert scorecard["provisional_memory_boundary"]["hard_gate_passed"] is True
 
     # Human summary renders without raising and mentions key sections.
     summary = eval_run.render_summary(scorecard)
     assert "Per language" in summary
     assert "Per slice" in summary
     assert "Memory-recall slice" in summary
+    assert "Provisional-memory boundary" in summary

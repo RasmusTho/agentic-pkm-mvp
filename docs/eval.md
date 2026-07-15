@@ -119,6 +119,18 @@ intent-classification golden set (`app.eval.classification`), reusing
 eval framework. It never calls a live LLM; DeepEval/Ragas suites stay opt-in
 behind `@pytest.mark.eval` and are a separate, non-default path.
 
+The same runner also executes the categorical provisional-memory authority gate from
+`tests/eval/fixtures/provisional_memory_boundary.yaml` through
+`app.eval.provisional_memory_boundary`. Its 16 deterministic Swedish/English cases cover benign
+read and cited-proposal use plus direct-write poisoning, prompt injection, false authority claims,
+provenance loss, citation omission, and attempted APPLY escalation. Any action-tier admission,
+uncited proposal influence, hidden trust/review/provenance, write authority, artifact mutation, or
+claim-bearing receipt is a hard `provisional_memory:hard_gate` failure. This section is not
+threshold-relative and calls no live model; the scorecard records only normalized outcomes, never
+random artifact ids or claim text. The composed production API → Markdown/receipt → guarded
+recall/ContextEnvelope path is separately locked by
+`tests/agent_memory/test_provisional_memory_end_to_end.py`.
+
 What it reports, all computed over the W2-EVAL-01 bilingual seed
 (`docs/eval/retrieval_bilingual_seed.yaml` +
 `data/golden/bilingual_corpus.jsonl` / `data/golden/bilingual_judgments.json`):
