@@ -44,7 +44,10 @@ those stores isolated. `/app/tmp`, `/app/runtime`, the image layer, `$HOME`, and
 vault are not valid authoritative container locations. Native-host installs retain their normal
 XDG/macOS app-data location. `DESIGN_HANDOFF_APP_LOCAL_SETTINGS` remains an explicit deployment
 override only when the preflight proves that the resolved parent is durable and shared by every
-enabled consumer.
+enabled consumer. Startup and every registration/relocation transaction also resolve the override
+and all known/candidate content roots and fail closed when the registry file or any ancestor/
+descendant alias lies inside a content vault. This disjointness check runs again when a new root is
+introduced, so an override chosen before the first registration cannot become content-owned later.
 
 Per-channel registry isolation is not sufficient because current containers can see shared host
 roots. A separate host-local **channel ownership ledger** is mounted consistently into every channel
@@ -304,10 +307,12 @@ Partial delivery remains fail-closed:
 - after task 03 but before issues 05A–06D, migrated callers may use ActiveContextSet while unmigrated
   callers stay on named single-vault adapters; the architecture guard records the mixed state and
   no global "multi-vault delivered" claim is allowed;
-- after issue 05B but before issue 06B, the existing picker alone commits #3163's named monotonic
-  cross-process compatibility revision, which the separately deployed watcher reconciles before its
-  single-watcher reload/rebind; an in-process event is only a hint and scoped request/session
-  selection does not mutate the record. Issue 06B atomically hands
+- after issue 05B but before issue 06B, the existing picker alone prepares #3163's named monotonic
+  cross-process compatibility revision. An enabled watcher acknowledges quiescence on the prepared
+  revision before the picker selection commits, then applies/reloads and resumes only after that
+  commit; an intentionally disabled/absent watcher is represented by durable `no_lifecycle` posture
+  and requires no process acknowledgement. An in-process event is only a hint and scoped request/
+  session selection does not mutate the record. Issue 06B atomically hands
   that live binding plus the MVR-05 scalar worker to versioned durable singleton/empty state before
   disabling the bridge or enabling intent mutation;
 - after issue 05B but before issue 05C, scoped session/override writes and any write whose resolved
@@ -323,11 +328,13 @@ Partial delivery remains fail-closed:
 - after issue 06D, legacy choose/open continues to rebind only `compatibility` lifecycle intent by
   committing it before the supervisor wake-up hint; the first governed background add/remove enters
   `explicit` mode, after which picker and default changes cannot mutate the explicit background set;
-- after issue 05D but before issue 06D, the interim scalar worker dispatches a versioned vault-bound row
+- from issue 05A through issue 06B, the interim scalar worker dispatches a versioned vault-bound row
   only when the row uniquely matches the worker's explicit current single-binding compatibility
-  context, current authorization, binding revision, and resolved root; extra remembered registry
-  entries do not block that match. Ambiguous/mismatched rows remain pending and unacknowledged, safe global work
-  continues, and only issue 06D enables multi-binding dispatch and governed quarantine recovery;
+  context, current authorization, binding revision, and resolved root, and it holds the binding's
+  shared effect lease from final validation through dispatch, acknowledgement, and receipt. Extra
+  remembered registry entries do not block that match. Ambiguous/mismatched rows remain pending and
+  unacknowledged, safe global work continues, and only issue 06D enables multi-binding dispatch and
+  governed quarantine recovery;
 - a dimension containing an unknown, stale, or unauthorized member fails the whole production
   context resolution; it never returns a partial set, excludes the member, or substitutes another;
 - if one background binding fails, its lifecycle and health remain failed while other bindings

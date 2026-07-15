@@ -32,7 +32,10 @@ This slice promotes the existing seed without changing content-vault authority.
   `/app/instance-state` in every registry consumer and resolve the production store to
   `/app/instance-state/agentic-pkm/vault-registry.md`. Migrate once from the legacy resolved
   app-local path by atomic validated copy with provenance; never treat the image layer, `$HOME`,
-  `/app/tmp`, or `/app/runtime` as durable registry storage.
+  `/app/tmp`, `/app/runtime`, or a content vault as durable registry storage. Startup and every
+  registration/relocation resolve `DESIGN_HANDOFF_APP_LOCAL_SETTINGS` plus all known/candidate
+  content roots and reject any registry path whose canonical identity or ancestor/descendant alias
+  lies inside one of those roots; this repeats when the first or a later vault is introduced.
 - Create and maintain the authoritative registry, lock metadata, transaction temporary files,
   validated snapshots, and rollback exports as owner-only mode `0600` (directories `0700`) on
   native hosts and shared volumes. Preflight rejects permissive or unfixable ownership/mode before
@@ -287,6 +290,10 @@ never encounter and truncate authoritative new-schema state before fork/merge pr
 - [ ] **MVR-01B:** Compose, startup, and migration preflight fail before recreate when the instance-state mount
   is absent, not writable, channel-colliding, or resolves differently between consumers.
   - Verify: `tests/ops/test_instance_state_volume_contract.py::test_registry_volume_and_preflight_cover_all_consumers`
+- [ ] **MVR-01B:** Startup and registration/relocation reject an explicit app-local registry override
+  inside any known or candidate content root, including symlink/bind aliases and an override chosen
+  before the first vault was registered.
+  - Verify: `tests/ops/test_instance_state_volume_contract.py::test_registry_override_cannot_become_content_owned`
 - [ ] **MVR-01B:** Prod uses a protected external instance-state volume; a `down -v`/volume-loss drill
   restores the newest checksum-verified registry, default, dimension, principal/background state,
   runtime floors, host-global ownership ledger, and the actual protected ledger HMAC key/key-ID/
@@ -396,7 +403,7 @@ family-wide command that requires a later sealed slice.
 
 ### MVR-01B validation
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_vault_registry_container_durability.py::test_registry_survives_recreate_and_is_shared_cross_process tests/integration/test_vault_registry_channel_isolation.py::test_overlapping_content_roots_cannot_be_active_in_two_channels tests/integration/test_vault_registry_channel_isolation.py::test_same_channel_nested_vaults_preserve_child_boundary tests/integration/test_vault_registry_channel_isolation.py::test_transfer_is_dormant_until_foreground_ownership_floor tests/integration/test_vault_registry_channel_isolation.py::test_relocation_is_dormant_until_all_consumer_effect_leases tests/integration/test_vault_registry_channel_isolation.py::test_registration_removal_is_dormant_until_all_consumer_floors tests/integration/test_vault_registry_channel_isolation.py::test_first_upgrade_seeds_all_legacy_channel_owners_before_claim tests/integration/test_vault_registry_channel_isolation.py::test_env_only_bootstrap_atomically_enrolls_one_stable_binding_or_fails_closed tests/integration/test_vault_registry_channel_isolation.py::test_uninitialized_env_upgrade_preserves_read_only_binding_without_writes tests/integration/test_vault_registry_channel_isolation.py::test_host_global_ledger_key_is_durable_shared_and_rotates_atomically tests/integration/test_vault_registry_rollback.py::test_previous_image_reads_latest_post_migration_registry_state tests/ops/test_instance_state_volume_contract.py::test_legacy_registry_export_happens_after_writer_quiescence tests/ops/test_instance_state_volume_contract.py::test_registry_volume_and_preflight_cover_all_consumers tests/ops/test_instance_state_volume_contract.py::test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restore`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_vault_registry_container_durability.py::test_registry_survives_recreate_and_is_shared_cross_process tests/integration/test_vault_registry_channel_isolation.py::test_overlapping_content_roots_cannot_be_active_in_two_channels tests/integration/test_vault_registry_channel_isolation.py::test_same_channel_nested_vaults_preserve_child_boundary tests/integration/test_vault_registry_channel_isolation.py::test_transfer_is_dormant_until_foreground_ownership_floor tests/integration/test_vault_registry_channel_isolation.py::test_relocation_is_dormant_until_all_consumer_effect_leases tests/integration/test_vault_registry_channel_isolation.py::test_registration_removal_is_dormant_until_all_consumer_floors tests/integration/test_vault_registry_channel_isolation.py::test_first_upgrade_seeds_all_legacy_channel_owners_before_claim tests/integration/test_vault_registry_channel_isolation.py::test_env_only_bootstrap_atomically_enrolls_one_stable_binding_or_fails_closed tests/integration/test_vault_registry_channel_isolation.py::test_uninitialized_env_upgrade_preserves_read_only_binding_without_writes tests/integration/test_vault_registry_channel_isolation.py::test_host_global_ledger_key_is_durable_shared_and_rotates_atomically tests/integration/test_vault_registry_rollback.py::test_previous_image_reads_latest_post_migration_registry_state tests/ops/test_instance_state_volume_contract.py::test_legacy_registry_export_happens_after_writer_quiescence tests/ops/test_instance_state_volume_contract.py::test_registry_volume_and_preflight_cover_all_consumers tests/ops/test_instance_state_volume_contract.py::test_registry_override_cannot_become_content_owned tests/ops/test_instance_state_volume_contract.py::test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restore`
 - Verify the 01B PR diff contains its mapped owner-doc targets in
   `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md`,
   `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, and `docs/RELEASE_CHANNELS/README.md`.

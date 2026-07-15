@@ -30,11 +30,18 @@ rationale) to record the supersession rather than leaving it as if still current
 
 ## What This Task Does
 
-- Commits selection/switch plus a monotonic rebind revision atomically in the shared app-local
-  selection state before returning success. The separately deployed watcher reconciles that
-  revision from the shared seam, then re-resolves the root → reloads vault-scoped settings via the
-  SETTINGS-01 path (one loader, not a second one — see capability Cross-Task Invariants) → resumes
-  ingest against the new root. `VaultChangedEvent` (emitted by `VaultManager._emit_changed`) remains
+- Runs selection/switch plus rebind as a recoverable prepare → commit → resume transaction in the
+  shared app-local selection state before returning success. When the watcher lifecycle is enabled,
+  the separately deployed watcher drains its captured old tick and durably acknowledges the prepare
+  revision while quiescent; it does not load, scan, emit, or auto-execute against the candidate root.
+  The picker then commits selection plus compatibility binding/revision and publishes resume. Only
+  after observing that committed resume may the watcher re-resolve the root → reload vault-scoped
+  settings via the SETTINGS-01 path (one loader, not a second one — see capability Cross-Task
+  Invariants) → resume ingest against the new root. Pre-commit failure cancels while the new root has
+  no watcher effects; post-commit recovery rolls forward and keeps ingress blocked until resume.
+  An intentionally disabled or omitted watcher is represented durably as `no_lifecycle`, so picker
+  commit succeeds without waiting for a nonexistent acknowledgement. `VaultChangedEvent` (emitted by
+  `VaultManager._emit_changed`) remains
   an optional same-process wake-up hint; it is not delivery between the API and watcher containers,
   and restart/event loss converges from the durable revision.
 - Upgrades the advisory `ingest_binding` status (`bound`/`diverged`/`unbound`/`unknown`) so
@@ -62,13 +69,18 @@ the UI says one vault and ingest watches another — captures silently vanish fr
 
 - [ ] Selecting a vault via the production selection path rebinds the watcher ingest root in the
       separately deployed watcher process; a file created in the newly selected vault is picked up
-      by the next tick.
+      only after prepare/quiesce, selection commit, and resume.
   - Verify: `tests/watcher/test_ingest_binding_follows_selection.py::test_selection_rebinds_ingest`
     (enforcement AC — drives the production API process and a separate watcher process/container,
     asserts commit-before-success plus revision reconciliation, and never calls the rebind helper)
 - [ ] Switching vaults mid-run rebinds cleanly: in-flight tick completes against the old root, next
       tick runs against the new root, `ingest_binding` reflects each state truthfully.
   - Verify: `tests/watcher/test_ingest_binding_follows_selection.py::test_switch_is_clean_and_truthful`
+- [ ] A fault at every prepare/acknowledge/selection-commit/resume boundary produces no effect in the
+      candidate vault before selection commit and recovers forward after commit; a configured
+      `no_lifecycle` watcher posture completes the foreground selection without a process ack.
+  - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_prepare_commit_resume_is_failure_atomic`
+  - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_disabled_watcher_is_durable_no_lifecycle`
 - [ ] Rebind triggers the SETTINGS-01 settings reload for the new vault (vault-scoped settings
       follow the vault; one bundle swap).
   - Verify: `tests/watcher/test_ingest_binding_follows_selection.py::test_rebind_reloads_settings`
@@ -93,9 +105,10 @@ the UI says one vault and ingest watches another — captures silently vanish fr
   demand — the owner has flagged this as a wanted future capability (see the Settings Spine
   README follow-up note), but it is a distinct, larger capability (multi-watcher lifecycle
   management) than "the one watcher follows the one active selection." This task's rebind
-  mechanism (commit shared revision, reconcile, re-resolve, resume) is the building block a future
+  mechanism (prepare shared revision, quiesce, commit, reconcile, resume) is the building block a future
   multi-watcher task would reuse per-instance, but instantiating multiple watchers is not this
-  task's scope.
+  task's scope. The single-watcher transaction is prepare/quiesce → picker commit → resume, not an
+  acknowledgement after the watcher has already performed effects in the candidate vault.
 - Multi-active-vault epic #2143 in the sense of concurrently serving more than one selected vault
   to the API/retrieval layer — still exactly one active vault at a time, as today. (This task is
   about the watcher *following* that one selection, not about serving several at once.)
@@ -105,10 +118,12 @@ the UI says one vault and ingest watches another — captures silently vanish fr
 
 ## Restart / Durability Posture
 
-The applied binding is in-memory, but its monotonic desired revision is durable in the shared
-app-local selection seam. On restart the watcher reconciles that record rather than relying on an
-event or process-local manager state, so it lands on the same vault the human last selected. If no
-durable selection exists, env bootstrap applies and the binding status says so.
+The applied binding is in-memory, but prepare/commit/resume phase and monotonic desired revision are
+durable in the shared app-local selection seam. On restart the watcher reconciles that record rather
+than relying on an event or process-local manager state: an uncommitted prepare cancels without new-
+root effects, while a committed selection recovers forward to resume. If no durable selection exists,
+env bootstrap applies and the binding status says so; if the lifecycle is intentionally disabled,
+the durable posture is `no_lifecycle` rather than a missing acknowledgement.
 
 ## Related Docs
 
