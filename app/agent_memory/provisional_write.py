@@ -19,6 +19,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 import yaml
+from yaml.constructor import ConstructorError
+from yaml.nodes import MappingNode
 
 from app.agent_memory.candidate import MemoryType
 from app.agent_memory.provisional_memory import (
@@ -44,8 +46,66 @@ _VISIBLE_PREFIX = (
     "> [!warning] Provisional / low trust — not authority\n"
     "> This memory may support reading or a cited proposal, but never APPLY or tool use.\n\n"
 )
+_PROVISIONAL_FRONTMATTER_KEYS = frozenset(
+    {
+        "uuid",
+        "artifact_class",
+        "artifact_type",
+        "source_role",
+        "authority_state",
+        "evidence_role",
+        "review_state",
+        "scope_id",
+        "principal_id",
+        "memory_type",
+        "sensitivity",
+        "created_by",
+        "created_at",
+        "provenance_event_ids",
+        "labels",
+    }
+)
 logger = logging.getLogger(__name__)
 ProvenanceRef = Annotated[str, Field(min_length=1, max_length=128)]
+
+
+class _UniqueKeySafeLoader(yaml.SafeLoader):
+    """Safe YAML loader that refuses ambiguous duplicate mapping keys."""
+
+
+def _construct_unique_mapping(
+    loader: yaml.SafeLoader,
+    node: MappingNode,
+    deep: bool = False,
+) -> dict[object, object]:
+    loader.flatten_mapping(node)
+    mapping: dict[object, object] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        try:
+            duplicate = key in mapping
+        except TypeError as exc:
+            raise ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                "found an unhashable mapping key",
+                key_node.start_mark,
+            ) from exc
+        if duplicate:
+            raise ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found duplicate key {key!r}",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_UniqueKeySafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_unique_mapping,
+)
 
 
 class ProvisionalWriteRequest(BaseModel):
@@ -440,9 +500,11 @@ def load_provisional_markdown(
     if not raw.startswith("---\n") or "\n---\n" not in raw[4:]:
         raise ValueError("provisional Markdown requires YAML frontmatter")
     yaml_text, body = raw[4:].split("\n---\n", 1)
-    metadata = yaml.safe_load(yaml_text)
+    metadata = yaml.load(yaml_text, Loader=_UniqueKeySafeLoader)
     if not isinstance(metadata, dict):
         raise ValueError("provisional Markdown frontmatter must be a mapping")
+    if set(metadata) != _PROVISIONAL_FRONTMATTER_KEYS:
+        raise ValueError("provisional Markdown frontmatter keys must match the schema exactly")
     if metadata.get("artifact_class") != "agentic_memory" or metadata.get("artifact_type") != "provisional_memory":
         raise ValueError("not a provisional-memory artifact")
     labels = metadata.get("labels")
