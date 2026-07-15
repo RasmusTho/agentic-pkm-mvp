@@ -48,6 +48,9 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
 set -eu
 touch {docker_marker!s}
 printf 'docker %s\\n' "$*" >> "${{FAKE_DEPLOY_EVENT_LOG:?}}"
+if [ -n "${{FAKE_DOCKER_FAIL_MATCH:-}}" ] && [[ "$*" == *"${{FAKE_DOCKER_FAIL_MATCH}}"* ]]; then
+  exit 24
+fi
 case "$*" in
   *" ps -q "*) printf '%s\\n' fake-capture-watch ;;
   inspect*) printf '%s\\n' healthy ;;
@@ -63,6 +66,12 @@ printf 'curl %s\n' "$*" >> "${FAKE_DEPLOY_EVENT_LOG:?}"
 case "$*" in
   *"/version"*) printf '{"git_sha":"%s"}\\n' "$FAKE_SHA" ;;
   *"/api/health"*) printf '{"ok":true,"required_ok":true,"version":{"git_sha":"%s"},"checks":{}}\\n' "$FAKE_SHA" ;;
+  *"/healthz"*)
+    if [ "${FAKE_API_LIVENESS:-pass}" = "fail" ]; then
+      exit 22
+    fi
+    printf '{"ok":true}\\n'
+    ;;
   *) printf '{"ok":true}\\n' ;;
 esac
 """,
@@ -203,3 +212,66 @@ def test_unacknowledged_deploy_keeps_strict_compose_startup(tmp_path: Path) -> N
         for event in events
     )
     assert not any("--no-deps companion-ui" in event for event in events)
+
+
+def test_acknowledged_embedding_cutover_liveness_failure_rolls_back_candidate(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    previous_sha = "1" * 40
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    env["FAKE_API_LIVENESS"] = "fail"
+
+    result = _run_deploy(root, env, sha, "--ack-embedding-rebuild-required")
+
+    assert result.returncode != 0
+    assert "service recreate/liveness gate failed" in result.stderr
+    assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
+    events = _deploy_events(env)
+    assert any(
+        event.endswith(
+            "up -d --force-recreate api worker watcher heimdal-capture-watch"
+        )
+        for event in events
+    )
+    assert any(
+        event.endswith(
+            "up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui"
+        )
+        for event in events
+    )
+
+
+def test_acknowledged_embedding_cutover_gateway_failure_rolls_back_candidate(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    previous_sha = "2" * 40
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    env["FAKE_DOCKER_FAIL_MATCH"] = (
+        "up -d --force-recreate --no-deps companion-ui"
+    )
+
+    result = _run_deploy(root, env, sha, "--ack-embedding-rebuild-required")
+
+    assert result.returncode != 0
+    assert "service recreate/liveness gate failed" in result.stderr
+    assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
+    events = _deploy_events(env)
+    assert any("--no-deps companion-ui" in event for event in events)
+    assert any(
+        event.endswith(
+            "up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui"
+        )
+        for event in events
+    )

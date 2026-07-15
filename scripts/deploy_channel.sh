@@ -252,13 +252,24 @@ recreate_channel_services() {
     # dependency. The later live smoke still admits only the sole exact
     # embedding_index=rebuild_required transition; the API container healthcheck
     # remains strict on /readyz throughout.
-    compose up -d --force-recreate api worker watcher heimdal-capture-watch
+    compose up -d --force-recreate api worker watcher heimdal-capture-watch || return 1
     wait_json_ok "http://127.0.0.1:${api_port}/healthz" || return 1
-    compose up -d --force-recreate --no-deps companion-ui
+    compose up -d --force-recreate --no-deps companion-ui || return 1
     return 0
   fi
 
   compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui
+}
+
+rollback_failed_startup() {
+  local reason="$1"
+  echo "${reason}; attempting rollback to previous pin" >&2
+  if [ -n "${current_sha}" ]; then
+    write_pin "${pin_file}" "${current_sha}"
+    if ! compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui; then
+      echo "rollback recreate failed for previous pin ${current_sha}" >&2
+    fi
+  fi
 }
 
 capture_watch_gate() {
@@ -375,15 +386,14 @@ fi
 write_pin "${pin_file}" "${target_sha}"
 
 compose pull api worker watcher heimdal-capture-watch companion-ui
-recreate_channel_services
-health_gate || {
-  echo "health gate failed; attempting rollback to previous pin" >&2
-  if [ -n "${current_sha}" ]; then
-    write_pin "${pin_file}" "${current_sha}"
-    compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui || true
-  fi
+if ! recreate_channel_services; then
+  rollback_failed_startup "service recreate/liveness gate failed"
   exit 1
-}
+fi
+if ! health_gate; then
+  rollback_failed_startup "health gate failed"
+  exit 1
+fi
 version_gate
 fleet_model_fitness_gate
 COMPANION_UI_ALLOW_EMBEDDING_REBUILD_REQUIRED="${ack_embedding_rebuild_required}" \
