@@ -298,11 +298,18 @@ to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup.
 
 Partial delivery remains fail-closed:
 
+- after issue 01B but before 01C atomically installs the complete multi-registration rollback floor,
+  production authority is scalar-sealed: existing many-binding cutover and every picker/API/CLI/
+  import/bootstrap/direct-service producer of registration #2 fail before reservation or mutation;
+  01C unseals them only with the rollback gateway/guards, current export, and roll-forward lineage;
 - after issue 01C but before task 02, registrations exist but `last_active_vault_ref` remains the
   compatibility behavior; no registration is silently promoted to default;
 - after issue 01B and until issue 05C advances the foreground-ownership floor, cross-channel transfer
   is implemented but production transfer requests fail capability-not-ready; the source lease cannot be
-  released while legacy foreground read/write paths remain unfenced;
+  released while legacy foreground read/write paths remain unfenced. Once activated, a journaled
+  transfer-only reservation excludes the root while source registration is retired to a tombstone and
+  destination registration/lineage becomes durable, so ordinary duplicate-root admission is never
+  bypassed and two live registrations/owners never coexist;
 - after issue 01B and until issue 06B proves both foreground and background consumer floors, active
   registration removal is implemented but production removal fails capability-not-ready without
   changing registry/revision/ownership; only 06B may activate its drain/commit/release sequence;
