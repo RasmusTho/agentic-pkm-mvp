@@ -11,13 +11,15 @@ AGENTS = ROOT / "AGENTS.md"
 
 def test_retry_exhaustion_alone_cannot_require_human_exception() -> None:
     contract = GATE_CONTRACT.read_text(encoding="utf-8")
+    normalized = " ".join(contract.split())
 
     assert "## Escalation Classifier" in contract
     assert "A retry counter alone must never select" in contract
     assert "`needs_owner`" in contract
     for route in ("`auto_repair`", "`auto_backoff`", "`blocked_technical`"):
         assert route in contract
-    assert "before capability escalation and classifier-based repair" in contract
+    assert "before capability escalation" in normalized
+    assert "classifier-based repair triage" in normalized
 
 
 def test_host_preflight_failure_routes_to_disabled_technical_recovery() -> None:
@@ -66,3 +68,20 @@ def test_agent_policy_reserves_owner_interruptions_for_authority() -> None:
 
     assert "A retry count, a failed local/CI/type check" in agents
     assert "only its explicit authority categories may create `agent:needs-human`" in agents
+
+
+def test_repair_budget_policy_is_consistent_across_governing_surfaces() -> None:
+    contract = GATE_CONTRACT.read_text(encoding="utf-8")
+    dispatcher = (ROOT / "docs/AGENT_ISSUE_DISPATCHER.md").read_text(
+        encoding="utf-8"
+    )
+    closure_skill = (ROOT / ".codex/skills/verification-and-closure/SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    for surface in (contract, dispatcher, closure_skill):
+        normalized = " ".join(surface.split())
+        assert "per stable failure mechanism and failure domain" in normalized
+        assert "two standard repair attempts" in normalized
+        assert "two strongest-capability repair attempts" in normalized
+        assert "does not create a Human Exception" in normalized

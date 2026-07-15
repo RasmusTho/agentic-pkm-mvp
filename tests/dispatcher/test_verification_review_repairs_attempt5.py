@@ -62,6 +62,8 @@ def _delivered_receipt(
                 "reasoning_effort": "high",
                 "outcome": "fixed",
                 "finding_id": "head-rebind",
+                "failure_domain": "review_code_correctness",
+                "mechanism_id": "head-rebind",
                 "strongest": False,
             }
         )
@@ -84,6 +86,8 @@ def _delivered_receipt(
                 "reasoning_effort": "xhigh",
                 "outcome": "clean",
                 "finding_id": None,
+                "failure_domain": None,
+                "mechanism_id": None,
                 "strongest": True,
             },
             {
@@ -93,6 +97,8 @@ def _delivered_receipt(
                 "reasoning_effort": "xhigh",
                 "outcome": "clean",
                 "finding_id": None,
+                "failure_domain": None,
+                "mechanism_id": None,
                 "strongest": True,
             },
         ],
@@ -259,7 +265,12 @@ def _record_exhausted_repair_budget(
             "high",
             {"head_sha": HEAD},
             "repaired",
-            {"head_sha": HEAD},
+            {
+                "head_sha": HEAD,
+                "finding_id": f"repair-{ordinal}",
+                "failure_domain": "review_code_correctness",
+                "mechanism_id": "exhausted-repair",
+            },
             holder="host",
             lease_id=claimed.lease_id,
         )
@@ -500,7 +511,12 @@ def _superseded_exhausted_chain(
             "high",
             {"head_sha": HEAD},
             "repaired",
-            {"head_sha": HEAD},
+            {
+                "head_sha": HEAD,
+                "finding_id": f"superseded-repair-{ordinal}",
+                "failure_domain": "review_code_correctness",
+                "mechanism_id": "superseded-repair",
+            },
             holder="host",
             lease_id=claimed.lease_id or "",
         )

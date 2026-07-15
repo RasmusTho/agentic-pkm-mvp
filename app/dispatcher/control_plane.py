@@ -15,6 +15,7 @@ from app.dispatcher.schema import (
     SCHEMA_VERSION,
     has_unique_key,
     verification_v3_schema_error,
+    verification_v4_schema_error,
 )
 from app.dispatcher.store import SqliteStore
 
@@ -130,9 +131,11 @@ def _dispatcher_schema_error(conn: sqlite3.Connection) -> str | None:
         version = int(row[0])
     except (TypeError, ValueError):
         return "invalid dispatcher schema_version"
-    if version not in {1, 2, SCHEMA_VERSION}:
+    if version not in {1, 2, 3, SCHEMA_VERSION}:
         return f"unsupported dispatcher schema_version: {version}"
     if version == SCHEMA_VERSION:
+        return verification_v4_schema_error(conn)
+    if version == 3:
         return verification_v3_schema_error(conn, allow_additive_migration=True)
     return None
 

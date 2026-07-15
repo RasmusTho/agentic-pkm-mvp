@@ -137,6 +137,8 @@ def test_each_repair_requires_blocking_fresh_review_and_final_two_clean(tmp_path
     context = {"head": run.head_sha}
     loop.repair(
         finding_id="F1",
+        failure_domain="review_code_correctness",
+        mechanism_id="repair-loop",
         session_id="fix-1",
         capability="terra",
         reasoning_effort="high",
@@ -146,6 +148,8 @@ def test_each_repair_requires_blocking_fresh_review_and_final_two_clean(tmp_path
     with pytest.raises(ValueError):
         loop.repair(
             finding_id="F2",
+            failure_domain="review_code_correctness",
+            mechanism_id="repair-loop",
             session_id="fix-2",
             capability="terra",
             reasoning_effort="high",
@@ -153,6 +157,9 @@ def test_each_repair_requires_blocking_fresh_review_and_final_two_clean(tmp_path
             outcome="fixed",
         )
     loop.review(
+        finding_id="F1",
+        failure_domain="review_code_correctness",
+        mechanism_id="repair-loop",
         session_id="review-1",
         capability="terra",
         reasoning_effort="high",
@@ -161,6 +168,8 @@ def test_each_repair_requires_blocking_fresh_review_and_final_two_clean(tmp_path
     )
     loop.repair(
         finding_id="F2",
+        failure_domain="review_code_correctness",
+        mechanism_id="repair-loop",
         session_id="fix-2",
         capability="terra",
         reasoning_effort="high",

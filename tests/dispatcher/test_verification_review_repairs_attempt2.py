@@ -56,6 +56,8 @@ class DeliveredWithReviewsLauncher(Launcher):
                     "reasoning_effort": "high",
                     "outcome": "clean",
                     "finding_id": None,
+                    "failure_domain": None,
+                    "mechanism_id": None,
                     "strongest": None,
                 },
                 {
@@ -65,6 +67,8 @@ class DeliveredWithReviewsLauncher(Launcher):
                     "reasoning_effort": "high",
                     "outcome": "clean",
                     "finding_id": None,
+                    "failure_domain": None,
+                    "mechanism_id": None,
                     "strongest": None,
                 },
             ],
@@ -135,6 +139,8 @@ def test_stop_cannot_borrow_live_owner_lease(tmp_path, holder, lease_id) -> None
     with pytest.raises(ValueError, match="ownership"):
         loop.repair(
             finding_id="F-stale",
+            failure_domain="review_code_correctness",
+            mechanism_id="stale-repair",
             session_id="stale-repair",
             capability="gpt-5.6-terra",
             reasoning_effort="high",

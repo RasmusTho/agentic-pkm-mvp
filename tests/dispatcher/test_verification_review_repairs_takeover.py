@@ -469,7 +469,12 @@ def _record_exhausted_chain(
             "xhigh" if kind == "escalated_repair" else "high",
             {"head_sha": HEAD},
             "repaired",
-            {"finding_id": f"finding-{index}", "head_sha": HEAD},
+            {
+                "finding_id": f"finding-{index}",
+                "failure_domain": "review_code_correctness",
+                "mechanism_id": "legacy-exhausted-chain",
+                "head_sha": HEAD,
+            },
             holder="head-a-host",
             lease_id=lease_id,
         )
@@ -482,7 +487,12 @@ def _record_exhausted_chain(
             "xhigh",
             {"head_sha": HEAD},
             "blocking" if index == 1 else "clean",
-            {"finding_id": f"review-finding-{index}", "head_sha": HEAD},
+            {
+                "finding_id": f"review-finding-{index}",
+                "failure_domain": "review_code_correctness",
+                "mechanism_id": "legacy-exhausted-chain",
+                "head_sha": HEAD,
+            },
             holder="head-a-host",
             lease_id=lease_id,
         )
