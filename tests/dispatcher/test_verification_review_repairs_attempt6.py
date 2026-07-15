@@ -677,7 +677,7 @@ def _valid_artifact() -> dict[str, object]:
 def _legacy_artifact() -> dict[str, object]:
     return {
         "id": 8,
-        "name": f"verification-dispatch-legacy-{HEAD}",
+        "name": f"verification-dispatch-3603-{HEAD}",
         "size_in_bytes": 1,
         "expired": False,
         "workflow_run": {},
