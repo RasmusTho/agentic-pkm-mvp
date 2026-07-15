@@ -175,7 +175,7 @@ def resolve_embedding_identity(
     override_model: str | None = None,
     override_provider: str | None = None,
     *,
-    use_env_profile: bool = True,
+    use_implicit_profiles: bool = True,
 ) -> EmbeddingIdentity:
     spec = _normalize_name(profile)
     override_model = _normalize_name(override_model)
@@ -187,7 +187,7 @@ def resolve_embedding_identity(
     candidates: list[str] = []
     if spec:
         candidates.append(spec)
-    env_profile = _normalize_name(os.getenv("EMBED_PROFILE")) if use_env_profile else None
+    env_profile = _normalize_name(os.getenv("EMBED_PROFILE")) if use_implicit_profiles else None
     if env_profile in {"deterministic", "test", "offline"} and (spec in {None, "default"}):
         dim = get_embed_dim()
         return EmbeddingIdentity(provider="deterministic", model="deterministic-hash", dim=dim, normalize=True)
@@ -208,12 +208,14 @@ def resolve_embedding_identity(
         if profiles is not None:
             profiles_map = {key.strip().lower(): cfg for key, cfg in profiles.profiles.items()}
             default_name = _normalize_name(profiles.default_profile)
-        global_profile = _normalize_name(getattr(bundle.global_, "profile", None))
-        if global_profile:
-            candidates.append(global_profile)
-    if default_name:
-        candidates.append(default_name)
-    candidates.append("default")
+        if use_implicit_profiles:
+            global_profile = _normalize_name(getattr(bundle.global_, "profile", None))
+            if global_profile:
+                candidates.append(global_profile)
+    if use_implicit_profiles:
+        if default_name:
+            candidates.append(default_name)
+        candidates.append("default")
 
     seen: set[str] = set()
     for name in candidates:

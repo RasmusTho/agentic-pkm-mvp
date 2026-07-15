@@ -281,7 +281,7 @@ class LLMRouter:
             profile=profile,
             override_model=override_model,
             override_provider=override_provider,
-            use_env_profile=not target_is_explicit,
+            use_implicit_profiles=not target_is_explicit,
         )
         return (
             LLMRoute(
