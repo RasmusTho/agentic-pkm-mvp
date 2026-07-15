@@ -61,11 +61,11 @@ and key ID are host-bootstrap truth. Missing, ephemeral, channel-specific, misma
 key state blocks claims and lifecycle start. Key rotation holds the global fence, drains all owners,
 re-fingerprints every canonical root, and atomically advances ledger plus key generation before any
 owner resumes; interrupted rotation recovers one complete generation and never compares mixed keys.
-Registration/relocation
-uses a recoverable pending→registry-commit→active reservation protocol; lifecycle start proves the
+Registration uses a recoverable pending→registry-commit→active reservation protocol; lifecycle start proves the
 active reservation still matches its channel and root. The same physical content root cannot be
 active in two dev/test/prod/native ownership domains simultaneously, and nested roots cannot straddle
-those domains. Explicit transfer
+those domains. Relocation is implemented but capability-gated until MVR-06C proves every foreground
+and background consumer uses the matching shared/exclusive effect-lease order. Explicit transfer
 remains capability-gated until MVR-05C activates foreground read/write ownership fencing. It then
 drains/stops the source channel, commits release, and claims the destination; crashes leave a
 blocking recoverable reservation, never two owners or an unowned running lifecycle.
@@ -245,6 +245,9 @@ to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup.
   cache/response/ack, and receipt. Relocation, removal, transfer, and revocation use the same order
   with the matching exclusive lease; stale effects fail before access or a change waits for an
   already-authorized effect to complete under the prior revision.
+- An expired/stale explicit session bearer always requires visible reselection; an ephemeral server
+  store cannot infer its former target from a sole remaining/default binding. Normal default
+  resolution for a new client with no stale explicit intent is a separate path.
 - Every read, retrieval result, write, receipt, cache entry, and background binding preserves
   vault identity and context-generation provenance.
 - Container registry/default/background intent survives force-recreate on a shared instance-state

@@ -57,8 +57,12 @@ This slice promotes the existing seed without changing content-vault authority.
   One channel/instance may register an initialized parent vault and initialized nested child as
   distinct bindings only when the existing nested-vault boundary contract is active: parent traversal
   prunes the child, each effect targets one explicit binding/lease, and neither registration aliases
-  the same physical root. Registration/relocation uses a recoverable pending reservation → per-channel
-  registry commit → active lease protocol. Explicit cross-channel transfer is implemented but
+  the same physical root. Registration uses a recoverable pending reservation → per-channel
+  registry commit → active lease protocol. Relocation is implemented behind a separate
+  `capability_not_ready` floor: it cannot mutate the active root until MVR-06C proves every
+  foreground and background consumer holds the shared per-binding effect lease and the production
+  relocation path takes its matching exclusive lease. Registration of a new, inactive binding does
+  not move an existing consumer. Explicit cross-channel transfer is implemented but
   remains capability-gated until MVR-05C proves production foreground read and write lease fencing;
   before that floor every transfer request fails `capability_not_ready`. Once enabled, transfer
   drains/stops the old channel before release/claim; recovery never permits two active owners.
@@ -301,6 +305,11 @@ never encounter and truncate authoritative new-schema state before fork/merge pr
   production transfer request fails capability-not-ready until the MVR-05C foreground read/write
   ownership-fence floor is active, and an injected direct call cannot release the source lease.
   - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_transfer_is_dormant_until_foreground_ownership_floor`
+- [ ] **MVR-01B:** Relocation remains dormant after registration ships: every production relocation
+  request fails capability-not-ready and leaves the root/revision/lease unchanged until MVR-06C
+  proves foreground plus background shared-effect fencing and activates the matching exclusive
+  relocation path.
+  - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_relocation_is_dormant_until_all_consumer_effect_leases`
 - [ ] **MVR-01B:** Removing an actively leased registration enters a recoverable draining state,
   blocks new consumers, drains existing request/lifecycle holders, commits removal, and only then
   releases ownership; crash injection at each phase yields neither dual ownership nor a stranded lease.
@@ -384,7 +393,7 @@ family-wide command that requires a later sealed slice.
 
 ### MVR-01B validation
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_vault_registry_container_durability.py::test_registry_survives_recreate_and_is_shared_cross_process tests/integration/test_vault_registry_channel_isolation.py::test_overlapping_content_roots_cannot_be_active_in_two_channels tests/integration/test_vault_registry_channel_isolation.py::test_same_channel_nested_vaults_preserve_child_boundary tests/integration/test_vault_registry_channel_isolation.py::test_transfer_is_dormant_until_foreground_ownership_floor tests/integration/test_vault_registry_channel_isolation.py::test_registration_removal_drains_before_ownership_release tests/integration/test_vault_registry_channel_isolation.py::test_first_upgrade_seeds_all_legacy_channel_owners_before_claim tests/integration/test_vault_registry_channel_isolation.py::test_env_only_bootstrap_atomically_enrolls_one_stable_binding_or_fails_closed tests/integration/test_vault_registry_channel_isolation.py::test_uninitialized_env_upgrade_preserves_read_only_binding_without_writes tests/integration/test_vault_registry_channel_isolation.py::test_host_global_ledger_key_is_durable_shared_and_rotates_atomically tests/integration/test_vault_registry_rollback.py::test_previous_image_reads_latest_post_migration_registry_state tests/ops/test_instance_state_volume_contract.py::test_legacy_registry_export_happens_after_writer_quiescence tests/ops/test_instance_state_volume_contract.py::test_registry_volume_and_preflight_cover_all_consumers tests/ops/test_instance_state_volume_contract.py::test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restore`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_vault_registry_container_durability.py::test_registry_survives_recreate_and_is_shared_cross_process tests/integration/test_vault_registry_channel_isolation.py::test_overlapping_content_roots_cannot_be_active_in_two_channels tests/integration/test_vault_registry_channel_isolation.py::test_same_channel_nested_vaults_preserve_child_boundary tests/integration/test_vault_registry_channel_isolation.py::test_transfer_is_dormant_until_foreground_ownership_floor tests/integration/test_vault_registry_channel_isolation.py::test_relocation_is_dormant_until_all_consumer_effect_leases tests/integration/test_vault_registry_channel_isolation.py::test_registration_removal_drains_before_ownership_release tests/integration/test_vault_registry_channel_isolation.py::test_first_upgrade_seeds_all_legacy_channel_owners_before_claim tests/integration/test_vault_registry_channel_isolation.py::test_env_only_bootstrap_atomically_enrolls_one_stable_binding_or_fails_closed tests/integration/test_vault_registry_channel_isolation.py::test_uninitialized_env_upgrade_preserves_read_only_binding_without_writes tests/integration/test_vault_registry_channel_isolation.py::test_host_global_ledger_key_is_durable_shared_and_rotates_atomically tests/integration/test_vault_registry_rollback.py::test_previous_image_reads_latest_post_migration_registry_state tests/ops/test_instance_state_volume_contract.py::test_legacy_registry_export_happens_after_writer_quiescence tests/ops/test_instance_state_volume_contract.py::test_registry_volume_and_preflight_cover_all_consumers tests/ops/test_instance_state_volume_contract.py::test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restore`
 - Verify the 01B PR diff contains its mapped owner-doc targets in
   `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md`,
   `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, and `docs/RELEASE_CHANNELS/README.md`.
