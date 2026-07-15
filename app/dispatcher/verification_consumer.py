@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Protocol, Sequence, cast
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
 
 import jsonschema
 
@@ -746,7 +746,8 @@ _CREDENTIAL_ASSIGNMENT = re.compile(
     r"(?i)(?<![A-Za-z0-9_.-])(?P<quote>[\"']?)(?P<key>[A-Za-z0-9_.-]*"
     r"(?:api[_ -]?key|access[_ -]?token|auth[_ -]?token|token|credential|"
     r"password|secret)[A-Za-z0-9_.-]*)(?P=quote)\s*(?::|=|\s)\s*"
-    r"(?:\"[^\"]*\"|'[^']*'|[^\s;,]+)"
+    r"(?:\[REDACTED\]|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|"
+    r"[^\s;,)\]}]+)"
 )
 _BEARER_VALUE = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+")
 _KNOWN_TOKEN_VALUE = re.compile(
@@ -774,7 +775,7 @@ _SAFE_REASONING_EFFORTS = frozenset(
 )
 _SAFE_EVENT_OUTCOMES = frozenset({"blocking", "clean", "fixed", "repaired"})
 _SAFE_GITHUB_URL = re.compile(
-    r"https://(?:github\.com|api\.github\.com)(?:/[^\s,;)\]}]*)?",
+    r"https://(?:github\.com|api\.github\.com)(?:/[^\s,;)\]}\"'<>]*)?",
     re.IGNORECASE,
 )
 
@@ -784,7 +785,9 @@ def _safe_github_url_projection(value: str) -> str:
 
     parsed = urlsplit(value)
     host = parsed.netloc.lower()
-    segments = [unquote(segment) for segment in parsed.path.split("/") if segment]
+    if "%" in parsed.path:
+        return f"https://{host}/REDACTED"
+    segments = [segment for segment in parsed.path.split("/") if segment]
     contains_private_component = any(
         _CREDENTIAL_ASSIGNMENT.search(segment)
         or _BEARER_VALUE.search(segment)
@@ -862,10 +865,13 @@ def _sanitize_receipt_text(value: object, *, limit: int = _MAX_RECEIPT_TEXT) -> 
 
     text = str(value)
     safe_urls: list[str] = []
+    placeholder_prefix = "\x00SAFELINK"
+    while placeholder_prefix in text:
+        placeholder_prefix += "_"
 
     def preserve_url(match: re.Match[str]) -> str:
         url = _safe_github_url_projection(match.group(0))
-        placeholder = f"SAFELINK{len(safe_urls)}"
+        placeholder = f"{placeholder_prefix}{len(safe_urls)}\x00"
         safe_urls.append(url)
         return placeholder
 
@@ -879,7 +885,7 @@ def _sanitize_receipt_text(value: object, *, limit: int = _MAX_RECEIPT_TEXT) -> 
     text = _ABSOLUTE_MACHINE_PATH.sub("[REDACTED_PATH]", text)
     text = _OPAQUE_SECRET_VALUE.sub("[REDACTED]", text)
     for index, url in enumerate(safe_urls):
-        text = text.replace(f"SAFELINK{index}", url)
+        text = text.replace(f"{placeholder_prefix}{index}\x00", url)
     return text.strip()[:limit]
 
 

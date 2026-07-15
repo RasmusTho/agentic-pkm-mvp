@@ -33,6 +33,8 @@ _ADVERSARIAL_PRIVATE_VALUES = (
     "/mnt/secrets/token",
     r"C:\Users\operator\private-vault\token.txt",
     r"\\server\share\private-vault\token.txt",
+    r'{"x-api-key":"hunter\"vault-secret"}',
+    "https://github.com/%2567%2568%2570%255FABCDEF1234567890/repo/issues/1",
 )
 _SAFE_EVIDENCE_URL = "https://github.com/RasmusTho/agentic-pkm-mvp/pull/3620"
 
@@ -76,6 +78,8 @@ def test_quoted_credential_assignments_are_sanitized_before_persistence(
     encoded = json.dumps(sanitized, sort_keys=True)
     assert "hunter2" not in encoded
     assert "vault-secret" not in encoded
+    assert sanitize_verification_closer_receipt(sanitized) == sanitized
+    assert str(sanitized["summary"]).endswith("}")
     assert encoded.count("[REDACTED]") == 2
 
 
@@ -102,6 +106,25 @@ def test_hyphenated_quoted_credential_assignments_are_sanitized_before_persisten
     encoded = json.dumps(sanitized, sort_keys=True)
     assert "hunter2" not in encoded
     assert "vault-secret" not in encoded
+
+
+def test_escaped_quoted_credential_value_is_fully_redacted() -> None:
+    summary = r'{"x-api-key":"hunter\"vault-secret"}'
+    sanitized = sanitize_verification_closer_receipt(
+        {
+            "verdict": "blocked",
+            "head_sha": HEAD,
+            "summary": summary,
+            "receipt_ids": [],
+            "retry_after": None,
+            "review_events": None,
+            "human_exception": None,
+        }
+    )
+
+    assert "hunter" not in str(sanitized["summary"])
+    assert "vault-secret" not in str(sanitized["summary"])
+    assert sanitize_verification_closer_receipt(sanitized) == sanitized
 
 
 def test_secret_shaped_github_urls_are_sanitized_before_persistence() -> None:
@@ -153,6 +176,111 @@ def test_secret_shaped_github_urls_are_sanitized_before_persistence() -> None:
         )
         assert private_value not in str(unsafe_projection["summary"])
         assert unsafe_projection["summary"] == "https://github.com/REDACTED"
+
+
+@pytest.mark.parametrize(
+    ("url", "private_value", "expected"),
+    [
+        (
+            "https://github.com/gh" + "p_ABCDEF1234567890/repo/issues/1",
+            "gh" + "p_ABCDEF1234567890",
+            "https://github.com/REDACTED",
+        ),
+        (
+            "https://github.com/org/ABCDEF0123456789abcdef/pull/1",
+            "ABCDEF0123456789abcdef",
+            "https://github.com/REDACTED",
+        ),
+        (
+            "https://api.github.com/repos/gh"
+            + "p_ABCDEF1234567890/repo/issues/1",
+            "gh" + "p_ABCDEF1234567890",
+            "https://api.github.com/REDACTED",
+        ),
+    ],
+)
+def test_secret_shaped_github_identity_components_are_redacted(
+    url: str,
+    private_value: str,
+    expected: str,
+) -> None:
+    sanitized = sanitize_verification_closer_receipt(
+        {
+            "verdict": "blocked",
+            "head_sha": HEAD,
+            "summary": url,
+            "receipt_ids": [],
+            "retry_after": None,
+            "review_events": None,
+            "human_exception": None,
+        }
+    )
+
+    assert private_value not in str(sanitized["summary"])
+    assert sanitized["summary"] == expected
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://github.com/%2567%2568%2570%255FABCDEF1234567890/repo/issues/1",
+        "https://api.github.com/repos/org/%2567%2568%2570%255FABCDEF1234567890/issues/1",
+        "https://github.com/org/repo/%252FUsers%252Foperator%252Fprivate-vault",
+    ],
+)
+def test_encoded_github_components_fail_closed(url: str) -> None:
+    sanitized = sanitize_verification_closer_receipt(
+        {
+            "verdict": "blocked",
+            "head_sha": HEAD,
+            "summary": url,
+            "receipt_ids": [],
+            "retry_after": None,
+            "review_events": None,
+            "human_exception": None,
+        }
+    )
+
+    assert "%" not in str(sanitized["summary"])
+    assert str(sanitized["summary"]).endswith("/REDACTED")
+
+
+def test_quoted_safe_github_urls_and_many_placeholders_remain_actionable() -> None:
+    safe_urls = [f"https://github.com/org/repo/issues/{index}" for index in range(12)]
+    quoted = f'"{safe_urls[0]}"'
+    sanitized = sanitize_verification_closer_receipt(
+        {
+            "verdict": "blocked",
+            "head_sha": HEAD,
+            "summary": " ; ".join((quoted, *safe_urls[1:])),
+            "receipt_ids": [],
+            "retry_after": None,
+            "review_events": None,
+            "human_exception": None,
+        }
+    )
+
+    summary = str(sanitized["summary"])
+    assert quoted in summary
+    assert all(url in summary for url in safe_urls)
+    assert sanitize_verification_closer_receipt(sanitized) == sanitized
+
+
+def test_raw_placeholder_text_cannot_duplicate_a_preserved_url() -> None:
+    safe_url = "https://github.com/org/repo/issues/3764"
+    sanitized = sanitize_verification_closer_receipt(
+        {
+            "verdict": "blocked",
+            "head_sha": HEAD,
+            "summary": f"raw=\x00SAFELINK0\x00 ; {safe_url}",
+            "receipt_ids": [],
+            "retry_after": None,
+            "review_events": None,
+            "human_exception": None,
+        }
+    )
+
+    assert str(sanitized["summary"]).count(safe_url) == 1
 
 
 def _check(
