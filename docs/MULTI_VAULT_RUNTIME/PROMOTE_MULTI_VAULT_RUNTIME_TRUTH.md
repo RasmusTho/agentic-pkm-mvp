@@ -107,6 +107,12 @@ operators, or future agents still act on stale single-global-vault truth.
 
 ## How to Verify (Pre-Merge)
 
+- Before authoring owner-doc/debt promotion, fetch MVR-07's merged `origin/main`, create a clean
+  detached worktree at that exact ref, run every already-delivered child/capability target there,
+  and post the SHA/result to #2143. A dirty, branch-local, or stale run blocks preparation of the
+  MVR-08 promotion PR; this proves merged runtime before its description is promoted.
+- In that MVR-07 merged-head worktree run:
+  `pytest -q tests/instance/test_vault_registry_migration.py::test_parent_registry_acceptance tests/integration/test_multi_vault_request_isolation.py::test_parent_request_context_acceptance tests/integration/test_multi_vault_lifecycle_and_dimension.py::test_parent_dimension_background_acceptance tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior tests/integration/test_multi_vault_dimensions.py::test_dimension_preserves_per_binding_authority_and_provenance tests/architecture/test_multi_vault_context_boundaries.py::test_production_consumers_use_context_seam tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`.
 - On the PR head, run every child pre-merge target plus docs/lint checks; this is candidate evidence,
   not the merged-head closure receipt.
 - `pytest -q tests/integration/test_multi_vault_capability_acceptance.py::test_merged_multi_vault_capability tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`
@@ -119,7 +125,7 @@ operators, or future agents still act on stale single-global-vault truth.
 - Fetch `origin/main`, create a clean detached worktree at that exact ref, and fail unless
   `test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"` and
   `test -z "$(git status --porcelain)"` both succeed inside it. Record that SHA on #2143 before
-  any owner-doc promotion or parent closure.
+  parent closure or shipped-status promotion; the earlier pre-PR receipt is the owner-doc gate.
 - In that detached merged-head worktree run:
   `pytest -q tests/instance/test_vault_registry_migration.py::test_parent_registry_acceptance tests/integration/test_multi_vault_request_isolation.py::test_parent_request_context_acceptance tests/integration/test_multi_vault_lifecycle_and_dimension.py::test_parent_dimension_background_acceptance tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior tests/integration/test_multi_vault_dimensions.py::test_dimension_preserves_per_binding_authority_and_provenance tests/architecture/test_multi_vault_context_boundaries.py::test_production_consumers_use_context_seam tests/integration/test_multi_vault_capability_acceptance.py::test_merged_multi_vault_capability tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`.
 - Run the opt-in integrated UAT in the same worktree and attach its exact merged SHA and result to

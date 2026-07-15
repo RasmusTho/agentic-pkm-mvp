@@ -52,6 +52,10 @@ not background lifecycles.
   independently safe `global` work. MVR-06 owns binding-scoped dispatch, legacy classification,
   quarantine, and recovery; until it lands no versioned vault-bound row can execute against the
   worker's env-selected vault.
+- Namespace every migrated vault-bound outbox idempotency/dedup key by `vault_binding_id` in
+  addition to topic, logical source identity, and content fingerprint. A global producer uses an
+  explicit `global` scope marker. Two vaults containing the same UUID/path/content must create
+  independent rows; retry within one binding must still deduplicate normally.
 - Make many-binding reads explicit and provenance-preserving; require an explicit target binding
   for writes unless the command contract already provides one unambiguously.
 - Add an architecture guard against new direct process-global vault resolution in request code.
@@ -126,6 +130,9 @@ call site can leak retrieval context or write to the wrong human artifact surfac
   the interim scalar worker leaves such rows pending/unacknowledged with blocked readiness instead
   of dispatching them; global work remains independently processable until MVR-06.
   - Verify: `tests/workers/test_multi_vault_partial_delivery_gate.py::test_scalar_worker_never_dispatches_mvr05_vault_bound_rows`
+- [ ] Vault-bound outbox idempotency keys include the stable binding: duplicate logical identities
+  in two bindings persist independently, while same-binding retries deduplicate.
+  - Verify: `tests/services/test_multi_vault_outbox_idempotency.py::test_duplicate_identity_events_are_deduplicated_per_binding`
 - [ ] Invalid or unauthorized request selection returns the explicit error/picker contract and
   never serves default, last-active, CWD, or another binding.
   - Verify: `tests/api/test_multi_vault_request_fail_closed.py::test_invalid_selection_never_falls_back`
@@ -148,7 +155,7 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/integration/test_multi_vault_picker_context.py tests/integration/test_multi_vault_projection_isolation.py tests/migrations/test_multi_vault_projection_backfill.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/workers/test_multi_vault_partial_delivery_gate.py tests/architecture/test_multi_vault_context_boundaries.py`
+- `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/integration/test_multi_vault_picker_context.py tests/integration/test_multi_vault_projection_isolation.py tests/migrations/test_multi_vault_projection_backfill.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/workers/test_multi_vault_partial_delivery_gate.py tests/services/test_multi_vault_outbox_idempotency.py tests/architecture/test_multi_vault_context_boundaries.py`
 - `ruff check app tests`
 
 ## Restart / Durability Posture

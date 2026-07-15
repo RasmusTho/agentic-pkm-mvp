@@ -82,13 +82,17 @@ cross-process truth belong here.
   explicit recovery without dispatch or ack. A quarantined unsafe row makes the affected worker
   readiness degraded/blocked but a valid global row never blocks multi-binding startup merely for
   lacking a binding.
-- Revalidate every not-yet-in-flight vault-bound row against the current registry revision,
-  authorization verdict, lifecycle generation, and routing class before dispatch. Removal, lost
-  authority, or generation rotation atomically moves a stale row to durable quarantine without
-  dispatch or acknowledgement. Authenticated administration can inspect and drop it, or reissue it
-  only after the same stable binding is authorized under a fresh context, preserving original
-  idempotency/lineage; it can never retarget the row to another binding. Quarantine is a terminal,
-  observable disposition rather than an indefinitely pending row.
+- Revalidate every not-yet-in-flight vault-bound row against the current stable binding, compatible
+  registry revision, authorization verdict, routing class, and payload locator before dispatch.
+  Captured request/background context and generation remain immutable producer provenance, but a
+  routine supervisor restart or generation rotation alone does not invalidate the row. When the
+  same binding remains authorized and any relative locator resolves safely under its current root,
+  dispatch records a new consumer-context generation linked to the producer context. Removal, lost
+  authority, binding-identity mismatch, or an incompatible absolute/stale locator atomically moves
+  the row to durable quarantine without dispatch or acknowledgement. Authenticated administration
+  can inspect and drop it, or reissue it only after the same stable binding is authorized under a
+  fresh context, preserving original idempotency/lineage; it can never retarget the row to another
+  binding. Quarantine is a terminal, observable disposition rather than an indefinitely pending row.
 
 ## Concretely
 
@@ -193,9 +197,13 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
   vault polling and ack are binding-scoped.
   - Verify: `tests/migrations/test_multi_vault_outbox_upgrade.py::test_legacy_pending_rows_backfill_or_quarantine_fail_loud`
 - [ ] Pending vault-bound rows are revalidated before dispatch; lifecycle removal, lost authority,
-  or generation rotation quarantines them durably without dispatch/ack, and governed reissue can
+  or incompatible binding/locator change quarantines them durably without dispatch/ack, and governed reissue can
   target only the same re-authorized stable binding with lineage/idempotency preserved.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_pending_rows_quarantine_across_removal_and_rebind`
+- [ ] A routine supervisor restart or generation rotation preserves valid pending rows for the same
+  authorized binding, links fresh consumer context to immutable producer provenance, and does not
+  quarantine or retarget them.
+  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_pending_rows_survive_compatible_restart_generation`
 - [ ] Production watcher/worker/settings callers consume ActiveContextSet outside named bootstrap
   adapters; no parallel lifecycle context type remains.
   - Verify: `tests/architecture/test_multi_vault_context_boundaries.py::test_background_consumers_use_lifecycle_seam`
