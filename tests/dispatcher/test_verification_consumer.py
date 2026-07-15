@@ -662,6 +662,28 @@ def test_gh_source_fetches_bounded_artifact_and_live_truth_without_shell(tmp_pat
             )
         if endpoint.endswith("artifacts/7/zip"):
             return Result(archive_bytes.getvalue())
+        if endpoint.endswith("actions/runs/99"):
+            return Result(
+                json.dumps(
+                    {
+                        "id": 99,
+                        "run_attempt": 1,
+                        "name": "CI",
+                        "event": "pull_request",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "head_sha": HEAD,
+                        "repository": {
+                            "id": 456,
+                            "full_name": "RasmusTho/agentic-pkm-mvp",
+                        },
+                        "head_repository": {
+                            "id": 456,
+                            "full_name": "RasmusTho/agentic-pkm-mvp",
+                        },
+                    }
+                )
+            )
         if "/pulls/3603" in endpoint:
             return Result(json.dumps(eligible_pr()))
         return Result(json.dumps({"check_runs": GREEN}))

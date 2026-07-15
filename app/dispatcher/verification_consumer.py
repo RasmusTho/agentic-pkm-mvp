@@ -519,6 +519,50 @@ class GhCliVerificationSource:
                 raise ValueError("verification artifact workflow-run mismatch")
             if provenance.get("artifact_name") != name:
                 raise ValueError("verification artifact identity mismatch")
+            source_workflow = request.get("source_workflow")
+            if not isinstance(source_workflow, Mapping):
+                raise ValueError("verification source workflow identity mismatch")
+            source_run_id = source_workflow.get("run_id")
+            if (
+                not isinstance(source_run_id, int)
+                or isinstance(source_run_id, bool)
+                or source_run_id <= 0
+            ):
+                raise ValueError("verification source workflow identity mismatch")
+            source_run = self._json(
+                f"repos/{repository}/actions/runs/{source_run_id}"
+            )
+            source_repository = (
+                source_run.get("repository")
+                if isinstance(source_run, Mapping)
+                else None
+            )
+            source_head_repository = (
+                source_run.get("head_repository")
+                if isinstance(source_run, Mapping)
+                else None
+            )
+            if (
+                not isinstance(source_run, Mapping)
+                or not isinstance(source_repository, Mapping)
+                or not isinstance(source_head_repository, Mapping)
+                or source_run.get("id") != source_run_id
+                or source_run.get("name") != source_workflow.get("name")
+                or source_run.get("run_attempt")
+                != source_workflow.get("run_attempt")
+                or source_run.get("head_sha") != source_workflow.get("head_sha")
+                or source_run.get("head_sha") != request.get("current_head_sha")
+                or source_run.get("event") != "pull_request"
+                or source_run.get("status") != "completed"
+                or source_run.get("conclusion") != "success"
+                or source_repository.get("id")
+                != workflow_run.get("repository_id")
+                or source_repository.get("full_name") != repository
+                or source_head_repository.get("id")
+                != workflow_run.get("head_repository_id")
+                or source_head_repository.get("full_name") != repository
+            ):
+                raise ValueError("verification source workflow identity mismatch")
             requests.append(request)
         return requests
 
