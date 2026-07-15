@@ -682,6 +682,14 @@ class CodexExecLauncher:
                 terminate_and_reap_child()
             else:
                 process.wait()
+                # A clean direct-parent exit is not sufficient to release
+                # coordinator authority: descendants can detach their stdio
+                # yet remain in the private process group. Remove any such
+                # residual group before a valid terminal receipt may return.
+                if process_group_is_alive():
+                    terminate_and_reap_child()
+                else:
+                    process_group_id = None
             if stderr_thread:
                 stderr_thread.join(timeout=1)
             returncode = process.returncode

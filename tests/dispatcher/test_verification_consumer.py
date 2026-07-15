@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 from threading import Condition, Thread
+from typing import Mapping
 import zipfile
 
 import pytest
@@ -1226,6 +1227,53 @@ class _NormalExitDescendantHeldStdoutProcess(_DescendantHeldStdoutProcess):
             self.release_stdout()
 
 
+class _CleanExitDetachedDescendantProcess:
+    def __init__(self) -> None:
+        receipt = {
+            "verdict": "blocked",
+            "head_sha": HEAD,
+            "summary": "technical stop",
+            "receipt_ids": [],
+            "retry_after": None,
+            "review_events": None,
+            "human_exception": None,
+        }
+        self.stdout = io.StringIO(
+            json.dumps({"type": "thread.started", "thread_id": "thread-clean"})
+            + "\n"
+            + json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "agent_message",
+                        "text": json.dumps(receipt),
+                    },
+                }
+            )
+            + "\n"
+        )
+        self.stderr = io.StringIO("")
+        self.returncode = 0
+        self.pid = 42_024
+        self.descendant_alive = True
+        self.group_signals: list[tuple[int, int]] = []
+        self.wait_calls = 0
+
+    def poll(self) -> int:
+        return self.returncode
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.wait_calls += 1
+        return self.returncode
+
+    def killpg(self, process_group_id: int, sig: int) -> None:
+        self.group_signals.append((process_group_id, sig))
+        if process_group_id != self.pid or not self.descendant_alive:
+            raise ProcessLookupError(process_group_id)
+        if sig == verification_consumer.signal.SIGKILL:
+            self.descendant_alive = False
+
+
 def _authority_loss_launcher(tmp_path: Path) -> CodexExecLauncher:
     return CodexExecLauncher(
         tmp_path,
@@ -1505,6 +1553,50 @@ def test_parent_exit_rejects_late_descendant_stdout(tmp_path, monkeypatch) -> No
 
     assert error.receipt["session_id"] is None
     assert process.stdout.reads == 1
+
+
+def _clean_parent_exit_with_detached_descendant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[_CleanExitDetachedDescendantProcess, Mapping[str, object]]:
+    process = _CleanExitDetachedDescendantProcess()
+    monkeypatch.setattr(
+        verification_consumer.subprocess, "Popen", lambda *args, **kwargs: process
+    )
+    monkeypatch.setattr(verification_consumer.os, "killpg", process.killpg)
+
+    session_id, receipt = _authority_loss_launcher(tmp_path).launch(
+        {"head_sha": HEAD}
+    )
+
+    assert session_id == "thread-clean"
+    return process, receipt
+
+
+def test_clean_parent_exit_reaps_stdout_independent_descendant(
+    tmp_path, monkeypatch
+) -> None:
+    process, _ = _clean_parent_exit_with_detached_descendant(tmp_path, monkeypatch)
+
+    assert not process.descendant_alive
+    assert process.group_signals == [
+        (process.pid, 0),
+        (process.pid, verification_consumer.signal.SIGTERM),
+        (process.pid, 0),
+        (process.pid, verification_consumer.signal.SIGKILL),
+    ]
+
+
+def test_successful_terminal_receipt_leaves_no_private_group_members(
+    tmp_path, monkeypatch
+) -> None:
+    process, receipt = _clean_parent_exit_with_detached_descendant(
+        tmp_path, monkeypatch
+    )
+
+    assert receipt["verdict"] == "blocked"
+    assert not process.descendant_alive
+    with pytest.raises(ProcessLookupError):
+        process.killpg(process.pid, 0)
 
 
 def test_thread_start_authority_loss_terminates_codex_child(
