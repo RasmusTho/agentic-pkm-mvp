@@ -145,9 +145,17 @@ def test_stop_cannot_borrow_live_owner_lease(tmp_path, holder, lease_id) -> None
                 "tried_actions": ["checked the governing contract"],
                 "evidence": ["issue #3603"],
                 "why_unsafe": "continuation would expand authority",
-                "options": ["hold", "authorize"],
+                "options": [
+                    {"id": "hold", "label": "Hold", "consequence": "delivery waits"},
+                    {
+                        "id": "authorize",
+                        "label": "Authorize",
+                        "consequence": "delivery continues",
+                    },
+                ],
                 "no_action_option": "hold",
                 "recommended_option": "hold",
+                "recommendation_rationale": "authority has not been granted",
                 "consequence_of_doing_nothing": "delivery remains blocked",
             },
         )

@@ -308,9 +308,11 @@ Each packet must include:
   docs consulted.
 - `why_unsafe`: the exact authority, safety, scope, or evidence gap that blocks
   autonomous continuation.
-- `options`: two or three unique, concrete owner choices with their consequences.
-- `no_action_option`: the explicit do-nothing choice, exactly matching one offered option.
-- `recommended_option`: one recommended path with rationale, exactly matching one offered option.
+- `options`: two or three unique objects, each with a stable `id`, plain-language `label`, and the
+  concrete `consequence` of choosing it.
+- `no_action_option`: the id of the explicit do-nothing choice.
+- `recommended_option`: the id of exactly one offered choice.
+- `recommendation_rationale`: why that offered choice is recommended for the stated evidence.
 - `consequence_of_doing_nothing`: what remains blocked or at risk.
 
 ### Dedupe and No-Spam Rules

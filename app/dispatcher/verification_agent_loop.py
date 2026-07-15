@@ -28,6 +28,7 @@ HUMAN_EXCEPTION_PACKET_FIELDS = frozenset(
         "options",
         "no_action_option",
         "recommended_option",
+        "recommendation_rationale",
         "consequence_of_doing_nothing",
     }
 )
@@ -52,25 +53,40 @@ def valid_human_exception_packet(packet: object) -> bool:
         "why_unsafe",
         "no_action_option",
         "recommended_option",
+        "recommendation_rationale",
         "consequence_of_doing_nothing",
     ):
         if not isinstance(packet.get(field), str) or not packet[field].strip():
             return False
-    for field in ("tried_actions", "evidence", "options"):
+    for field in ("tried_actions", "evidence"):
         values = packet.get(field)
         if not isinstance(values, list) or any(
             not isinstance(value, str) or not value.strip() for value in values
         ):
             return False
     options = packet["options"]
-    assert isinstance(options, list)
+    if not isinstance(options, list) or not 2 <= len(options) <= 3:
+        return False
+    option_ids: list[str] = []
+    for option in options:
+        if not isinstance(option, Mapping) or set(option) != {
+            "id",
+            "label",
+            "consequence",
+        }:
+            return False
+        if any(
+            not isinstance(option.get(field), str) or not option[field].strip()
+            for field in ("id", "label", "consequence")
+        ):
+            return False
+        option_ids.append(str(option["id"]))
     return (
         bool(packet["tried_actions"])
         and bool(packet["evidence"])
-        and 2 <= len(options) <= 3
-        and len(set(options)) == len(options)
-        and packet["no_action_option"] in options
-        and packet["recommended_option"] in options
+        and len(set(option_ids)) == len(option_ids)
+        and packet["no_action_option"] in option_ids
+        and packet["recommended_option"] in option_ids
     )
 
 

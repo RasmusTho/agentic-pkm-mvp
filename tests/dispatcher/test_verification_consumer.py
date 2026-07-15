@@ -130,9 +130,21 @@ class Launcher:
                 "tried_actions": ["validated CI and review evidence"],
                 "evidence": ["PR #3620"],
                 "why_unsafe": "continuation requires authority outside the issue",
-                "options": ["hold", "authorize"],
+                "options": [
+                    {
+                        "id": "hold",
+                        "label": "Hold delivery",
+                        "consequence": "delivery remains blocked",
+                    },
+                    {
+                        "id": "authorize",
+                        "label": "Authorize continuation",
+                        "consequence": "delivery continues with expanded authority",
+                    },
+                ],
                 "no_action_option": "hold",
                 "recommended_option": "hold",
+                "recommendation_rationale": "the current issue grants no expanded authority",
                 "consequence_of_doing_nothing": "the delivery remains blocked",
             },
         }
@@ -778,9 +790,9 @@ def test_human_exception_packet_requires_two_to_three_actionable_options(
     for field, value in (
         ("tried_actions", []),
         ("evidence", []),
-        ("options", ["hold"]),
-        ("options", ["hold", "authorize", "defer", "delegate"]),
-        ("options", ["hold", "hold"]),
+        ("options", [packet["options"][0]]),
+        ("options", [*packet["options"], {"id": "defer", "label": "Defer", "consequence": "work waits"}, {"id": "delegate", "label": "Delegate", "consequence": "another owner decides"}]),
+        ("options", [packet["options"][0], packet["options"][0]]),
         ("no_action_option", "not-offered"),
         ("recommended_option", "not-offered"),
     ):
@@ -788,6 +800,51 @@ def test_human_exception_packet_requires_two_to_three_actionable_options(
         with pytest.raises(jsonschema.ValidationError):
             verification_consumer.validate_verification_closer_receipt(invalid, schema)
         assert not valid_human_exception_packet(invalid["human_exception"])
+
+
+def test_human_exception_options_require_ids_labels_and_consequences(
+    tmp_path,
+) -> None:
+    schema = json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "app/dispatcher/schemas/verification_closer_receipt.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    _, receipt = Launcher().launch({})
+    receipt.update({"retry_after": None, "review_events": None})
+    packet = receipt["human_exception"]
+    assert isinstance(packet, dict)
+
+    for options in (
+        ["hold", "authorize"],
+        [{"id": "hold", "label": "Hold delivery"}, packet["options"][1]],
+        [packet["options"][0], {**packet["options"][1], "id": "hold"}],
+    ):
+        invalid = {**receipt, "human_exception": {**packet, "options": options}}
+        with pytest.raises(jsonschema.ValidationError):
+            verification_consumer.validate_verification_closer_receipt(invalid, schema)
+        assert not valid_human_exception_packet(invalid["human_exception"])
+
+
+def test_human_exception_recommendation_requires_rationale(tmp_path) -> None:
+    schema = json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "app/dispatcher/schemas/verification_closer_receipt.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    _, receipt = Launcher().launch({})
+    receipt.update({"retry_after": None, "review_events": None})
+    packet = receipt["human_exception"]
+    assert isinstance(packet, dict)
+
+    for rationale in (None, "", "   "):
+        invalid_packet = {**packet, "recommendation_rationale": rationale}
+        invalid = {**receipt, "human_exception": invalid_packet}
+        with pytest.raises(jsonschema.ValidationError):
+            verification_consumer.validate_verification_closer_receipt(invalid, schema)
+        assert not valid_human_exception_packet(invalid_packet)
 
 
 def test_pending_repair_checks_persist_repair_before_backoff(tmp_path) -> None:

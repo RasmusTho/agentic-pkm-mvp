@@ -39,9 +39,17 @@ def test_terminal_stop_routes_one_deduplicated_owner_decision(tmp_path) -> None:
         "tried_actions": ["checked the governing contract"],
         "evidence": ["issue #3603"],
         "why_unsafe": "continuation would expand authority",
-        "options": ["hold", "authorize"],
+        "options": [
+            {"id": "hold", "label": "Hold", "consequence": "delivery waits"},
+            {
+                "id": "authorize",
+                "label": "Authorize",
+                "consequence": "delivery continues",
+            },
+        ],
         "no_action_option": "hold",
         "recommended_option": "hold",
+        "recommendation_rationale": "authority has not been granted",
         "consequence_of_doing_nothing": "the delivery remains blocked",
     }
     first = loop.stop("authority-critical", packet)

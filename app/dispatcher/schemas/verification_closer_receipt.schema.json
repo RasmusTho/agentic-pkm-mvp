@@ -75,10 +75,20 @@
               "minItems": 2,
               "maxItems": 3,
               "uniqueItems": true,
-              "items": {"type": "string", "minLength": 1}
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {"type": "string", "minLength": 1},
+                  "label": {"type": "string", "minLength": 1},
+                  "consequence": {"type": "string", "minLength": 1}
+                },
+                "required": ["id", "label", "consequence"],
+                "additionalProperties": false
+              }
             },
             "no_action_option": {"type": "string", "minLength": 1},
             "recommended_option": {"type": "string", "minLength": 1},
+            "recommendation_rationale": {"type": "string", "minLength": 1},
             "consequence_of_doing_nothing": {"type": "string", "minLength": 1}
           },
           "required": [
@@ -91,6 +101,7 @@
             "options",
             "no_action_option",
             "recommended_option",
+            "recommendation_rationale",
             "consequence_of_doing_nothing"
           ],
           "additionalProperties": false
