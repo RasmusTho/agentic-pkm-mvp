@@ -22,7 +22,10 @@ from app.dispatcher.verification_consumer import (
     VerificationConsumer,
     verification_attempt_idempotency_key,
 )
-from app.dispatcher.verification_agent_loop import VerificationAgentLoop
+from app.dispatcher.verification_agent_loop import (
+    VerificationAgentLoop,
+    valid_human_exception_packet,
+)
 from tests.dispatcher.verification_helpers import HEAD, ledger, request
 
 
@@ -637,7 +640,9 @@ def test_needs_human_receipt_requires_valid_complete_owner_packet(tmp_path) -> N
         ).fetchone()[0] == 0
 
 
-def test_human_exception_packet_requires_actionable_decision_space(tmp_path) -> None:
+def test_human_exception_packet_requires_two_to_three_actionable_options(
+    tmp_path,
+) -> None:
     schema = json.loads(
         (
             Path(__file__).resolve().parents[2]
@@ -655,12 +660,16 @@ def test_human_exception_packet_requires_actionable_decision_space(tmp_path) -> 
     for field, value in (
         ("tried_actions", []),
         ("evidence", []),
+        ("options", ["hold"]),
+        ("options", ["hold", "authorize", "defer", "delegate"]),
+        ("options", ["hold", "hold"]),
         ("no_action_option", "not-offered"),
         ("recommended_option", "not-offered"),
     ):
         invalid = {**receipt, "human_exception": {**packet, field: value}}
         with pytest.raises(jsonschema.ValidationError):
             verification_consumer.validate_verification_closer_receipt(invalid, schema)
+        assert not valid_human_exception_packet(invalid["human_exception"])
 
 
 def test_pending_repair_checks_persist_repair_before_backoff(tmp_path) -> None:
