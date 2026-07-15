@@ -10,28 +10,36 @@ services:
     volumes:
       - pgdata-dev:/var/lib/postgresql/data
 
+  migrate:
+    environment:
+      LLM_PROVIDER: mock
+
   api:
     ports: !override
       - "18001:8000"
     environment:
+      LLM_PROVIDER: mock
       PKM_ENVIRONMENT: dev
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
 
   worker:
     environment:
+      LLM_PROVIDER: mock
       PKM_ENVIRONMENT: dev
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
 
   watcher:
     environment:
+      LLM_PROVIDER: mock
       PKM_ENVIRONMENT: dev
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
 
   heimdal-capture-watch:
     environment:
+      LLM_PROVIDER: mock
       PKM_ENVIRONMENT: dev
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
