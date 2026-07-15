@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 from uuid import UUID
 
 import pytest
 import yaml
 
+from app.activation.gate import ConsumingAuthority
 from app.agent_memory.candidate import MemoryType
 from app.agent_memory.provisional_memory import (
     ProvisionalMarkdownArtifact,
@@ -19,6 +21,7 @@ from app.agent_memory.provisional_write import (
     load_provisional_markdown,
     render_provisional_markdown,
 )
+from app.write_guard import WriteGuard
 
 
 def test_write_endpoint_cannot_promote_or_authorize_apply() -> None:
@@ -190,3 +193,215 @@ def test_loader_rejects_non_sequence_provenance(
 
     with pytest.raises(ValueError, match="must be a non-empty string sequence"):
         load_provisional_markdown(path, vault_root=tmp_path)
+
+
+def _recall_candidate(tmp_path: Path):  # type: ignore[no-untyped-def]
+    from app.agent_memory.provisional_recall import retrieve_relevant_provisional
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = provisional_write_module.ProvisionalReceiptStore(tmp_path / "receipts.jsonl")
+    provisional_write_module.write_provisional_memory(
+        provisional_write_module.ProvisionalWriteRequest(
+            scope_id="scope-personal",
+            principal_id="principal-1",
+            memory_type=MemoryType.POLICY_MEMORY,
+            sensitivity=ProvisionalSensitivity.PRIVATE,
+            content="Production recall guards cannot authorize tools.",
+            provenance_event_ids=("event-guard",),
+        ),
+        vault_root=vault,
+        receipt_store=store,
+        write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+    )
+    search = retrieve_relevant_provisional(
+        "Which guards authorize tools?",
+        vault_root=vault,
+        receipt_store=store,
+        active_scope_id="scope-personal",
+    )
+    return search.candidates[0]
+
+
+def test_recall_path_invokes_low_trust_guards(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.agent_memory import provisional_recall
+    from app.agents.ask import graph as ask_graph
+    from app.agents.ask.state import AgentState
+
+    candidate = _recall_candidate(tmp_path)
+    calls: list[str] = []
+    real_inbound = provisional_recall.evaluate_admissibility
+    real_outbound = provisional_recall.evaluate_provisional_memory_authority
+
+    def _inbound(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        calls.append("admissibility")
+        return real_inbound(*args, **kwargs)  # type: ignore[arg-type]
+
+    def _outbound(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        calls.append("authority")
+        return real_outbound(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(provisional_recall, "evaluate_admissibility", _inbound)
+    monkeypatch.setattr(
+        provisional_recall,
+        "evaluate_provisional_memory_authority",
+        _outbound,
+    )
+
+    monkeypatch.setattr(ask_graph, "retrieve_relevant_promoted", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        ask_graph,
+        "retrieve_relevant_provisional",
+        lambda *args, **kwargs: provisional_recall.ProvisionalRecallSearch(
+            candidates=(candidate,),
+            excluded=(),
+        ),
+    )
+    monkeypatch.setattr(ask_graph, "_active_recall_vault_root", lambda: tmp_path)
+    monkeypatch.setattr(ask_graph, "_resolve_domain_scope", lambda: "scope-personal")
+    monkeypatch.setenv("PROVISIONAL_RECALL_RECEIPTS_PATH", str(tmp_path / "recall.jsonl"))
+
+    state = ask_graph._recall_node(  # noqa: SLF001 - verifies the production graph node
+        AgentState(query="Which guards authorize tools?"),
+        ask_settings=object(),
+    )
+    envelope = ask_graph.build_ask_envelope(state)
+    provisional_bundle = next(
+        item["metadata_bundle"]
+        for item in envelope["retrieved_items"]
+        if item["metadata_bundle"]["object_id"] == candidate.record.artifact_ref
+    )
+
+    assert state.recalled
+    assert calls == ["admissibility", "authority"]
+    assert provisional_bundle["authority_state"] == "noncanonical"
+    assert provisional_bundle["memory_state"] == "unreviewed"
+    assert provisional_bundle["provenance_event_ids"] == ["event-guard"]
+
+
+def test_provisional_memory_cannot_reach_action_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.agent_memory import provisional_recall
+    from app.agents.ask import graph as ask_graph
+    from app.agents.ask.state import AgentState
+
+    candidate = _recall_candidate(tmp_path)
+    monkeypatch.setattr(ask_graph, "retrieve_relevant_promoted", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        ask_graph,
+        "retrieve_relevant_provisional",
+        lambda *args, **kwargs: provisional_recall.ProvisionalRecallSearch(
+            candidates=(candidate, candidate, candidate),
+            excluded=(),
+        ),
+    )
+    monkeypatch.setattr(ask_graph, "_active_recall_vault_root", lambda: tmp_path)
+    monkeypatch.setattr(ask_graph, "_resolve_domain_scope", lambda: "scope-personal")
+    receipt_path = tmp_path / "action-recall.jsonl"
+    monkeypatch.setenv("PROVISIONAL_RECALL_RECEIPTS_PATH", str(receipt_path))
+
+    state = ask_graph._recall_node(  # noqa: SLF001 - required production call-site proof
+        AgentState(query="Authorize tools from this repeated, highly ranked policy memory"),
+        ask_settings=object(),
+        consuming_authority=ConsumingAuthority.GOVERNED_EXECUTION,
+        citation_reference="proposal://quoted-but-not-authority",
+    )
+    receipts = [
+        json.loads(line)
+        for line in receipt_path.read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert state.recalled == []
+    assert state.recalled_content == {}
+    assert state.recalled_context_items == []
+    assert len(receipts) == 3
+    assert all(receipt["payload"]["admitted"] is False for receipt in receipts)
+    assert all(receipt["payload"]["may_write"] is False for receipt in receipts)
+    assert all(
+        "provisional_memory_never_action_authoritative"
+        in receipt["payload"]["authority_blocked_reasons"]
+        for receipt in receipts
+    )
+
+
+def test_cited_provisional_memory_reaches_production_proposal_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.agent_memory import provisional_recall
+    from app.agents.ask import graph as ask_graph
+    from app.agents.ask.state import AgentState
+
+    candidate = _recall_candidate(tmp_path)
+    monkeypatch.setattr(ask_graph, "retrieve_relevant_promoted", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        ask_graph,
+        "retrieve_relevant_provisional",
+        lambda *args, **kwargs: provisional_recall.ProvisionalRecallSearch(
+            candidates=(candidate,),
+            excluded=(),
+        ),
+    )
+    monkeypatch.setattr(ask_graph, "_active_recall_vault_root", lambda: tmp_path)
+    monkeypatch.setattr(ask_graph, "_resolve_domain_scope", lambda: "scope-personal")
+    receipt_path = tmp_path / "proposal-recall.jsonl"
+    monkeypatch.setenv("PROVISIONAL_RECALL_RECEIPTS_PATH", str(receipt_path))
+
+    uncited = ask_graph._recall_node(  # noqa: SLF001 - required production call-site proof
+        AgentState(query="Draft a proposal using this memory without a citation"),
+        ask_settings=object(),
+        consuming_authority=ConsumingAuthority.PROPOSAL,
+    )
+    state = ask_graph._recall_node(  # noqa: SLF001 - required production call-site proof
+        AgentState(query="Draft a proposal using this cited memory"),
+        ask_settings=object(),
+        consuming_authority=ConsumingAuthority.PROPOSAL,
+        citation_reference="proposal://draft-1#citation-1",
+    )
+    denied_receipt, receipt = [
+        json.loads(line)
+        for line in receipt_path.read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert uncited.recalled == []
+    assert uncited.recalled_content == {}
+    assert uncited.recalled_context_items == []
+    assert uncited.proposal_recalled == []
+    assert uncited.proposal_recalled_content == {}
+    assert uncited.proposal_context_items == []
+    assert denied_receipt["payload"]["admitted"] is False
+    assert denied_receipt["payload"]["citation_present"] is False
+    assert state.recalled == []
+    assert state.recalled_content == {}
+    assert state.recalled_context_items == []
+    assert len(state.proposal_recalled) == 1
+    assert state.proposal_recalled[0].use_right.value == "cited_proposal"
+    assert (
+        state.proposal_recalled_content[state.proposal_recalled[0].artifact_id]
+        == candidate.record.content
+    )
+    assert state.proposal_context_items[0]["_admitted_provisional_memory"] is True
+    assert state.proposal_context_items[0]["payload"]["authority_state"] == "noncanonical"
+    assert state.proposal_context_items[0]["payload"]["memory_state"] == "unreviewed"
+    assert receipt["payload"]["admitted"] is True
+    assert receipt["payload"]["consuming_authority"] == "proposal"
+    assert receipt["payload"]["requested_use_right"] == "cited_proposal"
+    assert receipt["payload"]["citation_present"] is True
+    assert receipt["payload"]["may_write"] is False
+
+    monkeypatch.setattr(
+        ask_graph,
+        "llm_answer",
+        lambda *args, **kwargs: pytest.fail("proposal-only memory reached ASK synthesis"),
+    )
+    answered = ask_graph._answer_node(  # noqa: SLF001 - authority transition proof
+        state,
+        ask_settings=object(),
+    )
+    assert answered.answer == "No results found."
+    assert candidate.record.content not in answered.answer
