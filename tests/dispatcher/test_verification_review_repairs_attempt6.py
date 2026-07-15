@@ -26,7 +26,7 @@ _SECRET = "credential=SHOULD_NOT_PERSIST"
 _PRIVATE_PATH = "/Users/operator/private-vault"
 _ADVERSARIAL_PRIVATE_VALUES = (
     "OPENAI_API_KEY SHOULD_NOT_PERSIST",
-    "AKIAIOSFODNN7EXAMPLE",
+    "AWS_SECRET=SHOULD_NOT_PERSIST",
     "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature0123456789",
     "/root/.ssh/id_rsa",
     "/srv/private/vault",
@@ -121,7 +121,7 @@ class _UnsafeBlockedLauncher(Launcher):
             "receipt_ids": [
                 f"token={_SECRET}",
                 _PRIVATE_PATH,
-                "AKIAIOSFODNN7EXAMPLE",
+                "AWS_SECRET=SHOULD_NOT_PERSIST",
             ],
             "retry_after": None,
             "review_events": None,
@@ -136,12 +136,12 @@ class _UnsafeDeliveredLauncher(DeliveredLauncher):
         receipt["receipt_ids"] = [
             f"token={_SECRET}",
             _PRIVATE_PATH,
-            "AKIAIOSFODNN7EXAMPLE",
+            "AWS_SECRET=SHOULD_NOT_PERSIST",
         ]
         events = receipt["review_events"]
         assert isinstance(events, list)
         events[0]["session_id"] = _PRIVATE_PATH
-        events[1]["session_id"] = "AKIAIOSFODNN7EXAMPLE"
+        events[1]["session_id"] = "AWS_SECRET=SHOULD_NOT_PERSIST"
         return session, receipt
 
 
