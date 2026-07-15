@@ -96,9 +96,12 @@ cross-process truth belong here.
   revision cursor makes a producer crash after the atomic commit but before event publication
   converge without leaving removed or relocated bindings active.
 - Before each watcher batch, content read/write, queue dispatch/ack, or emitted outbox mutation,
-  compare the current auth epoch/binding revision and validate a live GOV decision for that lifecycle
-  principal and binding. Revocation that races between reconciliation passes blocks the operation and
-  drains the lifecycle; immutable producer provenance never authorizes continued work.
+  acquire the host-global ownership fence and then the binding's cross-process shared effect lease;
+  validate the active channel/root lease, current auth epoch/binding revision, and a live GOV decision.
+  Release the global fence after the stable snapshot but hold the shared lease through I/O, dispatch,
+  acknowledgement, and receipt. Relocation/removal/revocation/transfer takes the ownership fence then
+  matching exclusive binding lease and drains shared effects before changing state. A process-local or
+  check-then-effect guard is insufficient; immutable producer provenance never authorizes continued work.
 - Define start/rebind/drain/stop behavior for zero/one/many bindings, including clean in-flight
   completion and loud partial failure.
 - Propagate the complete background `ActiveContextSet` identity, including binding and generation,
@@ -114,12 +117,14 @@ cross-process truth belong here.
   unknown/ambiguous row remains quarantined for explicit recovery without dispatch or ack. A quarantined unsafe row makes the affected worker
   readiness degraded/blocked but a valid global row never blocks multi-binding startup merely for
   lacking a binding.
-- Before multi-worker activation, prove the production PostgreSQL poll/claim/dispatch/ack seam owns
-  each row exactly once under concurrent independent binding workers. The claim must be atomic in the
-  database (not a plain select followed by a later acknowledgement), preserve singleton ownership for
-  `global` work, and scope `vault_bound` ownership to its binding without permitting a second worker
-  to dispatch the same row. Repository CI runs the race against provisioned PostgreSQL on the exact
-  delivery SHA and errors rather than skips when PostgreSQL or the required claim semantics are absent.
+- Before multi-worker activation, prove the production PostgreSQL poll/claim/dispatch/ack seam gives
+  each row at most one concurrent claim owner through an atomic recoverable database lease/claim, not
+  a plain select followed by later acknowledgement. Preserve the current at-least-once contract:
+  crash after handler effect but before acknowledgement expires/releases the claim for redelivery,
+  and handler/idempotency keys absorb that replay without losing the row or claiming exactly-once
+  effects. `global` work remains singleton; `vault_bound` ownership is binding-scoped. Exact-SHA CI
+  races concurrent workers and injects crash-after-effect; missing PostgreSQL/claim semantics errors,
+  never skips.
 - Revalidate every not-yet-in-flight vault-bound row against the current stable binding, compatible
   registry revision, authorization verdict, routing class, and payload locator before dispatch.
   Captured request/background context and generation remain immutable producer provenance, but a
@@ -156,7 +161,8 @@ acceptance criteria prefixed with its ID:
    write plus deployment/release-channel owner-doc updates. All intent-changing admin commands
    remain capability-gated until 06B.
    Depends on MVR-05D.
-2. **MVR-06B — compatibility bridge handoff:** atomic #3163 watcher bridge retirement, durable picker
+2. **MVR-06B — compatibility bridge handoff:** atomic #3163 watcher bridge retirement plus drain and
+   replacement of the MVR-05 scalar worker with a versioned explicit single-binding handoff, durable picker
    and default-driven compatibility binding, commit-before-hint, Settings Spine drain/rebind, and
    activation only of governed singleton/explicit-empty transitions after the supervisor can honor
    them. A second enrollment and every many-binding transition remain capability-gated through 06C
@@ -176,7 +182,9 @@ Partial-delivery gates are explicit: after 06A, durable intent/auth schema exist
 single-watcher bridge remains authoritative and every add/remove or other intent-changing command
 returns `capability_not_ready`; list/inspect is read-only. 06B atomically replaces the bridge with the revision-reconciling single-binding
 compatibility supervisor and permits only empty/singleton intent; a second binding is rejected.
-06C implements and proves the dormant multi-binding supervisor but keeps second/many-binding
+The 06B cutover enables intent mutation only after both watcher/settings and the old scalar worker
+have drained and the replacement consumes the same durable singleton/empty state. 06C implements and
+proves the dormant multi-binding supervisor but keeps second/many-binding
 enrollment/start sealed; 06D atomically enables many-binding enrollment/start and its matching queued
 dispatch only after the MVR-05 classification receipt and current
 binding/authority checks pass. A later stage never becomes observable before its producer,
@@ -294,8 +302,10 @@ migration, preflight, and fail-loud gate merge together.
   revision cursor without accepting later work on the stale binding.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window`
 - [ ] **MVR-06C:** A pure GOV verdict/role revocation with no registry mutation advances the auth epoch, drains the
-  affected running lifecycle, and blocks its next read/write/outbox/dispatch operation before effect.
-  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_authorization_epoch_revokes_running_lifecycle_before_next_effect`
+  affected lifecycle through the ownership-fence → exclusive binding-lease order. Every background
+  operation holds the matching shared lease from final validation through I/O, dispatch/ack, and
+  receipt, so a racing revocation either waits for an authorized effect or blocks it before effect.
+  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_background_effect_fence_closes_authorization_race_window`
 - [ ] **MVR-06D:** Zero bindings idle truthfully; one binding preserves current behavior; a failed member is
   loud and cannot redirect or mark the whole set healthy.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_zero_one_many_and_partial_failure_are_truthful`
@@ -309,19 +319,22 @@ migration, preflight, and fail-loud gate merge together.
 - [ ] **MVR-06D:** The parent lifecycle-and-dimension acceptance target composes the MVR-04 dimension authority
   contract with isolated zero/one/many watcher and worker behavior before MVR-06 merges.
   - Verify: `tests/integration/test_multi_vault_lifecycle_and_dimension.py::test_parent_dimension_background_acceptance`
-- [ ] **MVR-06C:** Cross-process worker startup consumes explicit versioned binding state, not an untracked
-  process-global/env snapshot, and resolves it into the full background ActiveContextSet before
-  work starts.
-  - Verify: `tests/runtime/test_background_binding_handoff.py::test_worker_handoff_is_versioned_and_explicit`
+- [ ] **MVR-06B:** Before singleton/explicit-empty intent mutation becomes available, the MVR-05 scalar
+  worker is drained and replaced atomically with a worker consuming explicit versioned binding state
+  resolved to the full background ActiveContextSet. Failure leaves the old worker/bridge authoritative
+  and intent mutation sealed; it never leaves duplicate workers or a worker on the prior binding.
+  - Verify: `tests/runtime/test_background_binding_handoff.py::test_scalar_worker_handoff_is_atomic_versioned_and_intent_gated`
 - [ ] **MVR-06D:** MVR-06 validates MVR-05's legacy classification/coalescing receipt before multi-binding start:
-  global topics continue exactly once, scoped vault-bound rows retain one canonical lineage, and
-  unknown/ambiguous rows remain quarantined without dispatch or acknowledgement.
+  global topics retain one canonical row lineage and at-least-once dispatch, scoped vault-bound rows
+  retain one canonical lineage, and unknown/ambiguous rows remain quarantined without dispatch or
+  acknowledgement.
   - Verify: `tests/migrations/test_multi_vault_outbox_upgrade.py::test_mvr06_requires_complete_mvr05_classification_receipt`
 - [ ] **MVR-06D:** Independent production workers racing the PostgreSQL poll/claim/dispatch/ack path
-  acquire one atomic dispatch owner for each global or vault-bound row; no worker can dispatch the
-  same row twice, and the test fails rather than skips without the provisioned database or required
-  locking/claim constraints.
-  - Verify: `tests/integration/test_multi_vault_outbox_pg_claims.py::test_concurrent_binding_workers_claim_each_row_once` +
+  acquire at most one concurrent recoverable claim owner for each global or vault-bound row. A crash
+  after handler effect but before acknowledgement redelivers under the existing at-least-once and
+  idempotency contract without permanent claim/lost work; the test fails rather than skips without
+  PostgreSQL or required lease constraints.
+  - Verify: `tests/integration/test_multi_vault_outbox_pg_claims.py::test_concurrent_claim_owner_and_crash_redelivery_preserve_at_least_once` +
     successful exact-SHA `integration-nightly / pg-contracts` workflow receipt on #2143
 - [ ] **MVR-06A:** The MVR-06 minimum-runtime floor commits before the first background-intent field and blocks
   every older API/watcher/worker before registry access; fault injection leaves either untouched
@@ -382,12 +395,12 @@ PostgreSQL receipt belongs only to 06D.
 
 ### MVR-06B validation
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_settings_spine_bridge_handoff_is_atomic tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff tests/integration/test_multi_vault_background_lifecycle.py::test_picker_commit_precedes_hint_and_survives_event_loss tests/integration/test_multi_vault_background_lifecycle.py::test_default_mutation_rebinds_only_compatibility_lifecycle tests/integration/test_multi_vault_background_lifecycle.py::test_rebind_reuses_settings_spine_and_is_generation_clean tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback tests/runtime/test_background_binding_handoff.py::test_env_only_single_vault_upgrade_preserves_compatibility_watcher tests/runtime/test_background_binding_handoff.py::test_remove_last_then_restart_preserves_explicit_empty_intent tests/runtime/test_background_binding_handoff.py::test_mvr06b_restart_uses_only_durable_authorized_singleton_or_empty_intent tests/api/test_background_binding_admin.py::test_mvr06b_commands_allow_only_singleton_or_empty_intent tests/api/test_background_binding_admin.py::test_stale_binding_intent_can_be_removed_without_content_authority`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_settings_spine_bridge_handoff_is_atomic tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff tests/integration/test_multi_vault_background_lifecycle.py::test_picker_commit_precedes_hint_and_survives_event_loss tests/integration/test_multi_vault_background_lifecycle.py::test_default_mutation_rebinds_only_compatibility_lifecycle tests/integration/test_multi_vault_background_lifecycle.py::test_rebind_reuses_settings_spine_and_is_generation_clean tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback tests/runtime/test_background_binding_handoff.py::test_env_only_single_vault_upgrade_preserves_compatibility_watcher tests/runtime/test_background_binding_handoff.py::test_remove_last_then_restart_preserves_explicit_empty_intent tests/runtime/test_background_binding_handoff.py::test_mvr06b_restart_uses_only_durable_authorized_singleton_or_empty_intent tests/runtime/test_background_binding_handoff.py::test_scalar_worker_handoff_is_atomic_versioned_and_intent_gated tests/api/test_background_binding_admin.py::test_mvr06b_commands_allow_only_singleton_or_empty_intent tests/api/test_background_binding_admin.py::test_stale_binding_intent_can_be_removed_without_content_authority`
 - Verify the 06B PR diff contains its mapped vault/settings and Settings Spine owner-doc targets.
 
 ### MVR-06C validation
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_lifecycle_requires_matching_channel_ownership_lease tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window tests/integration/test_multi_vault_background_lifecycle.py::test_authorization_epoch_revokes_running_lifecycle_before_next_effect tests/api/test_background_binding_admin.py::test_mvr06c_rejects_many_until_mvr06d_dispatch_gate tests/runtime/test_background_binding_handoff.py::test_worker_handoff_is_versioned_and_explicit`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_lifecycle_requires_matching_channel_ownership_lease tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window tests/integration/test_multi_vault_background_lifecycle.py::test_background_effect_fence_closes_authorization_race_window tests/api/test_background_binding_admin.py::test_mvr06c_rejects_many_until_mvr06d_dispatch_gate`
 - Verify the 06C PR diff contains its mapped `docs/ENVIRONMENTS.md` and `docs/HEALTH.md` dormant-
   supervisor writebacks.
 
@@ -395,7 +408,7 @@ PostgreSQL receipt belongs only to 06D.
 
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_two_bindings_run_isolated_lifecycles tests/integration/test_multi_vault_background_lifecycle.py::test_zero_one_many_and_partial_failure_are_truthful tests/api/test_background_binding_admin.py::test_mvr06d_enrollment_enables_many_with_dispatch tests/integration/test_multi_vault_lifecycle_and_dimension.py::test_parent_dimension_background_acceptance tests/migrations/test_multi_vault_outbox_upgrade.py::test_mvr06_requires_complete_mvr05_classification_receipt tests/integration/test_multi_vault_background_lifecycle.py::test_pending_rows_quarantine_across_removal_and_rebind tests/integration/test_multi_vault_background_lifecycle.py::test_pending_rows_survive_compatible_restart_generation tests/architecture/test_multi_vault_context_boundaries.py::test_background_consumers_use_lifecycle_seam`
 - Dispatch exact-head `integration-nightly / pg-contracts` for
-  `tests/integration/test_multi_vault_outbox_pg_claims.py::test_concurrent_binding_workers_claim_each_row_once`;
+  `tests/integration/test_multi_vault_outbox_pg_claims.py::test_concurrent_claim_owner_and_crash_redelivery_preserve_at_least_once`;
   missing PostgreSQL or claim constraints is an error, never a skip, and the successful URL/SHA is
   attached to #2143.
 - Verify the 06D PR diff contains its mapped activated `docs/ENVIRONMENTS.md` and `docs/HEALTH.md`

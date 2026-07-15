@@ -228,10 +228,12 @@ to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup.
   `last_active`, CWD, or `./vault` after an explicit selection fails.
 - One request uses one immutable context generation. A session-only selection change lets in-flight
   reads keep their snapshot. Binding relocation/removal or authority revision invalidates caches and
-  later generations, and every governed mutation must hold a cross-process shared per-binding
-  effect lease from final target/auth revalidation through I/O and receipt. Relocation, removal, and
-  revocation take the matching exclusive lease; stale in-flight mutations fail before writing or a
-  change waits for an already-authorized effect to complete under the prior revision.
+  later generations. Every foreground read/write and background content/dispatch/ack effect acquires
+  the host-global ownership fence and then a cross-process shared per-binding effect lease, releases
+  the global fence after final target/auth revalidation, and holds the shared lease through I/O,
+  cache/response/ack, and receipt. Relocation, removal, transfer, and revocation use the same order
+  with the matching exclusive lease; stale effects fail before access or a change waits for an
+  already-authorized effect to complete under the prior revision.
 - Every read, retrieval result, write, receipt, cache entry, and background binding preserves
   vault identity and context-generation provenance.
 - Container registry/default/background intent survives force-recreate on a shared instance-state
@@ -277,7 +279,8 @@ Partial delivery remains fail-closed:
   no global "multi-vault delivered" claim is allowed;
 - after issue 05B but before issue 06B, the existing picker alone continues to drive #3163's named
   single-watcher bridge while scoped request/session selection does not; issue 06B atomically hands
-  that live binding to the durable supervisor before disabling the bridge;
+  that live binding plus the MVR-05 scalar worker to versioned durable singleton/empty state before
+  disabling the bridge or enabling intent mutation;
 - before issue 05A enables the first binding-keyed compatibility producer, every pending legacy
   outbox key is classified and
   scoped/coalesced under the DB fence; identical retries preserve one canonical lineage and
