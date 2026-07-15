@@ -1920,9 +1920,7 @@ def _trusted_evidence_urls(run: VerificationRun) -> frozenset[str]:
         return None
 
     issue_numbers = [positive_int(run.request.get("linked_issue"))]
-    supporting = run.request.get("supporting_issues")
-    if isinstance(supporting, list):
-        issue_numbers.extend(positive_int(value) for value in supporting)
+    issue_numbers.extend(positive_int(value) for value in run.supporting_authority)
     for issue_number in issue_numbers:
         if issue_number is not None:
             urls.add(f"{web_base}/issues/{issue_number}")
@@ -1946,12 +1944,10 @@ def _trusted_evidence_urls(run: VerificationRun) -> frozenset[str]:
 
 def _governing_contract_matches(run: VerificationRun, pr_body: object) -> bool:
     issue_contract = resolve_issue_contract(pr_body)
-    requested_support = run.request.get("supporting_issues")
     return bool(
         issue_contract is not None
         and issue_contract[0] == run.request.get("linked_issue")
-        and isinstance(requested_support, list)
-        and set(requested_support).issubset(issue_contract[1])
+        and set(run.supporting_authority).issubset(issue_contract[1])
     )
 
 

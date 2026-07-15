@@ -14,6 +14,8 @@ from app.dispatcher.verification_consumer import (
     CodexExecLauncher,
     GhCliVerificationSource,
     VerificationConsumer,
+    _governing_contract_matches,
+    _trusted_evidence_urls,
 )
 from app.dispatcher.verification_dispatch import VerificationDispatchLedger
 from tests.dispatcher.test_verification_consumer import (
@@ -499,7 +501,7 @@ def test_authenticated_new_head_accepts_monotonic_supporting_issue_extension(
     assert state.attempts(run_id) == before
 
 
-def test_successive_takeovers_enforce_durable_cumulative_supporting_authority(
+def test_successive_takeovers_preserve_monotonic_supporting_evidence(
     tmp_path: Path,
 ) -> None:
     state = ledger(tmp_path)
@@ -511,6 +513,8 @@ def test_successive_takeovers_enforce_durable_cumulative_supporting_authority(
     source, _ = _gh_source(repaired)
 
     first_takeover = state.ingest(source.pending_requests(REPO)[0])
+    assert first_takeover.request["supporting_issues"] == [3626]
+    assert first_takeover.supporting_authority == (3626, 3783)
     claimed = state.claim(run_id, "head-b-host")
     lease_id = claimed.lease_id or ""
     state.start(
@@ -541,6 +545,7 @@ def test_successive_takeovers_enforce_durable_cumulative_supporting_authority(
     assert retained.requested_head_sha == HEAD
     assert retained.current_head_sha == REPAIRED_HEAD
     assert retained.request["supporting_issues"] == [3626]
+    assert retained.supporting_authority == (3626, 3783)
     assert state.attempts(run_id) == before
     with state.store._connect() as conn:
         durable = conn.execute(
@@ -559,6 +564,8 @@ def test_successive_takeovers_enforce_durable_cumulative_supporting_authority(
     assert second_takeover.status == "queued"
     assert second_takeover.requested_head_sha == HEAD
     assert second_takeover.current_head_sha == THIRD_REPAIRED_HEAD
+    assert second_takeover.request["supporting_issues"] == [3626]
+    assert second_takeover.supporting_authority == (3626, 3783, 3784)
     assert state.attempts(run_id) == before
     with state.store._connect() as conn:
         durable = conn.execute(
@@ -567,6 +574,73 @@ def test_successive_takeovers_enforce_durable_cumulative_supporting_authority(
         ).fetchone()
     assert durable is not None
     assert json.loads(durable["supporting_authority_json"]) == [3626, 3783, 3784]
+
+
+def test_successive_takeover_cannot_replace_prior_supporting_evidence(
+    tmp_path: Path,
+) -> None:
+    state = ledger(tmp_path)
+    original = request()
+    original["supporting_issues"] = [3626]
+    run_id, before = _record_exhausted_chain(state, original)
+    repaired = request(REPAIRED_HEAD)
+    repaired["supporting_issues"] = [3626, 3783]
+    source, _ = _gh_source(repaired)
+    state.ingest(source.pending_requests(REPO)[0])
+    claimed = state.claim(run_id, "head-b-host")
+    lease_id = claimed.lease_id or ""
+    state.start(
+        run_id,
+        "head-b-host",
+        lease_id,
+        "01900000-0000-7000-8000-000000000104",
+        {"head_sha": REPAIRED_HEAD},
+    )
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET lease_expires_at=? WHERE run_id=?",
+            ("2000-01-01T00:00:00+00:00", run_id),
+        )
+        conn.commit()
+    replacement = request(SECOND_REPAIRED_HEAD)
+    replacement["supporting_issues"] = [3626, 999999]
+    replacement_source, _ = _gh_source(replacement)
+
+    with pytest.raises(
+        ValueError, match="verification artifact head does not match canonical run"
+    ):
+        state.ingest(replacement_source.pending_requests(REPO)[0])
+
+    retained = state.get(run_id)
+    assert retained is not None
+    assert retained.status == "running"
+    assert retained.current_head_sha == REPAIRED_HEAD
+    assert retained.request["supporting_issues"] == [3626]
+    assert retained.supporting_authority == (3626, 3783)
+    assert state.attempts(run_id) == before
+
+
+def test_takeover_updates_cumulative_authority_projection(tmp_path: Path) -> None:
+    state = ledger(tmp_path)
+    original = request()
+    original["supporting_issues"] = [3626]
+    run_id, _ = _record_exhausted_chain(state, original)
+    repaired = request(REPAIRED_HEAD)
+    repaired["supporting_issues"] = [3626, 3783]
+    source, _ = _gh_source(repaired)
+
+    reopened = state.ingest(source.pending_requests(REPO)[0])
+    complete_body = "Governing-Issue: #3603\n\nFixes #3626\nFixes #3783"
+    missing_extension = "Governing-Issue: #3603\n\nFixes #3626"
+
+    assert reopened.run_id == run_id
+    assert reopened.request["supporting_issues"] == [3626]
+    assert reopened.supporting_authority == (3626, 3783)
+    assert f"https://github.com/{REPO}/issues/3783" in _trusted_evidence_urls(
+        reopened
+    )
+    assert _governing_contract_matches(reopened, complete_body)
+    assert not _governing_contract_matches(reopened, missing_extension)
 
 
 def test_expired_head_reconciliation_rejects_unauthenticated_valid_artifact(

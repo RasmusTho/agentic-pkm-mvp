@@ -342,6 +342,7 @@ class VerificationRun:
     lease_expires_at: str | None
     coordinator_session_id: str | None
     request: dict[str, object]
+    supporting_authority: tuple[int, ...]
     context_pack: dict[str, object] | None
     terminal_receipt: dict[str, object] | None
     stop_reason: str | None
@@ -354,6 +355,8 @@ class VerificationRun:
 
 
 def _run(row: sqlite3.Row) -> VerificationRun:
+    request = _validated_row_request(row)
+    supporting_authority = tuple(_validated_supporting_authority(row, request))
     return VerificationRun(
         run_id=row["run_id"],
         idempotency_key=row["idempotency_key"],
@@ -368,7 +371,8 @@ def _run(row: sqlite3.Row) -> VerificationRun:
         lease_id=row["lease_id"],
         lease_expires_at=row["lease_expires_at"],
         coordinator_session_id=row["coordinator_session_id"],
-        request=_validated_row_request(row),
+        request=request,
+        supporting_authority=supporting_authority,
         context_pack=_load(row["context_pack_json"]),
         terminal_receipt=_load(row["terminal_receipt_json"]),
         stop_reason=row["stop_reason"],
