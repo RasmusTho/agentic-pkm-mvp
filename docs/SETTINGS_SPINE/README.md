@@ -112,14 +112,12 @@ respectively — task 8 marks them so.
 
 ## Follow-up capability flagged, not in this spec
 
-While ruling on SETTINGS-05 (rebind on vault selection), the owner flagged a larger wanted
-capability: spinning up additional, time-limited watchers on demand (not just one watcher
-following one active selection). SETTINGS-05's rebind mechanism (commit a shared monotonic
-selection revision, reconcile it cross-process, re-resolve, resume) is the reusable building block a future multi-watcher
-task would instantiate per watcher, but running more than one watcher concurrently is a distinct
-capability (watcher lifecycle management: spin up, tear down, scope, resource limits) and is
-explicitly out of scope here. Worth its own bounded issue once SETTINGS-05 ships and the
-single-watcher-follows-selection mechanism is proven.
+While ruling on SETTINGS-05 (rebind on vault selection), the owner also flagged multi-binding
+watcher lifecycle supervision. That scope is now owned—without a duplicate issue—by
+`docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md` (MVR-06 under #2143), which reuses
+SETTINGS-05's monotonic cross-process rebind seam. The only residual follow-up not owned there is
+time-limited scheduling/resource policy for on-demand lifecycles; create a bounded issue for that
+policy only after MVR-06 ships and only if no existing scheduling/resource-policy contract owns it.
 
 ## Related docs
 

@@ -21,8 +21,10 @@ no new runtime behavior.
 
 - Run the capability acceptance suite on merged `origin/main`, including concurrent sessions,
   dimension resolution, background lifecycles, governed writes, and no/one-vault compatibility.
-- Execute the relevant isolated test-channel journey and record redacted vault-binding/startup
-  evidence.
+- Before authoring shipped owner truth, route MVR-07's exact merged `origin/main` SHA through the
+  governed test-channel promotion workflow, execute the isolated two-binding journey, and record the
+  durable promotion plus redacted vault-binding/startup evidence. A failed or missing live-channel
+  proof blocks the MVR-08 PR rather than allowing docs to claim shipped support.
 - Promote shipped truth into architecture, ActiveContextSet, topology, settings/environment, SBS
   debt, and docs index surfaces; remove future-state wording only where evidence supports it.
 - Reconcile #2566 and #3156/#3163 dependency/status truth without duplicating or auto-closing their
@@ -88,8 +90,15 @@ operators, or future agents still act on stale single-global-vault truth.
   - Verify: `tests/integration/test_multi_vault_capability_acceptance.py::test_merged_multi_vault_capability`
 - [ ] No-vault and one-vault compatibility targets pass on the same MVR-08 candidate head.
   - Verify: `tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`
+- [ ] Before any shipped-truth owner-doc edit is authored, MVR-07's exact merged `origin/main` SHA has
+  a successful durable governed test-channel promotion receipt and a redacted PASS receipt from the
+  isolated two-binding smoke; a missing or failed receipt leaves MVR-08 blocked and owner truth
+  unchanged.
+  - Verify: durable test-channel promotion receipt for the exact MVR-07 merge SHA + runtime receipt
+    on GitHub issue `#2143`
 - [ ] Architecture/context/topology/settings/environment owner docs and transition debt match
-  shipped behavior; every spec file remains indexed.
+  shipped behavior; every spec file remains indexed. These writebacks are authored only after a
+  successful durable test-channel promotion and redacted smoke receipt for MVR-07's exact merged SHA.
   - Verify: doc writeback at `docs/ARCHITECTURE.md :: Active context and vault bindings` + doc
   writeback at `docs/contracts/ACTIVE_CONTEXT_SET.md :: Runtime status` + doc writeback at
   `docs/contracts/GOVERNED_WRITE_PROTOCOL.md :: GovernedWriteProtocol` + doc writeback at
@@ -131,14 +140,20 @@ operators, or future agents still act on stale single-global-vault truth.
   detached worktree at that exact ref, run every already-delivered child/capability target there,
   and post the SHA/result to #2143. A dirty, branch-local, or stale run blocks preparation of the
   MVR-08 promotion PR; this proves merged runtime before its description is promoted.
+- Route that same exact MVR-07 merged SHA through the governed
+  [promote-to-test](../../.codex/skills/promote-to-test/SKILL.md) workflow and run
+  `python3 scripts/multi_vault_test_channel_smoke.py --channel test --fixture-manifest "$MVR_TEST_FIXTURE_MANIFEST" --json`
+  against the resulting deployment. The durable promotion and redacted PASS receipt must both name
+  the exact MVR-07 SHA before any shipped-truth owner-doc edit is authored or merged. Failure leaves
+  MVR-08 unstarted/blocked and current-state owner docs unchanged.
 - In that MVR-07 merged-head worktree run:
   `pytest -q tests/instance/test_vault_registry_migration.py::test_parent_registry_acceptance tests/integration/test_multi_vault_request_isolation.py::test_parent_request_context_acceptance tests/integration/test_multi_vault_lifecycle_and_dimension.py::test_parent_dimension_background_acceptance tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior tests/integration/test_multi_vault_dimensions.py::test_dimension_preserves_per_binding_authority_and_provenance tests/architecture/test_multi_vault_context_boundaries.py::test_production_consumers_use_context_seam tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`.
 - On the PR head, run every child pre-merge target plus docs/lint checks; this is candidate evidence,
   not the merged-head closure receipt.
 - `pytest -q tests/integration/test_multi_vault_capability_acceptance.py::test_merged_multi_vault_capability tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/uat/`
-- Do not require a live pinned-image promotion of the unmerged PR head: the current governed image
-  producer publishes pullable SHA tags only from `main`. On the PR head, verify the candidate image
+- Do not require a live pinned-image promotion of the unmerged MVR-08 PR head: the required
+  pre-authoring live proof targets MVR-07's already-merged, publishable SHA. On the PR head, verify the candidate image
   build and all smoke harness/root-isolation contracts locally/CI without claiming deployment
   evidence. If the live test channel is still checkout-based, an additional exact-checkout run is
   allowed but remains candidate evidence and cannot satisfy parent closure. A pinned-image run must

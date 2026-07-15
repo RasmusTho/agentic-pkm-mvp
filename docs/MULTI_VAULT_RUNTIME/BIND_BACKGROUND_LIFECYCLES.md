@@ -53,8 +53,15 @@ cross-process truth belong here.
   legacy bootstrap, then truthful no-vault—so an env-backed one-vault watcher is not idled while
   foreground resolution still selects its bootstrap binding. The commit atomically replaces
   `compatibility_binding_id` with that resolved binding or nullable no-vault and stores event
-  provenance in the revision. Any governed add/remove command
-  transitions to explicit mode. `explicit` with an empty binding list is durable and means idle—it
+  provenance in the revision. The first governed add/remove command never starts from an implicit
+  empty set: under the same locked revision-checked transaction it snapshots the effective
+  compatibility singleton (`{compatibility_binding_id}`), or the truthful empty set when
+  compatibility is no-vault, then applies the requested add/remove and commits the result as
+  explicit. Adding the same member or removing a nonmember is idempotent against that snapshot;
+  removing the compatibility member yields explicit-empty. While 06B permits at most one explicit
+  member, adding a different member to a non-empty compatibility snapshot would yield two and
+  therefore fails `capability_not_ready` without changing mode or state; replacement requires an
+  explicit remove followed by add. `explicit` with an empty binding list is durable and means idle—it
   must never re-enrol the default after restart. This state mutates through MVR-01's locked,
   revision-checked atomic registry transaction.
 - Add governed production add/remove/list operations for that set through the existing
@@ -189,7 +196,9 @@ acceptance criteria prefixed with its ID:
    and default-driven compatibility binding, preserved mutation-gate/final-scan/quiesce → commit →
    resume semantics, Settings Spine drain/rebind, and
    activation only of governed singleton/explicit-empty transitions after the supervisor can honor
-   them. Before any singleton activation it proves the exact channel/root ownership lease, binding
+   them. The first mutation atomically snapshots the effective compatibility singleton before
+   applying add/remove, so it cannot silently drop the running binding. Before any singleton
+   activation it proves the exact channel/root ownership lease, binding
    revision, and auth epoch; continuously reconciles their durable changes; and holds the shared
    per-binding effect lease through every watcher/worker/settings I/O, dispatch/ack, and receipt.
    Existing GOV-revocation producers take the matching exclusive lease. Only after those background
@@ -320,6 +329,12 @@ migration, preflight, and fail-loud gate merge together.
   singleton or explicit-empty background intent, reject unknown/unauthorized or second bindings,
   atomically commit a durable revision, and publish an idempotent wake-up event for that revision.
   - Verify: `tests/api/test_background_binding_admin.py::test_mvr06b_commands_allow_only_singleton_or_empty_intent`
+- [ ] **MVR-06B:** The first governed add/remove while in compatibility mode atomically snapshots the
+  effective compatibility singleton (or truthful no-vault empty set) before applying the operation:
+  remove-current yields explicit-empty, add-current/remove-nonmember preserves the singleton, and
+  add-different is rejected as a gated second enrollment without changing mode or stopping the
+  compatibility lifecycle.
+  - Verify: `tests/api/test_background_binding_admin.py::test_first_explicit_mutation_snapshots_compatibility_singleton_before_apply`
 - [ ] **MVR-06B:** Instance-authorized removal clears stale stored intent idempotently even after its registry
   entry disappears or content authority is lost; add still requires live membership and authority.
   - Verify: `tests/api/test_background_binding_admin.py::test_stale_binding_intent_can_be_removed_without_content_authority`
@@ -472,7 +487,7 @@ PostgreSQL receipt belongs only to 06D.
 
 ### MVR-06B validation
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_settings_spine_bridge_handoff_is_atomic tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff tests/integration/test_multi_vault_background_lifecycle.py::test_post_handoff_picker_rebind_preserves_two_phase_failure_atomicity tests/integration/test_multi_vault_background_lifecycle.py::test_default_mutation_rebinds_only_compatibility_lifecycle tests/integration/test_multi_vault_background_lifecycle.py::test_rebind_reuses_settings_spine_and_is_generation_clean tests/integration/test_multi_vault_background_lifecycle.py::test_lifecycle_requires_matching_channel_ownership_lease tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window tests/integration/test_multi_vault_background_lifecycle.py::test_registration_removal_activates_after_all_consumer_floors tests/integration/test_multi_vault_background_lifecycle.py::test_background_effect_fence_closes_authorization_race_window tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback tests/runtime/test_background_binding_handoff.py::test_env_only_single_vault_upgrade_preserves_compatibility_watcher tests/runtime/test_background_binding_handoff.py::test_remove_last_then_restart_preserves_explicit_empty_intent tests/runtime/test_background_binding_handoff.py::test_mvr06b_restart_uses_only_durable_authorized_singleton_or_empty_intent tests/runtime/test_background_binding_handoff.py::test_scalar_worker_handoff_is_atomic_versioned_and_intent_gated tests/runtime/test_background_binding_handoff.py::test_background_context_has_explicit_workspace_and_capability_identity tests/api/test_background_binding_admin.py::test_mvr06b_commands_allow_only_singleton_or_empty_intent tests/api/test_background_binding_admin.py::test_stale_binding_intent_can_be_removed_without_content_authority`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_settings_spine_bridge_handoff_is_atomic tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff tests/integration/test_multi_vault_background_lifecycle.py::test_post_handoff_picker_rebind_preserves_two_phase_failure_atomicity tests/integration/test_multi_vault_background_lifecycle.py::test_default_mutation_rebinds_only_compatibility_lifecycle tests/integration/test_multi_vault_background_lifecycle.py::test_rebind_reuses_settings_spine_and_is_generation_clean tests/integration/test_multi_vault_background_lifecycle.py::test_lifecycle_requires_matching_channel_ownership_lease tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window tests/integration/test_multi_vault_background_lifecycle.py::test_registration_removal_activates_after_all_consumer_floors tests/integration/test_multi_vault_background_lifecycle.py::test_background_effect_fence_closes_authorization_race_window tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback tests/runtime/test_background_binding_handoff.py::test_env_only_single_vault_upgrade_preserves_compatibility_watcher tests/runtime/test_background_binding_handoff.py::test_remove_last_then_restart_preserves_explicit_empty_intent tests/runtime/test_background_binding_handoff.py::test_mvr06b_restart_uses_only_durable_authorized_singleton_or_empty_intent tests/runtime/test_background_binding_handoff.py::test_scalar_worker_handoff_is_atomic_versioned_and_intent_gated tests/runtime/test_background_binding_handoff.py::test_background_context_has_explicit_workspace_and_capability_identity tests/api/test_background_binding_admin.py::test_mvr06b_commands_allow_only_singleton_or_empty_intent tests/api/test_background_binding_admin.py::test_first_explicit_mutation_snapshots_compatibility_singleton_before_apply tests/api/test_background_binding_admin.py::test_stale_binding_intent_can_be_removed_without_content_authority`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_handoff_buffers_direct_filesystem_write_through_commit`
 - Verify the 06B PR diff contains its mapped vault/settings, Settings Spine, environment, and health
   owner-doc targets.
