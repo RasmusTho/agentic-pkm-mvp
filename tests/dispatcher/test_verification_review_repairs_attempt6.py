@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import pytest
 
 from app.dispatcher.cli import _compact_verification_run
 from app.dispatcher.verification_consumer import (
+    CodexExecLauncher,
     VerificationConsumer,
     _checks_rejection,
     _trusted_evidence_urls,
@@ -390,6 +392,86 @@ def test_retry_after_is_bounded_and_canonical(
     sanitized = sanitize_verification_closer_receipt(receipt)
 
     assert sanitized["retry_after"] == expected
+
+
+def _mixed_channel_failure_launcher(
+    tmp_path, *, stderr: str, terminal_event: dict[str, object]
+) -> CodexExecLauncher:
+    class Result:
+        returncode = 1
+
+        def __init__(self) -> None:
+            self.stdout = "\n".join(
+                (
+                    json.dumps(
+                        {
+                            "type": "thread.started",
+                            "thread_id": "01900000-0000-7000-8000-000000000092",
+                        }
+                    ),
+                    json.dumps(terminal_event),
+                )
+            )
+            self.stderr = stderr
+
+    def runner(*args, **kwargs):
+        return Result()
+
+    return CodexExecLauncher(
+        tmp_path,
+        Path(__file__).resolve().parents[2]
+        / "app/dispatcher/schemas/verification_closer_receipt.schema.json",
+        tmp_path / "context.json",
+        adapter_path=Path(__file__).resolve().parents[2]
+        / ".codex/agents/verification-closer.toml",
+        runner=runner,
+    )
+
+
+def test_structured_stdout_rate_limit_is_not_masked_by_benign_stderr(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        _mixed_channel_failure_launcher(
+            tmp_path,
+            stderr="benign provider warning",
+            terminal_event={
+                "type": "error",
+                "error": {"code": "rate_limit_exceeded", "status": 429},
+            },
+        ),
+        "host",
+    ).consume(request())
+
+    assert result.status == "backoff"
+    assert result.terminal_receipt["api_fallback"] is False
+    assert result.terminal_receipt["failure_receipt"]["failure_class"] == "rate_limit"
+    assert state.attempts(result.run_id)[-1]["outcome"] == "rate_limited"
+
+
+def test_mixed_channel_prose_does_not_authorize_rate_limit_backoff(tmp_path) -> None:
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        _mixed_channel_failure_launcher(
+            tmp_path,
+            stderr="rate limit exceeded according to a free-form warning",
+            terminal_event={
+                "type": "error",
+                "message": "free-form 429 rate limit prose",
+            },
+        ),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "codex_exec_failed"
+    assert result.terminal_receipt["failure_class"] == "execution"
 
 
 def test_allowlisted_text_projection_preserves_structural_receipt_fields() -> None:

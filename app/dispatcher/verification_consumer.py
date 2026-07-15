@@ -1667,9 +1667,16 @@ class CodexExecLauncher:
                 }
             )
         if returncode != 0 or terminal_error is not None:
-            detail = "".join(stderr_chunks).strip() or terminal_error or "no stderr"
+            stderr_detail = "".join(stderr_chunks).strip()
+            detail = stderr_detail or terminal_error or "no stderr"
             failure_class = (
-                "rate_limit" if _is_rate_limit_exec_failure(detail) else "execution"
+                "rate_limit"
+                if any(
+                    _is_rate_limit_exec_failure(candidate)
+                    for candidate in (stderr_detail, terminal_error)
+                    if candidate
+                )
+                else "execution"
             )
             raise CodexExecFailure(
                 {

@@ -66,7 +66,8 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - Missing or pending checks and auth/rate limits enter time-bounded `backoff`; replay cannot launch
   before `retry_after`. Rate-limit classification requires either a structured `retry` receipt or the
   launcher's structured `failure_class=rate_limit`, derived once from a non-zero provider failure;
-  only parsed provider fields such as status 429 or canonical failure codes can create that signal,
+  only parsed provider fields such as status 429 or canonical failure codes, inspected independently
+  across bounded stderr and structured terminal events, can create that signal,
   while free-form, arbitrary, negated, or explicitly false terminal/stderr prose cannot select
   rate-limit backoff. Terminal completion
   additionally requires two fresh clean
@@ -126,7 +127,8 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - The Codex process boundary drains bounded stderr concurrently and rejects non-zero exits or
   terminal error events even when stdout contained an otherwise valid receipt. A bounded rate-limit,
   usage-limit, quota, or credit-exhaustion signal on that non-zero path remains a lease-fenced backoff
-  receipt with no repair-budget use or API-key fallback. Raw stderr, terminal event content, exception
+  receipt with no repair-budget use or API-key fallback; either diagnostic channel can supply the
+  structured signal without masking the other. Raw stderr, terminal event content, exception
   text, paths, and credentials are transient classification input only: durable attempts, terminal
   receipts, and `verification-status` retain only bounded outcome, return-code, failure-class,
   error-type, retry, and canonical UUID coordinator-session fields. A zero exit without both thread
