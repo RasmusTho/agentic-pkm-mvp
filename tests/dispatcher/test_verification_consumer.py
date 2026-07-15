@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 from threading import Condition, Thread
@@ -3389,6 +3390,176 @@ def _nonzero_codex_launcher(tmp_path, stderr: str) -> CodexExecLauncher:
         / ".codex/agents/verification-closer.toml",
         runner=runner,
     )
+
+
+def _codex_json_usage_failure_launcher(
+    tmp_path: Path,
+    *,
+    message: str,
+    nested: bool = False,
+    stderr: str = "",
+) -> tuple[CodexExecLauncher, list[list[str]]]:
+    class Result:
+        returncode = 1
+
+        def __init__(self) -> None:
+            event = (
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "type": "agent_message",
+                        "text": json.dumps({"type": "error", "message": message}),
+                    },
+                }
+                if nested
+                else {"type": "error", "message": message}
+            )
+            self.stdout = "\n".join(
+                (
+                    json.dumps(
+                        {
+                            "type": "thread.started",
+                            "thread_id": "01900000-0000-7000-8000-000000000017",
+                        }
+                    ),
+                    json.dumps(event),
+                    json.dumps(
+                        {
+                            "type": "turn.failed",
+                            "error": {"message": "synthetic execution failure"},
+                        }
+                    ),
+                )
+            )
+            self.stderr = stderr
+
+    calls: list[list[str]] = []
+
+    def runner(command: list[str], **_kwargs: object) -> Result:
+        calls.append(command)
+        return Result()
+
+    launcher = CodexExecLauncher(
+        tmp_path,
+        Path(__file__).resolve().parents[2]
+        / "app/dispatcher/schemas/verification_closer_receipt.schema.json",
+        tmp_path / "context.json",
+        adapter_path=Path(__file__).resolve().parents[2]
+        / ".codex/agents/verification-closer.toml",
+        runner=runner,
+    )
+    return launcher, calls
+
+
+def test_codex_json_usage_limit_event_enters_durable_backoff(tmp_path) -> None:
+    state = ledger(tmp_path)
+    launcher, calls = _codex_json_usage_failure_launcher(
+        tmp_path,
+        message="You've hit your usage limit. Synthetic retry guidance.",
+    )
+
+    result = VerificationConsumer(
+        state, Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "backoff"
+    assert result.terminal_receipt["outcome"] == "rate_limited"
+    assert result.terminal_receipt["api_fallback"] is False
+    assert result.terminal_receipt["failure_receipt"]["failure_class"] == "rate_limit"
+    assert len(calls) == 1
+    with state.store._connect() as conn:
+        attempts = conn.execute(
+            "SELECT attempt_kind, outcome FROM verification_attempts"
+        ).fetchall()
+    assert [(row[0], row[1]) for row in attempts] == [
+        ("verification", "rate_limited")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("message", "nested", "stderr"),
+    [
+        ("This is not a usage limit.", False, ""),
+        ("Example: You've hit your usage limit.", False, ""),
+        ("You've hit your usage limit: false", False, ""),
+        ("You've hit your usage limit. Nested model text.", True, ""),
+        (
+            "synthetic execution failure",
+            False,
+            "You've hit your usage limit. Untrusted stderr.",
+        ),
+        (
+            "synthetic execution failure",
+            False,
+            json.dumps(
+                {
+                    "type": "error",
+                    "message": "You've hit your usage limit. Untrusted stderr JSON.",
+                }
+            ),
+        ),
+    ],
+)
+def test_untrusted_usage_limit_text_cannot_mint_backoff(
+    tmp_path: Path, message: str, nested: bool, stderr: str
+) -> None:
+    launcher, _ = _codex_json_usage_failure_launcher(
+        tmp_path, message=message, nested=nested, stderr=stderr
+    )
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "codex_exec_failed"
+    assert result.terminal_receipt["failure_class"] == "execution"
+
+
+def test_codex_json_usage_limit_backoff_replay_is_idempotent(tmp_path) -> None:
+    state = ledger(tmp_path)
+    launcher, calls = _codex_json_usage_failure_launcher(
+        tmp_path,
+        message="You've hit your usage limit. Synthetic retry guidance.",
+    )
+    consumer = VerificationConsumer(
+        state, Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    )
+
+    first = consumer.consume(request())
+    replay = consumer.consume(request())
+
+    assert first.run_id == replay.run_id
+    assert first.status == replay.status == "backoff"
+    assert len(calls) == 1
+    with state.store._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM verification_runs").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM verification_attempts").fetchone()[0] == 1
+
+
+def test_codex_json_usage_limit_event_is_not_durable(tmp_path) -> None:
+    marker = "You've hit your usage limit. SYNTHETIC_PRIVATE_DIAGNOSTIC"
+    state = ledger(tmp_path)
+    launcher, _ = _codex_json_usage_failure_launcher(tmp_path, message=marker)
+
+    result = VerificationConsumer(
+        state, Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+    backup = tmp_path / "dispatcher-backup.sqlite3"
+    with state.store._connect() as source, sqlite3.connect(backup) as destination:
+        source.backup(destination)
+
+    durable = json.dumps(
+        {
+            "attempts": state.attempts(result.run_id),
+            "terminal": result.terminal_receipt,
+            "status": _compact_verification_run(result),
+        },
+        sort_keys=True,
+    )
+    assert marker not in durable
+    assert marker.encode() not in state.store.db_path.read_bytes()
+    assert marker.encode() not in backup.read_bytes()
 
 
 def test_negated_nonzero_rate_limit_text_is_not_backoff_evidence(tmp_path) -> None:

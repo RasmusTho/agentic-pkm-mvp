@@ -1467,6 +1467,28 @@ def _is_rate_limit_exec_failure(detail: str) -> bool:
     return False
 
 
+def _is_codex_usage_limit_event(event: object) -> bool:
+    """Recognize the bounded Codex CLI envelope for subscription exhaustion."""
+
+    if not isinstance(event, Mapping) or event.get("type") != "error":
+        return False
+    message = event.get("message")
+    if not isinstance(message, str):
+        return False
+    normalized = " ".join(message.strip().split()).casefold()
+    prefixes = (
+        "you've hit your usage limit",
+        "you’ve hit your usage limit",
+        "you have hit your usage limit",
+    )
+    return any(
+        normalized == prefix
+        or normalized.startswith(prefix + ".")
+        or normalized.startswith(prefix + "!")
+        for prefix in prefixes
+    )
+
+
 class CodexExecLauncher:
     """Explicit least-privilege non-interactive verification coordinator."""
 
@@ -1777,6 +1799,7 @@ class CodexExecLauncher:
         thread_id: str | None = resume_session_id
         terminal: dict[str, object] | None = None
         terminal_error: str | None = None
+        terminal_rate_limited = False
         try:
             for line in lines:
                 if authority_lost.is_set():
@@ -1787,6 +1810,10 @@ class CodexExecLauncher:
                     continue
                 if event.get("type") in {"turn.failed", "error"}:
                     terminal_error = json.dumps(event, sort_keys=True)
+                    terminal_rate_limited = (
+                        _is_codex_usage_limit_event(event)
+                        or terminal_rate_limited
+                    )
                 if event.get("type") == "thread.started" and isinstance(event.get("thread_id"), str):
                     thread_id = event["thread_id"]
                     if on_thread_started:
@@ -1872,7 +1899,8 @@ class CodexExecLauncher:
             detail = stderr_detail or terminal_error or "no stderr"
             failure_class = (
                 "rate_limit"
-                if any(
+                if terminal_rate_limited
+                or any(
                     _is_rate_limit_exec_failure(candidate)
                     for candidate in (stderr_detail, terminal_error)
                     if candidate
