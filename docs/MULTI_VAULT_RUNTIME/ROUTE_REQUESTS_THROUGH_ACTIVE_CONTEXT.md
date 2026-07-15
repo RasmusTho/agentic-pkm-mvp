@@ -59,8 +59,10 @@ not background lifecycles.
 - Version every MVR-05 vault-bound outbox producer with `routing_class=vault_bound`, stable binding,
   and captured context identity before it may serve multi-vault writes. In the same slice, teach the
   still-scalar worker to recognize that envelope. It may dispatch only after production resolution
-  proves the registry contains exactly one authorized binding, the row names that binding, and the
-  worker's resolved root/fingerprint matches its current binding revision. Otherwise it leaves the
+  proves the row names the worker's one explicit current compatibility binding and the worker's
+  authorization, resolved root/fingerprint, and binding revision all still match. Other remembered
+  registry entries are irrelevant and must not stall that uniquely bound worker. A missing,
+  ambiguous, env-only, or mismatched worker binding leaves the
   row durably pending/unacknowledged, reports readiness `blocked_pending_mvr06`, and continues only
   independently safe `global` work. MVR-06 owns multi-binding dispatch, legacy classification,
   quarantine, and recovery; until it lands no ambiguous row can execute against an env-selected vault.
@@ -70,6 +72,12 @@ not background lifecycles.
   independent rows; retry within one binding must still deduplicate normally.
 - Make many-binding reads explicit and provenance-preserving; require an explicit target binding
   for writes unless the command contract already provides one unambiguously.
+- At every governed mutation seam, immediately before the owner store writes, re-resolve the target
+  binding and compare its current revision/root plus the current authorization epoch with the
+  request snapshot, then validate a live GOV `DecisionToken` for that principal, scope, operation,
+  and binding. Relocation, removal, or revocation after request resolution returns a stale-context/
+  reauthorization error without writing; it never continues merely because the request snapshot is
+  immutable. Long-running owner transactions must use their existing drain/fence contract.
 - Add an architecture guard against new direct process-global vault resolution in request code.
 
 ## Concretely
@@ -142,11 +150,16 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 - [ ] Production capture/governed-write paths require one explicit authorized target and record
   vault/context provenance in their receipt.
   - Verify: `tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt`
+- [ ] Relocation, removal, or GOV revocation after request resolution but before commit invalidates
+  the current DecisionToken/binding revision and blocks the in-flight mutation without writing to
+  either the old or replacement root.
+  - Verify: `tests/api/test_multi_vault_governed_writes.py::test_authority_or_locator_change_blocks_inflight_write_before_commit`
 - [ ] Every MVR-05 vault-bound producer emits the versioned binding/context routing envelope, and
-  the interim scalar worker dispatches only a provable registry/authorization/root-matching
-  singleton; it leaves every ambiguous/mismatched row pending/unacknowledged with blocked readiness,
+  the interim scalar worker dispatches only a row matching its explicit current single-binding
+  compatibility context, authorization, revision, and root even when other vaults are remembered;
+  it leaves every ambiguous/mismatched row pending/unacknowledged with blocked readiness,
   while global work remains independently processable until MVR-06.
-  - Verify: `tests/workers/test_multi_vault_partial_delivery_gate.py::test_scalar_worker_dispatches_only_provable_singleton_rows`
+  - Verify: `tests/workers/test_multi_vault_partial_delivery_gate.py::test_scalar_worker_dispatches_only_rows_matching_explicit_worker_binding`
 - [ ] Vault-bound outbox idempotency keys include the stable binding: duplicate logical identities
   in two bindings persist independently, while same-binding retries deduplicate.
   - Verify: `tests/services/test_multi_vault_outbox_idempotency.py::test_duplicate_identity_events_are_deduplicated_per_binding`

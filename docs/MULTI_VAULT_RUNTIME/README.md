@@ -110,8 +110,10 @@ keyed by `context_id` plus generation and every scope-affecting input (server-de
 operational scope, non-reversible selection-capability digest, dimension/filter, and binding set); receipts and writes
 record that identity and their target binding. In the current single-user runtime the opaque
 selection ID is an expiring bearer capability used in addition to #2223 authentication, while the
-server derives the one operator principal from `appInstallId` and owns operational scope; client
-identity/scope strings are never trusted. Binding plus generation alone is insufficient because two
+server resolves a human or delegated operator-role principal from the auth/GOV boundary and owns
+operational scope; `appInstallId` remains separate instance identity, API keys remain credentials,
+and client identity/scope strings are never trusted. The local-only bootstrap role is explicitly an
+instance-scoped delegated role, not a claim of the human's global identity. Binding plus generation alone is insufficient because two
 bearer selections may share both while carrying different scopes or filters. Context is never
 carried from one vault to another merely because a selection changed. Cross-vault synthesis
 requires an explicit multi-binding context and preserves per-source provenance.
@@ -171,8 +173,11 @@ to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup.
 - Selection cannot upgrade authority. Every binding is independently authorized by GOV.
 - No request, session, worker, restart, or migration silently falls back to another vault,
   `last_active`, CWD, or `./vault` after an explicit selection fails.
-- One request uses one immutable context generation. Session changes and binding/authority revision
-  changes rotate later generations and invalidate affected caches; in-flight work keeps its snapshot.
+- One request uses one immutable context generation. A session-only selection change lets in-flight
+  reads keep their snapshot. Binding relocation/removal or authority revision invalidates caches and
+  later generations, and every governed mutation must immediately before write re-resolve the target
+  binding revision/root and validate a current GOV `DecisionToken`; stale in-flight mutations fail
+  without writing or drain under an owner-defined transaction protocol.
 - Every read, retrieval result, write, receipt, cache entry, and background binding preserves
   vault identity and context-generation provenance.
 - Container registry/default/background intent survives force-recreate on a shared instance-state
@@ -215,8 +220,9 @@ Partial delivery remains fail-closed:
   the supervisor; the first governed background add/remove enters `explicit` mode, after which picker
   and default changes cannot mutate the explicit background set;
 - after task 05 but before task 06, the interim scalar worker dispatches a versioned vault-bound row
-  only when registry, authorization, binding revision, and resolved root prove one matching
-  singleton; ambiguous/mismatched rows remain pending and unacknowledged, safe global work
+  only when the row uniquely matches the worker's explicit current single-binding compatibility
+  context, current authorization, binding revision, and resolved root; extra remembered registry
+  entries do not block that match. Ambiguous/mismatched rows remain pending and unacknowledged, safe global work
   continues, and only task 06 enables multi-binding dispatch/classification/recovery;
 - a dimension containing an unknown, stale, or unauthorized member fails the whole production
   context resolution; it never returns a partial set, excludes the member, or substitutes another;

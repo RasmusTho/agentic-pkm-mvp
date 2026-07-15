@@ -27,16 +27,22 @@ generation unknown. A process-global mutable manager cannot safely represent con
 - Add a typed `ContextSelectionStore` keyed by a high-entropy opaque server-minted
   `context_selection_id`. In the current single-user product that ID is an expiring bearer
   capability, not a claim of multi-user identity: every operation also passes the existing #2223
-  Companion authentication gate, and the server derives one operator principal from the durable
-  `appInstallId` plus a server-owned operational scope for the endpoint/command. API keys, paths,
-  correlation IDs, and client-supplied principal/scope strings never become identity or authority.
-  The record is bound to that instance principal and allowed server-derived scope; possession of a
-  different selection ID is required to access a different session selection. The production
+  Companion authentication gate. The server resolves `principal_context` from an authenticated
+  human principal or a server-owned delegated operator-role principal supplied by the auth/GOV
+  boundary, plus a server-owned operational scope for the endpoint/command. The current local-only
+  bootstrap may use a private `local_operator_role_id` owned by that boundary; it denotes an
+  instance-scoped delegated role, not the human's global identity. `appInstallId` is carried
+  separately as instance identity and can never derive, equal, or substitute for a principal. API
+  keys are credentials rather than principals; paths, correlation IDs, and client-supplied
+  principal/scope strings never become identity or authority. A governed operation with no resolved
+  principal/delegated role fails closed. The record is bound to that principal, instance, and allowed
+  server-derived scope; possession of a different selection ID is required to access a different
+  session selection. The production
   resolver snapshots one context per request without mutating process-global state and GOV
   re-authorizes every binding on every resolution.
 - Add production Companion endpoints to create, replace, inspect, and clear a TTL-bound selection.
   Creation returns the server-minted ID; later mutation/read requires that bearer ID plus the
-  #2223 gate and the same server-derived instance principal/allowed scope. The existing
+  #2223 gate and the same server-resolved principal/instance/allowed scope. The existing
   `/api/companion/vault/select` remains only a
   named legacy-global adapter until task 05 migrates its production client; it cannot be the new
   session-selection command or mutate a scoped selection implicitly.
@@ -80,7 +86,8 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 - Secondary subsystem(s): GOV, EBF, RCA, SFC
 - Write class: mechanical session state; governed content writes remain unchanged
 - Authority impact: selection cannot upgrade authority; per-binding GOV check becomes enforced
-- Persistence impact: request snapshots and TTL-bound V1 session selection are ephemeral; only the instance default is durable
+- Persistence impact: request snapshots and TTL-bound V1 session selection are ephemeral; the
+  auth/GOV-owned delegated operator-role record and instance default are separate durable inputs
 - Derived/rebuildable impact: context snapshots/caches are rebuildable and full-context-keyed
 - Human knowledge impact: no cross-vault carry or silent merge
 - Memory impact: memory/retrieval consumers receive explicit binding provenance
@@ -116,9 +123,14 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 - [ ] Zero/one/many bindings are valid and each member is independently GOV-authorized.
   - Verify: `tests/api/test_active_context_resolution.py::test_each_binding_is_authorized_independently`
 - [ ] Session selection uses an expiring high-entropy server-minted bearer ID in addition to #2223
-  authentication, binds to the server-derived single-operator instance principal and operational
-  scope, and rejects arbitrary client correlation/principal/scope inputs or a different ID.
+  authentication, binds to the server-resolved human/delegated-role principal, separate instance
+  identity, and operational scope, and rejects arbitrary client correlation/principal/scope inputs
+  or a different ID. `appInstallId` is never principal identity.
   - Verify: `tests/api/test_active_context_resolution.py::test_selection_id_is_single_user_bearer_with_server_derived_context`
+- [ ] Principal derivation uses only the auth/GOV-owned human or delegated-role record; two
+  installations cannot be conflated with two humans, and multiple human/agent roles on one instance
+  remain distinct in GOV decisions, cache keys, and receipts.
+  - Verify: `tests/api/test_active_context_resolution.py::test_instance_identity_never_substitutes_for_principal_context`
 - [ ] Production create/replace/inspect/clear commands drive the selection store, enforce #2223
   authentication and expiry, and never mutate process-global `VaultManager` state.
   - Verify: `tests/api/test_active_context_selection_api.py::test_production_selection_lifecycle_is_scoped_and_global_free`
