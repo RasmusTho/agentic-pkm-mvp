@@ -50,6 +50,34 @@ def _unsafe_text() -> str:
     return " ; ".join((_SECRET, _PRIVATE_PATH, *_ADVERSARIAL_PRIVATE_VALUES))
 
 
+@pytest.mark.parametrize(
+    "summary",
+    [
+        'diagnostic {"password": "hunter2", "credential": "vault-secret"}',
+        "diagnostic {'password': 'hunter2', 'credential': 'vault-secret'}",
+    ],
+)
+def test_quoted_credential_assignments_are_sanitized_before_persistence(
+    summary: str,
+) -> None:
+    sanitized = sanitize_verification_closer_receipt(
+        {
+            "verdict": "blocked",
+            "head_sha": HEAD,
+            "summary": summary,
+            "receipt_ids": [],
+            "retry_after": None,
+            "review_events": None,
+            "human_exception": None,
+        }
+    )
+
+    encoded = json.dumps(sanitized, sort_keys=True)
+    assert "hunter2" not in encoded
+    assert "vault-secret" not in encoded
+    assert encoded.count("[REDACTED]") == 2
+
+
 def _check(
     *,
     check_id: int,

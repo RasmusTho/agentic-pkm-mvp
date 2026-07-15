@@ -87,8 +87,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   invalid review or repair events cannot strand coordinator authority or consume a partial budget;
   a no-repair delivery still requires two distinct clean review sessions. Schema validity does not
   make model-produced text durable-safe: raw coordinator output remains transient, and only the
-  bounded projection that redacts credentials and machine-local paths may enter attempts, pending
-  replay receipts, terminal rows, Human Exception packets, or status output. The projection retains
+  bounded projection that redacts credentials—including assignments with quoted JSON/mapping keys—
+  and machine-local paths may enter attempts, pending replay receipts, terminal rows, Human Exception
+  packets, or status output. The projection retains
   the structured identities and actionable option relationships required for deterministic replay
   and governed owner decisions, then passes the canonical schema and semantic validation again.
   Check eligibility selects the latest GitHub rerun per

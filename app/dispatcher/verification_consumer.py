@@ -742,8 +742,9 @@ _MAX_RECEIPT_LIST_ITEMS = 16
 _MAX_RECEIPT_IDS = 32
 _SAFE_DURABLE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}\Z")
 _CREDENTIAL_ASSIGNMENT = re.compile(
-    r"(?i)\b([A-Za-z0-9_]*(?:api[_ -]?key|access[_ -]?token|auth[_ -]?token|"
-    r"token|credential|password|secret)[A-Za-z0-9_]*)\s*(?::|=|\s)\s*"
+    r"(?i)(?<![A-Za-z0-9_])(?P<quote>[\"']?)(?P<key>[A-Za-z0-9_]*"
+    r"(?:api[_ -]?key|access[_ -]?token|auth[_ -]?token|token|credential|"
+    r"password|secret)[A-Za-z0-9_]*)(?P=quote)\s*(?::|=|\s)\s*"
     r"(?:\"[^\"]*\"|'[^']*'|[^\s;,]+)"
 )
 _BEARER_VALUE = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+")
@@ -809,7 +810,9 @@ def _sanitize_receipt_text(value: object, *, limit: int = _MAX_RECEIPT_TEXT) -> 
         return placeholder
 
     text = _SAFE_GITHUB_URL.sub(preserve_url, text)
-    text = _CREDENTIAL_ASSIGNMENT.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
+    text = _CREDENTIAL_ASSIGNMENT.sub(
+        lambda match: f"{match.group('key')}=[REDACTED]", text
+    )
     text = _BEARER_VALUE.sub("Bearer [REDACTED]", text)
     text = _KNOWN_TOKEN_VALUE.sub("[REDACTED]", text)
     text = _JWT_VALUE.sub("[REDACTED]", text)
