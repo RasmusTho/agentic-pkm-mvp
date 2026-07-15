@@ -124,3 +124,18 @@ BuilderOps inquiry `inq_20260715T062832Z_e73546a2` completed with consensus rece
 The reconciliation keeps the audit's projection-only, bounded-read, Goodhart, history-honesty, and promotion boundaries, and tightens them in four ways: Q1 is contract plus a minimum working one-transaction query surface rather than schema alone; public identity must survive rebuild and rename; every CKM mutation advances an atomic state revision; and cursor, observation, and comparison semantics fail explicitly on any version/snapshot/query mismatch. M2 general history and O2 feature expansion remain observation-gated and are not filed by this breakdown.
 
 Feature-breakdown resolved the earlier hub question by accepting #3138 as the completed MVP validation hub and defining one separate post-MVP successor capability. Its initial graph is Q1a → Q1b → {Q2, M1, O1a}, with M1 → O1b. Successor issue numbers and delivery state are recorded in the authoritative specification directory.
+
+## 10. Later-inquiry correction and implementation pause (2026-07-15)
+
+BuilderOps inquiry `inq_20260715T090347Z_61c6d5e4` completed with consensus receipt `receipt_inq_20260715T090347Z_61c6d5e4_run_terminal`. It agreed with the one-transaction, tagged-value, candidate-separation, compatibility-refusal, deferred-HTTP, and no-general-bitemporality kernel, but found that the first reconciliation had crossed into feature-breakdown before five owner decisions were explicit.
+
+The later consensus adds these fail-closed constraints to the authoritative contract:
+
+- complete snapshot/export access must bind effective audience, access-policy version, redaction profile, and a decided retention/redistribution posture;
+- public identifiers are never reused and require explicit rename/delete/split/merge alias or tombstone semantics;
+- a completeness manifest accounts for included, filtered, omitted, and truncated object classes;
+- v1 uses bounded complete capture and defers pagination until size evidence, retained immutable snapshots, and accepted retention semantics make continuation honest;
+- aggregate maturity is absent from v1 machine-readable output, while every registered metric declares intended/prohibited uses and Goodhart-review ownership;
+- longitudinal support is limited to explicitly accepted questions and replayable retained captured samples under a correction/deletion policy; digests alone do not prove reconstruction.
+
+The unresolved owner gates are snapshot access/disclosure, metric use, supported longitudinal questions, identity lifecycle, and retention/correction/deletion. Owner direction on 2026-07-15 selected the fail-closed route: pause Q1a PR #3786 and correct the CKM contract before implementation resumes. This routing decision does not resolve the five policies. `docs/CKM_MEASUREMENT_AND_ACCESS/` remains authoritative and now carries the gates and corrected task boundaries; all child Issues remain blocked until those decisions and Issue-contract reconciliation are complete.
