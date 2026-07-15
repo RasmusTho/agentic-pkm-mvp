@@ -968,6 +968,143 @@ class VerificationConsumer:
                 return current
             raise
 
+    @staticmethod
+    def _pending_delivered_receipt(
+        run: VerificationRun,
+    ) -> Mapping[str, object] | None:
+        terminal = run.terminal_receipt
+        if run.status not in {"backoff", "claimed", "running"} or not isinstance(
+            terminal, Mapping
+        ):
+            return None
+        pending = terminal.get("pending_terminal_receipt")
+        if not isinstance(pending, Mapping) or pending.get("verdict") != "delivered":
+            return None
+        return pending
+
+    def _replay_pending_delivered(
+        self, run: VerificationRun, receipt: Mapping[str, object]
+    ) -> VerificationRun:
+        """Revalidate one persisted delivered receipt through merged live truth."""
+        auth = self.auth.check()
+        if not auth.ok:
+            try:
+                return self.ledger.defer_unclaimed(
+                    run.run_id,
+                    {
+                        "outcome": "blocked",
+                        "reason": auth.reason,
+                        "auth_mode": auth.auth_mode,
+                        "pending_terminal_receipt": dict(receipt),
+                    },
+                    _retry_at(),
+                )
+            except ValueError:
+                current = self.ledger.get(run.run_id)
+                assert current is not None
+                return current
+        try:
+            claimed = self.ledger.claim(run.run_id, self.holder)
+        except (VerificationSubscriptionBusy, VerificationBackoffPending):
+            current = self.ledger.get(run.run_id)
+            assert current is not None
+            return current
+        lease_id = claimed.lease_id or ""
+        receipt_head = receipt.get("head_sha")
+        if not isinstance(receipt_head, str) or not re.fullmatch(
+            r"[0-9a-fA-F]{40}", receipt_head
+        ):
+            return self.ledger.terminal(
+                claimed.run_id,
+                "failed",
+                dict(receipt),
+                reason="receipt_head_mismatch",
+                holder=self.holder,
+                lease_id=lease_id,
+            )
+        try:
+            live_pr = self.truth.pull_request(claimed.repository, claimed.pr_number)
+            live_checks = self.truth.checks(claimed.repository, receipt_head)
+            rejection = delivered_live_truth_rejection(
+                claimed,
+                live_pr,
+                live_checks,
+                expected_head_sha=receipt_head,
+            )
+        except Exception as exc:
+            return self.ledger.backoff(
+                claimed.run_id,
+                {
+                    "outcome": "blocked",
+                    "reason": "postlaunch_live_truth_unavailable",
+                    "error_type": type(exc).__name__,
+                    "pending_terminal_receipt": dict(receipt),
+                },
+                _retry_at(),
+                holder=self.holder,
+                lease_id=lease_id,
+            )
+        if rejection:
+            if rejection in {"missing_checks", "checks_not_green"}:
+                return self.ledger.backoff(
+                    claimed.run_id,
+                    {
+                        "outcome": "deferred",
+                        "reason": rejection,
+                        "pending_terminal_receipt": dict(receipt),
+                    },
+                    _retry_at(),
+                    holder=self.holder,
+                    lease_id=lease_id,
+                )
+            reason = (
+                "receipt_head_mismatch"
+                if rejection == "stale_head"
+                else f"receipt_live_truth_{rejection}"
+            )
+            return self.ledger.terminal(
+                claimed.run_id,
+                "failed",
+                dict(receipt),
+                reason=reason,
+                holder=self.holder,
+                lease_id=lease_id,
+            )
+        review_events = receipt.get("review_events")
+        events = review_events if isinstance(review_events, list) else []
+        loop = VerificationAgentLoop(
+            self.ledger,
+            claimed.run_id,
+            holder=self.holder,
+            lease_id=lease_id,
+        )
+        if events:
+            try:
+                loop.apply_events(events, context=context_pack(claimed, live_pr))
+            except ValueError as exc:
+                return self._terminal_event_application_failure(
+                    claimed, lease_id, exc
+                )
+        try:
+            return self.ledger.terminal(
+                claimed.run_id,
+                "completed",
+                dict(receipt),
+                holder=self.holder,
+                lease_id=lease_id,
+            )
+        except ValueError as exc:
+            if "two fresh clean reviews" not in str(exc):
+                raise
+            return self.ledger.terminal(
+                claimed.run_id,
+                "failed",
+                dict(receipt),
+                reason="closure_gate_not_proven",
+                holder=self.holder,
+                lease_id=lease_id,
+            )
+
     def consume(self, request: Mapping[str, object]) -> VerificationRun:
         run = self.ledger.ingest(request)
         if run.status in {"completed", "failed", "needs_human", "superseded"}:
@@ -976,6 +1113,9 @@ class VerificationConsumer:
             # An active delivery is already owned. Restart recovery is an
             # explicit operation so replayed artifacts cannot duplicate it.
             return run
+        pending_delivered = self._pending_delivered_receipt(run)
+        if pending_delivered is not None:
+            return self._replay_pending_delivered(run, pending_delivered)
         pr = self.truth.pull_request(run.repository, run.pr_number)
         checks = self.truth.checks(run.repository, run.head_sha)
         rejection = live_truth_rejection(run, pr, checks)
@@ -1270,6 +1410,7 @@ class VerificationConsumer:
                     "outcome": "blocked",
                     "reason": "postlaunch_live_truth_unavailable",
                     "error_type": type(exc).__name__,
+                    "pending_terminal_receipt": dict(receipt),
                 },
                 _retry_at(),
                 holder=self.holder,
