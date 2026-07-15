@@ -424,6 +424,8 @@ def load_provisional_markdown(
         raise ValueError("physical provisional Markdown filename is not a UUID") from exc
     if path_memory_id.version != 4 or relative_path.suffix != ".md":
         raise ValueError("physical provisional Markdown filename is not canonical")
+    if relative_path.name != f"{path_memory_id}.md":
+        raise ValueError("physical provisional Markdown filename is not canonical")
     raw = path.read_text(encoding="utf-8")
     if not raw.startswith("---\n") or "\n---\n" not in raw[4:]:
         raise ValueError("provisional Markdown requires YAML frontmatter")

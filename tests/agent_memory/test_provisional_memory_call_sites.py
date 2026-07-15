@@ -85,3 +85,35 @@ def test_loader_rejects_filename_frontmatter_uuid_mismatch(tmp_path: Path) -> No
 
     with pytest.raises(ValueError, match="physical provisional Markdown path"):
         load_provisional_markdown(path, vault_root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "12345678-1234-4ABC-8DEF-1234567890AB.md",
+        "{12345678-1234-4abc-8def-1234567890ab}.md",
+    ],
+)
+def test_loader_rejects_noncanonical_uuid_filename_aliases(
+    tmp_path: Path,
+    filename: str,
+) -> None:
+    memory_id = UUID("12345678-1234-4abc-8def-1234567890ab")
+    artifact = ProvisionalMarkdownArtifact(
+        memory_id=memory_id,
+        artifact_ref=f"vault://Memory/Provisional/{memory_id}.md",
+        scope_id="scope-personal",
+        principal_id="principal-1",
+        memory_type=MemoryType.PREFERENCE_MEMORY,
+        sensitivity=ProvisionalSensitivity.PRIVATE,
+        content="UUID textual aliases are not canonical identity.",
+        created_by="human://owner",
+        created_at="2026-07-15T00:00:00Z",
+        provenance_event_ids=("event-1",),
+    )
+    path = tmp_path / "Memory" / "Provisional" / filename
+    path.parent.mkdir(parents=True)
+    path.write_text(render_provisional_markdown(artifact), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="filename is not canonical"):
+        load_provisional_markdown(path, vault_root=tmp_path)
