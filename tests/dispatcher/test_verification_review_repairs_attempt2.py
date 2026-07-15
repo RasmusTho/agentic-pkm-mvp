@@ -234,6 +234,9 @@ def test_codex_nonzero_exit_drains_stderr_and_rejects_valid_receipt(
         )
         returncode = 1
 
+        def poll(self):
+            return self.returncode
+
         def wait(self):
             assert stderr.drained, "stderr must be drained before waiting"
             return self.returncode
@@ -241,12 +244,24 @@ def test_codex_nonzero_exit_drains_stderr_and_rejects_valid_receipt(
     process = Process()
     process.stderr = stderr
     monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: process)
+
+    class ProvenContainment:
+        def environment(self, base):
+            return dict(base)
+
+        def attach(self, root_pid):
+            return None
+
+        def cleanup(self):
+            return True
+
     root = Path(__file__).resolve().parents[2]
     launcher = CodexExecLauncher(
         tmp_path,
         root / "app/dispatcher/schemas/verification_closer_receipt.schema.json",
         tmp_path / "context.json",
         adapter_path=root / ".codex/agents/verification-closer.toml",
+        containment_factory=ProvenContainment,
     )
 
     with pytest.raises(RuntimeError, match="diagnostic"):

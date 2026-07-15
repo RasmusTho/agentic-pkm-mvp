@@ -3,9 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 import io
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 from threading import Condition, Thread
-from typing import Mapping
+from typing import Callable, Mapping
 import zipfile
 
 import pytest
@@ -1667,7 +1670,34 @@ class _CleanExitDetachedDescendantProcess:
             self.descendant_alive = False
 
 
-def _authority_loss_launcher(tmp_path: Path) -> CodexExecLauncher:
+class _ProvenContainment:
+    def environment(self, base: Mapping[str, str]) -> dict[str, str]:
+        return dict(base)
+
+    def attach(self, root_pid: int) -> None:
+        self.root_pid = root_pid
+
+    def cleanup(self) -> bool:
+        return True
+
+
+class _EscapedDescendantContainment(_ProvenContainment):
+    def __init__(self, process: _CleanExitDetachedDescendantProcess, *, proven: bool) -> None:
+        self.process = process
+        self.proven = proven
+        self.cleanup_calls = 0
+
+    def cleanup(self) -> bool:
+        self.cleanup_calls += 1
+        self.process.descendant_alive = False
+        return self.proven
+
+
+def _authority_loss_launcher(
+    tmp_path: Path,
+    containment_factory: Callable[[], verification_consumer.WholeTreeContainment]
+    | None = None,
+) -> CodexExecLauncher:
     return CodexExecLauncher(
         tmp_path,
         Path(__file__).resolve().parents[2]
@@ -1675,6 +1705,7 @@ def _authority_loss_launcher(tmp_path: Path) -> CodexExecLauncher:
         tmp_path / "context.json",
         adapter_path=Path(__file__).resolve().parents[2]
         / ".codex/agents/verification-closer.toml",
+        containment_factory=containment_factory or _ProvenContainment,
     )
 
 
@@ -1990,6 +2021,91 @@ def test_successful_terminal_receipt_leaves_no_private_group_members(
     assert not process.descendant_alive
     with pytest.raises(ProcessLookupError):
         process.killpg(process.pid, 0)
+
+
+def test_new_session_descendant_cannot_outlive_launcher(
+    tmp_path, monkeypatch
+) -> None:
+    process = _CleanExitDetachedDescendantProcess()
+    containment = _EscapedDescendantContainment(process, proven=True)
+    monkeypatch.setattr(
+        verification_consumer.subprocess, "Popen", lambda *args, **kwargs: process
+    )
+    # A setsid escape is absent from the original private process group.
+    monkeypatch.setattr(
+        verification_consumer.os,
+        "killpg",
+        lambda process_group_id, sig: (_ for _ in ()).throw(
+            ProcessLookupError(process_group_id)
+        ),
+    )
+
+    session_id, receipt = _authority_loss_launcher(
+        tmp_path, containment_factory=lambda: containment
+    ).launch({"head_sha": HEAD})
+
+    assert session_id == "thread-clean"
+    assert receipt["verdict"] == "blocked"
+    assert not process.descendant_alive
+    assert containment.cleanup_calls == 1
+
+
+def test_terminal_receipt_fails_closed_without_process_tree_containment(
+    tmp_path, monkeypatch
+) -> None:
+    process = _CleanExitDetachedDescendantProcess()
+    containment = _EscapedDescendantContainment(process, proven=False)
+    monkeypatch.setattr(
+        verification_consumer.subprocess, "Popen", lambda *args, **kwargs: process
+    )
+    monkeypatch.setattr(
+        verification_consumer.os,
+        "killpg",
+        lambda process_group_id, sig: (_ for _ in ()).throw(
+            ProcessLookupError(process_group_id)
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="whole-process-tree containment unavailable"):
+        _authority_loss_launcher(
+            tmp_path, containment_factory=lambda: containment
+        ).launch({"head_sha": HEAD})
+
+    assert not process.descendant_alive
+    assert containment.cleanup_calls == 1
+
+
+def test_tagged_cleanup_reaps_setsid_descendant() -> None:
+    containment = verification_consumer.TaggedProcessTreeCleanup()
+    root = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import os,subprocess,sys,time; "
+            "time.sleep(0.05); "
+            "child=subprocess.Popen([sys.executable,'-c',"
+            "'import os,signal,time;os.setsid();"
+            "signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(30)']); "
+            "print(child.pid,flush=True); time.sleep(0.3)",
+        ],
+        env=containment.environment(os.environ),
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert root.stdout is not None
+    containment.attach(root.pid)
+    escaped_pid = int(root.stdout.readline())
+    try:
+        root.wait(timeout=2)
+        assert escaped_pid in containment._known_pids
+        assert containment.cleanup() is False
+        with pytest.raises(ProcessLookupError):
+            os.kill(escaped_pid, 0)
+    finally:
+        try:
+            os.kill(escaped_pid, verification_consumer.signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def test_thread_start_authority_loss_terminates_codex_child(
