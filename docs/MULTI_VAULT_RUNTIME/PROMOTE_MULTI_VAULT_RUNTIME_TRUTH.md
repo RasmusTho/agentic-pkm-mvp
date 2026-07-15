@@ -62,7 +62,7 @@ operators, or future agents still act on stale single-global-vault truth.
 - Sync/deployment impact: test-channel verification receipt and truthful channel notes
 - External boundary impact: receipts are redacted; no host paths, secrets, or binding payloads
 - New or changed contract: promotes target contract to shipped state where proven
-- Owner-doc impact: will-update-in-PR across named owners
+- Owner-doc impact: will-update-in-PR across named owners and this capability's README/parent ledger
 - Transition debt impact: close/re-baseline D1/D13/D14 and record any bounded residue
 - Fitness rule impact: registers integrated multi-vault runtime fitness targets
 
@@ -94,6 +94,11 @@ operators, or future agents still act on stale single-global-vault truth.
   `docs/ENVIRONMENTS.md :: Vault terminology` + doc writeback at
   `docs/architecture/SBS_TRANSITION_DEBT.md :: multi-vault runtime selection` + doc writeback at
   `docs/DOCS_INDEX.md :: v6.0 Capability Specifications`
+- [ ] This capability's own lifecycle surfaces no longer claim future/blocked state: README records
+  shipped scope and any residual debt, while the parent reference contains actual child issue/PR/SHA/
+  Verify receipts and records #2143 closure only after the merged-head ledger passes.
+  - Verify: doc writeback at `docs/MULTI_VAULT_RUNTIME/README.md :: Multi-vault runtime selection` +
+    doc writeback at `docs/MULTI_VAULT_RUNTIME/PARENT_FEATURE_ISSUE.md :: Parent reference — Multi-vault runtime selection`
 - [ ] #2566 and #3156/#3163 show truthful dependency/status receipts with no duplicate scope.
   - Verify: GitHub comment receipts on issues `#2566`, `#3156`, and `#3163`
 - [ ] #2143 contains a complete child/AC/Verify/PR/SHA/owner-doc ledger and has no residual open

@@ -67,8 +67,17 @@ not background lifecycles.
   registry entries are irrelevant and must not stall that uniquely bound worker. A missing,
   ambiguous, env-only, or mismatched worker binding leaves the
   row durably pending/unacknowledged, reports readiness `blocked_pending_mvr06`, and continues only
-  independently safe `global` work. MVR-06 owns multi-binding dispatch, legacy classification,
-  quarantine, and recovery; until it lands no ambiguous row can execute against an env-selected vault.
+  independently safe `global` work. MVR-06 owns multi-binding dispatch and governed quarantine
+  recovery; until it lands no ambiguous row can execute against an env-selected vault.
+- While every old DB/outbox producer is fenced and before any upgraded producer is enabled, classify
+  every undelivered legacy row through the production handler registry and reconcile its idempotency
+  key transactionally. Known global rows retain an explicit global key. A known vault-bound row is
+  assigned/scoped only from provable producer evidence and the explicit compatibility binding. If
+  its recomputed binding-scoped key already exists with identical topic/source/payload fingerprint,
+  coalesce to one canonical row while preserving lineage/attempt history; a differing collision,
+  unknown topic, or ambiguous binding quarantines without dispatch/ack. Commit a migration receipt
+  proving no dispatchable unscoped vault-bound row remains before new producers start. MVR-06 consumes
+  this result and must not independently backfill a second copy.
 - Namespace every migrated vault-bound outbox idempotency/dedup key by `vault_binding_id` in
   addition to topic, logical source identity, and content fingerprint. A global producer uses an
   explicit `global` scope marker. Two vaults containing the same UUID/path/content must create
@@ -142,6 +151,10 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 - [ ] Legacy single-vault projection rows backfill only with one provable binding; ambiguous rows
   block mixed-mode startup until quarantined/rebuilt, without destructive guessing.
   - Verify: `tests/migrations/test_multi_vault_projection_backfill.py::test_projection_backfill_is_unambiguous_or_fails_loud`
+- [ ] Before any binding-keyed producer starts, all pending legacy outbox keys are classified and
+  scoped/coalesced under the DB fence; an identical retry produces one canonical dispatch lineage,
+  while conflicting or ambiguous rows quarantine and cannot later duplicate the upgraded event.
+  - Verify: `tests/migrations/test_multi_vault_outbox_upgrade.py::test_legacy_idempotency_keys_coalesce_before_new_producer_enable`
 - [ ] The migration records the MVR-05 minimum-runtime floor before any binding-keyed database
   state is written; scalar rollback then fails before starting an old API/worker, including on a
   one-binding instance, while a compatible roll-forward retains the full lineage.
@@ -211,7 +224,7 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/integration/test_multi_vault_resolution.py tests/integration/test_multi_vault_picker_context.py tests/integration/test_multi_vault_projection_isolation.py tests/integration/test_multi_vault_outbox_producers.py tests/migrations/test_multi_vault_projection_backfill.py tests/ops/test_mvr05_mixed_version_fence.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/workers/test_multi_vault_partial_delivery_gate.py tests/services/test_multi_vault_outbox_idempotency.py tests/architecture/test_multi_vault_context_boundaries.py`
+- `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/integration/test_multi_vault_resolution.py tests/integration/test_multi_vault_picker_context.py tests/integration/test_multi_vault_projection_isolation.py tests/integration/test_multi_vault_outbox_producers.py tests/migrations/test_multi_vault_projection_backfill.py tests/migrations/test_multi_vault_outbox_upgrade.py tests/ops/test_mvr05_mixed_version_fence.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/workers/test_multi_vault_partial_delivery_gate.py tests/services/test_multi_vault_outbox_idempotency.py tests/architecture/test_multi_vault_context_boundaries.py`
 - `ruff check app tests`
 
 ## Restart / Durability Posture

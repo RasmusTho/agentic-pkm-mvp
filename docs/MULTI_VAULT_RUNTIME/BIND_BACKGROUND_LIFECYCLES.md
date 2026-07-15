@@ -23,11 +23,13 @@ cross-process truth belong here.
 - At the MVR-06 migration boundary, read the live binding owned by MVR-05's named legacy-picker
   bridge, materialize that binding as durable `compatibility_binding_id` in compatibility mode,
   start the revision-reconciling supervisor, and disable the bridge in one fail-closed cutover. Roll back
-  the cutover if either handoff step fails. Afterward, the supervisor—not the retired bridge—keeps
-  consuming #3163's legacy choose/open picker event while mode remains `compatibility`, atomically
-  updating `compatibility_binding_id` and rebind generation. Generic request/session selection never
-  changes background intent. Once a governed add/remove command enters `explicit` mode, picker and
-  default changes cannot alter the explicit set.
+  the cutover if either handoff step fails. Afterward, the production legacy choose/open picker
+  producer—not the supervisor—uses the locked registry transaction to commit
+  `compatibility_binding_id`, provenance, and a new revision while mode is `compatibility`, then
+  publishes #3163's event only as an idempotent wake-up hint. The supervisor reconciles the durable
+  revision, so event loss or a crash after commit still converges. Generic request/session selection
+  never changes background intent. Once a governed add/remove command enters `explicit` mode, picker
+  and default changes cannot alter the explicit set.
 - Add a durable, mechanical instance-local `background_vault_binding_ids` intent set. Request or
   session selection never auto-enrols a member. Each unique binding is re-resolved and
   re-authorized at lifecycle start; a missing/unauthorized member remains explicitly failed.
@@ -36,8 +38,8 @@ cross-process truth belong here.
   present, otherwise the current default/no-vault result, into nullable durable
   `compatibility_binding_id`. Restart reuses that exact binding and never re-derives another from
   unrecorded interaction history or default. While mode remains compatibility, a production legacy
-  choose/open event or explicit MVR-02 default set/clear atomically replaces/clears this field and
-  triggers rebind; the event provenance is stored with the revision. Any governed add/remove command
+  choose/open command or explicit MVR-02 default set/clear atomically replaces/clears this field and
+  stores event provenance in the revision before publishing a rebind hint. Any governed add/remove command
   transitions to explicit mode. `explicit` with an empty binding list is durable and means idle—it
   must never re-enrol the default after restart. This state mutates through MVR-01's locked,
   revision-checked atomic registry transaction.
@@ -67,13 +69,18 @@ cross-process truth belong here.
   fence to atomically advance `minimum_runtime_schema=MVR-06`. A build below that floor cannot start
   watcher/worker/API against the registry; recovery preserves the complete lineage and uses an
   MVR-06-compatible roll-forward/rollback, never a projection that discards background intent.
-- Reconcile durable registry revisions at supervisor startup and continuously while running, with
-  idempotent event hints only accelerating that reconciliation. For every unseen revision, diff
+- Reconcile both durable registry revisions and the auth/GOV authorization-decision epoch at
+  supervisor startup and continuously while running, with idempotent event hints only accelerating
+  reconciliation. For every unseen registry revision or auth epoch, diff
   registration path/device/authority provenance, removal, default, and background intent. Drain,
   re-resolve, and re-authorize every affected lifecycle into a new ActiveContextSet generation
   before accepting later work; removal or failed authorization stops that binding loudly. This
   revision cursor makes a producer crash after the atomic commit but before event publication
   converge without leaving removed or relocated bindings active.
+- Before each watcher batch, content read/write, queue dispatch/ack, or emitted outbox mutation,
+  compare the current auth epoch/binding revision and validate a live GOV decision for that lifecycle
+  principal and binding. Revocation that races between reconciliation passes blocks the operation and
+  drains the lifecycle; immutable producer provenance never authorizes continued work.
 - Define start/rebind/drain/stop behavior for zero/one/many bindings, including clean in-flight
   completion and loud partial failure.
 - Propagate the complete background `ActiveContextSet` identity, including binding and generation,
@@ -83,11 +90,10 @@ cross-process truth belong here.
 - Version queued work and outbox rows with an explicit routing class:
   `global` for handlers that touch no content vault, or `vault_bound` with binding/context identity.
   Global rows remain singleton work and require no invented vault. Vault-bound polling/ack ownership
-  is binding-scoped. Before enabling more than one lifecycle, a fail-loud upgrade gate uses the
-  versioned topic/handler routing registry to classify every undelivered legacy row: known global
-  topics remain global; known vault-bound topics backfill only when producer evidence and the prior
-  single-vault binding prove one target; unknown topics or ambiguous vault-bound rows quarantine for
-  explicit recovery without dispatch or ack. A quarantined unsafe row makes the affected worker
+  is binding-scoped. Before enabling more than one lifecycle, a fail-loud upgrade gate validates
+  MVR-05's committed classification/key-coalescing receipt and proves that no dispatchable unscoped
+  vault-bound row remains. It revalidates already-scoped rows against current intent; any residual
+  unknown/ambiguous row remains quarantined for explicit recovery without dispatch or ack. A quarantined unsafe row makes the affected worker
   readiness degraded/blocked but a valid global row never blocks multi-binding startup merely for
   lacking a binding.
 - Revalidate every not-yet-in-flight vault-bound row against the current stable binding, compatible
@@ -149,7 +155,8 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
   change.
 - Compatibility-uninitialized and explicit-empty are different states. Removing the last explicit
   member survives restart as zero bindings and cannot reactivate the compatibility default.
-- In-flight work completes against its captured binding; new work starts on the new generation.
+- A selection-only rebind may let non-mutating in-flight work complete against its captured binding;
+  authority revocation/removal requires pre-operation revalidation and blocks/drains stale work.
 - One failed binding does not masquerade as healthy or silently redirect to another.
 - Never log or expose host paths, secrets, or binding payloads beyond the repository's redaction
   contract in receipts.
@@ -168,6 +175,10 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
   compatibility binding and drains/rebinds the supervisor; generic scoped selection and every picker
   event after explicit-mode transition leave background intent unchanged.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff`
+- [ ] The picker transaction durably commits compatibility binding/provenance/revision before its
+  wake-up hint; event loss and crashes before/after publication restart on the committed binding and
+  never the previous one.
+  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_picker_commit_precedes_hint_and_survives_event_loss`
 - [ ] The production supervisor runs independent watcher/worker lifecycles for two bindings and
   attributes ingest, queues, settings, health, and receipts to the correct immutable
   ActiveContextSet/vault/generation.
@@ -196,6 +207,9 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
   crash after registry commit but before event publication still converges from the durable
   revision cursor without accepting later work on the stale binding.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window`
+- [ ] A pure GOV verdict/role revocation with no registry mutation advances the auth epoch, drains the
+  affected running lifecycle, and blocks its next read/write/outbox/dispatch operation before effect.
+  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_authorization_epoch_revokes_running_lifecycle_before_next_effect`
 - [ ] Zero bindings idle truthfully; one binding preserves current behavior; a failed member is
   loud and cannot redirect or mark the whole set healthy.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_zero_one_many_and_partial_failure_are_truthful`
@@ -206,11 +220,10 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
   process-global/env snapshot, and resolves it into the full background ActiveContextSet before
   work starts.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_worker_handoff_is_versioned_and_explicit`
-- [ ] Pending pre-upgrade outbox work is classified through the production handler registry: global
-  topics continue exactly once without a binding, vault-bound rows are assigned only from provable
-  prior evidence, and unknown/ambiguous rows quarantine without dispatch or acknowledgement; new
-  vault polling and ack are binding-scoped.
-  - Verify: `tests/migrations/test_multi_vault_outbox_upgrade.py::test_legacy_pending_rows_backfill_or_quarantine_fail_loud`
+- [ ] MVR-06 validates MVR-05's legacy classification/coalescing receipt before multi-binding start:
+  global topics continue exactly once, scoped vault-bound rows retain one canonical lineage, and
+  unknown/ambiguous rows remain quarantined without dispatch or acknowledgement.
+  - Verify: `tests/migrations/test_multi_vault_outbox_upgrade.py::test_mvr06_requires_complete_mvr05_classification_receipt`
 - [ ] The MVR-06 minimum-runtime floor commits before the first background-intent field and blocks
   every older API/watcher/worker before registry access; fault injection leaves either untouched
   MVR-05 state or an MVR-06-compatible lineage.

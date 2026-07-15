@@ -138,7 +138,8 @@ member binding independently. Removing a dimension does not remove its vault reg
   rebind. MVR-05 temporarily preserves that production behavior only for the legacy picker action;
   generic scoped selections do not drive it. MVR-06 reuses #3163's reload machinery, atomically
   imports the live watcher binding into durable compatibility intent, then retires the bridge while
-  the supervisor continues consuming legacy choose/open events in compatibility mode. Governed
+  the legacy choose/open producer commits compatibility intent before its wake-up hint and the
+  supervisor reconciles that durable revision. Governed
   background administration explicitly transitions to multi-binding `explicit` mode; only then do
   picker/default events stop changing lifecycle intent. #3163 is not a multi-active implementation,
   and no duplicate watcher-rebind issue is created here.
@@ -187,9 +188,11 @@ to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup.
   volume and resolves to the identical store from every enabled process.
 - Request/session selection never auto-enrols a vault into background work. Background lifecycle
   intent is a distinct durable instance-local binding set; each member is re-authorized at start.
-- Background supervisors reconcile durable registry revisions, not event delivery: every affected
-  lifecycle drains and re-resolves after relocation, removal, authority-provenance, default, or
-  intent changes, including when a producer crashes before publishing its wake-up event.
+- Background supervisors reconcile durable registry revisions and auth/GOV decision epochs, not
+  event delivery: every affected lifecycle drains and re-resolves after relocation, removal,
+  revocation, authority-provenance, default, or intent changes. Picker/default/background producers
+  commit intent before publishing wake-up hints, and per-operation authorization closes races between
+  reconciliation passes.
 - Zero, one, and many bindings are all valid. One configured vault behaves as before; no-vault
   behavior remains truthful and idle.
 - The durable registry/default/dimension store is instance-local mechanical state; content and
@@ -220,14 +223,17 @@ Partial delivery remains fail-closed:
 - after task 05 but before task 06, the existing picker alone continues to drive #3163's named
   single-watcher bridge while scoped request/session selection does not; task 06 atomically hands
   that live binding to the durable supervisor before disabling the bridge;
-- after task 06, legacy choose/open continues to rebind only `compatibility` lifecycle intent through
-  the supervisor; the first governed background add/remove enters `explicit` mode, after which picker
-  and default changes cannot mutate the explicit background set;
+- before task 05 enables binding-keyed producers, every pending legacy outbox key is classified and
+  scoped/coalesced under the DB fence; identical retries preserve one canonical lineage and
+  ambiguous/conflicting rows quarantine, so task 06 cannot backfill a duplicate;
+- after task 06, legacy choose/open continues to rebind only `compatibility` lifecycle intent by
+  committing it before the supervisor wake-up hint; the first governed background add/remove enters
+  `explicit` mode, after which picker and default changes cannot mutate the explicit background set;
 - after task 05 but before task 06, the interim scalar worker dispatches a versioned vault-bound row
   only when the row uniquely matches the worker's explicit current single-binding compatibility
   context, current authorization, binding revision, and resolved root; extra remembered registry
   entries do not block that match. Ambiguous/mismatched rows remain pending and unacknowledged, safe global work
-  continues, and only task 06 enables multi-binding dispatch/classification/recovery;
+  continues, and only task 06 enables multi-binding dispatch and governed quarantine recovery;
 - a dimension containing an unknown, stale, or unauthorized member fails the whole production
   context resolution; it never returns a partial set, excludes the member, or substitutes another;
 - if one background binding fails, its lifecycle and health remain failed while other bindings

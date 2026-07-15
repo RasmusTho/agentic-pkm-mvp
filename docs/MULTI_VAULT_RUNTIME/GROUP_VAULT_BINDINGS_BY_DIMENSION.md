@@ -34,8 +34,11 @@ non-authoritative registry grouping.
   removal of a dimension non-destructive to registrations/content.
 - Extend the MVR-01 rollback lineage for the additive dimension schema: a pre-MVR-04 image cannot
   read or mutate dimensions, so its scalar projection omits them while the complete dimension state
-  remains immutable and is restored on roll-forward. Divergent current-schema mutation blocks merge
-  rather than dropping or guessing membership.
+  remains immutable. On roll-forward, unchanged registrations restore dimensions exactly. A valid
+  old-image registration removal is imported in the same locked transaction that removes that
+  binding from every dimension, records a repair receipt, and preserves remaining member order;
+  ambiguous identity/divergent mutation blocks merge rather than leaving a dangling member or
+  guessing membership.
 
 ## Concretely
 
@@ -99,8 +102,12 @@ a hidden authority system and can expose material across real confidentiality bo
   independent authority and provenance and never upgrades access through grouping.
   - Verify: `tests/integration/test_multi_vault_dimensions.py::test_dimension_preserves_per_binding_authority_and_provenance`
 - [ ] A rollback through a pre-MVR-04 compatible scalar image preserves dimension metadata and
-  ordered membership in the authoritative lineage and restores it unchanged on roll-forward.
+  ordered membership; unchanged registrations restore exactly, while a valid rollback-period
+  registration removal transactionally removes that member from every dimension with a receipt.
   - Verify: `tests/integration/test_vault_registry_rollback.py::test_mvr04_dimensions_survive_scalar_projection_round_trip`
+- [ ] Roll-forward after the old image removes a dimension member never creates dangling membership,
+  silently restores the removed registration, or prunes any unrelated ordered member.
+  - Verify: `tests/integration/test_vault_registry_rollback.py::test_mvr04_rollforward_repairs_removed_dimension_member_transactionally`
 
 ## Out of Scope
 
