@@ -84,6 +84,13 @@ not background lifecycles.
   independent rows; retry within one binding must still deduplicate normally.
 - Make many-binding reads explicit and provenance-preserving; require an explicit target binding
   for writes unless the command contract already provides one unambiguously.
+- At every production filesystem, settings, projection, cache-fill, and retrieval read call site,
+  immediately before data is read or returned, compare the current binding revision/root and auth
+  epoch with the request snapshot and re-authorize the principal/scope/operation. Relocation,
+  removal, or revocation drains the affected in-flight read or returns a stale-context/
+  reauthorization error without reading or serving cached data from the old root. Long-running read
+  transactions use an owner-defined snapshot/drain fence; immutable request context alone is not an
+  authorization lease.
 - At every governed mutation seam, immediately before the owner store writes, re-resolve the target
   binding and compare its current revision/root plus the current authorization epoch with the
   request snapshot, then validate a live GOV `DecisionToken` for that principal, scope, operation,
@@ -110,6 +117,35 @@ unknown selection returns the explicit picker/error contract and touches neither
 
 A correct resolver is insufficient if a downstream route re-reads mutable global state. One such
 call site can leak retrieval context or write to the wrong human artifact surface.
+
+## Bounded implementation issue decomposition
+
+This specification maps to four serial implementation issues and must never be filed as one child.
+Each extracted issue copies a complete canonical Issue contract/SBS block and carries only the
+acceptance criteria prefixed with its ID:
+
+1. **MVR-05A — binding-keyed persistence cutover:** projection/outbox schema and backfill,
+   idempotency classification, all-process mixed-version fence, minimum-runtime floor, and
+   duplicate-binding projection isolation.
+2. **MVR-05B — request ingress and reads:** production resolver, picker, API/CLI/agent/MCP context
+   propagation, retrieval/cache provenance, pre-read revision/auth revalidation, stale selection,
+   and the temporary #3163 picker bridge. Depends on 05A and #3163.
+3. **MVR-05C — governed writes:** explicit target selection plus expanded DecisionToken/
+   AuthorityReceipt producers, migration, fixtures, preflight, and immediately-before-write race
+   enforcement. Depends on 05B.
+4. **MVR-05D — outbox producers and interim delivery:** production envelope registry, binding-keyed
+   dedup, scalar-worker partial-delivery guard, aggregate request acceptance, and owner-doc
+   writebacks. Depends on 05C and closes MVR-05.
+
+Every partial state remains fenced as described in `Cross-Task Invariants / Interaction Safety`;
+four distinct merged receipts are required on #2143.
+
+Partial-delivery gates are explicit: after 05A, only the compatible new runtime may use the migrated
+binding-keyed store and old request adapters remain single-binding; after 05B, scoped reads are live
+but new scoped write commands remain disabled; 05C enables only governed write producers that emit
+the complete binding/context envelope in the same slice; 05D migrates the remaining producers and
+interim worker before aggregate readiness. No stage permits a legacy envelope, old scalar process,
+or un-revalidated read/write to cross its floor.
 
 ## Source Anchors
 
@@ -150,88 +186,92 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 
 ## Acceptance Criteria
 
-- [ ] Two production API sessions read different vaults concurrently without cross-talk or global
+- [ ] **MVR-05B:** Two production API sessions read different vaults concurrently without cross-talk or global
   mutation.
   - Verify: `tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk`
-- [ ] Production retrieval over several bindings preserves source vault and context generation on
+- [ ] **MVR-05B:** Production retrieval over several bindings preserves source vault and context generation on
   every result and cache lookup.
   - Verify: `tests/retrieval/test_multi_vault_retrieval.py::test_production_retrieval_preserves_binding_provenance`
-- [ ] Two registered bindings containing the same artifact UUID retain independent object,
+- [ ] **MVR-05A:** Two registered bindings containing the same artifact UUID retain independent object,
   file-state, vector/index, retrieval, and receipt provenance without overwrite or cross-read.
   - Verify: `tests/integration/test_multi_vault_projection_isolation.py::test_duplicate_uuid_is_namespaced_by_binding`
-- [ ] Legacy single-vault projection rows backfill only with one provable binding; ambiguous rows
+- [ ] **MVR-05A:** Legacy single-vault projection rows backfill only with one provable binding; ambiguous rows
   block mixed-mode startup until quarantined/rebuilt, without destructive guessing.
   - Verify: `tests/migrations/test_multi_vault_projection_backfill.py::test_projection_backfill_is_unambiguous_or_fails_loud`
-- [ ] Before any binding-keyed producer starts, all pending legacy outbox keys are classified and
+- [ ] **MVR-05A:** Before any binding-keyed producer starts, all pending legacy outbox keys are classified and
   scoped/coalesced under the DB fence; an identical retry produces one canonical dispatch lineage,
   while conflicting or ambiguous rows quarantine and cannot later duplicate the upgraded event.
   - Verify: `tests/migrations/test_multi_vault_outbox_upgrade.py::test_legacy_idempotency_keys_coalesce_before_new_producer_enable`
-- [ ] The migration records the MVR-05 minimum-runtime floor before any binding-keyed database
+- [ ] **MVR-05A:** The migration records the MVR-05 minimum-runtime floor before any binding-keyed database
   state is written; scalar rollback then fails before starting an old API/worker, including on a
   one-binding instance, while a compatible roll-forward retains the full lineage.
   - Verify: `tests/migrations/test_multi_vault_projection_backfill.py::test_projection_upgrade_blocks_scalar_rollback_before_first_write`
-- [ ] Pinned-image deployment fences writes/dequeue, drains and stops the old scalar API/worker,
+- [ ] **MVR-05A:** Pinned-image deployment fences writes/dequeue, drains and stops the old scalar API/worker,
   every enabled watcher, Heimdal, capture, and auxiliary DB/outbox producer, and proves none can
   restart or retain a DB session before setting the floor or running the binding-keyed migration;
   fault injection leaves the floor/database untouched or requires compatible roll-forward.
   - Verify: `tests/ops/test_mvr05_mixed_version_fence.py::test_all_old_scalar_db_clients_are_stopped_before_binding_keyed_migration`
-- [ ] The deployment fence inventory is generated from production compose/runtime producer truth and
+- [ ] **MVR-05A:** The deployment fence inventory is generated from production compose/runtime producer truth and
   fails when any enabled process that can call the DB/outbox seam is absent from the drain/stop plan.
   - Verify: `tests/ops/test_mvr05_mixed_version_fence.py::test_fence_inventory_covers_every_enabled_db_outbox_process`
-- [ ] Production capture/governed-write paths require one explicit authorized target and record
+- [ ] **MVR-05C:** Production capture/governed-write paths require one explicit authorized target and record
   vault/context provenance in their receipt.
   - Verify: `tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt`
-- [ ] Relocation, removal, or GOV revocation after request resolution but before commit invalidates
+- [ ] **MVR-05C:** Relocation, removal, or GOV revocation after request resolution but before commit invalidates
   the current DecisionToken/binding revision and blocks the in-flight mutation without writing to
   either the old or replacement root.
   - Verify: `tests/api/test_multi_vault_governed_writes.py::test_authority_or_locator_change_blocks_inflight_write_before_commit`
-- [ ] The production capture path issues, persists, validates, and receipts the expanded token bound
+- [ ] **MVR-05B:** Relocation, removal, or GOV revocation after request resolution but before a production
+  filesystem/retrieval/cache read revalidates or drains that in-flight request and never returns data
+  from the stale root or authorization snapshot.
+  - Verify: `tests/integration/test_multi_vault_request_isolation.py::test_authority_or_locator_change_blocks_inflight_read_before_effect`
+- [ ] **MVR-05C:** The production capture path issues, persists, validates, and receipts the expanded token bound
   to principal/instance/scope/binding revision/auth epoch; legacy-shaped tokens and stale epochs fail
   before mutation, and all token producers/fixtures satisfy the same schema.
   - Verify: `tests/api/test_multi_vault_governed_writes.py::test_capture_token_binds_principal_scope_binding_revision_and_auth_epoch`
-- [ ] A production producer registry and architecture guard enumerate every vault-bound watcher,
+- [ ] **MVR-05D:** A production producer registry and architecture guard enumerate every vault-bound watcher,
   API/ingest/capture, Heimdal, and shared outbox call site; no unregistered call site can emit a
   legacy envelope.
   - Verify: `tests/architecture/test_multi_vault_context_boundaries.py::test_vault_bound_outbox_producers_cannot_emit_legacy_envelopes`
-- [ ] Invoking every registered production vault-bound producer emits the versioned stable-binding,
+- [ ] **MVR-05D:** Invoking every registered production vault-bound producer emits the versioned stable-binding,
   context, routing-class, and idempotency envelope without fixture-only row construction.
   - Verify: `tests/integration/test_multi_vault_outbox_producers.py::test_production_call_sites_emit_binding_context_envelopes`
-- [ ] The interim scalar worker dispatches only a row matching its explicit current single-binding
+- [ ] **MVR-05D:** The interim scalar worker dispatches only a row matching its explicit current single-binding
   compatibility context, authorization, revision, and root even when other vaults are remembered;
   it leaves every ambiguous/mismatched row pending/unacknowledged with blocked readiness,
   while global work remains independently processable until MVR-06.
   - Verify: `tests/workers/test_multi_vault_partial_delivery_gate.py::test_scalar_worker_dispatches_only_rows_matching_explicit_worker_binding`
-- [ ] Vault-bound outbox idempotency keys include the stable binding: duplicate logical identities
+- [ ] **MVR-05D:** Vault-bound outbox idempotency keys include the stable binding: duplicate logical identities
   in two bindings persist independently, while same-binding retries deduplicate.
   - Verify: `tests/services/test_multi_vault_outbox_idempotency.py::test_duplicate_identity_events_are_deduplicated_per_binding`
-- [ ] Invalid or unauthorized request selection returns the explicit error/picker contract and
+- [ ] **MVR-05B:** Invalid or unauthorized request selection returns the explicit error/picker contract and
   never serves default, last-active, CWD, or another binding.
   - Verify: `tests/api/test_multi_vault_request_fail_closed.py::test_invalid_selection_never_falls_back`
-- [ ] The shipped Companion picker creates/replaces a scoped selection and its client sends that
+- [ ] **MVR-05B:** The shipped Companion picker creates/replaces a scoped selection and its client sends that
   bearer ID through production read and governed-write requests; choosing B changes later requests
   to B, and stale-ID recovery with zero, many, ambiguous, or default-mismatched bindings visibly
   asks for reselection.
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_existing_picker_drives_scoped_request_context`
-- [ ] After API restart, a stale bearer never authorizes or falls back for its failed request; the
+- [ ] **MVR-05B:** After API restart, a stale bearer never authorizes or falls back for its failed request; the
   client never retries that failed request. Before a later, newly initiated request it may
   transparently mint a replacement only after fresh authenticated resolution proves exactly one
   authorized binding equal to the explicit default; otherwise reselection remains visible.
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_stale_selection_restart_recovers_only_unambiguous_singleton_default`
-- [ ] Before MVR-06 takes ownership, only the legacy choose/open picker action also drives #3163's
+- [ ] **MVR-05B:** Before MVR-06 takes ownership, only the legacy choose/open picker action also drives #3163's
   single-watcher rebind; generic scoped session/request selection does not. The bridge is named and
   guarded for atomic retirement by MVR-06.
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_legacy_picker_bridge_preserves_single_watcher_until_mvr06`
-- [ ] Request-bound production code cannot introduce new direct global vault resolution outside
+- [ ] **MVR-05B:** Request-bound production code cannot introduce new direct global vault resolution outside
   named compatibility adapters.
   - Verify: `tests/architecture/test_multi_vault_context_boundaries.py::test_request_consumers_use_context_seam`
-- [ ] The parent request acceptance target composes two-session isolation, resolution precedence,
+- [ ] **MVR-05D:** The parent request acceptance target composes two-session isolation, resolution precedence,
   fail-closed stale selection, projection separation, retrieval provenance, and governed writes on
   the production request seam.
   - Verify: `tests/integration/test_multi_vault_request_isolation.py::test_parent_request_context_acceptance`
-- [ ] Production resolution applies explicit selection, instance default, and no-vault precedence
+- [ ] **MVR-05B:** Production resolution applies explicit selection, instance default, and no-vault precedence
   without consulting last-active, CWD, or another binding after an invalid explicit choice.
   - Verify: `tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior`
-- [ ] Architecture, event, DB, deployment, and release-channel owner contracts describe the shipped
+- [ ] **MVR-05D:** Architecture, event, DB, deployment, and release-channel owner contracts describe the shipped
   binding/context envelope, idempotency-key migration, projection namespace, minimum-runtime floor,
   and all-process fenced cutover.
   - Verify: doc writeback at `docs/ARCHITECTURE.md :: Active context and vault bindings` + doc
@@ -267,7 +307,8 @@ session/default context and never inherit an unrecorded process selection.
 
 ## Related GitHub Issues
 
-Create one child under #2143 after MVR-03/04 and #3163. Use Sol/high for binding-key schema/backfill and
-authority review; Terra/high is acceptable only for decomposed mechanical call-site migration after
-those gates are fixed. This slice owns compatibility migration of the already-shipped picker;
+Create the four serial children in `Bounded implementation issue decomposition` under #2143 after
+MVR-03/04, adding the #3163 dependency at 05B. Use Sol/high for binding-key schema/backfill and
+authority review; Terra/high is acceptable only for the mechanically bounded call-site work after
+those gates are fixed. This family owns compatibility migration of the already-shipped picker;
 #2566 remains the separate downstream visual switcher/overlay issue.

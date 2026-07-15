@@ -136,6 +136,35 @@ inspected through the production API/CLI service before the supervisor starts.
 Request isolation cannot protect background ingest or queues that still watch one frozen env path.
 Mixed bindings would silently index or mutate the wrong vault while health remained misleading.
 
+## Bounded implementation issue decomposition
+
+This specification maps to four serial implementation issues and must never be filed as one child.
+Each extracted issue copies a complete canonical Issue contract/SBS block and carries only the
+acceptance criteria prefixed with its ID:
+
+1. **MVR-06A — intent and service authority:** durable compatibility/explicit intent schema,
+   governed admin producers, explicit-empty semantics, delegated background-runtime role, producer
+   migrations/fixtures/preflight, and the MVR-06 minimum-runtime floor. Depends on MVR-05D.
+2. **MVR-06B — compatibility bridge handoff:** atomic #3163 watcher bridge retirement, durable picker
+   and default-driven compatibility binding, commit-before-hint, and Settings Spine drain/rebind.
+   Depends on 06A and #3163.
+3. **MVR-06C — isolated lifecycle supervision:** zero/one/many per-binding watcher/worker/settings
+   lifecycles, ownership-lease checks, revision/auth-epoch reconciliation, truthful health, and
+   cross-process ActiveContextSet handoff. Depends on 06B.
+4. **MVR-06D — queued-work convergence and owner truth:** validate MVR-05 classification, preserve or
+   quarantine pending rows under current authority/binding, architecture boundary, aggregate
+   lifecycle acceptance, and owner-doc writebacks. Depends on 06C and closes MVR-06.
+
+Four distinct merged receipts are required on #2143; no child recreates #3163 or #3156.
+
+Partial-delivery gates are explicit: after 06A, durable intent/auth state exists but the legacy
+single-watcher bridge remains authoritative and admin rejects any transition requiring more than one
+running binding; 06B atomically replaces it with the revision-reconciling single-binding
+compatibility supervisor; 06C lifts the capability gate for explicit zero/one/many lifecycles; 06D
+enables multi-binding queued dispatch only after the MVR-05 classification receipt and current
+binding/authority checks pass. A later stage never becomes observable before its producer,
+migration, preflight, and fail-loud gate merge together.
+
 ## Source Anchors
 
 - `docs/SETTINGS_SPINE/REBIND_ON_VAULT_SELECTION.md`
@@ -184,90 +213,90 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
 
 ## Acceptance Criteria
 
-- [ ] MVR-06 atomically imports the live MVR-05/#3163 compatibility watcher binding, starts the
+- [ ] **MVR-06B:** MVR-06 atomically imports the live MVR-05/#3163 compatibility watcher binding, starts the
   revision-reconciling supervisor, and retires the legacy picker bridge; injected failure leaves
   the old bridge authoritative and never enables two or zero watcher owners.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_settings_spine_bridge_handoff_is_atomic`
-- [ ] The imported live compatibility binding survives restart even when it differs from the
+- [ ] **MVR-06B:** The imported live compatibility binding survives restart even when it differs from the
   instance default; a later legacy choose/open picker event or explicit default set/clear changes it
   while compatibility mode remains active, and governed background administration enters explicit mode.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback`
-- [ ] After bridge retirement, a legacy choose/open picker change still atomically updates the
+- [ ] **MVR-06B:** After bridge retirement, a legacy choose/open picker change still atomically updates the
   compatibility binding and drains/rebinds the supervisor; generic scoped selection and every picker
   event after explicit-mode transition leave background intent unchanged.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff`
-- [ ] The picker transaction durably commits compatibility binding/provenance/revision before its
+- [ ] **MVR-06B:** The picker transaction durably commits compatibility binding/provenance/revision before its
   wake-up hint; event loss and crashes before/after publication restart on the committed binding and
   never the previous one.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_picker_commit_precedes_hint_and_survives_event_loss`
-- [ ] The production supervisor runs independent watcher/worker lifecycles for two bindings and
+- [ ] **MVR-06C:** The production supervisor runs independent watcher/worker lifecycles for two bindings and
   attributes ingest, queues, settings, health, and receipts to the correct immutable
   ActiveContextSet/vault/generation.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_two_bindings_run_isolated_lifecycles`
-- [ ] Lifecycle start/rebind refuses a binding whose physical root is leased or pending in another
+- [ ] **MVR-06C:** Lifecycle start/rebind refuses a binding whose physical root is leased or pending in another
   release channel, including after relocation and restart.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_lifecycle_requires_matching_channel_ownership_lease`
-- [ ] Existing-install migration, channel/native bootstrap, and fixtures persist one distinct
+- [ ] **MVR-06A:** Existing-install migration, channel/native bootstrap, and fixtures persist one distinct
   least-privilege background runtime role delegated from the local operator role before lifecycle
   startup; missing, stale, ambiguous, or over-broad delegation fails preflight and cannot dispatch.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_background_service_role_is_bootstrapped_delegated_and_least_privilege`
-- [ ] Request/session selection does not alter durable background intent; after restart the
+- [ ] **MVR-06A:** Request/session selection does not alter durable background intent; after restart the
   supervisor reconstructs exactly the explicitly enrolled, deduplicated, re-authorized set.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_restart_uses_only_durable_authorized_binding_set`
-- [ ] Governed production API and CLI add/remove/list operations are the tested producers of
+- [ ] **MVR-06A:** Governed production API and CLI add/remove/list operations are the tested producers of
   background intent, reject unknown/unauthorized bindings, atomically commit a durable revision,
   and publish an idempotent wake-up event for that revision.
   - Verify: `tests/api/test_background_binding_admin.py::test_production_enrollment_commands_drive_lifecycle_intent`
-- [ ] Instance-authorized removal clears stale stored intent idempotently even after its registry
+- [ ] **MVR-06A:** Instance-authorized removal clears stale stored intent idempotently even after its registry
   entry disappears or content authority is lost; add still requires live membership and authority.
   - Verify: `tests/api/test_background_binding_admin.py::test_stale_binding_intent_can_be_removed_without_content_authority`
-- [ ] Removing the final explicit member persists explicit-empty intent; restart and list remain
+- [ ] **MVR-06A:** Removing the final explicit member persists explicit-empty intent; restart and list remain
   empty/idle and never re-enrol the instance default.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_remove_last_then_restart_preserves_explicit_empty_intent`
-- [ ] Replacing or clearing the instance default through MVR-02's production API/CLI drains and
+- [ ] **MVR-06B:** Replacing or clearing the instance default through MVR-02's production API/CLI drains and
   re-resolves a compatibility lifecycle before later work, but does not rebind explicit intent.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_default_mutation_rebinds_only_compatibility_lifecycle`
-- [ ] Rebind drains in-flight work on the old generation and routes later work to the new one using
+- [ ] **MVR-06B:** Rebind drains in-flight work on the old generation and routes later work to the new one using
   #3163's production event/reload path.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_rebind_reuses_settings_spine_and_is_generation_clean`
-- [ ] Relocating/removing a registered binding or changing authority-relevant provenance rotates
+- [ ] **MVR-06C:** Relocating/removing a registered binding or changing authority-relevant provenance rotates
   every affected running lifecycle through drain, re-resolution, and re-authorization; a producer
   crash after registry commit but before event publication still converges from the durable
   revision cursor without accepting later work on the stale binding.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window`
-- [ ] A pure GOV verdict/role revocation with no registry mutation advances the auth epoch, drains the
+- [ ] **MVR-06C:** A pure GOV verdict/role revocation with no registry mutation advances the auth epoch, drains the
   affected running lifecycle, and blocks its next read/write/outbox/dispatch operation before effect.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_authorization_epoch_revokes_running_lifecycle_before_next_effect`
-- [ ] Zero bindings idle truthfully; one binding preserves current behavior; a failed member is
+- [ ] **MVR-06C:** Zero bindings idle truthfully; one binding preserves current behavior; a failed member is
   loud and cannot redirect or mark the whole set healthy.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_zero_one_many_and_partial_failure_are_truthful`
-- [ ] The parent lifecycle-and-dimension acceptance target composes the MVR-04 dimension authority
+- [ ] **MVR-06D:** The parent lifecycle-and-dimension acceptance target composes the MVR-04 dimension authority
   contract with isolated zero/one/many watcher and worker behavior before MVR-06 merges.
   - Verify: `tests/integration/test_multi_vault_lifecycle_and_dimension.py::test_parent_dimension_background_acceptance`
-- [ ] Cross-process worker startup consumes explicit versioned binding state, not an untracked
+- [ ] **MVR-06C:** Cross-process worker startup consumes explicit versioned binding state, not an untracked
   process-global/env snapshot, and resolves it into the full background ActiveContextSet before
   work starts.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_worker_handoff_is_versioned_and_explicit`
-- [ ] MVR-06 validates MVR-05's legacy classification/coalescing receipt before multi-binding start:
+- [ ] **MVR-06D:** MVR-06 validates MVR-05's legacy classification/coalescing receipt before multi-binding start:
   global topics continue exactly once, scoped vault-bound rows retain one canonical lineage, and
   unknown/ambiguous rows remain quarantined without dispatch or acknowledgement.
   - Verify: `tests/migrations/test_multi_vault_outbox_upgrade.py::test_mvr06_requires_complete_mvr05_classification_receipt`
-- [ ] The MVR-06 minimum-runtime floor commits before the first background-intent field and blocks
+- [ ] **MVR-06A:** The MVR-06 minimum-runtime floor commits before the first background-intent field and blocks
   every older API/watcher/worker before registry access; fault injection leaves either untouched
   MVR-05 state or an MVR-06-compatible lineage.
   - Verify: `tests/migrations/test_multi_vault_background_intent_upgrade.py::test_background_intent_sets_mvr06_floor_before_first_write`
-- [ ] Pending vault-bound rows are revalidated before dispatch; lifecycle removal, lost authority,
+- [ ] **MVR-06D:** Pending vault-bound rows are revalidated before dispatch; lifecycle removal, lost authority,
   or incompatible binding/locator change quarantines them durably without dispatch/ack, and governed reissue can
   target only the same re-authorized stable binding with lineage/idempotency preserved.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_pending_rows_quarantine_across_removal_and_rebind`
-- [ ] A routine supervisor restart or generation rotation preserves valid pending rows for the same
+- [ ] **MVR-06D:** A routine supervisor restart or generation rotation preserves valid pending rows for the same
   authorized binding, links fresh consumer context to immutable producer provenance, and does not
   quarantine or retarget them.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_pending_rows_survive_compatible_restart_generation`
-- [ ] Production watcher/worker/settings callers consume ActiveContextSet outside named bootstrap
+- [ ] **MVR-06D:** Production watcher/worker/settings callers consume ActiveContextSet outside named bootstrap
   adapters; no parallel lifecycle context type remains.
   - Verify: `tests/architecture/test_multi_vault_context_boundaries.py::test_background_consumers_use_lifecycle_seam`
-- [ ] Environment, security, governed-write, vault/settings, and Settings Spine owner contracts
+- [ ] **MVR-06D:** Environment, security, governed-write, vault/settings, and Settings Spine owner contracts
   describe the shipped background-role producer, durable intent, per-binding lifecycle, and
   authorization/rebind behavior in the same PR without claiming later MVR scope.
   - Verify: doc writeback at `docs/ENVIRONMENTS.md :: Runtime Control Surface` + doc writeback at
@@ -307,6 +336,8 @@ work is retried only under its existing idempotency contract, never silently reb
 
 ## Related GitHub Issues
 
-Create one child under #2143 only after #3163 and MVR-02–05 merge. Use Sol/xhigh because watcher
-concurrency, cross-process binding, and settings reload have high blast radius. Do not recreate
-#3163 or its Settings Spine parent #3156.
+Create the four serial children in `Bounded implementation issue decomposition` under #2143 only
+after their named dependencies merge. Use Sol/xhigh for authority, watcher concurrency,
+cross-process binding, queue migration, and settings reload; bounded mechanical adapters may use
+Terra/high only after the governing contract is frozen. Do not recreate #3163 or its Settings Spine
+parent #3156.

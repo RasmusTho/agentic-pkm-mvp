@@ -192,15 +192,21 @@ member binding independently. Removing a dimension does not remove its vault reg
 | 01C | [ESTABLISH_INSTANCE_VAULT_REGISTRY](ESTABLISH_INSTANCE_VAULT_REGISTRY.md#bounded-implementation-issue-decomposition) | scalar rollback gateway, exports, and roll-forward lineage | 01B | Sol/xhigh |
 | 02 | [RESOLVE_INSTANCE_DEFAULT_VAULT](RESOLVE_INSTANCE_DEFAULT_VAULT.md) | explicit default and fail-closed precedence | 01A–01C | Sol/high |
 | 03 | [VERSION_ACTIVE_CONTEXT_SELECTION](VERSION_ACTIVE_CONTEXT_SELECTION.md) | versioned request/session `ActiveContextSet` | 01A–01C, 02 | Sol/xhigh |
-| 04 | [GROUP_VAULT_BINDINGS_BY_DIMENSION](GROUP_VAULT_BINDINGS_BY_DIMENSION.md) | non-authoritative dimension membership and context resolution | 01, 03 | Sol/high design; Terra/high execution after contract freeze |
-| 05 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md) | production picker/HTTP/retrieval/write migration plus binding-scoped projections | 03, 04, #3163 | Sol/high schema/authority; Terra/high mechanical consumers |
-| 06 | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md) | watcher/worker/settings lifecycle bindings and queued-work migration | 02–05, #3163 | Sol/xhigh |
-| 07 | [PRESERVE_SINGLE_VAULT_MIGRATION](PRESERVE_SINGLE_VAULT_MIGRATION.md) | compatibility adapters and migration fitness | 04, 05, 06 | Terra/high |
-| 08 | [PROMOTE_MULTI_VAULT_RUNTIME_TRUTH](PROMOTE_MULTI_VAULT_RUNTIME_TRUTH.md) | integrated proof, owner-doc/debt promotion, parent closure ledger | 01A–01C, 02–07 | Terra/high review; Sol/high if residual architecture risk |
+| 04 | [GROUP_VAULT_BINDINGS_BY_DIMENSION](GROUP_VAULT_BINDINGS_BY_DIMENSION.md) | non-authoritative dimension membership and context resolution | 01A–01C, 03 | Sol/high design; Terra/high execution after contract freeze |
+| 05A | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | binding-keyed persistence cutover | 03, 04 | Sol/xhigh |
+| 05B | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | request ingress, picker, reads, retrieval, and read-race fence | 05A, #3163 | Sol/high; Terra/high mechanical consumers |
+| 05C | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | governed write target/token/receipt migration | 05B | Sol/xhigh |
+| 05D | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | outbox producers, interim worker delivery, aggregate proof, owner docs | 05C | Sol/high; Terra/high mechanical consumers |
+| 06A | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | durable intent, service role, admin, and runtime floor | 05D | Sol/xhigh |
+| 06B | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | #3163 compatibility bridge handoff and settings rebind | 06A, #3163 | Sol/xhigh |
+| 06C | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | isolated zero/one/many lifecycle supervision | 06B | Sol/xhigh |
+| 06D | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | queued-work convergence, aggregate proof, and owner docs | 06C | Sol/xhigh |
+| 07 | [PRESERVE_SINGLE_VAULT_MIGRATION](PRESERVE_SINGLE_VAULT_MIGRATION.md) | compatibility adapters and migration fitness | 04, 05A–05D, 06A–06D | Terra/high |
+| 08 | [PROMOTE_MULTI_VAULT_RUNTIME_TRUTH](PROMOTE_MULTI_VAULT_RUNTIME_TRUTH.md) | integrated proof, owner-doc/debt promotion, parent closure ledger | 01A–01C, 02–04, 05A–05D, 06A–06D, 07 | Terra/high review; Sol/high if residual architecture risk |
 
-Execution is serial through task 06: tasks 04 and 06 both evolve the instance-registry schema, task
-05 introduces binding-keyed projection migrations consumed by task 06, and their producer/preflight
-sets are not disjoint. No parallel dispatch is allowed for 04–06. Every merge posts a child receipt
+Execution is serial through issue 06D: task 04 and the 05/06 families evolve shared registry,
+projection, auth, queue, and lifecycle contracts, and their producer/preflight sets are not disjoint.
+No parallel dispatch is allowed through 06D. Every merge posts a child receipt
 to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup.
 
 ## Cross-Task Invariants / Interaction Safety
@@ -252,23 +258,23 @@ Partial delivery remains fail-closed:
   compatibility behavior; no registration is silently promoted to default;
 - after task 02 but before task 03, default resolution is available only through explicit
   background/compatibility adapters; requests do not pretend to be session-scoped;
-- after task 03 but before tasks 05/06, migrated callers may use ActiveContextSet while unmigrated
+- after task 03 but before issues 05A–06D, migrated callers may use ActiveContextSet while unmigrated
   callers stay on named single-vault adapters; the architecture guard records the mixed state and
   no global "multi-vault delivered" claim is allowed;
-- after task 05 but before task 06, the existing picker alone continues to drive #3163's named
-  single-watcher bridge while scoped request/session selection does not; task 06 atomically hands
+- after issue 05B but before issue 06B, the existing picker alone continues to drive #3163's named
+  single-watcher bridge while scoped request/session selection does not; issue 06B atomically hands
   that live binding to the durable supervisor before disabling the bridge;
-- before task 05 enables binding-keyed producers, every pending legacy outbox key is classified and
+- before issue 05D enables binding-keyed producers, every pending legacy outbox key is classified and
   scoped/coalesced under the DB fence; identical retries preserve one canonical lineage and
-  ambiguous/conflicting rows quarantine, so task 06 cannot backfill a duplicate;
-- after task 06, legacy choose/open continues to rebind only `compatibility` lifecycle intent by
+  ambiguous/conflicting rows quarantine, so issue 06D cannot backfill a duplicate;
+- after issue 06D, legacy choose/open continues to rebind only `compatibility` lifecycle intent by
   committing it before the supervisor wake-up hint; the first governed background add/remove enters
   `explicit` mode, after which picker and default changes cannot mutate the explicit background set;
-- after task 05 but before task 06, the interim scalar worker dispatches a versioned vault-bound row
+- after issue 05D but before issue 06D, the interim scalar worker dispatches a versioned vault-bound row
   only when the row uniquely matches the worker's explicit current single-binding compatibility
   context, current authorization, binding revision, and resolved root; extra remembered registry
   entries do not block that match. Ambiguous/mismatched rows remain pending and unacknowledged, safe global work
-  continues, and only task 06 enables multi-binding dispatch and governed quarantine recovery;
+  continues, and only issue 06D enables multi-binding dispatch and governed quarantine recovery;
 - a dimension containing an unknown, stale, or unauthorized member fails the whole production
   context resolution; it never returns a partial set, excludes the member, or substitutes another;
 - if one background binding fails, its lifecycle and health remain failed while other bindings

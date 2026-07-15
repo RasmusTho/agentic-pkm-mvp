@@ -130,10 +130,16 @@ Preserves the invariant→producers rule from #1991/#1997, the no-silent-fallbac
 | 01C | [ESTABLISH_INSTANCE_VAULT_REGISTRY — rollback](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/ESTABLISH_INSTANCE_VAULT_REGISTRY.md#bounded-implementation-issue-decomposition) | filed after spec merge | blocked on 01B |
 | 02 | [RESOLVE_INSTANCE_DEFAULT_VAULT](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/RESOLVE_INSTANCE_DEFAULT_VAULT.md) | filed after spec merge | blocked on 01A–01C |
 | 03 | [VERSION_ACTIVE_CONTEXT_SELECTION](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/VERSION_ACTIVE_CONTEXT_SELECTION.md) | filed after spec merge | blocked on 01A–01C and 02 |
-| 04 | [GROUP_VAULT_BINDINGS_BY_DIMENSION](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/GROUP_VAULT_BINDINGS_BY_DIMENSION.md) | filed after spec merge | blocked on 01 and 03 |
-| 05 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md) | filed after spec merge | blocked on 04 and #3163 |
-| 06 | [BIND_BACKGROUND_LIFECYCLES](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md) | filed after spec merge | blocked on 05 and #3163 |
-| 07 | [PRESERVE_SINGLE_VAULT_MIGRATION](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/PRESERVE_SINGLE_VAULT_MIGRATION.md) | filed after spec merge | blocked on 04–06 |
+| 04 | [GROUP_VAULT_BINDINGS_BY_DIMENSION](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/GROUP_VAULT_BINDINGS_BY_DIMENSION.md) | filed after spec merge | blocked on 01A–01C and 03 |
+| 05A | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT — persistence](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | filed after spec merge | blocked on 03–04 |
+| 05B | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT — ingress/reads](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | filed after spec merge | blocked on 05A and #3163 |
+| 05C | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT — governed writes](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | filed after spec merge | blocked on 05B |
+| 05D | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT — outbox/delivery](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | filed after spec merge | blocked on 05C |
+| 06A | [BIND_BACKGROUND_LIFECYCLES — intent/authority](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | filed after spec merge | blocked on 05D |
+| 06B | [BIND_BACKGROUND_LIFECYCLES — bridge handoff](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | filed after spec merge | blocked on 06A and #3163 |
+| 06C | [BIND_BACKGROUND_LIFECYCLES — supervision](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | filed after spec merge | blocked on 06B |
+| 06D | [BIND_BACKGROUND_LIFECYCLES — queued work/owner truth](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md#bounded-implementation-issue-decomposition) | filed after spec merge | blocked on 06C |
+| 07 | [PRESERVE_SINGLE_VAULT_MIGRATION](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/PRESERVE_SINGLE_VAULT_MIGRATION.md) | filed after spec merge | blocked on 04, 05A–05D, and 06A–06D |
 | 08 | [PROMOTE_MULTI_VAULT_RUNTIME_TRUTH](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/PROMOTE_MULTI_VAULT_RUNTIME_TRUTH.md) | filed after spec merge | final validation child |
 
 Issue numbers replace the placeholders only after the specification PR merges and strict Issue
@@ -151,7 +157,7 @@ live Issues/PRs, and dispatcher truth before the next pickup.
 
 #2143 closes only after:
 
-1. issues 01A–01C and tasks 02–08 have merged and their issues have no residual `agent:*` labels;
+1. issues 01A–01C, tasks 02–04, issues 05A–05D and 06A–06D, and tasks 07–08 have merged with no residual `agent:*` labels;
 2. all capability-acceptance targets in `README.md` pass on merged `origin/main`;
 3. #2566 and #3156/#3163 are reconciled without duplicated scope and their state is truthful;
 4. architecture, ActiveContextSet, topology, settings/context, environment, transition-debt, and
