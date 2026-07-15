@@ -916,9 +916,22 @@ class VerificationConsumer:
 
     def _launch_after_live_fence(self, claimed: VerificationRun) -> VerificationRun:
         """Re-read authority after auth and claim, immediately before launch."""
-        pr = self.truth.pull_request(claimed.repository, claimed.pr_number)
-        checks = self.truth.checks(claimed.repository, claimed.head_sha)
-        rejection = live_truth_rejection(claimed, pr, checks)
+        try:
+            pr = self.truth.pull_request(claimed.repository, claimed.pr_number)
+            checks = self.truth.checks(claimed.repository, claimed.head_sha)
+            rejection = live_truth_rejection(claimed, pr, checks)
+        except Exception as exc:
+            return self.ledger.backoff(
+                claimed.run_id,
+                {
+                    "outcome": "blocked",
+                    "reason": "prelaunch_live_truth_unavailable",
+                    "error_type": type(exc).__name__,
+                },
+                _retry_at(),
+                holder=self.holder,
+                lease_id=claimed.lease_id or "",
+            )
         if rejection:
             receipt = {"outcome": "launch_rejected", "reason": rejection}
             if rejection in {"missing_checks", "checks_not_green"}:

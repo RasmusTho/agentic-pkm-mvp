@@ -90,7 +90,8 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - Authentication does not extend an earlier live-truth read atomically. After auth and lease claim,
   the consumer re-fetches head, governing contract, and checks immediately before launch; drift
   supersedes the claimed run, while missing or non-green checks back off. Both are technical
-  prelaunch outcomes and start no coordinator.
+  prelaunch outcomes and start no coordinator. A GitHub source or contract-parse exception during
+  that claimed read also enters lease-fenced bounded backoff instead of stranding a live claim.
 - A genuine coordinator `needs_human` verdict crosses the one durable Human Exception boundary:
   the consumer accepts only one of the four governed failure classes plus the complete canonical
   owner-decision packet, then records it head- and governing-issue-bound before terminal state.

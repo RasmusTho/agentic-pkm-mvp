@@ -52,6 +52,18 @@ class MutatingAuth(Auth):
         return super().check()
 
 
+class FailingSecondReadTruth(Truth):
+    def __init__(self) -> None:
+        super().__init__(eligible_pr(), GREEN)
+        self.pull_calls = 0
+
+    def pull_request(self, repository, pr_number):
+        self.pull_calls += 1
+        if self.pull_calls == 2:
+            raise RuntimeError("simulated GitHub source outage")
+        return super().pull_request(repository, pr_number)
+
+
 class Launcher:
     config = LaunchConfig("verification_closer", "gpt-5.6-terra", "high", "workspace-write", "instructions")
     def __init__(self): self.calls = []
@@ -189,6 +201,24 @@ def test_governing_issue_move_during_auth_fails_closed_before_launch(tmp_path) -
 
     assert result.status == "superseded"
     assert result.stop_reason == "governing_issue_mismatch"
+    assert launcher.calls == []
+
+
+def test_post_auth_live_truth_error_backs_off_claimed_run(tmp_path) -> None:
+    truth = FailingSecondReadTruth()
+    launcher = Launcher()
+
+    result = VerificationConsumer(
+        ledger(tmp_path), truth, Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "backoff"
+    assert result.terminal_receipt == {
+        "outcome": "blocked",
+        "reason": "prelaunch_live_truth_unavailable",
+        "error_type": "RuntimeError",
+    }
+    assert truth.pull_calls == 2
     assert launcher.calls == []
 
 
@@ -1244,6 +1274,37 @@ def test_restart_recovers_without_duplicate_agent_or_mutation(tmp_path) -> None:
     resumed = consumer.recover(running.run_id)
     assert resumed.status == "needs_human"
     assert launcher.calls[-1][1] == "thread-new"
+
+
+def test_recovery_live_truth_error_backs_off_claimed_run(tmp_path) -> None:
+    state = ledger(tmp_path)
+    truth = FailingSecondReadTruth()
+    launcher = Launcher()
+    run = state.ingest(request())
+    claimed = state.claim(run.run_id, "original")
+    running = state.start(
+        run.run_id,
+        "original",
+        claimed.lease_id,
+        "old-session",
+        {"head_sha": HEAD},
+    )
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET lease_expires_at='2000-01-01T00:00:00+00:00' "
+            "WHERE run_id=?",
+            (running.run_id,),
+        )
+        conn.commit()
+
+    result = VerificationConsumer(
+        state, truth, Auth(), launcher, "replacement"
+    ).recover(running.run_id)
+
+    assert result.status == "backoff"
+    assert result.coordinator_session_id == "old-session"
+    assert truth.pull_calls == 2
+    assert launcher.calls == []
 
 
 def test_recover_rejects_live_head_movement_before_resume(tmp_path) -> None:
