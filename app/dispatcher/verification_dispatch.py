@@ -403,13 +403,19 @@ class VerificationDispatchLedger:
                 if candidate["current_head_sha"] != request.get("current_head_sha"):
                     lease_expires_at = candidate["lease_expires_at"]
                     candidate_supporting = candidate_request.get("supporting_issues")
+                    incoming_supporting = request.get("supporting_issues")
+                    supporting_authority_extends = (
+                        isinstance(candidate_supporting, list)
+                        and isinstance(incoming_supporting, list)
+                        and set(candidate_supporting).issubset(incoming_supporting)
+                    )
                     authority_matches = (
                         authenticated_artifact
                         and candidate["status"] == "running"
                         and isinstance(lease_expires_at, str)
                         and _parse_timestamp(lease_expires_at)
                         <= _parse_timestamp(now)
-                        and candidate_supporting == request.get("supporting_issues")
+                        and supporting_authority_extends
                     )
                     if not authority_matches:
                         raise ValueError(

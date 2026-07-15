@@ -77,7 +77,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   still has an expired running lease, ingestion atomically requeues that same run on the new head,
   clears stale lease/session/terminal state, and retains every existing attempt and the exhausted
   standard/escalated 2+2 repair budget. An unauthenticated artifact, a live lease, mismatched issue
-  authority, or an ambiguous terminal chain fails closed without changing the run.
+  authority, removal/replacement of prior supporting issues, or an ambiguous terminal chain fails
+  closed without changing the run; authenticated repaired heads may extend the supporting-issue set
+  monotonically as new findings become linked to the same PR.
 - Missing or pending checks and auth/rate limits enter time-bounded `backoff`; replay cannot launch
   before `retry_after`. Rate-limit classification requires either a structured `retry` receipt or the
   launcher's structured `failure_class=rate_limit`, derived once from a non-zero provider failure;

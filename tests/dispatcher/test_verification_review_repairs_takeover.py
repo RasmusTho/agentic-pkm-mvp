@@ -480,6 +480,25 @@ def test_first_authenticated_new_head_reopens_expired_chain_without_budget_reset
     ]
 
 
+def test_authenticated_new_head_accepts_monotonic_supporting_issue_extension(
+    tmp_path: Path,
+) -> None:
+    state = ledger(tmp_path)
+    original = request()
+    original["supporting_issues"] = [3626]
+    run_id, before = _record_exhausted_chain(state, original)
+    repaired = request(REPAIRED_HEAD)
+    repaired["supporting_issues"] = [3626, 3783, 3784]
+    source, _ = _gh_source(repaired)
+
+    reopened = state.ingest(source.pending_requests(REPO)[0])
+
+    assert reopened.run_id == run_id
+    assert reopened.status == "queued"
+    assert reopened.current_head_sha == REPAIRED_HEAD
+    assert state.attempts(run_id) == before
+
+
 def test_expired_head_reconciliation_rejects_unauthenticated_valid_artifact(
     tmp_path: Path,
 ) -> None:
@@ -521,14 +540,41 @@ def test_new_head_reconciliation_rejects_authenticated_artifact_while_lease_is_l
 
 
 @pytest.mark.parametrize(
+    "incoming_supporting",
+    [
+        [],
+        [999999],
+    ],
+)
+def test_expired_head_reconciliation_rejects_supporting_issue_removal_or_replacement(
+    tmp_path: Path, incoming_supporting: list[int]
+) -> None:
+    state = ledger(tmp_path)
+    original = request()
+    original["supporting_issues"] = [3626]
+    run_id, before = _record_exhausted_chain(state, original)
+    payload = request(REPAIRED_HEAD)
+    payload["supporting_issues"] = incoming_supporting
+    source, _ = _gh_source(payload)
+
+    with pytest.raises(ValueError):
+        state.ingest(source.pending_requests(REPO)[0])
+
+    retained = state.get(run_id)
+    assert retained is not None
+    assert retained.status == "running"
+    assert retained.current_head_sha == HEAD
+    assert state.attempts(run_id) == before
+
+
+@pytest.mark.parametrize(
     "mutate",
     [
         lambda payload: payload.update(linked_issue=999999),
-        lambda payload: payload.update(supporting_issues=[999999]),
         lambda payload: payload.update(repository="other/repository"),
     ],
 )
-def test_expired_head_reconciliation_rejects_mismatched_authority(
+def test_expired_head_reconciliation_rejects_mismatched_primary_authority(
     tmp_path: Path, mutate: Callable[[dict[str, object]], None]
 ) -> None:
     state = ledger(tmp_path)
