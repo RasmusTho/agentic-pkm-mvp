@@ -176,6 +176,18 @@ cross-process truth belong here.
   effects. `global` work remains singleton; `vault_bound` ownership is binding-scoped. Exact-SHA CI
   races concurrent workers and injects crash-after-effect; missing PostgreSQL/claim semantics errors,
   never skips.
+- Admit a handler to MVR-06D dispatch only when its stable idempotency identity supports durable
+  post-effect reconciliation. Before invoking it, persist an `effect_pending` phase with claim,
+  binding, idempotency identity, and bounded effect descriptor. The handler must either commit its
+  effect and durable outcome/receipt atomically in one store transaction or expose a production
+  no-effect reconciliation read that can prove the idempotent effect applied or did not apply. After
+  a crash, an expired `effect_pending` claim is reconciled before any current-authority quarantine:
+  a proven applied effect records/links its audit receipt and terminates acknowledged even if the
+  binding was subsequently revoked or removed (recording the prior authorized effect grants no new
+  authority); a proven no-effect row proceeds through current authority checks and may redispatch or
+  quarantine; an ambiguous outcome moves to distinct `effect_reconciliation_required`, blocks
+  readiness, and can neither redispatch, acknowledge, drop, nor masquerade as an unapplied authority
+  quarantine. No non-reconcilable effect handler may be enabled in the many-binding worker.
 - Revalidate every not-yet-in-flight vault-bound row against the current stable binding, compatible
   registry revision, authorization verdict, routing class, and payload locator before dispatch.
   Captured request/background context and generation remain immutable producer provenance, but a
@@ -461,6 +473,12 @@ migration, preflight, and fail-loud gate merge together.
   PostgreSQL or required lease constraints.
   - Verify: `tests/integration/test_multi_vault_outbox_pg_claims.py::test_concurrent_claim_owner_and_crash_redelivery_preserve_at_least_once` +
     successful exact-SHA `integration-nightly / pg-contracts` workflow receipt on #2143
+- [ ] **MVR-06D:** If authority is revoked or a binding is removed after a handler effect but before
+  receipt/ack, production claim recovery reconciles the durable `effect_pending` idempotency outcome
+  first: a proven effect becomes receipted/acknowledged under its prior authorized provenance, a
+  proven no-effect row follows current authority quarantine, and ambiguity blocks in
+  `effect_reconciliation_required` without replay or false unapplied classification.
+  - Verify: `tests/integration/test_multi_vault_outbox_pg_claims.py::test_revocation_after_effect_reconciles_receipt_before_authority_quarantine`
 - [ ] **MVR-06A:** The MVR-06 minimum-runtime floor commits before the first background-role,
   delegation, intent, or compatibility field and blocks every older API/watcher/worker before
   registry/auth access; fault injection leaves either untouched MVR-05/MVR-03 state or one complete
@@ -545,7 +563,9 @@ PostgreSQL receipt belongs only to 06D.
 
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_two_bindings_run_isolated_lifecycles tests/integration/test_multi_vault_background_lifecycle.py::test_zero_one_many_and_partial_failure_are_truthful tests/api/test_background_binding_admin.py::test_mvr06d_enrollment_enables_many_with_dispatch tests/integration/test_multi_vault_lifecycle_and_dimension.py::test_parent_dimension_background_acceptance tests/migrations/test_multi_vault_outbox_upgrade.py::test_mvr06_requires_complete_mvr05_classification_receipt tests/integration/test_multi_vault_background_lifecycle.py::test_pending_rows_quarantine_across_removal_and_rebind tests/integration/test_multi_vault_background_lifecycle.py::test_pending_rows_survive_compatible_restart_generation tests/architecture/test_multi_vault_context_boundaries.py::test_background_consumers_use_lifecycle_seam`
 - Dispatch exact-head `integration-nightly / pg-contracts` for
-  `tests/integration/test_multi_vault_outbox_pg_claims.py::test_concurrent_claim_owner_and_crash_redelivery_preserve_at_least_once`;
+  `tests/integration/test_multi_vault_outbox_pg_claims.py::test_concurrent_claim_owner_and_crash_redelivery_preserve_at_least_once`
+  and
+  `tests/integration/test_multi_vault_outbox_pg_claims.py::test_revocation_after_effect_reconciles_receipt_before_authority_quarantine`;
   missing PostgreSQL or claim constraints is an error, never a skip, and the successful URL/SHA is
   attached to #2143.
 - Verify the 06D PR diff contains its mapped activated `docs/ENVIRONMENTS.md`, `docs/HEALTH.md`,

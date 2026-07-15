@@ -26,7 +26,8 @@ no new runtime behavior.
   durable promotion plus redacted vault-binding/startup evidence. A failed or missing live-channel
   proof blocks the MVR-08 PR rather than allowing docs to claim shipped support.
 - Promote shipped truth into architecture, ActiveContextSet, topology, settings/environment, SBS
-  debt, and docs index surfaces; remove future-state wording only where evidence supports it.
+  debt, docs index, and every current single-vault/deferred owner or downstream restatement surface;
+  remove future-state wording only where evidence supports it.
 - Reconcile #2566 and #3156/#3163 dependency/status truth without duplicating or auto-closing their
   distinct UI/Settings scope.
 - In the MVR-08 PR, change README to shipped capability truth and convert the parent reference from a
@@ -112,6 +113,11 @@ operators, or future agents still act on stale single-global-vault truth.
   `docs/DB_SCHEMA.md :: DB Schema (Current Reality)` + doc writeback at
   `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments` + doc writeback at
   `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification` + doc writeback at
+  `docs/MODULAR_ARCHITECTURE.md :: Kernel and extension fabric` + doc writeback at
+  `docs/CONCEPTS/USER_SITUATION_MODEL.md :: B3. Multiple vaults across environments` + doc writeback at
+  `docs/INTEGRATION_FABRIC_CONTRACT.md :: Reading rules` + doc writeback at
+  `docs/EMERGENT_FEATURES_MODEL.md :: Reading rules` + doc writeback at
+  `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md :: Relationship to current shipped behavior` + doc writeback at
   `docs/architecture/SBS_TRANSITION_DEBT.md :: multi-vault runtime selection` + doc writeback at
   `docs/DOCS_INDEX.md :: v6.0 Capability Specifications`
 - [ ] This capability's own lifecycle surfaces no longer claim future/blocked runtime state: README
@@ -150,6 +156,12 @@ operators, or future agents still act on stale single-global-vault truth.
   `pytest -q tests/instance/test_vault_registry_migration.py::test_parent_registry_acceptance tests/instance/test_default_vault_resolution.py::test_legacy_last_active_materializes_default_once tests/integration/test_vault_registry_container_durability.py::test_default_survives_recreate_after_mvr02 tests/integration/test_multi_vault_request_isolation.py::test_parent_request_context_acceptance tests/integration/test_multi_vault_lifecycle_and_dimension.py::test_parent_dimension_background_acceptance tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk tests/api/test_active_context_resolution.py::test_request_override_header_outranks_session_without_mutating_it tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior tests/integration/test_multi_vault_dimensions.py::test_dimension_preserves_per_binding_authority_and_provenance tests/architecture/test_multi_vault_context_boundaries.py::test_production_consumers_use_context_seam tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`.
 - On the PR head, run every child pre-merge target plus docs/lint checks; this is candidate evidence,
   not the merged-head closure receipt.
+- Verify the MVR-08 diff reconciles the canonical current-baseline claims in
+  `docs/MODULAR_ARCHITECTURE.md` and `docs/CONCEPTS/USER_SITUATION_MODEL.md` plus their
+  `docs/INTEGRATION_FABRIC_CONTRACT.md`, `docs/EMERGENT_FEATURES_MODEL.md`, and
+  `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md` restatements; no indexed current owner/reference may
+  still say multi-vault is deferred, undecided, or one-active-vault-only except where a narrower
+  surface truthfully remains scalar and names that bounded residual.
 - `pytest -q tests/integration/test_multi_vault_capability_acceptance.py::test_merged_multi_vault_capability tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/uat/`
 - Do not require a live pinned-image promotion of the unmerged MVR-08 PR head: the required
