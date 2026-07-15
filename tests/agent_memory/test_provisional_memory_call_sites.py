@@ -154,3 +154,39 @@ def test_loader_rejects_unmodeled_or_duplicate_authority_frontmatter(
 
     with pytest.raises((ValueError, yaml.YAMLError)):
         load_provisional_markdown(path, vault_root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        "provenance_event_ids: event-1",
+        "provenance_event_ids: {event-1: forged}",
+    ],
+)
+def test_loader_rejects_non_sequence_provenance(
+    tmp_path: Path,
+    replacement: str,
+) -> None:
+    memory_id = UUID("12345678-1234-4abc-8def-1234567890ab")
+    artifact = ProvisionalMarkdownArtifact(
+        memory_id=memory_id,
+        artifact_ref=f"vault://Memory/Provisional/{memory_id}.md",
+        scope_id="scope-personal",
+        principal_id="principal-1",
+        memory_type=MemoryType.PREFERENCE_MEMORY,
+        sensitivity=ProvisionalSensitivity.PRIVATE,
+        content="Provenance shape must be structural, not coerced.",
+        created_by="human://owner",
+        created_at="2026-07-15T00:00:00Z",
+        provenance_event_ids=("event-1",),
+    )
+    path = tmp_path / "Memory" / "Provisional" / f"{memory_id}.md"
+    path.parent.mkdir(parents=True)
+    rendered = render_provisional_markdown(artifact)
+    path.write_text(
+        rendered.replace("provenance_event_ids:\n- event-1", replacement),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must be a non-empty string sequence"):
+        load_provisional_markdown(path, vault_root=tmp_path)

@@ -510,6 +510,18 @@ def load_provisional_markdown(
     labels = metadata.get("labels")
     if labels != ["provisional-memory", "low-trust", "not-authority"]:
         raise ValueError("provisional-memory visibility labels are required")
+    provenance_event_ids = metadata["provenance_event_ids"]
+    if (
+        not isinstance(provenance_event_ids, list)
+        or not provenance_event_ids
+        or any(
+            not isinstance(item, str) or not item.strip()
+            for item in provenance_event_ids
+        )
+    ):
+        raise ValueError(
+            "provisional-memory provenance_event_ids must be a non-empty string sequence"
+        )
     normalized_body = body.lstrip("\n")
     if not normalized_body.startswith(_VISIBLE_PREFIX):
         raise ValueError("provisional-memory low-trust warning is required")
@@ -528,7 +540,7 @@ def load_provisional_markdown(
         content=content,
         created_by=metadata["created_by"],
         created_at=metadata["created_at"],
-        provenance_event_ids=tuple(metadata["provenance_event_ids"]),
+        provenance_event_ids=tuple(provenance_event_ids),
         source_role=metadata["source_role"],
         authority_state=metadata["authority_state"],
         review_state=metadata["review_state"],
