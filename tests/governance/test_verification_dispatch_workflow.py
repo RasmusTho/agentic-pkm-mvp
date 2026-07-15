@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -22,9 +25,27 @@ def test_workflow_triggers_from_completed_ci_workflow_run() -> None:
     assert 'repos/${REPOSITORY}/pulls/${PR_NUMBER}' in text
     assert 'repos/${REPOSITORY}/commits/${RUN_HEAD_SHA}/pulls' in text
     assert "resolve_pr_number" in text
-    assert "scripts/build_verification_dispatch_request.py" in text
+    assert "python3 -m scripts.build_verification_dispatch_request" in text
     assert '--artifact-workflow-run-id "${{ github.run_id }}"' in text
     assert '--artifact-repository-id "${{ github.repository_id }}"' in text
+
+
+def test_request_builder_runs_as_repository_module() -> None:
+    text = _workflow_text()
+    command = "python3 -m scripts.build_verification_dispatch_request"
+
+    assert command in text
+    assert "python3 scripts/build_verification_dispatch_request.py" not in text
+    result = subprocess.run(
+        [sys.executable, "-m", "scripts.build_verification_dispatch_request", "--help"],
+        cwd=REPO_ROOT,
+        env={"PATH": os.environ.get("PATH", "")},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_successful_current_head_emits_dispatch_artifact() -> None:
