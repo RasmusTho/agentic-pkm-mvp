@@ -66,6 +66,15 @@ class ProcessResult(Protocol):
 
 ProcessRunner = Callable[..., ProcessResult]
 
+CANONICAL_RECEIPT_SCHEMA_PATH = (
+    Path(__file__).resolve().parent
+    / "schemas/verification_closer_receipt.schema.json"
+)
+
+
+class ReceiptContractError(ValueError):
+    """Untrusted launcher output failed the canonical receipt contract."""
+
 
 class WholeTreeContainment(Protocol):
     """One launch-scoped host boundary that can prove descendant cleanup."""
@@ -340,6 +349,34 @@ def validate_verification_closer_receipt(
             raise jsonschema.ValidationError(
                 f"repair review event {index} requires finding_id"
             )
+
+
+def load_and_validate_verification_closer_receipt(
+    receipt: object, schema_path: Path
+) -> Mapping[str, object]:
+    """Validate untrusted launcher output against the canonical receipt contract."""
+
+    try:
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ReceiptContractError(
+            "verification closer receipt schema is unavailable"
+        ) from exc
+    if not isinstance(schema, Mapping):
+        raise ReceiptContractError(
+            "verification closer receipt schema must be an object"
+        )
+    try:
+        validate_codex_output_schema(schema)
+    except (ValueError, jsonschema.SchemaError) as exc:
+        raise ReceiptContractError("verification closer receipt schema is invalid") from exc
+    if not isinstance(receipt, Mapping):
+        raise ReceiptContractError("verification closer receipt must be an object")
+    try:
+        validate_verification_closer_receipt(receipt, schema)
+    except jsonschema.ValidationError as exc:
+        raise ReceiptContractError("verification closer receipt is invalid") from exc
+    return receipt
 
 
 class GhCliVerificationSource:
@@ -1324,10 +1361,12 @@ class VerificationConsumer:
         auth: AuthPreflight,
         launcher: CoordinatorLauncher,
         holder: str,
+        receipt_schema: Path | None = None,
     ) -> None:
         self.ledger, self.truth, self.auth, self.launcher, self.holder = (
             ledger, truth, auth, launcher, holder
         )
+        self.receipt_schema = receipt_schema or CANONICAL_RECEIPT_SCHEMA_PATH
 
     @staticmethod
     def _lease_is_live(run: VerificationRun) -> bool:
@@ -1649,6 +1688,9 @@ class VerificationConsumer:
                 on_thread_started=started,
                 on_heartbeat=heartbeat,
             )
+            receipt = load_and_validate_verification_closer_receipt(
+                receipt, self.receipt_schema
+            )
             safe_session_id = bounded_coordinator_session_id(session_id)
             if safe_session_id is None:
                 raise ValueError("invalid returned coordinator session identity")
@@ -1662,6 +1704,19 @@ class VerificationConsumer:
             ):
                 raise ValueError("coordinator session identity mismatch")
             session_id = safe_session_id
+        except ReceiptContractError as exc:
+            cause = exc.__cause__
+            return self.ledger.terminal(
+                claimed.run_id,
+                "failed",
+                {
+                    "outcome": "invalid_verification_receipt",
+                    "error_type": type(cause).__name__ if cause else type(exc).__name__,
+                },
+                reason="invalid_receipt_contract",
+                holder=self.holder,
+                lease_id=lease_id,
+            )
         except CodexExecFailure as exc:
             raw_failure = exc.receipt
             rate_limited = self._rate_limited(raw_failure)

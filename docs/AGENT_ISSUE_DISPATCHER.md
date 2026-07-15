@@ -47,7 +47,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   ChatGPT/keyring auth preflight, builds a minimal immutable context pack, and launches only the
   registered `verification_closer` adapter with its pinned model, reasoning, sandbox, and developer
   instructions. Streaming `codex exec --json --output-schema` events persist the thread identity
-  immediately; only a schema-valid final `agent_message` receipt drives terminal state.
+  immediately. The consumer independently reloads the canonical schema and applies both structural
+  and semantic receipt validation to every launcher result before persisting attempts, review events,
+  or closure evidence; injected or replacement launchers cannot bypass that trust boundary.
 - Before process start, the launcher rejects output schemas outside the Codex Structured Outputs
   subset (including conditional composition and object fields that are not required). The provider
   schema keeps optional values explicitly nullable; local semantic validation still fail-closes a
@@ -90,8 +92,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   text, paths, and credentials are transient classification input only: durable attempts, terminal
   receipts, and `verification-status` retain only bounded outcome, return-code, failure-class,
   error-type, retry, and canonical UUID coordinator-session fields. A zero exit without both thread
-  identity and one schema-valid final receipt also enters exact-lease technical backoff; malformed or missing
-  coordinator output can neither terminal the run nor retain an active claim. Every launch carries a
+  identity and one schema-valid final receipt also enters exact-lease technical backoff. A returned
+  receipt that fails the consumer's canonical schema or semantic validation terminals technically
+  before attempt, event, or closure persistence; malformed or missing coordinator output can never
+  report delivery or retain an active claim. Every launch carries a
   launch-scoped process-tree tracker plus a high-entropy tag so bounded cleanup can remove observed
   descendants even after a `setsid` escape. Before a clean terminal receipt returns, the launcher
   removes residual private-group members and requires a host containment adapter to prove whole-tree

@@ -127,6 +127,8 @@ class Launcher:
             "head_sha": HEAD,
             "summary": "test",
             "receipt_ids": [],
+            "retry_after": None,
+            "review_events": None,
             "human_exception": {
                 "failure_class": "authority-critical",
                 "original_intent": "verify and close the governing issue",
@@ -160,7 +162,7 @@ class RateLimitedLauncher(Launcher):
         session = resume_session_id or "01900000-0000-7000-8000-000000000002"
         if on_thread_started: on_thread_started(session)
         return session, {
-            "verdict": "retry", "head_sha": HEAD, "summary": "rate limit exhausted", "receipt_ids": [], "retry_after": "1h"
+            "verdict": "retry", "head_sha": HEAD, "summary": "rate limit exhausted", "receipt_ids": [], "retry_after": "1h", "review_events": None, "human_exception": None
         }
 
 
@@ -206,6 +208,7 @@ class DeliveredLauncher(Launcher):
             "head_sha": HEAD,
             "summary": "verified and merged",
             "receipt_ids": ["review-1", "review-2"],
+            "retry_after": None,
             "review_events": [
                 {
                     "kind": "review",
@@ -213,6 +216,8 @@ class DeliveredLauncher(Launcher):
                     "capability": "gpt-5.6-sol",
                     "reasoning_effort": "xhigh",
                     "outcome": "clean",
+                    "finding_id": None,
+                    "strongest": True,
                 },
                 {
                     "kind": "review",
@@ -220,8 +225,11 @@ class DeliveredLauncher(Launcher):
                     "capability": "gpt-5.6-sol",
                     "reasoning_effort": "xhigh",
                     "outcome": "clean",
+                    "finding_id": None,
+                    "strongest": True,
                 },
             ],
+            "human_exception": None,
         }
 
 
@@ -805,7 +813,7 @@ def test_needs_human_receipt_requires_valid_complete_owner_packet(tmp_path) -> N
     ).consume(request())
 
     assert result.status == "failed"
-    assert result.stop_reason == "invalid_human_exception_packet"
+    assert result.stop_reason == "invalid_receipt_contract"
     with state.store._connect() as conn:
         assert conn.execute(
             "SELECT COUNT(*) FROM verification_exceptions WHERE run_id=?",
@@ -914,6 +922,7 @@ def test_pending_repair_checks_persist_repair_before_backoff(tmp_path) -> None:
                 "head_sha": new_head,
                 "summary": "repair pushed; checks pending",
                 "receipt_ids": ["repair-1"],
+                "retry_after": None,
                 "review_events": [
                     {
                         "kind": "repair",
@@ -925,6 +934,7 @@ def test_pending_repair_checks_persist_repair_before_backoff(tmp_path) -> None:
                         "strongest": False,
                     }
                 ],
+                "human_exception": None,
             }
 
     state = ledger(tmp_path)
@@ -975,6 +985,7 @@ def test_supporting_issue_addition_allows_repair_head_rebind_without_budget_rese
                 "head_sha": new_head,
                 "summary": "bounded repair published",
                 "receipt_ids": ["repair-3745"],
+                "retry_after": None,
                 "review_events": [
                     {
                         "kind": "repair",
@@ -986,6 +997,7 @@ def test_supporting_issue_addition_allows_repair_head_rebind_without_budget_rese
                         "strongest": False,
                     }
                 ],
+                "human_exception": None,
             }
 
     state = ledger(tmp_path)
@@ -1028,6 +1040,7 @@ def test_invalid_pending_repair_event_batch_fails_before_backoff(tmp_path) -> No
                 "head_sha": new_head,
                 "summary": "schema-valid but semantically invalid repair",
                 "receipt_ids": ["repair-1"],
+                "retry_after": None,
                 "review_events": [
                     {
                         "kind": "repair",
@@ -1039,6 +1052,7 @@ def test_invalid_pending_repair_event_batch_fails_before_backoff(tmp_path) -> No
                         "strongest": True,
                     }
                 ],
+                "human_exception": None,
             }
 
     state = ledger(tmp_path)
@@ -1070,6 +1084,7 @@ def test_invalid_review_event_batch_terminals_without_stranding_lease(tmp_path) 
                 "head_sha": HEAD,
                 "summary": "three clean reviews exceed the durable budget",
                 "receipt_ids": ["review-1", "review-2", "review-3"],
+                "retry_after": None,
                 "review_events": [
                     {
                         "kind": "review",
@@ -1077,9 +1092,12 @@ def test_invalid_review_event_batch_terminals_without_stranding_lease(tmp_path) 
                         "capability": "gpt-5.6-sol",
                         "reasoning_effort": "xhigh",
                         "outcome": "clean",
+                        "finding_id": None,
+                        "strongest": None,
                     }
                     for index in range(1, 4)
                 ],
+                "human_exception": None,
             }
 
     state = ledger(tmp_path)
@@ -1130,11 +1148,13 @@ def test_pending_repair_replay_preserves_two_plus_two_accounting(tmp_path) -> No
                 "head_sha": new_head,
                 "summary": "repair pushed; checks pending",
                 "receipt_ids": ["repair-1"],
+                "retry_after": None,
                 "review_events": [{
                     "kind": "repair", "session_id": "repair-1",
                     "capability": "gpt-5.6-terra", "reasoning_effort": "high",
                     "outcome": "fixed", "finding_id": "F1", "strongest": False,
                 }],
+                "human_exception": None,
             }
 
     class ReviewOnlyDeliveryLauncher(Launcher):
@@ -1146,6 +1166,7 @@ def test_pending_repair_replay_preserves_two_plus_two_accounting(tmp_path) -> No
                 "head_sha": new_head,
                 "summary": "checks green and reviews clean",
                 "receipt_ids": ["review-1", "review-2"],
+                "retry_after": None,
                 "review_events": [
                     {
                         "kind": "review", "session_id": "review-1",
@@ -1158,6 +1179,7 @@ def test_pending_repair_replay_preserves_two_plus_two_accounting(tmp_path) -> No
                         "outcome": "clean", "finding_id": None, "strongest": None,
                     },
                 ],
+                "human_exception": None,
             }
 
     state = ledger(tmp_path)
@@ -1268,7 +1290,7 @@ def test_technical_receipt_failures_never_require_owner(tmp_path) -> None:
         ).consume(request())
 
         assert result.status == "failed"
-        assert result.stop_reason == reason
+        assert result.stop_reason == "invalid_receipt_contract"
         with state.store._connect() as conn:
             assert conn.execute(
                 "SELECT COUNT(*) FROM verification_exceptions WHERE run_id=?",
@@ -1307,6 +1329,81 @@ def test_delivered_receipt_accepts_matching_post_merge_live_truth(tmp_path) -> N
 
     assert result.status == "completed"
     assert result.verified_head_sha == HEAD
+
+
+def test_schema_invalid_delivered_receipt_cannot_complete(tmp_path) -> None:
+    class SchemaInvalidDeliveredLauncher(DeliveredLauncher):
+        def launch(self, context_pack, **kwargs):
+            session, receipt = super().launch(context_pack, **kwargs)
+            del receipt["retry_after"]
+            return session, receipt
+
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state,
+        TransitionTruth(merged_pr()),
+        Auth(),
+        SchemaInvalidDeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "invalid_receipt_contract"
+    assert result.verified_head_sha is None
+    assert result.terminal_receipt == {
+        "outcome": "invalid_verification_receipt",
+        "error_type": "ValidationError",
+    }
+
+
+def test_schema_invalid_launcher_receipt_fails_before_attempt_or_events(
+    tmp_path,
+) -> None:
+    class SchemaInvalidEventLauncher(DeliveredLauncher):
+        def launch(self, context_pack, **kwargs):
+            session, receipt = super().launch(context_pack, **kwargs)
+            receipt["review_events"][0]["unexpected"] = "not canonical"
+            return session, receipt
+
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state,
+        TransitionTruth(merged_pr()),
+        Auth(),
+        SchemaInvalidEventLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert state.attempts(result.run_id) == []
+    with state.store._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM verification_exceptions WHERE run_id=?",
+            (result.run_id,),
+        ).fetchone()[0] == 0
+
+
+def test_receipt_schema_load_failure_is_redacted_and_fails_closed(tmp_path) -> None:
+    private_path = tmp_path / "credential=SHOULD_NOT_PERSIST" / "schema.json"
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state,
+        TransitionTruth(merged_pr()),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+        receipt_schema=private_path,
+    ).consume(request())
+
+    durable = json.dumps(result.terminal_receipt, sort_keys=True)
+    assert result.status == "failed"
+    assert result.stop_reason == "invalid_receipt_contract"
+    assert result.terminal_receipt == {
+        "outcome": "invalid_verification_receipt",
+        "error_type": "FileNotFoundError",
+    }
+    assert "SHOULD_NOT_PERSIST" not in durable
+    assert state.attempts(result.run_id) == []
 
 
 def test_delivered_truth_accepts_added_supporting_repair_issue(tmp_path) -> None:
