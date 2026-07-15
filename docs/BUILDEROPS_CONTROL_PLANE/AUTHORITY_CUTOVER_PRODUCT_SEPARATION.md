@@ -27,7 +27,8 @@ import, cutover, Product route/process removal, legacy retirement, and end-to-en
   Compose mounts/env/secrets/health, and Product deployment paths;
 - disable/remove production SQLite/JSONL/JSON authority construction and SSH direct-store paths;
 - run health/readiness, API/executor end-to-end, crash recovery, full-backup + continuous-WAL
-  restore-through-watermark drill, and Product-independence acceptance;
+  restore-through-watermark drill with Demerzel's host secret store unavailable, and
+  Product-independence acceptance;
 - archive legacy sources read-only with inventory hashes and retention; and
 - define rollback before activation as prior image + pre-import backup, and recovery after activation
   as a compatible image or full-backup + continuous-WAL replay through the recorded highest
@@ -70,8 +71,8 @@ unchanged.
 - Pre-activation rollback may restore the pre-import backup. Post-activation recovery is
   forward-only and must preserve every acknowledged transition; full backup + continuous WAL must
   replay through the recorded highest acknowledged LSN/receipt sequence and reconcile unknown
-  external effects before reopening writes. Missing independent WAL durability blocks authority
-  readiness and cutover.
+  external effects before reopening writes. Missing independent WAL durability or independently
+  recoverable key/KMS custody blocks authority readiness and cutover.
 - Product Runtime behavior unrelated to BuilderOps remains unchanged and independently verifiable.
 - Archived sources are immutable evidence, not rollback authority.
 - Owner docs are not rewritten as shipped until this task's receipts exist; BCP-07 owns writeback.
@@ -92,10 +93,12 @@ unchanged.
 - [ ] Production commands cannot create/open BuilderOps or dispatcher SQLite/JSONL/JSON authority and
   fail closed if the API is unavailable.
   Verify: `tests/architecture/test_builderops_store_boundary.py::test_cutover_leaves_no_legacy_authority_producer`.
-- [ ] A post-import encrypted full backup plus continuous WAL restores to a disposable database
-  through the highest acknowledged LSN/receipt sequence with matching epoch/counts/hashes and passes
+- [ ] With Demerzel's host secret store unavailable, independently recoverable key/KMS custody
+  decrypts the post-import full backup plus continuous WAL and restores a disposable database through
+  the highest acknowledged LSN/receipt sequence with matching epoch/counts/hashes and passing
   `/readyz` plus outbox/lease integrity checks.
-  Verify: restore-through-watermark receipt bound to the authoritative full backup and WAL lineage.
+  Verify: restore-through-watermark receipt bound to the authoritative full backup, WAL lineage, and
+  independent key-custody recovery proof.
 - [ ] Recovery rehearsal proves pre-activation backup rollback is unavailable after activation and
   that compatible-image or full-backup + continuous-WAL recovery reaches the recorded highest
   acknowledged LSN/receipt sequence and preserves every transition, idempotency result, receipt,
@@ -118,8 +121,8 @@ unchanged.
 - run the fail-loud producer inventory and focused full BuilderOps/dispatcher/API tests;
 - run `ruff check app tests` and any harness self-verification required by invariant→producers;
 - stop each Product/BuilderOps side independently and prove readiness semantics; and
-- attach cutover, restore, no-authority-rewind recovery rehearsal, and GitHub readback receipts to
-  the parent.
+- attach cutover, restore-without-Demerzel-host-secrets, independent key-custody recovery,
+  no-authority-rewind recovery rehearsal, and GitHub readback receipts to the parent.
 
 ## Related Docs
 

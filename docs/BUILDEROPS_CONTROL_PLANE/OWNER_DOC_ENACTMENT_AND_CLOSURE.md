@@ -67,25 +67,28 @@ without changing Product runtime or inventing a new Product SBS component.
 
 - [ ] SBS and Builder System process owner docs describe BuilderOps as an independently deployed
   ecosystem-wide enabling system and Product Runtime as a non-owner.
-  Verify: doc writeback at `docs/architecture/SBS_OPERATING_MODEL.md :: 3. Builder System boundary`
-  and `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md` control-plane topology section.
+  Verify: doc writeback at `docs/architecture/SBS_OPERATING_MODEL.md :: 3. Builder System Boundary And Work Classification`
+  and `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md :: 1. Executive Model`.
 - [ ] Store/boundary/dispatcher docs define authenticated API-only clients, one PostgreSQL
   operational authority, outbox/readback semantics, and SQLite migration/test-only posture.
   Verify: reconciled anchors in `docs/builderops/BUILDEROPS_VAULT_BOUNDARY.md`,
   `docs/builderops/BUILDEROPS_VAULT_STORE.md`, and `docs/AGENT_ISSUE_DISPATCHER.md`.
 - [ ] Deployment/security/health/operations docs own the separate Compose/pin/credential/health/
-  full-backup/continuous-WAL/recovery lifecycle without implying Product ownership.
+  full-backup/continuous-WAL/restore-through-acknowledged-LSN and independently recoverable key/KMS
+  custody lifecycle without implying Product ownership.
   Verify: reconciled anchors in `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, `docs/SECURITY.md`,
   `docs/HEALTH.md`, and `docs/OPERATIONS.md`.
 - [ ] BCP-INV-01 through BCP-INV-10 are registered only with the tests/gates/doctors that actually
   enforce them.
-  Verify: `docs/testing/invariant-tests.md` BuilderOps control-plane section and referenced tests.
+  Verify: doc writeback at `docs/testing/invariant-tests.md :: BuilderOps control plane` plus its
+  referenced tests.
 - [ ] #3686/PR #3695, #3603/PR #3620, #3690, the BCP child ledger, and temporal docs show truthful
   final state with no obsolete `agent:*` labels on closed items.
   Verify: GitHub/backlog reconciliation receipt linked on the parent.
-- [ ] The parent capability checklist is complete and closure receipt links cutover, restore drill,
+- [ ] The parent capability checklist is complete and its closure receipt links cutover, restore
+  without Demerzel host secrets, independent key-custody recovery, no-authority-rewind recovery,
   executor/GitHub readback, tests, and owner-doc diff.
-  Verify: parent feature issue closure comment.
+  Verify: parent #3788 closure comment.
 
 ## Out of Scope
 

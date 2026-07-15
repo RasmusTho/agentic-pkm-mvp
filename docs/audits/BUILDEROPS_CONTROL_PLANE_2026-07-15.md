@@ -153,8 +153,10 @@ repo delivery manifest and host credential mapping, binds them to `RepoRef` plus
 may execute only an outbox/attempt that passed issue/SHA/CI/review/protection gates. It becomes
 terminal only after GitHub readback. General clients and Product Runtime never receive merge
 credentials.
-Raw GitHub/model/client/database credentials stay in host secret stores and never enter PostgreSQL,
-outbox payloads, receipts, artifacts, logs/metrics, or BuilderOps backups.
+Raw GitHub/model/client/database/recovery-decryption credentials never enter PostgreSQL, outbox
+payloads, receipts, artifacts, logs/metrics, WAL, or BuilderOps backups. Operational secrets stay in
+host secret stores; backup/WAL decryption uses independently recoverable key/KMS custody outside
+Demerzel's failure domains so total host loss does not make the recovery lineage unreadable.
 
 ### RQ5 — How independent is the lifecycle?
 
@@ -186,8 +188,9 @@ Minimum deployable unit:
 - structured secret-safe status for queue age, dead letters, lease conflicts, API auth failures,
   GitHub rate-limit/credential state, and executor heartbeat;
 - scheduled encrypted full backup plus continuous synchronous WAL durability in a target that
-  survives Demerzel primary-host/storage failure, acknowledged-LSN tracking, retention, and a
-  disposable restore-through-watermark drill; and
+  survives Demerzel primary-host/storage failure, independent recovery-key/KMS custody,
+  acknowledged-LSN tracking, retention, and a disposable restore-through-watermark drill without
+  Demerzel's host secret store; and
 - a host-level probe independent of Product `/readyz` and Product worker heartbeat.
 
 ## 7. Invariant kernel
@@ -200,9 +203,9 @@ Minimum deployable unit:
 | BCP-INV-04 | MUST | External effects become terminal only after deterministic reconciliation/readback. | outbox crash-window tests |
 | BCP-INV-05 | MUST | Lease fencing rejects stale workers across expiry/restart. | concurrent claim/heartbeat tests |
 | BCP-INV-06 | MUST | Product Runtime owns no BuilderOps route, process, data, credential, or health path. | architecture/Compose route-removal gate |
-| BCP-INV-07 | GATE | Independent migrations, full backup + continuous WAL, restore through acknowledged LSN, release pin, health, and no-authority-rewind recovery pass before cutover. | deploy/cutover/recovery receipt |
+| BCP-INV-07 | GATE | Independent migrations, full backup + continuous WAL, independently recoverable key/KMS custody, restore through acknowledged LSN without the primary host secret store, release pin, health, and no-authority-rewind recovery pass before cutover. | deploy/cutover/recovery receipt |
 | BCP-INV-08 | GATE | Producer-derived host/worktree/container/automation coverage proves all legacy stores are inventoried, frozen, provenance-resolved or quarantined, reconciled, and archived; live leases are not imported. | expected-source/provenance manifest + reconciliation receipt |
-| BCP-INV-09 | MUST | Executor revalidates protected-base repo policy and credential binding; credentials are unavailable to Product/general clients and absent from all durable state/backups. | manifest/secret/permission + durable-state/restore negative tests |
+| BCP-INV-09 | MUST | Executor revalidates protected-base repo policy and credential binding; credentials and raw recovery keys are unavailable to Product/general clients and absent from BuilderOps durable state/backups/WAL. | manifest/secret/permission + durable-state/restore negative tests |
 | BCP-INV-10 | DOCTOR | Outbox age/dead letters, lease conflicts, credential/rate-limit state, and executor heartbeat are visible without secrets. | status/metrics contract |
 
 These are target-state invariants. They enter `docs/testing/invariant-tests.md` only with the task

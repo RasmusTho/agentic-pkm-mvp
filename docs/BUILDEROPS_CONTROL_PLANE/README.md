@@ -68,7 +68,9 @@ not by rewriting that merge.
    act on repo B. The privileged executor re-resolves the protected-base delivery manifest and a
    host-side `RepoRef` credential mapping; client-selected policy cannot weaken it. Product and
    general clients cannot obtain merge credentials. Raw secrets never enter PostgreSQL, outbox
-   payloads, receipts, artifacts, logs/metrics, or BuilderOps backups.
+   payloads, receipts, artifacts, logs/metrics, WAL, or BuilderOps backups. Backup/WAL decryption
+   uses independently recoverable key/KMS custody outside Demerzel's failure domains rather than
+   depending solely on its host secret store.
 7. **Independent lifecycle.** Product start/stop/deploy/health/backup cannot start, stop, publish, or
    restore BuilderOps, and BuilderOps failure does not change Product process ownership.
 8. **No authority rewind.** Before activation, rollback may use the pre-import PostgreSQL backup.
@@ -118,11 +120,13 @@ Partial-failure examples:
   dependency, and its lifecycle remains healthy with BuilderOps stopped.
   Verify: `tests/architecture/test_builderops_product_separation.py::test_product_runtime_has_no_builderops_ownership`.
 - [ ] A full backup plus synchronously durable continuous WAL restores into a disposable database
-  through the highest acknowledged LSN/receipt sequence and passes readiness/invariant checks before
-  authoritative cutover.
+  through the highest acknowledged LSN/receipt sequence with Demerzel's host secret store
+  unavailable, using independently recoverable key/KMS custody, and passes readiness/invariant
+  checks before authoritative cutover.
   Verify: BCP-02 restore-through-watermark drill and BCP-06 cutover/recovery gate.
-- [ ] Durable-state and restored-backup negative scans prove no raw client/database/GitHub/model
-  credential is persisted, and post-activation recovery cannot lose acknowledged state.
+- [ ] Durable-state, WAL, and restored-backup negative scans prove no raw client/database/GitHub/
+  model/recovery-decryption credential is persisted, and post-activation recovery cannot lose
+  acknowledged state.
   Verify: BCP-02 credential-persistence test plus BCP-06 no-authority-rewind rehearsal.
 - [ ] A verification-gated merge uses the repo-scoped executor credential, independently binds the
   protected-base delivery manifest and host credential mapping to the current PR SHA, and becomes

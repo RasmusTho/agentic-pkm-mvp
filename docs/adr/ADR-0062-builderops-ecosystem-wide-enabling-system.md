@@ -70,11 +70,13 @@ encrypted transport plus revocable, scoped client credentials. The concrete cred
 an implementation choice, but anonymous tailnet mutation, a shared Product API key, and credentials
 stored in a consumer checkout are forbidden.
 
-Raw client, database, GitHub, and model/session credentials never enter PostgreSQL, outbox payloads,
-receipts, artifacts, logs, metrics, or BuilderOps backups. Durable state may carry only a secret
-reference, non-secret fingerprint, privilege/scope descriptor, and rotation generation. Secret
-material remains in a Demerzel/MacBook host secret store outside the BuilderOps data and backup
-boundary.
+Raw client, database, GitHub, model/session, and recovery-decryption credentials never enter
+PostgreSQL, outbox payloads, receipts, artifacts, logs, metrics, WAL, or BuilderOps backups. Durable
+state may carry only a secret reference, non-secret fingerprint, privilege/scope descriptor, and
+rotation generation. Operational secret material remains in a Demerzel/MacBook host secret store
+outside the BuilderOps data and backup boundary. Backup/WAL decryption instead uses independently
+recoverable key custody or KMS authorization outside Demerzel's primary host/storage failure domains;
+the restore path cannot depend solely on the lost host secret store.
 
 ### D3 — One PostgreSQL operational authority
 
@@ -123,8 +125,9 @@ and lifecycle, separate from `pkm-dev`, `pkm-test`, and `pkm-prod`. It owns dist
 - immutable release pin and deployment/rollback receipt;
 - `/healthz`, `/readyz`, structured status/metrics, and alert/probe path;
 - scheduled full backup plus continuous encrypted WAL/recovery durability in a target that survives
-  loss of Demerzel's primary host/storage failure domain, retention, restore tooling, and a proved
-  restore-through-acknowledged-LSN drill; and
+  loss of Demerzel's primary host/storage failure domain, independently recoverable key/KMS custody,
+  retention, restore tooling, and a proved restore-through-acknowledged-LSN drill with Demerzel's
+  host secret store unavailable; and
 - API and executor credentials with rotation/revocation procedures.
 
 Product Runtime must not start, stop, proxy, health-gate, migrate, back up, mount, authenticate, or
@@ -170,9 +173,10 @@ production command can recreate SQLite authority. Before authority activation, r
 the pre-import PostgreSQL backup. After activation, rollback is forward-only: a compatible prior
 service image may run against the current database, or a proved point-in-time recovery must restore
 the full backup and continuous WAL through the recorded highest acknowledged LSN/receipt sequence.
-Writes reopen only after recovery and unknown-effect reconciliation reach that watermark. No
-post-activation snapshot rewind may discard an accepted transition, idempotency result, receipt,
-outbox outcome, or fencing state. SQLite is never reactivated as authority.
+Writes reopen only after independently recovering the decryption capability, restoring through the
+watermark, and reconciling unknown effects. No post-activation snapshot rewind may discard an
+accepted transition, idempotency result, receipt, outbox outcome, or fencing state. SQLite is never
+reactivated as authority.
 
 ### D7 — Multi-repo provenance and promotion remain explicit
 
@@ -237,8 +241,8 @@ requires an owner decision before specification and backlog preparation.
   after the BCP-06 cutover is proved.
 - Current local/file-first BuilderOps records are not silently discarded. Migration preserves
   identity and provenance or emits a reviewable quarantine/conflict receipt.
-- Independent full-backup + continuous-WAL restore-through-watermark is a launch gate. A persistent
-  volume or snapshot alone is not recoverability.
+- Independent full-backup + continuous-WAL restore-through-watermark with independently recoverable
+  key/KMS custody is a launch gate. A persistent volume or snapshot alone is not recoverability.
 - Product availability and BuilderOps availability are independent: either may be down without the
   other process owning or restarting it.
 

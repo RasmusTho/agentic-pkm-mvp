@@ -60,8 +60,8 @@ reshape a Product SBS subsystem.
 ## Suggested Validation
 
 - keep a child/PR/receipt ledger on the parent;
-- require the BCP-06 end-to-end cutover and restore-through-acknowledged-watermark receipts before
-  BCP-07; and
+- require the BCP-06 end-to-end cutover, restore-through-acknowledged-watermark, and independent
+  recovery-key/KMS custody receipts before BCP-07; and
 - close only through BCP-07's parent-closure handoff.
 
 ## Source Docs
@@ -97,5 +97,6 @@ authoritative cutover gates.
 
 After BCP-06, attach the Demerzel end-to-end API/executor/GitHub readback receipt, legacy-import
 reconciliation, independent Product/BuilderOps lifecycle proof, and full-backup + continuous-WAL
-restore-through-acknowledged-watermark drill. Only then
+restore-through-acknowledged-watermark drill with Demerzel's host secret store unavailable and
+independently recoverable key/KMS custody. Only then
 may #3690/BCP-07 promote current-state owner docs and close this parent.

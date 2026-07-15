@@ -32,8 +32,9 @@ Product ownership.
   dead letters, lease conflicts, auth failures, rate limits/credential state, and executor heartbeat;
 - provide scheduled encrypted full backups plus continuous WAL durability to an independent
   recovery target that survives loss of Demerzel's primary host and storage failure domains,
+  independently recoverable key custody or KMS authorization outside those failure domains,
   retention, acknowledged-LSN tracking, documented point-in-time restore, and an automated
-  restore-through-watermark drill; and
+  restore-through-watermark drill with Demerzel's host secret store unavailable; and
 - prove Product Compose and Product credentials/config are not dependencies.
 
 ## Concretely
@@ -41,7 +42,8 @@ Product ownership.
 The slice adds a BuilderOps-only Compose invocation and service entrypoint such that an operator can
 deploy a pinned image, wait for migrations, call authenticated `/healthz` and `/readyz`, inspect
 secret-safe status, prove synchronous recovery durability before mutation acknowledgement, take a
-full backup, restore it plus WAL through the highest acknowledged LSN into an isolated project, and
+full backup, independently recover its decryption capability, restore it plus WAL through the highest
+acknowledged LSN into an isolated project while Demerzel's host secret store is unavailable, and
 change to a compatible BuilderOps image without rewinding authoritative data or running a `pkm-*`
 Compose command.
 
@@ -66,9 +68,11 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
 - BuilderOps Compose project/database/volume/role/secrets/pin/migrations remain distinct from
   `pkm-dev`, `pkm-test`, and `pkm-prod`.
 - Tailnet membership alone is not authentication; no anonymous mutation or Product API key reuse.
-- Raw client, database, GitHub, merge, and model/session credentials are never returned to clients or
-  persisted in repo config, PostgreSQL, outbox payloads, receipts, artifacts, logs/metrics, or
-  BuilderOps backups/restores. Durable records carry non-secret references and scope metadata only.
+- Raw client, database, GitHub, merge, model/session, and recovery-decryption credentials are never
+  returned to clients or persisted in repo config, PostgreSQL, outbox payloads, receipts, artifacts,
+  logs/metrics, WAL, or BuilderOps backups/restores. Durable records carry non-secret references and
+  scope metadata only. Recovery key/KMS custody must remain usable after total loss of Demerzel's host
+  secret store and primary storage.
 - `/healthz` is process liveness; `/readyz` fails on unavailable DB, wrong schema/epoch, an
   authority-threatening outbox condition, a recovery target co-resident with Demerzel or sharing
   its primary storage failure domain, or inability to keep the commit/recovery LSN synchronously
@@ -100,13 +104,15 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
   co-resident/shared-storage target and fails closed when the durability guarantee or lag bound is
   unavailable.
   Verify: `tests/builderops/control_plane/test_recovery_durability.py::test_authority_ack_requires_separate_failure_domain_and_recovery_lsn`.
-- [ ] An encrypted full backup plus continuous WAL restores into a disposable database through the
-  highest acknowledged LSN/receipt sequence and passes schema, count, integrity, outbox/lease, and
+- [ ] With Demerzel's host secret store unavailable, independently recoverable key/KMS custody can
+  decrypt an encrypted full backup plus continuous WAL and restore a disposable database through the
+  highest acknowledged LSN/receipt sequence with passing schema, count, integrity, outbox/lease, and
   readiness checks.
-  Verify: `tests/ops/test_builderops_backup_restore.py::test_full_backup_and_wal_restore_through_acknowledged_watermark`.
-- [ ] Negative scans of PostgreSQL, outbox payloads, receipts, artifacts, logs/metrics, encrypted
-  backup bytes, and a restored database find no raw client/database/GitHub/model credential; only
-  non-secret reference/fingerprint/scope/rotation metadata is durable.
+  Verify: `tests/ops/test_builderops_backup_restore.py::test_restore_through_watermark_without_demerzel_secret_store`.
+- [ ] Negative scans of PostgreSQL, outbox payloads, receipts, artifacts, logs/metrics, WAL,
+  encrypted backup bytes, and a restored database find no raw client/database/GitHub/model/
+  recovery-decryption credential; only non-secret reference/fingerprint/scope/rotation metadata is
+  durable.
   Verify: `tests/security/test_builderops_secret_persistence.py::test_raw_credentials_never_enter_durable_state_or_restored_backup`.
 
 ## Out of Scope
@@ -119,9 +125,10 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
 ## How to Verify (Pre-Merge)
 
 - render/validate Compose config under the dedicated project name;
-- run auth-negative, credential-redaction, durable-state, and restored-backup secret scans;
+- run auth-negative, credential-redaction, durable-state, WAL, and restored-backup secret scans;
 - interrupt recovery durability to prove acknowledgement/readiness fails closed, then execute full
-  backup + WAL restore through the acknowledged watermark in an isolated test project; and
+  backup + WAL restore through the acknowledged watermark in an isolated test project with
+  Demerzel's host secret store unavailable; and
 - run `ruff check app tests` plus focused ops tests.
 
 ## Related Docs
