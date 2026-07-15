@@ -103,5 +103,4 @@ by BuilderOps governance and remains outside Product persistence authority.
 
 ## Related GitHub Issues
 
-- [#3792](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3792), initially `agent:blocked`
-  until ADR/spec acceptance, then the first `agent:ready` candidate.
+- [#3792](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3792), the first `agent:ready` child.

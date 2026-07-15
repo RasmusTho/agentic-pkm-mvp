@@ -1,6 +1,6 @@
-State: Proposed — owner direction recorded 2026-07-15; repository ratification remains pending until this ADR PR merges. Re-scopes BuilderOps as an ecosystem-wide, API-first enabling system with an independent Demerzel deployment and one PostgreSQL operational authority. Docs/governance decision only; no runtime behavior changes here.
+State: Accepted (owner decision, 2026-07-15). Re-scopes BuilderOps as an ecosystem-wide, API-first enabling system with an independent Demerzel deployment and one PostgreSQL operational authority. Docs/governance decision only; no runtime behavior changes here.
 Doc role: Decision record (ADR)
-Authority: Authoritative after acceptance for BuilderOps scope, deployment/trust boundary, operational authority, client access, and extraction posture. Layers on ADR-0010 without changing repo/GitHub delivery authority.
+Authority: Authoritative for BuilderOps scope, deployment/trust boundary, operational authority, client access, and extraction posture. Layers on ADR-0010 without changing repo/GitHub delivery authority.
 Owner: BuilderOps governance / Architecture spine (Rasmus)
 Temporal class: Durable decision (supersede by ADR if the ecosystem-wide scope, API-only boundary, PostgreSQL authority, independent lifecycle, or ADR-0010 relationship reverses).
 Source of truth: This ADR plus ADR-0010. `docs/BUILDEROPS_CONTROL_PLANE/` is the executable target-state specification. `docs/audits/BUILDEROPS_CONTROL_PLANE_2026-07-15.md` and the recorded model inquiry are advisory evidence, not authority.
@@ -8,7 +8,7 @@ Source of truth: This ADR plus ADR-0010. `docs/BUILDEROPS_CONTROL_PLANE/` is the
 # ADR-0062: BuilderOps as an ecosystem-wide API-first enabling system
 
 **Date:** 2026-07-14; revised 2026-07-15
-**Status:** Proposed (owner direction settled; merge pending)
+**Status:** Accepted (owner decision, 2026-07-15)
 
 ## Context
 
@@ -190,8 +190,8 @@ Owner-settled on 2026-07-15:
 6. Demerzel owns scoped review/merge orchestration; and
 7. repo/GitHub delivery authority remains unchanged.
 
-This proposed ADR additionally makes the necessary multi-repo provenance, atomic outbox, migration,
-and extraction consequences explicit. They become repository authority only when the ADR is merged.
+This ADR additionally makes the necessary multi-repo provenance, atomic outbox, migration, and
+extraction consequences explicit. They become repository authority when this ADR lands on `main`.
 Exact port, DNS name, credential technology, backup destination/retention numbers, schema layout,
 and whether/when source code moves repositories are implementation or later trigger decisions; none
 requires an owner decision before specification and backlog preparation.
@@ -199,7 +199,7 @@ requires an owner decision before specification and backlog preparation.
 ## Consequences
 
 - This ADR and its specification do not implement the service. Runtime work begins only from the
-  bounded issue sequence in `docs/BUILDEROPS_CONTROL_PLANE/` after the decision contract is accepted.
+  bounded issue sequence in `docs/BUILDEROPS_CONTROL_PLANE/`.
 - Issue #3686 and PR #3695 remain valuable defect and migration-inventory evidence, but host-stable
   SQLite is superseded as the production target.
 - Issue #3603 remains the review/merge-orchestration workstream after PR #3620 merged. BCP-05 reuses
@@ -207,7 +207,7 @@ requires an owner decision before specification and backlog preparation.
   does not reopen the merged PR or create another orchestrator. The host remains disabled until the
   separately recorded interactive keyring authorization and pilot receipt exist.
 - Issue #3690 remains the owner-doc enactment task and must be rewritten to reflect this topology
-  after ADR acceptance.
+  after the BCP-06 cutover is proved.
 - Current local/file-first BuilderOps records are not silently discarded. Migration preserves
   identity and provenance or emits a reviewable quarantine/conflict receipt.
 - Independent backup/restore is a launch gate. A persistent volume alone is not a backup.
@@ -227,4 +227,4 @@ requires an owner decision before specification and backlog preparation.
 - Issue #3686 / PR #3695 (fragmented SQLite evidence; superseded target)
 - Issue #3603 / merged PR #3620 (delivered Demerzel orchestration baseline; migration and host
   acceptance remain open)
-- Issue #3690 (post-acceptance owner-doc enactment)
+- Issue #3690 (post-cutover owner-doc enactment)

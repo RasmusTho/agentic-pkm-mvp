@@ -1,4 +1,4 @@
-State: FILED — parent feature issue [#3788](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3788) is the authoritative backlog/validation hub. It remains `agent:blocked` while ADR-0062/specification is unmerged and while child slices are outstanding.
+State: FILED — parent feature issue [#3788](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3788) is the authoritative backlog/validation hub. It remains `agent:blocked` while child slices are outstanding.
 Doc role: Specification companion (parent issue draft/pointer)
 Authority: `README.md` owns task decomposition. The live GitHub parent owns backlog/validation state.
 
@@ -34,7 +34,8 @@ reshape a Product SBS subsystem.
 ## Constraints
 
 - Parent is a validation hub and never receives `agent:ready`.
-- No runtime child becomes ready before ADR-0062/specification merges.
+- BCP-01 is the first executable child; later children stay blocked until their named dependencies
+  are delivered.
 - GitHub/repo delivery authority remains unchanged.
 - No production direct-DB or local SQLite fallback is allowed.
 - Product Runtime owns no BuilderOps lifecycle or trust material at closure.
@@ -72,7 +73,7 @@ reshape a Product SBS subsystem.
 
 | Task | GitHub work item | Initial state |
 |---|---|---|
-| BCP-01 | [#3792](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3792) | `agent:blocked` on ADR/spec acceptance |
+| BCP-01 | [#3792](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3792) | `agent:ready` |
 | BCP-02 | [#3790](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3790) | `agent:blocked` on BCP-01 |
 | BCP-03 | [#3789](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3789) | `agent:blocked` on BCP-01 |
 | BCP-04 | [#3791](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3791) | `agent:blocked` on BCP-02 |

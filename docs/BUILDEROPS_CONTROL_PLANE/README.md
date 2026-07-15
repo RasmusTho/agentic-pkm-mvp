@@ -1,4 +1,4 @@
-State: Proposed target-state specification; prepared with ADR-0062 on 2026-07-15. Parent validation hub #3788 is filed; all runtime children remain blocked until ADR/spec acceptance. Existing issues #3603 and #3690 are reconciled into the sequence.
+State: Accepted target-state specification (owner decision, 2026-07-15). Parent validation hub #3788 remains `agent:blocked` while child slices are outstanding; BCP-01 is the first executable child. Existing issues #3603 and #3690 are reconciled into the sequence.
 Doc role: Specification directory
 Authority: Owns the bounded task decomposition and cross-task invariants after merge. ADR-0062 owns the architectural decision; ADR-0010 owns the repo/BuilderOps authority seam; shipped owner docs win for current behavior.
 Owner: BuilderOps governance / Architecture spine
@@ -44,7 +44,8 @@ Execution order:
 `BCP-01 -> BCP-02`; `BCP-03` may start after BCP-01 and run beside BCP-02. Then
 `BCP-02 -> BCP-04 -> BCP-05`; `BCP-03 + BCP-04 + BCP-05 -> BCP-06 -> BCP-07`.
 
-Parent validation hub: #3788. No task is `agent:ready` while ADR-0062/specification is unmerged.
+Parent validation hub: #3788. BCP-01 is the first `agent:ready` child; dependency-blocked
+children remain `agent:blocked`.
 BCP-05 and BCP-07 reuse existing issues rather than creating duplicate work. PR #3620 is the
 merged BCP-05 implementation baseline; later migration lands in a new PR under the existing issue,
 not by rewriting that merge.
@@ -115,7 +116,7 @@ Partial-failure examples:
   review/repair/recovery logic; replace its dispatcher-SQLite ledger and direct claim boundary with
   the BuilderOps API/PostgreSQL contract in later migration work. Do not reopen or rewrite #3620.
 - **Reuse #3690** for BCP-07. Its old host-stable-SQLite wording is superseded and must be updated
-  after ADR acceptance.
+  when the BCP-06 cutover is proved.
 - **Supersede the target of #3686 / PR #3695.** Their fragmentation and host-ack evidence is required
   by BCP-03; host-stable SQLite is not a production destination.
 - **Do not duplicate #3174.** Repo-explicit skill targeting and cross-repo promotion-copy work remains

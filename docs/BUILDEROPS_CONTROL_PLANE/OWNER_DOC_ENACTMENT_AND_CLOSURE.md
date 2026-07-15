@@ -109,5 +109,5 @@ without changing Product runtime or inventing a new Product SBS component.
 
 ## Related GitHub Issues
 
-- Existing issue #3690; rewrite after ADR acceptance rather than create a BCP-07 duplicate.
+- Existing issue #3690; rewrite after BCP-06 cutover proof rather than create a BCP-07 duplicate.
 - Parent feature closes only through this issue's closure handoff.
