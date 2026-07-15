@@ -17,14 +17,14 @@ Observe what CKM consumers actually ask, including unsupported historical questi
 
 ## What This Task Does
 
-- Define a privacy-safe, versioned observation event for supported queries, typed refusals, and explicitly accepted questions.
+- Define a privacy-safe, versioned outer observation adapter for already-returned supported results, typed refusals, and explicitly accepted questions.
 - Record bounded structural facts such as resource/query family, filter classes, result/refusal kind, truncation, latency bucket, contract versions, and snapshot/query digests without raw free text or resource payloads.
 - Use the authoritative OEF event path where applicable, preserving BuilderOps scope and projection-only status.
 - Produce evidence that can support a future PromotionIntent or bounded issue, never direct feature activation.
 
 ## Concretely
 
-Every query-service outcome may emit a separate bounded observation through the existing governed event mechanism. Query execution stays read-only with respect to CKM itself. Unsupported historical requests are classified by typed refusal; any human-accepted question records source authority separately from the raw demand signal.
+After the query service returns an immutable result or typed refusal, the calling orchestration layer may pass a redacted observation input to a separate governed event recorder. The query service, DTO layer, SQLite connection, and read transaction never depend on or invoke the recorder. Event success or failure cannot change the already-returned query outcome. Unsupported historical requests are classified by typed refusal; any human-accepted question records source authority separately from the raw demand signal.
 
 ## Why This Matters
 
@@ -38,10 +38,12 @@ The architecture inquiry deliberately refused to guess M2 history or O2 product 
   Verify: `tests/builderops/ckm/test_observation_capture.py::test_supported_refused_and_accepted_question_events_are_distinct`
 - [ ] Observation includes canonical query and snapshot digests where available, bounded filter/result metadata, truncation, and coarse performance data without enabling replay of sensitive input.
   Verify: `tests/builderops/ckm/test_observation_capture.py::test_observation_is_bounded_bound_and_non_replayable`
-- [ ] Query observation cannot mutate CKM state/revision, GitHub, repo, Product/Runtime authority, or trigger a feature, ranking, gate, alert, or promotion automatically.
+- [ ] The query service/store/DTO modules have no event-recorder dependency or callback; observation begins only in an outer adapter after a complete immutable result/refusal exists.
+  Verify: `tests/builderops/ckm/test_observation_capture.py::test_observation_runs_only_after_query_path_returns`
+- [ ] The outer observation adapter cannot mutate CKM state/revision, GitHub, repo, Product/Runtime authority, or trigger a feature, ranking, gate, alert, or promotion automatically.
   Verify: `tests/builderops/ckm/test_observation_capture.py::test_observation_has_no_authority_or_ckm_side_effect`
-- [ ] Event emission failure is surfaced according to the authoritative OEF contract and cannot corrupt or semantically change the query result.
-  Verify: `tests/builderops/ckm/test_observation_capture.py::test_observation_failure_preserves_query_semantics`
+- [ ] Event emission failure is surfaced according to the authoritative OEF contract and cannot corrupt, replace, or semantically change the already-returned query result/refusal.
+  Verify: `tests/builderops/ckm/test_observation_capture.py::test_observation_failure_preserves_returned_query_semantics`
 - [ ] An accepted historical question records its human/source authority and remains insufficient by itself to claim general history support.
   Verify: `tests/builderops/ckm/test_observation_capture.py::test_accepted_question_records_authority_without_enabling_history`
 - [ ] The owner spec records observed question categories while keeping M2 and O2 unfiled until a new source-backed executable contract exists.
@@ -58,6 +60,7 @@ The architecture inquiry deliberately refused to guess M2 history or O2 product 
 ## Out of Scope
 
 - Raw query logging, payload/citation capture, or user analytics.
+- Event hooks, callbacks, receipt emission, or write dependencies inside the query service/read transaction.
 - M2 general history, as-of reconstruction, or retroactive provenance.
 - O2 UI, alerts, drift, prediction, automation, federation, or automatic issue creation.
 - Choosing cadence/window/minimum evidence thresholds before observation.
