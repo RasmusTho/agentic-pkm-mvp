@@ -15,7 +15,7 @@ can_parallelize_with: []
 
 ERE-01 frames the architecture as "adding a future stream is a registry entry + adapter, not an engine change," and ERE-09 (calendar) claims to prove it. But `app/episodes/segmenter.py::run_segmentation_tick` still pulls data through **hardcoded per-stream `if <STREAM_ID> in live_streams:` blocks** — one for heimdal, one for vault.activity, one for calendar. Enumeration is registry-driven (AC4/AC5, `enumerate_consumable_streams`); the data-pull loop is not. Calendar (ERE-09) *did* require editing the tick (the calendar block was added to `run_segmentation_tick`), so the ERE-01 claim is today aspirational, not literally true. This task makes it literally true: an adapter-dispatch table where each live registry entry resolves to a reader+normalizer, `run_segmentation_tick` iterates live streams and dispatches, and a future source (location/ERE-10) needs a registry entry + adapter with **zero** edit to `run_segmentation_tick`.
 
-This is an owner-optional architectural/governance investment (`lane:governance`). It changes no segmentation *behavior* — it is a behavior-preserving refactor of the ingestion seam only. The pure five-dimension core (`fold_signals_into_segments`, `detect_shift`) and all ERE-04/ERE-09 behavior and tests are untouched.
+This is an owner-optional Product/Runtime SIP Tier 2 refactor (`lane:core-runtime`). It changes no segmentation *behavior* — it is a behavior-preserving refactor of the ingestion seam only. The pure five-dimension core (`fold_signals_into_segments`, `detect_shift`) and all ERE-04/ERE-09 behavior and tests are untouched.
 
 ## What This Task Does
 
@@ -90,4 +90,4 @@ Not applicable in the user-facing-surface sense: this task ships no new user-fac
 
 ## Related GitHub Issues
 
-Issue **#3523** — `[Episode Resolution Engine] adapter-dispatch: registry-driven ingestion so a new source needs no engine change`. Child of parent #3175, `lane:governance`, `agent:blocked`, `prio:low` (owner-optional investment, not on the critical ERE build path). Spec landed in PR #3522. Pairs with ERE-12 (#3524, fail-loud correspondence); ERE-11 must merge first.
+Issue **#3523** / PR **#3727** — `[Episode Resolution Engine] adapter-dispatch: registry-driven ingestion so a new source needs no engine change`. Child of parent #3175, Product/Runtime SIP Tier 2, `lane:core-runtime`, `prio:low` (owner-optional refactor, not on the critical ERE build path). Pairs with ERE-12 (#3524, fail-loud correspondence), which remains `agent:blocked` until ERE-11 merges.
