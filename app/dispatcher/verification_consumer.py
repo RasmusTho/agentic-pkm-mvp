@@ -2413,7 +2413,7 @@ class VerificationConsumer:
         pending_delivered = self._pending_delivered_receipt(run)
         if pending_delivered is not None:
             return self._replay_pending_delivered(run, pending_delivered)
-        pr = intake_pr or self.truth.pull_request(run.repository, run.pr_number)
+        pr = self.truth.pull_request(run.repository, run.pr_number)
         checks = self.truth.checks(run.repository, run.head_sha)
         rejection = live_truth_rejection(run, pr, checks)
         if rejection:

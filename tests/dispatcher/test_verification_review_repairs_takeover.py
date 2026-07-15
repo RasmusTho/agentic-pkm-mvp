@@ -968,6 +968,35 @@ def test_historical_authenticated_artifact_cannot_move_expired_chain_backward(
     assert _durable_verification_snapshot(state, run_id) == durable_before[0]
 
 
+def test_authenticated_intake_refetches_live_pr_after_ingest_before_rejection(
+    tmp_path: Path,
+) -> None:
+    source, _ = _gh_source(request())
+    authenticated = source.pending_requests(REPO)[0]
+
+    class CorrectedAfterIntakeTruth(Truth):
+        def __init__(self) -> None:
+            super().__init__(eligible_pr(), GREEN)
+            self.pull_calls = 0
+
+        def pull_request(self, repository, pr_number):
+            self.pull_calls += 1
+            if self.pull_calls == 1:
+                return eligible_pr(draft=True)
+            return eligible_pr()
+
+    truth = CorrectedAfterIntakeTruth()
+    launcher = Launcher()
+    result = VerificationConsumer(
+        ledger(tmp_path), truth, Auth(ok=False), launcher, "host"
+    ).consume(authenticated)
+
+    assert truth.pull_calls == 2
+    assert result.status == "backoff"
+    assert result.stop_reason is None
+    assert launcher.calls == []
+
+
 def test_reconciled_new_head_replay_is_idempotent(tmp_path: Path) -> None:
     state = ledger(tmp_path)
     run_id, _ = _record_exhausted_chain(state, request())
