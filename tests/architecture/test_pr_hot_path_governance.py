@@ -55,7 +55,7 @@ def test_verification_skill_distinguishes_issue_backed_and_direct_repair_modes()
     text = _read(".codex/skills/verification-and-closure/SKILL.md")
 
     for fragment in (
-        "For issue-backed PRs, close or update the governing Issue as usual.",
+        "For issue-backed PRs, close the exact closing issues and update the governing issue",
         "For direct repair PRs, verify the `Direct Repair` block instead of issue ACs.",
         "Do not create an Issue after the fact solely for a bounded direct repair.",
         "Direct repair merged: PR #<n>, type=<type>, validation=<checks>.",

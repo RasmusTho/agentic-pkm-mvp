@@ -116,15 +116,17 @@ include raw paths, vault names, environment values, DSNs, secrets, or raw startu
 
 ## Direct Repair PRs
 
-- For issue-backed PRs, close or update the governing Issue as usual.
+- For issue-backed PRs, close the exact closing issues and update the governing issue; these are the
+  same lifecycle mutation only when the governing identity is itself in `closing_issues`.
 - For direct repair PRs, verify the `Direct Repair` block instead of issue ACs.
 - Do not create an Issue after the fact solely for a bounded direct repair.
 
 ## Verification Modes
 
 - Issue-backed PR:
-  - verify governing issue ACs
-  - close/update the governing Issue after merge
+  - verify the governing issue-set contract and every closing issue's ACs
+  - close/project `Done` for exact closing issues after merge; update an unclosed governing parent
+    with validation evidence without projecting it `Done`
 - Direct repair PR:
   - verify the `Direct Repair` block and `Validation`
   - do not require issue ACs
@@ -332,7 +334,8 @@ Do not leave state updates as recommendations when you can execute them directly
 
 - do not validate code only; validate delivery state
 - detect and correct false status where possible
-- if issue-backed work is truly delivered, confirm or recommend Issue closure and Project Status = `Done`
+- if issue-backed work is truly delivered, execute and confirm closure plus Project Status = `Done`
+  for exact closing issues only; update any distinct governing parent without falsely closing it
 - if direct repair work is truly delivered, write the direct repair delivery receipt and do not create or mutate a governing Issue
 - direct repair delivery receipt shape:
   - `Direct repair merged: PR #<n>, type=<type>, validation=<checks>.`
