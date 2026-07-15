@@ -134,10 +134,13 @@ delivery plus deterministic reconciliation and authoritative readback. This is n
 
 ### RQ3 — How does cutover avoid silent loss or split brain?
 
-Inventory and freeze every SQLite/JSONL/JSON authority source, hash it, dry-run a versioned read-only
-import, preserve provenance, quarantine conflicts, invalidate live leases into a new authority epoch,
-back up before import, reconcile counts/hashes, cut all clients to the API, then disable legacy
-writers and archive sources read-only. No rollback path re-enables SQLite.
+Derive the expected source/root universe from every legacy producer/default plus MacBook/Demerzel
+worktree, container, automation, and host inventory; then freeze every SQLite/JSONL/JSON authority
+source, hash it, dry-run a versioned read-only import, preserve provenance, quarantine conflicts,
+invalidate live leases into a new authority epoch, back up before import, reconcile coverage/counts/
+hashes, cut all clients to the API, disable legacy writers, and archive sources read-only. Before
+activation the pre-import backup is available; after activation recovery may not rewind any
+acknowledged state. No recovery path re-enables SQLite.
 
 ### RQ4 — Where does merge authority live?
 
@@ -145,6 +148,8 @@ In a privileged Demerzel executor with repo-scoped GitHub permission and host-lo
 It is a BuilderOps API client, not a database client. It may execute only an outbox/attempt that
 passed issue/SHA/CI/review/protection gates and becomes terminal only after GitHub readback. General
 clients and Product Runtime never receive merge credentials.
+Raw GitHub/model/client/database credentials stay in host secret stores and never enter PostgreSQL,
+outbox payloads, receipts, artifacts, logs/metrics, or BuilderOps backups.
 
 ### RQ5 — How independent is the lifecycle?
 
@@ -189,9 +194,9 @@ Minimum deployable unit:
 | BCP-INV-04 | MUST | External effects become terminal only after deterministic reconciliation/readback. | outbox crash-window tests |
 | BCP-INV-05 | MUST | Lease fencing rejects stale workers across expiry/restart. | concurrent claim/heartbeat tests |
 | BCP-INV-06 | MUST | Product Runtime owns no BuilderOps route, process, data, credential, or health path. | architecture/Compose route-removal gate |
-| BCP-INV-07 | GATE | Independent migrations, backup, restore drill, release pin, and health pass before cutover. | deploy/cutover receipt |
-| BCP-INV-08 | GATE | All legacy stores are inventoried, frozen, reconciled, and archived; live leases are not imported. | migration manifest + reconciliation receipt |
-| BCP-INV-09 | MUST | Merge credentials are repo-scoped and unavailable to Product/general clients. | secret/permission inventory + negative auth tests |
+| BCP-INV-07 | GATE | Independent migrations, backup, restore drill, release pin, health, and no-authority-rewind recovery pass before cutover. | deploy/cutover/recovery receipt |
+| BCP-INV-08 | GATE | Producer-derived host/worktree/container/automation coverage proves all legacy stores are inventoried, frozen, reconciled, and archived; live leases are not imported. | expected-source manifest + reconciliation receipt |
+| BCP-INV-09 | MUST | Credentials are repo-scoped where applicable, unavailable to Product/general clients, and absent from all durable state/backups. | secret/permission inventory + durable-state/restore negative tests |
 | BCP-INV-10 | DOCTOR | Outbox age/dead letters, lease conflicts, credential/rate-limit state, and executor heartbeat are visible without secrets. | status/metrics contract |
 
 These are target-state invariants. They enter `docs/testing/invariant-tests.md` only with the task

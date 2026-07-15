@@ -1,4 +1,4 @@
-State: Accepted target-state specification (owner decision, 2026-07-15). Parent validation hub #3788 remains `agent:blocked` while child slices are outstanding; BCP-01 is the first executable child. Existing issues #3603 and #3690 are reconciled into the sequence.
+State: Accepted target-state specification (owner decision, 2026-07-15). Parent validation hub #3788 remains `agent:blocked` while child slices are outstanding; BCP-01 becomes the first executable child after PR #3691 merges and strict readiness validation passes. Existing issues #3603 and #3690 are reconciled into the sequence.
 Doc role: Specification directory
 Authority: Owns the bounded task decomposition and cross-task invariants after merge. ADR-0062 owns the architectural decision; ADR-0010 owns the repo/BuilderOps authority seam; shipped owner docs win for current behavior.
 Owner: BuilderOps governance / Architecture spine
@@ -44,8 +44,8 @@ Execution order:
 `BCP-01 -> BCP-02`; `BCP-03` may start after BCP-01 and run beside BCP-02. Then
 `BCP-02 -> BCP-04 -> BCP-05`; `BCP-03 + BCP-04 + BCP-05 -> BCP-06 -> BCP-07`.
 
-Parent validation hub: #3788. BCP-01 is the first `agent:ready` child; dependency-blocked
-children remain `agent:blocked`.
+Parent validation hub: #3788. BCP-01 is the first `agent:ready` candidate after PR #3691 merges;
+dependency-blocked children remain `agent:blocked`.
 BCP-05 and BCP-07 reuse existing issues rather than creating duplicate work. PR #3620 is the
 merged BCP-05 implementation baseline; later migration lands in a new PR under the existing issue,
 not by rewriting that merge.
@@ -62,16 +62,19 @@ not by rewriting that merge.
    before repeating; terminal success requires GitHub readback bound to repo and current SHA.
 5. **Fenced leases.** Stale workers cannot mutate after expiry/reassignment; fencing survives API,
    worker, and database restarts.
-6. **Credential non-transitivity.** A credential/lease for repo A cannot act on repo B. Product and
-   general clients cannot obtain merge credentials.
+6. **Credential non-transitivity and non-persistence.** A credential/lease for repo A cannot act on
+   repo B. Product and general clients cannot obtain merge credentials. Raw secrets never enter
+   PostgreSQL, outbox payloads, receipts, artifacts, logs/metrics, or BuilderOps backups.
 7. **Independent lifecycle.** Product start/stop/deploy/health/backup cannot start, stop, publish, or
    restore BuilderOps, and BuilderOps failure does not change Product process ownership.
-8. **No SQLite rollback.** Rollback uses the prior BuilderOps image pin and PostgreSQL backup. It
-   never re-enables SQLite/JSONL/JSON as mutation authority.
+8. **No authority rewind.** Before activation, rollback may use the pre-import PostgreSQL backup.
+   After activation, recovery preserves every acknowledged transition through a compatible image or
+   proved point-in-time replay; it never rewinds accepted state or re-enables SQLite/JSONL/JSON.
 9. **Artifact integrity.** Large artifacts may remain content-addressed files, but identity, state,
    terminal receipts, and promotion/outbox status are PostgreSQL-authoritative.
-10. **Fail-loud cutover.** Missing source inventory, unresolved conflicts, failed restore drill,
-    unhealthy schema/outbox, missing credentials, or an extant Product route blocks cutover.
+10. **Fail-loud cutover.** Incomplete producer-derived source coverage, an unenumerated host/
+    worktree/container root, unresolved conflicts, failed restore drill, unhealthy schema/outbox,
+    missing credentials, or an extant Product route blocks cutover.
 
 Partial-failure examples:
 
@@ -91,14 +94,19 @@ Partial-failure examples:
 - [ ] One authenticated API endpoint on Demerzel coordinates records, tasks, leases, attempts,
   idempotency, receipts, and outbox state against one PostgreSQL authority.
   Verify: BCP-01/02 contract tests named in their task files.
+- [ ] Every authority-bearing record carries the mandatory multi-repo envelope; leases,
+  idempotency, promotions, and routing are namespaced by repo and fail closed on absent/ambiguous
+  `(repo, stack, task-class)` policy.
+  Verify: BCP-01 multi-repo namespace test plus BCP-04 delivery-manifest routing test.
 - [ ] A MacBook client and the privileged Demerzel executor can complete a restart-safe task flow
   without direct database access or local-authority fallback.
   Verify: `tests/builderops/control_plane/test_end_to_end_api_flow.py::test_remote_client_and_executor_share_one_authority_epoch`.
 - [ ] A crash at each state/outbox/external-effect boundary produces no duplicate accepted transition
   and a reconcilable receipt chain.
   Verify: `tests/builderops/control_plane/test_outbox_recovery.py::test_external_effect_crash_windows_reconcile_once`.
-- [ ] Every discovered legacy source is accounted for by import, quarantine, or explicit archive,
-  with no live lease carried into the new epoch.
+- [ ] A producer-derived manifest proves the complete MacBook/Demerzel worktree/container source
+  universe, and every expected source is imported, quarantined, explicitly accounted missing, or
+  archived, with no live lease carried into the new epoch.
   Verify: BCP-03 migration reconciliation receipt plus BCP-06 cutover receipt.
 - [ ] Product Runtime contains no BuilderOps route, process bootstrap, data mount, secret, or health
   dependency, and its lifecycle remains healthy with BuilderOps stopped.
@@ -106,6 +114,9 @@ Partial-failure examples:
 - [ ] An encrypted backup restores into a disposable database and passes readiness plus invariant
   checks before authoritative cutover.
   Verify: BCP-02 restore-drill receipt and BCP-06 cutover gate.
+- [ ] Durable-state and restored-backup negative scans prove no raw client/database/GitHub/model
+  credential is persisted, and post-activation recovery cannot lose acknowledged state.
+  Verify: BCP-02 credential-persistence test plus BCP-06 no-authority-rewind rehearsal.
 - [ ] A verification-gated merge uses the repo-scoped executor credential, binds the current PR SHA,
   and becomes terminal only after GitHub readback.
   Verify: the migrated #3603/#3620 test baseline and BCP-05 runtime receipt.

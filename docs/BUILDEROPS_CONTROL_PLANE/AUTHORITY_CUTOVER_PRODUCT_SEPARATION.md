@@ -29,14 +29,18 @@ import, cutover, Product route/process removal, legacy retirement, and end-to-en
 - run health/readiness, API/executor end-to-end, crash recovery, backup restore drill, and Product-
   independence acceptance;
 - archive legacy sources read-only with inventory hashes and retention; and
-- define rollback as prior BuilderOps image pin + PostgreSQL backup restore, never SQLite reactivation.
+- define rollback before activation as prior image + pre-import backup, and recovery after activation
+  as a compatible image or proved point-in-time replay through the last acknowledged transition;
+  never rewind accepted state or reactivate SQLite.
 
 ## Concretely
 
 The operator runs one fail-closed cutover command/plan: preflight inventory and restore proof, freeze,
 backup, final import, authority-epoch activation, client/executor switch, Product route/startup
 removal, end-to-end proof, and archive receipt. Any failed gate stops before authority activation or
-leaves the PostgreSQL epoch authoritative for forward repair.
+leaves the PostgreSQL epoch authoritative for forward repair. Once a client can receive an accepted
+response, snapshot rewind is forbidden; recovery must prove all acknowledged idempotency/state/
+receipt/outbox/fencing records survive or are replayed and reconciled.
 
 ## Why This Matters
 
@@ -63,14 +67,19 @@ unchanged.
 - Invariant → producers: every producer/initializer/client of legacy state is migrated or disabled in
   the same change, with a fail-loud preflight.
 - No dual-write/dual-authority window is permitted.
+- Pre-activation rollback may restore the pre-import backup. Post-activation recovery is
+  forward-only and must preserve every acknowledged transition; a point-in-time recovery must replay
+  WAL/events through the last acknowledged receipt and reconcile unknown external effects before
+  reopening writes.
 - Product Runtime behavior unrelated to BuilderOps remains unchanged and independently verifiable.
 - Archived sources are immutable evidence, not rollback authority.
 - Owner docs are not rewritten as shipped until this task's receipts exist; BCP-07 owns writeback.
 
 ## Acceptance Criteria
 
-- [ ] Final inventory/import reconciliation accounts for all legacy state, records a new authority
-  epoch, and proves no live legacy lease or unresolved conflict entered production.
+- [ ] Final inventory/import reconciliation covers the producer-derived expected host/worktree/
+  container/automation universe, accounts for all legacy state, records a new authority epoch, and
+  proves no coverage gap, live legacy lease, or unresolved conflict entered production.
   Verify: cutover receipt containing BCP-03 inventory/import/reconciliation hashes.
 - [ ] MacBook client plus Demerzel executor complete a record→lease→attempt→outbox→GitHub readback→
   receipt flow against one PostgreSQL epoch after restart.
@@ -84,9 +93,11 @@ unchanged.
 - [ ] A post-import encrypted backup restores to a disposable database with matching epoch/counts/
   hashes and passes `/readyz` plus outbox/lease integrity checks.
   Verify: restore-drill receipt bound to the authoritative cutover backup.
-- [ ] Rollback rehearsal uses the prior service pin and PostgreSQL backup and contains no SQLite
+- [ ] Recovery rehearsal proves pre-activation backup rollback is unavailable after activation and
+  that compatible-image or point-in-time recovery preserves/replays every acknowledged transition,
+  idempotency result, receipt, outbox outcome, and fencing state before writes reopen, with no SQLite
   activation path.
-  Verify: `tests/ops/test_builderops_cutover.py::test_rollback_contract_never_reactivates_legacy_store`.
+  Verify: `tests/ops/test_builderops_cutover.py::test_post_activation_recovery_cannot_rewind_acknowledged_state`.
 - [ ] Legacy stores are archived read-only with hashes/retention and #3686/PR #3695 are reconciled as
   superseded-target evidence.
   Verify: archive/reconciliation receipt plus GitHub lifecycle receipt.
@@ -104,7 +115,8 @@ unchanged.
 - run the fail-loud producer inventory and focused full BuilderOps/dispatcher/API tests;
 - run `ruff check app tests` and any harness self-verification required by invariant→producers;
 - stop each Product/BuilderOps side independently and prove readiness semantics; and
-- attach cutover, restore, rollback-rehearsal, and GitHub readback receipts to the parent.
+- attach cutover, restore, no-authority-rewind recovery rehearsal, and GitHub readback receipts to
+  the parent.
 
 ## Related Docs
 

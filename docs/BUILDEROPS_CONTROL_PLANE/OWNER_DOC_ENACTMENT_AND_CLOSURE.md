@@ -14,9 +14,9 @@ existing_issue: 3690
 
 ## Purpose
 
-Issue #3690 already owns ADR-0062 enactment in Builder System owner docs but currently assumes
-host-stable SQLite and a future trigger-gated deployment split. After BCP-06, that contract must be
-updated to the proved API/PostgreSQL/independent-lifecycle reality and used for parent closure.
+Issue #3690 already owns ADR-0062 enactment in Builder System owner docs. Its originally filed
+host-stable SQLite/future-split wording is superseded; the live contract is reconciled to the proved
+API/PostgreSQL/independent-lifecycle writeback that runs only after BCP-06.
 
 ## What This Task Does
 

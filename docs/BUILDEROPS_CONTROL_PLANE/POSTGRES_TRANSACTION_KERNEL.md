@@ -22,6 +22,9 @@ port and PostgreSQL implementation before network deployment or migration can be
 - define a domain-neutral BuilderOps store port used by API/services without importing SQLite;
 - add an independent BuilderOps PostgreSQL schema/migration lineage for repo-scoped tasks, attempts,
   records, transitions, fenced leases, idempotency, append-only receipts, and outbox/dead letters;
+- require `RepoRef`, `scope`, `stack`, actor, source references, and schema version on every
+  authority-bearing record, with repo-namespaced leases, idempotency keys, outbox operations, and
+  promotions;
 - make guarded state + idempotency result + receipt + outbox intent one transaction;
 - implement atomic claim/heartbeat/release/complete with monotonically fenced ownership;
 - implement an outbox claim/retry/reconciliation state machine with deterministic operation keys;
@@ -59,6 +62,8 @@ by BuilderOps governance and remains outside Product persistence authority.
 - A timed-out external call stays `unknown` until reconciled.
 - Stale fencing tokens cannot mutate after lease expiry/reassignment.
 - File projections/artifacts cannot be the sole terminal-state or receipt authority.
+- Missing/ambiguous repo scope fails closed; an identity, lease, idempotency key, or promotion in one
+  repo namespace cannot collide with or authorize another.
 - Do not yet switch production clients or remove Product routes.
 
 ## Acceptance Criteria
@@ -81,6 +86,10 @@ by BuilderOps governance and remains outside Product persistence authority.
 - [ ] BuilderOps migrations are versioned independently of Product migrations and readiness can
   report the authority epoch and schema version.
   Verify: `tests/architecture/test_builderops_migration_boundary.py::test_builderops_migrations_do_not_use_product_lineage`.
+- [ ] Every authority-bearing row rejects a missing mandatory multi-repo envelope, and task/lease/
+  idempotency/outbox/promotion identities are repo-namespaced so repo A cannot collide with or
+  authorize repo B.
+  Verify: `tests/builderops/control_plane/test_multirepo_namespace.py::test_authority_envelope_is_required_and_repo_namespaces_are_isolated`.
 
 ## Out of Scope
 
@@ -103,4 +112,5 @@ by BuilderOps governance and remains outside Product persistence authority.
 
 ## Related GitHub Issues
 
-- [#3792](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3792), the first `agent:ready` child.
+- [#3792](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3792), the first `agent:ready`
+  candidate after PR #3691 merges and strict readiness validation passes.

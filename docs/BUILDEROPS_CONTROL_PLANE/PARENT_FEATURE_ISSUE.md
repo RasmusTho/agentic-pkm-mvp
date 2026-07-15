@@ -73,7 +73,7 @@ reshape a Product SBS subsystem.
 
 | Task | GitHub work item | Initial state |
 |---|---|---|
-| BCP-01 | [#3792](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3792) | `agent:ready` |
+| BCP-01 | [#3792](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3792) | `agent:blocked` until PR #3691 merges; then first `agent:ready` candidate after strict validation |
 | BCP-02 | [#3790](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3790) | `agent:blocked` on BCP-01 |
 | BCP-03 | [#3789](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3789) | `agent:blocked` on BCP-01 |
 | BCP-04 | [#3791](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3791) | `agent:blocked` on BCP-02 |

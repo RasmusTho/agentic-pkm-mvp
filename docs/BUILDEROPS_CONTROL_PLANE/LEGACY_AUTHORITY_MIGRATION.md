@@ -20,8 +20,9 @@ host-identity lessons remain migration inputs.
 
 ## What This Task Does
 
-- implement a discovery manifest that inventories all known BuilderOps/dispatcher SQLite, JSONL,
-  model-inquiry, promotion, receipt, and epic-run sources on authorized MacBook/Demerzel roots;
+- derive an expected-source manifest from every repo-owned legacy producer/default-path rule, then
+  enumerate the authorized MacBook and Demerzel hosts, registered Git worktrees, container mounts/
+  volumes, automation configuration, and host-stable candidates against that manifest;
 - freeze each source, record path/host/user/worktree, schema, size, timestamps, content hash, and
   writer status, and reject stale/foreign inventory acknowledgement;
 - create versioned read-only adapters and deterministic normalized identities/provenance;
@@ -33,10 +34,12 @@ host-identity lessons remain migration inputs.
 
 ## Concretely
 
-Given explicit authorized roots, the migration command emits an inventory manifest and hash, accepts
-a host/user/freshness-bound acknowledgement, runs a no-write dry import, and produces a reconciliation
-ledger. Re-running the same inputs returns the same normalized result; changed or conflicting inputs
-block with quarantine evidence.
+Given the fixed cutover host set, the migration command derives its expected roots and source classes
+from producer/default-path inventory plus live Git/Docker/automation enumeration. The operator may
+authorize access but cannot omit a producer or registered root. The command emits a coverage manifest
+and hash, accepts a host/user/freshness-bound acknowledgement, runs a no-write dry import, and
+produces a reconciliation ledger. Re-running the same inputs returns the same normalized result;
+missing roots, changed inputs, or conflicts block with explicit evidence.
 
 ## Why This Matters
 
@@ -57,8 +60,10 @@ knowledge, runtime data, and GitHub/repo delivery authority are unchanged.
 
 ## Constraints
 
-- Discovery must cover worktrees/containers/host-stable candidates; an expected missing root is an
-  explicit receipt, not silent absence.
+- Producer/default-path inventory is the expected-source authority; discovery must cover every
+  registered worktree, container mount/volume, automation path, and host-stable candidate on both
+  cutover hosts. Caller-supplied roots may add scope but never subtract expected coverage.
+- An expected missing or inaccessible root is an explicit blocking receipt, not silent absence.
 - Source adapters are read-only and hash-verify before and after import.
 - Conflicting equal identities are quarantined; timestamps or path order never silently choose a
   winner.
@@ -69,10 +74,10 @@ knowledge, runtime data, and GitHub/repo delivery authority are unchanged.
 
 ## Acceptance Criteria
 
-- [ ] Discovery finds generic BuilderOps DBs, dispatcher DB/JSONL, model-inquiry/promotion artifacts,
-  receipt files, and epic-run state across supplied roots and binds acknowledgement to host/user/
-  freshness/inventory hash.
-  Verify: `tests/builderops/control_plane/test_legacy_inventory.py::test_inventory_is_complete_and_acknowledgement_is_host_bound`.
+- [ ] Static producer/default-path inventory plus MacBook/Demerzel Git-worktree, Docker-volume/mount,
+  automation, and host-path enumeration proves the expected source/root universe; omitted or
+  inaccessible expected coverage blocks and acknowledgement binds host/user/freshness/manifest hash.
+  Verify: `tests/builderops/control_plane/test_legacy_inventory.py::test_producer_derived_inventory_covers_hosts_worktrees_containers_and_automations`.
 - [ ] Re-running an unchanged import is idempotent, while a source changed after freeze fails hash
   verification and imports nothing further.
   Verify: `tests/builderops/control_plane/test_legacy_import.py::test_import_is_restart_safe_and_rejects_changed_source`.
@@ -85,9 +90,10 @@ knowledge, runtime data, and GitHub/repo delivery authority are unchanged.
 - [ ] Inquiry/epic-run identities, transitions, promotions, and receipts are represented in
   PostgreSQL with content-hash references to immutable artifacts and no file-only terminal state.
   Verify: `tests/builderops/control_plane/test_legacy_artifact_import.py::test_file_first_authority_imports_envelope_and_receipts`.
-- [ ] A reconciliation receipt accounts for every discovered source item as imported, deduplicated,
-  quarantined, intentionally excluded, or archived, with counts and hashes.
-  Verify: `tests/builderops/control_plane/test_legacy_reconciliation.py::test_reconciliation_accounts_for_every_inventory_item`.
+- [ ] A reconciliation receipt accounts for every expected producer/root and every source item as
+  imported, deduplicated, quarantined, explicitly missing/inaccessible, intentionally excluded, or
+  archived, and cutover rejects any unresolved coverage gap.
+  Verify: `tests/builderops/control_plane/test_legacy_reconciliation.py::test_reconciliation_accounts_for_expected_universe_and_blocks_coverage_gaps`.
 
 ## Out of Scope
 
@@ -98,8 +104,8 @@ knowledge, runtime data, and GitHub/repo delivery authority are unchanged.
 
 ## How to Verify (Pre-Merge)
 
-- construct fixtures for multiple worktrees, host/container path divergence, stale acknowledgements,
-  partial imports, and source mutation;
+- construct fixtures for omitted caller roots, multiple worktrees, host/container path divergence,
+  unmounted/inaccessible volumes, stale acknowledgements, partial imports, and source mutation;
 - run importer twice and compare database/result hashes; and
 - preserve #3686/PR #3695 evidence in the migration receipt.
 

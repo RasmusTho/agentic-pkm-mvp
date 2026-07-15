@@ -23,6 +23,8 @@ Product ownership.
 - create a separate BuilderOps FastAPI/service entrypoint over the BCP-01 store port;
 - require encrypted tailnet transport and revocable, scoped client credentials; distinguish normal,
   privileged executor, and operator scopes;
+- keep raw client/database/GitHub/model credentials in host secret stores only; persist only secret
+  references, non-secret fingerprints, scopes, and rotation generations;
 - create a BuilderOps-only Compose project with its own API, outbox worker, migration gate,
   PostgreSQL service/database/role/volume/secrets, and immutable release pin;
 - provide independent deploy/rollback receipts and a host probe;
@@ -36,8 +38,8 @@ Product ownership.
 
 The slice adds a BuilderOps-only Compose invocation and service entrypoint such that an operator can
 deploy a pinned image, wait for migrations, call authenticated `/healthz` and `/readyz`, inspect
-secret-safe status, take a backup, restore it into an isolated project, and roll back without
-running a `pkm-*` Compose command.
+secret-safe status, take a backup, restore it into an isolated project, and change to a compatible
+BuilderOps image without rewinding authoritative data or running a `pkm-*` Compose command.
 
 ## Why This Matters
 
@@ -60,10 +62,13 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
 - BuilderOps Compose project/database/volume/role/secrets/pin/migrations remain distinct from
   `pkm-dev`, `pkm-test`, and `pkm-prod`.
 - Tailnet membership alone is not authentication; no anonymous mutation or Product API key reuse.
-- Database and merge credentials are never returned to API clients or stored in repo config.
+- Raw client, database, GitHub, merge, and model/session credentials are never returned to clients or
+  persisted in repo config, PostgreSQL, outbox payloads, receipts, artifacts, logs/metrics, or
+  BuilderOps backups/restores. Durable records carry non-secret references and scope metadata only.
 - `/healthz` is process liveness; `/readyz` fails on unavailable DB, wrong schema/epoch, or an
   authority-threatening outbox condition.
-- A persistent volume is not accepted as backup.
+- A persistent volume is not accepted as backup; backup/restore negative scans must also prove the
+  credential exclusion boundary.
 - Do not cut production clients or expose the service as authority until BCP-03/04/05 gates pass.
 
 ## Acceptance Criteria
@@ -81,11 +86,15 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
   rate-limit, and executor-heartbeat state without exposing secrets.
   Verify: `tests/builderops/control_plane/test_service_health.py::test_readiness_and_status_cover_required_dependencies_without_secrets`.
 - [ ] Deploy and rollback use a BuilderOps-specific immutable pin and emit receipts that identify
-  image SHA, schema version, and authority epoch.
+  image SHA, schema version, and authority epoch without restoring an older authoritative snapshot.
   Verify: `tests/ops/test_builderops_deploy_contract.py::test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch`.
 - [ ] A scheduled encrypted backup can be restored into a disposable database and pass schema,
   count, integrity, and readiness checks.
   Verify: `tests/ops/test_builderops_backup_restore.py::test_backup_restore_drill_reaches_ready_with_matching_integrity`.
+- [ ] Negative scans of PostgreSQL, outbox payloads, receipts, artifacts, logs/metrics, encrypted
+  backup bytes, and a restored database find no raw client/database/GitHub/model credential; only
+  non-secret reference/fingerprint/scope/rotation metadata is durable.
+  Verify: `tests/security/test_builderops_secret_persistence.py::test_raw_credentials_never_enter_durable_state_or_restored_backup`.
 
 ## Out of Scope
 
@@ -97,7 +106,7 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
 ## How to Verify (Pre-Merge)
 
 - render/validate Compose config under the dedicated project name;
-- run auth-negative and credential-redaction tests;
+- run auth-negative, credential-redaction, durable-state, and restored-backup secret scans;
 - execute backup plus disposable restore in an isolated test project; and
 - run `ruff check app tests` plus focused ops tests.
 

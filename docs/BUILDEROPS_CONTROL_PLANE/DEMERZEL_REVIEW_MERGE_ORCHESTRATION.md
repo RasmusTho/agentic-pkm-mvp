@@ -68,6 +68,9 @@ weaken them and does not enter Product Runtime.
   verification orchestrator or rewrite the merged PR.
 - The executor is an API client and never opens PostgreSQL/SQLite directly.
 - General clients and Product Runtime never receive model or merge credentials.
+- The executor resolves GitHub/model credentials from host-secret references at effect time. Raw
+  material never enters API requests, PostgreSQL, outbox payloads, receipts, artifacts, logs, or
+  backups.
 - A merge receipt binds the exact current SHA and GitHub readback; a local success return is
   insufficient.
 - Existing CI + review + protection gates are not weakened by autonomous execution.
@@ -86,9 +89,10 @@ weaken them and does not enter Product Runtime.
   Verify: `tests/dispatcher/test_verification_merge.py::test_merge_requires_current_sha_all_gates_fencing_and_repo_scope`.
 - [ ] A timed-out merge reconciles GitHub state before retry and emits one terminal readback receipt.
   Verify: `tests/dispatcher/test_verification_merge.py::test_timed_out_merge_reconciles_before_retry`.
-- [ ] Executor credentials are host-local and privileged-scope-only; API/status/logs reveal neither
-  token nor model session material.
-  Verify: `tests/security/test_builderops_executor_credentials.py::test_executor_secrets_are_scoped_and_redacted`.
+- [ ] Executor credentials are host-local and privileged-scope-only; API/status/logs and all durable
+  state/backups contain only non-secret references/scope metadata, never token or model session
+  material.
+  Verify: `tests/security/test_builderops_executor_credentials.py::test_executor_secrets_are_referenced_not_persisted`.
 - [ ] The delivered flow runs one real/dry-run-safe review→repair/verify→merge-or-no-merge cycle on
   Demerzel and posts its receipt to the parent validation hub.
   Verify: runtime receipt on the BuilderOps control-plane parent issue, bound to issue/PR/SHA.

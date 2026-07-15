@@ -21,6 +21,9 @@ are on the MacBook and must cross one authenticated API boundary instead.
 
 - provide a versioned client transport for records, worklogs, learnings, promotions, receipts,
   inquiries, tasks, leases, attempts, and status;
+- load the addressed repo's delivery manifest and select policy/TCD routing by
+  `(RepoRef, stack, task-class)`, rejecting missing or ambiguous routing instead of borrowing
+  another repo's defaults;
 - configure base URL and scoped credential through host/user secret configuration, never repo files;
 - migrate MacBook CLI wrappers, repo-local skills, automations, dispatcher commands, Signboard/read
   clients, model-inquiry launchers, and other authority-bearing callers to the transport;
@@ -64,6 +67,8 @@ removes direct operational-store access from builder clients.
 - Preserve command-level compatibility only where semantics remain API-authoritative; fail loudly
   for removed local-store flags.
 - BCP-04 prepares clients; BCP-06 chooses the authoritative cutover moment.
+- Every authority-bearing request names one `RepoRef`; no implicit current-directory repo inference
+  may authorize a mutation.
 
 ## Acceptance Criteria
 
@@ -82,6 +87,9 @@ removes direct operational-store access from builder clients.
 - [ ] A normal client credential cannot call privileged executor/merge operations or address a repo
   outside its granted scope.
   Verify: `tests/builderops/control_plane/test_service_auth.py::test_normal_client_cannot_use_executor_or_cross_repo_scope`.
+- [ ] Client policy loads the addressed repo's delivery manifest and routes by
+  `(RepoRef, stack, task-class)`; missing/ambiguous manifests and cross-repo prior reuse fail closed.
+  Verify: `tests/builderops/control_plane/test_delivery_manifest_routing.py::test_repo_stack_task_routing_is_explicit_and_non_transitive`.
 - [ ] Static/runtime inventory rejects production imports/construction of SQLite stores outside the
   migration/test adapter allowlist.
   Verify: `tests/architecture/test_builderops_store_boundary.py::test_only_control_plane_data_layer_and_migration_adapters_access_stores`.

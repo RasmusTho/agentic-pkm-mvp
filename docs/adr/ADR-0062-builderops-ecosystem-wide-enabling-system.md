@@ -70,6 +70,12 @@ encrypted transport plus revocable, scoped client credentials. The concrete cred
 an implementation choice, but anonymous tailnet mutation, a shared Product API key, and credentials
 stored in a consumer checkout are forbidden.
 
+Raw client, database, GitHub, and model/session credentials never enter PostgreSQL, outbox payloads,
+receipts, artifacts, logs, metrics, or BuilderOps backups. Durable state may carry only a secret
+reference, non-secret fingerprint, privilege/scope descriptor, and rotation generation. Secret
+material remains in a Demerzel/MacBook host secret store outside the BuilderOps data and backup
+boundary.
+
 ### D3 — One PostgreSQL operational authority
 
 One BuilderOps PostgreSQL store on Demerzel is the production authority for operational identity and
@@ -149,8 +155,12 @@ reconciliation are required.
 The cutover gate proves authenticated API clients and the Demerzel executor against PostgreSQL
 before disabling every legacy writer. It then removes Product Runtime BuilderOps routes/startup,
 archives the legacy sources read-only under an explicit retention policy, and verifies that no
-production command can recreate SQLite authority. Rollback restores the previous PostgreSQL release
-and database backup; it never reactivates SQLite as authority.
+production command can recreate SQLite authority. Before authority activation, rollback may restore
+the pre-import PostgreSQL backup. After activation, rollback is forward-only: a compatible prior
+service image may run against the current database, or a proved point-in-time recovery may replay
+through the last acknowledged transition. No post-activation snapshot rewind may discard an
+accepted transition, idempotency result, receipt, outbox outcome, or fencing state. SQLite is never
+reactivated as authority.
 
 ### D7 — Multi-repo provenance and promotion remain explicit
 
