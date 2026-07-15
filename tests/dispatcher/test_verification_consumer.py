@@ -716,6 +716,7 @@ def test_gh_source_fetches_bounded_artifact_and_live_truth_without_shell(tmp_pat
                         "id": 99,
                         "run_attempt": 1,
                         "name": "CI",
+                        "path": ".github/workflows/ci.yml",
                         "event": "pull_request",
                         "status": "completed",
                         "conclusion": "success",

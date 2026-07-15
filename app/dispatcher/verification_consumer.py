@@ -37,6 +37,7 @@ from app.dispatcher.verification_dispatch import (
     VerificationDispatchLedger,
     VerificationRun,
     VerificationSubscriptionBusy,
+    _authenticated_verification_request,
 )
 from app.dispatcher.verification_agent_loop import (
     HUMAN_EXCEPTION_PACKET_FIELDS,
@@ -72,10 +73,26 @@ CANONICAL_RECEIPT_SCHEMA_PATH = (
     Path(__file__).resolve().parent
     / "schemas/verification_closer_receipt.schema.json"
 )
+_COORDINATOR_ENV_ALLOWLIST = frozenset(
+    {"HOME", "LANG", "LC_ALL", "LC_CTYPE", "NO_COLOR", "PATH", "TERM", "TMPDIR"}
+)
+_VERIFICATION_SOURCE_PATH = ".github/workflows/ci.yml"
+_VERIFICATION_ARTIFACT_NAME = re.compile(
+    r"verification-dispatch-(?P<pr_number>[1-9][0-9]*)-(?P<head_sha>[0-9a-fA-F]{40})\Z"
+)
 
 
 class ReceiptContractError(ValueError):
     """Untrusted launcher output failed the canonical receipt contract."""
+
+
+def _minimal_coordinator_environment() -> dict[str, str]:
+    """Return only non-secret host values required to locate and run Codex."""
+    return {
+        key: os.environ[key]
+        for key in _COORDINATOR_ENV_ALLOWLIST
+        if key in os.environ
+    }
 
 
 class WholeTreeContainment(Protocol):
@@ -484,12 +501,17 @@ class GhCliVerificationSource:
             if not isinstance(artifact, Mapping):
                 continue
             name, artifact_id = artifact.get("name"), artifact.get("id")
+            artifact_identity = (
+                _VERIFICATION_ARTIFACT_NAME.fullmatch(name)
+                if isinstance(name, str)
+                else None
+            )
             if (
-                not isinstance(name, str)
-                or not name.startswith("verification-dispatch-")
+                artifact_identity is None
                 or artifact.get("expired") is True
                 or not isinstance(artifact_id, int)
                 or isinstance(artifact_id, bool)
+                or artifact_id <= 0
             ):
                 continue
             compressed_size = artifact.get("size_in_bytes")
@@ -581,7 +603,14 @@ class GhCliVerificationSource:
                 request = json.loads(archive.read(info))
             if not isinstance(request, dict):
                 raise ValueError("verification request artifact is not an object")
-            if request.get("repository") != repository:
+            assert artifact_identity is not None
+            if (
+                request.get("repository") != repository
+                or str(request.get("pr_number"))
+                != artifact_identity.group("pr_number")
+                or request.get("current_head_sha")
+                != artifact_identity.group("head_sha")
+            ):
                 raise ValueError("verification artifact repository mismatch")
             provenance = request.get("artifact_provenance")
             if not isinstance(provenance, Mapping) or not isinstance(
@@ -626,6 +655,8 @@ class GhCliVerificationSource:
                 or not isinstance(source_head_repository, Mapping)
                 or source_run.get("id") != source_run_id
                 or source_run.get("name") != source_workflow.get("name")
+                or source_run.get("name") != "CI"
+                or source_run.get("path") != _VERIFICATION_SOURCE_PATH
                 or source_run.get("run_attempt")
                 != source_workflow.get("run_attempt")
                 or source_run.get("head_sha") != source_workflow.get("head_sha")
@@ -641,7 +672,7 @@ class GhCliVerificationSource:
                 or source_head_repository.get("full_name") != repository
             ):
                 raise ValueError("verification source workflow identity mismatch")
-            requests.append(request)
+            requests.append(_authenticated_verification_request(request))
         return requests
 
     def pull_request(self, repository: str, pr_number: int) -> Mapping[str, object]:
@@ -734,13 +765,12 @@ class CodexChatGPTAuthPreflight:
         store = config.get("cli_auth_credentials_store")
         if mode != "chatgpt" or store != "keyring":
             return AuthReceipt(False, str(mode or ""), str(store or ""), "ChatGPT/keyring policy mismatch")
-        env = {k: v for k, v in os.environ.items() if k not in {"OPENAI_API_KEY", "CODEX_API_KEY"}}
         result = self.runner(
             ["codex", "login", "status"],
             capture_output=True,
             text=True,
             timeout=30,
-            env=env,
+            env=_minimal_coordinator_environment(),
             check=False,
         )
         if result.returncode != 0:
@@ -1413,11 +1443,7 @@ class CodexExecLauncher:
         self.context_path.write_text(
             json.dumps(context_pack, sort_keys=True, indent=2) + "\n", encoding="utf-8"
         )
-        base_env = {
-            k: v
-            for k, v in os.environ.items()
-            if k not in {"OPENAI_API_KEY", "CODEX_API_KEY"}
-        }
+        base_env = _minimal_coordinator_environment()
         try:
             containment = self.containment_factory()
             cleanup_tracker = (
