@@ -46,12 +46,18 @@ Verdict semantics:
 
 from __future__ import annotations
 
+from collections import Counter
 import json
 import math
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 from app.eval.benchmark import compute_metric_delta
+from app.eval.classification import (
+    ACTION_CAPABLE_CLASSES,
+    EMITTABLE_CLASSES,
+    HARD_GATE_EXPECTED_CLASSES,
+)
 from app.eval.provisional_memory_boundary import validate_boundary_evidence
 
 SCORECARD_SCHEMA_VERSION = "eval_scorecard.v1"
@@ -249,6 +255,9 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
 
     matrix = _resolve_dict(scorecard, label, ("classification", "confusion_matrix"))
     matrix_path = f"{label}.classification.confusion_matrix"
+    classification_classes = {*EMITTABLE_CLASSES, "unknown"}
+    if set(matrix) != classification_classes:
+        raise ScorecardCompareError(f"invalid classification rows at {matrix_path}")
     validated_matrix: Dict[str, Dict[str, int]] = {}
     for expected in sorted(matrix):
         row = matrix[expected]
@@ -256,12 +265,31 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
             raise ScorecardCompareError(
                 f"scorecard bucket at {matrix_path}.{expected} is not an object"
             )
-        validated_matrix[expected] = {
-            predicted: int(
-                _require_finite(row[predicted], f"{matrix_path}.{expected}.{predicted}")
+        if set(row) != classification_classes:
+            raise ScorecardCompareError(
+                f"invalid classification columns at {matrix_path}.{expected}"
             )
-            for predicted in sorted(row)
-        }
+        validated_row: Dict[str, int] = {}
+        for predicted in sorted(row):
+            path = f"{matrix_path}.{expected}.{predicted}"
+            value = _require_finite(row[predicted], path)
+            if not value.is_integer() or value < 0:
+                raise ScorecardCompareError(
+                    f"confusion-matrix count must be a non-negative integer at {path}"
+                )
+            validated_row[predicted] = int(value)
+        validated_matrix[expected] = validated_row
+    classification_n_cases = _resolve(scorecard, label, ("classification", "n_cases"))
+    if (
+        isinstance(classification_n_cases, bool)
+        or not isinstance(classification_n_cases, int)
+        or classification_n_cases <= 0
+        or classification_n_cases
+        != sum(sum(row.values()) for row in validated_matrix.values())
+    ):
+        raise ScorecardCompareError(
+            f"classification n_cases contradicts confusion matrix at {label}"
+        )
     view["confusion_matrix"] = validated_matrix
 
     view["hard_gate_passed"] = _require_bool(
@@ -293,6 +321,20 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
     if len(confusion_signatures) != len(confusions):
         raise ScorecardCompareError(
             f"duplicate mutation-side confusion at {confusions_path}"
+        )
+    matrix_mutation_counts = {
+        (expected, predicted): validated_matrix[expected][predicted]
+        for expected in HARD_GATE_EXPECTED_CLASSES
+        for predicted in ACTION_CAPABLE_CLASSES
+        if validated_matrix[expected][predicted]
+    }
+    listed_mutation_counts = Counter(
+        (entry["expected_intent"], entry["predicted_intent"])
+        for entry in confusions
+    )
+    if dict(listed_mutation_counts) != matrix_mutation_counts:
+        raise ScorecardCompareError(
+            f"classification matrix contradicts mutation confusions at {label}"
         )
     view["mutation_side_confusions"] = confusions
     if view["hard_gate_passed"] != (not confusions):

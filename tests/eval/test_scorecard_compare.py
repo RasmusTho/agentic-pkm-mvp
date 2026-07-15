@@ -168,6 +168,12 @@ def test_verdict_regression_on_mutation_side_hard_gate() -> None:
             "predicted_intent": "governance_bearing",
         }
     ]
+    candidate["classification"]["confusion_matrix"]["exploratory"][
+        "exploratory"
+    ] -= 1
+    candidate["classification"]["confusion_matrix"]["exploratory"][
+        "governance_bearing"
+    ] += 1
     candidate["regression"] = True
     candidate["failures"] = [
         {
@@ -285,6 +291,12 @@ def test_cli_rejects_classification_gate_confusion_contradiction(
             "predicted_intent": "governance_bearing",
         }
     ]
+    candidate["classification"]["confusion_matrix"]["exploratory"][
+        "exploratory"
+    ] -= 1
+    candidate["classification"]["confusion_matrix"]["exploratory"][
+        "governance_bearing"
+    ] += 1
     path = tmp_path / "candidate_contradictory_classification_gate.json"
     path.write_text(json.dumps(candidate), encoding="utf-8")
 
@@ -292,6 +304,57 @@ def test_cli_rejects_classification_gate_confusion_contradiction(
         ["compare", "--baseline", str(BASELINE_PATH), "--candidate", str(path)]
     ) == 2
     assert "hard-gate state contradicts" in capsys.readouterr().err
+
+
+def test_cli_rejects_matrix_mutation_missing_from_confusion_evidence(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    candidate = load_scorecard(CANDIDATE_PATH)
+    matrix = candidate["classification"]["confusion_matrix"]["exploratory"]
+    matrix["exploratory"] -= 1
+    matrix["governance_bearing"] += 1
+    path = tmp_path / "candidate_matrix_mutation_without_evidence.json"
+    path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    assert eval_run.main(
+        ["compare", "--baseline", str(BASELINE_PATH), "--candidate", str(path)]
+    ) == 2
+    assert "matrix contradicts mutation confusions" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("count", [-1, 1.5])
+def test_cli_rejects_invalid_confusion_matrix_count(
+    count: float,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    candidate = load_scorecard(CANDIDATE_PATH)
+    candidate["classification"]["confusion_matrix"]["exploratory"][
+        "exploratory"
+    ] = count
+    path = tmp_path / "candidate_invalid_matrix_count.json"
+    path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    assert eval_run.main(
+        ["compare", "--baseline", str(BASELINE_PATH), "--candidate", str(path)]
+    ) == 2
+    assert "non-negative integer" in capsys.readouterr().err
+
+
+def test_cli_rejects_classification_case_count_matrix_mismatch(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    candidate = load_scorecard(CANDIDATE_PATH)
+    candidate["classification"]["n_cases"] += 1
+    path = tmp_path / "candidate_classification_count_mismatch.json"
+    path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    assert eval_run.main(
+        ["compare", "--baseline", str(BASELINE_PATH), "--candidate", str(path)]
+    ) == 2
+    assert "n_cases contradicts confusion matrix" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("gate", ["classification", "provisional"])
@@ -310,6 +373,12 @@ def test_cli_rejects_categorical_metric_nested_evidence_mismatch(
                 "predicted_intent": "governance_bearing",
             }
         ]
+        candidate["classification"]["confusion_matrix"]["exploratory"][
+            "exploratory"
+        ] -= 1
+        candidate["classification"]["confusion_matrix"]["exploratory"][
+            "governance_bearing"
+        ] += 1
         scope = "classification:hard_gate"
     else:
         boundary = candidate["provisional_memory_boundary"]
