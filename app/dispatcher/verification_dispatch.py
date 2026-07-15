@@ -178,8 +178,6 @@ def _validate_request(request: Mapping[str, object]) -> None:
         "contract_version",
         "stage",
         "repository",
-        "base_ref",
-        "head_ref",
         "current_head_sha",
         "idempotency_key",
         "generated_at",
