@@ -44,12 +44,12 @@ The CKM MVP outcome: CEG in the BuilderOps store, seeded + populated from repo a
 
 ## Acceptance Criteria
 
-- [ ] CEG seeded, populated, and rebuildable from scratch. Verify: `tests/builderops/ckm/test_rebuild_roundtrip.py::test_drop_and_rebuild_reproduces_graph`
-- [ ] Every capability assessed with per-dimension citations + candidate share. Verify: `tests/builderops/ckm/test_assessment_engine.py::test_every_dimension_cites_evidence`
-- [ ] Gap/missing-evidence findings specific and cited. Verify: `tests/builderops/ckm/test_gap_detection.py::test_findings_name_capability_dimension_and_citation`
-- [ ] All egress self-identifies with watermarks. Verify: `tests/builderops/ckm/test_projections.py::test_all_egress_self_identifies_with_watermark`
-- [ ] Orthogonality contract enforced on the live path. Verify: `tests/builderops/ckm/test_evidence_kind_orthogonality.py::test_ckm_never_touches_runtime_evidence_role`
-- [ ] Owner validation of the live Development Overview recorded here. Verify: validation comment on this issue (operator receipt)
+- [x] CEG seeded, populated, and rebuildable from scratch. Verify: `tests/builderops/ckm/test_store.py::test_upsert_idempotent_and_rebuild`; `tests/builderops/ckm/test_seed.py::test_seed_idempotent_and_incremental`
+- [x] Every capability assessed with per-dimension citations + candidate share. Verify: `tests/builderops/ckm/test_assessment_engine.py::test_every_dimension_cites_evidence`
+- [x] Gap/missing-evidence findings specific and cited. Verify: `tests/builderops/ckm/test_gap_detection.py::test_findings_name_capability_dimension_and_citation`
+- [x] All egress self-identifies with watermarks. Verify: `tests/builderops/ckm/test_projections.py::test_all_egress_self_identifies_with_watermark`; `tests/builderops/ckm/test_overview_html.py::test_provenance_banner_precedes_map_and_footer_remains`
+- [x] Orthogonality contract enforced on the live path. Verify: `tests/builderops/ckm/test_evidence_kind_orthogonality.py::test_ckm_never_touches_runtime_evidence_role`
+- [x] Owner validation of the live Development Overview recorded here. Verify: [owner visual acceptance receipt on #3138](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3138#issuecomment-4974008965)
 
 ## Implementation Tasks
 
@@ -62,7 +62,7 @@ Each child ships its named tests under `tests/builderops/ckm/` and passes `pytes
 
 ## Validation / Acceptance Path
 
-After CKM-09/10: full live pipeline run; projections + overview attached here as the validation receipt; owner sanity pass on the capability map. Owner-doc promotion (BuilderOps owner doc + DOCS_INDEX supported-capability rows) in a follow-up docs PR only after acceptance is recorded here.
+Completed: the full live pipeline, projections, overview, and child receipts were attached to #3138; CKM-11 #3689 records the owner visual acceptance; current-main reconciliation re-ran the parent ledger before #3138 closed. `docs/CAPABILITY_KNOWLEDGE_MODEL/README.md` and `docs/DOCS_INDEX.md` now state accepted MVP truth.
 
 ## Out of Scope
 

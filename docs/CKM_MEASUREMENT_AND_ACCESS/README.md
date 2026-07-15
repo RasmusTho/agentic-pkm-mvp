@@ -9,13 +9,13 @@ Last reviewed: 2026-07-15
 
 # CKM Measurement & Access
 
-This successor capability makes the delivered Capability Knowledge Model safely consumable by machines and measurable without turning CKM projections into authority. It follows the accepted CKM MVP (#3138), the architecture audit `docs/audits/CKM_MEASUREMENT_AND_ACCESS_2026-07-14.md`, and BuilderOps inquiry `inq_20260715T062832Z_e73546a2` (`consensus`).
+This specification defines how a successor capability will make the delivered Capability Knowledge Model safely consumable by machines and measurable without turning CKM projections into authority. It follows the accepted CKM MVP (#3138), the architecture audit `docs/audits/CKM_MEASUREMENT_AND_ACCESS_2026-07-14.md`, and BuilderOps inquiry `inq_20260715T062832Z_e73546a2` (`consensus`).
 
 Work classification: **Builder System / CES boundary**. CKM remains projection-only BuilderOps analysis. OEF may consume descriptive observations but gains no policy or control authority. Product/Runtime artifacts and GitHub remain read-only sources. Federation remains SFC/CES-owned, and Correctness Kernel drift remains a separate declared-state contract.
 
 ## Capability boundary
 
-The delivered capability provides:
+Once parent acceptance is complete, the specified successor capability will provide:
 
 - a transport-neutral, versioned CKM result/error envelope and resource DTOs;
 - rebuild-stable public resource identity, independent of mutable names, slugs, and SQLite row IDs;
@@ -110,10 +110,12 @@ Dependency graph:
   Verify: `tests/builderops/ckm/test_query_service.py::test_query_path_is_read_only_and_side_effect_free`; `tests/builderops/ckm/test_query_service.py::test_cursor_tampering_and_snapshot_change_refuse`
 - [ ] Q2 proves bounded indexed plans, constant query counts per page, and no N+1 regression without weakening Q1 ordering/cursor guarantees.
   Verify: `tests/builderops/ckm/test_query_plans.py`
-- [ ] M1 emits deterministic fully bound descriptive observations with machine-readable Goodhart warnings and rejects semantically incompatible comparison inputs.
+- [ ] M1 emits deterministic fully bound descriptive observations with machine-readable Goodhart warnings and no scalar authority surface.
   Verify: `tests/builderops/ckm/test_metrics.py`
-- [ ] O1a/O1b record privacy-safe real questions and compare only compatible immutable snapshots; cadence and minimum-snapshot hypotheses remain explicitly unresolved.
-  Verify: `tests/builderops/ckm/test_observation_capture.py`; `tests/builderops/ckm/test_metric_comparison.py`; validation receipts on the successor parent
+- [ ] O1a records privacy-safe real questions outside the read path and preserves typed unsupported requests without authorizing new capability.
+  Verify: `tests/builderops/ckm/test_observation_capture.py`; validation receipt on the successor parent
+- [ ] O1b compares only compatible immutable observations and refuses every semantics-bearing mismatch; cadence and minimum-snapshot hypotheses remain explicitly unresolved.
+  Verify: `tests/builderops/ckm/test_metric_comparison.py`; validation receipt on the successor parent
 - [ ] Every child has a delivery receipt, owner-doc resolution, transition-debt result, and local review/CI evidence; D11/D12 and unresolved learning candidates are terminally resolved.
   Verify: successor-parent closure ledger and child issue receipts
 - [ ] Owner-doc promotion states supported access/measurement truth only after all repo-verifiable acceptance criteria pass.
@@ -125,7 +127,7 @@ Each task ships its named focused tests, runs `ruff check app tests`, and passes
 
 Live validation hub: [#3775](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3775). Children: Q1a #3776, Q1b #3777, Q2 #3778, M1 #3779, O1a #3780, O1b #3781. GitHub owns execution state; this directory owns the implementation contract.
 
-Acceptance does not require a fixed observation duration or snapshot count. It requires the delivered observation mechanism and truthful evidence captured so far. Any later feature proposal gets its own source-backed contract.
+Future parent acceptance will not require a fixed observation duration or snapshot count. It will require the observation mechanism to be delivered and the evidence captured by that point to be reported truthfully. Any later feature proposal gets its own source-backed contract.
 
 ## Source docs
 
