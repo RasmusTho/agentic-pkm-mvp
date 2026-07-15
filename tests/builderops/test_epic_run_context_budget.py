@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 
+import pytest
+
 from app.builderops.epic_run_context_budget import (
+    EpicRunContextBudgetError,
     build_3229_pilot_replay,
     evaluate_slice_boundary_context_budget,
 )
 from app.builderops.epic_run_state import (
+    apply_epic_run_update,
     create_epic_run_state,
     load_epic_run_state,
+    new_epic_run_state,
+    normalize_epic_run_state,
     record_context_budget_receipt,
     save_epic_run_state,
 )
@@ -182,3 +189,85 @@ def test_cost_per_accepted_slice_includes_repairs_handoffs_and_unknowns() -> Non
         ["known_monetary_cost_per_accepted_slice_usd"]
         == "unknown"
     )
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    [
+        "accepted_authority",
+        "dispatch_effect",
+        "bypassed_gate",
+        "missing_measurement",
+        "extra_measurement_field",
+        "missing_signal",
+        "extra_policy_field",
+        "invalid_recommendation",
+        "missing_checkpoint_field",
+        "fractional_accepted_count",
+        "unknown_context_with_low_pressure",
+    ],
+)
+def test_malformed_or_authority_bearing_receipts_cannot_persist(
+    malformation: str,
+) -> None:
+    receipt = deepcopy(_evaluate())
+    if malformation == "accepted_authority":
+        receipt["accepted"] = True
+    elif malformation == "dispatch_effect":
+        receipt["effects"]["dispatch_mutations"] = [{"action": "start"}]
+    elif malformation == "bypassed_gate":
+        receipt["gate_invariants"]["ci"] = "bypassed"
+    elif malformation == "missing_measurement":
+        del receipt["measurements"]["context"]
+    elif malformation == "extra_measurement_field":
+        receipt["measurements"]["context"]["confidence"] = "guessed"
+    elif malformation == "missing_signal":
+        del receipt["signals"]["repairs"]
+    elif malformation == "extra_policy_field":
+        receipt["policy"]["universal_token_threshold"] = 1000
+    elif malformation == "invalid_recommendation":
+        receipt["recommendations"]["coordinator_lifecycle"] = "rotate_now"
+    elif malformation == "missing_checkpoint_field":
+        del receipt["checkpoint"]["open_review_findings"]
+    elif malformation == "fractional_accepted_count":
+        receipt["cost_per_accepted_slice"]["accepted_slice_count"] = {
+            "value": 1.5,
+            "source": "caller",
+        }
+    elif malformation == "unknown_context_with_low_pressure":
+        receipt["measurements"]["context"] = {
+            "value": "unknown",
+            "unit": "tokens",
+            "source": "unavailable",
+        }
+        receipt["signals"]["context_pressure"] = "low"
+
+    state = new_epic_run_state(3229, f"reject-{malformation}")
+    with pytest.raises(EpicRunContextBudgetError):
+        apply_epic_run_update(state, context_budget_receipts=[receipt])
+
+    state_with_untrusted_receipt = dict(state)
+    state_with_untrusted_receipt["context_budget_receipts"] = [receipt]
+    with pytest.raises(EpicRunContextBudgetError):
+        normalize_epic_run_state(state_with_untrusted_receipt)
+
+
+@pytest.mark.parametrize("accepted_slice_count", [False, 1.5, -1])
+def test_evaluator_rejects_non_integer_or_negative_accepted_slice_denominator(
+    accepted_slice_count: object,
+) -> None:
+    with pytest.raises(EpicRunContextBudgetError):
+        _evaluate(accepted_slice_count=accepted_slice_count)
+
+
+def test_zero_accepted_slices_preserves_denominator_without_division() -> None:
+    receipt = _evaluate(
+        accepted_slice_count=0,
+        cost_inputs={
+            "model_cost_usd": {"value": 3.0, "source": "provider_receipt"}
+        },
+    )
+
+    cost = receipt["cost_per_accepted_slice"]
+    assert cost["accepted_slice_count"] == {"value": 0, "source": "caller"}
+    assert cost["known_monetary_cost_per_accepted_slice_usd"] == "unknown"

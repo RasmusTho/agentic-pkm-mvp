@@ -177,16 +177,91 @@ def normalize_context_budget_receipt(receipt: Mapping[str, Any]) -> dict[str, An
     """Validate a receipt before it enters dispatcher-backed epic run-state."""
 
     normalized = _json_object(receipt, "context_budget_receipt")
+    expected_top_level = {
+        "schema_name",
+        "schema_version",
+        "mode",
+        "slice_id",
+        "measurements",
+        "signals",
+        "policy",
+        "checkpoint",
+        "recommendations",
+        "recommendation_reasons",
+        "cost_per_accepted_slice",
+        "effects",
+        "gate_invariants",
+    }
+    if set(normalized) != expected_top_level:
+        raise EpicRunContextBudgetError(
+            "context-budget receipt fields must be exactly "
+            f"{sorted(expected_top_level)}"
+        )
     if normalized.get("schema_name") != RECEIPT_SCHEMA_NAME:
         raise EpicRunContextBudgetError("unsupported context-budget receipt schema_name")
     if normalized.get("schema_version") != RECEIPT_SCHEMA_VERSION:
         raise EpicRunContextBudgetError("unsupported context-budget receipt schema_version")
     if normalized.get("mode") != "advisory_shadow":
         raise EpicRunContextBudgetError("context-budget receipt must be advisory_shadow")
+    normalized["slice_id"] = _required_string(normalized["slice_id"], "slice_id")
 
-    recommendations = normalized.get("recommendations")
-    if not isinstance(recommendations, dict):
-        raise EpicRunContextBudgetError("recommendations must be an object")
+    measurements = _json_object(normalized["measurements"], "measurements")
+    if set(measurements) != {"context"}:
+        raise EpicRunContextBudgetError("measurements must contain exactly context")
+    normalized_context = _normalize_measurement(
+        measurements["context"],
+        "measurements.context",
+        expected_unit="tokens",
+    )
+    normalized["measurements"] = {"context": normalized_context}
+
+    signals = _json_object(normalized["signals"], "signals")
+    if set(signals) != {
+        "context_pressure",
+        "completed_slices_since_checkpoint",
+        "repairs",
+        "uncertainty",
+    }:
+        raise EpicRunContextBudgetError(
+            "signals fields must be context_pressure, "
+            "completed_slices_since_checkpoint, repairs, and uncertainty"
+        )
+    pressure = _enum(
+        signals["context_pressure"],
+        CONTEXT_PRESSURES,
+        "signals.context_pressure",
+    )
+    if normalized_context["value"] == UNKNOWN and pressure != UNKNOWN:
+        raise EpicRunContextBudgetError(
+            "unknown context measurement requires unknown context_pressure"
+        )
+    completed_slices = signals["completed_slices_since_checkpoint"]
+    if (
+        isinstance(completed_slices, bool)
+        or not isinstance(completed_slices, int)
+        or completed_slices < 0
+    ):
+        raise EpicRunContextBudgetError(
+            "signals.completed_slices_since_checkpoint must be a non-negative integer"
+        )
+    normalized["signals"] = {
+        "context_pressure": pressure,
+        "completed_slices_since_checkpoint": completed_slices,
+        "repairs": _normalize_repairs(signals["repairs"]),
+        "uncertainty": _normalize_uncertainty(signals["uncertainty"]),
+    }
+    normalized["policy"] = _normalize_policy(normalized["policy"])
+
+    recommendations = _json_object(normalized["recommendations"], "recommendations")
+    if set(recommendations) != {
+        "coordinator_lifecycle",
+        "slice_execution",
+        "model_tier",
+    }:
+        raise EpicRunContextBudgetError(
+            "recommendations fields must be coordinator_lifecycle, "
+            "slice_execution, and model_tier"
+        )
     if recommendations.get("coordinator_lifecycle") not in {
         "keep",
         "checkpoint_rotate",
@@ -196,6 +271,18 @@ def normalize_context_budget_receipt(receipt: Mapping[str, Any]) -> dict[str, An
         raise EpicRunContextBudgetError("invalid slice execution recommendation")
     if recommendations.get("model_tier") not in {"luna", "terra", "sol"}:
         raise EpicRunContextBudgetError("invalid model tier recommendation")
+    normalized["recommendations"] = recommendations
+    normalized["recommendation_reasons"] = [
+        _required_string(item, f"recommendation_reasons[{index}]")
+        for index, item in enumerate(
+            _json_list(normalized["recommendation_reasons"], "recommendation_reasons")
+        )
+    ]
+
+    normalized["checkpoint"] = _normalize_checkpoint(normalized["checkpoint"])
+    normalized["cost_per_accepted_slice"] = _normalize_cost_observation(
+        normalized["cost_per_accepted_slice"]
+    )
 
     expected_effects: dict[str, list[Any]] = {
         "dispatch_mutations": [],
@@ -207,6 +294,19 @@ def normalize_context_budget_receipt(receipt: Mapping[str, Any]) -> dict[str, An
     }
     if normalized.get("effects") != expected_effects:
         raise EpicRunContextBudgetError("advisory receipt cannot carry mutations")
+    normalized["effects"] = expected_effects
+
+    expected_gate_invariants = {
+        "ci": "unchanged_required",
+        "independent_review": "unchanged_required",
+        "merge": "unchanged_required",
+        "closure": "unchanged_required",
+    }
+    if normalized.get("gate_invariants") != expected_gate_invariants:
+        raise EpicRunContextBudgetError(
+            "context-budget receipt cannot weaken or replace gate invariants"
+        )
+    normalized["gate_invariants"] = expected_gate_invariants
     return normalized
 
 
@@ -322,6 +422,118 @@ def _recommend_model_tier(
     return "terra"
 
 
+def _normalize_checkpoint(value: Mapping[str, Any]) -> dict[str, Any]:
+    checkpoint = _json_object(value, "checkpoint")
+    if set(checkpoint) != {
+        "slice_status",
+        "decision_log_delta",
+        "open_review_findings",
+        "external_state",
+    }:
+        raise EpicRunContextBudgetError(
+            "checkpoint fields must be slice_status, decision_log_delta, "
+            "open_review_findings, and external_state"
+        )
+    external_state = _json_object(
+        checkpoint["external_state"],
+        "checkpoint.external_state",
+    )
+    if set(external_state) != {
+        "marker",
+        "previous_marker",
+        "changed",
+        "refresh_required",
+    }:
+        raise EpicRunContextBudgetError(
+            "checkpoint.external_state fields must be marker, previous_marker, "
+            "changed, and refresh_required"
+        )
+    marker = _json_object(external_state["marker"], "checkpoint.external_state.marker")
+    previous_raw = external_state["previous_marker"]
+    previous = (
+        None
+        if previous_raw is None
+        else _json_object(previous_raw, "checkpoint.external_state.previous_marker")
+    )
+    expected_changed = previous is not None and marker != previous
+    if external_state["changed"] is not expected_changed:
+        raise EpicRunContextBudgetError(
+            "checkpoint.external_state.changed does not match the markers"
+        )
+    if external_state["refresh_required"] is not expected_changed:
+        raise EpicRunContextBudgetError(
+            "changed external state must require refresh, and unchanged state must not"
+        )
+    return {
+        "slice_status": _required_string(checkpoint["slice_status"], "checkpoint.slice_status"),
+        "decision_log_delta": _json_list(
+            checkpoint["decision_log_delta"],
+            "checkpoint.decision_log_delta",
+        ),
+        "open_review_findings": _json_list(
+            checkpoint["open_review_findings"],
+            "checkpoint.open_review_findings",
+        ),
+        "external_state": {
+            "marker": marker,
+            "previous_marker": previous,
+            "changed": expected_changed,
+            "refresh_required": expected_changed,
+        },
+    }
+
+
+def _normalize_cost_observation(value: Mapping[str, Any]) -> dict[str, Any]:
+    observation = _json_object(value, "cost_per_accepted_slice")
+    if set(observation) != {
+        "accepted_slice_count",
+        "inputs",
+        "known_monetary_cost_per_accepted_slice_usd",
+        "completeness",
+        "human_minutes_are_not_monetized",
+    }:
+        raise EpicRunContextBudgetError(
+            "cost_per_accepted_slice has missing or unknown fields"
+        )
+    denominator = _json_object(
+        observation["accepted_slice_count"],
+        "cost_per_accepted_slice.accepted_slice_count",
+    )
+    if set(denominator) != {"value", "source"}:
+        raise EpicRunContextBudgetError(
+            "accepted_slice_count fields must be value and source"
+        )
+    denominator_value = denominator["value"]
+    if denominator_value == UNKNOWN:
+        accepted_slice_count = None
+        expected_source = "unavailable"
+    else:
+        if (
+            isinstance(denominator_value, bool)
+            or not isinstance(denominator_value, int)
+            or denominator_value < 0
+        ):
+            raise EpicRunContextBudgetError(
+                "accepted_slice_count must be a non-negative integer or unknown"
+            )
+        accepted_slice_count = denominator_value
+        expected_source = "caller"
+    if denominator.get("source") != expected_source:
+        raise EpicRunContextBudgetError(
+            f"accepted_slice_count source must be {expected_source}"
+        )
+
+    expected = _build_cost_observation(
+        _json_object(observation["inputs"], "cost_per_accepted_slice.inputs"),
+        accepted_slice_count=accepted_slice_count,
+    )
+    if observation != expected:
+        raise EpicRunContextBudgetError(
+            "cost_per_accepted_slice derived values or completeness are inconsistent"
+        )
+    return expected
+
+
 def _build_cost_observation(
     inputs: Mapping[str, Any],
     *,
@@ -362,9 +574,13 @@ def _build_cost_observation(
     if accepted_slice_count is None:
         denominator: dict[str, Any] = {"value": UNKNOWN, "source": "unavailable"}
     else:
-        if isinstance(accepted_slice_count, bool) or accepted_slice_count <= 0:
+        if (
+            isinstance(accepted_slice_count, bool)
+            or not isinstance(accepted_slice_count, int)
+            or accepted_slice_count < 0
+        ):
             raise EpicRunContextBudgetError(
-                "accepted_slice_count must be positive or unknown"
+                "accepted_slice_count must be a non-negative integer or unknown"
             )
         denominator = {"value": accepted_slice_count, "source": "caller"}
 
@@ -374,7 +590,11 @@ def _build_cost_observation(
         if normalized_inputs[field]["value"] != UNKNOWN
     ]
     per_accepted: float | str = UNKNOWN
-    if denominator["value"] != UNKNOWN and known_monetary:
+    if (
+        denominator["value"] != UNKNOWN
+        and denominator["value"] > 0
+        and known_monetary
+    ):
         per_accepted = sum(known_monetary) / denominator["value"]
 
     completeness = (
