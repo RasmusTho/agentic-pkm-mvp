@@ -144,13 +144,44 @@ jobs:
             // (e.g. a change list describing this very check) is not mistaken for the section.
             const builderOpsRoutingMatch = body.match(/(?:^|\n)## BuilderOps Routing[\s\S]*?(?=\n##\s|\n---)|(?:^|\n)## BuilderOps Routing[\s\S]*/i);
             const builderOpsRoutingSection = builderOpsRoutingMatch ? builderOpsRoutingMatch[0] : "";
-            const issueLinkPattern = /(Fixes|Closes|Resolves)[ \t]+#[1-9][0-9]*\b/i;
-            const hasIssueLink = issueLinkPattern.test(body);
-            const issueLinkMentions = body.match(/\b(?:Fixes|Closes|Resolves)[ \t]+#\S+/gi) || [];
-            const exactIssueLinkMatches = body.match(/\b(?:Fixes|Closes|Resolves)[ \t]+#[1-9][0-9]*\b/gi) || [];
-            const governingIssueLines = body.match(/^[ \t]*Governing-Issue[ \t]*:.*$/gim) || [];
-            const exactGoverningIssueMatches = body.match(/^[ \t]*Governing-Issue:[ \t]*#([1-9][0-9]*)[ \t]*$/gim) || [];
-            const hasIssueAuthority = governingIssueLines.length > 0 || issueLinkMentions.length > 0;
+            // authority-classifier:start
+            const classifyIssueAuthority = (candidateBody) => {
+              const governingKeyword = "[Gg][Oo][Vv][Ee][Rr][Nn][Ii][Nn][Gg]-[Ii][Ss][Ss][Uu][Ee]";
+              const closingKeyword = "(?:[Ff][Ii][Xx][Ee][Ss]|[Cc][Ll][Oo][Ss][Ee][Ss]|[Rr][Ee][Ss][Oo][Ll][Vv][Ee][Ss])";
+              const issueTokenPrefix = "(?:^|[^0-9A-Za-z_])";
+              const issueTokenTerminator = "(?=$|[ \\t\\r\\n.,;:)\\]}])";
+              const governingIssueLines = candidateBody.match(
+                new RegExp(`^[ \\t]*${governingKeyword}[ \\t]*:.*$`, "gm")
+              ) || [];
+              const exactGoverningIssueMatches = candidateBody.match(
+                new RegExp(`^[ \\t]*${governingKeyword}:[ \\t]*#([1-9][0-9]*)[ \\t]*$`, "gm")
+              ) || [];
+              const issueLinkMentions = candidateBody.match(
+                new RegExp(`${issueTokenPrefix}${closingKeyword}[ \\t]+#\\S+`, "gm")
+              ) || [];
+              const exactIssueLinkMatches = candidateBody.match(
+                new RegExp(`${issueTokenPrefix}${closingKeyword}[ \\t]+#[1-9][0-9]*${issueTokenTerminator}`, "gm")
+              ) || [];
+              const hasIssueLink = exactIssueLinkMatches.length > 0;
+              const hasIssueAuthority = governingIssueLines.length > 0 || issueLinkMentions.length > 0;
+              const valid =
+                governingIssueLines.length === 1 &&
+                exactGoverningIssueMatches.length === 1 &&
+                hasIssueLink &&
+                issueLinkMentions.length === exactIssueLinkMatches.length;
+              return {
+                exactGoverningIssueMatches,
+                exactIssueLinkMatches,
+                governingIssueLines,
+                hasIssueAuthority,
+                hasIssueLink,
+                issueLinkMentions,
+                valid,
+              };
+            };
+            // authority-classifier:end
+            const issueAuthority = classifyIssueAuthority(body);
+            const hasIssueAuthority = issueAuthority.hasIssueAuthority;
             const hasConcreteBuilderOpsValue = (pattern) => {
               const match = builderOpsRoutingSection.match(pattern);
               if (!match) {
@@ -170,12 +201,7 @@ jobs:
               return;
             }
             if (hasIssueAuthority) {
-              if (
-                governingIssueLines.length !== 1 ||
-                exactGoverningIssueMatches.length !== 1 ||
-                !hasIssueLink ||
-                issueLinkMentions.length !== exactIssueLinkMatches.length
-              ) {
+              if (!issueAuthority.valid) {
                 core.setFailed("Issue-backed PRs must include exactly one positive `Governing-Issue: #<id>` line and at least one positive closing issue. The governing issue may differ from closed supporting issues in an approved multi-issue PR; issue-free lanes must omit both authority surfaces.");
                 return;
               }

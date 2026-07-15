@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
 
+from app.dispatcher.verification_contract import resolve_issue_contract
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -23,25 +26,31 @@ _TIER1_LANE_REGEX = re.compile(
     r"^\-\s+\[x\]\s+(?:Docs authoring|Governance) lane\b",
     re.IGNORECASE | re.MULTILINE,
 )
-_ISSUE_LINK_REGEX = re.compile(
-    r"(Fixes|Closes|Resolves)[ \t]+#[1-9][0-9]*\b", re.IGNORECASE
-)
-_ISSUE_LINK_MENTION_REGEX = re.compile(
-    r"\b(?:Fixes|Closes|Resolves)[ \t]+#\S+", re.IGNORECASE
-)
-_GOVERNING_ISSUE_LINE_REGEX = re.compile(
-    r"^[ \t]*Governing-Issue[ \t]*:.*$", re.IGNORECASE | re.MULTILINE
-)
-_EXACT_GOVERNING_ISSUE_REGEX = re.compile(
-    r"^[ \t]*Governing-Issue:[ \t]*#([1-9][0-9]*)[ \t]*$",
-    re.IGNORECASE | re.MULTILINE,
-)
-
-
 def _read_workflow() -> str:
     return (REPO_ROOT / ".github/workflows/issue-pr-governance.yml").read_text(
         encoding="utf-8"
     )
+
+
+def _js_issue_authority(body: str) -> dict[str, object]:
+    workflow = _read_workflow()
+    classifier = workflow.split("// authority-classifier:start", 1)[1].split(
+        "// authority-classifier:end", 1
+    )[0]
+    script = (
+        classifier
+        + "\nconst candidate = JSON.parse(process.argv[1]);"
+        + "\nprocess.stdout.write(JSON.stringify(classifyIssueAuthority(candidate)));"
+    )
+    completed = subprocess.run(
+        ["node", "-e", script, json.dumps(body)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout)
 
 
 def _read_development_workflow() -> str:
@@ -128,24 +137,14 @@ def _builderops_routing_satisfied(body: str) -> bool:
         return True
     return (
         _TIER1_LANE_REGEX.search(body) is not None
-        and _GOVERNING_ISSUE_LINE_REGEX.search(body) is None
-        and _ISSUE_LINK_MENTION_REGEX.search(body) is None
+        and not _js_issue_authority(body)["hasIssueAuthority"]
         and _BUILDEROPS_ROUTING_REGEX.search(body) is None
     )
 
 
 def _governing_issue_identity_satisfied(body: str) -> bool:
-    governing_lines = _GOVERNING_ISSUE_LINE_REGEX.findall(body)
-    issue_mentions = _ISSUE_LINK_MENTION_REGEX.findall(body)
-    if not governing_lines and not issue_mentions:
-        return True
-    valid_issue_links = _ISSUE_LINK_REGEX.findall(body)
-    return (
-        len(governing_lines) == 1
-        and len(_EXACT_GOVERNING_ISSUE_REGEX.findall(body)) == 1
-        and len(valid_issue_links) > 0
-        and len(issue_mentions) == len(valid_issue_links)
-    )
+    authority = _js_issue_authority(body)
+    return not authority["hasIssueAuthority"] or bool(authority["valid"])
 
 
 @pytest.mark.parametrize(
@@ -197,6 +196,29 @@ def test_issue_free_lanes_do_not_require_governing_identity(body: str) -> None:
     assert _governing_issue_identity_satisfied(body)
 
 
+@pytest.mark.parametrize(
+    ("body", "accepted"),
+    [
+        ("Governing-Issue: #123\nFixes #123", True),
+        ("Governing-Issue: #3603\nRefs #3603\nFixes #3626", True),
+        ("Governing-Issue: #123", False),
+        ("Governing-Issue: #123\nRefs #123", False),
+        ("Governing-Issue: #123\nGoverning-Issue : #456\nFixes #123", False),
+        ("Governing-Issue: #123\nGoverning-Issue:\n#456\nFixes #123", False),
+        ("Governing-Issue: #123\nGoverning-Issue: #0\nFixes #123", False),
+        ("Governing-Issue: #123\nFixes #123é", False),
+        ("Governing-Issue: #123\nFixeſ #123", False),
+        ("Governıng-Issue: #123\nFixes #123", False),
+    ],
+)
+def test_javascript_and_python_authority_grammar_are_identical(
+    body: str,
+    accepted: bool,
+) -> None:
+    assert bool(_js_issue_authority(body)["valid"]) is accepted
+    assert (resolve_issue_contract(body) is not None) is accepted
+
+
 def test_issue_backed_code_pr_requires_builderops_routing_even_with_tier1_checkbox() -> None:
     body = (
         "Fixes #123\n\n"
@@ -232,9 +254,10 @@ def test_mixed_tier_pr_uses_highest_required_tier() -> None:
 def test_workflow_checks_issue_link_before_allowing_tier1_builderops_omission() -> None:
     text = _read_workflow()
 
-    assert "const hasIssueLink = issueLinkPattern.test(body);" in text
+    assert "// authority-classifier:start" in text
+    assert "const issueAuthority = classifyIssueAuthority(body);" in text
     assert "isTier1Lane && !hasIssueAuthority && !builderOpsRoutingSection" in text
-    assert text.index("const hasIssueAuthority =") < text.index(
+    assert text.index("const issueAuthority = classifyIssueAuthority(body);") < text.index(
         "const builderOpsRoutingSatisfied ="
     )
 
@@ -248,9 +271,8 @@ def test_workflow_requires_exactly_one_positive_governing_identity_for_issue_bac
         "const issueLinkMentions =",
         "const exactIssueLinkMatches =",
         "const hasIssueAuthority =",
-        "governingIssueLines.length !== 1",
-        "exactGoverningIssueMatches.length !== 1",
-        "issueLinkMentions.length !== exactIssueLinkMatches.length",
+        "const valid =",
+        "if (!issueAuthority.valid)",
         "exactly one positive `Governing-Issue: #<id>` line",
     ):
         assert fragment in text, fragment

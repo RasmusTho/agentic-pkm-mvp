@@ -135,6 +135,12 @@ def test_ambiguous_governing_issue_emits_no_request() -> None:
         "Governing-Issue: #3602\nFixes #-1",
         "Governing-Issue: #3602\nFixes #abc",
         "Governing-Issue: #3602\nFixes\n#3602",
+        "Governing-Issue: #3602\nGoverning-Issue : #456\nFixes #3602",
+        "Governing-Issue: #3602\nGoverning-Issue:\n#456\nFixes #3602",
+        "Governing-Issue: #3602\nGoverning-Issue: #0\nFixes #3602",
+        "Governing-Issue: #3602\nFixes #3602é",
+        "Governing-Issue: #3602\nFixeſ #3602",
+        "Governıng-Issue: #3602\nFixes #3602",
     ],
 )
 def test_invalid_closing_authority_emits_no_request(body: str) -> None:

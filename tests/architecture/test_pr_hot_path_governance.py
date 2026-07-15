@@ -82,6 +82,7 @@ def test_issue_pr_governance_accepts_direct_repair_block_without_lane_checkbox()
         "const builderOpsRoutingMatch = body.match(/(?:^|\\n)## BuilderOps Routing",
         "const hasBuilderOpsRouting =",
         "const tier1LanePattern =",
+        "const classifyIssueAuthority =",
         "const hasIssueAuthority =",
         "const builderOpsRoutingSatisfied =",
         "PR body must include `## BuilderOps Routing`",
@@ -98,7 +99,7 @@ def test_issue_pr_governance_accepts_direct_repair_block_without_lane_checkbox()
         "const docsAuthoringPattern ="
     )
     assert text.index("const builderOpsRoutingMatch = body.match(/(?:^|\\n)## BuilderOps Routing") < text.index(
-        "const issueLinkPattern ="
+        "const classifyIssueAuthority ="
     )
     assert text.index("if (isDirectRepair) {") < text.index("const docsAuthoringPattern =")
 
