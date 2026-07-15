@@ -252,6 +252,9 @@ class VerificationDispatchLedger:
                 if candidate_request.get("linked_issue") != request.get("linked_issue"):
                     raise ValueError("verification canonical run governing issue mismatch")
                 next_head = request.get("current_head_sha")
+                if candidate["idempotency_key"] == request["idempotency_key"]:
+                    conn.commit()
+                    return _run(candidate)
                 if candidate["current_head_sha"] == next_head:
                     raise ValueError(
                         "stale-head supersession requires an authoritative new head"
@@ -276,6 +279,31 @@ class VerificationDispatchLedger:
                 assert reopened is not None
                 conn.commit()
                 return _run(reopened)
+            for candidate in conn.execute(
+                """
+                SELECT * FROM verification_runs
+                WHERE repository=? AND pr_number=? AND stage=?
+                  AND status IN ('completed','failed','needs_human','superseded')
+                ORDER BY created_at ASC, run_id ASC
+                """,
+                (request["repository"], request["pr_number"], request["stage"]),
+            ):
+                candidate_request = _load(candidate["request_json"])
+                if not isinstance(candidate_request, Mapping):
+                    raise ValueError("verification canonical run authority is malformed")
+                if candidate["idempotency_key"] == request["idempotency_key"]:
+                    if candidate_request.get("linked_issue") != request.get(
+                        "linked_issue"
+                    ):
+                        raise ValueError("verification idempotency authority conflict")
+                    conn.commit()
+                    return _run(candidate)
+                if candidate_request.get("linked_issue") != request.get("linked_issue"):
+                    raise ValueError("verification canonical run governing issue mismatch")
+                raise ValueError(
+                    "verification canonical chain is terminal: "
+                    f"{candidate['status']}"
+                )
             existing = conn.execute(
                 "SELECT * FROM verification_runs WHERE idempotency_key = ?",
                 (request["idempotency_key"],),

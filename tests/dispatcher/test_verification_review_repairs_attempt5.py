@@ -530,18 +530,45 @@ def test_non_reopenable_terminal_chains_remain_terminal(
     tmp_path, status: str, stop_reason: str | None
 ) -> None:
     state = ledger(tmp_path)
-    original = state.ingest(request())
+    run_id = _superseded_exhausted_chain(state)
     with state.store._connect() as conn:
         conn.execute(
             "UPDATE verification_runs SET status=?, stop_reason=?, "
             "terminal_receipt_json=? WHERE run_id=?",
-            (status, stop_reason, '{"outcome":"terminal"}', original.run_id),
+            (status, stop_reason, '{"outcome":"terminal"}', run_id),
         )
         conn.commit()
 
-    next_run = state.ingest(request(REPAIRED_HEAD))
+    with pytest.raises(ValueError, match=f"canonical chain is terminal: {status}"):
+        state.ingest(request(REPAIRED_HEAD))
 
-    retained = state.get(original.run_id)
+    retained = state.get(run_id)
     assert retained is not None
     assert retained.status == status
-    assert next_run.run_id != original.run_id
+    assert [row["kind"] for row in state.attempts(run_id)] == [
+        "standard_repair",
+        "standard_repair",
+    ]
+    with state.store._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM verification_runs").fetchone()[0] == 1
+
+
+def test_same_terminal_artifact_remains_idempotent(tmp_path) -> None:
+    state = ledger(tmp_path)
+    run_id = _superseded_exhausted_chain(state)
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET status='failed', "
+            "stop_reason='technical_failure' WHERE run_id=?",
+            (run_id,),
+        )
+        conn.commit()
+
+    replay = state.ingest(request())
+
+    assert replay.run_id == run_id
+    assert replay.status == "failed"
+    assert [row["kind"] for row in state.attempts(run_id)] == [
+        "standard_repair",
+        "standard_repair",
+    ]
