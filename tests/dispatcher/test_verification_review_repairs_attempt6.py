@@ -20,13 +20,29 @@ from tests.dispatcher.verification_helpers import HEAD, ledger, request
 
 _SECRET = "credential=SHOULD_NOT_PERSIST"
 _PRIVATE_PATH = "/Users/operator/private-vault"
+_ADVERSARIAL_PRIVATE_VALUES = (
+    "OPENAI_API_KEY SHOULD_NOT_PERSIST",
+    "AKIAIOSFODNN7EXAMPLE",
+    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature0123456789",
+    "/root/.ssh/id_rsa",
+    "/srv/private/vault",
+    "/mnt/secrets/token",
+    r"C:\Users\operator\private-vault\token.txt",
+    r"\\server\share\private-vault\token.txt",
+)
 
 
 def _assert_private_text_absent(value: object) -> None:
     encoded = json.dumps(value, sort_keys=True)
     assert "SHOULD_NOT_PERSIST" not in encoded
     assert _PRIVATE_PATH not in encoded
+    for private_value in _ADVERSARIAL_PRIVATE_VALUES:
+        assert private_value not in encoded
     assert len(encoded) < 20_000
+
+
+def _unsafe_text() -> str:
+    return " ; ".join((_SECRET, _PRIVATE_PATH, *_ADVERSARIAL_PRIVATE_VALUES))
 
 
 def _check(
@@ -79,8 +95,12 @@ class _UnsafeBlockedLauncher(Launcher):
         return session, {
             "verdict": "blocked",
             "head_sha": HEAD,
-            "summary": f"{_SECRET} {_PRIVATE_PATH} " + "x" * 5_000,
-            "receipt_ids": [f"token={_SECRET}", _PRIVATE_PATH],
+            "summary": _unsafe_text() + " " + "x" * 5_000,
+            "receipt_ids": [
+                f"token={_SECRET}",
+                _PRIVATE_PATH,
+                "AKIAIOSFODNN7EXAMPLE",
+            ],
             "retry_after": None,
             "review_events": None,
             "human_exception": None,
@@ -90,12 +110,16 @@ class _UnsafeBlockedLauncher(Launcher):
 class _UnsafeDeliveredLauncher(DeliveredLauncher):
     def launch(self, context_pack, **kwargs):
         session, receipt = super().launch(context_pack, **kwargs)
-        receipt["summary"] = f"{_SECRET} {_PRIVATE_PATH} " + "x" * 5_000
-        receipt["receipt_ids"] = [f"token={_SECRET}", _PRIVATE_PATH]
+        receipt["summary"] = _unsafe_text() + " " + "x" * 5_000
+        receipt["receipt_ids"] = [
+            f"token={_SECRET}",
+            _PRIVATE_PATH,
+            "AKIAIOSFODNN7EXAMPLE",
+        ]
         events = receipt["review_events"]
         assert isinstance(events, list)
         events[0]["session_id"] = _PRIVATE_PATH
-        events[1]["session_id"] = f"token={_SECRET}"
+        events[1]["session_id"] = "AKIAIOSFODNN7EXAMPLE"
         return session, receipt
 
 
@@ -173,7 +197,7 @@ class _UnsafeHumanExceptionLauncher(Launcher):
         session, receipt = super().launch(context_pack, **kwargs)
         packet = receipt["human_exception"]
         assert isinstance(packet, dict)
-        unsafe = f"retain decision context; {_SECRET}; source {_PRIVATE_PATH}"
+        unsafe = "retain decision context; " + _unsafe_text()
         for key in (
             "original_intent",
             "current_state",

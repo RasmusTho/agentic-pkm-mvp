@@ -698,17 +698,35 @@ _MAX_RECEIPT_LIST_ITEMS = 16
 _MAX_RECEIPT_IDS = 32
 _SAFE_DURABLE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}\Z")
 _CREDENTIAL_ASSIGNMENT = re.compile(
-    r"(?i)\b(api[_ -]?key|access[_ -]?token|auth[_ -]?token|token|credential|"
-    r"password|secret)\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s;,]+)"
+    r"(?i)\b([A-Za-z0-9_]*(?:api[_ -]?key|access[_ -]?token|auth[_ -]?token|"
+    r"token|credential|password|secret)[A-Za-z0-9_]*)\s*(?::|=|\s)\s*"
+    r"(?:\"[^\"]*\"|'[^']*'|[^\s;,]+)"
 )
 _BEARER_VALUE = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+")
 _KNOWN_TOKEN_VALUE = re.compile(
-    r"(?i)\b(?:gh[pousr]_|github_pat_|sk-)[A-Za-z0-9_-]{6,}"
+    r"(?i)\b(?:gh[pousr]_|github_pat_|glpat-|sk-|AIza)[A-Za-z0-9_-]{6,}"
+)
+_JWT_VALUE = re.compile(
+    r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"
+)
+_OPAQUE_SECRET_VALUE = re.compile(
+    r"(?<![A-Za-z0-9+/=_-])(?=[A-Za-z0-9+/=_-]{20,}"
+    r"(?![A-Za-z0-9+/=_-]))(?=[A-Za-z0-9+/=_-]*[0-9])"
+    r"[A-Za-z0-9+/=_-]{20,}"
 )
 _ABSOLUTE_MACHINE_PATH = re.compile(
-    r"(?<![A-Za-z0-9])(?:/(?:Users|home|private|tmp|var|opt|etc|Volumes)"
-    r"(?:/[^\s,;:)\]}]+)+|[A-Za-z]:\\(?:[^\\\s]+\\)*[^\\\s]*)"
+    r"(?<![A-Za-z0-9])(?:"
+    r"[A-Za-z]:\\(?:[^\\\s]+\\)*[^\\\s]*|"
+    r"\\\\[^\\\s]+\\[^\\\s]+(?:\\[^\\\s]+)*|"
+    r"/(?:[^/\s,;:)\]}]+/)*[^/\s,;:)\]}]+)"
 )
+_SAFE_CAPABILITIES = frozenset(
+    {"gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "luna", "terra", "sol"}
+)
+_SAFE_REASONING_EFFORTS = frozenset(
+    {"minimal", "low", "medium", "high", "xhigh", "max"}
+)
+_SAFE_EVENT_OUTCOMES = frozenset({"blocking", "clean", "fixed", "repaired"})
 
 
 def bounded_error_type(value: object) -> str | None:
@@ -737,7 +755,9 @@ def _sanitize_receipt_text(value: object, *, limit: int = _MAX_RECEIPT_TEXT) -> 
     text = _CREDENTIAL_ASSIGNMENT.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
     text = _BEARER_VALUE.sub("Bearer [REDACTED]", text)
     text = _KNOWN_TOKEN_VALUE.sub("[REDACTED]", text)
+    text = _JWT_VALUE.sub("[REDACTED]", text)
     text = _ABSOLUTE_MACHINE_PATH.sub("[REDACTED_PATH]", text)
+    text = _OPAQUE_SECRET_VALUE.sub("[REDACTED]", text)
     return text.strip()[:limit]
 
 
@@ -745,33 +765,43 @@ def _required_receipt_text(value: object) -> str:
     return _sanitize_receipt_text(value) or "[REDACTED]"
 
 
-def _sanitize_receipt_identifier(value: object, *, prefix: str) -> str:
+def _pseudonymous_receipt_identifier(value: object, *, prefix: str) -> str:
     raw = str(value)
-    if (
-        _SAFE_DURABLE_IDENTIFIER.fullmatch(raw)
-        and _KNOWN_TOKEN_VALUE.search(raw) is None
-    ):
-        return raw
     digest = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:16]
     return f"{prefix}-{digest}"
+
+
+def _allowlisted_receipt_value(
+    value: object, *, allowed: frozenset[str], fallback: str
+) -> str:
+    raw = str(value)
+    return raw if raw in allowed else fallback
 
 
 def _sanitize_review_event(event: Mapping[str, object]) -> dict[str, object]:
     finding = event.get("finding_id")
     return {
         "kind": event["kind"],
-        "session_id": _sanitize_receipt_identifier(
+        "session_id": _pseudonymous_receipt_identifier(
             event["session_id"], prefix="review-session"
         ),
-        "capability": _sanitize_receipt_identifier(
-            event["capability"], prefix="capability"
+        "capability": _allowlisted_receipt_value(
+            event["capability"],
+            allowed=_SAFE_CAPABILITIES,
+            fallback="unknown-capability",
         ),
-        "reasoning_effort": _sanitize_receipt_identifier(
-            event["reasoning_effort"], prefix="reasoning"
+        "reasoning_effort": _allowlisted_receipt_value(
+            event["reasoning_effort"],
+            allowed=_SAFE_REASONING_EFFORTS,
+            fallback="unknown",
         ),
-        "outcome": _sanitize_receipt_identifier(event["outcome"], prefix="outcome"),
+        "outcome": _allowlisted_receipt_value(
+            event["outcome"],
+            allowed=_SAFE_EVENT_OUTCOMES,
+            fallback="recorded",
+        ),
         "finding_id": (
-            _sanitize_receipt_identifier(finding, prefix="finding")
+            _pseudonymous_receipt_identifier(finding, prefix="finding")
             if finding is not None
             else None
         ),
@@ -789,7 +819,13 @@ def _sanitize_human_exception_packet(
     for option in raw_options[:3]:
         assert isinstance(option, Mapping)
         raw_id = str(option["id"])
-        safe_id = _sanitize_receipt_identifier(raw_id, prefix="option")
+        safe_id = (
+            raw_id
+            if _SAFE_DURABLE_IDENTIFIER.fullmatch(raw_id)
+            and _KNOWN_TOKEN_VALUE.search(raw_id) is None
+            and _OPAQUE_SECRET_VALUE.search(raw_id) is None
+            else _pseudonymous_receipt_identifier(raw_id, prefix="option")
+        )
         option_ids[raw_id] = safe_id
         options.append(
             {
@@ -843,7 +879,7 @@ def sanitize_verification_closer_receipt(
         "head_sha": receipt["head_sha"],
         "summary": _sanitize_receipt_text(receipt["summary"]),
         "receipt_ids": [
-            _sanitize_receipt_identifier(value, prefix="receipt")
+            _pseudonymous_receipt_identifier(value, prefix="receipt")
             for value in raw_receipt_ids[:_MAX_RECEIPT_IDS]
         ],
         "retry_after": retry_after,
