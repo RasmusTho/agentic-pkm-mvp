@@ -47,15 +47,18 @@ override only when the preflight proves that the resolved parent is durable and 
 enabled consumer.
 
 Before the first recreate that introduces this volume, the deploy/startup migration gate resolves
-the legacy path inside the **still-running old API container**, exports that file with mode `0600`
-to channel-scoped host staging, and validates its fingerprint/schema. If no old container exists,
-the gate may proceed only when it proves the legacy source itself is durable or no legacy registry
-ever existed. The new-image one-shot migrator mounts `instance-state`, atomically imports the staged
-payload and records source fingerprint/provenance. It never deletes an independently durable
-legacy source; the staged copy remains through cross-process verification and is removed only
-after that verification succeeds. A missing export, conflicting populated
-destination, or unreadable/ambiguous source blocks recreate/import rather than booting an empty
-registry.
+the legacy path and records a preliminary fingerprint inside the still-running old API container.
+It then acquires the channel deployment fence, rejects and drains every registry mutation producer,
+stops the old API, exports the **final post-stop** file with mode `0600` to channel-scoped host
+staging, and validates its fingerprint/schema again. The fence prevents any old writer from
+restarting through import; a changed final fingerprint or unfenced writer aborts rather than using
+a pre-quiescence snapshot. If no old container exists, the gate may proceed only when it proves the
+legacy source itself is durable and unchanged under the fence or no legacy registry ever existed.
+The new-image one-shot migrator mounts `instance-state`, atomically imports the staged payload and
+records source fingerprint/provenance. It never deletes an independently durable legacy source; the
+staged copy remains through cross-process verification and is removed only after that verification
+succeeds. A missing export, conflicting populated destination, or unreadable/ambiguous source
+blocks recreate/import rather than booting an empty registry.
 
 All registry-backed mutation uses one store transaction contract: an exclusive OS file lock on a
 sidecar in the shared volume, reload plus monotonic schema revision/CAS validation, write to a
@@ -189,6 +192,9 @@ to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup.
 - Once MVR-05 enables binding-keyed database state, a durable minimum-runtime floor blocks every
   scalar pre-MVR rollback, including one-binding instances; rollback must use a compatible image
   and never project shared projection/outbox tables into unsafe scalar semantics.
+- Before MVR-05 records that floor or runs its shared-database migration, the channel deployment
+  fence drains and stops the old scalar API/worker and prevents restart. New-image migration cannot
+  run ahead of force-recreate while incompatible old processes remain live.
 
 Partial delivery remains fail-closed:
 

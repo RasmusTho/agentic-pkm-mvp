@@ -42,12 +42,20 @@ not background lifecycles.
   consumer, fixture, and query together. Existing single-vault rows are assigned only when the
   legacy binding is provably unique; ambiguous rows are quarantined and rebuilt from their source
   vault under a fail-loud preflight—never copied to several bindings or guessed from a default.
-- Before enabling the first binding-keyed database producer or migrating any row, atomically set a
-  durable `minimum_runtime_schema=MVR-05` compatibility floor in instance state. Scalar pre-MVR
-  rollback is blocked from that point even on a one-binding instance, because the old API/worker
-  cannot safely filter or acknowledge binding-keyed projection/outbox rows. Promotion preflight
-  names this forward-only boundary; rollback remains available only to a build that understands at
-  least MVR-05. Apply invariant→producers to startup, migrations, fixtures, and rollback preflight.
+- Before enabling the first binding-keyed database producer or migrating any row, acquire the
+  channel deployment fence, remove old scalar API ingress, signal the old worker to stop dequeue/ack,
+  drain their in-flight work, and stop both processes. The host-side coordinator does not depend on
+  new-image code executing inside the old containers: after timeout it may terminate them only after
+  proving their database sessions are gone and incomplete transactions rolled back. The migration
+  must prove those process identities and sessions are gone and prevent their restart before it atomically records durable
+  `minimum_runtime_schema=MVR-05` in instance state and touches the shared database. The pinned-image
+  deploy path must run this drain/stop gate before its new-image `migrate` service; its current
+  migrate-before-force-recreate ordering is not acceptable for MVR-05. Any failed fence/drain/stop
+  aborts before the floor or database changes. After the floor commits, scalar pre-MVR rollback is
+  blocked even on a one-binding instance, because the old API/worker cannot safely filter or
+  acknowledge binding-keyed projection/outbox rows. Recovery is roll-forward or rollback to a build
+  that understands at least MVR-05. Apply invariant→producers to deployment, startup, migrations,
+  fixtures, and rollback preflight.
 - Version every MVR-05 vault-bound outbox producer with `routing_class=vault_bound`, stable binding,
   and captured context identity before it may serve multi-vault writes. In the same slice, teach the
   still-scalar worker to recognize that envelope. It may dispatch only after production resolution
@@ -127,6 +135,10 @@ call site can leak retrieval context or write to the wrong human artifact surfac
   state is written; scalar rollback then fails before starting an old API/worker, including on a
   one-binding instance, while a compatible roll-forward retains the full lineage.
   - Verify: `tests/migrations/test_multi_vault_projection_backfill.py::test_projection_upgrade_blocks_scalar_rollback_before_first_write`
+- [ ] Pinned-image deployment fences writes/dequeue, drains and stops the old scalar API/worker, and
+  proves neither can restart before setting the floor or running the binding-keyed migration; fault
+  injection at every phase leaves the floor/database untouched or requires compatible roll-forward.
+  - Verify: `tests/ops/test_mvr05_mixed_version_fence.py::test_old_scalar_runtime_is_stopped_before_binding_keyed_migration`
 - [ ] Production capture/governed-write paths require one explicit authorized target and record
   vault/context provenance in their receipt.
   - Verify: `tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt`
@@ -173,7 +185,7 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/integration/test_multi_vault_resolution.py tests/integration/test_multi_vault_picker_context.py tests/integration/test_multi_vault_projection_isolation.py tests/migrations/test_multi_vault_projection_backfill.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/workers/test_multi_vault_partial_delivery_gate.py tests/services/test_multi_vault_outbox_idempotency.py tests/architecture/test_multi_vault_context_boundaries.py`
+- `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/integration/test_multi_vault_resolution.py tests/integration/test_multi_vault_picker_context.py tests/integration/test_multi_vault_projection_isolation.py tests/migrations/test_multi_vault_projection_backfill.py tests/ops/test_mvr05_mixed_version_fence.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/workers/test_multi_vault_partial_delivery_gate.py tests/services/test_multi_vault_outbox_idempotency.py tests/architecture/test_multi_vault_context_boundaries.py`
 - `ruff check app tests`
 
 ## Restart / Durability Posture

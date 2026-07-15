@@ -37,10 +37,21 @@ This slice promotes the existing seed without changing content-vault authority.
   validated snapshots, and rollback exports as owner-only mode `0600` (directories `0700`) on
   native hosts and shared volumes. Preflight rejects permissive or unfixable ownership/mode before
   exposing absolute content-root paths or device provenance.
-- Add the pre-recreate migration gate: resolve and export the legacy registry from the running old
-  API container into mode-`0600` channel staging, validate it before stopping that container, then
-  import through a new-image one-shot migrator with the durable volume mounted. No old container is
-  safe only with proof of a durable legacy source or proof that no legacy registry existed.
+- Add the pre-recreate migration gate: while the old API is still running, resolve the legacy source
+  and record its schema/fingerprint, then acquire the channel deployment fence, reject new picker,
+  initialize, and headless-CLI registry mutations, drain in-flight mutations, and stop every old
+  registry writer. Export the final file from the stopped container/durable source into mode-`0600`
+  channel staging, validate its schema and final fingerprint, and recheck that the source has not
+  changed before import. The new-image one-shot migrator may mount/import the durable volume only
+  while that fence proves no legacy writer can restart. Any writer that cannot be fenced, a changed
+  post-stop fingerprint, or an unprovable final source blocks the upgrade; a pre-quiescence snapshot
+  is never authoritative. No old container is safe only with proof of a durable legacy source or
+  proof that no legacy registry existed.
+- Implement the channel deployment fence outside the old image (deployment lock plus ingress and
+  container-lifecycle control), so the first upgrade does not assume unsupported fence behavior in
+  that image. From MVR-01 onward, production registry API/CLI producers also honor the same durable
+  fence before mutation; this makes later upgrades cooperatively drainable without weakening the
+  first-upgrade stop-and-final-export rule.
 - Keep rollback readable from this first migration onward: every committed registry revision also
   refreshes a versioned, mode-`0600` rollback export under the same lock, and the rollback preflight
   validates and transforms that export into the exact legacy `AppLocalSettingsStore` path before an
@@ -157,6 +168,10 @@ single-vault package or can silently lose identity during migration.
   registry state on a per-channel durable volume; API, worker, watcher, and Heimdal resolve and read
   the identical revision after restart.
   - Verify: `tests/integration/test_vault_registry_container_durability.py::test_registry_survives_recreate_and_is_shared_cross_process`
+- [ ] The first-volume upgrade fences and drains every legacy registry writer, stops the old API,
+  exports and validates the final post-stop fingerprint, and prevents old-writer restart through
+  import; an injected mutation or unfenced writer aborts without importing the stale snapshot.
+  - Verify: `tests/ops/test_instance_state_volume_contract.py::test_legacy_registry_export_happens_after_writer_quiescence`
 - [ ] Compose, startup, and migration preflight fail before recreate when the instance-state mount
   is absent, not writable, channel-colliding, or resolves differently between consumers.
   - Verify: `tests/ops/test_instance_state_volume_contract.py::test_registry_volume_and_preflight_cover_all_consumers`
