@@ -166,6 +166,11 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   replay, so a newer empty run cannot hide older spent budget. More than one active canonical chain
   for the same repository, pull request, and stage is likewise rejected before exact replay; the
   dispatcher never selects a newer empty active row over an older row with spent budget.
+  An expired unclaimed technical backoff follows the same authenticated live-head takeover rule:
+  the first authoritative artifact for the newer live head requeues the existing canonical run,
+  preserves its immutable requested head, attempts, exceptions, and cumulative 2+2 budget, and
+  clears only head-bound coordinator, context, receipt, retry, and verified-head state. An
+  unexpired backoff or any authority/token mismatch remains non-mutating and fail-closed.
 - The Codex process boundary drains bounded stderr concurrently and rejects non-zero exits or
   terminal error events even when stdout contained an otherwise valid receipt. A bounded rate-limit,
   usage-limit, quota, or credit-exhaustion signal on that non-zero path remains a lease-fenced backoff

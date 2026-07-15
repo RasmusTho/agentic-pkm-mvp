@@ -863,6 +863,7 @@ class VerificationDispatchLedger:
                     raise ValueError("verification canonical run governing issue mismatch")
                 if candidate["current_head_sha"] != request.get("current_head_sha"):
                     lease_expires_at = candidate["lease_expires_at"]
+                    retry_after = candidate["retry_after"]
                     candidate_supporting = _validated_supporting_authority(
                         candidate, candidate_request
                     )
@@ -873,6 +874,17 @@ class VerificationDispatchLedger:
                         raise ValueError(
                             "verification canonical authority changed during live observation"
                         )
+                    expired_running = (
+                        candidate["status"] == "running"
+                        and isinstance(lease_expires_at, str)
+                        and _parse_timestamp(lease_expires_at)
+                        <= _parse_timestamp(now)
+                    )
+                    expired_backoff = (
+                        candidate["status"] == "backoff"
+                        and isinstance(retry_after, str)
+                        and _parse_timestamp(retry_after) <= _parse_timestamp(now)
+                    )
                     authority_matches = (
                         _live_takeover_authority_matches(
                             live_observation,
@@ -880,10 +892,7 @@ class VerificationDispatchLedger:
                             candidate_request,
                             candidate_supporting,
                         )
-                        and candidate["status"] == "running"
-                        and isinstance(lease_expires_at, str)
-                        and _parse_timestamp(lease_expires_at)
-                        <= _parse_timestamp(now)
+                        and (expired_running or expired_backoff)
                     )
                     if not authority_matches:
                         raise ValueError(
@@ -899,14 +908,19 @@ class VerificationDispatchLedger:
                             last_heartbeat_at=NULL, coordinator_session_id=NULL,
                             context_pack_json=NULL, terminal_receipt_json=NULL,
                             stop_reason=NULL, retry_after=NULL, updated_at=?
-                        WHERE run_id=? AND status='running' AND lease_expires_at=?
+                        WHERE run_id=? AND current_head_sha=? AND (
+                            (status='running' AND lease_expires_at=?) OR
+                            (status='backoff' AND retry_after=?)
+                        )
                         """,
                         (
                             next_head,
                             _json(incoming_supporting),
                             now,
                             candidate["run_id"],
+                            candidate["current_head_sha"],
                             lease_expires_at,
+                            retry_after,
                         ),
                     )
                     if conn.execute("SELECT changes()").fetchone()[0] != 1:
