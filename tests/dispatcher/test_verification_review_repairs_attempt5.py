@@ -328,7 +328,7 @@ def test_repaired_head_artifact_cannot_merge_unrelated_authority(tmp_path) -> No
 
     same_head_state = ledger(tmp_path / "same-head")
     same_head = same_head_state.ingest(request(REPAIRED_HEAD))
-    with pytest.raises(ValueError, match="governing issue mismatch"):
+    with pytest.raises(ValueError, match="idempotency authority conflict"):
         same_head_state.ingest(unrelated)
 
     claimed = same_head_state.claim(same_head.run_id, "host")
