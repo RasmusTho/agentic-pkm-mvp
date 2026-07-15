@@ -18,6 +18,7 @@ from app.agent_memory.promotion import PromotedMemory
 
 class RecallUseRight(str, Enum):
     ACTIVATABLE = "activatable"
+    CITED_PROPOSAL = "cited_proposal"
     INSTRUCTIONAL = "instructional"
     ACTION_AUTHORIZING = "action_authorizing"
 
@@ -32,6 +33,7 @@ class ActivationReason(str, Enum):
 
 class MemoryLifecycleState(str, Enum):
     PROMOTED = "promoted"
+    PROVISIONAL = "provisional"
     REVISED = "revised"
     REJECTED = "rejected"
 
@@ -51,6 +53,7 @@ class RecallExplanation(BaseModel):
     use_right: RecallUseRight
     lifecycle_state: MemoryLifecycleState
     review_state: ReviewState
+    trust_state: Optional[str] = None
     activation_reason: ActivationReason
     why_now: str
     bundle_reference: Optional[str] = None

@@ -46,6 +46,10 @@ class AgentState(RuntimeStateModel):
     # Recalled memory bodies keyed by artifact/memory id. Supporting input only,
     # used to compose a recall-only answer when retrieval returns no hits.
     recalled_content: dict[str, str] = Field(default_factory=dict)
+    # Content-free metadata projections for admitted provisional memory. These
+    # are composed into the bounded ContextEnvelope; claim text remains only in
+    # ``recalled_content`` for the already-admitted synthesis context.
+    recalled_context_items: List[dict[str, Any]] = Field(default_factory=list)
     answer: Optional[str] = None
     reasoning: Optional[List[str]] = None
     llm_route: dict[str, Any] | None = None

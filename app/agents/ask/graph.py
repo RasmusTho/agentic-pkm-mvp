@@ -20,6 +20,12 @@ from app.agent_memory.recall_explanation import (
     render_recall_footer,
 )
 from app.agent_memory.recall_retrieval import RecallCandidate, retrieve_relevant_promoted
+from app.agent_memory.provisional_recall import (
+    activate_provisional_recall,
+    retrieve_relevant_provisional,
+)
+from app.agent_memory.provisional_write import ProvisionalReceiptStore
+from app.activation.gate import ConsumingAuthority
 from app.agent_memory.ask_provenance_manifest import (
     AuthorizationSnapshot,
     schedule_ask_provenance_capture,
@@ -38,6 +44,9 @@ logger = logging.getLogger(__name__)
 TOP_K_INITIAL = 40
 RECALL_TOP_K = 3
 DEFAULT_RECALL_RECEIPTS_PATH = Path("runtime/agent_memory/recall_receipts.jsonl")
+DEFAULT_PROVISIONAL_RECALL_RECEIPTS_PATH = Path(
+    "runtime/agent_memory/provisional_recall_receipts.jsonl"
+)
 _ASK_LAST_ACTIVE_LOADED_ATTR = "_ask_recall_last_active_loaded"
 
 
@@ -119,6 +128,13 @@ def _recall_receipt_path() -> Path:
     return DEFAULT_RECALL_RECEIPTS_PATH
 
 
+def _provisional_recall_receipt_path() -> Path:
+    configured = os.getenv("PROVISIONAL_RECALL_RECEIPTS_PATH")
+    if configured:
+        return Path(configured).expanduser()
+    return DEFAULT_PROVISIONAL_RECALL_RECEIPTS_PATH
+
+
 def _active_recall_vault_root() -> Path | None:
     manager = get_vault_manager()
     context = manager.context
@@ -158,12 +174,27 @@ def _source_artifact_path(candidate: RecallCandidate, vault_root: Path | None) -
 def _recall_node(state: AgentState, *, ask_settings) -> AgentState:
     vault_root = _active_recall_vault_root()
     candidates = retrieve_relevant_promoted(state.query, k=RECALL_TOP_K, vault_root=vault_root)
-    if not candidates:
+    active_scope = _resolve_domain_scope()
+    provisional = (
+        retrieve_relevant_provisional(
+            state.query,
+            k=RECALL_TOP_K,
+            vault_root=vault_root,
+            receipt_store=ProvisionalReceiptStore(),
+            active_scope_id=active_scope,
+        )
+        if vault_root is not None and active_scope is not None
+        else None
+    )
+    if not candidates and (provisional is None or not provisional.candidates):
         state.recalled = []
+        state.recalled_content = {}
+        state.recalled_context_items = []
         return state
 
     recalled = []
     recalled_content: dict[str, str] = {}
+    recalled_context_items: list[dict[str, Any]] = []
     reasoning = list(state.reasoning or [])
     receipt_path = _recall_receipt_path()
     for candidate in candidates:
@@ -184,8 +215,48 @@ def _recall_node(state: AgentState, *, ask_settings) -> AgentState:
                 f"recall:{guarded.memory_id}:{guarded.explanation.title}:{candidate.reason}"
             )
 
+    for candidate in provisional.candidates if provisional is not None else ():
+        guarded = activate_provisional_recall(
+            candidate,
+            consuming_authority=ConsumingAuthority.READ_ONLY,
+            active_scope_id=active_scope or "",
+            use_right=RecallUseRight.ACTIVATABLE,
+            activation_reason=ActivationReason.CONTEXTUAL_RELEVANCE,
+            receipt_path=_provisional_recall_receipt_path(),
+        )
+        if guarded.may_answer and guarded.explanation is not None:
+            recalled.append(guarded.explanation)
+            recalled_content[guarded.explanation.artifact_id] = candidate.record.content
+            reasoning.append(
+                f"provisional_recall:{guarded.memory_id}:{candidate.reason_code}"
+            )
+            record = candidate.record
+            recalled_context_items.append(
+                {
+                    "id": record.artifact_ref,
+                    "doc_id": record.artifact_ref,
+                    "_admitted_provisional_memory": True,
+                    "payload": {
+                        "uuid": record.artifact_ref,
+                        "object_type": "memory_item",
+                        "scope_id": record.scope_id,
+                        "principal_id": record.principal_id,
+                        "source_role": record.source_role,
+                        "authority_state": record.authority_state,
+                        "evidence_role": record.evidence_role.value,
+                        "sensitivity": record.sensitivity.value,
+                        "created_by": record.created_by,
+                        "created_at": record.created_at.isoformat(),
+                        "provenance_event_ids": list(record.provenance_event_ids),
+                        "memory_state": record.review_state.value,
+                    },
+                    "evidence_role_in_context": record.evidence_role.value,
+                }
+            )
+
     state.recalled = recalled
     state.recalled_content = recalled_content
+    state.recalled_context_items = recalled_context_items
     if reasoning:
         state.reasoning = reasoning
     return state
@@ -237,6 +308,7 @@ def _hits_as_scoped_retrieval(state: AgentState) -> ScopedRetrieval:
                 "evidence_role_in_context": hit.evidence_role_in_context,
             }
         )
+    results.extend(dict(item) for item in (state.recalled_context_items or []))
     # Rehydrate the content-free denials captured at retrieval time (state carries them as plain
     # dicts). They are scope-level: hit reranking/truncation between retrieve and here must not —
     # and does not — affect them.
@@ -379,7 +451,9 @@ def _answer_node(state: AgentState, *, ask_settings) -> AgentState:
     # gate seam so the deterministic admissibility decision is unchanged.
     envelope = build_ask_envelope(state)
     source_ids = _envelope_source_ids(envelope)
-    source_ids.extend(r.artifact_id for r in (state.recalled or []) if r.artifact_id)
+    for recalled in state.recalled or []:
+        if recalled.artifact_id and recalled.artifact_id not in source_ids:
+            source_ids.append(recalled.artifact_id)
     decision = evaluate_ask_synthesis(source_ids)
     if decision.activatable:
         context = build_ask_context(

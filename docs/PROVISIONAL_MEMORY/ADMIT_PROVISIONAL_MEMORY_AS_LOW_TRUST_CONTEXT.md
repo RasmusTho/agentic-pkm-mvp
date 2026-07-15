@@ -39,15 +39,15 @@ prevent a new recall caller from bypassing the ceiling.
 
 ## Acceptance Criteria
 
-- [ ] The production recall path invokes admissibility and authority guards for provisional memory.
+- [x] The production recall path invokes admissibility and authority guards for provisional memory.
   Verify: `tests/agent_memory/test_provisional_memory_call_sites.py::test_recall_path_invokes_low_trust_guards`
-- [ ] Read use preserves visible provenance/review posture and `may_write=false`.
+- [x] Read use preserves visible provenance/review posture and `may_write=false`.
   Verify: `tests/agent_memory/test_provisional_memory_recall.py::test_read_context_preserves_low_trust_posture`
-- [ ] Proposal influence requires an explicit citation; uncited background influence is excluded.
+- [x] Proposal influence requires an explicit citation; uncited background influence is excluded.
   Verify: `tests/agent_memory/test_provisional_memory_recall.py::test_proposal_use_requires_explicit_citation`
-- [ ] Provisional memory cannot reach APPLY/tool-use or an action-authorizing context even when
+- [x] Provisional memory cannot reach APPLY/tool-use or an action-authorizing context even when
   repeated or highly ranked. Verify: `tests/agent_memory/test_provisional_memory_call_sites.py::test_provisional_memory_cannot_reach_action_authority`
-- [ ] Activation produces a recall receipt and does not mutate the artifact or lifecycle authority.
+- [x] Activation produces a recall receipt and does not mutate the artifact or lifecycle authority.
   Verify: `tests/agent_memory/test_provisional_memory_recall.py::test_recall_receipt_does_not_persist_activation_authority`
 
 ## How to Verify (Pre-Merge)
@@ -79,5 +79,5 @@ The action-tier assertion must exercise the real consumer entry point.
 
 ## Related GitHub Issues
 
-Filed as #3720, blocked by #3719. TCD hint: Sol/high due to retrieval/context authority and production
-consumer enforcement.
+Implemented under #3720 after #3719 delivered the governed producer. TCD hint: Sol/high due to
+retrieval/context authority and production consumer enforcement.
