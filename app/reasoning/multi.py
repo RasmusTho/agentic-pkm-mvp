@@ -92,7 +92,7 @@ def run_multi_note_reasoning(object_ids: Sequence[str], *, trace_id: str | None 
         degraded_reason = "missing_input"
 
     synthesis = None
-    if not {"provider_failure", "empty_output"}.intersection(outcomes):
+    if outcome == "success":
         synthesis = _build_synthesis_inference(all_claims, [oid for oid, _ in texts])
     if synthesis:
         all_inferences.append(synthesis)

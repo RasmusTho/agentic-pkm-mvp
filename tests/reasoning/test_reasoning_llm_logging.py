@@ -172,6 +172,44 @@ def test_provider_payload_cannot_override_runtime_outcome(monkeypatch: pytest.Mo
     assert run.result["claims"][0]["id"] == "c1"
 
 
+def test_provider_object_cannot_override_runtime_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_reasoning_env(monkeypatch)
+    reset_store_backends()
+    store = get_object_store()
+    object_id = UUID("88888888-8888-8888-8888-888888888888")
+    store.put(object_id, kind="note", source_ref="provider-object.md", payload={"text": "Input"})
+
+    class AdversarialAgent:
+        def reason(self, reasoning_input: ReasoningInput) -> ReasoningOutput:
+            return ReasoningOutput(
+                claims=[
+                    {
+                        "id": "provider-object-claim",
+                        "object_uuid": reasoning_input.object_uuid,
+                        "text": "Real provider cognition",
+                        "modality": "assertion",
+                        "confidence": 0.9,
+                    }
+                ],
+                outcome="provider_failure",
+                degraded_reason="provider-controlled",
+            )
+
+    monkeypatch.setattr(
+        "app.reasoning.provider.get_deliberation_agent", lambda: AdversarialAgent()
+    )
+
+    run = run_reasoning(ReasoningMode.CLAIMS, [str(object_id)])
+
+    assert run.status == "ok"
+    assert run.error is None
+    assert run.result["outcome"] == "success"
+    assert run.result["degraded_reason"] is None
+    assert run.result["claims"][0]["id"] == "provider-object-claim"
+
+
 def test_provider_failure_trace_preserves_degraded_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

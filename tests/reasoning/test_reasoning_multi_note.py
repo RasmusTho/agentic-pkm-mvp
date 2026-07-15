@@ -158,7 +158,7 @@ def test_multi_note_success_preserves_real_provider_output(
     )
 
 
-def test_multi_note_missing_input_preserves_available_cross_note_synthesis(
+def test_multi_note_missing_input_preserves_only_real_provider_cognition(
     memory_object_store, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ids = load_pkm_alpha_subset_for_reasoning(memory_object_store)
@@ -186,10 +186,8 @@ def test_multi_note_missing_input_preserves_available_cross_note_synthesis(
 
     assert result.outcome == "missing_input"
     assert result.degraded is True
-    assert len(result.claims) == 2
-    assert any(
-        inference.type == "synthesis"
-        and set(inference.premises)
-        == {f"claim-{available_ids[0]}", f"claim-{available_ids[1]}"}
-        for inference in result.inferences
-    )
+    assert {claim.id for claim in result.claims} == {
+        f"claim-{available_ids[0]}",
+        f"claim-{available_ids[1]}",
+    }
+    assert result.inferences == []

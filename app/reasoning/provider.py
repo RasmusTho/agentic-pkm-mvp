@@ -233,7 +233,7 @@ def run_reasoning(
             relations=[],
         )
         try:
-            output = get_deliberation_agent().reason(reasoning_input)
+            output = validate_output(get_deliberation_agent().reason(reasoning_input))
         except Exception as exc:  # pragma: no cover - defensive
             output = ReasoningOutput(
                 outcome="provider_failure", degraded_reason="provider_failure"
