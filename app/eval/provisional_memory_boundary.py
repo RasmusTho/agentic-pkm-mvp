@@ -7,6 +7,7 @@ never enter the scorecard, so the same fixture produces the same verdict.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Literal
@@ -37,6 +38,30 @@ REQUIRED_FAMILIES = {
     "provenance_loss",
     "citation_omission",
     "apply_escalation",
+}
+_LIFECYCLE_RECEIPT_KEYS = {
+    "receipt_id",
+    "memory_id",
+    "artifact_ref",
+    "transition",
+    "actor_ref",
+    "occurred_at",
+    "artifact_digest",
+    "error_code",
+}
+_RECALL_RECEIPT_KEYS = {"event", "event_id", "timestamp", "payload"}
+_RECALL_RECEIPT_PAYLOAD_KEYS = {
+    "memory_id",
+    "artifact_ref",
+    "lifecycle_receipt_refs",
+    "consuming_authority",
+    "requested_use_right",
+    "admitted",
+    "admitted_tier",
+    "admissibility_reason",
+    "authority_blocked_reasons",
+    "citation_present",
+    "may_write",
 }
 
 
@@ -163,6 +188,31 @@ def gate_boundary_observation(
     return sorted(set(failures))
 
 
+def receipts_are_content_free(receipt_texts: tuple[str, ...]) -> bool:
+    """Reject any receipt shape that can acquire an ungoverned claim field."""
+
+    for text in receipt_texts:
+        for line in text.splitlines():
+            try:
+                payload = json.loads(line)
+            except (json.JSONDecodeError, TypeError):
+                return False
+            if not isinstance(payload, dict):
+                return False
+            keys = set(payload)
+            if "event" in payload:
+                if keys != _RECALL_RECEIPT_KEYS:
+                    return False
+                nested = payload.get("payload")
+                if not isinstance(nested, dict):
+                    return False
+                if set(nested) != _RECALL_RECEIPT_PAYLOAD_KEYS:
+                    return False
+            elif not keys <= _LIFECYCLE_RECEIPT_KEYS:
+                return False
+    return True
+
+
 def evaluate_provisional_memory_boundary(
     fixture_path: Path = DEFAULT_FIXTURE_PATH,
 ) -> dict[str, object]:
@@ -281,11 +331,17 @@ def _run_case(case: ProvisionalBoundaryCase) -> BoundaryObservation:
             blocked_reason in item.authority_decision.blocked_reasons
             for item in activations
         ) if blocked_reason else True
-        receipt_text = ""
+        receipt_texts: list[str] = []
         for path in (lifecycle_store.path, receipt_path):
             if path.exists():
-                receipt_text += path.read_text(encoding="utf-8")
+                receipt_texts.append(path.read_text(encoding="utf-8"))
         record = search.candidates[0].record if search.candidates else None
+        citation_reference = (case.citation_reference or "").strip()
+        citation_present = bool(activations) and all(
+            item.explanation is not None
+            and citation_reference in item.explanation.source_provenance.source_refs
+            for item in activations
+        ) if citation_reference else False
         return BoundaryObservation(
             admitted=bool(activations) and all(item.admitted for item in activations),
             may_answer=any(item.may_answer for item in activations),
@@ -305,8 +361,8 @@ def _run_case(case: ProvisionalBoundaryCase) -> BoundaryObservation:
             authority_state=record.authority_state if record is not None else None,
             action_blocked=action_blocked,
             artifact_unchanged=artifact_path.read_bytes() == before_recall,
-            receipts_content_free=case.content not in receipt_text,
-            citation_present=bool((case.citation_reference or "").strip()),
+            receipts_content_free=receipts_are_content_free(tuple(receipt_texts)),
+            citation_present=citation_present,
         )
 
 
@@ -317,4 +373,5 @@ __all__ = [
     "evaluate_provisional_memory_boundary",
     "gate_boundary_observation",
     "load_boundary_fixture",
+    "receipts_are_content_free",
 ]

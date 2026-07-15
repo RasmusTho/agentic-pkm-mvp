@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 
 import pytest
 from pydantic import ValidationError
@@ -11,7 +12,9 @@ from app.eval.provisional_memory_boundary import (
     ProvisionalBoundaryCase,
     evaluate_provisional_memory_boundary,
     gate_boundary_observation,
+    receipts_are_content_free,
 )
+import app.eval.provisional_memory_boundary as boundary_module
 
 pytestmark = pytest.mark.not_pg
 
@@ -113,3 +116,57 @@ def test_fixture_schema_rejects_action_case_without_exact_block_reason() -> None
                 "expected": {"admitted": False},
             }
         )
+
+
+def test_hard_gate_observes_citation_in_emitted_recall(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = boundary_module.activate_provisional_recall
+
+    def without_emitted_citation(*args: object, **kwargs: object) -> object:
+        result = original(*args, **kwargs)
+        explanation = result.explanation
+        if explanation is None:
+            return result
+        provenance = explanation.source_provenance.model_copy(
+            update={
+                "source_refs": [
+                    ref
+                    for ref in explanation.source_provenance.source_refs
+                    if not ref.startswith("proposal://")
+                ]
+            }
+        )
+        return replace(
+            result,
+            explanation=explanation.model_copy(
+                update={"source_provenance": provenance}
+            ),
+        )
+
+    monkeypatch.setattr(boundary_module, "activate_provisional_recall", without_emitted_citation)
+
+    result = evaluate_provisional_memory_boundary()
+
+    assert result["hard_gate_passed"] is False
+    assert {
+        (failure["case_id"], failure["reason"])
+        for failure in result["failures"]
+    } >= {
+        ("cited-proposal-en", "uncited_proposal_admitted"),
+        ("cited-proposal-sv", "uncited_proposal_admitted"),
+    }
+
+
+def test_receipt_gate_rejects_claim_bearing_structural_extension() -> None:
+    lifecycle = {
+        "receipt_id": "00000000-0000-4000-8000-000000000001",
+        "memory_id": "00000000-0000-4000-8000-000000000002",
+        "artifact_ref": "vault://Memory/Provisional/example.md",
+        "transition": "created",
+        "actor_ref": "agent_memory.provisional_writer",
+        "occurred_at": "2026-07-15T00:00:00Z",
+        "artifact_digest": "0" * 64,
+    }
+    extended = {**lifecycle, "claim_preview": "partial secret"}
+
+    assert receipts_are_content_free((json.dumps(lifecycle),)) is True
+    assert receipts_are_content_free((json.dumps(extended),)) is False
