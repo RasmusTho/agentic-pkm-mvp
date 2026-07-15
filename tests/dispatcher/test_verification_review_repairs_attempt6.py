@@ -609,6 +609,98 @@ def test_canonical_artifact_uploader_workflow_is_authenticated() -> None:
     assert downloads == [7]
 
 
+def _mixed_artifact_source(
+    artifacts: list[dict[str, object]], *, fail_uploader_read: bool = False
+) -> GhCliVerificationSource:
+    raw_request = request()
+    archive_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w") as archive:
+        archive.writestr("verification-dispatch/request.json", json.dumps(raw_request))
+    source = GhCliVerificationSource()
+
+    def json_response(endpoint: str) -> object:
+        if endpoint.endswith("actions/artifacts?per_page=100"):
+            return {"artifacts": artifacts}
+        if endpoint.endswith("actions/runs/123"):
+            if fail_uploader_read:
+                raise RuntimeError("GitHub transport unavailable")
+            return {
+                "id": 123,
+                "name": "Verification Dispatch Request",
+                "path": ".github/workflows/verification-dispatch-request.yml",
+                "event": "workflow_run",
+                "run_attempt": 1,
+                "status": "completed",
+                "conclusion": "success",
+                "head_sha": "b" * 40,
+                "repository": {"id": 456, "full_name": _TRUSTED_REPOSITORY},
+                "head_repository": {"id": 456, "full_name": _TRUSTED_REPOSITORY},
+            }
+        if endpoint.endswith("actions/runs/99"):
+            return {
+                "id": 99,
+                "run_attempt": 1,
+                "name": "CI",
+                "event": "pull_request",
+                "status": "completed",
+                "conclusion": "success",
+                "head_sha": HEAD,
+                "repository": {"id": 456, "full_name": _TRUSTED_REPOSITORY},
+                "head_repository": {"id": 456, "full_name": _TRUSTED_REPOSITORY},
+            }
+        raise AssertionError(f"unexpected GitHub endpoint: {endpoint}")
+
+    source._json = json_response  # type: ignore[method-assign]
+    source._artifact_bytes = (  # type: ignore[method-assign]
+        lambda _endpoint, _artifact_id: archive_bytes.getvalue()
+    )
+    return source
+
+
+def _valid_artifact() -> dict[str, object]:
+    return {
+        "id": 7,
+        "name": f"verification-dispatch-3603-{HEAD}",
+        "size_in_bytes": 1,
+        "expired": False,
+        "workflow_run": {
+            "id": 123,
+            "repository_id": 456,
+            "head_repository_id": 456,
+            "head_sha": "b" * 40,
+        },
+    }
+
+
+def _legacy_artifact() -> dict[str, object]:
+    return {
+        "id": 8,
+        "name": f"verification-dispatch-legacy-{HEAD}",
+        "size_in_bytes": 1,
+        "expired": False,
+        "workflow_run": {},
+    }
+
+
+def test_valid_artifact_survives_legacy_and_malformed_candidates() -> None:
+    source = _mixed_artifact_source([_valid_artifact(), _legacy_artifact()])
+
+    assert source.pending_requests(_TRUSTED_REPOSITORY) == [request()]
+
+
+def test_invalid_artifact_cannot_deny_service_to_later_valid_candidate() -> None:
+    source = _mixed_artifact_source([_legacy_artifact(), _valid_artifact()])
+
+    assert source.pending_requests(_TRUSTED_REPOSITORY) == [request()]
+
+
+def test_artifact_poll_transport_failure_is_not_silently_skipped() -> None:
+    source = _mixed_artifact_source([_valid_artifact()], fail_uploader_read=True)
+
+    with pytest.raises(RuntimeError, match="GitHub transport unavailable"):
+        source.pending_requests(_TRUSTED_REPOSITORY)
+
+
 def test_allowlisted_text_projection_preserves_structural_receipt_fields() -> None:
     _, receipt = Launcher().launch({})
     receipt["retry_after"] = "2030-01-02T03:04:05+00:00"
