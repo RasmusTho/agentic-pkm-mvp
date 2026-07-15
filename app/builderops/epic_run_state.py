@@ -326,6 +326,8 @@ def normalize_epic_run_state(state: Mapping[str, Any]) -> dict[str, Any]:
 
     if not isinstance(state, Mapping):
         raise EpicRunStateError("run-state must be a JSON object")
+    if "schema_version" in state and type(state["schema_version"]) is not int:
+        raise EpicRunStateError("epic run-state schema_version must be an integer")
     raw = _json_clone(dict(state))
 
     unknown = sorted(set(raw) - set(_STATE_FIELDS))
@@ -333,7 +335,7 @@ def normalize_epic_run_state(state: Mapping[str, Any]) -> dict[str, Any]:
         raise EpicRunStateError(f"unknown run-state field(s): {unknown}")
 
     schema_version = raw.get("schema_version", SCHEMA_VERSION)
-    if schema_version != SCHEMA_VERSION:
+    if type(schema_version) is not int or schema_version != SCHEMA_VERSION:
         raise EpicRunStateError(
             f"unsupported epic run-state schema_version: {schema_version!r}"
         )

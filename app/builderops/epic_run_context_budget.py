@@ -18,6 +18,16 @@ MONETARY_COST_FIELDS = (
     "tool_cost_usd",
     "wait_cost_usd",
 )
+INTEGER_COST_FIELDS = (
+    "model_input_tokens",
+    "model_output_tokens",
+    "failed_attempts",
+    "implementation_repairs",
+    "ci_repairs",
+    "review_repairs",
+    "handoffs",
+    "worker_starts",
+)
 COST_INPUT_FIELDS = (
     *MONETARY_COST_FIELDS,
     "model_input_tokens",
@@ -72,8 +82,7 @@ def evaluate_slice_boundary_context_budget(
     if normalized_context["value"] == UNKNOWN:
         normalized_pressure = UNKNOWN
     if (
-        isinstance(completed_slices_since_checkpoint, bool)
-        or not isinstance(completed_slices_since_checkpoint, int)
+        type(completed_slices_since_checkpoint) is not int
         or completed_slices_since_checkpoint < 0
     ):
         raise EpicRunContextBudgetError(
@@ -88,7 +97,10 @@ def evaluate_slice_boundary_context_budget(
         if previous_external_state_marker is None
         else _json_object(previous_external_state_marker, "previous_external_state_marker")
     )
-    external_state_changed = previous_marker is not None and marker != previous_marker
+    external_state_changed = previous_marker is not None and not _json_exact_equal(
+        marker,
+        previous_marker,
+    )
 
     recommendations, reasons = _build_recommendations_and_reasons(
         context_pressure=normalized_pressure,
@@ -152,6 +164,10 @@ def evaluate_slice_boundary_context_budget(
 def normalize_context_budget_receipt(receipt: Mapping[str, Any]) -> dict[str, Any]:
     """Validate a receipt before it enters dispatcher-backed epic run-state."""
 
+    if type(receipt.get("schema_version")) is not int:
+        raise EpicRunContextBudgetError(
+            "context-budget receipt schema_version must be an integer"
+        )
     normalized = _json_object(receipt, "context_budget_receipt")
     expected_top_level = {
         "schema_name",
@@ -176,7 +192,10 @@ def normalize_context_budget_receipt(receipt: Mapping[str, Any]) -> dict[str, An
         )
     if normalized.get("schema_name") != RECEIPT_SCHEMA_NAME:
         raise EpicRunContextBudgetError("unsupported context-budget receipt schema_name")
-    if normalized.get("schema_version") != RECEIPT_SCHEMA_VERSION:
+    if (
+        type(normalized.get("schema_version")) is not int
+        or normalized["schema_version"] != RECEIPT_SCHEMA_VERSION
+    ):
         raise EpicRunContextBudgetError("unsupported context-budget receipt schema_version")
     if normalized.get("mode") != "advisory_shadow":
         raise EpicRunContextBudgetError("context-budget receipt must be advisory_shadow")
@@ -214,8 +233,7 @@ def normalize_context_budget_receipt(receipt: Mapping[str, Any]) -> dict[str, An
         )
     completed_slices = signals["completed_slices_since_checkpoint"]
     if (
-        isinstance(completed_slices, bool)
-        or not isinstance(completed_slices, int)
+        type(completed_slices) is not int
         or completed_slices < 0
     ):
         raise EpicRunContextBudgetError(
@@ -286,7 +304,7 @@ def normalize_context_budget_receipt(receipt: Mapping[str, Any]) -> dict[str, An
         "review_mutations": [],
         "closure_mutations": [],
     }
-    if normalized.get("effects") != expected_effects:
+    if not _json_exact_equal(normalized.get("effects"), expected_effects):
         raise EpicRunContextBudgetError("advisory receipt cannot carry mutations")
     normalized["effects"] = expected_effects
 
@@ -296,7 +314,10 @@ def normalize_context_budget_receipt(receipt: Mapping[str, Any]) -> dict[str, An
         "merge": "unchanged_required",
         "closure": "unchanged_required",
     }
-    if normalized.get("gate_invariants") != expected_gate_invariants:
+    if not _json_exact_equal(
+        normalized.get("gate_invariants"),
+        expected_gate_invariants,
+    ):
         raise EpicRunContextBudgetError(
             "context-budget receipt cannot weaken or replace gate invariants"
         )
@@ -321,6 +342,8 @@ def build_3229_pilot_replay() -> dict[str, Any]:
 
 
 def _normalize_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
+    if type(policy.get("schema_version")) is not int:
+        raise EpicRunContextBudgetError("policy.schema_version must be an integer")
     normalized = _json_object(policy, "policy")
     expected = {
         "schema_version",
@@ -331,7 +354,10 @@ def _normalize_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
         raise EpicRunContextBudgetError(
             f"policy fields must be exactly {sorted(expected)}"
         )
-    if normalized["schema_version"] != POLICY_SCHEMA_VERSION:
+    if (
+        type(normalized["schema_version"]) is not int
+        or normalized["schema_version"] != POLICY_SCHEMA_VERSION
+    ):
         raise EpicRunContextBudgetError("unsupported policy schema_version")
     for field in ("rotate_on_high_context_pressure", "thin_worker_when_isolated"):
         if not isinstance(normalized[field], bool):
@@ -351,14 +377,9 @@ def _normalize_measurement(
             f"{field} fields must be exactly value, unit, source"
         )
     value = normalized["value"]
-    if value != UNKNOWN and (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not _is_finite_number(value)
-        or value < 0
-    ):
+    if value != UNKNOWN and (type(value) is not int or value < 0):
         raise EpicRunContextBudgetError(
-            f"{field}.value must be finite, non-negative, or unknown"
+            f"{field}.value must be a non-negative integer or unknown"
         )
     normalized["source"] = _required_string(normalized["source"], f"{field}.source")
     normalized["unit"] = _required_string(normalized["unit"], f"{field}.unit")
@@ -407,7 +428,7 @@ def _normalize_repairs(value: Mapping[str, int]) -> dict[str, int]:
         raise EpicRunContextBudgetError(f"repairs fields must be exactly {sorted(expected)}")
     for field in expected:
         count = normalized[field]
-        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        if type(count) is not int or count < 0:
             raise EpicRunContextBudgetError(f"repairs.{field} must be non-negative")
     return {field: normalized[field] for field in sorted(expected)}
 
@@ -507,7 +528,7 @@ def _normalize_checkpoint(value: Mapping[str, Any]) -> dict[str, Any]:
         if previous_raw is None
         else _json_object(previous_raw, "checkpoint.external_state.previous_marker")
     )
-    expected_changed = previous is not None and marker != previous
+    expected_changed = previous is not None and not _json_exact_equal(marker, previous)
     if external_state["changed"] is not expected_changed:
         raise EpicRunContextBudgetError(
             "checkpoint.external_state.changed does not match the markers"
@@ -561,8 +582,7 @@ def _normalize_cost_observation(value: Mapping[str, Any]) -> dict[str, Any]:
         expected_source = "unavailable"
     else:
         if (
-            isinstance(denominator_value, bool)
-            or not isinstance(denominator_value, int)
+            type(denominator_value) is not int
             or denominator_value < 0
         ):
             raise EpicRunContextBudgetError(
@@ -579,7 +599,7 @@ def _normalize_cost_observation(value: Mapping[str, Any]) -> dict[str, Any]:
         _json_object(observation["inputs"], "cost_per_accepted_slice.inputs"),
         accepted_slice_count=accepted_slice_count,
     )
-    if observation != expected:
+    if not _json_exact_equal(observation, expected):
         raise EpicRunContextBudgetError(
             "cost_per_accepted_slice derived values or completeness are inconsistent"
         )
@@ -607,12 +627,7 @@ def _build_cost_observation(
                 f"cost_inputs.{field} fields must be value and source"
             )
         value = measurement["value"]
-        if value != UNKNOWN and (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not _is_finite_number(value)
-            or value < 0
-        ):
+        if value != UNKNOWN and not _valid_cost_value(field, value):
             raise EpicRunContextBudgetError(
                 f"cost_inputs.{field}.value must be finite, non-negative, or unknown"
             )
@@ -628,8 +643,7 @@ def _build_cost_observation(
         denominator: dict[str, Any] = {"value": UNKNOWN, "source": "unavailable"}
     else:
         if (
-            isinstance(accepted_slice_count, bool)
-            or not isinstance(accepted_slice_count, int)
+            type(accepted_slice_count) is not int
             or accepted_slice_count < 0
         ):
             raise EpicRunContextBudgetError(
@@ -692,6 +706,33 @@ def _is_finite_number(value: int | float) -> bool:
     if isinstance(value, int):
         return True
     return math.isfinite(value)
+
+
+def _valid_cost_value(field: str, value: Any) -> bool:
+    if field in INTEGER_COST_FIELDS:
+        return type(value) is int and value >= 0
+    return (
+        type(value) in {int, float}
+        and _is_finite_number(value)
+        and value >= 0
+    )
+
+
+def _json_exact_equal(left: Any, right: Any) -> bool:
+    """Compare JSON-shaped values without Python's bool/int coercion."""
+
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            _json_exact_equal(left[key], right[key]) for key in left
+        )
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            _json_exact_equal(left_item, right_item)
+            for left_item, right_item in zip(left, right, strict=True)
+        )
+    return left == right
 
 
 def _required_string(value: Any, field: str) -> str:

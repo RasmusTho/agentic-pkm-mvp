@@ -12,6 +12,7 @@ from app.builderops.epic_run_context_budget import (
     normalize_context_budget_receipt,
 )
 from app.builderops.epic_run_state import (
+    EpicRunStateError,
     apply_epic_run_update,
     create_epic_run_state,
     load_epic_run_state,
@@ -60,6 +61,20 @@ def _evaluate(**overrides: object) -> dict[str, object]:
     return evaluate_slice_boundary_context_budget(**inputs)  # type: ignore[arg-type]
 
 
+def _assert_receipt_rejected_on_update_and_load(
+    receipt: dict[str, object],
+    *,
+    run_id: str,
+) -> None:
+    state = new_epic_run_state(3229, run_id)
+    with pytest.raises(EpicRunContextBudgetError):
+        apply_epic_run_update(state, context_budget_receipts=[receipt])
+
+    state["context_budget_receipts"] = [receipt]
+    with pytest.raises(EpicRunContextBudgetError):
+        normalize_epic_run_state(state)
+
+
 def test_context_budget_round_trips_in_run_state(tmp_path: Path) -> None:
     state = create_epic_run_state(3229, "measure-context", root=tmp_path)
     receipt = _evaluate()
@@ -75,6 +90,112 @@ def test_context_budget_round_trips_in_run_state(tmp_path: Path) -> None:
     assert record_context_budget_receipt(loaded, receipt)["context_budget_receipts"] == [
         receipt
     ]
+
+
+@pytest.mark.parametrize("invalid_version", [True, 1.0])
+@pytest.mark.parametrize("surface", ["receipt", "policy", "run_state"])
+def test_schema_versions_require_exact_builtin_integers(
+    invalid_version: object,
+    surface: str,
+) -> None:
+    if surface == "run_state":
+        state = new_epic_run_state(3229, "strict-state-version")
+        state["schema_version"] = invalid_version
+        with pytest.raises(EpicRunStateError, match="schema_version must be an integer"):
+            normalize_epic_run_state(state)
+        return
+
+    receipt = deepcopy(_evaluate())
+    if surface == "receipt":
+        receipt["schema_version"] = invalid_version
+    else:
+        receipt["policy"]["schema_version"] = invalid_version
+        with pytest.raises(EpicRunContextBudgetError):
+            _evaluate(policy=receipt["policy"])
+    _assert_receipt_rejected_on_update_and_load(
+        receipt,
+        run_id=f"strict-{surface}-{type(invalid_version).__name__}",
+    )
+
+
+@pytest.mark.parametrize(
+    ("surface", "invalid_value"),
+    [
+        ("context", True),
+        ("context", 72_000.0),
+        ("accepted_slice_count", True),
+        ("accepted_slice_count", 1.0),
+        ("model_input_tokens", True),
+        ("model_input_tokens", 1.0),
+        ("failed_attempts", True),
+        ("failed_attempts", 1.0),
+    ],
+)
+def test_integer_measurements_reject_bool_and_float_substitution(
+    surface: str,
+    invalid_value: object,
+) -> None:
+    if surface == "context":
+        overrides = {
+            "context_measurement": {
+                "value": invalid_value,
+                "unit": "tokens",
+                "source": "provider_usage",
+            }
+        }
+    elif surface == "accepted_slice_count":
+        overrides = {"accepted_slice_count": invalid_value}
+    else:
+        overrides = {
+            "cost_inputs": {
+                surface: {"value": invalid_value, "source": "run_receipts"}
+            }
+        }
+    with pytest.raises(EpicRunContextBudgetError):
+        _evaluate(**overrides)
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("human_minutes_are_not_monetized", 1),
+        ("known_monetary_cost_per_accepted_slice_usd", False),
+        ("known_monetary_cost_per_accepted_slice_usd", 0),
+    ],
+)
+def test_derived_cost_values_require_exact_types_on_update_and_load(
+    field: str,
+    invalid_value: object,
+) -> None:
+    receipt = deepcopy(
+        _evaluate(
+            cost_inputs={
+                "model_cost_usd": {"value": 0.0, "source": "provider_receipt"}
+            },
+            accepted_slice_count=1,
+        )
+    )
+    receipt["cost_per_accepted_slice"][field] = invalid_value
+    _assert_receipt_rejected_on_update_and_load(
+        receipt,
+        run_id=f"strict-derived-{field}-{type(invalid_value).__name__}",
+    )
+
+
+def test_cost_numeric_types_round_trip_and_normalize_idempotently() -> None:
+    receipt = _evaluate(
+        cost_inputs={
+            "model_cost_usd": {"value": 2, "source": "provider_receipt"},
+            "tool_minutes": {"value": 1.5, "source": "tool_receipt"},
+            "model_input_tokens": {"value": 100, "source": "provider_usage"},
+        },
+        accepted_slice_count=2,
+    )
+
+    normalized = normalize_context_budget_receipt(receipt)
+
+    assert normalized == receipt
+    assert normalize_context_budget_receipt(normalized) == normalized
 
 
 def test_lifecycle_and_execution_decisions_are_independent() -> None:
