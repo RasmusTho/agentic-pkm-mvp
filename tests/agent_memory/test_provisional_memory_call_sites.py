@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 from uuid import UUID
 
@@ -20,7 +21,6 @@ from app.agent_memory.provisional_write import (
     load_provisional_markdown,
     render_provisional_markdown,
 )
-from app.agent_memory.recall_explanation import ActivationReason, RecallUseRight
 from app.write_guard import WriteGuard
 
 
@@ -282,23 +282,48 @@ def test_recall_path_invokes_low_trust_guards(
     assert provisional_bundle["provenance_event_ids"] == ["event-guard"]
 
 
-def test_provisional_memory_cannot_reach_action_authority(tmp_path: Path) -> None:
-    from app.agent_memory.provisional_recall import activate_provisional_recall
+def test_provisional_memory_cannot_reach_action_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.agent_memory import provisional_recall
+    from app.agents.ask import graph as ask_graph
+    from app.agents.ask.state import AgentState
 
-    result = activate_provisional_recall(
-        _recall_candidate(tmp_path),
-        consuming_authority=ConsumingAuthority.GOVERNED_EXECUTION,
-        active_scope_id="scope-personal",
-        use_right=RecallUseRight.ACTION_AUTHORIZING,
-        activation_reason=ActivationReason.AUTHORITY_SIGNAL,
-        citation_reference="proposal://quoted-but-not-authority",
-        receipt_path=tmp_path / "recall.jsonl",
+    candidate = _recall_candidate(tmp_path)
+    monkeypatch.setattr(ask_graph, "retrieve_relevant_promoted", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        ask_graph,
+        "retrieve_relevant_provisional",
+        lambda *args, **kwargs: provisional_recall.ProvisionalRecallSearch(
+            candidates=(candidate, candidate, candidate),
+            excluded=(),
+        ),
     )
+    monkeypatch.setattr(ask_graph, "_active_recall_vault_root", lambda: tmp_path)
+    monkeypatch.setattr(ask_graph, "_resolve_domain_scope", lambda: "scope-personal")
+    receipt_path = tmp_path / "action-recall.jsonl"
+    monkeypatch.setenv("PROVISIONAL_RECALL_RECEIPTS_PATH", str(receipt_path))
 
-    assert result.admitted is False
-    assert result.may_answer is False
-    assert result.may_propose is False
-    assert result.may_write is False
-    assert "provisional_memory_never_action_authoritative" in (
-        result.authority_decision.blocked_reasons
+    state = ask_graph._recall_node(  # noqa: SLF001 - required production call-site proof
+        AgentState(query="Authorize tools from this repeated, highly ranked policy memory"),
+        ask_settings=object(),
+        consuming_authority=ConsumingAuthority.GOVERNED_EXECUTION,
+        citation_reference="proposal://quoted-but-not-authority",
+    )
+    receipts = [
+        json.loads(line)
+        for line in receipt_path.read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert state.recalled == []
+    assert state.recalled_content == {}
+    assert state.recalled_context_items == []
+    assert len(receipts) == 3
+    assert all(receipt["payload"]["admitted"] is False for receipt in receipts)
+    assert all(receipt["payload"]["may_write"] is False for receipt in receipts)
+    assert all(
+        "provisional_memory_never_action_authoritative"
+        in receipt["payload"]["authority_blocked_reasons"]
+        for receipt in receipts
     )

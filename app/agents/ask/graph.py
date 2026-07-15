@@ -171,7 +171,13 @@ def _source_artifact_path(candidate: RecallCandidate, vault_root: Path | None) -
     return vault_root / candidate.artifact_path
 
 
-def _recall_node(state: AgentState, *, ask_settings) -> AgentState:
+def _recall_node(
+    state: AgentState,
+    *,
+    ask_settings,
+    consuming_authority: ConsumingAuthority = ConsumingAuthority.READ_ONLY,
+    citation_reference: str | None = None,
+) -> AgentState:
     vault_root = _active_recall_vault_root()
     candidates = retrieve_relevant_promoted(state.query, k=RECALL_TOP_K, vault_root=vault_root)
     active_scope = _resolve_domain_scope()
@@ -216,13 +222,19 @@ def _recall_node(state: AgentState, *, ask_settings) -> AgentState:
             )
 
     for candidate in provisional.candidates if provisional is not None else ():
+        use_right = {
+            ConsumingAuthority.READ_ONLY: RecallUseRight.ACTIVATABLE,
+            ConsumingAuthority.PROPOSAL: RecallUseRight.CITED_PROPOSAL,
+            ConsumingAuthority.GOVERNED_EXECUTION: RecallUseRight.ACTION_AUTHORIZING,
+        }[consuming_authority]
         guarded = activate_provisional_recall(
             candidate,
-            consuming_authority=ConsumingAuthority.READ_ONLY,
+            consuming_authority=consuming_authority,
             active_scope_id=active_scope or "",
-            use_right=RecallUseRight.ACTIVATABLE,
+            use_right=use_right,
             activation_reason=ActivationReason.CONTEXTUAL_RELEVANCE,
             receipt_path=_provisional_recall_receipt_path(),
+            citation_reference=citation_reference,
         )
         if guarded.may_answer and guarded.explanation is not None:
             recalled.append(guarded.explanation)

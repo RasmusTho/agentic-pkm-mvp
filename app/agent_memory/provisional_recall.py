@@ -121,18 +121,34 @@ def retrieve_relevant_provisional(
     by_memory: dict[UUID, list] = {}
     for receipt in receipts:
         by_memory.setdefault(receipt.memory_id, []).append(receipt)
+    excluded: list[ProvisionalRecallExclusion] = []
     directory = vault_root / PROVISIONAL_MEMORY_DIR
     if directory.exists():
         for path in directory.glob("*.md"):
             try:
                 memory_id = UUID(path.stem)
             except ValueError:
+                excluded.append(
+                    ProvisionalRecallExclusion(
+                        memory_id=path.stem,
+                        artifact_ref=f"vault://{PROVISIONAL_MEMORY_DIR}/{path.name}",
+                        reason_code="artifact_identity_invalid",
+                    )
+                )
+                continue
+            if memory_id.version != 4 or path.name != f"{memory_id}.md":
+                excluded.append(
+                    ProvisionalRecallExclusion(
+                        memory_id=path.stem,
+                        artifact_ref=f"vault://{PROVISIONAL_MEMORY_DIR}/{path.name}",
+                        reason_code="artifact_identity_invalid",
+                    )
+                )
                 continue
             by_memory.setdefault(memory_id, [])
 
     query_tokens = _tokens(query)
     candidates: list[ProvisionalRecallCandidate] = []
-    excluded: list[ProvisionalRecallExclusion] = []
     for memory_id in sorted(by_memory, key=str):
         artifact_ref = f"vault://{PROVISIONAL_MEMORY_DIR}/{memory_id}.md"
         path = vault_root / PROVISIONAL_MEMORY_DIR / f"{memory_id}.md"

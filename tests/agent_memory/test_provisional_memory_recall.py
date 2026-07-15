@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from uuid import uuid1
 
 from app.activation.gate import AdmissionTier, ConsumingAuthority
 from app.agent_memory.candidate import MemoryType, ReviewState
@@ -184,3 +185,26 @@ def test_missing_provenance_is_excluded_with_content_free_diagnostic(tmp_path: P
     assert search.candidates == ()
     assert search.excluded[0].reason_code == "artifact_invalid"
     assert "deterministic bilingual" not in repr(search.excluded)
+
+
+def test_non_uuid4_filename_is_excluded_without_crashing_recall(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    directory = vault / "Memory" / "Provisional"
+    directory.mkdir(parents=True)
+    memory_id = uuid1()
+    (directory / f"{memory_id}.md").write_text(
+        "---\nartifact_type: provisional_memory\n---\n",
+        encoding="utf-8",
+    )
+
+    search = retrieve_relevant_provisional(
+        "anything",
+        vault_root=vault,
+        receipt_store=ProvisionalReceiptStore(tmp_path / "empty.jsonl"),
+        active_scope_id="scope-personal",
+    )
+
+    assert search.candidates == ()
+    assert search.excluded[0].memory_id == str(memory_id)
+    assert search.excluded[0].reason_code == "artifact_identity_invalid"
+    assert "artifact_type" not in repr(search.excluded)
