@@ -409,8 +409,11 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
         ],
     }
 
-    view["floor_regression"] = bool(scorecard.get("regression"))
-    failures = scorecard.get("failures", [])
+    scorecard_regression = _require_bool(
+        _resolve(scorecard, label, ("regression",)),
+        f"{label}.regression",
+    )
+    failures = _resolve(scorecard, label, ("failures",))
     failures_path = f"{label}.failures"
     if not isinstance(failures, list):
         raise ScorecardCompareError(f"scorecard section at {failures_path} is not a list")
@@ -426,6 +429,11 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
                 )
         for key in FAILURE_ENTRY_NUMERIC_KEYS:
             _require_finite(entry[key], f"{failures_path}[{index}].{key}")
+    if scorecard_regression != bool(failures):
+        raise ScorecardCompareError(
+            f"scorecard regression flag contradicts failures at {label}"
+        )
+    view["floor_regression"] = scorecard_regression
     view["failures"] = failures
 
     return view

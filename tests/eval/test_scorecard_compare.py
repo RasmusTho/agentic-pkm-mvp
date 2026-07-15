@@ -489,6 +489,59 @@ def test_rejects_malformed_failures_entry(
     assert "missing 'value'" in captured.err
 
 
+@pytest.mark.parametrize("regression", [0, None, ""])
+def test_cli_rejects_non_boolean_regression_flag(
+    regression: object,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    candidate = load_scorecard(CANDIDATE_PATH)
+    candidate["regression"] = regression
+    path = tmp_path / "candidate_bad_regression_type.json"
+    path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    assert eval_run.main(
+        ["compare", "--baseline", str(BASELINE_PATH), "--candidate", str(path)]
+    ) == 2
+    assert "non-boolean gate value at candidate.regression" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "regression,failures",
+    [
+        (True, []),
+        (
+            False,
+            [
+                {
+                    "scope": "provisional_memory:hard_gate",
+                    "metric": "cited-proposal-en:uncited_proposal_admitted",
+                    "value": 1.0,
+                    "threshold": 0.0,
+                    "kind": "categorical",
+                }
+            ],
+        ),
+    ],
+)
+def test_cli_rejects_regression_failure_contradiction(
+    regression: bool,
+    failures: list[dict[str, object]],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    candidate = load_scorecard(CANDIDATE_PATH)
+    candidate["regression"] = regression
+    candidate["failures"] = failures
+    path = tmp_path / "candidate_contradictory_regression.json"
+    path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    assert eval_run.main(
+        ["compare", "--baseline", str(BASELINE_PATH), "--candidate", str(path)]
+    ) == 2
+    assert "regression flag contradicts failures" in capsys.readouterr().err
+
+
 def test_verdict_regression_when_candidate_fails_own_floors() -> None:
     baseline = load_scorecard(BASELINE_PATH)
     candidate = load_scorecard(CANDIDATE_PATH)
