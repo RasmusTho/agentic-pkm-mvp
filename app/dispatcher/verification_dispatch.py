@@ -237,6 +237,45 @@ class VerificationDispatchLedger:
                     raise ValueError("verification artifact head does not match canonical run")
                 conn.commit()
                 return _run(candidate)
+            for candidate in conn.execute(
+                """
+                SELECT * FROM verification_runs
+                WHERE repository=? AND pr_number=? AND stage=?
+                  AND status='superseded' AND stop_reason='stale_head'
+                ORDER BY created_at ASC, run_id ASC
+                """,
+                (request["repository"], request["pr_number"], request["stage"]),
+            ):
+                candidate_request = _load(candidate["request_json"])
+                if not isinstance(candidate_request, Mapping):
+                    raise ValueError("verification canonical run authority is malformed")
+                if candidate_request.get("linked_issue") != request.get("linked_issue"):
+                    raise ValueError("verification canonical run governing issue mismatch")
+                next_head = request.get("current_head_sha")
+                if candidate["current_head_sha"] == next_head:
+                    raise ValueError(
+                        "stale-head supersession requires an authoritative new head"
+                    )
+                conn.execute(
+                    """
+                    UPDATE verification_runs
+                    SET status='queued', current_head_sha=?, verified_head_sha=NULL,
+                        claimed_by=NULL, lease_id=NULL, lease_expires_at=NULL,
+                        last_heartbeat_at=NULL, coordinator_session_id=NULL,
+                        context_pack_json=NULL, terminal_receipt_json=NULL,
+                        stop_reason=NULL, retry_after=NULL, updated_at=?
+                    WHERE run_id=? AND status='superseded'
+                      AND stop_reason='stale_head'
+                    """,
+                    (next_head, now, candidate["run_id"]),
+                )
+                reopened = conn.execute(
+                    "SELECT * FROM verification_runs WHERE run_id=?",
+                    (candidate["run_id"],),
+                ).fetchone()
+                assert reopened is not None
+                conn.commit()
+                return _run(reopened)
             existing = conn.execute(
                 "SELECT * FROM verification_runs WHERE idempotency_key = ?",
                 (request["idempotency_key"],),
