@@ -21,6 +21,11 @@ not background lifecycles.
 
 - Inject the request's immutable `ActiveContextSet` into Companion/API routes and shared service
   calls that read, retrieve, capture, mutate, or emit receipts against content vaults.
+- Migrate the existing Companion choose/open-vault picker and its current client state—not the
+  deferred #2566 visual switcher—to create or replace a scoped selection, retain the returned
+  `context_selection_id` for that client session, and send it on every vault-bound request. On
+  expiry/restart the client clears the stale ID, shows the existing reselection contract, and never
+  silently continues on the instance default.
 - Resolve per-binding settings, paths, caches, retrieval scope, and write provenance from the
   snapshot.
 - Make many-binding reads explicit and provenance-preserving; require an explicit target binding
@@ -85,18 +90,22 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 - [ ] Invalid or unauthorized request selection returns the explicit error/picker contract and
   never serves default, last-active, CWD, or another binding.
   - Verify: `tests/api/test_multi_vault_request_fail_closed.py::test_invalid_selection_never_falls_back`
+- [ ] The shipped Companion picker creates/replaces a scoped selection and its client sends that
+  bearer ID through production read and governed-write requests; choosing B changes later requests
+  to B, and stale-ID recovery visibly asks for reselection.
+  - Verify: `tests/integration/test_multi_vault_picker_context.py::test_existing_picker_drives_scoped_request_context`
 - [ ] Request-bound production code cannot introduce new direct global vault resolution outside
   named compatibility adapters.
   - Verify: `tests/architecture/test_multi_vault_context_boundaries.py::test_request_consumers_use_context_seam`
 
 ## Out of Scope
 
-- Watcher/worker lifecycle, UI switcher #2566, registry/default/dimension storage, or removing all
-  compatibility adapters.
+- Watcher/worker lifecycle, the new visual switcher/overlay behavior owned by #2566,
+  registry/default/dimension storage, or removing all compatibility adapters.
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/architecture/test_multi_vault_context_boundaries.py`
+- `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/integration/test_multi_vault_picker_context.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/architecture/test_multi_vault_context_boundaries.py`
 - `ruff check app tests`
 
 ## Restart / Durability Posture
@@ -115,4 +124,5 @@ session/default context and never inherit an unrecorded process selection.
 
 Create one child under #2143 after MVR-03. Terra/high is acceptable for the mechanical call-site
 migration once the Sol-reviewed seam is fixed; escalate to Sol/high on any authority or cache
-isolation ambiguity. #2566 remains the separate downstream UI issue.
+isolation ambiguity. This slice owns compatibility migration of the already-shipped picker;
+#2566 remains the separate downstream visual switcher/overlay issue.

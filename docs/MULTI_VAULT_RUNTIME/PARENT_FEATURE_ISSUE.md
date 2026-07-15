@@ -75,8 +75,9 @@ consumer migration and validation after those contracts are frozen.
 - [ ] Registry identity and persistence preserve same-logical-vault clones, explicit default,
   shipped corrupt-registry picker recovery, and lossless producer migration.
   - Verify: `tests/instance/test_vault_registry_migration.py::test_parent_registry_acceptance`
-- [ ] Two sessions can concurrently use distinct vault contexts, and same-binding/same-generation
-  sessions with different scope/principal cannot share cache or authority state.
+- [ ] Two bearer-capability sessions can concurrently use distinct vault contexts, and
+  same-binding/same-generation sessions with different server-derived scope/capability cannot
+  share cache or authority state; no unsupported multi-user identity is claimed.
   - Verify: `tests/integration/test_multi_vault_request_isolation.py::test_parent_request_context_acceptance`
 - [ ] Dimensions resolve explicit binding sets without becoming authority, while background work
   uses its distinct durable, re-authorized intent set and reuses #3163.

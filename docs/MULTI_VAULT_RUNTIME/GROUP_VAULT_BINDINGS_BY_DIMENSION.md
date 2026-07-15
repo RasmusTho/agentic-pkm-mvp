@@ -23,6 +23,10 @@ non-authoritative registry grouping.
   `vault_binding_id` values to the instance registry.
 - Provide add/remove/list/filter operations and resolve a dimension into explicit source bindings.
 - Preserve per-binding identity, provenance, and GOV evaluation in multi-binding contexts.
+- Make production dimension-to-context resolution all-or-nothing: an unknown, stale, removed, or
+  unauthorized member fails the entire resolution with a redacted member-specific error. It never
+  returns an authorized subset. Authenticated registry administration may inspect stored membership
+  but that inspection is not an ActiveContextSet or permission result.
 - Remove dangling membership transactionally when a registration is removed, while keeping
   removal of a dimension non-destructive to registrations/content.
 
@@ -63,8 +67,8 @@ a hidden authority system and can expose material across real confidentiality bo
 ## Constraints
 
 - A dimension does not grant access, select a default, merge identities, or imply topology.
-- GOV checks every member independently; unauthorized members are explicit failures/exclusions
-  according to the caller contract, never silently substituted.
+- GOV checks every member independently; any unauthorized/unknown/stale member fails the entire
+  production context resolution, never an exclusion, partial result, or silent substitution.
 - Dimension deletion never deletes vault content or registrations.
 
 ## Acceptance Criteria
@@ -75,7 +79,8 @@ a hidden authority system and can expose material across real confidentiality bo
 - [ ] Resolving a dimension returns explicit per-vault bindings and performs independent production
   authorization for every member.
   - Verify: `tests/api/test_dimension_context_resolution.py::test_dimension_resolution_authorizes_each_binding`
-- [ ] Unauthorized/unknown members cannot confer authority or trigger fallback to another member.
+- [ ] An unauthorized/unknown/stale member fails the entire production resolution without exposing
+  an authorized partial set, conferring authority, or triggering fallback.
   - Verify: `tests/api/test_dimension_context_resolution.py::test_dimension_never_upgrades_authority_or_falls_back`
 - [ ] Removing a dimension preserves registrations/content; removing a registration repairs
   dangling membership transactionally.

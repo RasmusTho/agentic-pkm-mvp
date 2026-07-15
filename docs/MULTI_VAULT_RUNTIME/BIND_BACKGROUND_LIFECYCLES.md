@@ -33,13 +33,18 @@ cross-process truth belong here.
   Mutations validate registry membership and authorization, are idempotent by binding ID, record
   redacted receipts, and publish the versioned lifecycle/reload event. Tests must use these
   production producers rather than seeding the store.
-- Introduce a lifecycle supervisor that derives explicit binding instances from that durable set
-  and gives every watcher/worker a stable binding plus generation. For migrated one-vault installs
-  with no explicit set, the instance default/legacy bootstrap yields exactly one compatibility
-  member; no request/session state participates.
+- Introduce a lifecycle supervisor that treats the durable set only as intent. At start/rebind it
+  derives one immutable full `ActiveContextSet` per lifecycle binding, including context ID,
+  generation, stable binding, server-derived instance-background principal, operational scope,
+  topology posture, and `background_intent` or `compatibility_default` provenance. Watcher, worker,
+  settings, queues, health, and receipts propagate that context rather than a rival
+  binding-plus-generation model. For migrated one-vault installs with no explicit set, the instance
+  default/legacy bootstrap yields exactly one compatibility context; no request/session state
+  participates.
 - Define start/rebind/drain/stop behavior for zero/one/many bindings, including clean in-flight
   completion and loud partial failure.
-- Propagate binding identity/generation into health, receipts, settings reload, and work queues.
+- Propagate the complete background `ActiveContextSet` identity, including binding and generation,
+  into health, receipts, settings reload, and work queues.
 - Make cross-process consumers receive/re-resolve versioned binding state rather than sharing an
   untracked env snapshot.
 
@@ -73,10 +78,10 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
 - Derived/rebuildable impact: worker/watch instances and health projections are rebuildable
 - Human knowledge impact: background writes preserve target vault attribution
 - Memory impact: background indexing never mixes vault contexts
-- Retrieval/context impact: indexes/queues carry binding plus generation
+- Retrieval/context impact: indexes/queues carry the full ActiveContextSet identity and binding provenance
 - Sync/deployment impact: replaces frozen env snapshot with explicit cross-process binding truth
 - External boundary impact: env remains bootstrap adapter only
-- New or changed contract: per-binding lifecycle supervision and truthful state transitions
+- New or changed contract: per-binding lifecycle supervision through ActiveContextSet and truthful state transitions
 - Owner-doc impact: will-update-in-PR at `docs/ENVIRONMENTS.md` and watcher/settings owner docs
 - Transition debt impact: reduces D13/D14; residual adapters remain for task 07
 - Fitness rule impact: strengthens lifecycle isolation and truthful health
@@ -97,7 +102,8 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
 ## Acceptance Criteria
 
 - [ ] The production supervisor runs independent watcher/worker lifecycles for two bindings and
-  attributes ingest, queues, settings, health, and receipts to the correct vault/generation.
+  attributes ingest, queues, settings, health, and receipts to the correct immutable
+  ActiveContextSet/vault/generation.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_two_bindings_run_isolated_lifecycles`
 - [ ] Request/session selection does not alter durable background intent; after restart the
   supervisor reconstructs exactly the explicitly enrolled, deduplicated, re-authorized set.
@@ -115,10 +121,11 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
   loud and cannot redirect or mark the whole set healthy.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_zero_one_many_and_partial_failure_are_truthful`
 - [ ] Cross-process worker startup consumes explicit versioned binding state, not an untracked
-  process-global/env snapshot.
+  process-global/env snapshot, and resolves it into the full background ActiveContextSet before
+  work starts.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_worker_handoff_is_versioned_and_explicit`
-- [ ] Production watcher/worker/settings callers use the lifecycle seam outside named bootstrap
-  adapters.
+- [ ] Production watcher/worker/settings callers consume ActiveContextSet outside named bootstrap
+  adapters; no parallel lifecycle context type remains.
   - Verify: `tests/architecture/test_multi_vault_context_boundaries.py::test_background_consumers_use_lifecycle_seam`
 
 ## Out of Scope

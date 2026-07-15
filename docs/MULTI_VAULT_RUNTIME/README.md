@@ -103,12 +103,16 @@ provenance. A request resolves one snapshot and all downstream work for that req
 
 Changing a session selection creates a new generation. In-flight work completes against its old
 snapshot; later work sees the new generation. Caches, retrieval results, and settings bundles are
-keyed by `context_id` plus generation and every scope-affecting input (principal, operational
-scope, dimension/filter, and binding set); receipts and writes record that identity and their
-target binding. Binding plus generation alone is insufficient because two sessions may share both
-while carrying different principals or scopes. Context is never carried from one vault to another
-merely because a selection changed. Cross-vault synthesis requires an explicit multi-binding
-context and preserves per-source provenance.
+keyed by `context_id` plus generation and every scope-affecting input (server-derived principal,
+operational scope, non-reversible selection-capability digest, dimension/filter, and binding set); receipts and writes
+record that identity and their target binding. In the current single-user runtime the opaque
+selection ID is an expiring bearer capability used in addition to #2223 authentication, while the
+server derives the one operator principal from `appInstallId` and owns operational scope; client
+identity/scope strings are never trusted. Binding plus generation alone is insufficient because two
+bearer selections may share both while carrying different scopes or filters. Context is never
+carried from one vault to another merely because a selection changed. Cross-vault synthesis
+requires an explicit multi-binding context and preserves per-source provenance.
+Raw bearer IDs are never logged, receipted, or used directly as cache-key material.
 
 ### Dimensions
 
@@ -183,8 +187,8 @@ Partial delivery remains fail-closed:
 - after task 03 but before tasks 05/06, migrated callers may use ActiveContextSet while unmigrated
   callers stay on named single-vault adapters; the architecture guard records the mixed state and
   no global "multi-vault delivered" claim is allowed;
-- a dimension containing an unknown or unauthorized member resolves as an explicit failure or
-  documented exclusion; it never substitutes another member;
+- a dimension containing an unknown, stale, or unauthorized member fails the whole production
+  context resolution; it never returns a partial set, excludes the member, or substitutes another;
 - if one background binding fails, its lifecycle and health remain failed while other bindings
   continue truthfully; no failed work is redirected;
 - compatibility adapters are removed only after all producers, consumers, fixtures, preflights,

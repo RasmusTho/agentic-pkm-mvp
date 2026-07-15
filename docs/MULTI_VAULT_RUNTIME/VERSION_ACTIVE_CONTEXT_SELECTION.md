@@ -21,15 +21,20 @@ generation unknown. A process-global mutable manager cannot safely represent con
 - Define the minimal runtime-capable `ActiveContextSet` schema: `context_id`, monotonic
   `generation`, immutable zero/one/many source bindings, selection provenance, optional dimension
   filter, and principal/scope/topology fields already reserved by the contract.
-- Add a typed `ContextSelectionStore` keyed by an opaque server-minted `context_selection_id`,
-  bound to the existing Companion request-auth context (#2223: loopback-local or configured API
-  key for non-loopback state changes), plus an explicit request override carrier. Arbitrary client
-  correlation IDs and paths are never session identity, authentication, or authority. The
-  production resolver snapshots one context per request without mutating process-global state and
-  GOV re-authorizes every binding on every resolution.
+- Add a typed `ContextSelectionStore` keyed by a high-entropy opaque server-minted
+  `context_selection_id`. In the current single-user product that ID is an expiring bearer
+  capability, not a claim of multi-user identity: every operation also passes the existing #2223
+  Companion authentication gate, and the server derives one operator principal from the durable
+  `appInstallId` plus a server-owned operational scope for the endpoint/command. API keys, paths,
+  correlation IDs, and client-supplied principal/scope strings never become identity or authority.
+  The record is bound to that instance principal and allowed server-derived scope; possession of a
+  different selection ID is required to access a different session selection. The production
+  resolver snapshots one context per request without mutating process-global state and GOV
+  re-authorizes every binding on every resolution.
 - Add production Companion endpoints to create, replace, inspect, and clear a TTL-bound selection.
-  Creation returns the server-minted ID; later mutation/read requires that ID plus the same
-  #2223-authenticated principal/scope. The existing `/api/companion/vault/select` remains only a
+  Creation returns the server-minted ID; later mutation/read requires that bearer ID plus the
+  #2223 gate and the same server-derived instance principal/allowed scope. The existing
+  `/api/companion/vault/select` remains only a
   named legacy-global adapter until task 05 migrates its production client; it cannot be the new
   session-selection command or mutate a scoped selection implicitly.
 - Keep session selection TTL-bound and ephemeral in V1. A request that supplies no selection ID
@@ -39,7 +44,9 @@ generation unknown. A process-global mutable manager cannot safely represent con
   chat/canvas session map or durable human-artifact store is reused.
 - Rotate generation atomically on session change; let in-flight work finish on its snapshot.
 - Key/invalidate caches and downstream context artifacts by `context_id`, generation, principal,
-  scope, dimension/filter, and binding set; never by binding plus generation alone.
+  scope, a non-reversible selection-capability digest, dimension/filter, and binding set; never by
+  binding plus generation alone. Raw bearer IDs are never logged, receipted, or embedded in cache
+  keys.
 - Enforce GOV authorization independently for every resolved binding.
 
 ## Concretely
@@ -102,14 +109,17 @@ retrieval, settings, or write provenance to leak between humans or vaults.
   - Verify: `tests/api/test_active_context_resolution.py::test_session_expiry_and_restart_are_truthful`
 - [ ] Zero/one/many bindings are valid and each member is independently GOV-authorized.
   - Verify: `tests/api/test_active_context_resolution.py::test_each_binding_is_authorized_independently`
-- [ ] Session selection uses a server-minted ID bound to the production request-auth context;
-  arbitrary client correlation IDs cannot read or mutate another selection.
-  - Verify: `tests/api/test_active_context_resolution.py::test_selection_id_is_server_minted_and_auth_bound`
+- [ ] Session selection uses an expiring high-entropy server-minted bearer ID in addition to #2223
+  authentication, binds to the server-derived single-operator instance principal and operational
+  scope, and rejects arbitrary client correlation/principal/scope inputs or a different ID.
+  - Verify: `tests/api/test_active_context_resolution.py::test_selection_id_is_single_user_bearer_with_server_derived_context`
 - [ ] Production create/replace/inspect/clear commands drive the selection store, enforce #2223
   authentication and expiry, and never mutate process-global `VaultManager` state.
   - Verify: `tests/api/test_active_context_selection_api.py::test_production_selection_lifecycle_is_scoped_and_global_free`
-- [ ] Cache/retrieval context cannot collide across two sessions with the same binding and
-  generation but different principal, scope, or dimension/filter.
+- [ ] Cache/retrieval context cannot collide across two bearer selections with the same binding and
+  generation but different server-derived scope, selection-capability digest, or dimension/filter;
+  raw bearer IDs remain secret and the typed principal field stays in the key for future
+  authenticated-principal expansion.
   - Verify: `tests/retrieval/test_active_context_cache_isolation.py::test_cache_keys_include_full_context_identity`
 
 ## Out of Scope
@@ -137,5 +147,6 @@ way that makes stale cached work appear current.
 
 ## Related GitHub Issues
 
-Create one child under #2143 after MVR-01/02. Use Sol/xhigh: request concurrency, cache isolation,
-and authority enforcement have high blast radius. Reuse #2356's type; do not create a rival seam.
+Create one child under #2143 after MVR-01/02. Use Sol/xhigh: request concurrency, bearer-capability
+handling, cache isolation, and authority enforcement have high blast radius. Reuse #2356's type;
+do not create a rival seam or claim multi-user identity that #2223 does not provide.
