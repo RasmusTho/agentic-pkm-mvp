@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Protocol, Sequence, cast
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
 
 import jsonschema
 
@@ -746,7 +746,8 @@ _CREDENTIAL_ASSIGNMENT = re.compile(
     r"(?i)(?<![A-Za-z0-9_.-])(?P<quote>[\"']?)(?P<key>[A-Za-z0-9_.-]*"
     r"(?:api[_ -]?key|access[_ -]?token|auth[_ -]?token|token|credential|"
     r"password|secret)[A-Za-z0-9_.-]*)(?P=quote)\s*(?::|=|\s)\s*"
-    r"(?:\"[^\"]*\"|'[^']*'|[^\s;,]+)"
+    r"(?:\[REDACTED\]|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|"
+    r"[^\s;,)\]}]+)"
 )
 _BEARER_VALUE = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+")
 _KNOWN_TOKEN_VALUE = re.compile(
@@ -773,15 +774,15 @@ _SAFE_REASONING_EFFORTS = frozenset(
     {"minimal", "low", "medium", "high", "xhigh", "max"}
 )
 _SAFE_EVENT_OUTCOMES = frozenset({"blocking", "clean", "fixed", "repaired"})
-_HTTPS_URL_CANDIDATE = re.compile(r"https://[^\s,;)\]}]+", re.IGNORECASE)
+_HTTPS_URL_CANDIDATE = re.compile(r"https://[^\s,;)\]}\"'<>]+", re.IGNORECASE)
 
 
 def _safe_github_url_projection(value: str) -> str:
     """Retain only bounded, recognized GitHub evidence routes without secrets."""
 
-    parsed = urlsplit(value)
-    host = parsed.hostname.lower() if parsed.hostname is not None else ""
     try:
+        parsed = urlsplit(value)
+        host = parsed.hostname.lower() if parsed.hostname is not None else ""
         port = parsed.port
     except ValueError:
         return "[REDACTED_URL]"
@@ -789,7 +790,9 @@ def _safe_github_url_projection(value: str) -> str:
         return "[REDACTED_URL]"
     if parsed.username is not None or parsed.password is not None or port is not None:
         return f"https://{host}/REDACTED"
-    segments = [unquote(segment) for segment in parsed.path.split("/") if segment]
+    if "%" in parsed.path:
+        return f"https://{host}/REDACTED"
+    segments = [segment for segment in parsed.path.split("/") if segment]
     contains_private_component = any(
         _CREDENTIAL_ASSIGNMENT.search(segment)
         or _BEARER_VALUE.search(segment)

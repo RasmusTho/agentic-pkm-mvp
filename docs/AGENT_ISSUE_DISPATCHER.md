@@ -90,8 +90,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   attempts, pending replay receipts, terminal rows, Human Exception packets, or status output. Its
   only durable text projection is the canonical `[REDACTED]` marker followed by unique, bounded,
   allowlisted GitHub repository, issue, pull-request, or Actions-run evidence routes. Queries,
-  fragments, unsupported routes, secret-shaped path components, URL userinfo, explicit ports, and
-  non-GitHub origins are never preserved. This allowlist, rather than credential-pattern coverage,
+  fragments, percent-encoded paths, unsupported routes, secret-shaped path components, URL userinfo,
+  explicit ports, and non-GitHub origins are never preserved. This allowlist, rather than
+  credential-pattern coverage,
   establishes the no-secret invariant for free-form coordinator text. The projection retains
   the structured identities and actionable option relationships required for deterministic replay
   and governed owner decisions, then passes the canonical schema and semantic validation again.
