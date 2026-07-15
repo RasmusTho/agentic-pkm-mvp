@@ -40,6 +40,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - `app.dispatcher.verification_dispatch` extends the same SQLite control plane with versioned,
   idempotent PR/head verification runs, one global active subscription slot, exact lease-token
   fencing, durable retry timestamps, attempts, receipts, and deduplicated Human Exception packets.
+  Schema v4 assigns new runs repair-budget policy `v2`; its additive v3 migration marks every
+  existing run `v1`, retaining the historical PR-wide/global 2+2 meaning without resetting or
+  reinterpreting any attempt.
 - Initial verification claims acquire the authoritative SQLite write lock before sampling both
   eligibility time and lease expiry. Token-authorized mutations use the same post-lock authority
   clock, so lock waits cannot create already-expired leases or revive expired coordinators.
@@ -53,7 +56,8 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - Before process start, the launcher rejects output schemas outside the Codex Structured Outputs
   subset (including conditional composition and object fields that are not required). The provider
   schema keeps optional values explicitly nullable; local semantic validation still fail-closes a
-  delivered receipt without two review events or a repair event without its finding identity.
+  delivered receipt without two review events or a repair/blocking-review event without its stable
+  finding, closed failure-domain, and mechanism identity.
 - Artifact ingestion independently authenticates both producer runs before download, dispatcher
   persistence, or any target-PR read. The artifact uploader run must be the completed/successful
   `Verification Dispatch Request` workflow at its canonical path, with matching listing run id,
@@ -84,8 +88,8 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   inside the SQLite write transaction. If the observation and canonical token both prove the incoming
   repaired head is the exact open, unmerged, non-draft live PR head while the prior head's coordinator
   row still has an expired running lease, ingestion atomically requeues that same run on the new head, clears
-  stale lease/session/terminal state, and retains every existing attempt and the exhausted
-  standard/escalated 2+2 repair budget. An unauthenticated artifact, a missing or mismatched live
+  stale lease/session/terminal state, and retains every existing attempt and its repair-budget
+  policy. An unauthenticated artifact, a missing or mismatched live
   observation, a live lease, mismatched governing authority, removal/replacement of prior supporting
   issues in either the incoming request or live PR, or an ambiguous terminal chain fails closed without
   changing the run. Freshly observed repaired heads may extend the supporting-issue set monotonically
@@ -112,8 +116,14 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   while free-form, arbitrary, negated, or explicitly false terminal/stderr prose cannot select
   rate-limit backoff. Terminal completion
   additionally requires two fresh clean
-  review receipts after the final durable repair attempt. Standard and strongest-capability repair
-  budgets are persisted across restart.
+  review receipts after the final durable repair attempt. For `v2` runs, repair budget is per stable
+  failure mechanism and failure domain: two standard repair attempts followed, when needed, by two
+  strongest-capability repair attempts for the same key. The closed domains are
+  `review_code_correctness`, `static_quality`, `lease_concurrency`, and
+  `deployment_model_schema`. Multiple findings may share a mechanism, while an existing finding
+  cannot rebind to another domain or mechanism. Capability escalation is key-local; repair budget,
+  policy version, and bindings persist across restart, head rebind, and takeover. Budget exhaustion
+  does not create a Human Exception.
 - Completion never relies on coordinator receipt ids or review-event prose alone. The fresh exact-head
   GitHub read must contain a named, completed, successful `Unit tests (not pg)` check produced by
   the authoritative `github-actions` App and authenticated as a pull-request run of
@@ -127,8 +137,12 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   no-op, and a later invalid/conflicting event rolls back the whole batch. A semantic event-batch
   rejection becomes an exact-lease technical terminal receipt before any pending-check backoff, so
   invalid review or repair events cannot strand coordinator authority or consume a partial budget;
-  a no-repair delivery still requires two distinct clean review sessions. Schema validity does not
-  make model-produced text durable-safe: raw coordinator prose remains transient and never enters
+  a no-repair delivery still requires two distinct clean review sessions.
+  The minimal coordinator context and CLI status expose only policy version plus a bounded,
+  most-recent-first list of sanitized mechanism/domain keys and used/remaining
+  standard/escalated counts. Total and omitted counts make any truncation explicit; finding
+  identities are excluded. Schema validity does not make model-produced text durable-safe: raw coordinator prose
+  remains transient and never enters
   attempts, pending replay receipts, terminal rows, Human Exception packets, or status output. Its
   only durable text projection is the canonical `[REDACTED]` marker followed by unique, bounded,
   allowlisted GitHub repository, issue, pull-request, or Actions-run evidence routes that are
@@ -240,10 +254,11 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   exact live PR head; terminal delivery records the verified head only after two clean reviews on it.
   A later artifact for that repaired head reuses the same active repository/PR/governing-issue run
   instead of opening an empty verification chain, so redispatch cannot reset prior attempts or the
-  PR-wide standard/escalated repair and fresh-review accounting. A mismatched head or governing
+  run's policy-specific repair budget and independent fresh-review accounting. A mismatched head or governing
   authority fails closed instead of sharing the ledger.
   When the repaired head's checks are still pending, its repair event is persisted before bounded
-  backoff so replay cannot bypass the 2+2 ledger; review events are rejected until checks are green.
+  backoff so replay cannot bypass its keyed or legacy-global ledger; review events are rejected until
+  checks are green.
   An exact same-session terminal receipt replay reuses its deterministic verification attempt, so
   already-deduplicated review events retain the same closure anchor. A changed receipt or session
   creates a new anchor and must earn fresh reviews.

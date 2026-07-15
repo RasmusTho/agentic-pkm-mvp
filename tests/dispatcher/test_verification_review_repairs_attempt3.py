@@ -63,6 +63,8 @@ def _clean_reviews() -> list[dict[str, object]]:
             "reasoning_effort": "high",
             "outcome": "clean",
             "finding_id": None,
+            "failure_domain": None,
+            "mechanism_id": None,
             "strongest": None,
         },
         {
@@ -72,6 +74,8 @@ def _clean_reviews() -> list[dict[str, object]]:
             "reasoning_effort": "high",
             "outcome": "clean",
             "finding_id": None,
+            "failure_domain": None,
+            "mechanism_id": None,
             "strongest": None,
         },
     ]
@@ -201,6 +205,8 @@ class RepairedDeliveryLauncher(Launcher):
                     "reasoning_effort": "high",
                     "outcome": "fixed",
                     "finding_id": "discussion_r3573344490",
+                    "failure_domain": "review_code_correctness",
+                    "mechanism_id": "discussion-repair",
                     "strongest": False,
                 },
                 *_clean_reviews(),

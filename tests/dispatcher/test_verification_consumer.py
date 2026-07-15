@@ -221,6 +221,8 @@ class DeliveredLauncher(Launcher):
                     "reasoning_effort": "xhigh",
                     "outcome": "clean",
                     "finding_id": None,
+                    "failure_domain": None,
+                    "mechanism_id": None,
                     "strongest": True,
                 },
                 {
@@ -230,6 +232,8 @@ class DeliveredLauncher(Launcher):
                     "reasoning_effort": "xhigh",
                     "outcome": "clean",
                     "finding_id": None,
+                    "failure_domain": None,
+                    "mechanism_id": None,
                     "strongest": True,
                 },
             ],
@@ -1261,6 +1265,8 @@ def test_pending_repair_checks_persist_repair_before_backoff(tmp_path) -> None:
                         "reasoning_effort": "high",
                         "outcome": "fixed",
                         "finding_id": "F1",
+                        "failure_domain": "review_code_correctness",
+                        "mechanism_id": "pending-repair",
                         "strongest": False,
                     }
                 ],
@@ -1326,6 +1332,8 @@ def test_supporting_issue_addition_allows_repair_head_rebind_without_budget_rese
                         "reasoning_effort": "high",
                         "outcome": "fixed",
                         "finding_id": "F3745",
+                        "failure_domain": "review_code_correctness",
+                        "mechanism_id": "supporting-repair",
                         "strongest": False,
                     }
                 ],
@@ -1383,6 +1391,8 @@ def test_invalid_pending_repair_event_batch_fails_before_backoff(tmp_path) -> No
                         "reasoning_effort": "high",
                         "outcome": "fixed",
                         "finding_id": "F1",
+                        "failure_domain": "review_code_correctness",
+                        "mechanism_id": "invalid-strongest-repair",
                         "strongest": True,
                     }
                 ],
@@ -1427,6 +1437,8 @@ def test_invalid_review_event_batch_terminals_without_stranding_lease(tmp_path) 
                         "reasoning_effort": "xhigh",
                         "outcome": "clean",
                         "finding_id": None,
+                        "failure_domain": None,
+                        "mechanism_id": None,
                         "strongest": None,
                     }
                     for index in range(1, 4)
@@ -1488,7 +1500,9 @@ def test_pending_repair_replay_preserves_two_plus_two_accounting(tmp_path) -> No
                 "review_events": [{
                     "kind": "repair", "session_id": "repair-1",
                     "capability": "gpt-5.6-terra", "reasoning_effort": "high",
-                    "outcome": "fixed", "finding_id": "F1", "strongest": False,
+                    "outcome": "fixed", "finding_id": "F1",
+                    "failure_domain": "review_code_correctness",
+                    "mechanism_id": "replay-repair", "strongest": False,
                 }],
                 "human_exception": None,
             }
@@ -1507,12 +1521,16 @@ def test_pending_repair_replay_preserves_two_plus_two_accounting(tmp_path) -> No
                     {
                         "kind": "review", "session_id": "review-1",
                         "capability": "gpt-5.6-sol", "reasoning_effort": "xhigh",
-                        "outcome": "clean", "finding_id": None, "strongest": None,
+                        "outcome": "clean", "finding_id": None,
+                        "failure_domain": None, "mechanism_id": None,
+                        "strongest": None,
                     },
                     {
                         "kind": "review", "session_id": "review-2",
                         "capability": "gpt-5.6-sol", "reasoning_effort": "xhigh",
-                        "outcome": "clean", "finding_id": None, "strongest": None,
+                        "outcome": "clean", "finding_id": None,
+                        "failure_domain": None, "mechanism_id": None,
+                        "strongest": None,
                     },
                 ],
                 "human_exception": None,
@@ -1555,12 +1573,14 @@ def test_exact_terminal_receipt_replay_preserves_closure_anchor(tmp_path) -> Non
         {
             "kind": "review", "session_id": "review-1",
             "capability": "gpt-5.6-sol", "reasoning_effort": "xhigh",
-            "outcome": "clean", "finding_id": None, "strongest": None,
+            "outcome": "clean", "finding_id": None,
+            "failure_domain": None, "mechanism_id": None, "strongest": None,
         },
         {
             "kind": "review", "session_id": "review-2",
             "capability": "gpt-5.6-sol", "reasoning_effort": "xhigh",
-            "outcome": "clean", "finding_id": None, "strongest": None,
+            "outcome": "clean", "finding_id": None,
+            "failure_domain": None, "mechanism_id": None, "strongest": None,
         },
     ]
     loop = VerificationAgentLoop(
@@ -3093,6 +3113,8 @@ def test_production_receipt_schema_uses_codex_subset_and_preserves_semantics() -
                 "reasoning_effort": "xhigh",
                 "outcome": "clean",
                 "finding_id": None,
+                "failure_domain": None,
+                "mechanism_id": None,
                 "strongest": None,
             },
             {
@@ -3102,6 +3124,8 @@ def test_production_receipt_schema_uses_codex_subset_and_preserves_semantics() -
                 "reasoning_effort": "xhigh",
                 "outcome": "clean",
                 "finding_id": None,
+                "failure_domain": None,
+                "mechanism_id": None,
                 "strongest": None,
             },
         ],
@@ -3118,7 +3142,7 @@ def test_production_receipt_schema_uses_codex_subset_and_preserves_semantics() -
         dict(valid["review_events"][0], kind="repair"),  # type: ignore[index]
         valid["review_events"][1],  # type: ignore[index]
     ]
-    with pytest.raises(jsonschema.ValidationError, match="finding_id"):
+    with pytest.raises(jsonschema.ValidationError, match="stable finding"):
         verification_consumer.validate_verification_closer_receipt(
             repair_without_finding, schema
         )

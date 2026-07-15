@@ -208,13 +208,16 @@ Retry budget:
 
 - One CI rerun is allowed for a suspected flake when logs support a flaky or
   infrastructure classification and the governing workflow allows reruns.
-- At most two repair attempts are allowed for the same failure mechanism.
-- A new failure mechanism resets only after the gate proves it is materially
-  different from the prior mechanism.
+- Repair budget is per stable failure mechanism and failure domain: two standard
+  repair attempts followed, when needed, by two strongest-capability repair attempts.
+- A new mechanism receives a separate budget only after the gate records a stable,
+  materially different mechanism identity. A finding may not be rebound to another
+  mechanism or domain to reset accounting.
 
 Frontier-rescue stop conditions:
 
-- The same failure mechanism survives two repair attempts.
+- The same failure mechanism survives its two standard and two strongest-capability
+  repair attempts.
 - The cause is unknown after the context pack and one focused investigation.
 - The proposed repair expands scope beyond the issue contract.
 - Repair would touch protected branches, workflows, secrets, migrations,
@@ -240,9 +243,10 @@ Required loop:
 
 Maximum attempts:
 
-- Two substantive fix attempts are allowed for the same blocking finding or
-  failure mechanism before capability escalation and classifier-based repair
-  triage; retry exhaustion alone is not a Human Exception.
+- Two standard repair attempts are allowed for the same stable failure mechanism
+  and failure domain before capability escalation. At most two strongest-capability
+  repair attempts then remain for that same key. Exhaustion triggers classifier-based
+  repair triage; it does not create a Human Exception.
 - A high-risk PR needs two clean review rounds only when the governing
   verification skill or human reviewer requires it.
 - Cosmetic or receipt-only corrections do not reset the substantive attempt
@@ -282,12 +286,14 @@ repair counter is updated. A retry counter alone must never select
 | `blocked_technical` | The system failed closed, a dependency is unavailable, or the cause needs stronger diagnosis; no authority is missing. | Keep the affected service/merge path disabled or blocked, collect evidence, and create a linked bounded recovery slice when needed. |
 | `needs_owner` | Continuing needs an unapproved irreversible/external effect, a security/privacy/cost commitment, a production/release operator action, or resolution of contradictory source authority. | Emit one deduplicated Human Exception packet while preserving all CI/review/merge gates. |
 
-Repair accounting is partitioned by failure domain: review/code correctness,
-static-quality, lease/concurrency, and deployment/model-schema compatibility.
-A failure in one domain does not consume another domain's budget. Repeatedly
-identical findings still hit a circuit breaker: it triggers stronger autonomous
-diagnosis and a bounded replan, not an owner interruption, unless that replan
-crosses a `needs_owner` authority category.
+Repair accounting is per stable failure mechanism and failure domain. The closed
+domains are review/code correctness, static-quality, lease/concurrency, and
+deployment/model-schema compatibility. A failure in one domain or mechanism does
+not consume another key's budget. Multiple findings may bind to the same mechanism,
+but one finding may never rebind to reset accounting. Repeatedly identical findings
+still hit a circuit breaker: it triggers stronger autonomous diagnosis and a bounded
+replan, not an owner interruption, unless that replan crosses a `needs_owner`
+authority category. Budget exhaustion by itself does not create a Human Exception.
 
 Deployment/model-schema compatibility is a control-plane concern. It must be
 checked in a non-mutating preflight before a dispatcher claim or pilot; a

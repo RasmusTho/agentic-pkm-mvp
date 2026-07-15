@@ -22,6 +22,7 @@ from app.dispatcher.schema import (
     LEGACY_UNTRUSTED_VERIFICATION_STATUS,
     SCHEMA_VERSION,
     verification_v3_schema_error,
+    verification_v4_schema_error,
 )
 
 
@@ -330,51 +331,36 @@ class SqliteStore:
                 "SELECT value FROM dispatcher_meta WHERE key='schema_version'"
             ).fetchone()
             current_version = None if row is None else str(row["value"])
-        verification_columns: set[str] = set()
-        verification_runs_exists = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='verification_runs'"
-        ).fetchone()
-        if verification_runs_exists is not None:
-            verification_columns = {
-                row["name"] for row in conn.execute("PRAGMA table_info(verification_runs)")
-            }
-        verification_additive_columns_complete = {
-            "current_head_sha",
-            "verified_head_sha",
-            "supporting_authority_json",
-        }.issubset(verification_columns)
         if "repo" in columns and current_version == str(SCHEMA_VERSION):
-            schema_error = verification_v3_schema_error(
-                conn, allow_additive_migration=True
-            )
+            # A database declaring the current version must already have the
+            # complete current shape. Missing v4 identity columns cannot be
+            # reconstructed without resetting keyed repair accounting.
+            schema_error = verification_v4_schema_error(conn)
             if schema_error is not None:
                 raise ValueError(schema_error)
-            if verification_additive_columns_complete:
-                authority_reconciliation_required = False
-                for verification_row in conn.execute(
-                    "SELECT * FROM verification_runs"
-                ).fetchall():
-                    _, is_inert = (
-                        _verification_authority_migration(verification_row)
-                    )
-                    if is_inert:
-                        authority_reconciliation_required = (
-                            authority_reconciliation_required
-                            or not _legacy_verification_row_is_quarantined(
-                                verification_row
-                            )
+            authority_reconciliation_required = False
+            for verification_row in conn.execute(
+                "SELECT * FROM verification_runs"
+            ).fetchall():
+                _, is_inert = _verification_authority_migration(verification_row)
+                if is_inert:
+                    authority_reconciliation_required = (
+                        authority_reconciliation_required
+                        or not _legacy_verification_row_is_quarantined(
+                            verification_row
                         )
-                    else:
-                        if (
-                            verification_row["status"]
-                            == LEGACY_UNTRUSTED_VERIFICATION_STATUS
-                        ):
-                            raise ValueError(
-                                "legacy verification audit classification is malformed"
-                            )
-                        _validate_canonical_verification_row(verification_row)
-                if not authority_reconciliation_required:
-                    return
+                    )
+                else:
+                    if (
+                        verification_row["status"]
+                        == LEGACY_UNTRUSTED_VERIFICATION_STATUS
+                    ):
+                        raise ValueError(
+                            "legacy verification audit classification is malformed"
+                        )
+                    _validate_canonical_verification_row(verification_row)
+            if not authority_reconciliation_required:
+                return
 
         # Only the original v1 layout is a supported migration source.  In
         # particular, do not turn a database written by a newer dispatcher
@@ -384,7 +370,7 @@ class SqliteStore:
         # dispatcher_meta, so its absence is recognized only together with
         # the v1-specific missing ``repo`` column.
         is_unversioned_v1 = current_version is None and "repo" not in columns
-        if current_version not in {"1", "2", str(SCHEMA_VERSION)} and not is_unversioned_v1:
+        if current_version not in {"1", "2", "3", str(SCHEMA_VERSION)} and not is_unversioned_v1:
             version = "missing" if current_version is None else repr(current_version)
             raise ValueError(f"unsupported dispatcher schema_version: {version}")
         if current_version == "2" and "repo" not in columns:
@@ -408,12 +394,16 @@ class SqliteStore:
                 ).fetchone()
                 current_version = None if row is None else str(row["value"])
             is_unversioned_v1 = current_version is None and "repo" not in columns
-            if current_version not in {"1", "2", str(SCHEMA_VERSION)} and not is_unversioned_v1:
+            if current_version not in {"1", "2", "3", str(SCHEMA_VERSION)} and not is_unversioned_v1:
                 version = "missing" if current_version is None else repr(current_version)
                 raise ValueError(f"unsupported dispatcher schema_version: {version}")
-            if current_version == str(SCHEMA_VERSION) and "repo" in columns:
-                schema_error = verification_v3_schema_error(
-                    conn, allow_additive_migration=True
+            if current_version in {"3", str(SCHEMA_VERSION)} and "repo" in columns:
+                schema_error = (
+                    verification_v3_schema_error(
+                        conn, allow_additive_migration=True
+                    )
+                    if current_version == "3"
+                    else verification_v4_schema_error(conn)
                 )
                 if schema_error is not None:
                     raise ValueError(schema_error)
@@ -421,7 +411,10 @@ class SqliteStore:
                     row["name"]
                     for row in conn.execute("PRAGMA table_info(verification_runs)")
                 }
-                if "current_head_sha" not in verification_columns:
+                if (
+                    current_version == "3"
+                    and "current_head_sha" not in verification_columns
+                ):
                     conn.execute(
                         "ALTER TABLE verification_runs ADD COLUMN "
                         "current_head_sha TEXT NOT NULL DEFAULT ''"
@@ -430,18 +423,44 @@ class SqliteStore:
                         "UPDATE verification_runs SET current_head_sha=head_sha "
                         "WHERE current_head_sha=''"
                     )
-                if "verified_head_sha" not in verification_columns:
+                if (
+                    current_version == "3"
+                    and "verified_head_sha" not in verification_columns
+                ):
                     conn.execute(
                         "ALTER TABLE verification_runs ADD COLUMN verified_head_sha TEXT"
                     )
                 supporting_authority_added = (
-                    "supporting_authority_json" not in verification_columns
+                    current_version == "3"
+                    and "supporting_authority_json" not in verification_columns
                 )
                 if supporting_authority_added:
                     conn.execute(
                         "ALTER TABLE verification_runs ADD COLUMN "
                         "supporting_authority_json TEXT NOT NULL DEFAULT '[]'"
                     )
+                if (
+                    current_version == "3"
+                    and "repair_budget_policy" not in verification_columns
+                ):
+                    conn.execute(
+                        "ALTER TABLE verification_runs ADD COLUMN "
+                        "repair_budget_policy TEXT NOT NULL DEFAULT 'v1'"
+                    )
+                verification_attempt_columns = {
+                    row["name"]
+                    for row in conn.execute(
+                        "PRAGMA table_info(verification_attempts)"
+                    )
+                }
+                for column in ("finding_id", "failure_domain", "mechanism_id"):
+                    if (
+                        current_version == "3"
+                        and column not in verification_attempt_columns
+                    ):
+                        conn.execute(
+                            f"ALTER TABLE verification_attempts ADD COLUMN {column} TEXT"
+                        )
                 for verification_row in conn.execute(
                     "SELECT * FROM verification_runs"
                 ).fetchall():
@@ -498,9 +517,13 @@ class SqliteStore:
                                 "legacy verification audit classification is malformed"
                             )
                         _validate_canonical_verification_row(verification_row)
-                schema_error = verification_v3_schema_error(conn)
+                schema_error = verification_v4_schema_error(conn)
                 if schema_error is not None:
                     raise ValueError(schema_error)
+                conn.execute(
+                    "INSERT OR REPLACE INTO dispatcher_meta(key, value) VALUES (?, ?)",
+                    ("schema_version", str(SCHEMA_VERSION)),
+                )
                 conn.commit()
                 return
             if current_version == str(SCHEMA_VERSION):
@@ -538,7 +561,7 @@ class SqliteStore:
                 )
             for stmt in DDL_STATEMENTS:
                 conn.execute(stmt)
-            schema_error = verification_v3_schema_error(conn)
+            schema_error = verification_v4_schema_error(conn)
             if schema_error is not None:
                 raise ValueError(schema_error)
             conn.execute(
@@ -556,7 +579,7 @@ class SqliteStore:
             try:
                 for stmt in DDL_STATEMENTS:
                     conn.execute(stmt)
-                schema_error = verification_v3_schema_error(conn)
+                schema_error = verification_v4_schema_error(conn)
                 if schema_error is not None:
                     raise ValueError(schema_error)
                 conn.execute(
