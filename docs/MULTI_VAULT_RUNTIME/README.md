@@ -268,7 +268,7 @@ Partial delivery remains fail-closed:
 - after issue 01C but before task 02, registrations exist but `last_active_vault_ref` remains the
   compatibility behavior; no registration is silently promoted to default;
 - after issue 01B and until issue 05C advances the foreground-ownership floor, cross-channel transfer
-  is implemented but production requests fail capability-not-ready; the source lease cannot be
+  is implemented but production transfer requests fail capability-not-ready; the source lease cannot be
   released while legacy foreground read/write paths remain unfenced;
 - after task 02 but before task 03, default resolution is available only through explicit
   background/compatibility adapters; requests do not pretend to be session-scoped;
@@ -278,9 +278,11 @@ Partial delivery remains fail-closed:
 - after issue 05B but before issue 06B, the existing picker alone continues to drive #3163's named
   single-watcher bridge while scoped request/session selection does not; issue 06B atomically hands
   that live binding to the durable supervisor before disabling the bridge;
-- before issue 05D enables binding-keyed producers, every pending legacy outbox key is classified and
+- before issue 05A enables the first binding-keyed compatibility producer, every pending legacy
+  outbox key is classified and
   scoped/coalesced under the DB fence; identical retries preserve one canonical lineage and
-  ambiguous/conflicting rows quarantine, so issue 06D cannot backfill a duplicate;
+  ambiguous/conflicting rows quarantine. Issue 05D retires the compatibility translator only after
+  native producer migration, and issue 06D cannot backfill a duplicate;
 - after issue 06D, legacy choose/open continues to rebind only `compatibility` lifecycle intent by
   committing it before the supervisor wake-up hint; the first governed background add/remove enters
   `explicit` mode, after which picker and default changes cannot mutate the explicit background set;

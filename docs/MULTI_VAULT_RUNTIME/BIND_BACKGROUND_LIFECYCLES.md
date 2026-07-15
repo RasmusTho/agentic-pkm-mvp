@@ -166,8 +166,9 @@ acceptance criteria prefixed with its ID:
    supervisor, ownership-lease checks, revision/auth-epoch reconciliation, truthful gated health, and
    cross-process ActiveContextSet handoff; its multi-binding activation remains dormant. Depends on 06B.
 4. **MVR-06D — queued-work convergence and aggregate proof:** validate MVR-05 classification, preserve or
-   quarantine pending rows under current authority/binding, atomically activate zero/one/many controls,
-   write environment/health truth, and complete aggregate lifecycle proof. Depends on 06C and closes MVR-06.
+   quarantine pending rows under current authority/binding, atomically activate many-binding
+   enrollment/start plus its matching dispatch contract, write environment/health truth, and prove
+   aggregate zero/one/many behavior. Depends on 06C and closes MVR-06.
 
 Four distinct merged receipts are required on #2143; no child recreates #3163 or #3156.
 
@@ -175,9 +176,9 @@ Partial-delivery gates are explicit: after 06A, durable intent/auth schema exist
 single-watcher bridge remains authoritative and every add/remove or other intent-changing command
 returns `capability_not_ready`; list/inspect is read-only. 06B atomically replaces the bridge with the revision-reconciling single-binding
 compatibility supervisor and permits only empty/singleton intent; a second binding is rejected.
-06C implements and proves the dormant multi-binding supervisor but keeps enrollment/start sealed;
-06D atomically enables zero/one/many enrollment, lifecycle start, and queued dispatch only after the
-MVR-05 classification receipt and current
+06C implements and proves the dormant multi-binding supervisor but keeps second/many-binding
+enrollment/start sealed; 06D atomically enables many-binding enrollment/start and its matching queued
+dispatch only after the MVR-05 classification receipt and current
 binding/authority checks pass. A later stage never becomes observable before its producer,
 migration, preflight, and fail-loud gate merge together.
 
@@ -209,7 +210,7 @@ migration, preflight, and fail-loud gate merge together.
 - Owner-doc impact: each owning child updates in its PR: 06A security/governed-write plus
   deployment/release-channel floor truth; 06B
   vault/settings and Settings Spine; 06C documents the one-binding gated/dormant supervisor;
-  06D writes the activated zero/one/many runtime-control and health truth
+  06D writes the completed zero/one/many runtime-control and health truth, including many-binding activation
 - Transition debt impact: reduces D13/D14; residual adapters remain for task 07
 - Fitness rule impact: strengthens lifecycle isolation and truthful health
 
@@ -357,8 +358,9 @@ migration, preflight, and fail-loud gate merge together.
   binding state; it does not claim many-binding activation.
   - Verify: doc writeback at `docs/ENVIRONMENTS.md :: Runtime Control Surface` + doc writeback at
     `docs/HEALTH.md :: Runtime health`
-- [ ] **MVR-06D:** Environment and health owner contracts describe activated zero/one/many lifecycle
-  controls only after queued binding classification and current authority checks succeed.
+- [ ] **MVR-06D:** Environment and health owner contracts describe the completed zero/one/many
+  lifecycle posture, including newly activated many-binding controls, only after queued binding
+  classification and current authority checks succeed.
   - Verify: doc writeback at `docs/ENVIRONMENTS.md :: Runtime Control Surface` + doc writeback at
     `docs/HEALTH.md :: Runtime health`
 
