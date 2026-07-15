@@ -1,10 +1,10 @@
-State: FILED as GitHub validation-parent issue #3775 with children #3776-#3781. All children are blocked pending the owner gates in the authoritative specification and Issue-contract reconciliation. GitHub is the live validation surface; this file is the checked-in parent contract.
+State: FILED as GitHub validation-parent issue #3775 with children #3776-#3781. The five owner decisions are accepted; all children remain blocked pending task/Issue-contract reconciliation and strict revalidation. GitHub is the live validation surface; this file is the checked-in parent contract.
 
 # CKM Measurement & Access — Parent Validation Hub
 
 ## Context
 
-The accepted CKM MVP predecessor is #3138. The audit `docs/audits/CKM_MEASUREMENT_AND_ACCESS_2026-07-14.md` and consensus inquiries `inq_20260715T062832Z_e73546a2` and `inq_20260715T090347Z_61c6d5e4` define the post-MVP structured access, measurement, and observation boundary. The later inquiry exposed unresolved access, metric-use, longitudinal-scope, identity-lifecycle, and retention decisions; owner direction on 2026-07-15 paused Q1a until this contract is corrected and those gates are resolved. This parent is a validation hub, never an implementation pickup issue.
+The accepted CKM MVP predecessor is #3138. The audit `docs/audits/CKM_MEASUREMENT_AND_ACCESS_2026-07-14.md` and consensus inquiries `inq_20260715T062832Z_e73546a2` and `inq_20260715T090347Z_61c6d5e4` define the post-MVP structured access, measurement, and observation boundary. The later inquiry exposed five owner decisions; on 2026-07-15 the owner accepted the single-operator local posture, bounded human-advisory metric use under TCD, sampled compatible history, never-reused lifecycle identity, and 365-day retention with explicit pruning. Q1a remains paused until every affected contract is reconciled and revalidated. This parent is a validation hub, never an implementation pickup issue.
 
 ## Scope
 
@@ -38,17 +38,19 @@ Validate Q1a/Q1b, Q2, M1, O1a, and O1b as defined in `docs/CKM_MEASUREMENT_AND_A
 ## Constraints
 
 - Parent is never claimed.
-- No child becomes Ready until all five owner gates are accepted, its spec/Issue contract is reconciled, and strict readiness validation passes.
+- No child becomes Ready until its spec/Issue contract is reconciled to all five accepted owner decisions and strict readiness validation passes.
 - Q1 is not accepted after schemas alone.
 - Read paths are side-effect free and fail closed.
-- No ranking, gating, prioritization, automation, drift, prediction, or federation.
+- No machine ranking, gating, automated prioritization, automation, drift, prediction, or federation. A fully explained aggregate may be one small human-advisory input under the accepted policy.
 - M2/O2 remain observation-gated future work.
 - V1 uses bounded complete capture and has no cursor/pagination contract; later continuation requires size evidence, retained immutable snapshots, and accepted retention semantics.
 
 ## Acceptance Criteria
 
-- [ ] All five pre-implementation owner gates are accepted and every affected child Issue is revalidated against the corrected contract before pickup.
-  Verify: `docs/CKM_MEASUREMENT_AND_ACCESS/README.md :: Pre-implementation owner gates` plus child readiness receipts
+- [x] All five pre-implementation owner decisions are accepted.
+  Verify: `docs/CKM_MEASUREMENT_AND_ACCESS/README.md :: Accepted pre-implementation owner decisions`
+- [ ] Every affected task and child Issue is reconciled and revalidated against those decisions before pickup.
+  Verify: child reconciliation and strict readiness receipts
 - [ ] Every repo-verifiable capability criterion in the specification README is satisfied.
   Verify: child delivery receipts plus ledger at `docs/CKM_MEASUREMENT_AND_ACCESS/README.md :: Capability acceptance criteria`
 - [ ] Q1a and Q1b jointly prove the working public contract; schemas alone never satisfy Q1.
@@ -71,7 +73,7 @@ Validate Q1a/Q1b, Q2, M1, O1a, and O1b as defined in `docs/CKM_MEASUREMENT_AND_A
 
 ## Verification Path
 
-After the owner gates and contract/Issue reconciliation, each child executes its exact `Verify:` targets, `ruff check app tests`, current-SHA CI, and local review. Receipts accumulate on this parent after each merge.
+After contract/Issue reconciliation and strict readiness validation, each child executes its exact `Verify:` targets, `ruff check app tests`, current-SHA CI, and local review. Receipts accumulate on this parent after each merge.
 
 ## Validation / Acceptance Path
 

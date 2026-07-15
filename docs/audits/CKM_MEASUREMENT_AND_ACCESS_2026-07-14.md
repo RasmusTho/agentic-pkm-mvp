@@ -138,4 +138,16 @@ The later consensus adds these fail-closed constraints to the authoritative cont
 - aggregate maturity is absent from v1 machine-readable output, while every registered metric declares intended/prohibited uses and Goodhart-review ownership;
 - longitudinal support is limited to explicitly accepted questions and replayable retained captured samples under a correction/deletion policy; digests alone do not prove reconstruction.
 
-The unresolved owner gates are snapshot access/disclosure, metric use, supported longitudinal questions, identity lifecycle, and retention/correction/deletion. Owner direction on 2026-07-15 selected the fail-closed route: pause Q1a PR #3786 and correct the CKM contract before implementation resumes. This routing decision does not resolve the five policies. `docs/CKM_MEASUREMENT_AND_ACCESS/` remains authoritative and now carries the gates and corrected task boundaries; all child Issues remain blocked until those decisions and Issue-contract reconciliation are complete.
+At this pause point, the unresolved owner gates were snapshot access/disclosure, metric use, supported longitudinal questions, identity lifecycle, and retention/correction/deletion. Owner direction on 2026-07-15 selected the fail-closed route: pause Q1a PR #3786 and correct the CKM contract before implementation resumed. `docs/CKM_MEASUREMENT_AND_ACCESS/` remains authoritative for the later resolution and corrected task boundaries.
+
+## 11. Owner-decision resolution (2026-07-15)
+
+The owner subsequently resolved all five gates:
+
+- v1 is a trusted one-person local environment, so it declares a versioned `single_operator_local` posture and adds no account, role, authentication, authorization, or redaction machinery; multi-user or remote use requires a new decision;
+- aggregate maturity may be machine-readable only as a small `human_advisory_only` input with its vector, evidence, freshness, confidence, limitations, and Goodhart warning present; it cannot be the sole decision basis or drive machine authority, and TCD governs whether deeper KPI work is worth building;
+- longitudinal support is limited to retained compatible samples answering changes in evidence coverage/composition, source freshness, citation/confidence coverage, and candidate/finding composition; arbitrary historical reconstruction remains unsupported and the smallest implementation must be costed before M2 is filed;
+- identifiers are never reused: rename preserves identity, deletion tombstones, split creates new successor identifiers, and merge creates a new identifier with successor aliases from tombstoned inputs;
+- explicitly retained samples default to 365 days, expose count/byte usage, may expire automatically only at or after 365 days, and may be pruned earlier only through a previewed explicit operator action; correction/deletion/pruning preserves non-content lifecycle markers and makes unavailable-source replay refuse.
+
+These decisions resolve policy authority but do not resume implementation by themselves. Every affected task and live Issue must first be reconciled and strictly revalidated; PR #3786 remains paused until that work is complete.

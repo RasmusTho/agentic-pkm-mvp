@@ -1,4 +1,4 @@
-State: Target-state specification directory for the post-MVP CKM Measurement & Access capability. Backlog is filed as parent #3775 with children #3776-#3781, but every child is blocked pending the pre-implementation owner gates below and reconciliation of its Issue contract. Accepted predecessor CKM MVP validation hub: closed GitHub issue #3138. No successor implementation claim.
+State: Target-state specification directory for the post-MVP CKM Measurement & Access capability. Backlog is filed as parent #3775 with children #3776-#3781. The five owner decisions are accepted below, but every child remains blocked pending reconciliation and strict revalidation of its task and Issue contract. Accepted predecessor CKM MVP validation hub: closed GitHub issue #3138. No successor implementation claim.
 Doc role: Specification directory (capability breakdown)
 Authority: Owns the accepted post-MVP access, measurement, observation, dependency, and acceptance contract. Subordinate to ADR-0057 and the Builder System authority boundary.
 Owner: BuilderOps governance / Capability Knowledge Model
@@ -9,7 +9,7 @@ Last reviewed: 2026-07-15
 
 # CKM Measurement & Access
 
-This specification defines how a successor capability will make the delivered Capability Knowledge Model safely consumable by machines and measurable without turning CKM projections into authority. It follows the accepted CKM MVP (#3138), the architecture audit `docs/audits/CKM_MEASUREMENT_AND_ACCESS_2026-07-14.md`, and BuilderOps inquiries `inq_20260715T062832Z_e73546a2` and `inq_20260715T090347Z_61c6d5e4` (both `consensus`). The later inquiry governs this correction where the two inquiry handoffs differ; it remains advisory until its explicit owner gates are decided here.
+This specification defines how a successor capability will make the delivered Capability Knowledge Model safely consumable by machines and measurable without turning CKM projections into authority. It follows the accepted CKM MVP (#3138), the architecture audit `docs/audits/CKM_MEASUREMENT_AND_ACCESS_2026-07-14.md`, and BuilderOps inquiries `inq_20260715T062832Z_e73546a2` and `inq_20260715T090347Z_61c6d5e4` (both `consensus`). The later inquiry governs where the two inquiry handoffs differ, and the owner decisions recorded below now resolve its five policy gates.
 
 Work classification: **Builder System / CES boundary**. CKM remains projection-only BuilderOps analysis. OEF may consume descriptive observations but gains no policy or control authority. Product/Runtime artifacts and GitHub remain read-only sources. Federation remains SFC/CES-owned, and Correctness Kernel drift remains a separate declared-state contract.
 
@@ -25,49 +25,49 @@ Once parent acceptance is complete, the specified successor capability will prov
 - bounded exact-ID lookup and a bounded complete snapshot/export that refuses when it cannot be complete;
 - CLI JSON as the first adapter over the same query service future HTTP/UI adapters would use;
 - richer bounded filters and batch query plans after the correctness baseline;
-- versioned descriptive metric definitions and fully bound immutable observations;
+- versioned descriptive metric definitions, a bounded human-advisory aggregate, and fully bound immutable observations;
 - privacy-safe outer-adapter observation of already-returned query/question and unsupported-request outcomes;
 - comparison only between semantically compatible immutable observations;
-- retention, correction, deletion, and redistribution behavior only after an accepted owner policy exists.
+- one-year sampled retention, storage visibility, explicit pruning, correction, deletion, and operator-controlled export behavior under the accepted owner policy.
 
-The capability does **not** provide general bitemporality, arbitrary as-of reconstruction, retroactive provenance, rankings, gates, scalar-only ordering, agent scoring, prioritization, prediction, automation, drift detection, or federation.
+The capability does **not** provide general bitemporality, arbitrary as-of reconstruction, retroactive provenance, machine-produced rankings, gates, scalar-only ordering, agent scoring, automated prioritization, prediction, automation, drift detection, or federation. The single operator may use a labeled aggregate as one small advisory input, never as the sole basis for a decision.
 
 ## Accepted architecture decisions
 
 1. Q1 is one acceptance gate: contract plus a minimal working single-transaction snapshot. Q1a may land schemas/state identity first, but Q1 is not delivered until Q1b proves the public contract on the production read path.
-2. Public identity survives rebuild and display-name/slug changes, is never reused, and cannot silently preserve or collapse identity across deletion, split, or merge. Raw row IDs are never public identifiers. The exact alias/tombstone policy is an owner gate and must be accepted before Q1a resumes.
+2. Public identity survives rebuild and display-name/slug changes and is never reused. Rename keeps the identifier; deletion leaves a content-free tombstone; split creates new identifiers and tombstones the original with successor links; merge creates a new identifier and tombstones the inputs with successor aliases. Raw row IDs are never public identifiers.
 3. Snapshot identity binds epoch, transactionally advanced state revision, resource/envelope schema versions, taxonomy digest, exact watermarks, and the canonical read-set digest.
 4. Query execution is read-only and side-effect free: no directory creation, schema initialization, migration, receipt emission, event callback, or mutation. O1a observation, when present, is a separate outer adapter invoked only after the immutable query result/refusal returns.
 5. V1 prefers a bounded complete snapshot/export. If the configured bound cannot contain the complete declared scope, the operation returns a typed refusal and no measurement-eligible partial snapshot. Pagination is deferred until size evidence justifies it and retained immutable snapshots plus an accepted retention policy can make continuation honest.
 6. Missing, unassessed, unsupported, and measured-zero are tagged distinct states. Candidate and confirmed material remain separate. Completeness is always explicit.
 7. DTOs, errors, query services, and envelopes are transport-neutral. Click parses/serializes only.
 8. General valid-time/system-state history is unsupported. Assessment assertion history remains supported; unsupported historical requests fail explicitly. No provenance is fabricated retroactively.
-9. Metrics are descriptive and snapshot-bound. Every definition exposes intended/prohibited uses, Goodhart warnings, and `not_for_gating: true`; aggregate maturity is absent from every v1 machine-readable surface, and scalar ordering or automated authority is rejected.
-10. Comparison refuses any semantics-bearing mismatch, including identity and access-policy versions. Cadence, observation-window length, minimum distinct snapshots, and supported longitudinal questions remain unresolved until explicitly accepted.
+9. Metrics are descriptive and snapshot-bound. Every definition exposes intended/prohibited uses, Goodhart warnings, and `not_for_gating: true`. V1 may expose aggregate maturity as an explicitly `human_advisory_only` convenience only alongside its vector, citations, freshness, confidence, and composition. It cannot be the sole input to a decision or drive machine ranking, gating, prioritization, agent evaluation, or action. TCD applies to metric depth: add analysis only when its expected decision value exceeds development, review, and maintenance cost.
+10. Comparison refuses any semantics-bearing mismatch, including identity and access-policy versions. Supported longitudinal questions are limited to change in evidence coverage/composition, source freshness, citation/confidence coverage, and candidate/finding composition across retained compatible samples. Arbitrary point-in-time reconstruction is unsupported; cadence and minimum distinct-snapshot thresholds remain evidence-driven rather than fixed in advance.
+11. V1 is a trusted single-operator local environment. Results declare `effective_audience=single_operator_local`, a versioned local access policy, and `redaction_profile=none`; v1 adds no accounts, roles, authentication, multi-user authorization, or field redaction. A multi-user, remote, or externally redistributed surface requires a new policy decision before delivery.
+12. Explicitly retained snapshots, observations, watermark runs, and finding evaluations use a 365-day default retention period. Storage count and byte usage are visible. Payloads may expire after 365 days or be pruned earlier only by an explicit operator action; pruning/correction/deletion preserves a non-content marker and makes unavailable-source comparisons refuse rather than fabricate history.
 
-## Pre-implementation owner gates
+## Accepted pre-implementation owner decisions
 
-No child Issue may be Ready or implementation-active until all five decisions are recorded in this directory, their affected task contracts are reconciled, and the corresponding Issue bodies are revalidated.
+The owner accepted all five decisions on 2026-07-15. No child Issue may be Ready or implementation-active until the affected task contracts and Issue bodies are reconciled to these decisions and strict readiness validation passes.
 
-1. **Snapshot access and disclosure.** Decide who may access a complete snapshot, its data classification and redaction policy, and whether exports may be retained or redistributed.
-2. **Metric use.** Decide permitted and prohibited metric uses, registry/Goodhart-review ownership, and confirm that aggregate maturity is excluded from every v1 machine-readable output.
-3. **Longitudinal scope.** Name the concrete supported longitudinal questions and decide whether reconstruction at retained captured samples is sufficient. Until then M2 remains unfiled.
-4. **Identity lifecycle.** Decide rename, deletion, split, merge, alias, tombstone, and identifier non-reuse semantics before the public-ID schema is implemented or migrated.
-5. **Retention and correction.** Decide retention duration, pruning, correction, and deletion behavior for immutable snapshots, observation receipts, watermark runs, and finding-evaluation history.
-
-Owner decision on 2026-07-15 selected the fail-closed route: pause Q1a PR #3786 and correct this contract before implementation resumes. That routing decision does not itself answer the five policy questions above.
+1. **Snapshot access and disclosure — accepted.** The deployment is one trusted local operator. V1 requires no user-account, role, authentication, authorization, or redaction machinery. Complete exports may be retained and moved at the operator's discretion inside that one-person posture. Any multi-user, remote, service-hosted, or third-party redistribution use reopens this gate.
+2. **Metric use — accepted.** Metrics and aggregate maturity may advise the owner's development decisions as a small contextual input. They may not be the sole decision basis or drive automatic ranking, gating, prioritization, agent scoring, or action. Every aggregate travels with its components, evidence, freshness, confidence, limitations, and Goodhart warning. Metric depth and new KPI work are governed by TCD: do not build or deepen a measure when its expected decision benefit does not justify development and interpretation cost.
+3. **Longitudinal scope — accepted.** V1 may compare retained compatible samples only to answer whether evidence coverage/composition, source freshness, citation/confidence coverage, or candidate/finding composition changed. It refuses arbitrary as-of reconstruction, continuous history, causal claims, and unsupported trend semantics. M2 remains unfiled until the smallest implementation for these questions is costed and source-backed; no general history substrate is implied.
+4. **Identity lifecycle — accepted.** Identifiers are never reused. Rename preserves identity; deletion produces a content-free tombstone; split creates new identifiers and records successor links from the tombstoned original; merge creates a new identifier and records successor aliases from the tombstoned inputs. Historical observations retain the identities that were true when captured.
+5. **Retention and correction — accepted.** Explicitly captured snapshots, observation receipts, watermark runs, and finding-evaluation history default to 365-day retention. Raw exports are not retained automatically merely because they were returned. Storage count and bytes must be inspectable; expiry after 365 days may be automatic, while earlier pruning requires an explicit operator command with preview. Corrections append a superseding record. Required deletion or pruning removes payload content, leaves a non-content marker, and causes dependent replay/comparison to refuse honestly.
 
 ## Cross-task invariants / interaction safety
 
 These invariants are registered in `docs/architecture/SBS_FITNESS_RULES.md`; this section applies them to the task seams.
 
-- **I-MA1 — Projection-only governed access.** Every result declares non-authoritative projection status, provenance, freshness, effective audience, access-policy version, and redaction profile. Reads cannot mutate CKM, GitHub, repo, BuilderOps authority, or Product/Runtime state.
+- **I-MA1 — Projection-only governed access.** Every result declares non-authoritative projection status, provenance, freshness, `effective_audience=single_operator_local`, a versioned local access policy, and `redaction_profile=none`. V1 adds no multi-user security machinery. Reads cannot mutate CKM, GitHub, repo, BuilderOps authority, or Product/Runtime state; any later multi-user or remote surface must define a new policy first.
 - **I-MA2 — Snapshot consistency.** Every multi-object result comes from one read transaction and binds all CKM state via epoch/revision, versions, taxonomy, watermarks, and digest. No cross-snapshot mixing.
 - **I-MA3 — Rebuild-stable lifecycle identity.** Public identity survives rebuild and mutable display metadata, is never reused, and follows accepted rename/delete/split/merge alias or tombstone semantics; row IDs stay private.
 - **I-MA4 — Tagged value state.** `measured`, `missing`, `unassessed`, and `unsupported` are distinct; measured zero is not absence.
 - **I-MA5 — Comparable observations.** Observation and comparison bind every semantics-bearing definition/version/config input and refuse mismatch.
 - **I-MA6 — Candidate separation.** Candidate and confirmed evidence/resources remain distinct in structured results and observations.
-- **I-MA7 — No scalar authority.** Vectors, citations, freshness, confidence, and composition stay available; aggregate maturity is omitted from v1 machine-readable output, and ranking, gating, prioritization, or scalar-only decisions are unavailable.
+- **I-MA7 — No scalar authority.** Aggregate maturity may be machine-readable only as `human_advisory_only`, never privileged or presented alone. Vectors, citations, freshness, confidence, composition, limitations, and Goodhart warnings stay available at the same decision point. Machine ranking, gating, prioritization, agent scoring, automation, and scalar-only decisions remain unavailable.
 - **I-MA8 — Promotion-only action.** Observations may inform a proposal; normal Issue/PR/PromotionIntent/owner-doc authority paths make changes.
 - **I-MA9 — Bounded complete reads.** Every v1 snapshot/export has a hard bound, deterministic order, and completeness manifest. Exceeding the bound, unknown filters, or incomplete capture refuses without a measurement-eligible partial result.
 - **I-MA10 — Historical honesty.** Assessment assertions are not general bitemporality. Unsupported as-of, reconstruction, valid-time, finding-history, or watermark-history semantics refuse explicitly.
@@ -77,14 +77,14 @@ These invariants are registered in `docs/architecture/SBS_FITNESS_RULES.md`; thi
 - **Determinism.** Identical snapshot digest, canonical query, and version bundle produce byte-identical semantic results modulo explicitly excluded volatile fields such as `generated_at`.
 - **No retroactive provenance.** History starts when captured; no backfill claims evidence, definition, or configuration provenance that was not recorded.
 - **Complete observation binding.** Metric observations bind snapshot/query digests, schema versions, taxonomy digest, definition/version/digest, formula/detector bundles, threshold/config bundle, watermarks, provenance, and generated time.
-- **Policy-bound retention.** No snapshot or observation retention, redistribution, correction, or deletion behavior is inferred from implementation convenience; it follows the accepted owner policy and records the applicable policy version.
+- **Policy-bound retention.** Retained samples bind the applicable policy version and default to 365 days. Storage use is visible; automatic expiry is allowed at 365 days, while earlier pruning is an explicit operator action with preview. Correction/deletion/pruning removes or supersedes payloads without erasing the non-content lifecycle marker, and unavailable retained sources make dependent replay/comparison refuse.
 
 Partial-failure paths:
 
 - Q1a state identity lands but Q1b is absent: the public capability is **not delivered**; no consumer may treat schemas as a supported query surface.
 - If later size evidence authorizes pagination, continuation replays its retained immutable snapshot or refuses when that snapshot is unavailable; it never follows mutable current state.
 - The store is absent, old, or unsupported: query returns a typed error without creating a directory/database/schema/receipt.
-- Access, redaction, identity-lifecycle, or retention policy is missing or unsupported: export/history operations refuse; they do not inherit an implicit permissive default.
+- The declared single-operator access, identity-lifecycle, or retention policy version is missing or unsupported: export/history operations refuse; they do not infer a different policy.
 - A metric definition or detector bundle changes: comparison refuses; it never coerces observations into a trend.
 - O1 records an unsupported historical question: the record remains privacy-safe evidence, not authorization for M2. M2 requires an accepted question with source authority and new executable contract.
 - O1 records repeated feature demand: O2 remains a proposal gate; no feature, prediction, automation, or federation work is pre-authorized.
@@ -94,7 +94,7 @@ Partial-failure paths:
 
 | Order | Task / Issue | Outcome | Dependencies | Parallelization |
 | --- | --- | --- | --- | --- |
-| 1 | [ESTABLISH_PUBLIC_SNAPSHOT_CONTRACT.md](ESTABLISH_PUBLIC_SNAPSHOT_CONTRACT.md) (Q1a, #3776) | Lifecycle-safe identity, policy-bound DTO/error/envelope schemas, epoch/revision, and complete-snapshot contract | all owner gates accepted and Issue contract reconciled | serial |
+| 1 | [ESTABLISH_PUBLIC_SNAPSHOT_CONTRACT.md](ESTABLISH_PUBLIC_SNAPSHOT_CONTRACT.md) (Q1a, #3776) | Lifecycle-safe identity, policy-bound DTO/error/envelope schemas, epoch/revision, and complete-snapshot contract | owner decisions recorded; task and Issue contract reconciled | serial |
 | 2 | [DELIVER_SINGLE_TRANSACTION_QUERY_SERVICE.md](DELIVER_SINGLE_TRANSACTION_QUERY_SERVICE.md) (Q1b, #3777) | Working read-only one-transaction bounded complete snapshot service and CLI JSON | #3776 | serial; completes Q1 gate |
 | 3a | [OPTIMIZE_BOUNDED_QUERY_PLANS.md](OPTIMIZE_BOUNDED_QUERY_PLANS.md) (Q2, #3778) | Filters, batch plans, indexes, constant query count, N+1 removal | #3777 | may parallelize after Q1 with M1/O1a if ownership stays isolated |
 | 3b | [DEFINE_METRIC_REGISTRY_AND_OBSERVATIONS.md](DEFINE_METRIC_REGISTRY_AND_OBSERVATIONS.md) (M1, #3779) | Versioned metrics and fully bound observations | #3777 | may parallelize after Q1 with Q2/O1a |
@@ -103,7 +103,7 @@ Partial-failure paths:
 
 Dependency graph:
 
-`owner gates → Q1a → Q1b → {Q2, M1, O1a}`
+`accepted owner decisions → task/Issue reconciliation → Q1a → Q1b → {Q2, M1, O1a}`
 
 `M1 → O1b`
 
@@ -113,21 +113,23 @@ Dependency graph:
 
 ## Observation-gated future work
 
-- **M2 is not filed or Ready.** It requires a concrete accepted historical question, source authority, precise semantics, and verifiable refusal behavior. General bitemporality is not the default answer.
+- **M2 is not filed or Ready.** The accepted question set is limited to compatible sampled changes in evidence coverage/composition, source freshness, citation/confidence coverage, and candidate/finding composition. Filing still requires a costed smallest implementation, source authority, precise semantics, and verifiable refusal behavior. General bitemporality is not the answer.
 - **O2 is not filed or pre-authorized.** Filters beyond Q2, comparison/timeline product surfaces, drift, prediction, automation, and federation require accepted observation evidence and their normal authority path.
 - Two compatible snapshots are only the mathematical minimum for a delta. They do not prove a cadence, trend, window duration, or minimum evidence count.
 
 ## Capability acceptance criteria
 
-- [ ] All five owner gates are accepted and reflected in the affected task and Issue contracts before any child resumes.
-  Verify: decision writeback at `docs/CKM_MEASUREMENT_AND_ACCESS/README.md :: Pre-implementation owner gates` plus strict readiness validation for each affected Issue
+- [x] All five owner decisions are accepted in the authoritative specification.
+  Verify: decision writeback at `docs/CKM_MEASUREMENT_AND_ACCESS/README.md :: Accepted pre-implementation owner decisions`
+- [ ] Every affected task and Issue contract reflects the accepted owner decisions before any child resumes.
+  Verify: strict readiness validation and reconciliation receipt for each affected Issue
 - [ ] Q1 contract and implementation prove lifecycle-safe non-reused public identity, atomic state revision, one-transaction complete snapshots, policy metadata, tagged missing states, deterministic bounded capture, completeness accounting, and exact lookup.
   Verify: Q1a and Q1b child delivery receipts plus `tests/builderops/ckm/test_query_service.py`
 - [ ] Query execution is read-only/side-effect free; incomplete/oversized capture and all unknown schema/version/policy/semantics states fail explicitly.
   Verify: `tests/builderops/ckm/test_query_service.py::test_query_path_is_read_only_and_side_effect_free`; `tests/builderops/ckm/test_query_service.py::test_incomplete_or_oversized_snapshot_refuses`
 - [ ] Q2 proves bounded indexed plans, constant query counts per complete capture, and no N+1 regression without weakening Q1 ordering/completeness guarantees.
   Verify: `tests/builderops/ckm/test_query_plans.py`
-- [ ] M1 emits deterministic fully bound descriptive observations with machine-readable Goodhart warnings and no scalar authority surface.
+- [ ] M1 emits deterministic fully bound descriptive observations with machine-readable Goodhart warnings; any aggregate is `human_advisory_only`, accompanied by its evidence-rich components, and cannot drive machine authority.
   Verify: `tests/builderops/ckm/test_metrics.py`
 - [ ] O1a records privacy-safe real questions outside the read path and preserves typed unsupported requests without authorizing new capability.
   Verify: `tests/builderops/ckm/test_observation_capture.py`; validation receipt on the successor parent

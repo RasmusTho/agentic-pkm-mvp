@@ -25,7 +25,7 @@ Prove the public contract on the real read path. Q1 becomes delivered only when 
 
 ## Concretely
 
-An initial command such as `builderops ckm snapshot --json` returns one versioned projection envelope captured inside one read transaction. The completeness manifest accounts for every declared object class. If the configured bound cannot hold the complete scope, the command returns typed `snapshot_too_large` and no semantic result. V1 has no live continuation over mutable tables.
+An initial command such as `builderops ckm snapshot --json` returns one versioned projection envelope captured inside one read transaction. The completeness manifest accounts for every declared object class and declares the accepted single-operator local policy constants. If the configured bound cannot hold the complete scope, the command returns typed `snapshot_too_large` and no semantic result. V1 has no live continuation over mutable tables and adds no multi-user access-control machinery.
 
 ## Why This Matters
 
@@ -35,13 +35,13 @@ Without one transaction and a read-only connection, the envelope's digest and pr
 
 - [ ] Capability list results and snapshot manifest are produced within one explicit SQLite read transaction.
   Verify: `tests/builderops/ckm/test_query_service.py::test_list_capabilities_uses_one_read_transaction`
-- [ ] Exact public-ID lookup and bounded complete capture return deterministic results under the accepted access/redaction policy.
+- [ ] Exact public-ID lookup and bounded complete capture return deterministic results under `effective_audience=single_operator_local`, the versioned local access policy, and `redaction_profile=none`.
   Verify: `tests/builderops/ckm/test_query_service.py::test_exact_id_lookup_and_complete_bounded_capture`
 - [ ] Query execution against missing, unsupported, or valid stores creates no directory/database/schema/migration/receipt and performs no write.
   Verify: `tests/builderops/ckm/test_query_service.py::test_query_path_is_read_only_and_side_effect_free`
 - [ ] Oversized/incomplete capture, policy mismatch, query/version mismatch, and mixed-epoch state fail with typed refusal and no partial semantic result.
   Verify: `tests/builderops/ckm/test_query_service.py::test_incomplete_or_oversized_snapshot_refuses`
-- [ ] Candidate/confirmed separation, tagged missing values, hard bounds, completeness accounting, effective audience, access-policy version, and redaction profile are present on the production result path.
+- [ ] Candidate/confirmed separation, tagged missing values, hard bounds, completeness accounting, and the accepted single-operator policy constants are present on the production result path without accounts, roles, authentication, authorization, or field-redaction branches.
   Verify: `tests/builderops/ckm/test_query_service.py::test_missing_candidate_completeness_and_access_semantics`
 - [ ] CLI JSON serializes the transport-neutral query service without importing Click/CLI concepts into DTOs or service logic.
   Verify: `tests/builderops/ckm/test_query_service.py::test_cli_json_uses_transport_neutral_service`
@@ -72,4 +72,4 @@ Without one transaction and a read-only connection, the envelope's digest and pr
 
 ## Related GitHub Issues
 
-Implementation issue #3777 under validation parent #3775, dependency-blocked on #3776 and the owner gates. TCD hint: Sol/high or Terra/high; escalate to Sol/xhigh for unresolved transaction, read-only SQLite, completeness, access-policy, or compatibility risk.
+Implementation issue #3777 under validation parent #3775, dependency-blocked on #3776 and reconciliation of its own Issue contract to the accepted owner decisions. TCD hint: Sol/high or Terra/high; escalate to Sol/xhigh for unresolved transaction, read-only SQLite, completeness, access-policy, or compatibility risk.

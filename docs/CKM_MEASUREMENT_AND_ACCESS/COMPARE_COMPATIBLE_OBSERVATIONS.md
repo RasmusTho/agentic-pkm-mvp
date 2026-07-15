@@ -28,7 +28,7 @@ A comparison is a deterministic derived result over already immutable M1 observa
 
 ## Why This Matters
 
-Silent comparison across changed definitions or datasets produces persuasive but false movement. Explicit compatibility and refusal keep comparison useful for inspection without allowing it to become a gate, ranking, forecast, or causal claim.
+Silent comparison across changed definitions or datasets produces persuasive but false movement. Explicit compatibility and refusal keep comparison useful for inspection without allowing it to become a machine gate, ranking, forecast, or causal claim. A human may consider a fully explained aggregate delta as one small advisory input under the accepted metric-use policy.
 
 ## Acceptance Criteria
 
@@ -40,8 +40,8 @@ Silent comparison across changed definitions or datasets produces persuasive but
   Verify: `tests/builderops/ckm/test_metric_comparison.py::test_semantic_mismatch_refuses_without_partial_comparison`
 - [ ] Measured zero, missing, unassessed, and unsupported transitions remain explicit and cannot be converted into numeric deltas accidentally.
   Verify: `tests/builderops/ckm/test_metric_comparison.py::test_value_state_transitions_are_not_coerced_to_numbers`
-- [ ] Comparison exposes no ranking, gate, prioritization, agent score, forecast, causal claim, automated action, or privileged aggregate scalar.
-  Verify: `tests/builderops/ckm/test_metric_comparison.py::test_comparison_has_no_authority_or_scalar_ranking_surface`
+- [ ] Comparison exposes no machine ranking, gate, prioritization, agent score, forecast, causal claim, or automated action. Any aggregate delta is `human_advisory_only`, appears with component-wise deltas and limitations, and is never privileged or sufficient by itself.
+  Verify: `tests/builderops/ckm/test_metric_comparison.py::test_comparison_bounds_advisory_aggregate_without_authority`
 - [ ] The API/CLI result states that two snapshots prove only a bounded delta, and cadence/window/minimum evidence count remain hypotheses.
   Verify: `tests/builderops/ckm/test_metric_comparison.py::test_comparison_disclaims_trend_and_cadence_claims`
 - [ ] The owner spec records delivered comparison semantics and only the observation evidence actually gathered during the slice.
@@ -60,7 +60,7 @@ Silent comparison across changed definitions or datasets produces persuasive but
 - Trend, regression, causality, prediction, drift alerts, gates, rankings, or automated action.
 - A fixed cadence, window, or minimum evidence count.
 - General bitemporal queries, retroactive history, dashboards, federation, or Product/Runtime authority.
-- Comparison whose source snapshots cannot be replayed under the accepted retention policy.
+- Comparison whose source snapshots were pruned, expired, deleted, or otherwise cannot be replayed under the accepted 365-day retention policy.
 
 ## Related Docs
 
@@ -70,4 +70,4 @@ Silent comparison across changed definitions or datasets produces persuasive but
 
 ## Related GitHub Issues
 
-Implementation issue #3781 under validation parent #3775, dependency-blocked on #3779 and the identity/access/retention owner gates. TCD hint: Terra/high; escalate for definition-compatibility or authority-boundary uncertainty.
+Implementation issue #3781 under validation parent #3775, dependency-blocked on #3779 and reconciliation of its Issue contract to the accepted identity/access/retention decisions. TCD hint: Terra/high; escalate for definition-compatibility or authority-boundary uncertainty.
