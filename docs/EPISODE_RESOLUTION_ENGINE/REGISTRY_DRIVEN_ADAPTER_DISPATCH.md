@@ -89,4 +89,4 @@ Not applicable in the user-facing-surface sense: this task ships no new user-fac
 
 ## Related GitHub Issues
 
-Issue **#3523** / PR **#3727** — `[Episode Resolution Engine] adapter-dispatch: registry-driven ingestion so a new source needs no engine change`. Child of parent #3175, Product/Runtime SIP Tier 2, `lane:core-runtime`, `prio:low` (owner-optional refactor, not on the critical ERE build path). Pairs with ERE-12 (#3524, fail-loud correspondence), which remains `agent:blocked` until ERE-11 merges.
+Issue **#3523** / PR **#3727** delivered the Product/Runtime SIP Tier 2 registry-dispatch refactor. Its ERE-12 pair (#3524 / PR #3731) is active in the core-runtime lane and owns fail-loud correspondence.

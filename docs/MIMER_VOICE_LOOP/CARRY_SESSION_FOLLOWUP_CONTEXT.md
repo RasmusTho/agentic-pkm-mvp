@@ -61,7 +61,7 @@ RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q -m "not pg" tests/uat   # vault-write pat
 
 ## Out of Scope
 
-The durable, cross-session **"hot cache"** primitive (fable5-audit **G6** — a persistent working-context store that would survive restart and span sessions) is **explicitly out of scope and separately tracked**; this task is in-session only. Rebuilding live context from the persisted transcript after a restart (possible in principle, not built in v1); summarization/compaction of long sessions; any change to how ERE segments chat sessions (it consumes the stream as-is); cross-session memory promotion (MEM authority path, untouched).
+The durable, cross-session **"hot cache"** primitive (fable5-audit **G6** — a persistent working-context store that would survive restart and span sessions) is **explicitly out of scope and separately tracked**; this task is in-session only. Rebuilding live context from the persisted transcript after a restart (possible in principle, not built in v1); summarization/compaction of long sessions; building or changing the planned ERE `chat.sessions` adapter; cross-session memory promotion (MEM authority path, untouched).
 
 ## Related Docs
 

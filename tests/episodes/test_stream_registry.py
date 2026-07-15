@@ -430,7 +430,7 @@ def test_load_registry_never_imports_interaction_modules() -> None:
     }
     try:
         registry = sr.load_registry(use_cache=False)
-        # the chat.sessions live entry (transport module:app.chat.session_log)
+        # the chat.sessions planned entry (transport module:app.chat.session_log)
         # was validated during that load...
         assert registry.get("chat.sessions") is not None
         # ...without importing app.chat or any of its submodules

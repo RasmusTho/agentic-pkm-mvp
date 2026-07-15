@@ -45,7 +45,7 @@ The owner requires every input source identified and part of the architecture. T
 | 9 | [CALENDAR_STREAM_ADAPTER](CALENDAR_STREAM_ADAPTER.md) | ERE-09 | 1, 4 |
 | 10 | [LOCATION_STREAM_FUTURE_POSTURE](LOCATION_STREAM_FUTURE_POSTURE.md) | ERE-10 | spec-only posture; no issue until the Heimdal v2 trigger fires |
 | 11 | [REGISTRY_DRIVEN_ADAPTER_DISPATCH](REGISTRY_DRIVEN_ADAPTER_DISPATCH.md) | ERE-11 | implementation receipt #3523 / PR #3727; 4, 9 (owner-optional Product/Runtime refactor) |
-| 12 | [RECONCILE_LIVE_STREAM_ADAPTER_CORRESPONDENCE](RECONCILE_LIVE_STREAM_ADAPTER_CORRESPONDENCE.md) | ERE-12 | 11 (owner-optional governance/refactor) |
+| 12 | [RECONCILE_LIVE_STREAM_ADAPTER_CORRESPONDENCE](RECONCILE_LIVE_STREAM_ADAPTER_CORRESPONDENCE.md) | ERE-12 | implementation active in #3524 / PR #3731; 11 (Product/Runtime SIP refactor) |
 
 Flat order: 1‖2‖3 → 4 → 5 → 6‖7‖8 → 9. ERE-10 is a declared posture, not a build step. ERE-11 → 12 is an owner-optional Product/Runtime refactor lane, off the critical build path: it generalizes the ingestion seam so the ERE-01 "registry entry + adapter, not an engine change" claim becomes literally true and the Input-source inventory's 1:1 registry-match property becomes fail-loud enforced. It changes no segmentation behavior.
 
@@ -98,7 +98,7 @@ Delivered (ERE-06, #3181):
 
 ## Relationship to GitHub issues
 
-Parent feature issue: **#3175** (live validation hub, `agent:blocked`; see [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)). Children: ERE-01 → #3176, ERE-02 → #3177 (Tier 3: migration), ERE-03 → #3178; ERE-04 → #3179, ERE-05 → #3180, ERE-06 → #3181, ERE-07 → #3182, ERE-08 → #3183, ERE-09 → #3184; ERE-10 gets no issue until its trigger. ERE-11 → #3523 is a Product/Runtime SIP Tier 2 refactor (`lane:core-runtime`) implemented together with its owner-doc writeback in PR #3727. ERE-12 → #3524 is a separate follow-up that remains `agent:blocked` until ERE-11 merges; it owns registry reconciliation and the fail-loud flip, and directly repairs #3175's capability AC (the `test_engine_consumes_only_registered_streams` criterion currently asserts enumeration, not consumption — see INV-ERE-G). The spec is the source of truth; issues track execution state.
+Parent feature issue: **#3175** (live validation hub, `agent:blocked`; see [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)). Children: ERE-01 → #3176, ERE-02 → #3177 (Tier 3: migration), ERE-03 → #3178; ERE-04 → #3179, ERE-05 → #3180, ERE-06 → #3181, ERE-07 → #3182, ERE-08 → #3183, ERE-09 → #3184; ERE-10 gets no issue until its trigger. ERE-11 → #3523 is delivered by PR #3727 as a Product/Runtime SIP Tier 2 refactor. ERE-12 → #3524 is active in the same core-runtime lane via PR #3731; it reconciles the registry, flips adapter gaps to fail-loud, and makes `test_engine_consumes_only_registered_streams` drive the production tick and compare actual reads with the live set. The spec is the source of truth; issues track execution state.
 
 ## Open research carried (not blocking)
 

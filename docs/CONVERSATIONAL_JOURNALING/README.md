@@ -94,7 +94,7 @@ This capability composes with four sibling capabilities without depending on any
 - **`docs/EPISODE_DEBRIEF/`** (does not exist yet, `docs/research/yggdrasil-closed-loops-ideation.md` loop 4) — a future richer "what happened" skeleton (decisions made, commitments taken, open loops, key captures per episode) that could become a day-context input to JRNL-01 once episodes and their debriefs exist, sequenced behind Episode Resolution Engine delivery. Named in the day-context inventory as `future`, not a dependency.
 - **`docs/HEIMDAL_SCREEN_STREAM/`** (does not exist yet, ideation loop 6) — the richest future auto-journaling skeleton (screen activity, time-spend) that could pre-populate day context before the conversation even starts. Named as `future` in the day-context inventory, not a dependency; the owner ruling on the screen modality's always-on capture posture is recorded in the ideation capture but does not gate this capability.
 
-**Related in-flight dependency seam (not a blocker):** the chat-session surface JRNL-02 reuses (`app/chat/session_log.py`) writes raw markdown today with no WriteGuard assertion (`docs/architecture/runtime-semantics.md` class 19). GitHub issues **#2805** (Canvas Chat Surface parent), **#2806**, and **#2807** are already specified (`docs/CANVAS_CHAT_SURFACE/`) to make chat-session writes durable and WriteGuard-gated. JRNL-02 does not depend on #2807 merging first — it reuses the session surface as it exists today — but once #2807 lands, reflection-conversation sessions inherit governed durability automatically, with no change required on this capability's side.
+**Shipped durability seam:** the chat-session surface JRNL-02 reuses (`app/chat/session_log.py`) routes `open_session`, append, and close through `DEFAULT_WRITE_GUARD.assert_writes_allowed(CHAT_SESSION_PERSIST_ACTION)` (PR #3486). Reflection-conversation sessions therefore inherit WriteGuard-gated durability without a separate journaling write path.
 
 ## Relationship to GitHub issues
 
@@ -107,7 +107,7 @@ This capability composes with four sibling capabilities without depending on any
 - `docs/DECISION_RECEIPT_LOG/README.md` — decision-receipt log design and reader
 - `docs/COMMITMENT_SURFACING/README.md` — commitment domain model, read-only/degrade-honestly precedent, and the strict-dependency-chain breakdown style this capability mirrors
 - `docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md` — the Create engine draft-lifecycle (staging → acceptance) this capability's governed-write tasks reuse
-- `docs/CANVAS_CHAT_SURFACE/` (`#2805`/`#2806`/`#2807`) — the chat-session durability seam JRNL-02 names but does not block on
+- `docs/CANVAS_CHAT_SURFACE/` and PR #3486 — the shipped WriteGuard-gated chat-session durability seam JRNL-02 reuses
 - `docs/EPISODE_RESOLUTION_ENGINE/STREAM_REGISTRY_AND_SIGNAL_CONTRACT.md` — declares `chat.sessions` planned until its adapter lands; reflection transcripts preserve that future seam
 - `docs/SETTINGS_SPINE/README.md`, `docs/SETTINGS_SPINE/SINGLE_DEFAULT_REGISTRY.md` — the tunables posture the evening-nudge trigger and conversation-length default provisionally follow
 - `docs/COGNITIVE_PROSTHESIS_CHARTER.md` §2 — the Reflect arc stage this capability serves

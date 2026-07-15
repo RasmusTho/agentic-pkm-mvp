@@ -20,7 +20,7 @@ ERE-11 makes the drift *visible* (the `no_adapter` tick-summary key). ERE-12 mak
 ## What This Task Does
 
 1. **Resolve the true state of the four streams.** ERE-12 applies the conservative path to `chat.sessions`, `decision.receipts`, `kap.acquisitions`, and `heimdal.attention`:
-   - **(a) genuinely adapter-pending** → the entry is mis-declared: downgrade `status: live → planned` in `stream_registry.md` (and the README inventory row) with a one-line reason, so `live` stops over-claiming. This is the conservative default and the recommended path for v1 — none of these three has a shipped normalizer today.
+   - **(a) genuinely adapter-pending** → the entry is mis-declared: downgrade `status: live → planned` in `stream_registry.md` (and the README inventory row) with a one-line reason, so `live` stops over-claiming. This is the conservative default and the chosen path for v1 — none of these four has a shipped normalizer today.
    - **(b) should be consumed now** → spec a follow-up adapter slice (ERE-13+) per stream and keep it `live` only once its adapter merges.
    The slice's deliverable is the reconciliation, not four new adapters. All four take path (a), and the downstream surfaces below now describe episode consumption as adapter-pending rather than live. The invariant after this slice is total: every `live` entry resolves to exactly one adapter. The README, declaration, and ERE-01 contract update atomically.
 2. **Flip the dispatch guard to fail-loud.** Once the registry is reconciled so every `live` entry has an adapter, change ERE-11's `no_adapter` *report* into a hard error: a `live` registry entry that resolves to no adapter raises at the tick entrypoint (fail-loud, mirroring the ERE-01 `UnknownTransportError` / "no silent default streams" discipline), never a silent skip. This closes the drift permanently — a future `live` entry added without an adapter breaks the tick immediately and loudly, at declaration time, not at stream #8.
@@ -82,7 +82,7 @@ pytest -q tests/episodes/test_segmentation_core.py tests/episodes/test_calendar_
 pytest -q -m "not pg"
 ```
 
-The `chat.sessions` adapter follows path (b) by default. If the owner chooses path (b) for another stream (build the adapter now rather than downgrade), that stream's adapter gets its own slice/issue and its own behavioral tests; ERE-12 still owns the fail-loud guard + the correspondence invariant + the strengthened capability-AC test.
+All four adapterless entries follow path (a) in ERE-12. A future path-(b) promotion gets its own slice and behavioral tests, and may flip an entry to `live` only when its adapter lands.
 
 ## Out of Scope
 
