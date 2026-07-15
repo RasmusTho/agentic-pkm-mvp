@@ -116,7 +116,9 @@ and client identity/scope strings are never trusted. The local-only bootstrap ro
 instance-scoped delegated role, not a claim of the human's global identity. MVR-03 owns its missing
 producer: existing one-credential installs atomically migrate a credential fingerprint to a private,
 opaque `local_operator_role_id`; channel/native bootstrap and fixtures produce the same auth/GOV
-record before fail-closed principal enforcement. Binding plus generation alone is insufficient because two
+record before fail-closed principal enforcement. Auth-disabled loopback/no-key installs bind that
+role to a server-proven trusted-loopback subject and keep working; any non-loopback posture requires
+governed credential provisioning. Binding plus generation alone is insufficient because two
 bearer selections may share both while carrying different scopes or filters. Context is never
 carried from one vault to another merely because a selection changed. Cross-vault synthesis
 requires an explicit multi-binding context and preserves per-source provenance.

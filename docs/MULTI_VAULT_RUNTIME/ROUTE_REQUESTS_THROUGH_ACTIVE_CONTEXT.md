@@ -125,7 +125,9 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 - Sync/deployment impact: supports concurrent requests without process rebinding
 - External boundary impact: API input maps to context selectors, not raw trusted paths
 - New or changed contract: request-context propagation and explicit multi-binding write target
-- Owner-doc impact: will-update-in-PR at `docs/ARCHITECTURE.md`
+- Owner-doc impact: will-update-in-PR at `docs/ARCHITECTURE.md`, `docs/EVENTS.md`,
+  `docs/DB_SCHEMA.md`, `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, and
+  `docs/RELEASE_CHANNELS/README.md`
 - Transition debt impact: reduces D1 and request-side D13 global-binding debt
 - Fitness rule impact: adds production-entrypoint context-boundary guard
 
@@ -216,6 +218,14 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 - [ ] Production resolution applies explicit selection, instance default, and no-vault precedence
   without consulting last-active, CWD, or another binding after an invalid explicit choice.
   - Verify: `tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior`
+- [ ] Architecture, event, DB, deployment, and release-channel owner contracts describe the shipped
+  binding/context envelope, idempotency-key migration, projection namespace, minimum-runtime floor,
+  and all-process fenced cutover.
+  - Verify: doc writeback at `docs/ARCHITECTURE.md :: Active context and vault bindings` + doc
+    writeback at `docs/EVENTS.md :: Events` + doc writeback at
+    `docs/DB_SCHEMA.md :: DB Schema (Current Reality)` + doc writeback at
+    `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments` + doc writeback at
+    `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification`
 
 ## Out of Scope
 

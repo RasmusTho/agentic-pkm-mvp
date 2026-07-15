@@ -128,7 +128,8 @@ single-vault package or can silently lose identity during migration.
   instance-state volume shared by API/worker/watcher consumers before force-recreate
 - External boundary impact: paths remain EBF binding metadata, not vault identity
 - New or changed contract: first-class instance vault registry schema and package boundary
-- Owner-doc impact: will-update-in-PR at `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md`
+- Owner-doc impact: will-update-in-PR at `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md`,
+  `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, and `docs/RELEASE_CHANNELS/README.md`
 - Transition debt impact: reduces global/app-local registry ambiguity; opens no compatibility debt beyond the explicit re-export
 - Fitness rule impact: strengthens identity/path and instance/vault separation plus serialized
   cross-process mechanical-state mutation
@@ -204,6 +205,10 @@ single-vault package or can silently lose identity during migration.
 - [ ] The parent registry acceptance target composes the delivered registry, migration, durability,
   concurrency, recovery, and rollback contracts and passes before MVR-01 merges.
   - Verify: `tests/instance/test_vault_registry_migration.py::test_parent_registry_acceptance`
+- [ ] Deployment/release owner docs describe the shipped instance-state volume, quiesced final
+  export/import, scalar rollback projection, and roll-forward lineage without future-state claims.
+  - Verify: doc writeback at `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments` +
+    doc writeback at `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification`
 
 ## Out of Scope
 

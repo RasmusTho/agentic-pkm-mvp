@@ -46,11 +46,16 @@ generation unknown. A process-global mutable manager cannot safely represent con
   auth state under the MVR-01 instance-state boundary (native installs use private app-data). The
   record has its own schema, revision, migration provenance, lock/fsync/atomic-write path, and is
   never derived from `appInstallId` or the credential value. Production API and CLI authentication
-  resolve the same record. Zero/multiple ambiguous credentials, unsafe ownership, missing durable
-  storage, or a partial record fails preflight with an explicit provisioning action; a governed
-  credential rotation preserves the role ID, while an explicitly added human/agent role receives a
-  distinct principal. Update bootstrap, existing-install migration, channel init, and test fixtures
-  in this slice before the fail-closed requirement is enabled.
+  resolve the same record. For the supported auth-disabled local posture with no API key, bootstrap
+  binds the role to a `trusted_loopback` auth subject only after proving the effective listener and
+  request path are loopback-local, with no untrusted proxy/non-loopback exposure; this subject is
+  server-derived and cannot be claimed by a header. A later governed move to API-key/non-loopback
+  auth binds the credential fingerprint to the same role and disables trusted-loopback admission in
+  one transaction. Multiple ambiguous credentials, a zero-credential non-loopback posture, unsafe
+  ownership, missing durable storage, or a partial record fails preflight with an explicit
+  provisioning action. A governed credential rotation preserves the role ID, while an explicitly
+  added human/agent role receives a distinct principal. Update bootstrap, existing-install migration,
+  channel init, and test fixtures in this slice before fail-closed enforcement is enabled.
 - Add production Companion endpoints to create, replace, inspect, and clear a TTL-bound selection.
   Creation returns the server-minted ID; later mutation/read requires that bearer ID plus the
   #2223 gate and the same server-resolved principal/instance/allowed scope. The existing
@@ -106,7 +111,7 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 - Sync/deployment impact: concurrent requests no longer require process-level rebinding
 - External boundary impact: adapters translate legacy vault inputs only at ingress
 - New or changed contract: `ACTIVE_CONTEXT_SET.md` moves from v0 target stub to versioned runtime seam
-- Owner-doc impact: will-update-in-PR at `docs/contracts/ACTIVE_CONTEXT_SET.md`
+- Owner-doc impact: will-update-in-PR at `docs/contracts/ACTIVE_CONTEXT_SET.md` and `docs/SECURITY.md`
 - Transition debt impact: reduces WSP global-context deviation; legacy adapters remain bounded for task 07
 - Fitness rule impact: adds request snapshot/generation/no-cross-talk fitness tests
 
@@ -146,6 +151,14 @@ retrieval, settings, or write provenance to leak between humans or vaults.
   all produce the private versioned delegated-role binding before request selection is enabled;
   production API/CLI resolve it, rotation preserves it, and ambiguous/missing/unsafe state fails loud.
   - Verify: `tests/integration/test_local_operator_principal_bootstrap.py::test_existing_single_user_auth_migrates_to_distinct_delegated_role`
+- [ ] Existing auth-disabled loopback/no-key installations bootstrap the same private delegated-role
+  contract and keep production selection/governed writes working; spoofed forwarding or any
+  non-loopback exposure fails until governed credential provisioning completes.
+  - Verify: `tests/integration/test_local_operator_principal_bootstrap.py::test_zero_key_loopback_bootstraps_trusted_local_role_and_rejects_nonloopback`
+- [ ] Security and ActiveContextSet owner contracts describe the shipped credential/loopback subject
+  to delegated-role mapping, separate instance identity, and fail-closed principal resolution.
+  - Verify: doc writeback at `docs/SECURITY.md :: Security` + doc writeback at
+    `docs/contracts/ACTIVE_CONTEXT_SET.md :: ActiveContextSet`
 - [ ] Production create/replace/inspect/clear commands drive the selection store, enforce #2223
   authentication and expiry, and never mutate process-global `VaultManager` state.
   - Verify: `tests/api/test_active_context_selection_api.py::test_production_selection_lifecycle_is_scoped_and_global_free`

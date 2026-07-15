@@ -92,6 +92,11 @@ operators, or future agents still act on stale single-global-vault truth.
   `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md :: Future Multi-Vault` + doc writeback at
   `docs/SETTINGS.md :: Multi-vault settings resolution` + doc writeback at
   `docs/ENVIRONMENTS.md :: Vault terminology` + doc writeback at
+  `docs/SECURITY.md :: Security` + doc writeback at
+  `docs/EVENTS.md :: Events` + doc writeback at
+  `docs/DB_SCHEMA.md :: DB Schema (Current Reality)` + doc writeback at
+  `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments` + doc writeback at
+  `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification` + doc writeback at
   `docs/architecture/SBS_TRANSITION_DEBT.md :: multi-vault runtime selection` + doc writeback at
   `docs/DOCS_INDEX.md :: v6.0 Capability Specifications`
 - [ ] This capability's own lifecycle surfaces no longer claim future/blocked state: README records

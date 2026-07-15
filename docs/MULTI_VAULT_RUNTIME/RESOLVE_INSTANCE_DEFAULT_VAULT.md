@@ -38,13 +38,12 @@ fail-closed precedence resolver.
   the store or invoking an internal setter directly.
 - Make registration removal reference-safe: removing the current default returns a conflict unless
   the same locked transaction supplies either `clear_default=true` or one valid authorized
-  replacement binding. Explicit clear/replacement updates default, the MVR-06 compatibility
-  binding when present, dimensions, and the removal revision/event atomically; it never silently
-  chooses another registration or leaves a dangling default.
-- Publish the versioned default-mutation event consumed by MVR-06. After MVR-06, while background
-  intent mode remains `compatibility`, set/clear atomically replaces/clears its durable
-  `compatibility_binding_id`; the supervisor drains the old generation and resolves the new default
-  or truthful no-vault result before accepting later work. Explicit background intent is unaffected.
+  replacement binding. Explicit clear/replacement updates only MVR-01/02-owned registration/default
+  fields and the removal revision/event atomically; it never silently chooses another registration
+  or leaves a dangling default. MVR-04 and MVR-06 extend this transaction when they introduce
+  dimension and compatibility-intent references—MVR-02 does not interpret their future schemas.
+- Publish the versioned default-mutation event later consumed by MVR-06; no MVR-02 caller requires
+  or mutates a future background-intent field.
 - Preserve no-vault startup and headless bootstrap behavior through explicit adapters.
 
 ## Concretely

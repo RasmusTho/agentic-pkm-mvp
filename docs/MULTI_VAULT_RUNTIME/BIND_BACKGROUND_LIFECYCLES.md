@@ -60,11 +60,15 @@ cross-process truth belong here.
   live bridge binding—or, absent that, the instance default/legacy bootstrap—yields exactly
   one durable compatibility context; no later request/session state participates.
 - Subscribe the supervisor to MVR-02's versioned default-mutation event. While intent mode is
-  `compatibility`, replacing or clearing the default atomically updates `compatibility_binding_id`,
-  drains the current generation, and re-resolves the replacement binding or truthful no-vault
-  state before later work is accepted.
+  `compatibility`, MVR-06 extends the production default set/clear transaction so it atomically
+  updates `compatibility_binding_id` before the wake-up hint; the supervisor drains the current
+  generation and re-resolves the replacement binding or truthful no-vault state before later work.
   The same event cannot alter an `explicit` intent set. A default mutation may not leave a running
   compatibility lifecycle silently bound to the prior vault or rely on process restart.
+- Extend registration removal in the same schema-aware service: compatibility mode atomically clears
+  a removed `compatibility_binding_id`; explicit mode retains a now-stale member as loudly failed
+  intent until instance-authorized removal, preserving the explicit operator decision. MVR-06 never
+  requires MVR-02 to interpret these fields retroactively.
 - Before writing the first background-intent or compatibility-binding field, use the MVR-05 channel
   fence to atomically advance `minimum_runtime_schema=MVR-06`. A build below that floor cannot start
   watcher/worker/API against the registry; recovery preserves the complete lineage and uses an

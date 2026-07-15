@@ -31,7 +31,8 @@ non-authoritative registry grouping.
   returns an authorized subset. Authenticated registry administration may inspect stored membership
   but that inspection is not an ActiveContextSet or permission result.
 - Remove dangling membership transactionally when a registration is removed, while keeping
-  removal of a dimension non-destructive to registrations/content.
+  removal of a dimension non-destructive to registrations/content. This explicitly extends the
+  MVR-01/02 registration-removal transaction; earlier slices do not know the dimension schema.
 - Extend the MVR-01 rollback lineage for the additive dimension schema: a pre-MVR-04 image cannot
   read or mutate dimensions, so its scalar projection omits them while the complete dimension state
   remains immutable. On roll-forward, unchanged registrations restore dimensions exactly. A valid
