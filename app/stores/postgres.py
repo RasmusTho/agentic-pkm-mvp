@@ -39,6 +39,42 @@ def _ensure_decisions(conn) -> None:
             raise RuntimeError(
                 f"{_DECISIONS_MIGRATION_HINT} Missing columns: {', '.join(sorted(missing_columns))}."
             )
+        cur.execute(
+            """
+            SELECT object_id_column.is_nullable, id_column.column_default, fk.delete_rule
+            FROM information_schema.columns AS object_id_column
+            JOIN information_schema.columns AS id_column
+              ON id_column.table_schema = object_id_column.table_schema
+             AND id_column.table_name = object_id_column.table_name
+             AND id_column.column_name = 'id'
+            LEFT JOIN (
+                SELECT rc.delete_rule
+                FROM information_schema.table_constraints AS tc
+                JOIN information_schema.key_column_usage AS kcu
+                  ON tc.constraint_name = kcu.constraint_name
+                 AND tc.table_schema = kcu.table_schema
+                JOIN information_schema.referential_constraints AS rc
+                  ON rc.constraint_name = tc.constraint_name
+                 AND rc.constraint_schema = tc.table_schema
+                WHERE tc.table_schema = 'public'
+                  AND tc.table_name = 'decisions'
+                  AND tc.constraint_type = 'FOREIGN KEY'
+                  AND kcu.column_name = 'object_id'
+                LIMIT 1
+            ) AS fk ON TRUE
+            WHERE object_id_column.table_schema = 'public'
+              AND object_id_column.table_name = 'decisions'
+              AND object_id_column.column_name = 'object_id'
+            """
+        )
+        shape_row = cur.fetchone()
+        if (
+            shape_row is None
+            or shape_row[0] != "YES"
+            or "gen_random_uuid" not in (shape_row[1] or "")
+            or shape_row[2] != "SET NULL"
+        ):
+            raise RuntimeError(f"{_DECISIONS_MIGRATION_HINT} Schema shape is stale.")
 
 
 class PgObjects:

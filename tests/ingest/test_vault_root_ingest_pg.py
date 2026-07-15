@@ -5,11 +5,11 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 
-from app.db.db import conn_rw
 from app.db.dsn import resolve_dsn
 from app.ingest.vault_root import ingest_vault_root
 from app.settings import settings
 from app.stores import pg as pg_store
+from tests.migrations.decisions_schema_helpers import migrated_decisions_db
 
 
 def _pg_available() -> bool:
@@ -25,53 +25,21 @@ def _pg_available() -> bool:
         return False
 
 
-def _bootstrap_pg_tables_if_missing(dsn: str) -> None:
-    with psycopg.connect(dsn) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    to_regclass('public.objects') IS NOT NULL,
-                    to_regclass('public.store_objects') IS NOT NULL,
-                    to_regclass('public.decisions') IS NOT NULL,
-                    to_regclass('public.alembic_version') IS NOT NULL
-                """
-            )
-            objects_ready, store_objects_ready, decisions_ready, alembic_version_ready = cur.fetchone()
-
-    if not objects_ready:
-        with conn_rw():
-            pass
-
-    if not decisions_ready:
-        with psycopg.connect(dsn, autocommit=True) as conn:
-            conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-
-        from alembic import command
-        from alembic.config import Config
-
-        repo_root = Path(__file__).resolve().parents[2]
-        cfg = Config(str(repo_root / "alembic.ini"))
-        cfg.set_main_option("script_location", str(repo_root / "app" / "alembic"))
-        if not alembic_version_ready:
-            # This UAT fixture historically bootstraps the legacy `objects`
-            # table through conn_rw(), rather than from the full Alembic
-            # lineage. Stamp that known predecessor so the #3488 migration is
-            # the sole schema producer for `decisions` in this harness.
-            command.stamp(cfg, "4d1e0c9a3329")
-        command.upgrade(cfg, "head")
-
-    if not store_objects_ready:
-        pg_store._TABLES_READY = False
-        pg_store._ensure_tables()
+@pytest.fixture
+def migrated_runtime_db(monkeypatch: pytest.MonkeyPatch):
+    """Exercise ingest against an isolated database upgraded by Alembic."""
+    with migrated_decisions_db(monkeypatch) as dsn:
+        yield dsn
 
 
 @pytest.mark.pg
-def test_ingest_vault_root_persists_decisions_with_legacy_fk_parent(tmp_path: Path, monkeypatch) -> None:
+def test_ingest_vault_root_persists_decisions_with_legacy_fk_parent(
+    tmp_path: Path, monkeypatch, migrated_runtime_db: str
+) -> None:
     if not _pg_available():
         pytest.skip("Postgres backend not available")
 
-    monkeypatch.setenv("DATABASE_URL", resolve_dsn(os.getenv("DATABASE_URL") or settings.db_dsn))
+    monkeypatch.setenv("DATABASE_URL", migrated_runtime_db)
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.setenv("LLM_MOCK_RESPONSE", '{"type":"note","trust":"own","tags":[],"confidence":0.95}')
     monkeypatch.setenv("STORE_BACKEND", "pg")
@@ -81,8 +49,7 @@ def test_ingest_vault_root_persists_decisions_with_legacy_fk_parent(tmp_path: Pa
     (vault_root / "sample.md").write_text("# Sample\nBody text", encoding="utf-8")
     monkeypatch.setenv("VAULT_ROOT", str(vault_root))
 
-    dsn = resolve_dsn(os.getenv("DATABASE_URL") or settings.db_dsn)
-    _bootstrap_pg_tables_if_missing(dsn)
+    dsn = migrated_runtime_db
     with psycopg.connect(dsn) as conn:
         with conn:
             with conn.cursor() as cur:
@@ -111,14 +78,15 @@ def test_ingest_vault_root_persists_decisions_with_legacy_fk_parent(tmp_path: Pa
 
 
 @pytest.mark.pg
-def test_ingest_vault_root_unmigrated_db_fails_with_migration_hint(tmp_path: Path, monkeypatch, caplog) -> None:
+def test_ingest_vault_root_unmigrated_db_fails_with_migration_hint(
+    tmp_path: Path, monkeypatch, caplog, migrated_runtime_db: str
+) -> None:
     """The real PgObjectStore preflight reports its migration hint through ingest."""
     vault_root = tmp_path / "vault"
     vault_root.mkdir()
     (vault_root / "sample.md").write_text("# Sample\nBody text", encoding="utf-8")
 
-    dsn = resolve_dsn(os.getenv("DATABASE_URL") or settings.db_dsn)
-    _bootstrap_pg_tables_if_missing(dsn)
+    dsn = migrated_runtime_db
     monkeypatch.setenv("DATABASE_URL", dsn)
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
@@ -138,7 +106,9 @@ def test_ingest_vault_root_unmigrated_db_fails_with_migration_hint(tmp_path: Pat
 
 
 @pytest.mark.pg
-def test_ingest_vault_root_skips_classification_when_vault_root_unset(tmp_path: Path, monkeypatch) -> None:
+def test_ingest_vault_root_skips_classification_when_vault_root_unset(
+    tmp_path: Path, monkeypatch, migrated_runtime_db: str
+) -> None:
     """Guard the inverse of the invariant above: the durable (pg) decision
     path must not classify without a selected vault.
 
@@ -154,7 +124,7 @@ def test_ingest_vault_root_skips_classification_when_vault_root_unset(tmp_path: 
     if not _pg_available():
         pytest.skip("Postgres backend not available")
 
-    monkeypatch.setenv("DATABASE_URL", resolve_dsn(os.getenv("DATABASE_URL") or settings.db_dsn))
+    monkeypatch.setenv("DATABASE_URL", migrated_runtime_db)
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.setenv("LLM_MOCK_RESPONSE", '{"type":"note","trust":"own","tags":[],"confidence":0.95}')
     monkeypatch.setenv("STORE_BACKEND", "pg")
@@ -166,8 +136,7 @@ def test_ingest_vault_root_skips_classification_when_vault_root_unset(tmp_path: 
     vault_root.mkdir()
     (vault_root / "sample.md").write_text("# Sample\nBody text", encoding="utf-8")
 
-    dsn = resolve_dsn(os.getenv("DATABASE_URL") or settings.db_dsn)
-    _bootstrap_pg_tables_if_missing(dsn)
+    dsn = migrated_runtime_db
     with psycopg.connect(dsn) as conn:
         with conn:
             with conn.cursor() as cur:
