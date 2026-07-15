@@ -82,10 +82,11 @@ operators, or future agents still act on stale single-global-vault truth.
 
 ## Acceptance Criteria
 
-- [ ] Concurrent request/session, dimension, background lifecycle, governed-write, and isolation
-  acceptance targets pass on merged `origin/main`.
+- [ ] The MVR-08 candidate adds and passes the aggregate concurrent request/session, dimension,
+  background lifecycle, governed-write, and isolation acceptance target. The parent closure
+  workflow reruns it on merged `origin/main` after this child merges.
   - Verify: `tests/integration/test_multi_vault_capability_acceptance.py::test_merged_multi_vault_capability`
-- [ ] No-vault and one-vault compatibility targets pass on the same merged head.
+- [ ] No-vault and one-vault compatibility targets pass on the same MVR-08 candidate head.
   - Verify: `tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`
 - [ ] The isolated test-channel journey records a redacted receipt for two vault bindings, two
   sessions, one dimension read, one governed write, and truthful background health.
