@@ -49,6 +49,15 @@ not background lifecycles.
   container test is required in #3163/05B. MVR-06 atomically initializes durable background intent
   from the then-current compatibility watcher revision and disables this bridge when its supervisor
   takes ownership; no release may leave both or neither mechanism active.
+  Treat picker replacement plus compatibility rebind as one recoverable operation: stage the new
+  selection as unusable, journal its prior/new binding and compatibility revisions, commit the
+  durable compatibility revision, wait for the watcher to acknowledge that exact revision, and only
+  then atomically activate/return the new bearer while invalidating the prior selection. A failure or
+  crash before activation blocks picker and vault-bound ingress, appends a compensating monotonic
+  revision to the prior compatibility binding, waits for watcher acknowledgement, and discards the
+  staged bearer before service resumes. A failure after activation is recovered as committed from
+  the journal. Neither ordering window may leave a usable foreground selection and watcher on
+  different bindings.
 - Resolve per-binding settings, paths, caches, retrieval scope, and write provenance from the
   snapshot. Settings keys are classified by the canonical settings registry as either
   `binding_local` (resolved and consumed only inside that binding's isolated sub-operation) or
@@ -108,7 +117,11 @@ not background lifecycles.
   explicit `global` scope marker. Two vaults containing the same UUID/path/content must create
   independent rows; retry within one binding must still deduplicate normally.
 - Make many-binding reads explicit and provenance-preserving; require an explicit target binding
-  for writes unless the command contract already provides one unambiguously.
+  for writes unless the command contract already provides one unambiguously. The target must be a
+  member of the immutable request `ActiveContextSet.source_bindings`; every governed batch target
+  must be a subset. Registry membership, ownership, and independent GOV authorization cannot widen
+  the selected set. Reject an otherwise valid/authorized binding outside that set before token
+  issuance or any effect.
 - At every production filesystem, settings, projection, cache-fill, and retrieval read call site,
   acquire the MVR-01 host-global ownership fence and then the stable binding's cross-process shared
   effect lease. While both are held, require an active ownership lease for the current `(channel,
@@ -136,11 +149,15 @@ not background lifecycles.
   already-authorized effect and receipt finish, then advances revision/epoch before later effects.
   Long-running owner transactions use the same lease for their full externally visible effect.
 - Extend the canonical GOV token/receipt schema in this slice. A server-minted DecisionToken binds
-  decision ID, authenticated human/delegated-role principal, instance identity, operational scope,
-  action/write class, stable vault binding, binding revision/root fingerprint, authorization epoch,
-  issued/expiry times, and policy/delegation revision. Validation compares every field to current
-  state immediately before mutation. AuthorityReceipt references the token/decision and records the
-  evaluated binding/auth revisions plus applied/denied/stale outcome without raw paths or secrets.
+  decision ID, authenticated human/delegated-role principal, instance identity, the exact
+  ActiveContextSet context ID and generation, workspace identity/explicit no-workspace state,
+  cognitive scope, sphere memberships, situated identity, selection-capability digest and complete
+  selected binding set, action/write class, target stable vault binding, binding revision/root
+  fingerprint, authorization epoch, issued/expiry times, and policy/delegation revision. Validation
+  compares every field against current state immediately before mutation and proves the target
+  remains a member of that immutable selected set. AuthorityReceipt references the token/decision
+  and records the evaluated context generation/dimensions, target membership, and binding/auth revisions plus
+  applied/denied/stale outcome without raw paths, bearer values, or secrets.
   Update capture and every governed-write producer, serializer/store, migration, fixture, and
   fail-loud preflight together; an old actor/resource/action-only token cannot authorize the new seam.
 - Add an architecture guard against new direct process-global vault resolution in request code.
@@ -297,9 +314,11 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
   its explicit compatibility binding, authority, revision, and root; a mismatched or ambiguous row
   remains pending/unacknowledged with blocked readiness, while explicit-global work remains processable.
   - Verify: `tests/workers/test_multi_vault_partial_delivery_gate.py::test_mvr05a_scalar_worker_gates_migrated_rows_before_dispatch`
-- [ ] **MVR-05C:** Production capture/governed-write paths require one explicit authorized target and record
-  vault/context provenance in their receipt.
+- [ ] **MVR-05C:** Production capture/governed-write paths require one explicit authorized target,
+  reject an otherwise registered/owned/GOV-authorized target outside the immutable selected binding
+  set (and any batch that is not a subset), and record vault/context provenance in their receipt.
   - Verify: `tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt`
+  - Verify: `tests/api/test_multi_vault_governed_writes.py::test_write_target_must_belong_to_active_context_set`
 - [ ] **MVR-05C:** GOV revocation after request resolution but before
   commit invalidates the current DecisionToken/binding revision and blocks the in-flight mutation
   without writing. Production removal/relocation remain capability-not-ready and are proved after
@@ -330,10 +349,13 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
   use or filesystem effect, while the destination can access only under its matching active lease
   and current GOV authorization; failure to advance the floor leaves transfer dormant.
   - Verify: `tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_write_after_channel_lease_transfer`
-- [ ] **MVR-05C:** The production capture path issues, persists, validates, and receipts the expanded token bound
-  to principal/instance/scope/binding revision/auth epoch; legacy-shaped tokens and stale epochs fail
-  before mutation, and all token producers/fixtures satisfy the same schema.
-  - Verify: `tests/api/test_multi_vault_governed_writes.py::test_capture_token_binds_principal_scope_binding_revision_and_auth_epoch`
+- [ ] **MVR-05C:** The production capture path issues, persists, validates, and receipts the expanded
+  token bound to principal/instance plus exact context ID/generation, workspace/no-workspace,
+  cognitive dimensions, selection digest and complete selected set, as well as target binding
+  revision/auth epoch. A token replayed under a different generation, workspace, sphere, situated
+  identity, selection, or target membership fails before mutation; legacy-shaped tokens and stale
+  epochs fail, and all token producers/fixtures satisfy the same schema.
+  - Verify: `tests/api/test_multi_vault_governed_writes.py::test_capture_token_binds_exact_active_context_and_target_membership`
 - [ ] **MVR-05D:** A production producer registry and architecture guard enumerate every vault-bound watcher,
   API/ingest/capture, Heimdal, and shared outbox call site; no unregistered call site can emit a
   legacy envelope.
@@ -394,6 +416,12 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
   request selection does not mutate it, and the bridge is named and guarded for atomic retirement by
   MVR-06.
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_legacy_picker_bridge_preserves_single_watcher_until_mvr06`
+- [ ] **MVR-05B:** Picker replacement and the #3163 compatibility watcher rebind are recoverable as
+  one operation. Faults before/after durable revision commit, watcher acknowledgement, selection
+  activation, and prior-selection invalidation either converge fully to the new binding or append
+  and acknowledge a compensating revision to the prior binding while vault-bound ingress remains
+  blocked; no request can observe foreground selection A with watcher B or the reverse.
+  - Verify: `tests/integration/test_multi_vault_picker_context.py::test_picker_and_watcher_rebind_is_failure_atomic`
 - [ ] **MVR-05B:** Request-bound production code cannot introduce new direct global vault resolution outside
   named compatibility adapters.
   - Verify: `tests/architecture/test_multi_vault_context_boundaries.py::test_request_consumers_use_context_seam`
@@ -444,12 +472,12 @@ maps directly to that child ID; an early child never runs a later slice's accept
 
 ### MVR-05B validation
 
-- `pytest -q tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk tests/integration/test_multi_vault_request_isolation.py::test_authority_change_cannot_cross_read_effect_window tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_read_after_staged_channel_lease_transfer tests/retrieval/test_multi_vault_retrieval.py::test_production_retrieval_preserves_binding_provenance tests/integration/test_multi_vault_settings_resolution.py::test_many_binding_request_fails_before_effect_when_request_wide_settings_conflict tests/api/test_multi_vault_request_fail_closed.py::test_invalid_selection_never_falls_back tests/api/test_active_context_resolution.py::test_request_override_header_outranks_session_without_mutating_it tests/api/test_active_context_resolution.py::test_request_uses_one_context_generation_end_to_end tests/integration/test_multi_vault_picker_context.py::test_session_selection_reuses_bindings_with_per_request_server_scope tests/integration/test_multi_vault_partial_delivery.py::test_scoped_write_is_sealed_until_mvr05c tests/integration/test_multi_vault_picker_context.py::test_existing_picker_drives_scoped_request_context tests/integration/test_multi_vault_picker_context.py::test_fresh_vault_initialize_returns_usable_scoped_context tests/integration/test_multi_vault_picker_context.py::test_stale_selection_restart_requires_visible_reselection tests/integration/test_multi_vault_picker_context.py::test_legacy_picker_bridge_preserves_single_watcher_until_mvr06 tests/architecture/test_multi_vault_context_boundaries.py::test_request_consumers_use_context_seam tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior`
+- `pytest -q tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk tests/integration/test_multi_vault_request_isolation.py::test_authority_change_cannot_cross_read_effect_window tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_read_after_staged_channel_lease_transfer tests/retrieval/test_multi_vault_retrieval.py::test_production_retrieval_preserves_binding_provenance tests/integration/test_multi_vault_settings_resolution.py::test_many_binding_request_fails_before_effect_when_request_wide_settings_conflict tests/api/test_multi_vault_request_fail_closed.py::test_invalid_selection_never_falls_back tests/api/test_active_context_resolution.py::test_request_override_header_outranks_session_without_mutating_it tests/api/test_active_context_resolution.py::test_request_uses_one_context_generation_end_to_end tests/integration/test_multi_vault_picker_context.py::test_session_selection_reuses_bindings_with_per_request_server_scope tests/integration/test_multi_vault_partial_delivery.py::test_scoped_write_is_sealed_until_mvr05c tests/integration/test_multi_vault_picker_context.py::test_existing_picker_drives_scoped_request_context tests/integration/test_multi_vault_picker_context.py::test_fresh_vault_initialize_returns_usable_scoped_context tests/integration/test_multi_vault_picker_context.py::test_stale_selection_restart_requires_visible_reselection tests/integration/test_multi_vault_picker_context.py::test_legacy_picker_bridge_preserves_single_watcher_until_mvr06 tests/integration/test_multi_vault_picker_context.py::test_picker_and_watcher_rebind_is_failure_atomic tests/architecture/test_multi_vault_context_boundaries.py::test_request_consumers_use_context_seam tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior`
 - Verify the 05B PR diff contains its mapped `docs/ARCHITECTURE.md` and `docs/SETTINGS.md` writebacks.
 
 ### MVR-05C validation
 
-- `pytest -q tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt tests/api/test_multi_vault_governed_writes.py::test_authority_change_blocks_inflight_write_before_commit tests/api/test_multi_vault_governed_writes.py::test_capture_token_binds_principal_scope_binding_revision_and_auth_epoch tests/integration/test_multi_vault_write_effect_fence.py::test_authority_change_cannot_cross_validation_write_window tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_write_after_channel_lease_transfer tests/integration/test_multi_vault_picker_context.py::test_scoped_picker_governed_write_targets_selected_binding`
+- `pytest -q tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt tests/api/test_multi_vault_governed_writes.py::test_write_target_must_belong_to_active_context_set tests/api/test_multi_vault_governed_writes.py::test_authority_change_blocks_inflight_write_before_commit tests/api/test_multi_vault_governed_writes.py::test_capture_token_binds_exact_active_context_and_target_membership tests/integration/test_multi_vault_write_effect_fence.py::test_authority_change_cannot_cross_validation_write_window tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_write_after_channel_lease_transfer tests/integration/test_multi_vault_picker_context.py::test_scoped_picker_governed_write_targets_selected_binding`
 - Verify the 05C PR diff contains its mapped `docs/contracts/GOVERNED_WRITE_PROTOCOL.md` writeback.
 
 ### MVR-05D validation

@@ -19,9 +19,11 @@ generation unknown. A process-global mutable manager cannot safely represent con
 ## What This Task Does
 
 - Define the minimal runtime-capable `ActiveContextSet` schema: `context_id`, monotonic
-  `generation`, immutable zero/one/many source bindings, selection provenance, optional dimension
-  filter, and the already-delivered cognitive `scope`, `sphere_memberships`, `situated_identity`,
-  principal, and topology fields reserved by the contract. These cognitive dimensions remain WSP
+  `generation`, explicit `workspace_id` or typed `no_workspace` state, immutable zero/one/many
+  source bindings, selection provenance, optional dimension filter, and the already-delivered
+  cognitive `scope`, `sphere_memberships`, `situated_identity`,
+  principal, and topology fields reserved by the contract. Workspace is never inferred from vault,
+  path, scope, or principal. These cognitive dimensions remain WSP
   context and are never replaced by an endpoint action/permission name. Every source
   binding also carries its monotonic `binding_revision` (path/device/authority-provenance revision),
   and the snapshot carries the registry revision plus a non-secret authorization-decision epoch or
@@ -41,7 +43,8 @@ generation unknown. A process-global mutable manager cannot safely represent con
   keys are credentials rather than principals; paths, correlation IDs, and client-supplied
   principal/scope strings never become identity or authority. A governed operation with no resolved
   principal/delegated role fails closed. The selection record is bound to that principal, instance,
-  selected binding set, and validated cognitive dimensions, not to an endpoint permission/action.
+  workspace/no-workspace state, selected binding set, and validated cognitive dimensions, not to an
+  endpoint permission/action.
   Possession of a different selection ID is
   required to access a different session selection. At later request resolution GOV authorizes the
   principal/bindings/action independently while the immutable snapshot retains the selection's
@@ -96,7 +99,8 @@ generation unknown. A process-global mutable manager cannot safely represent con
   with the prior snapshot. Relocation, removal, authority-provenance, or verdict change invalidates
   affected cache entries and rotates generation before downstream work starts.
 - Key/invalidate caches and downstream context artifacts by `context_id`, generation,
-  registry/binding revisions, authorization epoch/fingerprint, principal, cognitive scope,
+  registry/binding revisions, authorization epoch/fingerprint, workspace/no-workspace, principal,
+  cognitive scope,
   sphere memberships, situated identity, a non-reversible selection-capability digest,
   dimension/filter, and binding set; never by binding plus generation alone. Action/write class and
   permission remain separate GOV inputs/receipt fields rather than being written into WSP scope.
@@ -168,7 +172,8 @@ retrieval, settings, or write provenance to leak between humans or vaults.
   - Verify: `tests/api/test_active_context_resolution.py::test_each_binding_is_authorized_independently`
 - [ ] Session selection uses an expiring high-entropy server-minted bearer ID in addition to #2223
   authentication, binds to the server-resolved human/delegated-role principal, separate instance
-  identity, selected bindings, cognitive scope, sphere memberships, and situated identity—but stores
+  identity, explicit workspace/no-workspace state, selected bindings, cognitive scope, sphere
+  memberships, and situated identity—but stores
   no operation authority. The resolver preserves those cognitive dimensions while deriving action,
   write class, and required permission separately per call for GOV; it permits the same selection
   for separately authorized read/write operations and rejects arbitrary client correlation/
@@ -209,8 +214,9 @@ retrieval, settings, or write provenance to leak between humans or vaults.
   authentication and expiry, and never mutate process-global `VaultManager` state.
   - Verify: `tests/api/test_active_context_selection_api.py::test_production_selection_lifecycle_is_scoped_and_global_free`
 - [ ] Cache/retrieval context cannot collide across two bearer selections with the same binding and
-  generation but different cognitive scope/sphere/situated identity, selection-capability digest,
-  or dimension/filter; action/permission stays a separate GOV input, raw bearer IDs remain secret,
+  generation but different workspace/no-workspace state, cognitive scope/sphere/situated identity,
+  selection-capability digest, or dimension/filter; workspace is never inferred from another field,
+  action/permission stays a separate GOV input, raw bearer IDs remain secret,
   and the typed principal field stays in the key for future
   authenticated-principal expansion.
   - Verify: `tests/retrieval/test_active_context_cache_isolation.py::test_cache_keys_include_full_context_identity`

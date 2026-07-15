@@ -143,13 +143,16 @@ required by #2143 without pretending that the move has shipped.
 ### Active context and isolation
 
 `ActiveContextSet` is the public WSP seam. Its first runtime-capable version carries a stable
-`context_id`, monotonic `generation`, zero/one/many immutable source bindings, selection
-provenance, and optional dimension filter. Every binding keeps its vault identity and instance
-provenance. A request resolves one snapshot and all downstream work for that request uses it.
+`context_id`, monotonic `generation`, explicit workspace identity or typed no-workspace state,
+zero/one/many immutable source bindings, selection provenance, and optional dimension filter.
+Workspace is never inferred from vault, path, scope, or principal. Every binding keeps its vault
+identity and instance provenance. A request resolves one snapshot and all downstream work for that
+request uses it.
 
 Changing a session selection creates a new generation. In-flight work completes against its old
 snapshot; later work sees the new generation. Caches, retrieval results, and settings bundles are
-keyed by `context_id` plus generation and every context-affecting input (server-derived principal,
+keyed by `context_id` plus generation and every context-affecting input (workspace/no-workspace,
+server-derived principal,
 cognitive operational scope, sphere memberships, situated identity, non-reversible selection-
 capability digest, dimension/filter, and binding set); receipts and writes
 record that identity and their target binding. In the current single-user runtime the opaque

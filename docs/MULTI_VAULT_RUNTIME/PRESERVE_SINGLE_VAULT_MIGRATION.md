@@ -49,6 +49,14 @@ producer and consumer has a replacement and proves reversibility to the single-v
   Cleanup runs after both PASS and injected failure; a cleanup error makes the smoke receipt FAIL and
   blocks later deployment/parent closure. No prior test-channel registration or operator state may be
   overwritten as a shortcut.
+- Run the journey against a freshly created, invocation-owned disposable instance-state/DB/runtime
+  namespace under the promoted test image/checkout, never against the test channel's standing
+  instance-state namespace. Preflight proves the disposable namespace is empty, binds background
+  intent directly into explicit mode through production bootstrap, and records its ownership marker
+  before fixture enrollment. Teardown destroys only that marked namespace after all production
+  drains/removals complete. The standing channel's compatibility/explicit mode, members, default,
+  revisions, projections, and operator state remain byte-for-byte unchanged; if isolation cannot be
+  established, fail before the first governed mutation.
 
 ## Concretely
 
@@ -111,7 +119,9 @@ can break startup or strand durable state. Both failures are latent outages rath
   - Verify: `tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_rejects_non_test_manifest_roots_before_registration`
 - [ ] Successful and failure-injected smoke runs drain and remove every fixture lifecycle,
   projection, dimension/default/registration, sandbox root, and host-global ownership lease, then
-  prove the exact pre-run non-fixture test-channel baseline; incomplete teardown returns FAIL.
+  delete only their marked disposable instance-state/DB/runtime namespace and prove the exact
+  pre-run standing test-channel baseline, including compatibility/explicit intent mode, is unchanged;
+  incomplete isolation or teardown returns FAIL.
   - Verify: `tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_restores_prior_test_state_on_success_and_failure`
 - [ ] Existing no-vault and one-vault journeys preserve startup, picker, request, restart, watcher
   idle/bind, CLI/agent/MCP, retrieval, governed-write, and receipt behavior.

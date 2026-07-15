@@ -61,11 +61,11 @@ Declare the active cognitive context as a versioned set of bindings rather than 
 This owner contract delegates the decided implementation-level V1 schema, transition, persistence,
 and migration details to `docs/MULTI_VAULT_RUNTIME/README.md` and its bounded task specifications.
 That capability specification is subordinate to this contract's WSP/GOV boundary and may not widen
-authority. V1 requires an opaque context ID, monotonic generation, zero/one/many immutable source
-bindings, server-derived principal, cognitive operational scope, sphere memberships, situated
-identity, topology posture, selection provenance,
+authority. V1 requires an opaque context ID, monotonic generation, explicit workspace identity (or
+a typed no-workspace state), zero/one/many immutable source bindings, server-derived principal,
+cognitive operational scope, sphere memberships, situated identity, topology posture, selection provenance,
 expiry where applicable, and non-reversible selection-capability digest. Cache and receipt identity
-includes every scope-affecting input; each binding is independently GOV-authorized. Current-state
+includes workspace and every scope-affecting input; each binding is independently GOV-authorized. Current-state
 owner docs remain shipped truth until the relevant implementation child writes them back.
 
 Endpoint action, write class, and required permission are separate GOV decision inputs. They are

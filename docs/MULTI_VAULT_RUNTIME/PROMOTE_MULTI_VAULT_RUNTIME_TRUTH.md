@@ -89,7 +89,9 @@ operators, or future agents still act on stale single-global-vault truth.
 - [ ] No-vault and one-vault compatibility targets pass on the same MVR-08 candidate head.
   - Verify: `tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`
 - [ ] The isolated test-channel journey records a redacted receipt for two vault bindings, two
-  sessions, one dimension read, one governed write, and truthful background health.
+  sessions, one dimension read, one governed write, and truthful background health on the exact
+  merged `origin/main` SHA. This is a parent-closure receipt after the MVR-08 merge, not an
+  unsatisfiable pre-merge pinned-image gate.
   - Verify: runtime receipt on GitHub issue `#2143`
 - [ ] Architecture/context/topology/settings/environment owner docs and transition debt match
   shipped behavior; every spec file remains indexed.
@@ -140,22 +142,21 @@ operators, or future agents still act on stale single-global-vault truth.
   not the merged-head closure receipt.
 - `pytest -q tests/integration/test_multi_vault_capability_acceptance.py::test_merged_multi_vault_capability tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/uat/`
-- Route the exact candidate through the governed
-  [promote-to-test](../../.codex/skills/promote-to-test/SKILL.md) workflow with
-  `MVR08_CANDIDATE_SHA` as its candidate ref. That workflow must run its channel-isolation
-  preflight before mutation, select the live checkout or pinned-image deployment model, and emit
-  the durable test-promotion receipt for that exact SHA. A direct `deploy_channel.sh` invocation is
-  not acceptance evidence; the governed workflow may invoke the script only after it has proved
-  that the test channel is pinned-image based. Fail if the selected deployment model cannot resolve
-  the exact artifact/checkout SHA.
-- With two isolated disposable test bindings declared in the redacted fixture manifest, run
-  `python3 scripts/multi_vault_test_channel_smoke.py --channel test --fixture-manifest "$MVR_TEST_FIXTURE_MANIFEST" --json`.
+- Do not require a live pinned-image promotion of the unmerged PR head: the current governed image
+  producer publishes pullable SHA tags only from `main`. On the PR head, verify the candidate image
+  build and all smoke harness/root-isolation contracts locally/CI without claiming deployment
+  evidence. If the live test channel is still checkout-based, an additional exact-checkout run is
+  allowed but remains candidate evidence and cannot satisfy parent closure. A pinned-image run must
+  wait for the MVR-08 merge and its `main` image artifact; it may not invent or overwrite a tag.
+- Against a disposable local/CI runtime using two isolated fixture bindings declared in the redacted
+  manifest, run `python3 scripts/multi_vault_test_channel_smoke.py --channel test --fixture-manifest "$MVR_TEST_FIXTURE_MANIFEST" --json`.
   The MVR-07 compatibility slice owns this harness and its production-path/root-safety tests. Before
   registration it must canonicalize every manifest root, prove each is a distinct descendant of the
   declared test sandbox, and reject known prod/dev/native roots, overlap, or symlink escape with zero
   effects. Each invocation uses a unique disposable namespace and failure-safe teardown; its receipt
   is FAIL unless fixture lifecycles, projections, dimensions/default/registrations, roots, and
-  ownership leases are removed and the exact pre-run non-fixture test baseline is restored. It then asserts two
+  ownership leases and its invocation-owned disposable instance-state/DB/runtime namespace are
+  removed and the exact standing test-channel baseline—including background intent mode—is unchanged. It then asserts two
   registered bindings, two independent sessions, one dimension read, one governed write to the
   explicit target, and per-binding background health, then emit only SHA, opaque fixture IDs,
   boolean outcomes, and receipt IDs for the #2143 comment—never paths, names, tokens, or content.

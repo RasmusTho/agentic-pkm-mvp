@@ -183,7 +183,9 @@ acceptance criteria prefixed with its ID:
    zero/one/many-capable per-binding watcher/worker/settings supervisor, prove independent ownership/
    revision/auth reconciliation and truthful gated health, activate the MVR-01B exclusive relocation
    path only after all foreground/background consumers share the lock order, and add cross-process
-   ActiveContextSet handoff; multi-binding activation remains dormant. Depends on 06B.
+   ActiveContextSet handoff. An internal capability-gated harness starts two isolated bindings through
+   the real supervisor and proves independent reconciliation/health while the production enrollment
+   and dispatch gates remain sealed; multi-binding activation remains dormant. Depends on 06B.
 4. **MVR-06D — queued-work convergence and aggregate proof:** validate MVR-05 classification, preserve or
    quarantine pending rows under current authority/binding, atomically activate many-binding
    enrollment/start plus its matching dispatch contract, write environment/health truth, and prove
@@ -340,8 +342,12 @@ migration, preflight, and fail-loud gate merge together.
   loud and cannot redirect or mark the whole set healthy.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_zero_one_many_and_partial_failure_are_truthful`
 - [ ] **MVR-06C:** The implemented multi-binding supervisor remains dormant: production enrollment/start
-  rejects a second binding until 06D atomically enables its matching queue-dispatch contract.
+  rejects a second binding until 06D atomically enables its matching queue-dispatch contract, while
+  an internal capability-gated production-supervisor harness runs two isolated bindings and proves
+  independent revision/auth reconciliation, failure containment, context handoff, and health without
+  enabling production enrollment or queue dispatch.
   - Verify: `tests/api/test_background_binding_admin.py::test_mvr06c_rejects_many_until_mvr06d_dispatch_gate`
+  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_mvr06c_dormant_supervisor_isolates_two_internal_bindings`
 - [ ] **MVR-06D:** Governed production enrollment may first persist and start a two-or-more binding explicit
   set only when the matching multi-binding queue-dispatch contract is enabled; restart reconstructs
   exactly that deduplicated, re-authorized set.
@@ -434,7 +440,7 @@ PostgreSQL receipt belongs only to 06D.
 
 ### MVR-06C validation
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_relocation_activates_only_after_all_consumer_effect_leases tests/integration/test_multi_vault_write_effect_fence.py::test_relocation_cannot_cross_foreground_or_background_effect_windows_after_activation tests/api/test_background_binding_admin.py::test_mvr06c_rejects_many_until_mvr06d_dispatch_gate`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_relocation_activates_only_after_all_consumer_effect_leases tests/integration/test_multi_vault_write_effect_fence.py::test_relocation_cannot_cross_foreground_or_background_effect_windows_after_activation tests/api/test_background_binding_admin.py::test_mvr06c_rejects_many_until_mvr06d_dispatch_gate tests/integration/test_multi_vault_background_lifecycle.py::test_mvr06c_dormant_supervisor_isolates_two_internal_bindings`
 - Verify the 06C PR diff contains its mapped `docs/ENVIRONMENTS.md` and `docs/HEALTH.md` dormant-
   supervisor writebacks.
 
