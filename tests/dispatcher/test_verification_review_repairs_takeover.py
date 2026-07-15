@@ -535,6 +535,171 @@ def _durable_verification_snapshot(
     }
 
 
+def _record_backoff_chain(
+    state: VerificationDispatchLedger,
+    *,
+    retry_after: str,
+    payload: dict[str, object] | None = None,
+) -> tuple[str, dict[str, object]]:
+    run_id, _ = _record_exhausted_chain(
+        state, payload or request(), expire_lease=False
+    )
+    running = state.get(run_id)
+    assert running is not None
+    assert running.lease_id is not None
+    state.exception(
+        run_id,
+        "synthetic_failure",
+        {"summary": "bounded synthetic exception", "head_sha": HEAD},
+        holder="head-a-host",
+        lease_id=running.lease_id,
+    )
+    state.backoff(
+        run_id,
+        {"outcome": "launcher_contract_failed", "error_type": "RuntimeError"},
+        retry_after,
+        holder="head-a-host",
+        lease_id=running.lease_id,
+    )
+    return run_id, _durable_verification_snapshot(state, run_id)
+
+
+def test_authenticated_live_head_rebinds_expired_backoff_chain(
+    tmp_path: Path,
+) -> None:
+    state = ledger(tmp_path)
+    run_id, _ = _record_backoff_chain(
+        state, retry_after="2000-01-01T00:00:00+00:00"
+    )
+
+    reopened = state.ingest(
+        _live_observed_artifact(state, request(REPAIRED_HEAD))
+    )
+
+    assert reopened.run_id == run_id
+    assert reopened.status == "queued"
+    assert reopened.requested_head_sha == HEAD
+    assert reopened.current_head_sha == REPAIRED_HEAD
+    assert reopened.claimed_by is None
+    assert reopened.lease_id is None
+    assert reopened.coordinator_session_id is None
+    assert reopened.context_pack is None
+    assert reopened.terminal_receipt is None
+    assert reopened.retry_after is None
+
+
+def test_expired_backoff_rebind_preserves_cumulative_chain_evidence(
+    tmp_path: Path,
+) -> None:
+    state = ledger(tmp_path)
+    run_id, before = _record_backoff_chain(
+        state, retry_after="2000-01-01T00:00:00+00:00"
+    )
+
+    reopened = state.ingest(
+        _live_observed_artifact(state, request(REPAIRED_HEAD))
+    )
+    after = _durable_verification_snapshot(state, run_id)
+
+    assert reopened.run_id == run_id
+    assert after["attempts"] == before["attempts"]
+    assert after["exceptions"] == before["exceptions"]
+    assert after["run_count"] == before["run_count"] == 1
+    assert [attempt["kind"] for attempt in state.attempts(run_id)] == [
+        "standard_repair",
+        "standard_repair",
+        "escalated_repair",
+        "escalated_repair",
+        "review",
+        "review",
+    ]
+
+
+@pytest.mark.parametrize("failure", ["unexpired", "unauthenticated", "stale_live_head"])
+def test_backoff_head_rebind_rejects_untrusted_or_premature_transition(
+    tmp_path: Path, failure: str
+) -> None:
+    state = ledger(tmp_path)
+    retry_after = (
+        "2999-01-01T00:00:00+00:00"
+        if failure == "unexpired"
+        else "2000-01-01T00:00:00+00:00"
+    )
+    run_id, before = _record_backoff_chain(state, retry_after=retry_after)
+    payload = request(REPAIRED_HEAD)
+    if failure == "unauthenticated":
+        incoming: dict[str, object] = payload
+    elif failure == "stale_live_head":
+        source, _ = _gh_source(payload)
+        authenticated = source.pending_requests(REPO)[0]
+        token = state.canonical_chain_token(authenticated)
+        incoming = _live_observed_verification_request(
+            authenticated,
+            observed_repository=REPO,
+            observed_pr_number=payload["pr_number"],
+            observed_head_sha=HEAD,
+            observed_state="open",
+            observed_merged_at=None,
+            observed_draft=False,
+            observed_linked_issue=payload["linked_issue"],
+            observed_supporting_issues=(),
+            canonical_chain_token=token,
+        )
+    else:
+        incoming = _live_observed_artifact(state, payload)
+
+    with pytest.raises(ValueError, match="artifact head does not match canonical run"):
+        state.ingest(incoming)
+
+    assert _durable_verification_snapshot(state, run_id) == before
+
+
+def test_expired_backoff_rebind_rejects_authority_drift(
+    tmp_path: Path,
+) -> None:
+    state = ledger(tmp_path)
+    original = request()
+    original["supporting_issues"] = [3626]
+    run_id, before = _record_backoff_chain(
+        state,
+        retry_after="2000-01-01T00:00:00+00:00",
+        payload=original,
+    )
+
+    removed_support = request(REPAIRED_HEAD)
+    with pytest.raises(ValueError, match="artifact head does not match canonical run"):
+        state.ingest(_live_observed_artifact(state, removed_support))
+
+    wrong_governor = request(REPAIRED_HEAD)
+    wrong_governor["linked_issue"] = 999999
+    with pytest.raises(ValueError, match="governing issue mismatch"):
+        state.ingest(_live_observed_artifact(state, wrong_governor))
+
+    assert _durable_verification_snapshot(state, run_id) == before
+
+
+def test_expired_backoff_rebind_rejects_canonical_chain_race(
+    tmp_path: Path,
+) -> None:
+    state = ledger(tmp_path)
+    run_id, _ = _record_backoff_chain(
+        state, retry_after="2000-01-01T00:00:00+00:00"
+    )
+    incoming = _live_observed_artifact(state, request(REPAIRED_HEAD))
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET retry_after=? WHERE run_id=?",
+            ("1999-01-01T00:00:00+00:00", run_id),
+        )
+        conn.commit()
+    before = _durable_verification_snapshot(state, run_id)
+
+    with pytest.raises(ValueError, match="canonical authority changed"):
+        state.ingest(incoming)
+
+    assert _durable_verification_snapshot(state, run_id) == before
+
+
 def test_first_authenticated_new_head_reopens_expired_chain_without_budget_reset(
     tmp_path: Path,
 ) -> None:
