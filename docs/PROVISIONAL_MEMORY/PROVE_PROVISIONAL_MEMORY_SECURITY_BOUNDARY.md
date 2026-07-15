@@ -44,7 +44,7 @@ authority invariant across production boundaries and both supported languages.
 - [x] The end-to-end production chain is exercised from API write through guarded recall/context.
   Verify: `tests/agent_memory/test_provisional_memory_end_to_end.py::test_direct_write_remains_low_trust_through_recall`
 - [x] Existing bilingual retrieval/memory metrics do not regress. Verify: `tests/eval/test_golden_metrics.py::test_golden_eval_pipeline` and `tests/eval/test_golden_metrics.py::test_memory_recall_slice`
-- [ ] Parent #2314 receives a closure packet listing all child merges, test/eval evidence, owner-doc
+- [x] Parent #2314 receives a closure packet listing all child merges, test/eval evidence, owner-doc
   writeback, and any operator-only residual. Verify: GitHub issue #2314 comment headed `W7 capability validation receipt`
 
 ## How to Verify (Pre-Merge)
