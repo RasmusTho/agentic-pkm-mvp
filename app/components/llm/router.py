@@ -30,6 +30,7 @@ class LLMRoute:
     mode: str
     reason: str
     degraded: bool = False
+    embedding_identity: EmbeddingIdentity | None = None
 
 
 def _normalize(value: str | None) -> str:
@@ -205,18 +206,34 @@ class LLMRouter:
         override_provider = None
         override_model = None
         target_provider, target_model = _resolve_target_model_id(target, expected_kind="embedding")
+        target_is_explicit = bool(
+            target
+            and any(
+                (target.model_id, target.provider, target.model, target.profile)
+            )
+        )
         if target is not None:
             profile = target.profile
             override_provider = target.provider or target_provider
             override_model = target.model or target_model
+        # EMBED_PROFILE is the operator's explicit identity activation seam.
+        # When the compiled task target leaves its profile blank, carry that
+        # activation into the router instead of pairing the selected profile's
+        # dimension with the generic shipped EMBED_MODEL fallback below.
+        if profile is None and not target_is_explicit:
+            profile = (os.getenv("EMBED_PROFILE") or "").strip() or None
         if override_model is None and routing is not None:
             override_model = routing.default_embed_model
-        if override_model is None:
+        # A configured task/default model remains higher-precedence settings
+        # authority. The generic environment/built-in model is only a fallback
+        # when no named profile has selected the complete embedding identity.
+        if override_model is None and profile is None:
             override_model = _default_embed_model()
         identity = resolve_embedding_identity(
             profile=profile,
             override_model=override_model,
             override_provider=override_provider,
+            use_env_profile=not target_is_explicit,
         )
         return (
             LLMRoute(
@@ -225,6 +242,7 @@ class LLMRouter:
                 mode="embeddings",
                 reason=reason,
                 degraded=degraded,
+                embedding_identity=identity,
             ),
             identity,
         )

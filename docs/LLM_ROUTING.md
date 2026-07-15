@@ -41,6 +41,14 @@ Routing is intentionally deterministic and single-source:
 3. **Environment defaults** — env vars fill in provider/model defaults when the task policy leaves them blank.
 4. **Built-in defaults** — used when no settings or env override is present.
 
+For embeddings, a blank compiled task target also permits the operator activation seam
+`EMBED_PROFILE` to select one complete named identity (provider, model, dimension, and
+normalization) before the generic `EMBED_MODEL` / `OLLAMA_EMBED_MODEL` environment fallback is
+applied. An explicit compiled `primary.{model_id,provider,model,profile}` target remains
+higher-precedence settings authority. This prevents a profile activation such as `bge-m3` from
+being combined with the shipped `nomic-embed-text` model fallback into a non-existent hybrid
+identity.
+
 Current state:
 - Chat, reasoning, eval, and embedding routes can each carry separate preferred model choices.
 - Embedding fallback is blocked unless the fallback is **dimension-matched** and its mixed-identity write is bound to reconcile discipline. The sanctioned fallback is Ollama-primary with a Gemini `gemini-embedding-001` @ `output_dimensionality=768` (L2-renormalized) auto-fallback on primary failure; the write is **MIXED-IDENTITY / reconcilable** (carries the Gemini identity, reconciled via `index reconcile` once Ollama recovers), and the query path always uses the primary identity — per `docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`, `docs/EMBEDDINGS.md :: Fallback rule`, and `docs/EMBEDDING_RELIABILITY/README.md` CTI-1/2/3. Generic fallback that changes dimension/normalization, or switches identity without that discipline, remains blocked.
@@ -54,6 +62,8 @@ Tests: `tests/components/llm/test_router.py::test_router_respects_env_defaults`,
 Core routing:
 - `LLM_PROVIDER` — default provider (`mock`, `ollama`, `openai`, `deepseek`).
 - `LLM_MODEL` — default chat/completions model.
+- `EMBED_PROFILE` — selects a registered complete embedding identity when the compiled embedding
+  task target is blank (for example `bge-m3` during the governed cutover).
 - `EMBED_MODEL` / `OLLAMA_EMBED_MODEL` — embedding model name for embed routes.
 - `LLM_FORCE_PROVIDER` — hard override for router provider (all tasks).
 - `LLM_FORCE_MODEL` — hard override for router model (all tasks).

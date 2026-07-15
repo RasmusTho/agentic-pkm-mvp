@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.components.llm.fabric import get_embeddings_client
 from app.components.llm.router import LLMRouter, LLMTaskIntent
 from app.config import llm as llm_config
 from app.settings.models import LLMRoutingSettings, SettingsBundle
@@ -62,6 +63,60 @@ def test_router_respects_model_env_defaults(clean_llm_env) -> None:
     assert embed.provider == "ollama"
     assert embed.model == "embed-test"
     assert embed.mode == "embeddings"
+
+
+def test_router_honors_activated_embedding_profile_over_generic_env_model_default(
+    clean_llm_env,
+) -> None:
+    """The cutover profile is one identity, not bge-m3's dimension paired
+    with the shipped nomic model fallback on the routed production path."""
+    clean_llm_env.setenv("LLM_PROVIDER", "mock")
+    clean_llm_env.setenv("EMBED_PROFILE", "bge-m3")
+    clean_llm_env.setenv("EMBED_MODEL", "nomic-embed-text:latest")
+    clean_llm_env.setenv("EMBED_DIM", "768")
+
+    intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    route = LLMRouter().route(intent)
+    client = get_embeddings_client(intent)
+
+    assert route.provider == "ollama"
+    assert route.model == "bge-m3:latest"
+    assert client.identity.provider == "ollama"
+    assert client.identity.model == "bge-m3:latest"
+    assert client.identity.dim == 1024
+    assert client.identity.normalize is True
+
+
+def test_explicit_embedding_task_target_remains_higher_precedence_than_env_profile(
+    monkeypatch,
+    clean_llm_env,
+) -> None:
+    clean_llm_env.setenv("EMBED_PROFILE", "bge-m3")
+    clean_llm_env.setenv("EMBED_MODEL", "nomic-embed-text:latest")
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            default_embedding=LLMRoutingSettings.TaskPolicy(
+                primary=LLMRoutingSettings.RouteTarget(
+                    provider="ollama",
+                    model="nomic-embed-text:latest",
+                )
+            )
+        )
+    )
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+
+    route = LLMRouter().route(
+        LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    )
+    client = get_embeddings_client(
+        LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    )
+
+    assert route.provider == "ollama"
+    assert route.model == "nomic-embed-text:latest"
+    assert client.identity.provider == "ollama"
+    assert client.identity.model == "nomic-embed-text:latest"
+    assert client.identity.dim == 768
 
 
 def test_router_forces_mock_for_chat_determinism(clean_llm_env) -> None:
