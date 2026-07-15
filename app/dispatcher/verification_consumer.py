@@ -1540,7 +1540,11 @@ def _is_valid_codex_retry(retry: str) -> bool:
 def _is_codex_usage_limit_event(event: object) -> bool:
     """Recognize the bounded Codex CLI envelope for subscription exhaustion."""
 
-    if not isinstance(event, Mapping) or event.get("type") != "error":
+    if (
+        not isinstance(event, Mapping)
+        or set(event) != {"type", "message"}
+        or event.get("type") != "error"
+    ):
         return False
     message = event.get("message")
     if not isinstance(message, str) or not message.isascii():

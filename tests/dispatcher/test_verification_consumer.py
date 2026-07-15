@@ -3400,6 +3400,7 @@ def _codex_json_usage_failure_launcher(
     message: str,
     nested: bool = False,
     stderr: str = "",
+    extra_event_fields: Mapping[str, object] | None = None,
 ) -> tuple[CodexExecLauncher, list[list[str]]]:
     class Result:
         returncode = 1
@@ -3414,7 +3415,11 @@ def _codex_json_usage_failure_launcher(
                     },
                 }
                 if nested
-                else {"type": "error", "message": message}
+                else {
+                    "type": "error",
+                    "message": message,
+                    **(extra_event_fields or {}),
+                }
             )
             self.stdout = "\n".join(
                 (
@@ -3644,6 +3649,32 @@ def test_untrusted_usage_limit_text_cannot_mint_backoff(
 ) -> None:
     launcher, _ = _codex_json_usage_failure_launcher(
         tmp_path, message=message, nested=nested, stderr=stderr
+    )
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "codex_exec_failed"
+    assert result.terminal_receipt["failure_class"] == "execution"
+
+
+@pytest.mark.parametrize(
+    "extra_event_fields",
+    [
+        {"usage_limit": False},
+        {"source": "model"},
+        {"payload": {"type": "agent_message", "usage_limit": True}},
+    ],
+)
+def test_noncanonical_codex_usage_limit_event_envelope_cannot_mint_backoff(
+    tmp_path: Path, extra_event_fields: Mapping[str, object]
+) -> None:
+    launcher, _ = _codex_json_usage_failure_launcher(
+        tmp_path,
+        message=CANONICAL_CODEX_USAGE_LIMIT,
+        extra_event_fields=extra_event_fields,
     )
 
     result = VerificationConsumer(
