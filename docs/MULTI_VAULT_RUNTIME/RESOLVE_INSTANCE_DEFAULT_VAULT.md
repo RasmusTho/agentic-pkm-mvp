@@ -27,7 +27,10 @@ fail-closed precedence resolver.
 - During the one-time schema migration only, materialize a valid legacy
   `last_active_vault_ref` as the default when no default exists, recording
   `legacy_last_active_migration` provenance. Subsequent last-active changes never update default.
-- Expose set/clear default operations that validate registration and do not mutate last-active.
+- Expose authenticated Companion API and headless CLI get/set/clear commands through one service.
+  They validate registration and authority, use MVR-01's locked transaction, emit redacted
+  receipts, and never mutate last-active. Tests drive these production commands rather than seeding
+  the store or invoking an internal setter directly.
 - Preserve no-vault startup and headless bootstrap behavior through explicit adapters.
 
 ## Concretely
@@ -82,6 +85,9 @@ turns an invalid explicit selection into a dangerous silent read/write against t
   - Verify: `tests/instance/test_default_vault_resolution.py::test_invalid_explicit_selection_never_falls_through`
 - [ ] Setting or clearing a default survives restart and never changes `last_active_vault_ref`.
   - Verify: `tests/instance/test_default_vault_resolution.py::test_default_is_durable_and_distinct_from_last_active`
+- [ ] Authenticated production API and CLI get/set/clear commands are the tested producers, reject
+  unknown/unauthorized bindings, and converge on the same locked registry state and receipt.
+  - Verify: `tests/api/test_default_vault_admin.py::test_production_default_commands_share_one_service`
 - [ ] A picker-only one-vault legacy store with no explicit default restarts on the same binding
   through the one-time provenance-tagged migration; later selections do not mutate that default.
   - Verify: `tests/instance/test_default_vault_resolution.py::test_legacy_last_active_materializes_default_once`
@@ -97,7 +103,7 @@ turns an invalid explicit selection into a dangerous silent read/write against t
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/instance/test_default_vault_resolution.py tests/integration/test_single_vault_compatibility.py tests/integration/test_vault_registry_container_durability.py`
+- `pytest -q tests/instance/test_default_vault_resolution.py tests/api/test_default_vault_admin.py tests/integration/test_single_vault_compatibility.py tests/integration/test_vault_registry_container_durability.py`
 - `ruff check app tests`
 
 ## Restart / Durability Posture

@@ -4,9 +4,9 @@ description: Supervise watcher worker and settings lifecycles per explicit bindi
 task_id: MVR-06
 source_anchor: "docs/SETTINGS_SPINE/REBIND_ON_VAULT_SELECTION.md :: What This Task Does"
 parent_capability: Multi-vault runtime selection
-prerequisites: [MVR-02, MVR-03, SETTINGS-05]
-depends_on: [RESOLVE_INSTANCE_DEFAULT_VAULT.md, VERSION_ACTIVE_CONTEXT_SELECTION.md]
-can_parallelize_with: [Group Vault Bindings By Dimension, Route Requests Through Active Context]
+prerequisites: [MVR-02, MVR-03, MVR-04, MVR-05, SETTINGS-05]
+depends_on: [RESOLVE_INSTANCE_DEFAULT_VAULT.md, VERSION_ACTIVE_CONTEXT_SELECTION.md, GROUP_VAULT_BINDINGS_BY_DIMENSION.md, ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md]
+can_parallelize_with: []
 ---
 
 # Bind Background Lifecycles
@@ -47,6 +47,12 @@ cross-process truth belong here.
   into health, receipts, settings reload, and work queues.
 - Make cross-process consumers receive/re-resolve versioned binding state rather than sharing an
   untracked env snapshot.
+- Version queued work and outbox rows with binding/context identity and make polling/ack ownership
+  binding-scoped. Before enabling more than one lifecycle, a fail-loud upgrade gate classifies every
+  undelivered legacy row: backfill only when its producer evidence and the prior single-vault
+  binding prove one target; otherwise quarantine it for explicit recovery without dispatch or ack.
+  An unclassified row blocks multi-binding startup and is never consumed by whichever worker polls
+  first or stranded silently by a binding filter.
 
 ## Concretely
 
@@ -74,7 +80,8 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
 - Secondary subsystem(s): OEF, EBF, PDM, GOV, SFC
 - Write class: existing mechanical/derived background writes only
 - Authority impact: lifecycle creation requires authorized bindings; no authority expansion
-- Persistence impact: durable instance-local background-binding intent; lifecycle state/receipts are operational
+- Persistence impact: durable instance-local background-binding intent plus binding/context schema
+  migration and classification for pending queue/outbox rows
 - Derived/rebuildable impact: worker/watch instances and health projections are rebuildable
 - Human knowledge impact: background writes preserve target vault attribution
 - Memory impact: background indexing never mixes vault contexts
@@ -124,6 +131,10 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
   process-global/env snapshot, and resolves it into the full background ActiveContextSet before
   work starts.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_worker_handoff_is_versioned_and_explicit`
+- [ ] Pending pre-upgrade outbox work is assigned only from provable prior binding evidence;
+  ambiguous rows quarantine and block multi-binding startup without dispatch or acknowledgement,
+  while new polling and ack are binding-scoped.
+  - Verify: `tests/migrations/test_multi_vault_outbox_upgrade.py::test_legacy_pending_rows_backfill_or_quarantine_fail_loud`
 - [ ] Production watcher/worker/settings callers consume ActiveContextSet outside named bootstrap
   adapters; no parallel lifecycle context type remains.
   - Verify: `tests/architecture/test_multi_vault_context_boundaries.py::test_background_consumers_use_lifecycle_seam`
@@ -135,7 +146,7 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/integration/test_multi_vault_background_lifecycle.py tests/runtime/test_background_binding_handoff.py tests/api/test_background_binding_admin.py tests/architecture/test_multi_vault_context_boundaries.py`
+- `pytest -q tests/integration/test_multi_vault_background_lifecycle.py tests/runtime/test_background_binding_handoff.py tests/api/test_background_binding_admin.py tests/migrations/test_multi_vault_outbox_upgrade.py tests/architecture/test_multi_vault_context_boundaries.py`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration -k "watcher or settings or multi_vault"`
 - `ruff check app tests`
 
@@ -155,6 +166,6 @@ existing idempotency contract, never silently rebound.
 
 ## Related GitHub Issues
 
-Create one child under #2143 only after #3163 and MVR-02/03 merge. Use Sol/xhigh because watcher
+Create one child under #2143 only after #3163 and MVR-02–05 merge. Use Sol/xhigh because watcher
 concurrency, cross-process binding, and settings reload have high blast radius. Do not recreate
 #3163 or its Settings Spine parent #3156.

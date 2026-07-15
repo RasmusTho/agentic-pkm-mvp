@@ -4,9 +4,9 @@ description: Migrate production HTTP retrieval and governed-write paths to immut
 task_id: MVR-05
 source_anchor: "docs/MULTI_VAULT_RUNTIME/README.md :: Active context and isolation"
 parent_capability: Multi-vault runtime selection
-prerequisites: [MVR-03]
-depends_on: [VERSION_ACTIVE_CONTEXT_SELECTION.md]
-can_parallelize_with: [Group Vault Bindings By Dimension, Bind Background Lifecycles]
+prerequisites: [MVR-03, MVR-04]
+depends_on: [VERSION_ACTIVE_CONTEXT_SELECTION.md, GROUP_VAULT_BINDINGS_BY_DIMENSION.md]
+can_parallelize_with: []
 ---
 
 # Route Requests Through Active Context
@@ -28,6 +28,12 @@ not background lifecycles.
   silently continues on the instance default.
 - Resolve per-binding settings, paths, caches, retrieval scope, and write provenance from the
   snapshot.
+- Namespace durable/rebuildable projections and associations by `vault_binding_id` plus their
+  existing artifact identity. This includes object/file-state rows, vector/index metadata, and any
+  retrieval association that currently keys only by UUID/path. Migrate schema and every producer,
+  consumer, fixture, and query together. Existing single-vault rows are assigned only when the
+  legacy binding is provably unique; ambiguous rows are quarantined and rebuilt from their source
+  vault under a fail-loud preflight—never copied to several bindings or guessed from a default.
 - Make many-binding reads explicit and provenance-preserving; require an explicit target binding
   for writes unless the command contract already provides one unambiguously.
 - Add an architecture guard against new direct process-global vault resolution in request code.
@@ -56,8 +62,9 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 - Secondary subsystem(s): GOV, RCA, HKA, EBF, HIX, OEF
 - Write class: existing governed human-artifact writes; no new write authority
 - Authority impact: enforces per-binding authorization and explicit write target
-- Persistence impact: none beyond existing content writes/receipts
-- Derived/rebuildable impact: caches/retrieval results generation-keyed and rebuildable
+- Persistence impact: additive binding namespace/association migration for durable projection rows;
+  ambiguous legacy projection state is quarantined/rebuilt, never guessed
+- Derived/rebuildable impact: caches/retrieval/object/file/vector projections become binding-keyed and rebuildable
 - Human knowledge impact: preserves source vault and target attribution
 - Memory impact: retrieval/memory reads are scoped to explicit bindings
 - Retrieval/context impact: production request consumers adopt ActiveContextSet
@@ -84,6 +91,12 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 - [ ] Production retrieval over several bindings preserves source vault and context generation on
   every result and cache lookup.
   - Verify: `tests/retrieval/test_multi_vault_retrieval.py::test_production_retrieval_preserves_binding_provenance`
+- [ ] Two registered bindings containing the same artifact UUID retain independent object,
+  file-state, vector/index, retrieval, and receipt provenance without overwrite or cross-read.
+  - Verify: `tests/integration/test_multi_vault_projection_isolation.py::test_duplicate_uuid_is_namespaced_by_binding`
+- [ ] Legacy single-vault projection rows backfill only with one provable binding; ambiguous rows
+  block mixed-mode startup until quarantined/rebuilt, without destructive guessing.
+  - Verify: `tests/migrations/test_multi_vault_projection_backfill.py::test_projection_backfill_is_unambiguous_or_fails_loud`
 - [ ] Production capture/governed-write paths require one explicit authorized target and record
   vault/context provenance in their receipt.
   - Verify: `tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt`
@@ -105,7 +118,7 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/integration/test_multi_vault_picker_context.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/architecture/test_multi_vault_context_boundaries.py`
+- `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/integration/test_multi_vault_picker_context.py tests/integration/test_multi_vault_projection_isolation.py tests/migrations/test_multi_vault_projection_backfill.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/architecture/test_multi_vault_context_boundaries.py`
 - `ruff check app tests`
 
 ## Restart / Durability Posture
@@ -122,7 +135,7 @@ session/default context and never inherit an unrecorded process selection.
 
 ## Related GitHub Issues
 
-Create one child under #2143 after MVR-03. Terra/high is acceptable for the mechanical call-site
-migration once the Sol-reviewed seam is fixed; escalate to Sol/high on any authority or cache
-isolation ambiguity. This slice owns compatibility migration of the already-shipped picker;
+Create one child under #2143 after MVR-03/04. Use Sol/high for binding-key schema/backfill and
+authority review; Terra/high is acceptable only for decomposed mechanical call-site migration after
+those gates are fixed. This slice owns compatibility migration of the already-shipped picker;
 #2566 remains the separate downstream visual switcher/overlay issue.

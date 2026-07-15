@@ -6,7 +6,7 @@ source_anchor: "docs/MULTI_VAULT_RUNTIME/README.md :: Dimensions"
 parent_capability: Multi-vault runtime selection
 prerequisites: [MVR-01, MVR-03]
 depends_on: [ESTABLISH_INSTANCE_VAULT_REGISTRY.md, VERSION_ACTIVE_CONTEXT_SELECTION.md]
-can_parallelize_with: [Route Requests Through Active Context, Bind Background Lifecycles]
+can_parallelize_with: []
 ---
 
 # Group Vault Bindings By Dimension
@@ -22,6 +22,9 @@ non-authoritative registry grouping.
 - Add versioned `dimension_id`, display metadata, and ordered membership over registered
   `vault_binding_id` values to the instance registry.
 - Provide add/remove/list/filter operations and resolve a dimension into explicit source bindings.
+- Provide authenticated Companion API and headless CLI create/rename/set-members/delete/list/resolve
+  commands through the same locked registry service. Mutations validate every binding, emit
+  redacted receipts, and are the production producers exercised by tests; no store seeding counts.
 - Preserve per-binding identity, provenance, and GOV evaluation in multi-binding contexts.
 - Make production dimension-to-context resolution all-or-nothing: an unknown, stale, removed, or
   unauthorized member fails the entire resolution with a redacted member-specific error. It never
@@ -76,6 +79,9 @@ a hidden authority system and can expose material across real confidentiality bo
 - [ ] Dimension membership survives restart and retains stable ordered vault-binding IDs, including
   two local clones that share one logical vault ID.
   - Verify: `tests/instance/test_vault_dimensions.py::test_dimension_membership_round_trip`
+- [ ] Authenticated production API and CLI administration create, rename, replace membership,
+  delete, list, and resolve dimensions through one service with authorization and receipts.
+  - Verify: `tests/api/test_vault_dimension_admin.py::test_production_dimension_commands_drive_registry`
 - [ ] Resolving a dimension returns explicit per-vault bindings and performs independent production
   authorization for every member.
   - Verify: `tests/api/test_dimension_context_resolution.py::test_dimension_resolution_authorizes_each_binding`
@@ -92,7 +98,7 @@ a hidden authority system and can expose material across real confidentiality bo
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/instance/test_vault_dimensions.py tests/api/test_dimension_context_resolution.py`
+- `pytest -q tests/instance/test_vault_dimensions.py tests/api/test_vault_dimension_admin.py tests/api/test_dimension_context_resolution.py`
 - `ruff check app tests`
 
 ## Restart / Durability Posture
