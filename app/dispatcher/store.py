@@ -280,7 +280,9 @@ def recognized_ambiguous_v1_closure_request(
         )
 
         projected = _canonical_request_projection(request)
-        _validate_request(projected)
+        validation_projection = dict(projected)
+        validation_projection["supporting_issues"] = []
+        _validate_request(validation_projection)
     except (KeyError, TypeError, ValueError):
         return False
     idempotency_key = request.get("idempotency_key")

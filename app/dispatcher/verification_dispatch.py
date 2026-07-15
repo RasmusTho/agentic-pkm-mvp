@@ -390,6 +390,13 @@ def _validate_request(request: Mapping[str, object]) -> None:
         or linked_issue in supporting_issues
     ):
         raise ValueError("verification request supporting issues are malformed")
+    if (
+        request["contract_version"] == LEGACY_CONTRACT_VERSION
+        and supporting_issues
+    ):
+        raise ValueError(
+            "legacy verification request has ambiguous multi-issue closure authority"
+        )
     closing_issues = request.get("closing_issues")
     if request["contract_version"] == LEGACY_CONTRACT_VERSION:
         closing_issues = [linked_issue]

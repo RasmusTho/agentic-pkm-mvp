@@ -276,6 +276,14 @@ def test_pr_contract_rejects_commit_message_closure_authority() -> None:
     assert "commit-message closing references are forbidden" in workflow
 
 
+def test_pr_contract_rejects_incomplete_commit_enumeration() -> None:
+    workflow = _read_workflow()
+
+    assert "commits.length !== pullRequest.commits" in workflow
+    assert "PR commit enumeration is incomplete or malformed" in workflow
+    assert "GitHub caps the pull-request commit list" in workflow
+
+
 def test_pr_contract_rejects_title_closure_authority() -> None:
     workflow = _read_workflow()
 

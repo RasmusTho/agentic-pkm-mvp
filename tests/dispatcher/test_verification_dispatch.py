@@ -958,7 +958,6 @@ def test_schema_reconciliation_quarantines_ambiguous_v1_multi_issue_closure(
     payload = request()
     payload["contract_version"] = "verification_dispatch_request.v1"
     payload.pop("closing_issues")
-    payload["supporting_issues"] = [3626]
     identity = {
         "contract_version": payload["contract_version"],
         "head_sha": payload["current_head_sha"],
@@ -998,6 +997,23 @@ def test_schema_reconciliation_quarantines_ambiguous_v1_multi_issue_closure(
         lease_id=claim.lease_id,
     )
     before_attempts = state.attempts(original.run_id)
+    payload["supporting_issues"] = [3626]
+    with sqlite3.connect(state.store.db_path) as conn:
+        conn.execute(
+            "UPDATE verification_runs "
+            "SET request_json=?, supporting_authority_json='[3626]' "
+            "WHERE run_id=?",
+            (
+                json.dumps(
+                    payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ),
+                original.run_id,
+            ),
+        )
+        conn.commit()
     if existing_schema == "4":
         with sqlite3.connect(state.store.db_path) as conn:
             conn.execute(
@@ -1019,6 +1035,32 @@ def test_schema_reconciliation_quarantines_ambiguous_v1_multi_issue_closure(
     assert migrated.coordinator_session_id is None
     assert migrated.repair_budget_policy == "v2"
     assert migrated_state.attempts(original.run_id) == before_attempts
+
+
+def test_ingest_rejects_ambiguous_v1_multi_issue_closure_before_persistence(
+    tmp_path,
+) -> None:
+    payload = request()
+    payload["contract_version"] = "verification_dispatch_request.v1"
+    payload.pop("closing_issues")
+    payload["supporting_issues"] = [3626]
+    identity = {
+        "contract_version": payload["contract_version"],
+        "head_sha": payload["current_head_sha"],
+        "pr_number": payload["pr_number"],
+        "repository": payload["repository"],
+        "stage": payload["stage"],
+    }
+    payload["idempotency_key"] = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    state = ledger(tmp_path)
+
+    with pytest.raises(ValueError, match="ambiguous multi-issue closure authority"):
+        state.ingest(payload)
+
+    with state.store._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM verification_runs").fetchone()[0] == 0
 
 
 def test_ingest_claim_and_terminal_lifecycle_is_idempotent(tmp_path) -> None:

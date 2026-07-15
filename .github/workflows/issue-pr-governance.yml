@@ -203,6 +203,14 @@ jobs:
               pull_number: context.payload.pull_request.number,
               per_page: 100,
             });
+            if (
+              !Number.isInteger(pullRequest.commits) ||
+              pullRequest.commits < 0 ||
+              commits.length !== pullRequest.commits
+            ) {
+              core.setFailed("PR commit enumeration is incomplete or malformed; fail closed because GitHub caps the pull-request commit list and an unscanned commit could carry closure authority.");
+              return;
+            }
             const commitClosureAttempt = commits.some((item) => {
               const message = item && item.commit && item.commit.message
                 ? item.commit.message
