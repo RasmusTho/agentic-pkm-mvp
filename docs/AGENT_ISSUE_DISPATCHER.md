@@ -95,8 +95,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   chain on the new head. Reopening preserves immutable requested-head audit plus all attempts and
   2+2 budget, while clearing stale lease, session, context, retry, and terminal state. No other
   terminal status or supersession reason is reopenable, and a different-head artifact cannot route
-  around that terminal chain by creating an empty run. Exact same-artifact terminal reads remain
-  idempotent; further work requires a governed lifecycle decision rather than a budget reset.
+  around that terminal chain by creating an empty run. Exact same-artifact replay is resolved
+  globally before any canonical-chain decision. A stale-head reopen is allowed only when that row
+  is the unambiguous terminal set; another terminal row fails closed without mutation. Further work
+  requires a governed lifecycle decision rather than a budget reset.
 - The Codex process boundary drains bounded stderr concurrently and rejects non-zero exits or
   terminal error events even when stdout contained an otherwise valid receipt. A bounded rate-limit,
   usage-limit, quota, or credit-exhaustion signal on that non-zero path remains a lease-fenced backoff

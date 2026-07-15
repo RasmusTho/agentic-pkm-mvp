@@ -572,3 +572,77 @@ def test_same_terminal_artifact_remains_idempotent(tmp_path) -> None:
         "standard_repair",
         "standard_repair",
     ]
+
+
+def _insert_legacy_terminal_chain(
+    state: VerificationDispatchLedger,
+    head_sha: str,
+    *,
+    status: str = "failed",
+) -> str:
+    payload = request(head_sha)
+    run_id = f"legacy-terminal-{head_sha[:8]}"
+    with state.store._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO verification_runs (
+                run_id, idempotency_key, contract_version, repository,
+                pr_number, head_sha, current_head_sha, stage, request_json,
+                status, terminal_receipt_json, stop_reason, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                payload["idempotency_key"],
+                payload["contract_version"],
+                payload["repository"],
+                payload["pr_number"],
+                head_sha,
+                head_sha,
+                payload["stage"],
+                json.dumps(payload),
+                status,
+                '{"outcome":"terminal"}',
+                "technical_failure",
+                "2999-01-01T00:00:00+00:00",
+                "2999-01-01T00:00:00+00:00",
+            ),
+        )
+        conn.commit()
+    return run_id
+
+
+def test_legacy_stale_chain_cannot_reopen_past_later_terminal_chain(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    stale_run_id = _superseded_exhausted_chain(state)
+    terminal_run_id = _insert_legacy_terminal_chain(state, REPAIRED_HEAD)
+
+    with pytest.raises(ValueError, match="canonical chain is terminal"):
+        state.ingest(request("c" * 40))
+
+    stale = state.get(stale_run_id)
+    terminal = state.get(terminal_run_id)
+    assert stale is not None
+    assert stale.status == "superseded"
+    assert stale.current_head_sha == HEAD
+    assert terminal is not None
+    assert terminal.status == "failed"
+    with state.store._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM verification_runs").fetchone()[0] == 2
+
+
+def test_exact_terminal_replay_wins_over_older_terminal_rows(tmp_path) -> None:
+    state = ledger(tmp_path)
+    stale_run_id = _superseded_exhausted_chain(state)
+    terminal_run_id = _insert_legacy_terminal_chain(state, REPAIRED_HEAD)
+
+    replay = state.ingest(request(REPAIRED_HEAD))
+
+    assert replay.run_id == terminal_run_id
+    assert replay.status == "failed"
+    stale = state.get(stale_run_id)
+    assert stale is not None
+    assert stale.status == "superseded"
+    assert stale.current_head_sha == HEAD

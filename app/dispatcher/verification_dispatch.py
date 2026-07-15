@@ -219,6 +219,33 @@ class VerificationDispatchLedger:
         run_id = f"vrun-{str(request['idempotency_key'])[:16]}"
         with self.store._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT * FROM verification_runs WHERE idempotency_key = ?",
+                (request["idempotency_key"],),
+            ).fetchone()
+            if existing is not None:
+                existing_request = _load(existing["request_json"])
+                if (
+                    not isinstance(existing_request, Mapping)
+                    or existing["repository"] != request["repository"]
+                    or existing["pr_number"] != request["pr_number"]
+                    or existing["stage"] != request["stage"]
+                    or existing["head_sha"] != request["current_head_sha"]
+                ):
+                    raise ValueError("verification idempotency authority conflict")
+                if existing_request.get("linked_issue") != request.get("linked_issue"):
+                    if existing["status"] in {
+                        "queued",
+                        "backoff",
+                        "claimed",
+                        "running",
+                    }:
+                        raise ValueError(
+                            "verification canonical run governing issue mismatch"
+                        )
+                    raise ValueError("verification idempotency authority conflict")
+                conn.commit()
+                return _run(existing)
             for candidate in conn.execute(
                 """
                 SELECT * FROM verification_runs
@@ -237,24 +264,44 @@ class VerificationDispatchLedger:
                     raise ValueError("verification artifact head does not match canonical run")
                 conn.commit()
                 return _run(candidate)
-            for candidate in conn.execute(
-                """
-                SELECT * FROM verification_runs
-                WHERE repository=? AND pr_number=? AND stage=?
-                  AND status='superseded' AND stop_reason='stale_head'
-                ORDER BY created_at ASC, run_id ASC
-                """,
-                (request["repository"], request["pr_number"], request["stage"]),
-            ):
+            terminal_candidates = list(
+                conn.execute(
+                    """
+                    SELECT * FROM verification_runs
+                    WHERE repository=? AND pr_number=? AND stage=?
+                      AND status IN ('completed','failed','needs_human','superseded')
+                    ORDER BY created_at ASC, run_id ASC
+                    """,
+                    (request["repository"], request["pr_number"], request["stage"]),
+                )
+            )
+            for candidate in terminal_candidates:
                 candidate_request = _load(candidate["request_json"])
                 if not isinstance(candidate_request, Mapping):
                     raise ValueError("verification canonical run authority is malformed")
                 if candidate_request.get("linked_issue") != request.get("linked_issue"):
                     raise ValueError("verification canonical run governing issue mismatch")
+            non_reopenable = [
+                candidate
+                for candidate in terminal_candidates
+                if candidate["status"] != "superseded"
+                or candidate["stop_reason"] != "stale_head"
+            ]
+            if non_reopenable:
+                raise ValueError(
+                    "verification canonical chain is terminal: "
+                    f"{non_reopenable[-1]['status']}"
+                )
+            stale_candidates = [
+                candidate
+                for candidate in terminal_candidates
+                if candidate["status"] == "superseded"
+                and candidate["stop_reason"] == "stale_head"
+            ]
+            if len(stale_candidates) > 1:
+                raise ValueError("verification canonical terminal chain is ambiguous")
+            for candidate in stale_candidates:
                 next_head = request.get("current_head_sha")
-                if candidate["idempotency_key"] == request["idempotency_key"]:
-                    conn.commit()
-                    return _run(candidate)
                 if candidate["current_head_sha"] == next_head:
                     raise ValueError(
                         "stale-head supersession requires an authoritative new head"
@@ -279,49 +326,6 @@ class VerificationDispatchLedger:
                 assert reopened is not None
                 conn.commit()
                 return _run(reopened)
-            for candidate in conn.execute(
-                """
-                SELECT * FROM verification_runs
-                WHERE repository=? AND pr_number=? AND stage=?
-                  AND status IN ('completed','failed','needs_human','superseded')
-                ORDER BY created_at ASC, run_id ASC
-                """,
-                (request["repository"], request["pr_number"], request["stage"]),
-            ):
-                candidate_request = _load(candidate["request_json"])
-                if not isinstance(candidate_request, Mapping):
-                    raise ValueError("verification canonical run authority is malformed")
-                if candidate["idempotency_key"] == request["idempotency_key"]:
-                    if candidate_request.get("linked_issue") != request.get(
-                        "linked_issue"
-                    ):
-                        raise ValueError("verification idempotency authority conflict")
-                    conn.commit()
-                    return _run(candidate)
-                if candidate_request.get("linked_issue") != request.get("linked_issue"):
-                    raise ValueError("verification canonical run governing issue mismatch")
-                raise ValueError(
-                    "verification canonical chain is terminal: "
-                    f"{candidate['status']}"
-                )
-            existing = conn.execute(
-                "SELECT * FROM verification_runs WHERE idempotency_key = ?",
-                (request["idempotency_key"],),
-            ).fetchone()
-            if existing is not None:
-                existing_request = _load(existing["request_json"])
-                if (
-                    not isinstance(existing_request, Mapping)
-                    or existing["repository"] != request["repository"]
-                    or existing["pr_number"] != request["pr_number"]
-                    or existing["stage"] != request["stage"]
-                    or existing["current_head_sha"] != request["current_head_sha"]
-                    or existing_request.get("linked_issue")
-                    != request.get("linked_issue")
-                ):
-                    raise ValueError("verification idempotency authority conflict")
-                conn.commit()
-                return _run(existing)
             conn.execute(
                 """
                 INSERT OR IGNORE INTO verification_runs (
