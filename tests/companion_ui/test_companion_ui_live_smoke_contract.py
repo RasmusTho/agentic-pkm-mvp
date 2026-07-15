@@ -40,6 +40,10 @@ def test_embedding_cutover_accepts_only_rebuild_required_degradation() -> None:
     with pytest.raises(AssertionError, match="operator health not ok"):
         assert_operator_health(payload, allow_embedding_rebuild_required=False)
 
+
+def test_embedding_cutover_rejects_other_required_failures() -> None:
+    payload = _embedding_rebuild_payload()
+
     other_required_failure = deepcopy(payload)
     checks = other_required_failure["checks"]
     assert isinstance(checks, dict)

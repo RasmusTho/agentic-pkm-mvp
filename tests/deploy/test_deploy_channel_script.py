@@ -121,7 +121,7 @@ def test_health_gate_blocks_and_triggers_rollback() -> None:
     assert "isinstance(data, dict)" in text
     assert "health gate failed; attempting rollback to previous pin" in text
     run_block = text.split('echo "deploy plan:', 1)[1]
-    assert run_block.index("compose up -d --force-recreate") < run_block.index("health_gate")
+    assert run_block.index("recreate_channel_services") < run_block.index("health_gate")
     assert run_block.index("health_gate") < run_block.index("version_gate")
 
 

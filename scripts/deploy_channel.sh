@@ -244,6 +244,23 @@ health_gate() {
   wait_json_ok "http://127.0.0.1:${ui_port}/healthz" || return 1
 }
 
+recreate_channel_services() {
+  if [ "${action}" = "deploy" ] && [ "${ack_embedding_rebuild_required}" = "1" ]; then
+    # During an acknowledged embedding-dimension cutover, /readyz must stay red
+    # until the governed full rebuild completes. Start the runtime first, prove
+    # API liveness, then start the gateway without re-applying its service_healthy
+    # dependency. The later live smoke still admits only the sole exact
+    # embedding_index=rebuild_required transition; the API container healthcheck
+    # remains strict on /readyz throughout.
+    compose up -d --force-recreate api worker watcher heimdal-capture-watch
+    wait_json_ok "http://127.0.0.1:${api_port}/healthz" || return 1
+    compose up -d --force-recreate --no-deps companion-ui
+    return 0
+  fi
+
+  compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui
+}
+
 capture_watch_gate() {
   # Surface a broken heimdal-capture-watch (e.g. missing/invalid HEIMDAL_RAW_STORE_KEY, which
   # its own healthcheck fails loud on) at deploy time instead of letting it sit unhealthy and
@@ -358,7 +375,7 @@ fi
 write_pin "${pin_file}" "${target_sha}"
 
 compose pull api worker watcher heimdal-capture-watch companion-ui
-compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui
+recreate_channel_services
 health_gate || {
   echo "health gate failed; attempting rollback to previous pin" >&2
   if [ -n "${current_sha}" ]; then
