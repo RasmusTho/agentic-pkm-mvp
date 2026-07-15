@@ -365,6 +365,7 @@ def _compact_verification_run(run: Any) -> dict[str, Any]:
         "verified_head_sha": run.verified_head_sha,
         "stage": run.stage,
         "status": run.status,
+        "authority_state": run.authority_state,
         "claimed_by": run.claimed_by,
         "lease_id": run.lease_id,
         "lease_expires_at": run.lease_expires_at,

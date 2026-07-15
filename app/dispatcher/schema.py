@@ -6,6 +6,8 @@ import sqlite3
 
 SCHEMA_VERSION = 3
 
+LEGACY_UNTRUSTED_VERIFICATION_STATUS = "legacy_untrusted"
+
 VERIFICATION_V3_REQUIRED_TABLES = frozenset(
     {"verification_runs", "verification_attempts", "verification_exceptions"}
 )

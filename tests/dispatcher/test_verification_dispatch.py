@@ -11,12 +11,40 @@ import pytest
 
 import app.dispatcher.verification_dispatch as verification_dispatch
 from app.dispatcher.verification_dispatch import VerificationRun
-from tests.dispatcher.verification_helpers import ledger, request
+from tests.dispatcher.verification_helpers import ledger, pre_trust_request, request
 from app.dispatcher.store import SqliteStore
 
 
 CLAIM_PRE_LOCK = "2030-01-01T00:00:00.000000+00:00"
 CLAIM_POST_LOCK = "2030-01-01T00:00:20.000000+00:00"
+
+
+def _migrated_legacy_ledger(tmp_path):
+    state = ledger(tmp_path)
+    original = state.ingest(request())
+    legacy_request = pre_trust_request()
+    with sqlite3.connect(state.store.db_path) as conn:
+        conn.execute(
+            "UPDATE verification_runs SET request_json=? WHERE run_id=?",
+            (
+                json.dumps(
+                    legacy_request,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ),
+                original.run_id,
+            ),
+        )
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN supporting_authority_json")
+        conn.commit()
+    migrated = verification_dispatch.VerificationDispatchLedger(
+        SqliteStore(state.store.db_path)
+    )
+    legacy = migrated.get(original.run_id)
+    assert legacy is not None
+    assert legacy.status == "legacy_untrusted"
+    return migrated, legacy
 
 
 def test_shared_request_fixture_carries_governing_issue() -> None:
@@ -89,6 +117,157 @@ def test_canonical_request_projection_preserves_idempotent_replay(tmp_path) -> N
     assert replay.request == first.request
     with state.store._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM verification_runs").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda state, run: state.claim(run.run_id, "host"),
+        lambda state, run: state.heartbeat(run.run_id, "host", "lease"),
+        lambda state, run: state.start(
+            run.run_id, "host", "lease", "session", {"head": run.head_sha}
+        ),
+        lambda state, run: state.terminal(
+            run.run_id,
+            "failed",
+            {"outcome": "blocked"},
+            holder="host",
+            lease_id="lease",
+        ),
+        lambda state, run: state.rebind_head(
+            run.run_id,
+            "b" * 40,
+            expected_head_sha=run.head_sha,
+            observed_repository=run.repository,
+            observed_pr_number=run.pr_number,
+            observed_head_sha="b" * 40,
+            holder="host",
+            lease_id="lease",
+        ),
+        lambda state, run: state.backoff(
+            run.run_id,
+            {"outcome": "retry"},
+            "2030-01-01T00:00:00+00:00",
+            holder="host",
+            lease_id="lease",
+        ),
+        lambda state, run: state.defer_unclaimed(
+            run.run_id,
+            {"outcome": "retry"},
+            "2030-01-01T00:00:00+00:00",
+        ),
+        lambda state, run: state.supersede_unclaimed(
+            run.run_id, {"outcome": "superseded"}, reason="stale_head"
+        ),
+        lambda state, run: state.record_attempt(
+            run.run_id,
+            "review",
+            "session",
+            "terra",
+            "high",
+            {"head": run.head_sha},
+            "clean",
+            holder="host",
+            lease_id="lease",
+        ),
+        lambda state, run: state.record_attempt_batch(
+            run.run_id,
+            "batch",
+            1,
+            run.head_sha,
+            lambda _attempts, _attempt_id: [],
+            holder="host",
+            lease_id="lease",
+        ),
+        lambda state, run: state.exception(
+            run.run_id,
+            "technical",
+            {"failure_class": "technical"},
+            holder="host",
+            lease_id="lease",
+        ),
+    ],
+)
+def test_inert_legacy_run_rejects_every_mutation_entrypoint(
+    tmp_path, mutation
+) -> None:
+    state, legacy = _migrated_legacy_ledger(tmp_path)
+    with state.store._connect() as conn:
+        before = dict(
+            conn.execute(
+                "SELECT * FROM verification_runs WHERE run_id=?", (legacy.run_id,)
+            ).fetchone()
+        )
+
+    with pytest.raises(ValueError, match="legacy verification audit is not executable"):
+        mutation(state, legacy)
+
+    with state.store._connect() as conn:
+        after = dict(
+            conn.execute(
+                "SELECT * FROM verification_runs WHERE run_id=?", (legacy.run_id,)
+            ).fetchone()
+        )
+    assert after == before
+
+
+def test_authenticated_artifact_starts_fresh_chain_beside_inert_legacy_audit(
+    tmp_path,
+) -> None:
+    state, legacy = _migrated_legacy_ledger(tmp_path)
+    with pytest.raises(
+        ValueError, match="legacy verification audit requires an authenticated artifact"
+    ):
+        state.ingest(request("b" * 40))
+    assert [run.run_id for run in state.list()] == [legacy.run_id]
+
+    authenticated = verification_dispatch._authenticated_verification_request(
+        request("b" * 40)
+    )
+
+    current = state.ingest(authenticated)
+
+    assert current.status == "queued"
+    assert current.authority_state == "canonical"
+    assert current.run_id != legacy.run_id
+    assert state.get(legacy.run_id) == legacy
+    assert {run.run_id for run in state.list()} == {legacy.run_id, current.run_id}
+    assert state.closure_ready(legacy.run_id) is False
+
+
+def test_authenticated_same_head_artifact_cannot_replace_inert_audit(tmp_path) -> None:
+    state, legacy = _migrated_legacy_ledger(tmp_path)
+    authenticated = verification_dispatch._authenticated_verification_request(request())
+
+    with pytest.raises(ValueError, match="legacy verification audit is not executable"):
+        state.ingest(authenticated)
+
+    assert state.get(legacy.run_id) == legacy
+    assert [run.run_id for run in state.list()] == [legacy.run_id]
+
+
+@pytest.mark.parametrize("corruption", ["legacy_as_queued", "canonical_as_legacy"])
+def test_legacy_classification_pair_fails_closed_when_corrupted(
+    tmp_path, corruption: str
+) -> None:
+    state, legacy = _migrated_legacy_ledger(tmp_path)
+    with state.store._connect() as conn:
+        if corruption == "legacy_as_queued":
+            conn.execute(
+                "UPDATE verification_runs SET status='queued' WHERE run_id=?",
+                (legacy.run_id,),
+            )
+        else:
+            conn.execute(
+                "UPDATE verification_runs SET request_json=? WHERE run_id=?",
+                (json.dumps(request(), sort_keys=True), legacy.run_id),
+            )
+        conn.commit()
+
+    with pytest.raises(ValueError):
+        state.get(legacy.run_id)
+    with pytest.raises(ValueError):
+        state.claim(legacy.run_id, "host")
 
 
 _REQUEST_SCALAR_PATHS: tuple[tuple[str | int, ...], ...] = (
