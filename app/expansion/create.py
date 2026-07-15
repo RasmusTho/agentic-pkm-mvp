@@ -459,11 +459,19 @@ def _run_cognition(request: CreateRequest) -> dict[str, Any]:
     try:
         output = run_multi_note_reasoning(object_ids, trace_id=request.trace_id)
     except Exception:
-        return {"claims": 0, "inferences": 0, "degraded": True}
+        return {
+            "claims": 0,
+            "inferences": 0,
+            "degraded": True,
+            "outcome": "provider_failure",
+            "degraded_reason": "provider_failure",
+        }
     return {
         "claims": len(output.claims),
         "inferences": len(output.inferences),
-        "degraded": False,
+        "degraded": output.degraded,
+        "outcome": output.outcome,
+        "degraded_reason": output.degraded_reason,
     }
 
 

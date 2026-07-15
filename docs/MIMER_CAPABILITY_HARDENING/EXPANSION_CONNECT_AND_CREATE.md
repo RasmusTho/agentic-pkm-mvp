@@ -211,7 +211,9 @@ WriteGuard, receipted) + receipts; nothing canonical. **Provenance** SourceRef p
 section; capability version + cognition metadata; citation-validated. **Deterministic fallback**
 no LLM ⇒ no synthesis; the capability degrades to a *research-pack-style* deterministic collation
 (sources + spans, no narrative) clearly labeled, or declines legibly — it never emits an unsourced
-narrative. **Observability** proposed/accepted/declined/expired counts + per-draft receipts in
+narrative. Provider failure, empty output, and missing input remain explicit degraded reasoning
+outcomes with no fabricated claims or inferences; collation stays separate from cognition metadata.
+**Observability** proposed/accepted/declined/expired counts + per-draft receipts in
 status. **Maturity** Planned. **Replacement** the CompilationDraft + staging + acceptance contract
 is the surface; cognition engines behind it are swappable (local or paid per RUNTIME_MODEL_POSTURE —
 the executing model never changes what the output may do).
