@@ -3,17 +3,20 @@ from __future__ import annotations
 import json
 
 from app.dispatcher.cli import _compact_verification_run
-from app.dispatcher.verification_consumer import _checks_rejection
-from app.dispatcher.verification_consumer import VerificationConsumer
+from app.dispatcher.verification_consumer import (
+    VerificationConsumer,
+    _checks_rejection,
+    sanitize_verification_closer_receipt,
+)
 from tests.dispatcher.test_verification_consumer import (
     Auth,
     DeliveredLauncher,
     FailingPostLaunchPrTruth,
     GREEN,
     Launcher,
-    PostMergeTerminalReadOutageTruth,
     Truth,
     eligible_pr,
+    merged_pr,
 )
 from tests.dispatcher.verification_helpers import HEAD, ledger, request
 
@@ -30,6 +33,7 @@ _ADVERSARIAL_PRIVATE_VALUES = (
     r"C:\Users\operator\private-vault\token.txt",
     r"\\server\share\private-vault\token.txt",
 )
+_SAFE_EVIDENCE_URL = "https://github.com/RasmusTho/agentic-pkm-mvp/pull/3620"
 
 
 def _assert_private_text_absent(value: object) -> None:
@@ -123,6 +127,20 @@ class _UnsafeDeliveredLauncher(DeliveredLauncher):
         return session, receipt
 
 
+class _RepeatedReplayOutageTruth(Truth):
+    def __init__(self) -> None:
+        super().__init__(eligible_pr(), GREEN)
+        self.pull_calls = 0
+
+    def pull_request(self, repository, pr_number):
+        self.pull_calls += 1
+        if self.pull_calls <= 2:
+            return eligible_pr()
+        if self.pull_calls <= 4:
+            raise RuntimeError("simulated repeated post-merge terminal outage")
+        return merged_pr()
+
+
 def test_schema_valid_receipt_text_is_sanitized_before_all_durable_writes(
     tmp_path,
 ) -> None:
@@ -159,7 +177,7 @@ def test_sanitized_pending_delivery_replay_preserves_required_semantics(
     launcher = _UnsafeDeliveredLauncher()
     consumer = VerificationConsumer(
         state,
-        PostMergeTerminalReadOutageTruth(),
+        _RepeatedReplayOutageTruth(),
         Auth(),
         launcher,
         "host",
@@ -170,14 +188,24 @@ def test_sanitized_pending_delivery_replay_preserves_required_semantics(
     assert pending.terminal_receipt is not None
     persisted = pending.terminal_receipt["pending_terminal_receipt"]
     _assert_private_text_absent(persisted)
-    with state.store._connect() as conn:
-        conn.execute(
-            "UPDATE verification_runs SET retry_after='2000-01-01T00:00:00+00:00' "
-            "WHERE run_id=?",
-            (pending.run_id,),
-        )
-        conn.commit()
 
+    def release_backoff() -> None:
+        with state.store._connect() as conn:
+            conn.execute(
+                "UPDATE verification_runs SET retry_after='2000-01-01T00:00:00+00:00' "
+                "WHERE run_id=?",
+                (pending.run_id,),
+            )
+            conn.commit()
+
+    release_backoff()
+    pending_again = consumer.consume(request())
+    assert pending_again.status == "backoff"
+    assert pending_again.terminal_receipt is not None
+    assert pending_again.terminal_receipt["pending_terminal_receipt"] == persisted
+    assert state.attempts(pending.run_id)[0]["receipt"] == persisted
+
+    release_backoff()
     completed = consumer.consume(request())
 
     assert completed.status == "completed"
@@ -197,7 +225,11 @@ class _UnsafeHumanExceptionLauncher(Launcher):
         session, receipt = super().launch(context_pack, **kwargs)
         packet = receipt["human_exception"]
         assert isinstance(packet, dict)
-        unsafe = "retain decision context; " + _unsafe_text()
+        unsafe = (
+            "retain decision context; "
+            + _unsafe_text()
+            + f"; evidence {_SAFE_EVIDENCE_URL}?token=SHOULD_NOT_PERSIST"
+        )
         for key in (
             "original_intent",
             "current_state",
@@ -240,3 +272,14 @@ def test_human_exception_packet_is_bounded_and_sanitized(tmp_path) -> None:
     assert len(packet["options"]) == 2
     assert all(len(item["consequence"]) <= 512 for item in packet["options"])
     assert all(len(item) <= 512 for item in packet["evidence"])
+    assert _SAFE_EVIDENCE_URL in packet["evidence"][0]
+    assert "?token=" not in packet["evidence"][0]
+
+
+def test_receipt_sanitization_is_a_canonical_fixed_point() -> None:
+    _, receipt = _UnsafeDeliveredLauncher().launch({})
+
+    once = sanitize_verification_closer_receipt(receipt)
+    twice = sanitize_verification_closer_receipt(once)
+
+    assert twice == once

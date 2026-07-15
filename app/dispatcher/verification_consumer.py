@@ -727,6 +727,10 @@ _SAFE_REASONING_EFFORTS = frozenset(
     {"minimal", "low", "medium", "high", "xhigh", "max"}
 )
 _SAFE_EVENT_OUTCOMES = frozenset({"blocking", "clean", "fixed", "repaired"})
+_SAFE_GITHUB_URL = re.compile(
+    r"https://(?:github\.com|api\.github\.com)(?:/[^\s,;)\]}]*)?",
+    re.IGNORECASE,
+)
 
 
 def bounded_error_type(value: object) -> str | None:
@@ -752,12 +756,23 @@ def _sanitize_receipt_text(value: object, *, limit: int = _MAX_RECEIPT_TEXT) -> 
     """Redact machine-local/sensitive text and enforce one durable size bound."""
 
     text = str(value)
+    safe_urls: list[str] = []
+
+    def preserve_url(match: re.Match[str]) -> str:
+        url = match.group(0).split("?", 1)[0].split("#", 1)[0]
+        placeholder = f"SAFELINK{len(safe_urls)}"
+        safe_urls.append(url[:256])
+        return placeholder
+
+    text = _SAFE_GITHUB_URL.sub(preserve_url, text)
     text = _CREDENTIAL_ASSIGNMENT.sub(lambda match: f"{match.group(1)}=[REDACTED]", text)
     text = _BEARER_VALUE.sub("Bearer [REDACTED]", text)
     text = _KNOWN_TOKEN_VALUE.sub("[REDACTED]", text)
     text = _JWT_VALUE.sub("[REDACTED]", text)
     text = _ABSOLUTE_MACHINE_PATH.sub("[REDACTED_PATH]", text)
     text = _OPAQUE_SECRET_VALUE.sub("[REDACTED]", text)
+    for index, url in enumerate(safe_urls):
+        text = text.replace(f"SAFELINK{index}", url)
     return text.strip()[:limit]
 
 
@@ -767,6 +782,8 @@ def _required_receipt_text(value: object) -> str:
 
 def _pseudonymous_receipt_identifier(value: object, *, prefix: str) -> str:
     raw = str(value)
+    if re.fullmatch(rf"{re.escape(prefix)}-[0-9a-f]{{16}}", raw):
+        return raw
     digest = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:16]
     return f"{prefix}-{digest}"
 
