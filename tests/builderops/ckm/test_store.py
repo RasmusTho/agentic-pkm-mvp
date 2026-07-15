@@ -182,15 +182,18 @@ def test_provenance_columns_required(tmp_path: Path) -> None:
         conn.execute(
             """
             INSERT INTO ckm_capability
-                (id, name, definition, lifecycle, existence_provenance, created_at, updated_at)
-            VALUES ('cap_y', 'y', 'def', 'candidate', 'prov', 't', 't')
+                (id, public_id, identity_key, name, definition, lifecycle,
+                 existence_provenance, created_at, updated_at)
+            VALUES ('cap_y', 'pub_cap_y', 'fixture:cap_y', 'y', 'def', 'candidate',
+                    'prov', 't', 't')
             """
         )
         conn.execute(
             """
             INSERT INTO ckm_artifact
-                (id, source_ref, artifact_kind, source, watermark, provenance, created_at, updated_at)
-            VALUES ('art_y', 'ref_y', 'adr', 'src', 'wm', 'prov', 't', 't')
+                (id, public_id, source_ref, artifact_kind, source, watermark, provenance,
+                 created_at, updated_at)
+            VALUES ('art_y', 'pub_art_y', 'ref_y', 'adr', 'src', 'wm', 'prov', 't', 't')
             """
         )
         with pytest.raises(sqlite3.IntegrityError):

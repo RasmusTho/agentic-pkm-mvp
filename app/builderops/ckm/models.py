@@ -126,6 +126,8 @@ class CkmCapability:
     """A node in the Capability Evidence Graph: the primary entity."""
 
     id: str
+    public_id: str
+    identity_key: str
     name: str
     definition: str
     lifecycle: str
@@ -137,6 +139,8 @@ class CkmCapability:
 
     def validate(self) -> "CkmCapability":
         _require_nonempty_str(self.id, "id")
+        _require_nonempty_str(self.public_id, "public_id")
+        _require_nonempty_str(self.identity_key, "identity_key")
         _require_nonempty_str(self.name, "name")
         _require_nonempty_str(self.definition, "definition")
         _require_choice(self.lifecycle, CAPABILITY_LIFECYCLE_STATES, "lifecycle")
@@ -149,6 +153,8 @@ class CkmCapability:
     def from_row(cls, row: Mapping[str, Any]) -> "CkmCapability":
         return cls(
             id=row["id"],
+            public_id=row["public_id"],
+            identity_key=row["identity_key"],
             name=row["name"],
             definition=row["definition"],
             parent_id=row["parent_id"],
@@ -162,6 +168,8 @@ class CkmCapability:
     def to_dict(self) -> JsonDict:
         return {
             "id": self.id,
+            "public_id": self.public_id,
+            "identity_key": self.identity_key,
             "name": self.name,
             "definition": self.definition,
             "parent_id": self.parent_id,
@@ -178,6 +186,7 @@ class CkmArtifact:
     """A normalized reference to a source item (the evidence's other end)."""
 
     id: str
+    public_id: str
     source_ref: str
     artifact_kind: str
     source: str
@@ -188,6 +197,7 @@ class CkmArtifact:
 
     def validate(self) -> "CkmArtifact":
         _require_nonempty_str(self.id, "id")
+        _require_nonempty_str(self.public_id, "public_id")
         _require_nonempty_str(self.source_ref, "source_ref")
         _require_choice(self.artifact_kind, ARTIFACT_KINDS, "artifact_kind")
         _require_nonempty_str(self.source, "source")
@@ -201,6 +211,7 @@ class CkmArtifact:
     def from_row(cls, row: Mapping[str, Any]) -> "CkmArtifact":
         return cls(
             id=row["id"],
+            public_id=row["public_id"],
             source_ref=row["source_ref"],
             artifact_kind=row["artifact_kind"],
             source=row["source"],
@@ -213,6 +224,7 @@ class CkmArtifact:
     def to_dict(self) -> JsonDict:
         return {
             "id": self.id,
+            "public_id": self.public_id,
             "source_ref": self.source_ref,
             "artifact_kind": self.artifact_kind,
             "source": self.source,
@@ -233,6 +245,7 @@ class CkmEvidenceEdge:
     """
 
     id: str
+    public_id: str
     artifact_id: str
     capability_id: str
     evidence_kind: str
@@ -250,6 +263,7 @@ class CkmEvidenceEdge:
 
     def validate(self) -> "CkmEvidenceEdge":
         _require_nonempty_str(self.id, "id")
+        _require_nonempty_str(self.public_id, "public_id")
         _require_nonempty_str(self.artifact_id, "artifact_id")
         _require_nonempty_str(self.capability_id, "capability_id")
         _require_choice(self.evidence_kind, EVIDENCE_KINDS, "evidence_kind")
@@ -271,6 +285,7 @@ class CkmEvidenceEdge:
     def from_row(cls, row: Mapping[str, Any]) -> "CkmEvidenceEdge":
         return cls(
             id=row["id"],
+            public_id=row["public_id"],
             artifact_id=row["artifact_id"],
             capability_id=row["capability_id"],
             evidence_kind=row["evidence_kind"],
@@ -290,6 +305,7 @@ class CkmEvidenceEdge:
     def to_dict(self) -> JsonDict:
         return {
             "id": self.id,
+            "public_id": self.public_id,
             "artifact_id": self.artifact_id,
             "capability_id": self.capability_id,
             "evidence_kind": self.evidence_kind,
@@ -316,6 +332,7 @@ class CkmAssessment:
     """
 
     id: str
+    public_id: str
     capability_id: str
     scores: Mapping[str, float]
     citations: Mapping[str, list[JsonDict]]
@@ -331,6 +348,7 @@ class CkmAssessment:
 
     def validate(self) -> "CkmAssessment":
         _require_nonempty_str(self.id, "id")
+        _require_nonempty_str(self.public_id, "public_id")
         _require_nonempty_str(self.capability_id, "capability_id")
         missing_dims = set(MATURITY_DIMENSIONS) - set(self.scores)
         if missing_dims:
@@ -370,6 +388,7 @@ class CkmAssessment:
     ) -> "CkmAssessment":
         return cls(
             id=row["id"],
+            public_id=row["public_id"],
             capability_id=row["capability_id"],
             scores=scores,
             citations=citations,
@@ -387,6 +406,7 @@ class CkmAssessment:
     def to_dict(self) -> JsonDict:
         return {
             "id": self.id,
+            "public_id": self.public_id,
             "capability_id": self.capability_id,
             "scores": dict(self.scores),
             "citations": {k: list(v) for k, v in self.citations.items()},
@@ -416,6 +436,7 @@ class CkmFinding:
     """A derived gap / missing-evidence finding node."""
 
     id: str
+    public_id: str
     kind: str
     capability_id: str
     dimension: str
@@ -426,6 +447,7 @@ class CkmFinding:
 
     def validate(self) -> "CkmFinding":
         _require_nonempty_str(self.id, "id")
+        _require_nonempty_str(self.public_id, "public_id")
         _require_choice(self.kind, FINDING_KINDS, "kind")
         _require_nonempty_str(self.capability_id, "capability_id")
         _require_choice(self.dimension, frozenset(MATURITY_DIMENSIONS), "dimension")
@@ -462,6 +484,7 @@ class CkmFinding:
     def from_row(cls, row: Mapping[str, Any], *, citations: list[JsonDict]) -> "CkmFinding":
         return cls(
             id=row["id"],
+            public_id=row["public_id"],
             kind=row["kind"],
             capability_id=row["capability_id"],
             dimension=row["dimension"],
@@ -474,6 +497,7 @@ class CkmFinding:
     def to_dict(self) -> JsonDict:
         return {
             "id": self.id,
+            "public_id": self.public_id,
             "kind": self.kind,
             "capability_id": self.capability_id,
             "dimension": self.dimension,

@@ -13,9 +13,10 @@ schema level, not only in application code.
 
 from __future__ import annotations
 
-CKM_SCHEMA_VERSION = 4
+CKM_SCHEMA_VERSION = 5
 
 CKM_TABLE_NAMES = (
+    "ckm_state",
     "ckm_capability",
     "ckm_artifact",
     "ckm_evidence_edge",
@@ -27,8 +28,20 @@ CKM_TABLE_NAMES = (
 
 CKM_DDL_STATEMENTS = [
     """
+    CREATE TABLE IF NOT EXISTS ckm_state (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        epoch TEXT NOT NULL,
+        state_revision INTEGER NOT NULL CHECK (state_revision >= 0),
+        schema_version INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS ckm_capability (
         id TEXT PRIMARY KEY,
+        public_id TEXT NOT NULL,
+        identity_key TEXT NOT NULL,
         name TEXT NOT NULL UNIQUE,
         definition TEXT NOT NULL,
         parent_id TEXT,
@@ -40,12 +53,21 @@ CKM_DDL_STATEMENTS = [
     )
     """,
     """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ckm_capability_public_id
+    ON ckm_capability(public_id)
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ckm_capability_identity_key
+    ON ckm_capability(identity_key)
+    """,
+    """
     CREATE INDEX IF NOT EXISTS idx_ckm_capability_parent
     ON ckm_capability(parent_id)
     """,
     """
     CREATE TABLE IF NOT EXISTS ckm_artifact (
         id TEXT PRIMARY KEY,
+        public_id TEXT NOT NULL,
         source_ref TEXT NOT NULL UNIQUE,
         artifact_kind TEXT NOT NULL,
         source TEXT NOT NULL,
@@ -56,12 +78,17 @@ CKM_DDL_STATEMENTS = [
     )
     """,
     """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ckm_artifact_public_id
+    ON ckm_artifact(public_id)
+    """,
+    """
     CREATE INDEX IF NOT EXISTS idx_ckm_artifact_kind
     ON ckm_artifact(artifact_kind)
     """,
     """
     CREATE TABLE IF NOT EXISTS ckm_evidence_edge (
         id TEXT PRIMARY KEY,
+        public_id TEXT NOT NULL,
         artifact_id TEXT NOT NULL REFERENCES ckm_artifact(id),
         capability_id TEXT NOT NULL REFERENCES ckm_capability(id),
         evidence_kind TEXT NOT NULL,
@@ -80,6 +107,10 @@ CKM_DDL_STATEMENTS = [
     )
     """,
     """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ckm_evidence_edge_public_id
+    ON ckm_evidence_edge(public_id)
+    """,
+    """
     CREATE INDEX IF NOT EXISTS idx_ckm_evidence_edge_capability
     ON ckm_evidence_edge(capability_id)
     """,
@@ -91,6 +122,7 @@ CKM_DDL_STATEMENTS = [
     CREATE TABLE IF NOT EXISTS ckm_evidence_edge_history (
         history_id TEXT PRIMARY KEY,
         edge_id TEXT NOT NULL,
+        public_id TEXT NOT NULL,
         artifact_id TEXT NOT NULL,
         capability_id TEXT NOT NULL,
         evidence_kind TEXT NOT NULL,
@@ -115,6 +147,7 @@ CKM_DDL_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS ckm_assessment (
         id TEXT PRIMARY KEY,
+        public_id TEXT NOT NULL,
         capability_id TEXT NOT NULL REFERENCES ckm_capability(id),
         functional_completeness REAL NOT NULL,
         functional_completeness_citations TEXT NOT NULL,
@@ -142,12 +175,17 @@ CKM_DDL_STATEMENTS = [
     )
     """,
     """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ckm_assessment_public_id
+    ON ckm_assessment(public_id)
+    """,
+    """
     CREATE INDEX IF NOT EXISTS idx_ckm_assessment_capability_asserted
     ON ckm_assessment(capability_id, asserted_at)
     """,
     """
     CREATE TABLE IF NOT EXISTS ckm_finding (
         id TEXT PRIMARY KEY,
+        public_id TEXT NOT NULL,
         kind TEXT NOT NULL CHECK (kind IN ('gap', 'missing_evidence')),
         capability_id TEXT NOT NULL REFERENCES ckm_capability(id),
         dimension TEXT NOT NULL,
@@ -157,6 +195,10 @@ CKM_DDL_STATEMENTS = [
         updated_at TEXT NOT NULL,
         UNIQUE (kind, capability_id, dimension)
     )
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ckm_finding_public_id
+    ON ckm_finding(public_id)
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_ckm_finding_capability
