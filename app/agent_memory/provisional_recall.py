@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import unicodedata
 from uuid import UUID, uuid4
 
 from app.activation.gate import (
@@ -51,7 +52,39 @@ DEFAULT_PROVISIONAL_RECALL_RECEIPTS_PATH = Path(
     "runtime/agent_memory/provisional_recall_receipts.jsonl"
 )
 PROVISIONAL_RECALL_RECEIPT_EVENT = "agent_memory.provisional_recall.evaluated"
-_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+_TOKEN_RE = re.compile(r"[^\W_]+")
+_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "att",
+    "av",
+    "det",
+    "en",
+    "ett",
+    "for",
+    "för",
+    "i",
+    "in",
+    "is",
+    "it",
+    "med",
+    "of",
+    "och",
+    "om",
+    "on",
+    "or",
+    "på",
+    "som",
+    "the",
+    "to",
+    "vad",
+    "which",
+    "with",
+}
 
 
 @dataclass(frozen=True)
@@ -412,7 +445,12 @@ def _tier_rank(tier: AdmissionTier) -> int:
 
 
 def _tokens(value: str) -> set[str]:
-    return {match.group(0).lower() for match in _TOKEN_RE.finditer(value)}
+    normalized = unicodedata.normalize("NFC", value.casefold())
+    return {
+        match.group(0)
+        for match in _TOKEN_RE.finditer(normalized)
+        if match.group(0) not in _STOPWORDS
+    }
 
 
 def _score(record: ProvisionalMemoryRecord, query_tokens: set[str]) -> float:
