@@ -417,6 +417,10 @@ def load_and_validate_verification_closer_receipt(
     return sanitized
 
 
+class _InvalidVerificationArtifact(ValueError):
+    """A single artifact candidate failed authenticated validation."""
+
+
 class GhCliVerificationSource:
     """Read request artifacts and live truth with the host's authenticated gh CLI."""
 
@@ -486,53 +490,51 @@ class GhCliVerificationSource:
                 raise RuntimeError(f"failed to download verification artifact {artifact_id}")
             return payload
 
-    def pending_requests(
-        self, repository: str, *, limit: int = 20
-    ) -> list[dict[str, object]]:
-        if limit <= 0:
-            raise ValueError("artifact request limit must be positive")
-        payload = self._json(f"repos/{repository}/actions/artifacts?per_page=100")
-        if not isinstance(payload, Mapping) or not isinstance(payload.get("artifacts"), list):
-            raise RuntimeError("malformed GitHub artifact listing")
-        requests: list[dict[str, object]] = []
-        for artifact in payload["artifacts"]:
-            if len(requests) >= limit:
-                break
-            if not isinstance(artifact, Mapping):
-                continue
-            name, artifact_id = artifact.get("name"), artifact.get("id")
-            artifact_identity = (
-                _VERIFICATION_ARTIFACT_NAME.fullmatch(name)
-                if isinstance(name, str)
-                else None
-            )
-            if (
-                artifact_identity is None
-                or artifact.get("expired") is True
-                or not isinstance(artifact_id, int)
-                or isinstance(artifact_id, bool)
-                or artifact_id <= 0
-            ):
-                continue
+    def _request_from_artifact(
+        self, repository: str, artifact: Mapping[str, object]
+    ) -> dict[str, object] | None:
+        name, artifact_id = artifact.get("name"), artifact.get("id")
+        artifact_identity = (
+            _VERIFICATION_ARTIFACT_NAME.fullmatch(name)
+            if isinstance(name, str)
+            else None
+        )
+        if (
+            artifact_identity is None
+            or artifact.get("expired") is True
+            or not isinstance(artifact_id, int)
+            or isinstance(artifact_id, bool)
+            or artifact_id <= 0
+        ):
+            return None
+        try:
             compressed_size = artifact.get("size_in_bytes")
             if (
                 not isinstance(compressed_size, int)
                 or isinstance(compressed_size, bool)
                 or compressed_size < 0
             ):
-                raise ValueError("verification artifact size metadata is malformed")
+                raise _InvalidVerificationArtifact(
+                    "verification artifact size metadata is malformed"
+                )
             if compressed_size > _MAX_ARTIFACT_COMPRESSED_BYTES:
-                raise ValueError("verification artifact exceeds compressed size limit")
+                raise _InvalidVerificationArtifact(
+                    "verification artifact exceeds compressed size limit"
+                )
             workflow_run = artifact.get("workflow_run")
             if not isinstance(workflow_run, Mapping):
-                raise ValueError("verification artifact workflow-run mismatch")
+                raise _InvalidVerificationArtifact(
+                    "verification artifact workflow-run mismatch"
+                )
             uploader_run_id = workflow_run.get("id")
             if (
                 not isinstance(uploader_run_id, int)
                 or isinstance(uploader_run_id, bool)
                 or uploader_run_id <= 0
             ):
-                raise ValueError("verification artifact workflow-run mismatch")
+                raise _InvalidVerificationArtifact(
+                    "verification artifact workflow-run mismatch"
+                )
             uploader_run = self._json(
                 f"repos/{repository}/actions/runs/{uploader_run_id}"
             )
@@ -578,32 +580,60 @@ class GhCliVerificationSource:
                 != workflow_run.get("head_repository_id")
                 or uploader_head_repository.get("full_name") != repository
             ):
-                raise ValueError(
+                raise _InvalidVerificationArtifact(
                     "verification artifact uploader workflow identity mismatch"
                 )
-            payload = self._artifact_bytes(
-                f"repos/{repository}/actions/artifacts/{artifact_id}/zip", artifact_id
-            )
-            with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-                members = archive.infolist()
-                if len(members) > _MAX_ARTIFACT_MEMBERS:
-                    raise ValueError("verification artifact contains too many members")
-                if sum(info.file_size for info in members) > _MAX_ARTIFACT_UNCOMPRESSED_BYTES:
-                    raise ValueError("verification artifact exceeds uncompressed size limit")
-                candidates = [
-                    info
-                    for info in members
-                    if info.filename == "request.json" or info.filename.endswith("/request.json")
-                ]
-                if len(candidates) != 1:
-                    raise ValueError("verification artifact must contain exactly one request.json")
-                info = candidates[0]
-                if info.file_size > _MAX_REQUEST_BYTES:
-                    raise ValueError("verification request artifact exceeds size limit")
-                request = json.loads(archive.read(info))
+            try:
+                payload = self._artifact_bytes(
+                    f"repos/{repository}/actions/artifacts/{artifact_id}/zip",
+                    artifact_id,
+                )
+            except ValueError as exc:
+                raise _InvalidVerificationArtifact(str(exc)) from exc
+            try:
+                with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                    members = archive.infolist()
+                    if len(members) > _MAX_ARTIFACT_MEMBERS:
+                        raise _InvalidVerificationArtifact(
+                            "verification artifact contains too many members"
+                        )
+                    if (
+                        sum(info.file_size for info in members)
+                        > _MAX_ARTIFACT_UNCOMPRESSED_BYTES
+                    ):
+                        raise _InvalidVerificationArtifact(
+                            "verification artifact exceeds uncompressed size limit"
+                        )
+                    candidates = [
+                        info
+                        for info in members
+                        if info.filename == "request.json"
+                        or info.filename.endswith("/request.json")
+                    ]
+                    if len(candidates) != 1:
+                        raise _InvalidVerificationArtifact(
+                            "verification artifact must contain exactly one request.json"
+                        )
+                    info = candidates[0]
+                    if info.file_size > _MAX_REQUEST_BYTES:
+                        raise _InvalidVerificationArtifact(
+                            "verification request artifact exceeds size limit"
+                        )
+                    request = json.loads(archive.read(info))
+            except (
+                json.JSONDecodeError,
+                RuntimeError,
+                UnicodeDecodeError,
+                zipfile.BadZipFile,
+                zipfile.LargeZipFile,
+            ) as exc:
+                raise _InvalidVerificationArtifact(
+                    "verification request artifact is malformed"
+                ) from exc
             if not isinstance(request, dict):
-                raise ValueError("verification request artifact is not an object")
-            assert artifact_identity is not None
+                raise _InvalidVerificationArtifact(
+                    "verification request artifact is not an object"
+                )
             if (
                 request.get("repository") != repository
                 or str(request.get("pr_number"))
@@ -611,31 +641,43 @@ class GhCliVerificationSource:
                 or request.get("current_head_sha")
                 != artifact_identity.group("head_sha")
             ):
-                raise ValueError("verification artifact repository mismatch")
+                raise _InvalidVerificationArtifact(
+                    "verification artifact repository mismatch"
+                )
             provenance = request.get("artifact_provenance")
             if not isinstance(provenance, Mapping) or not isinstance(
                 workflow_run, Mapping
             ):
-                raise ValueError("verification artifact workflow-run mismatch")
+                raise _InvalidVerificationArtifact(
+                    "verification artifact workflow-run mismatch"
+                )
             if (
                 provenance.get("workflow_run_id") != workflow_run.get("id")
                 or provenance.get("repository_id") != workflow_run.get("repository_id")
                 or workflow_run.get("head_repository_id")
                 != workflow_run.get("repository_id")
             ):
-                raise ValueError("verification artifact workflow-run mismatch")
+                raise _InvalidVerificationArtifact(
+                    "verification artifact workflow-run mismatch"
+                )
             if provenance.get("artifact_name") != name:
-                raise ValueError("verification artifact identity mismatch")
+                raise _InvalidVerificationArtifact(
+                    "verification artifact identity mismatch"
+                )
             source_workflow = request.get("source_workflow")
             if not isinstance(source_workflow, Mapping):
-                raise ValueError("verification source workflow identity mismatch")
+                raise _InvalidVerificationArtifact(
+                    "verification source workflow identity mismatch"
+                )
             source_run_id = source_workflow.get("run_id")
             if (
                 not isinstance(source_run_id, int)
                 or isinstance(source_run_id, bool)
                 or source_run_id <= 0
             ):
-                raise ValueError("verification source workflow identity mismatch")
+                raise _InvalidVerificationArtifact(
+                    "verification source workflow identity mismatch"
+                )
             source_run = self._json(
                 f"repos/{repository}/actions/runs/{source_run_id}"
             )
@@ -671,8 +713,43 @@ class GhCliVerificationSource:
                 != workflow_run.get("head_repository_id")
                 or source_head_repository.get("full_name") != repository
             ):
-                raise ValueError("verification source workflow identity mismatch")
-            requests.append(_authenticated_verification_request(request))
+                raise _InvalidVerificationArtifact(
+                    "verification source workflow identity mismatch"
+                )
+            try:
+                return _authenticated_verification_request(request)
+            except ValueError as exc:
+                raise _InvalidVerificationArtifact(
+                    "verification request artifact is malformed"
+                ) from exc
+        except _InvalidVerificationArtifact:
+            raise
+
+    def pending_requests(
+        self, repository: str, *, limit: int = 20
+    ) -> list[dict[str, object]]:
+        if limit <= 0:
+            raise ValueError("artifact request limit must be positive")
+        payload = self._json(f"repos/{repository}/actions/artifacts?per_page=100")
+        if not isinstance(payload, Mapping) or not isinstance(payload.get("artifacts"), list):
+            raise RuntimeError("malformed GitHub artifact listing")
+        requests: list[dict[str, object]] = []
+        first_rejection: _InvalidVerificationArtifact | None = None
+        for artifact in payload["artifacts"]:
+            if len(requests) >= limit:
+                break
+            if not isinstance(artifact, Mapping):
+                continue
+            try:
+                request = self._request_from_artifact(repository, artifact)
+            except _InvalidVerificationArtifact as exc:
+                if first_rejection is None:
+                    first_rejection = exc
+                continue
+            if request is not None:
+                requests.append(request)
+        if not requests and first_rejection is not None:
+            raise first_rejection
         return requests
 
     def pull_request(self, repository: str, pr_number: int) -> Mapping[str, object]:

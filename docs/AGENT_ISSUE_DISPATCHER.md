@@ -65,7 +65,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   compressed-size metadata is checked before
   download; the production stream, ZIP member count, aggregate declared size, and request member are
   independently bounded before an in-memory request is accepted. A mismatch or oversized artifact
-  fails closed before claim or model launch.
+  fails closed before claim or model launch. Invalid, legacy, or malformed candidates are isolated
+  within the bounded artifact listing so one retained artifact cannot suppress a later valid request;
+  an invalid-only poll remains a fail-loud rejection, while GitHub API and artifact-download
+  transport failures still propagate and stop the poll.
 - The authenticated request is projected onto the exact recursive v1 field allowlist before its
   idempotency identity is used or any JSON reaches SQLite; unknown top-level or nested fields are
   rejected rather than copied. The auth preflight and coordinator subprocess inherit only the
