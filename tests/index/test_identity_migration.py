@@ -166,6 +166,45 @@ def test_bge_m3_profile_resolves_to_1024_identity(monkeypatch) -> None:
     assert identity.no_prefix is True
 
 
+def test_doctor_honors_bge_profile_over_shipped_model_default(monkeypatch) -> None:
+    """The doctor uses the routed fabric path, so it must compare a BGE-M3
+    index with the same BGE-M3 identity selected by the operator profile."""
+    from app.index import doctor as doctor_mod
+
+    class _BgeIndex:
+        @staticmethod
+        def get_identity() -> EmbeddingIdentity:
+            return EmbeddingIdentity(
+                provider="ollama",
+                model="bge-m3:latest",
+                dim=1024,
+                normalize=True,
+            )
+
+    monkeypatch.setenv("EMBED_PROFILE", "bge-m3")
+    monkeypatch.setenv("EMBED_MODEL", "nomic-embed-text:latest")
+    monkeypatch.setenv("EMBED_DIM", "768")
+    monkeypatch.setattr(doctor_mod, "get_vector_index", _BgeIndex)
+    monkeypatch.setattr(
+        doctor_mod,
+        "inspect_retrieval_index_divergence",
+        lambda: {"checked": False, "cache_warmed": False},
+    )
+    doctor_mod.reset_diagnose_cache()
+
+    result = doctor_mod.diagnose_index()
+
+    assert result["expected_identity"] == {
+        "provider": "ollama",
+        "model": "bge-m3:latest",
+        "dim": 1024,
+        "normalize": True,
+    }
+    assert result["stored_identity"] == result["expected_identity"]
+    assert result["compatible_identity"] is True
+    assert result["rebuild_required"] is False
+
+
 # ---------------------------------------------------------------------------
 # AC: default NOT silently flipped
 # ---------------------------------------------------------------------------

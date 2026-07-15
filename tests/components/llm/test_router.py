@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
+from app.components.llm.fabric import get_embeddings_client
 from app.components.llm.router import LLMRouter, LLMTaskIntent
 from app.config import llm as llm_config
-from app.settings.models import LLMRoutingSettings, SettingsBundle
+from app.settings.models import EmbeddingProfiles, LLMRoutingSettings, SettingsBundle
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +42,10 @@ def test_router_respects_env_defaults(clean_llm_env, provider: str, expected: st
     assert decide.provider == expected
 
 
+def test_router_fixture_clears_host_embedding_profile(clean_llm_env) -> None:
+    assert "EMBED_PROFILE" not in os.environ
+
+
 def test_router_respects_model_env_defaults(clean_llm_env) -> None:
     """
     Router MUST select model defaults from environment variables.
@@ -62,6 +69,314 @@ def test_router_respects_model_env_defaults(clean_llm_env) -> None:
     assert embed.provider == "ollama"
     assert embed.model == "embed-test"
     assert embed.mode == "embeddings"
+
+
+def test_router_honors_activated_embedding_profile_over_generic_env_model_default(
+    clean_llm_env,
+) -> None:
+    """The cutover profile is one identity, not bge-m3's dimension paired
+    with the shipped nomic model fallback on the routed production path."""
+    clean_llm_env.setenv("LLM_PROVIDER", "mock")
+    clean_llm_env.setenv("EMBED_PROFILE", "bge-m3")
+    clean_llm_env.setenv("EMBED_MODEL", "nomic-embed-text:latest")
+    clean_llm_env.setenv("EMBED_DIM", "768")
+
+    intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    route = LLMRouter().route(intent)
+    client = get_embeddings_client(intent)
+
+    assert route.provider == "ollama"
+    assert route.model == "bge-m3:latest"
+    assert client.identity.provider == "ollama"
+    assert client.identity.model == "bge-m3:latest"
+    assert client.identity.dim == 1024
+    assert client.identity.normalize is True
+
+
+@pytest.mark.parametrize("target_kind", ["blank", "shipped-placeholder"])
+def test_activated_profile_beats_generic_settings_model_default(
+    target_kind,
+    monkeypatch,
+    clean_llm_env,
+) -> None:
+    clean_llm_env.setenv("EMBED_PROFILE", "bge-m3")
+    target = LLMRoutingSettings.RouteTarget()
+    if target_kind == "shipped-placeholder":
+        target = LLMRoutingSettings.RouteTarget(
+            model_id="ollama.embed.nomic_embed_text",
+            provider="ollama",
+            model="nomic-embed-text:latest",
+            profile="default",
+        )
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            default_embed_model="nomic-embed-text:latest",
+            default_embedding=LLMRoutingSettings.TaskPolicy(primary=target),
+        )
+    )
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(
+        "app.components.embeddings.legacy.get_settings_bundle", lambda: bundle
+    )
+
+    intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    route = LLMRouter().route(intent)
+    client = get_embeddings_client(intent)
+
+    assert route.provider == "ollama"
+    assert route.model == "bge-m3:latest"
+    assert client.identity.provider == "ollama"
+    assert client.identity.model == "bge-m3:latest"
+    assert client.identity.dim == 1024
+    assert client.identity.normalize is True
+
+
+def test_generic_settings_model_default_applies_without_selected_profile(
+    monkeypatch,
+    clean_llm_env,
+) -> None:
+    clean_llm_env.setenv("EMBED_PRIMARY_PROVIDER", "ollama")
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(default_embed_model="embed-test:latest")
+    )
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(
+        "app.components.embeddings.legacy.get_settings_bundle", lambda: bundle
+    )
+
+    intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    route = LLMRouter().route(intent)
+    client = get_embeddings_client(intent)
+
+    assert route.provider == "ollama"
+    assert route.model == "embed-test:latest"
+    assert client.identity.provider == "ollama"
+    assert client.identity.model == "embed-test:latest"
+
+
+def test_router_honors_activated_profile_over_shipped_default_target(
+    monkeypatch,
+    clean_llm_env,
+) -> None:
+    """The compiled `profile: default`/nomic route is the shipped placeholder,
+    not an operator choice that may block an explicit cutover profile."""
+    clean_llm_env.setenv("EMBED_PROFILE", "bge-m3")
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            tasks={
+                "embed": LLMRoutingSettings.TaskPolicy(
+                    primary=LLMRoutingSettings.RouteTarget(
+                        model_id="ollama.embed.nomic_embed_text",
+                        provider="ollama",
+                        model="nomic-embed-text:latest",
+                        profile="default",
+                    )
+                )
+            }
+        )
+    )
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+
+    intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    route = LLMRouter().route(intent)
+    client = get_embeddings_client(intent)
+
+    assert route.provider == "ollama"
+    assert route.model == "bge-m3:latest"
+    assert client.identity.provider == "ollama"
+    assert client.identity.model == "bge-m3:latest"
+    assert client.identity.dim == 1024
+    assert client.identity.normalize is True
+
+
+def test_shipped_default_embedding_target_stays_nomic_without_profile(
+    monkeypatch,
+    clean_llm_env,
+) -> None:
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            tasks={
+                "embed": LLMRoutingSettings.TaskPolicy(
+                    primary=LLMRoutingSettings.RouteTarget(
+                        model_id="ollama.embed.nomic_embed_text",
+                        provider="ollama",
+                        model="nomic-embed-text:latest",
+                        profile="default",
+                    )
+                )
+            }
+        )
+    )
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+
+    intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    route = LLMRouter().route(intent)
+    client = get_embeddings_client(intent)
+
+    assert route.provider == "ollama"
+    assert route.model == "nomic-embed-text:latest"
+    assert client.identity.provider == "ollama"
+    assert client.identity.model == "nomic-embed-text:latest"
+    assert client.identity.dim == 768
+
+
+def test_router_honors_settings_default_profile_over_shipped_default_target(
+    monkeypatch,
+    clean_llm_env,
+) -> None:
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            default_embed_model="nomic-embed-text:latest",
+            tasks={
+                "embed": LLMRoutingSettings.TaskPolicy(
+                    primary=LLMRoutingSettings.RouteTarget(
+                        model_id="ollama.embed.nomic_embed_text",
+                        provider="ollama",
+                        model="nomic-embed-text:latest",
+                        profile="default",
+                    )
+                )
+            }
+        ),
+        embedding_profiles=EmbeddingProfiles(default_profile="bge-m3"),
+    )
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(
+        "app.components.embeddings.legacy.get_settings_bundle", lambda: bundle
+    )
+
+    intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    route = LLMRouter().route(intent)
+    client = get_embeddings_client(intent)
+
+    assert route.provider == "ollama"
+    assert route.model == "bge-m3:latest"
+    assert client.identity.provider == "ollama"
+    assert client.identity.model == "bge-m3:latest"
+    assert client.identity.dim == 1024
+    assert client.identity.normalize is True
+
+
+def test_model_id_less_nomic_target_remains_explicit_under_profile_activation(
+    monkeypatch,
+    clean_llm_env,
+) -> None:
+    clean_llm_env.setenv("EMBED_PROFILE", "bge-m3")
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            tasks={
+                "embed": LLMRoutingSettings.TaskPolicy(
+                    primary=LLMRoutingSettings.RouteTarget(
+                        provider="ollama",
+                        model="nomic-embed-text:latest",
+                        profile="default",
+                    )
+                )
+            }
+        )
+    )
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+
+    intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    route = LLMRouter().route(intent)
+    client = get_embeddings_client(intent)
+
+    assert route.provider == "ollama"
+    assert route.model == "nomic-embed-text:latest"
+    assert client.identity.provider == "ollama"
+    assert client.identity.model == "nomic-embed-text:latest"
+    assert client.identity.dim == 768
+
+
+def test_explicit_embedding_task_target_remains_higher_precedence_than_env_profile(
+    monkeypatch,
+    clean_llm_env,
+) -> None:
+    clean_llm_env.setenv("EMBED_PROFILE", "bge-m3")
+    clean_llm_env.setenv("EMBED_MODEL", "nomic-embed-text:latest")
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            default_embedding=LLMRoutingSettings.TaskPolicy(
+                primary=LLMRoutingSettings.RouteTarget(
+                    provider="ollama",
+                    model="nomic-embed-text:latest",
+                )
+            )
+        )
+    )
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+
+    route = LLMRouter().route(
+        LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    )
+    client = get_embeddings_client(
+        LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    )
+
+    assert route.provider == "ollama"
+    assert route.model == "nomic-embed-text:latest"
+    assert client.identity.provider == "ollama"
+    assert client.identity.model == "nomic-embed-text:latest"
+    assert client.identity.dim == 768
+
+
+def test_explicit_embedding_task_target_suppresses_settings_default_profile(
+    monkeypatch,
+    clean_llm_env,
+) -> None:
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            default_embedding=LLMRoutingSettings.TaskPolicy(
+                primary=LLMRoutingSettings.RouteTarget(
+                    provider="ollama",
+                    model="nomic-embed-text:latest",
+                )
+            )
+        ),
+        embedding_profiles=EmbeddingProfiles(default_profile="bge-m3"),
+    )
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(
+        "app.components.embeddings.legacy.get_settings_bundle", lambda: bundle
+    )
+
+    intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    route = LLMRouter().route(intent)
+    client = get_embeddings_client(intent)
+
+    assert route.provider == "ollama"
+    assert route.model == "nomic-embed-text:latest"
+    assert client.identity.provider == "ollama"
+    assert client.identity.model == "nomic-embed-text:latest"
+    assert client.identity.dim == 768
+
+
+def test_explicit_embedding_task_profile_remains_active(
+    monkeypatch,
+    clean_llm_env,
+) -> None:
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            default_embed_model="nomic-embed-text:latest",
+            default_embedding=LLMRoutingSettings.TaskPolicy(
+                primary=LLMRoutingSettings.RouteTarget(profile="bge-m3")
+            )
+        )
+    )
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(
+        "app.components.embeddings.legacy.get_settings_bundle", lambda: bundle
+    )
+
+    intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    route = LLMRouter().route(intent)
+    client = get_embeddings_client(intent)
+
+    assert route.provider == "ollama"
+    assert route.model == "bge-m3:latest"
+    assert client.identity.provider == "ollama"
+    assert client.identity.model == "bge-m3:latest"
+    assert client.identity.dim == 1024
 
 
 def test_router_forces_mock_for_chat_determinism(clean_llm_env) -> None:
@@ -128,8 +443,53 @@ def test_router_force_override_beats_determinism(clean_llm_env) -> None:
     embed = router.route(LLMTaskIntent(task_kind="embed", determinism_required=True))
 
     assert embed.provider == "ollama"
-    assert embed.model == "forced-embed"
+    assert embed.model == "forced-embed:latest"
     assert embed.reason == "forced"
+    assert embed.embedding_identity is not None
+    assert embed.embedding_identity.model == embed.model
+
+
+def test_embedding_force_override_carries_exact_identity_under_conflicting_profile(
+    clean_llm_env,
+) -> None:
+    clean_llm_env.setenv("EMBED_PROFILE", "bge-m3")
+    clean_llm_env.setenv("EMBED_DIM", "768")
+    clean_llm_env.setenv("LLM_FORCE_PROVIDER", "ollama")
+    clean_llm_env.setenv("LLM_FORCE_MODEL", "nomic-embed-text:latest")
+
+    intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    route = LLMRouter().route(intent)
+    client = get_embeddings_client(intent)
+
+    assert route.provider == "ollama"
+    assert route.model == "nomic-embed-text:latest"
+    assert route.embedding_identity is not None
+    assert route.embedding_identity.provider == route.provider
+    assert route.embedding_identity.model == route.model
+    assert route.embedding_identity.dim == 768
+    assert client.identity == route.embedding_identity
+
+
+def test_invalid_embedding_force_provider_degrades_with_exact_mock_identity(
+    clean_llm_env,
+) -> None:
+    clean_llm_env.setenv("EMBED_PROFILE", "bge-m3")
+    clean_llm_env.setenv("EMBED_DIM", "768")
+    clean_llm_env.setenv("LLM_FORCE_PROVIDER", "nonexistent-provider")
+    clean_llm_env.setenv("LLM_FORCE_MODEL", "nomic-embed-text:latest")
+
+    intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    route = LLMRouter().route(intent)
+    client = get_embeddings_client(intent)
+
+    assert route.provider == "mock"
+    assert route.model == "mock-embedding"
+    assert route.reason == "invalid provider: nonexistent-provider"
+    assert route.degraded is True
+    assert route.embedding_identity is not None
+    assert route.embedding_identity.provider == route.provider
+    assert route.embedding_identity.model == route.model
+    assert client.identity == route.embedding_identity
 
 
 def test_router_uses_settings_task_policy(monkeypatch, clean_llm_env) -> None:

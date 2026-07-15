@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from app.proposals.declined_ledger import DeclinedLedger
+from app.retrieval.hybrid import get_store
 from app.vault.paths import resolve_vault_system_dir_rel_or_default
 from app.write_guard import WriteGuard
 from scripts import run_expansion_deep_pass as deep_pass
@@ -34,6 +35,15 @@ def _write_note(vault_root: Path, rel_path: str, body: str) -> Path:
     return path
 
 
+@pytest.fixture(autouse=True)
+def _isolate_retrieval_store() -> None:
+    """Keep deep-pass tests independent from earlier process-global corpora."""
+    store = get_store()
+    store.set_documents([])
+    yield
+    store.set_documents([])
+
+
 @pytest.fixture()
 def tiny_vault(tmp_path: Path) -> Path:
     vault_root = tmp_path / "vault"
@@ -47,6 +57,10 @@ def tiny_vault(tmp_path: Path) -> Path:
     system_dir_rel = resolve_vault_system_dir_rel_or_default(vault_root)
     _write_note(vault_root, f"{system_dir_rel}/drafts/ignored-draft.md", "# Should be excluded\n")
     return vault_root
+
+
+def test_retrieval_store_is_empty_at_test_start() -> None:
+    assert get_store().all() == []
 
 
 # ---------------------------------------------------------------------------

@@ -30,6 +30,7 @@ class LLMRoute:
     mode: str
     reason: str
     degraded: bool = False
+    embedding_identity: EmbeddingIdentity | None = None
 
 
 def _normalize(value: str | None) -> str:
@@ -100,6 +101,33 @@ def _resolve_target_model_id(
     if descriptor is None or descriptor.kind != expected_kind:
         return None, None
     return descriptor.provider, descriptor.model
+
+
+def _is_shipped_default_embedding_target(
+    target: LLMRoutingSettings.RouteTarget | None,
+    *,
+    resolved_provider: str | None,
+    resolved_model: str | None,
+) -> bool:
+    """Whether *target* is the compiled nomic/default placeholder.
+
+    The checked-in routing settings carry this target so an unconfigured
+    deployment stays on the shipped nomic identity. It is not a later
+    operator choice and therefore must not mask an explicit embedding-profile
+    activation during a governed identity cutover.
+    """
+    if (
+        target is None
+        or target.model_id != "ollama.embed.nomic_embed_text"
+        or (target.profile or "").strip().lower() != "default"
+    ):
+        return False
+    provider = target.provider or resolved_provider
+    model = target.model or resolved_model
+    return (
+        provider == "ollama"
+        and model in {"nomic-embed-text", "nomic-embed-text:latest"}
+    )
 
 
 class LLMRouter:
@@ -205,18 +233,55 @@ class LLMRouter:
         override_provider = None
         override_model = None
         target_provider, target_model = _resolve_target_model_id(target, expected_kind="embedding")
-        if target is not None:
+        env_profile = (os.getenv("EMBED_PROFILE") or "").strip() or None
+        configured_default_profile = None
+        embedding_profiles = (
+            getattr(self._settings, "embedding_profiles", None)
+            if self._settings is not None
+            else None
+        )
+        if embedding_profiles is not None:
+            candidate = (getattr(embedding_profiles, "default_profile", None) or "").strip()
+            if candidate and candidate.lower() != "default":
+                configured_default_profile = candidate
+        activated_profile = env_profile or configured_default_profile
+        defer_shipped_default_to_profile_resolution = bool(
+            activated_profile
+            and _is_shipped_default_embedding_target(
+                target,
+                resolved_provider=target_provider,
+                resolved_model=target_model,
+            )
+        )
+        target_is_explicit = bool(
+            target
+            and any(
+                (target.model_id, target.provider, target.model, target.profile)
+            )
+            and not defer_shipped_default_to_profile_resolution
+        )
+        if target is not None and not defer_shipped_default_to_profile_resolution:
             profile = target.profile
             override_provider = target.provider or target_provider
             override_model = target.model or target_model
-        if override_model is None and routing is not None:
+        # EMBED_PROFILE is the operator's explicit identity activation seam.
+        # When the compiled task target leaves its profile blank, carry that
+        # activation into the router instead of pairing the selected profile's
+        # dimension with the generic shipped EMBED_MODEL fallback below.
+        if profile is None and not target_is_explicit:
+            profile = activated_profile
+        if override_model is None and profile is None and routing is not None:
             override_model = routing.default_embed_model
-        if override_model is None:
+        # A configured task/default model remains higher-precedence settings
+        # authority. The generic environment/built-in model is only a fallback
+        # when no named profile has selected the complete embedding identity.
+        if override_model is None and profile is None:
             override_model = _default_embed_model()
         identity = resolve_embedding_identity(
             profile=profile,
             override_model=override_model,
             override_provider=override_provider,
+            use_implicit_profiles=not target_is_explicit,
         )
         return (
             LLMRoute(
@@ -225,6 +290,7 @@ class LLMRouter:
                 mode="embeddings",
                 reason=reason,
                 degraded=degraded,
+                embedding_identity=identity,
             ),
             identity,
         )
@@ -384,12 +450,22 @@ class LLMRouter:
             model = forced_model or (
                 _default_embed_model() if intent.task_kind == "embed" else _default_chat_model()
             )
+            embedding_identity = None
+            if intent.task_kind == "embed":
+                embedding_identity = resolve_embedding_identity(
+                    override_model=model,
+                    override_provider=provider,
+                    use_implicit_profiles=False,
+                )
+                provider = embedding_identity.provider
+                model = embedding_identity.model
             return LLMRoute(
                 provider=provider,
                 model=model,
                 mode=_default_mode(intent.task_kind),
                 reason=reason,
                 degraded=degraded,
+                embedding_identity=embedding_identity,
             )
 
         candidates = self._route_candidates(intent)

@@ -45,6 +45,8 @@ def get_chat_client(intent: LLMTaskIntent) -> ChatClient:
 def get_embeddings_client(intent: LLMTaskIntent) -> EmbeddingClientProtocol:
     router = LLMRouter()
     route = router.route(intent)
+    if route.embedding_identity is not None:
+        return get_embedding_client(resolved_identity=route.embedding_identity)
     return get_embedding_client(override_model=route.model, override_provider=route.provider)
 
 
