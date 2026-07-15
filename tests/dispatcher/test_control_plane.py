@@ -83,6 +83,7 @@ def _write_pre_repair_v3_state(tmp_path: Path):
         )
         conn.execute("ALTER TABLE verification_runs DROP COLUMN verified_head_sha")
         conn.execute("ALTER TABLE verification_runs DROP COLUMN current_head_sha")
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN supporting_authority_json")
         conn.commit()
     paths.events_path.touch()
     return paths, run
@@ -131,7 +132,11 @@ def test_pre_repair_v3_backup_restore_self_migrates_without_data_loss(
         exception_before = conn.execute(
             "SELECT exception_id, run_id, packet_json FROM verification_exceptions"
         ).fetchone()
-    assert {"current_head_sha", "verified_head_sha"}.isdisjoint(columns_before)
+    assert {
+        "current_head_sha",
+        "verified_head_sha",
+        "supporting_authority_json",
+    }.isdisjoint(columns_before)
 
     migrated = SqliteStore(restored.db_path)
     assert migrated.get_meta("schema_version") == str(SCHEMA_VERSION)
@@ -152,9 +157,19 @@ def test_pre_repair_v3_backup_restore_self_migrates_without_data_loss(
             "SELECT exception_id, run_id, packet_json FROM verification_exceptions"
         ).fetchone()
 
-    assert {"current_head_sha", "verified_head_sha"} <= columns_after
+    assert {
+        "current_head_sha",
+        "verified_head_sha",
+        "supporting_authority_json",
+    } <= columns_after
     assert run_after == run_before == (original.run_id, original.requested_head_sha, "queued")
     assert rebound_heads == (original.requested_head_sha, None)
+    with sqlite3.connect(restored.db_path) as conn:
+        supporting_authority = conn.execute(
+            "SELECT supporting_authority_json FROM verification_runs WHERE run_id=?",
+            (original.run_id,),
+        ).fetchone()[0]
+    assert json.loads(supporting_authority) == original.request["supporting_issues"]
     assert attempt_after == attempt_before
     assert exception_after == exception_before
     assert migrated.get_task("task-1") is not None

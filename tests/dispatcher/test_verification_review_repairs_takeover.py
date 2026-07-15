@@ -27,6 +27,8 @@ from tests.dispatcher.verification_helpers import HEAD, REPO, ledger, request
 
 
 REPAIRED_HEAD = "b" * 40
+SECOND_REPAIRED_HEAD = "d" * 40
+THIRD_REPAIRED_HEAD = "e" * 40
 PRODUCER_HEAD = "c" * 40
 PRODUCER_RUN_ID = 123
 REPOSITORY_ID = 456
@@ -495,6 +497,76 @@ def test_authenticated_new_head_accepts_monotonic_supporting_issue_extension(
     assert reopened.status == "queued"
     assert reopened.current_head_sha == REPAIRED_HEAD
     assert state.attempts(run_id) == before
+
+
+def test_successive_takeovers_enforce_durable_cumulative_supporting_authority(
+    tmp_path: Path,
+) -> None:
+    state = ledger(tmp_path)
+    original = request()
+    original["supporting_issues"] = [3626]
+    run_id, before = _record_exhausted_chain(state, original)
+    repaired = request(REPAIRED_HEAD)
+    repaired["supporting_issues"] = [3626, 3783]
+    source, _ = _gh_source(repaired)
+
+    first_takeover = state.ingest(source.pending_requests(REPO)[0])
+    claimed = state.claim(run_id, "head-b-host")
+    lease_id = claimed.lease_id or ""
+    state.start(
+        run_id,
+        "head-b-host",
+        lease_id,
+        "01900000-0000-7000-8000-000000000103",
+        {"head_sha": REPAIRED_HEAD},
+    )
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET lease_expires_at=? WHERE run_id=?",
+            ("2000-01-01T00:00:00+00:00", run_id),
+        )
+        conn.commit()
+
+    rolled_back = request(SECOND_REPAIRED_HEAD)
+    rolled_back["supporting_issues"] = [3626]
+    rollback_source, _ = _gh_source(rolled_back)
+    with pytest.raises(
+        ValueError, match="verification artifact head does not match canonical run"
+    ):
+        state.ingest(rollback_source.pending_requests(REPO)[0])
+
+    retained = state.get(run_id)
+    assert retained is not None
+    assert retained.status == "running"
+    assert retained.requested_head_sha == HEAD
+    assert retained.current_head_sha == REPAIRED_HEAD
+    assert retained.request["supporting_issues"] == [3626]
+    assert state.attempts(run_id) == before
+    with state.store._connect() as conn:
+        durable = conn.execute(
+            "SELECT supporting_authority_json FROM verification_runs WHERE run_id=?",
+            (run_id,),
+        ).fetchone()
+    assert durable is not None
+    assert json.loads(durable["supporting_authority_json"]) == [3626, 3783]
+
+    extended = request(THIRD_REPAIRED_HEAD)
+    extended["supporting_issues"] = [3626, 3783, 3784]
+    extension_source, _ = _gh_source(extended)
+    second_takeover = state.ingest(extension_source.pending_requests(REPO)[0])
+
+    assert first_takeover.run_id == second_takeover.run_id == run_id
+    assert second_takeover.status == "queued"
+    assert second_takeover.requested_head_sha == HEAD
+    assert second_takeover.current_head_sha == THIRD_REPAIRED_HEAD
+    assert state.attempts(run_id) == before
+    with state.store._connect() as conn:
+        durable = conn.execute(
+            "SELECT supporting_authority_json FROM verification_runs WHERE run_id=?",
+            (run_id,),
+        ).fetchone()
+    assert durable is not None
+    assert json.loads(durable["supporting_authority_json"]) == [3626, 3783, 3784]
 
 
 def test_expired_head_reconciliation_rejects_unauthenticated_valid_artifact(

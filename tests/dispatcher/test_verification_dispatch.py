@@ -314,6 +314,7 @@ def _verification_state_snapshot(state) -> dict[str, list[dict[str, object]]]:
         "malformed_verified_head_sha",
         "inconsistent_verified_current_heads",
         "verified_head_on_uncompleted_run",
+        "malformed_supporting_authority",
     ],
 )
 def test_every_ledger_mutation_rejects_corrupted_run_before_durable_change(
@@ -388,6 +389,12 @@ def test_every_ledger_mutation_rejects_corrupted_run_before_durable_change(
             conn.execute(
                 "UPDATE verification_runs SET verified_head_sha=? WHERE run_id=?",
                 (secret, run.run_id),
+            )
+        elif corruption == "malformed_supporting_authority":
+            conn.execute(
+                "UPDATE verification_runs SET supporting_authority_json=? "
+                "WHERE run_id=?",
+                (json.dumps({"private_key": secret}), run.run_id),
             )
         else:
             assert corruption in {
@@ -665,6 +672,7 @@ def test_existing_schema_v3_backfills_current_head_without_losing_request_audit(
     with sqlite3.connect(db) as conn:
         conn.execute("ALTER TABLE verification_runs DROP COLUMN verified_head_sha")
         conn.execute("ALTER TABLE verification_runs DROP COLUMN current_head_sha")
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN supporting_authority_json")
         conn.commit()
 
     migrated = ledger(tmp_path).get(original.run_id)
@@ -673,6 +681,12 @@ def test_existing_schema_v3_backfills_current_head_without_losing_request_audit(
     assert migrated.requested_head_sha == original.requested_head_sha
     assert migrated.head_sha == original.requested_head_sha
     assert migrated.verified_head_sha is None
+    with sqlite3.connect(db) as conn:
+        supporting_authority = conn.execute(
+            "SELECT supporting_authority_json FROM verification_runs WHERE run_id=?",
+            (original.run_id,),
+        ).fetchone()[0]
+    assert json.loads(supporting_authority) == original.request["supporting_issues"]
 
 
 def test_ingest_claim_and_terminal_lifecycle_is_idempotent(tmp_path) -> None:

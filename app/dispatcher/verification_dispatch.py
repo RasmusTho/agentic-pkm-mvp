@@ -293,7 +293,25 @@ def _validated_row_request(row: sqlite3.Row) -> dict[str, object]:
         or row["status"] != "completed"
     ):
         raise ValueError("verification canonical run authority is malformed")
+    _validated_supporting_authority(row, request)
     return request
+
+
+def _validated_supporting_authority(
+    row: sqlite3.Row, request: Mapping[str, object]
+) -> list[int]:
+    """Validate the durable cumulative supporting evidence for a run."""
+    loaded = _load(row["supporting_authority_json"])
+    requested = request.get("supporting_issues")
+    if (
+        not isinstance(loaded, list)
+        or any(not _positive_int(issue) for issue in loaded)
+        or len(set(loaded)) != len(loaded)
+        or not isinstance(requested, list)
+        or not set(requested).issubset(loaded)
+    ):
+        raise ValueError("verification canonical supporting authority is malformed")
+    return loaded
 
 
 def _validated_mutation_row(
@@ -480,7 +498,9 @@ class VerificationDispatchLedger:
                     raise ValueError("verification canonical run governing issue mismatch")
                 if candidate["current_head_sha"] != request.get("current_head_sha"):
                     lease_expires_at = candidate["lease_expires_at"]
-                    candidate_supporting = candidate_request.get("supporting_issues")
+                    candidate_supporting = _validated_supporting_authority(
+                        candidate, candidate_request
+                    )
                     incoming_supporting = request.get("supporting_issues")
                     supporting_authority_extends = (
                         isinstance(candidate_supporting, list)
@@ -504,6 +524,7 @@ class VerificationDispatchLedger:
                         """
                         UPDATE verification_runs
                         SET status='queued', current_head_sha=?, verified_head_sha=NULL,
+                            supporting_authority_json=?,
                             claimed_by=NULL, lease_id=NULL, lease_expires_at=NULL,
                             last_heartbeat_at=NULL, coordinator_session_id=NULL,
                             context_pack_json=NULL, terminal_receipt_json=NULL,
@@ -512,6 +533,7 @@ class VerificationDispatchLedger:
                         """,
                         (
                             next_head,
+                            _json(incoming_supporting),
                             now,
                             candidate["run_id"],
                             lease_expires_at,
@@ -594,9 +616,10 @@ class VerificationDispatchLedger:
                 """
                 INSERT OR IGNORE INTO verification_runs (
                     run_id, idempotency_key, contract_version, repository,
-                    pr_number, head_sha, current_head_sha, stage, request_json, status,
+                    pr_number, head_sha, current_head_sha, stage, request_json,
+                    supporting_authority_json, status,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
                 """,
                 (
                     run_id,
@@ -608,6 +631,7 @@ class VerificationDispatchLedger:
                     request["current_head_sha"],
                     request["stage"],
                     _json(request),
+                    _json(request["supporting_issues"]),
                     now,
                     now,
                 ),

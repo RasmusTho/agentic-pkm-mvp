@@ -10,14 +10,17 @@ VERIFICATION_V3_REQUIRED_TABLES = frozenset(
     {"verification_runs", "verification_attempts", "verification_exceptions"}
 )
 VERIFICATION_V3_ADDITIVE_COLUMNS = {
-    "verification_runs": frozenset({"current_head_sha", "verified_head_sha"})
+    "verification_runs": frozenset(
+        {"current_head_sha", "verified_head_sha", "supporting_authority_json"}
+    )
 }
 VERIFICATION_V3_REQUIRED_COLUMNS = {
     "verification_runs": frozenset(
         {
             "run_id", "idempotency_key", "contract_version", "repository",
             "pr_number", "head_sha", "current_head_sha", "verified_head_sha",
-            "stage", "request_json", "status", "claimed_by", "lease_id",
+            "stage", "request_json", "supporting_authority_json", "status",
+            "claimed_by", "lease_id",
             "lease_expires_at", "last_heartbeat_at", "coordinator_session_id",
             "context_pack_json", "terminal_receipt_json", "stop_reason",
             "retry_after", "created_at", "updated_at",
@@ -176,6 +179,7 @@ DDL_STATEMENTS: tuple[str, ...] = (
         verified_head_sha TEXT,
         stage TEXT NOT NULL,
         request_json TEXT NOT NULL,
+        supporting_authority_json TEXT NOT NULL DEFAULT '[]',
         status TEXT NOT NULL,
         claimed_by TEXT,
         lease_id TEXT,

@@ -49,6 +49,25 @@ def _loads(value: str | None) -> Any:
     return json.loads(value)
 
 
+def _supporting_authority_from_request_json(value: str) -> str:
+    """Project the cumulative supporting-issue baseline from a stored request."""
+    try:
+        request = json.loads(value)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("verification request audit is malformed") from exc
+    supporting = request.get("supporting_issues") if isinstance(request, dict) else None
+    if (
+        not isinstance(supporting, list)
+        or any(
+            isinstance(issue, bool) or not isinstance(issue, int) or issue <= 0
+            for issue in supporting
+        )
+        or len(set(supporting)) != len(supporting)
+    ):
+        raise ValueError("verification supporting authority is malformed")
+    return json.dumps(supporting, separators=(",", ":"), ensure_ascii=False)
+
+
 class SqliteStore:
     """SQLite implementation of :class:`DispatcherStore`.
 
@@ -90,7 +109,7 @@ class SqliteStore:
         (e.g. one dispatcher ``pull`` upserting hundreds of issues) pays the
         cheap outer check once per process, not once per row.
 
-        The migration itself (ADD COLUMN + two backfill UPDATEs) runs inside
+        The migration itself (additive DDL plus authority backfills) runs inside
         one explicit ``BEGIN IMMEDIATE`` transaction, committed or rolled back
         together: ``ALTER TABLE`` autocommits immediately outside an explicit
         transaction in Python's sqlite3 driver, so without this a crash
@@ -128,9 +147,10 @@ class SqliteStore:
             verification_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(verification_runs)")
             }
-        verification_heads_complete = {
+        verification_additive_columns_complete = {
             "current_head_sha",
             "verified_head_sha",
+            "supporting_authority_json",
         }.issubset(verification_columns)
         if "repo" in columns and current_version == str(SCHEMA_VERSION):
             schema_error = verification_v3_schema_error(
@@ -138,7 +158,7 @@ class SqliteStore:
             )
             if schema_error is not None:
                 raise ValueError(schema_error)
-            if verification_heads_complete:
+            if verification_additive_columns_complete:
                 return
 
         # Only the original v1 layout is a supported migration source.  In
@@ -199,6 +219,24 @@ class SqliteStore:
                     conn.execute(
                         "ALTER TABLE verification_runs ADD COLUMN verified_head_sha TEXT"
                     )
+                if "supporting_authority_json" not in verification_columns:
+                    conn.execute(
+                        "ALTER TABLE verification_runs ADD COLUMN "
+                        "supporting_authority_json TEXT NOT NULL DEFAULT '[]'"
+                    )
+                    for verification_row in conn.execute(
+                        "SELECT run_id, request_json FROM verification_runs"
+                    ).fetchall():
+                        conn.execute(
+                            "UPDATE verification_runs "
+                            "SET supporting_authority_json=? WHERE run_id=?",
+                            (
+                                _supporting_authority_from_request_json(
+                                    verification_row["request_json"]
+                                ),
+                                verification_row["run_id"],
+                            ),
+                        )
                 schema_error = verification_v3_schema_error(conn)
                 if schema_error is not None:
                     raise ValueError(schema_error)
