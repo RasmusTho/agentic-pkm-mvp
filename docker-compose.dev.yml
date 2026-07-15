@@ -1,4 +1,10 @@
 services:
+  migrate:
+    environment:
+      LLM_PROVIDER: mock
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
+      DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
+
   db:
     environment:
       POSTGRES_DB: app_dev
@@ -10,10 +16,6 @@ services:
     volumes:
       - pgdata-dev:/var/lib/postgresql/data
 
-  migrate:
-    environment:
-      LLM_PROVIDER: mock
-
   api:
     ports: !override
       - "18001:8000"
@@ -22,6 +24,8 @@ services:
       PKM_ENVIRONMENT: dev
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
+      VAULT_ROOT: ${VAULT_ROOT:-}
+      VAULT_ROOT_DEV: ${VAULT_ROOT_DEV:-}
 
   worker:
     environment:
@@ -29,6 +33,8 @@ services:
       PKM_ENVIRONMENT: dev
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
+      VAULT_ROOT: ${VAULT_ROOT:-}
+      VAULT_ROOT_DEV: ${VAULT_ROOT_DEV:-}
 
   watcher:
     environment:
@@ -36,6 +42,8 @@ services:
       PKM_ENVIRONMENT: dev
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
+      VAULT_ROOT: ${VAULT_ROOT:-}
+      VAULT_ROOT_DEV: ${VAULT_ROOT_DEV:-}
 
   heimdal-capture-watch:
     environment:
