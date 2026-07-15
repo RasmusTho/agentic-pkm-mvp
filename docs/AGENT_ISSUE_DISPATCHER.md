@@ -119,6 +119,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   receipt for safe resume/replay. A pending delivered receipt bypasses the ordinary open-only intake
   gate on retry, but can complete only through a fresh authenticated exact-head merged/check read;
   its event batch remains exact-replay idempotent.
+  Persisted pending receipts are untrusted replay input: the consumer reloads the canonical schema
+  and reapplies structural and semantic validation before authentication, event application, or
+  completion. Corrupt or schema-unverifiable replay data terminals technically with redacted
+  diagnostics and cannot create review or closure evidence.
 - Governing-Issue authority is live truth, not an artifact-only assertion. Every authority-bearing
   PR read must still contain exactly the request's explicit governing issue and every original
   supporting-issue reference. Later bounded repair references may extend that supporting evidence

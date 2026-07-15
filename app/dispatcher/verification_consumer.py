@@ -1422,6 +1422,29 @@ class VerificationConsumer:
         self, run: VerificationRun, receipt: Mapping[str, object]
     ) -> VerificationRun:
         """Revalidate one persisted delivered receipt through merged live truth."""
+        try:
+            receipt = load_and_validate_verification_closer_receipt(
+                receipt, self.receipt_schema
+            )
+        except ReceiptContractError as exc:
+            try:
+                claimed = self.ledger.claim(run.run_id, self.holder)
+            except (VerificationSubscriptionBusy, VerificationBackoffPending):
+                current = self.ledger.get(run.run_id)
+                assert current is not None
+                return current
+            cause = exc.__cause__
+            return self.ledger.terminal(
+                claimed.run_id,
+                "failed",
+                {
+                    "outcome": "invalid_persisted_verification_receipt",
+                    "error_type": type(cause).__name__ if cause else type(exc).__name__,
+                },
+                reason="invalid_receipt_contract",
+                holder=self.holder,
+                lease_id=claimed.lease_id or "",
+            )
         auth = self.auth.check()
         if not auth.ok:
             try:

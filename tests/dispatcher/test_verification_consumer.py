@@ -478,6 +478,115 @@ def test_pending_delivered_receipt_replay_is_idempotent(tmp_path) -> None:
     ]
 
 
+def _corrupt_pending_delivered_receipt(state, run_id, mutate) -> None:
+    current = state.get(run_id)
+    assert current is not None
+    terminal = dict(current.terminal_receipt)
+    pending = dict(terminal["pending_terminal_receipt"])
+    mutate(pending)
+    terminal["pending_terminal_receipt"] = pending
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET terminal_receipt_json=?, "
+            "retry_after='2000-01-01T00:00:00+00:00' WHERE run_id=?",
+            (json.dumps(terminal, sort_keys=True), run_id),
+        )
+        conn.commit()
+
+
+def test_pending_delivered_replay_revalidates_persisted_receipt(tmp_path) -> None:
+    class CountingAuth(Auth):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def check(self):
+            self.calls += 1
+            return super().check()
+
+    state = ledger(tmp_path)
+    auth = CountingAuth()
+    consumer = VerificationConsumer(
+        state,
+        PostMergeTerminalReadOutageTruth(),
+        auth,
+        DeliveredLauncher(),
+        "host",
+    )
+    first = consumer.consume(request())
+    _corrupt_pending_delivered_receipt(
+        state, first.run_id, lambda pending: pending.pop("retry_after")
+    )
+
+    final = consumer.consume(request())
+
+    assert final.status == "failed"
+    assert final.stop_reason == "invalid_receipt_contract"
+    assert final.verified_head_sha is None
+    assert auth.calls == 1
+    assert [row["kind"] for row in state.attempts(final.run_id)] == [
+        "verification"
+    ]
+
+
+def test_invalid_pending_delivered_replay_is_redacted_and_never_needs_human(
+    tmp_path,
+) -> None:
+    private = "credential=SHOULD_NOT_PERSIST /Users/operator/private-vault"
+    state = ledger(tmp_path)
+    consumer = VerificationConsumer(
+        state,
+        PostMergeTerminalReadOutageTruth(),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    )
+    first = consumer.consume(request())
+    _corrupt_pending_delivered_receipt(
+        state, first.run_id, lambda pending: pending.update({"diagnostic": private})
+    )
+
+    final = consumer.consume(request())
+
+    durable = json.dumps(final.terminal_receipt, sort_keys=True)
+    assert final.status == "failed"
+    assert final.stop_reason == "invalid_receipt_contract"
+    assert private not in durable
+    with state.store._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM verification_exceptions WHERE run_id=?",
+            (final.run_id,),
+        ).fetchone()[0] == 0
+
+
+def test_pending_delivered_replay_schema_load_failure_fails_closed(tmp_path) -> None:
+    state = ledger(tmp_path)
+    truth = PostMergeTerminalReadOutageTruth()
+    first = VerificationConsumer(
+        state, truth, Auth(), DeliveredLauncher(), "host"
+    ).consume(request())
+    _corrupt_pending_delivered_receipt(state, first.run_id, lambda pending: None)
+
+    final = VerificationConsumer(
+        state,
+        truth,
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+        receipt_schema=tmp_path / "credential=SHOULD_NOT_PERSIST" / "schema.json",
+    ).consume(request())
+
+    assert final.status == "failed"
+    assert final.stop_reason == "invalid_receipt_contract"
+    assert final.terminal_receipt == {
+        "outcome": "invalid_persisted_verification_receipt",
+        "error_type": "FileNotFoundError",
+    }
+    assert [row["kind"] for row in state.attempts(final.run_id)] == [
+        "verification"
+    ]
+
+
 def merged_pr(**updates: object) -> dict[str, object]:
     value = eligible_pr(
         state="closed",
