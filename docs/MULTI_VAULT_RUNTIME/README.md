@@ -46,6 +46,16 @@ XDG/macOS app-data location. `DESIGN_HANDOFF_APP_LOCAL_SETTINGS` remains an expl
 override only when the preflight proves that the resolved parent is durable and shared by every
 enabled consumer.
 
+Per-channel registry isolation is not sufficient because current containers can see shared host
+roots. A separate host-local **channel ownership ledger** is mounted consistently into every channel
+and native runtime. Under one global mode-`0600` lock it records `channel_id`, stable binding, and an
+HMAC fingerprint of canonical filesystem identity (never a raw host path). Registration/relocation
+uses a recoverable pending→registry-commit→active reservation protocol; lifecycle start proves the
+active reservation still matches its channel and root. The same physical content root cannot be
+active in dev/test/prod/native simultaneously. Explicit transfer drains/stops the source channel,
+commits release, then claims the destination; crashes leave a blocking recoverable reservation,
+never two owners or an unowned running lifecycle.
+
 Before the first recreate that introduces this volume, the deploy/startup migration gate resolves
 the legacy path and records a preliminary fingerprint inside the still-running old API container.
 It then acquires the channel deployment fence, rejects and drains every registry mutation producer,

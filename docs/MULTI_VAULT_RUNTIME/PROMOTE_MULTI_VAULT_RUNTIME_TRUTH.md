@@ -27,8 +27,14 @@ no new runtime behavior.
   debt, and docs index surfaces; remove future-state wording only where evidence supports it.
 - Reconcile #2566 and #3156/#3163 dependency/status truth without duplicating or auto-closing their
   distinct UI/Settings scope.
-- Post a parent ledger mapping every child, parent AC, Verify target, merged PR/SHA, owner-doc
-  writeback, and residual debt; close #2143 only when no gap remains.
+- In the MVR-08 PR, change README to shipped capability truth and convert the parent reference from a
+  blocked/future template into a closure-ready historical ledger. That repo ledger records merged
+  MVR-01–07 receipts plus the MVR-08 PR/head candidate, but explicitly delegates MVR-08's eventual
+  merge SHA and the live open/closed state to GitHub #2143; it never predicts its own merge.
+- After MVR-08 merges, run the merged-head closure gate, append MVR-08's exact merge SHA and every
+  final AC/Verify/owner-doc receipt to live #2143, then close it only when no gap remains. No
+  post-close repo write is required: README already says shipped, and the parent reference says live
+  GitHub is authoritative for closure state, avoiding an impossible self-referential child.
 
 ## Concretely
 
@@ -88,6 +94,7 @@ operators, or future agents still act on stale single-global-vault truth.
   shipped behavior; every spec file remains indexed.
   - Verify: doc writeback at `docs/ARCHITECTURE.md :: Active context and vault bindings` + doc
   writeback at `docs/contracts/ACTIVE_CONTEXT_SET.md :: Runtime status` + doc writeback at
+  `docs/contracts/GOVERNED_WRITE_PROTOCOL.md :: GovernedWriteProtocol` + doc writeback at
   `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md :: Runtime selection model` + doc writeback at
   `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md :: Future Multi-Vault` + doc writeback at
   `docs/SETTINGS.md :: Multi-vault settings resolution` + doc writeback at
@@ -99,15 +106,16 @@ operators, or future agents still act on stale single-global-vault truth.
   `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification` + doc writeback at
   `docs/architecture/SBS_TRANSITION_DEBT.md :: multi-vault runtime selection` + doc writeback at
   `docs/DOCS_INDEX.md :: v6.0 Capability Specifications`
-- [ ] This capability's own lifecycle surfaces no longer claim future/blocked state: README records
-  shipped scope and any residual debt, while the parent reference contains actual child issue/PR/SHA/
-  Verify receipts and records #2143 closure only after the merged-head ledger passes.
+- [ ] This capability's own lifecycle surfaces no longer claim future/blocked runtime state: README
+  records shipped scope/residual debt, while the parent reference contains merged MVR-01–07 receipts,
+  the MVR-08 candidate, and an explicit pointer making live #2143 authoritative for MVR-08 merge SHA
+  and closure status. Neither repo file predicts or must later mirror the parent close event.
   - Verify: doc writeback at `docs/MULTI_VAULT_RUNTIME/README.md :: Multi-vault runtime selection` +
     doc writeback at `docs/MULTI_VAULT_RUNTIME/PARENT_FEATURE_ISSUE.md :: Parent reference — Multi-vault runtime selection`
 - [ ] #2566 and #3156/#3163 show truthful dependency/status receipts with no duplicate scope.
   - Verify: GitHub comment receipts on issues `#2566`, `#3156`, and `#3163`
 - [ ] #2143 contains a complete child/AC/Verify/PR/SHA/owner-doc ledger and has no residual open
-  executable scope.
+  executable scope after MVR-08 merges; only then is the live issue closed.
   - Verify: runtime receipt on GitHub issue `#2143`
 
 ## Out of Scope
@@ -140,6 +148,9 @@ operators, or future agents still act on stale single-global-vault truth.
   `pytest -q tests/instance/test_vault_registry_migration.py::test_parent_registry_acceptance tests/integration/test_multi_vault_request_isolation.py::test_parent_request_context_acceptance tests/integration/test_multi_vault_lifecycle_and_dimension.py::test_parent_dimension_background_acceptance tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior tests/integration/test_multi_vault_dimensions.py::test_dimension_preserves_per_binding_authority_and_provenance tests/architecture/test_multi_vault_context_boundaries.py::test_production_consumers_use_context_seam tests/integration/test_multi_vault_capability_acceptance.py::test_merged_multi_vault_capability tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`.
 - Run the opt-in integrated UAT in the same worktree and attach its exact merged SHA and result to
   #2143. A branch-local, dirty, stale, skipped, or missing-target run cannot close the parent.
+- Verify the merged README says shipped and the merged parent reference delegates live closure state
+  to #2143; post MVR-08's exact merge SHA to #2143 before closing it. Do not open a post-close docs PR
+  merely to mirror GitHub state.
 
 ## Restart / Durability Posture
 

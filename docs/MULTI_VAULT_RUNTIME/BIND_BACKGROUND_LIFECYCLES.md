@@ -59,6 +59,9 @@ cross-process truth belong here.
   binding-plus-generation model. For migrated one-vault installs with no explicit set, the captured
   live bridge binding—or, absent that, the instance default/legacy bootstrap—yields exactly
   one durable compatibility context; no later request/session state participates.
+- Before every lifecycle start/rebind, require the MVR-01 shared channel-ownership ledger to show an
+  active lease for this exact channel, binding, and canonical-root fingerprint. A missing, pending,
+  foreign-channel, or changed lease blocks lifecycle work; runtime state cannot self-claim ownership.
 - Subscribe the supervisor to MVR-02's versioned default-mutation event. While intent mode is
   `compatibility`, MVR-06 extends the production default set/clear transaction so it atomically
   updates `compatibility_binding_id` before the wake-up hint; the supervisor drains the current
@@ -187,6 +190,9 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
   attributes ingest, queues, settings, health, and receipts to the correct immutable
   ActiveContextSet/vault/generation.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_two_bindings_run_isolated_lifecycles`
+- [ ] Lifecycle start/rebind refuses a binding whose physical root is leased or pending in another
+  release channel, including after relocation and restart.
+  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_lifecycle_requires_matching_channel_ownership_lease`
 - [ ] Request/session selection does not alter durable background intent; after restart the
   supervisor reconstructs exactly the explicitly enrolled, deduplicated, re-authorized set.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_restart_uses_only_durable_authorized_binding_set`

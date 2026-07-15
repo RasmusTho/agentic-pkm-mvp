@@ -90,6 +90,14 @@ not background lifecycles.
   and binding. Relocation, removal, or revocation after request resolution returns a stale-context/
   reauthorization error without writing; it never continues merely because the request snapshot is
   immutable. Long-running owner transactions must use their existing drain/fence contract.
+- Extend the canonical GOV token/receipt schema in this slice. A server-minted DecisionToken binds
+  decision ID, authenticated human/delegated-role principal, instance identity, operational scope,
+  action/write class, stable vault binding, binding revision/root fingerprint, authorization epoch,
+  issued/expiry times, and policy/delegation revision. Validation compares every field to current
+  state immediately before mutation. AuthorityReceipt references the token/decision and records the
+  evaluated binding/auth revisions plus applied/denied/stale outcome without raw paths or secrets.
+  Update capture and every governed-write producer, serializer/store, migration, fixture, and
+  fail-loud preflight together; an old actor/resource/action-only token cannot authorize the new seam.
 - Add an architecture guard against new direct process-global vault resolution in request code.
 
 ## Concretely
@@ -125,7 +133,8 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 - Sync/deployment impact: supports concurrent requests without process rebinding
 - External boundary impact: API input maps to context selectors, not raw trusted paths
 - New or changed contract: request-context propagation and explicit multi-binding write target
-- Owner-doc impact: will-update-in-PR at `docs/ARCHITECTURE.md`, `docs/EVENTS.md`,
+- Owner-doc impact: will-update-in-PR at `docs/ARCHITECTURE.md`,
+  `docs/contracts/GOVERNED_WRITE_PROTOCOL.md`, `docs/EVENTS.md`,
   `docs/DB_SCHEMA.md`, `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, and
   `docs/RELEASE_CHANNELS/README.md`
 - Transition debt impact: reduces D1 and request-side D13 global-binding debt
@@ -176,6 +185,10 @@ call site can leak retrieval context or write to the wrong human artifact surfac
   the current DecisionToken/binding revision and blocks the in-flight mutation without writing to
   either the old or replacement root.
   - Verify: `tests/api/test_multi_vault_governed_writes.py::test_authority_or_locator_change_blocks_inflight_write_before_commit`
+- [ ] The production capture path issues, persists, validates, and receipts the expanded token bound
+  to principal/instance/scope/binding revision/auth epoch; legacy-shaped tokens and stale epochs fail
+  before mutation, and all token producers/fixtures satisfy the same schema.
+  - Verify: `tests/api/test_multi_vault_governed_writes.py::test_capture_token_binds_principal_scope_binding_revision_and_auth_epoch`
 - [ ] A production producer registry and architecture guard enumerate every vault-bound watcher,
   API/ingest/capture, Heimdal, and shared outbox call site; no unregistered call site can emit a
   legacy envelope.
@@ -222,6 +235,7 @@ call site can leak retrieval context or write to the wrong human artifact surfac
   binding/context envelope, idempotency-key migration, projection namespace, minimum-runtime floor,
   and all-process fenced cutover.
   - Verify: doc writeback at `docs/ARCHITECTURE.md :: Active context and vault bindings` + doc
+    writeback at `docs/contracts/GOVERNED_WRITE_PROTOCOL.md :: GovernedWriteProtocol` + doc
     writeback at `docs/EVENTS.md :: Events` + doc writeback at
     `docs/DB_SCHEMA.md :: DB Schema (Current Reality)` + doc writeback at
     `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments` + doc writeback at

@@ -37,6 +37,12 @@ This slice promotes the existing seed without changing content-vault authority.
   validated snapshots, and rollback exports as owner-only mode `0600` (directories `0700`) on
   native hosts and shared volumes. Preflight rejects permissive or unfixable ownership/mode before
   exposing absolute content-root paths or device provenance.
+- Add the host-local cross-channel ownership ledger shared by dev/test/prod/native registration and
+  lifecycle preflight. It stores channel plus stable binding and an HMAC fingerprint of canonical
+  filesystem identity, not raw paths. Registration/relocation holds its global lock and uses a
+  recoverable pending reservation → per-channel registry commit → active lease protocol. A matching
+  root already active/pending in another channel fails loud. Explicit transfer drains/stops the old
+  channel before release/claim; recovery never permits two active owners.
 - Add the pre-recreate migration gate: while the old API is still running, resolve the legacy source
   and record its schema/fingerprint, then acquire the channel deployment fence, reject new picker,
   initialize, and headless-CLI registry mutations, drain in-flight mutations, and stop every old
@@ -176,6 +182,10 @@ single-vault package or can silently lose identity during migration.
 - [ ] Compose, startup, and migration preflight fail before recreate when the instance-state mount
   is absent, not writable, channel-colliding, or resolves differently between consumers.
   - Verify: `tests/ops/test_instance_state_volume_contract.py::test_registry_volume_and_preflight_cover_all_consumers`
+- [ ] Registering or starting the same canonical content root in two release channels is rejected by
+  the shared ownership ledger; injected crashes in reserve/commit/activate/transfer recover to at
+  most one active owner without exposing raw host paths.
+  - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_same_content_root_cannot_be_active_in_two_channels`
 - [ ] Registry, lock/temporary files, validated snapshots, and rollback exports remain mode `0600`
   under permissive host umasks; parent directories are `0700` and unsafe mode/ownership fails loud.
   - Verify: `tests/instance/test_vault_registry_permissions.py::test_registry_transaction_files_are_private`
@@ -217,7 +227,7 @@ single-vault package or can silently lose identity during migration.
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/instance/test_vault_registry.py tests/instance/test_vault_registry_migration.py tests/instance/test_vault_registry_concurrency.py tests/instance/test_vault_registry_permissions.py tests/api/test_vault_registry_recovery.py tests/architecture/test_instance_vault_registry_boundary.py tests/ops/test_instance_state_volume_contract.py tests/ops/test_scalar_rollback_guard.py`
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_vault_registry_container_durability.py tests/integration/test_vault_registry_rollback.py`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_vault_registry_container_durability.py tests/integration/test_vault_registry_rollback.py tests/integration/test_vault_registry_channel_isolation.py`
 - `ruff check app tests`
 
 ## Restart / Durability Posture
