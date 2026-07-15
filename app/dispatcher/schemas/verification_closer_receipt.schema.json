@@ -61,10 +61,12 @@
             "current_state": {"type": "string", "minLength": 1},
             "tried_actions": {
               "type": "array",
+              "minItems": 1,
               "items": {"type": "string", "minLength": 1}
             },
             "evidence": {
               "type": "array",
+              "minItems": 1,
               "items": {"type": "string", "minLength": 1}
             },
             "why_unsafe": {"type": "string", "minLength": 1},
@@ -73,6 +75,7 @@
               "minItems": 1,
               "items": {"type": "string", "minLength": 1}
             },
+            "no_action_option": {"type": "string", "minLength": 1},
             "recommended_option": {"type": "string", "minLength": 1},
             "consequence_of_doing_nothing": {"type": "string", "minLength": 1}
           },
@@ -84,6 +87,7 @@
             "evidence",
             "why_unsafe",
             "options",
+            "no_action_option",
             "recommended_option",
             "consequence_of_doing_nothing"
           ],

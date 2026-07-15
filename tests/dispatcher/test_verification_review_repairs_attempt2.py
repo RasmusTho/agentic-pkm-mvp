@@ -145,6 +145,7 @@ def test_stop_cannot_borrow_live_owner_lease(tmp_path, holder, lease_id) -> None
                 "evidence": ["issue #3603"],
                 "why_unsafe": "continuation would expand authority",
                 "options": ["hold", "authorize"],
+                "no_action_option": "hold",
                 "recommended_option": "hold",
                 "consequence_of_doing_nothing": "delivery remains blocked",
             },

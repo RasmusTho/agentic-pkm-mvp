@@ -26,6 +26,7 @@ HUMAN_EXCEPTION_PACKET_FIELDS = frozenset(
         "evidence",
         "why_unsafe",
         "options",
+        "no_action_option",
         "recommended_option",
         "consequence_of_doing_nothing",
     }
@@ -49,6 +50,7 @@ def valid_human_exception_packet(packet: object) -> bool:
         "original_intent",
         "current_state",
         "why_unsafe",
+        "no_action_option",
         "recommended_option",
         "consequence_of_doing_nothing",
     ):
@@ -60,7 +62,15 @@ def valid_human_exception_packet(packet: object) -> bool:
             not isinstance(value, str) or not value.strip() for value in values
         ):
             return False
-    return bool(packet["options"])
+    options = packet["options"]
+    assert isinstance(options, list)
+    return (
+        bool(packet["tried_actions"])
+        and bool(packet["evidence"])
+        and bool(options)
+        and packet["no_action_option"] in options
+        and packet["recommended_option"] in options
+    )
 
 
 class VerificationAgentLoop:

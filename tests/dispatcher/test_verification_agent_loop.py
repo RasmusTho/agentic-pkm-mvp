@@ -40,6 +40,7 @@ def test_terminal_stop_routes_one_deduplicated_owner_decision(tmp_path) -> None:
         "evidence": ["issue #3603"],
         "why_unsafe": "continuation would expand authority",
         "options": ["hold", "authorize"],
+        "no_action_option": "hold",
         "recommended_option": "hold",
         "consequence_of_doing_nothing": "the delivery remains blocked",
     }

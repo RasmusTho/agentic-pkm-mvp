@@ -85,6 +85,7 @@ class Launcher:
                 "evidence": ["PR #3620"],
                 "why_unsafe": "continuation requires authority outside the issue",
                 "options": ["hold", "authorize"],
+                "no_action_option": "hold",
                 "recommended_option": "hold",
                 "consequence_of_doing_nothing": "the delivery remains blocked",
             },
@@ -556,6 +557,32 @@ def test_needs_human_receipt_requires_valid_complete_owner_packet(tmp_path) -> N
             "SELECT COUNT(*) FROM verification_exceptions WHERE run_id=?",
             (result.run_id,),
         ).fetchone()[0] == 0
+
+
+def test_human_exception_packet_requires_actionable_decision_space(tmp_path) -> None:
+    schema = json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "app/dispatcher/schemas/verification_closer_receipt.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    _, receipt = Launcher().launch({})
+    receipt.update(
+        {"retry_after": None, "review_events": None}
+    )
+
+    verification_consumer.validate_verification_closer_receipt(receipt, schema)
+    packet = receipt["human_exception"]
+    assert isinstance(packet, dict)
+    for field, value in (
+        ("tried_actions", []),
+        ("evidence", []),
+        ("no_action_option", "not-offered"),
+        ("recommended_option", "not-offered"),
+    ):
+        invalid = {**receipt, "human_exception": {**packet, field: value}}
+        with pytest.raises(jsonschema.ValidationError):
+            verification_consumer.validate_verification_closer_receipt(invalid, schema)
 
 
 def test_technical_receipt_failures_never_require_owner(tmp_path) -> None:
