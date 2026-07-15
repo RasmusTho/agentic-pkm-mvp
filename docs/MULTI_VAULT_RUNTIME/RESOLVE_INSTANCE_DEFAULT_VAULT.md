@@ -35,6 +35,12 @@ fail-closed precedence resolver.
   registration/default, its locked registration transaction atomically sets that new binding as the
   explicit default with `first_vault_initialize` provenance. Later picker/last-active writes still
   never infer a default.
+- Preserve the equivalent first-open-existing journey: when a fresh no-vault instance opens its
+  first existing root and the locked transaction proves there were no prior registrations or
+  default, registration/selection atomically records that initialized or provisional read-only
+  binding as the explicit default with `first_open_existing` provenance. A later open, picker change,
+  or last-active write never changes the default. Explicit initialization of a provisional binding
+  completes its identity without replacing either the binding or this default.
 - Expose authenticated Companion API and headless CLI get/set/clear commands through one service.
 - Extend the MVR-01 rollback projection/roll-forward merge for the default schema introduced here:
   a scalar previous image receives only the already validated explicit rollback target, never an
@@ -121,6 +127,10 @@ turns an invalid explicit selection into a dangerous silent read/write against t
 - [ ] A no-vault installation that initializes its first vault after MVR-02 atomically records that
   binding as its explicit default; subsequent last-active changes do not alter it.
   - Verify: `tests/instance/test_default_vault_resolution.py::test_first_vault_initialize_materializes_default_once`
+- [ ] A fresh no-vault installation that first opens an existing initialized or uninitialized root
+  atomically records that stable binding as its explicit default, survives restart without
+  reselection, and does not let a later open/last-active change replace it.
+  - Verify: `tests/integration/test_single_vault_compatibility.py::test_first_open_existing_materializes_restart_default_once`
 - [ ] Existing no-vault and single-vault bootstrap paths remain truthful.
   - Verify: `tests/integration/test_single_vault_compatibility.py::test_default_adapter_preserves_bootstrap_and_no_vault`
 - [ ] Removing the current default is rejected unless the production mutation explicitly clears or
@@ -154,7 +164,9 @@ turns an invalid explicit selection into a dangerous silent read/write against t
 ## Restart / Durability Posture
 
 `default_vault_binding_id` survives restart independently of later last-active history. The one-time
-legacy migration preserves the pre-existing picker restart journey and records its provenance.
+legacy migration preserves the pre-existing picker restart journey and records its provenance; on a
+fresh empty registry, first initialize or first open-existing atomically creates the equivalent
+durable restart source exactly once.
 Request/session choices do not survive unless their own session contract says so; after session
 loss the explicit instance default (or no-vault) is visible rather than a guessed prior selection.
 

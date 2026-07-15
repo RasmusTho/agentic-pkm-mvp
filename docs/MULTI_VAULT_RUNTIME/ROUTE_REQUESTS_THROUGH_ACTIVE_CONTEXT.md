@@ -153,12 +153,15 @@ acceptance criteria prefixed with its ID:
 2. **MVR-05B — request ingress and reads:** production resolver, picker, API/CLI/agent/MCP context
    propagation including distinct one-request-override and retained-session carriers,
    server-derived per-call scope, foreground channel-ownership lease enforcement, retrieval/cache
-   provenance, pre-read revision/auth revalidation, stale selection, the temporary #3163 picker
-   bridge, and active-context architecture writeback. Depends on 05A and #3163.
+   provenance, pre-read revision/auth revalidation, and the matching exclusive fencing in every
+   already-live relocation, removal, and GOV-revocation producer. Cross-channel transfer remains
+   capability-gated. This slice also owns stale selection, the temporary #3163 picker bridge, and
+   active-context architecture writeback. Depends on 05A and #3163.
 3. **MVR-05C — governed writes:** explicit target selection plus expanded DecisionToken/
    AuthorityReceipt producers, migration, fixtures, preflight, and the cross-process per-binding
-   effect fence plus active channel-ownership lease spanning final revalidation through I/O/receipt, including exclusive
-   relocation/removal/revocation producers and lock-order enforcement, with governed-write
+   shared effect fence plus active channel-ownership lease spanning final revalidation through
+   I/O/receipt. It reuses the exclusive relocation/removal/revocation producer fences shipped by
+   05B, proves write-side lock-order enforcement, and then enables cross-channel transfer, with governed-write
    owner-contract writeback. Depends on 05B.
 4. **MVR-05D — outbox producers and delivery completion:** production envelope registry, binding-keyed
    dedup, remaining-producer migration and full worker delivery, event-contract writeback, and aggregate request
@@ -274,8 +277,10 @@ to cross its floor; independently safe explicit-global work may continue.
   - Verify: `tests/integration/test_multi_vault_write_effect_fence.py::test_locator_or_authority_change_cannot_cross_validation_write_window`
 - [ ] **MVR-05B:** Relocation, removal, or GOV revocation after request resolution but before a production
   filesystem/retrieval/cache read cannot cross the effect window: the read holds the shared binding
-  lease from final revalidation through I/O and cache/response publication, while the change takes the
-  ownership fence then exclusive binding lease and either waits or prevents stale data publication.
+  lease from final revalidation through I/O and cache/response publication. In this same slice every
+  already-live relocation, removal, and GOV-revocation production path takes the ownership fence then
+  the exclusive binding lease and either waits or prevents stale data publication; no unfenced
+  producer remains enabled in the independently mergeable 05B state.
   - Verify: `tests/integration/test_multi_vault_request_isolation.py::test_authority_or_locator_change_cannot_cross_read_effect_window`
 - [ ] **MVR-05B:** With cross-channel transfer still dormant, production request resolution and read
   seams require the current channel's active binding/root-fingerprint lease. A staged transfer

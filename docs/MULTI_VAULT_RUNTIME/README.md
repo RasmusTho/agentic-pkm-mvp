@@ -114,9 +114,13 @@ required by #2143 without pretending that the move has shipped.
 - `vault_id` identifies the logical content vault, while `local_instance_id` identifies one local
   clone and a stable `vault_binding_id` identifies its registry entry; two paths/clones may share
   one `vault_id` and must never collapse into one registration;
-- a registry entry preserves `vault_binding_id`, `vault_id`, display name, content-root path,
-  local-instance/device provenance, and last-opened metadata; path relocation updates a binding
+- an initialized registry entry preserves `vault_binding_id`, `vault_id`, display name, content-root
+  path, local-instance/device provenance, and last-opened metadata; path relocation updates a binding
   without changing logical-vault or local-instance identity;
+- a selected existing uninitialized root may be represented without writing into it by a provisional
+  read-only registration whose stable binding/local-instance identity and root fingerprint are
+  registry-owned while `vault_id` remains null; only an explicit initialize gesture may complete
+  that same binding's vault identity, and writes/initialized-only lifecycles fail closed beforehand;
 - `default_vault_binding_id` is explicit and is not inferred from `last_active_vault_ref`;
   compatibility input named `DEFAULT_VAULT_ID` may resolve only when that logical ID maps to one
   unambiguous local binding, otherwise it fails closed;
@@ -125,6 +129,9 @@ required by #2143 without pretending that the move has shipped.
   a valid legacy `last_active_vault_ref` as `default_vault_binding_id` with explicit
   `legacy_last_active_migration` provenance when no default exists. Later last-active changes never
   mutate the default;
+- on a fresh empty registry, the first initialize or first open-existing transaction records its
+  stable initialized/provisional binding as the default exactly once, preserving restart without
+  turning later picker or last-active changes into default mutations;
 - a one-request `X-Active-Context-Override` selection outranks the retained
   `X-Active-Context-Session` selection; session selection outranks the instance default; default
   outranks an explicit legacy bootstrap adapter; absence resolves to no-vault. The override is

@@ -88,10 +88,18 @@ This slice promotes the existing seed without changing content-vault authority.
   Reuse an existing matching registration. When an env-only installation has an empty registry,
   atomically create exactly one registration and ownership lease through the production registry
   transaction, preserving any valid vault identity embedded in the root and producing a fresh stable
-  local-instance/binding identity plus explicit `legacy_env_bootstrap` provenance. A missing or
-  ambiguous vault identity, an overlap conflict, or a registry/ledger commit failure leaves neither
-  registration nor lease active. Paths are never used as logical IDs. MVR-02 and MVR-06 consume this
-  registered binding; they do not independently invent one from env.
+  local-instance/binding identity plus explicit `legacy_env_bootstrap` provenance. An existing
+  uninitialized folder is the supported exception to embedded vault identity: without writing into
+  that folder, create a provisional read-only registration with a generated stable binding/local-
+  instance identity, nullable `vault_id`, canonical-root fingerprint, `uninitialized` status, and the
+  same provenance. It may acquire the ownership lease and serve the existing read-before-initialize
+  path, but every governed write and initialized-only lifecycle remains blocked. A later explicit,
+  informed initialize gesture completes that same registration atomically with the newly established
+  vault identity; it never replaces the binding or treats the path as a logical ID. A missing identity
+  on a root that is not truthfully uninitialized, an ambiguous identity, an overlap conflict, or a
+  registry/ledger commit failure leaves neither registration nor lease active. MVR-02 and MVR-06
+  consume the stable initialized or provisional binding; they do not independently invent one from
+  env.
 - Add the pre-recreate migration gate: while the old API is still running, resolve the legacy source
   and record its schema/fingerprint, then acquire the channel deployment fence, reject new picker,
   initialize, and headless-CLI registry mutations, drain in-flight mutations, and stop every old
@@ -350,6 +358,11 @@ never encounter and truncate authoritative new-schema state before fork/merge pr
   - Verify: doc writeback at `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md :: Future Multi-Vault` +
     doc writeback at `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments` +
     doc writeback at `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification`
+- [ ] **MVR-01B:** An env-selected existing uninitialized folder upgrades without any content-root
+  write into one stable provisional read-only binding/lease; reads retain the prior journey, writes
+  and initialized-only lifecycles remain blocked, and an explicit later initialize completes the
+  same binding rather than replacing it.
+  - Verify: `tests/integration/test_vault_registry_channel_isolation.py::test_uninitialized_env_upgrade_preserves_read_only_binding_without_writes`
 - [ ] **MVR-01C:** Deployment/release owner docs describe the shipped explicit scalar rollback
   projection, authenticated mutation-filtering gateway, minimum-runtime floor, and roll-forward
   lineage without future-state claims.
@@ -371,7 +384,7 @@ family-wide command that requires a later sealed slice.
 
 ### MVR-01B validation
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_vault_registry_container_durability.py::test_registry_survives_recreate_and_is_shared_cross_process tests/integration/test_vault_registry_channel_isolation.py::test_overlapping_content_roots_cannot_be_active_in_two_channels tests/integration/test_vault_registry_channel_isolation.py::test_same_channel_nested_vaults_preserve_child_boundary tests/integration/test_vault_registry_channel_isolation.py::test_transfer_is_dormant_until_foreground_ownership_floor tests/integration/test_vault_registry_channel_isolation.py::test_registration_removal_drains_before_ownership_release tests/integration/test_vault_registry_channel_isolation.py::test_first_upgrade_seeds_all_legacy_channel_owners_before_claim tests/integration/test_vault_registry_channel_isolation.py::test_env_only_bootstrap_atomically_enrolls_one_stable_binding_or_fails_closed tests/integration/test_vault_registry_channel_isolation.py::test_host_global_ledger_key_is_durable_shared_and_rotates_atomically tests/integration/test_vault_registry_rollback.py::test_previous_image_reads_latest_post_migration_registry_state tests/ops/test_instance_state_volume_contract.py::test_legacy_registry_export_happens_after_writer_quiescence tests/ops/test_instance_state_volume_contract.py::test_registry_volume_and_preflight_cover_all_consumers tests/ops/test_instance_state_volume_contract.py::test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restore`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_vault_registry_container_durability.py::test_registry_survives_recreate_and_is_shared_cross_process tests/integration/test_vault_registry_channel_isolation.py::test_overlapping_content_roots_cannot_be_active_in_two_channels tests/integration/test_vault_registry_channel_isolation.py::test_same_channel_nested_vaults_preserve_child_boundary tests/integration/test_vault_registry_channel_isolation.py::test_transfer_is_dormant_until_foreground_ownership_floor tests/integration/test_vault_registry_channel_isolation.py::test_registration_removal_drains_before_ownership_release tests/integration/test_vault_registry_channel_isolation.py::test_first_upgrade_seeds_all_legacy_channel_owners_before_claim tests/integration/test_vault_registry_channel_isolation.py::test_env_only_bootstrap_atomically_enrolls_one_stable_binding_or_fails_closed tests/integration/test_vault_registry_channel_isolation.py::test_uninitialized_env_upgrade_preserves_read_only_binding_without_writes tests/integration/test_vault_registry_channel_isolation.py::test_host_global_ledger_key_is_durable_shared_and_rotates_atomically tests/integration/test_vault_registry_rollback.py::test_previous_image_reads_latest_post_migration_registry_state tests/ops/test_instance_state_volume_contract.py::test_legacy_registry_export_happens_after_writer_quiescence tests/ops/test_instance_state_volume_contract.py::test_registry_volume_and_preflight_cover_all_consumers tests/ops/test_instance_state_volume_contract.py::test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restore`
 - Verify the 01B PR diff contains its mapped owner-doc targets in
   `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md`,
   `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, and `docs/RELEASE_CHANNELS/README.md`.
