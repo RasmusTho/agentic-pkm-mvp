@@ -166,6 +166,11 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   replay, so a newer empty run cannot hide older spent budget. More than one active canonical chain
   for the same repository, pull request, and stage is likewise rejected before exact replay; the
   dispatcher never selects a newer empty active row over an older row with spent budget.
+  An expired unclaimed technical backoff follows the same authenticated live-head takeover rule:
+  the first authoritative artifact for the newer live head requeues the existing canonical run,
+  preserves its immutable requested head, attempts, exceptions, and cumulative 2+2 budget, and
+  clears only head-bound coordinator, context, receipt, retry, and verified-head state. An
+  unexpired backoff or any authority/token mismatch remains non-mutating and fail-closed.
 - The Codex process boundary drains bounded stderr concurrently and rejects non-zero exits or
   terminal error events even when stdout contained an otherwise valid receipt. A bounded rate-limit,
   usage-limit, quota, or credit-exhaustion signal on that non-zero path remains a lease-fenced backoff
@@ -686,6 +691,21 @@ spawns. GitHub Issues/PRs/CI remain the hard lifecycle authority; Project status
 dispatcher and epic run-state remain operational coordination evidence only. Live mutations still
 belong to the owning workflow skill (`issue-to-code`, `verification-and-closure`, or issue
 maintenance) and must use explicit commands with verification.
+
+### Epic-runner context-budget observation
+
+Dispatcher-backed epic run-state accepts a versioned v1 context-budget receipt at each slice
+boundary. The observer records an explicit token measurement or `unknown`, a checkpoint/digest
+containing slice status, decision delta, open review findings, and external-state marker, plus
+truthful cost inputs for accepted slices. Missing token, monetary, repair, handoff, worker-start, or
+human-minute evidence remains `unknown`; the receipt never estimates or fabricates it.
+
+The evaluator reports coordinator lifecycle (`keep` or `checkpoint_rotate`) separately from slice
+execution (`inline` or `thin_worker`) and retains the evidence needed to reconstruct both. These are
+strictly advisory shadow recommendations: the receipt cannot dispatch or spawn agents, mutate CI,
+review, acceptance, merge, or closure state, or weaken any quality gate. See
+[the Dispatcher And Routing Model](development/BUILDER_SYSTEM_PROCESS_MAP.md#5-dispatcher-and-routing-model)
+for the cross-system classification.
 
 When a PR is locally validated but GitHub Actions are still pending, coordinators may separate the
 implementation handoff from terminal closure with a CI-monitor handoff record:

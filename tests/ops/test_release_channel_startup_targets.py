@@ -100,6 +100,15 @@ def test_test_start_target_binds_test_environment() -> None:
         "Makefile does not define docker-compose.test.yml for test startup "
         "(Issue #967)."
     )
+    assert "docker-compose.test-vault.yml" in makefile_text, (
+        "Explicit TEST vault startup must append the deterministic TEST vault "
+        "activation overlay."
+    )
+    startup_script = (REPO_ROOT / "scripts/start_full_system.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'COMPOSE_PROJECT_NAME:-}" = "pkm-test"' in startup_script
+    assert "docker-compose.test-vault.yml" in startup_script
 
 
 def test_prod_start_target_binds_prod_environment() -> None:

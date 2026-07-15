@@ -1,4 +1,10 @@
 services:
+  migrate:
+    environment:
+      DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
+      DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
+      LLM_PROVIDER: mock
+
   db:
     environment:
       POSTGRES_DB: app_test
@@ -24,6 +30,12 @@ services:
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
+      LLM_PROVIDER: mock
+      # Keep the universal TEST overlay fail-closed when no vault overlay is
+      # selected. The explicit legacy-vault overlay comes later and restores
+      # the operator-selected /app/vault watcher binding.
+      WATCHER_ENABLE: "0"
+      WATCHER_VAULT_PATH: ""
       WATCHER_STATE_DIR: tmp-test
       WATCHER_STOP_FILE: /app/tmp-test/WATCHER_STOP
       INDEX_OUTBOX_PATH: /app/tmp-test/index-outbox.jsonl
@@ -41,6 +53,9 @@ services:
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
+      LLM_PROVIDER: mock
+      WATCHER_ENABLE: "0"
+      WATCHER_VAULT_PATH: ""
       WATCHER_STATE_DIR: tmp-test
       WATCHER_STOP_FILE: /app/tmp-test/WATCHER_STOP
       INDEX_OUTBOX_PATH: /app/tmp-test/index-outbox.jsonl
@@ -58,6 +73,9 @@ services:
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
+      LLM_PROVIDER: mock
+      WATCHER_ENABLE: "0"
+      WATCHER_VAULT_PATH: ""
       WATCHER_STATE_DIR: tmp-test
       WATCHER_STOP_FILE: /app/tmp-test/WATCHER_STOP
       INDEX_OUTBOX_PATH: /app/tmp-test/index-outbox.jsonl
@@ -75,6 +93,7 @@ services:
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
+      LLM_PROVIDER: mock
 
   companion-ui:
     ports: !override
