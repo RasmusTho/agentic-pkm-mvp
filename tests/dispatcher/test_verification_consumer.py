@@ -270,7 +270,7 @@ class TerminalChecksTruth(TransitionTruth):
 def eligible_pr(**updates):
     value = {
         "number": 3603, "state": "open", "draft": False, "merged_at": None,
-        "body": "Governing-Issue: #3603\n\nRefs #3603",
+        "body": "Governing-Issue: #3603\n\nFixes #3603",
         "base": {"ref": "main", "repo": {"full_name": REPO}},
         "head": {"ref": "branch", "sha": HEAD},
     }
@@ -311,7 +311,7 @@ def test_supporting_issue_addition_during_repair_preserves_governing_authority(
 
 def test_supporting_issue_removal_or_governing_drift_fails_closed(tmp_path) -> None:
     for suffix, body in (
-        ("removed", "Governing-Issue: #3603\n\nRefs #3603"),
+        ("removed", "Governing-Issue: #3603\n\nFixes #3603"),
         ("governing", "Governing-Issue: #3626\n\nFixes #3626"),
     ):
         dispatch_request = request()

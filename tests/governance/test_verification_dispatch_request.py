@@ -127,6 +127,24 @@ def test_ambiguous_governing_issue_emits_no_request() -> None:
     assert build_request(event=_event(), pr=mismatched, issue={"number": 3626}) is None
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Governing-Issue: #3602",
+        "Governing-Issue: #3602\nFixes #0",
+        "Governing-Issue: #3602\nFixes #-1",
+        "Governing-Issue: #3602\nFixes #abc",
+        "Governing-Issue: #3602\nFixes\n#3602",
+    ],
+)
+def test_invalid_closing_authority_emits_no_request(body: str) -> None:
+    pr = _pr()
+    pr["body"] = body
+
+    assert resolve_issue_contract(body) is None
+    assert build_request(event=_event(), pr=pr, issue=_issue()) is None
+
+
 def test_associated_pr_must_still_be_open() -> None:
     assert build_request(event=_event(), pr=_pr(), issue=_issue()) is not None
     assert (

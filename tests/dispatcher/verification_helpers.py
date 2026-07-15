@@ -39,7 +39,7 @@ def request(head: str = HEAD) -> dict[str, object]:
         pr={
             "number": 3603,
             "state": "open",
-            "body": "Governing-Issue: #3603\n\nRefs #3603",
+            "body": "Governing-Issue: #3603\n\nFixes #3603",
             "base": {"ref": "main"},
             "head": {"ref": "codex/issue-3603", "sha": head},
         },
