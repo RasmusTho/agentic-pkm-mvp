@@ -5,6 +5,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from app.dispatcher.verification_contract import MAX_CLOSING_ISSUES
 from scripts.build_pr_evidence_pack import build_pack, render_markdown
 
 
@@ -246,6 +249,21 @@ def test_missing_data_is_reported_as_unknown_not_guessed() -> None:
     assert pack.issue_evidence == []
     assert pack.pr_contract_status == "unknown"
     assert "check run evidence unavailable" in pack.unknowns_missing_evidence
+
+
+def test_evidence_pack_rejects_over_limit_issue_authority() -> None:
+    body = "\n".join(
+        ["Governing-Issue: #3214"]
+        + [f"Fixes #{4000 + index}" for index in range(MAX_CLOSING_ISSUES + 1)]
+    )
+
+    with pytest.raises(ValueError, match="exceeds the bounded limit"):
+        build_pack(
+            pr={"number": 99, "title": "fanout", "body": body},
+            files_payload=[],
+            checks_payload={},
+            issue=[],
+        )
 
 
 def test_human_exception_requires_observed_exception_evidence(tmp_path: Path) -> None:

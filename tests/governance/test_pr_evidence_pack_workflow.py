@@ -61,6 +61,16 @@ def test_workflow_collects_pr_issue_file_and_check_evidence() -> None:
     assert "re.search" not in text
 
 
+def test_workflow_fails_closed_on_over_limit_authority_before_issue_fanout() -> None:
+    text = _workflow_text()
+
+    guard = text.index("over-limit issue authority")
+    loop = text.index("while IFS= read -r ISSUE_NUMBER")
+    issue_fetch = text.index('repos/${REPOSITORY}/issues/${ISSUE_NUMBER}')
+    assert "closing_issue_authority_exceeds_limit" in text
+    assert guard < loop < issue_fetch
+
+
 def test_workflow_paginates_files_and_check_runs() -> None:
     text = _workflow_text()
 

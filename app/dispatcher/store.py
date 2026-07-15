@@ -24,6 +24,7 @@ from app.dispatcher.schema import (
     verification_v3_schema_error,
     verification_v4_schema_error,
     verification_v5_schema_error,
+    verification_v6_schema_error,
 )
 
 
@@ -341,6 +342,7 @@ def _legacy_verification_row_is_quarantined(row: sqlite3.Row) -> bool:
         return False
     return bool(
         row["status"] == LEGACY_UNTRUSTED_VERIFICATION_STATUS
+        and row["legacy_recovery_audit_json"] is None
         and supporting_authority == []
         and closing_authority == []
         and row["current_head_sha"] == row["head_sha"]
@@ -447,7 +449,7 @@ class SqliteStore:
             # A database declaring the current version must already have the
             # complete current shape. Missing v4 identity columns cannot be
             # reconstructed without resetting keyed repair accounting.
-            schema_error = verification_v5_schema_error(conn)
+            schema_error = verification_v6_schema_error(conn)
             if schema_error is not None:
                 raise ValueError(schema_error)
             authority_reconciliation_required = False
@@ -482,7 +484,9 @@ class SqliteStore:
         # dispatcher_meta, so its absence is recognized only together with
         # the v1-specific missing ``repo`` column.
         is_unversioned_v1 = current_version is None and "repo" not in columns
-        if current_version not in {"1", "2", "3", "4", str(SCHEMA_VERSION)} and not is_unversioned_v1:
+        if current_version not in {
+            "1", "2", "3", "4", "5", str(SCHEMA_VERSION)
+        } and not is_unversioned_v1:
             version = "missing" if current_version is None else repr(current_version)
             raise ValueError(f"unsupported dispatcher schema_version: {version}")
         if current_version == "2" and "repo" not in columns:
@@ -506,10 +510,14 @@ class SqliteStore:
                 ).fetchone()
                 current_version = None if row is None else str(row["value"])
             is_unversioned_v1 = current_version is None and "repo" not in columns
-            if current_version not in {"1", "2", "3", "4", str(SCHEMA_VERSION)} and not is_unversioned_v1:
+            if current_version not in {
+                "1", "2", "3", "4", "5", str(SCHEMA_VERSION)
+            } and not is_unversioned_v1:
                 version = "missing" if current_version is None else repr(current_version)
                 raise ValueError(f"unsupported dispatcher schema_version: {version}")
-            if current_version in {"3", "4", str(SCHEMA_VERSION)} and "repo" in columns:
+            if current_version in {
+                "3", "4", "5", str(SCHEMA_VERSION)
+            } and "repo" in columns:
                 schema_error = (
                     verification_v3_schema_error(
                         conn, allow_additive_migration=True
@@ -518,7 +526,11 @@ class SqliteStore:
                     else (
                         verification_v4_schema_error(conn)
                         if current_version == "4"
-                        else verification_v5_schema_error(conn)
+                        else (
+                            verification_v5_schema_error(conn)
+                            if current_version == "5"
+                            else verification_v6_schema_error(conn)
+                        )
                     )
                 )
                 if schema_error is not None:
@@ -563,6 +575,14 @@ class SqliteStore:
                     conn.execute(
                         "ALTER TABLE verification_runs ADD COLUMN "
                         "closing_authority_json TEXT NOT NULL DEFAULT '[]'"
+                    )
+                if (
+                    current_version in {"3", "4", "5"}
+                    and "legacy_recovery_audit_json" not in verification_columns
+                ):
+                    conn.execute(
+                        "ALTER TABLE verification_runs ADD COLUMN "
+                        "legacy_recovery_audit_json TEXT"
                     )
                 if (
                     current_version == "3"
@@ -654,7 +674,7 @@ class SqliteStore:
                                 "legacy verification audit classification is malformed"
                             )
                         _validate_canonical_verification_row(verification_row)
-                schema_error = verification_v5_schema_error(conn)
+                schema_error = verification_v6_schema_error(conn)
                 if schema_error is not None:
                     raise ValueError(schema_error)
                 conn.execute(
@@ -698,7 +718,7 @@ class SqliteStore:
                 )
             for stmt in DDL_STATEMENTS:
                 conn.execute(stmt)
-            schema_error = verification_v5_schema_error(conn)
+            schema_error = verification_v6_schema_error(conn)
             if schema_error is not None:
                 raise ValueError(schema_error)
             conn.execute(
@@ -716,7 +736,7 @@ class SqliteStore:
             try:
                 for stmt in DDL_STATEMENTS:
                     conn.execute(stmt)
-                schema_error = verification_v5_schema_error(conn)
+                schema_error = verification_v6_schema_error(conn)
                 if schema_error is not None:
                     raise ValueError(schema_error)
                 conn.execute(

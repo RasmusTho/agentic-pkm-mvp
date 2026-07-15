@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from app.dispatcher.verification_contract import MAX_CLOSING_ISSUES
 from scripts.build_verification_dispatch_request import (
     build_request,
     resolve_issue_contract,
@@ -117,6 +118,20 @@ def test_multi_issue_pr_selects_explicit_governing_issue() -> None:
     assert request["linked_issue"] == 3603
     assert request["closing_issues"] == [3626, 3698, 3699, 3700, 3705]
     assert request["supporting_issues"] == [3626, 3698, 3699, 3700, 3705]
+
+
+def test_over_limit_closing_set_emits_no_dispatch_request() -> None:
+    pr = _pr()
+    closing = [4000 + index for index in range(MAX_CLOSING_ISSUES + 1)]
+    pr["body"] = "\n".join(
+        ["Governing-Issue: #3602"]
+        + [f"Fixes #{number}" for number in closing]
+    )
+    pr["live_closing_issues"] = [
+        {"number": number, "repository": REPOSITORY} for number in closing
+    ]
+
+    assert build_request(event=_event(), pr=pr, issue=_issue()) is None
 
 
 @pytest.mark.parametrize(

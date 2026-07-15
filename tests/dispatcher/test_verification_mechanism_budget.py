@@ -918,4 +918,4 @@ def test_declared_v4_missing_budget_identity_fails_closed_without_repair(
         ).fetchone()[0] == 3
         assert conn.execute(
             "SELECT value FROM dispatcher_meta WHERE key='schema_version'"
-        ).fetchone()[0] == "5"
+        ).fetchone()[0] == "6"

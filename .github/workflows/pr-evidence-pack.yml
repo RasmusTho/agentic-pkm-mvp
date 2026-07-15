@@ -42,10 +42,17 @@ jobs:
           import json
           from pathlib import Path
 
-          from app.dispatcher.verification_contract import resolve_issue_authority
+          from app.dispatcher.verification_contract import (
+              closing_issue_authority_exceeds_limit,
+              resolve_issue_authority,
+          )
 
           body = json.loads(Path("pr-evidence-pack/pr.json").read_text()).get("body") or ""
           authority = resolve_issue_authority(body)
+          if closing_issue_authority_exceeds_limit(body):
+              raise SystemExit(
+                  "over-limit issue authority; refusing issue snapshot fan-out"
+              )
           if authority:
               for issue_number in sorted(
                   {authority.governing_issue, *authority.closing_issues}

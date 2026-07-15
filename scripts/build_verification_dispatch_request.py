@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Sequence, TypeGuard
 
 from app.dispatcher.verification_contract import (
+    MAX_CLOSING_ISSUES,
     resolve_issue_authority,
     resolve_issue_contract as resolve_issue_contract,
 )
@@ -63,7 +64,10 @@ def _resolve_live_closing_issues(
         ):
             return None
         issues.append(number)
-    if len(set(issues)) != len(issues):
+    if (
+        len(set(issues)) != len(issues)
+        or len(issues) > MAX_CLOSING_ISSUES
+    ):
         return None
     return tuple(sorted(issues))
 

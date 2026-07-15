@@ -33,6 +33,12 @@ _CLOSING_ATTEMPT_TARGET = (
     rf"{_GITHUB_ISSUE_URL_ATTEMPT_TARGET})"
 )
 
+# Keep every issue-snapshot producer and verification consumer inside one
+# bounded multi-issue authority contract. The normal case remains one closing
+# issue; ten leaves room for an explicitly approved batch without permitting
+# PR-controlled API fan-out.
+MAX_CLOSING_ISSUES = 10
+
 GOVERNING_ISSUE_LINE_PATTERN = re.compile(
     rf"(?m)^[ \t]*{_GOVERNING_KEYWORD}[ \t]*:.*$"
 )
@@ -85,6 +91,8 @@ def resolve_issue_authority(pr_body: object) -> IssueAuthority | None:
         return None
     governing = int(matches[0])
     closing = tuple(sorted({int(match) for match in closing_matches}))
+    if len(closing) > MAX_CLOSING_ISSUES:
+        return None
     supporting = tuple(
         sorted(
             {
@@ -95,6 +103,17 @@ def resolve_issue_authority(pr_body: object) -> IssueAuthority | None:
         )
     )
     return IssueAuthority(governing, closing, supporting)
+
+
+def closing_issue_authority_exceeds_limit(pr_body: object) -> bool:
+    """Return whether exact unique closing references exceed the shared limit."""
+    if not isinstance(pr_body, str):
+        return False
+    canonical_body = pr_body.replace("\r\n", "\n")
+    closing = {
+        int(match) for match in CLOSING_ISSUE_PATTERN.findall(canonical_body)
+    }
+    return len(closing) > MAX_CLOSING_ISSUES
 
 
 def resolve_issue_contract(pr_body: object) -> tuple[int, tuple[int, ...]] | None:

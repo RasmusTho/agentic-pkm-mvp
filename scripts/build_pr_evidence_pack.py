@@ -10,7 +10,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Sequence
 
-from app.dispatcher.verification_contract import resolve_issue_authority
+from app.dispatcher.verification_contract import (
+    MAX_CLOSING_ISSUES,
+    closing_issue_authority_exceeds_limit,
+    resolve_issue_authority,
+)
 
 
 @dataclass(frozen=True)
@@ -88,7 +92,11 @@ def _labels(issue: dict[str, object]) -> list[str]:
 def _issue_evidence(
     *, governing_issue: int | None, closing_issues: list[int], payload: object
 ) -> list[IssueEvidence]:
-    raw_snapshots = [payload] if isinstance(payload, dict) else _as_list(payload)
+    if len(set(closing_issues)) > MAX_CLOSING_ISSUES:
+        raise ValueError("PR closing issue authority exceeds the bounded limit")
+    raw_snapshots: list[object] = (
+        [payload] if isinstance(payload, dict) else _as_list(payload)
+    )
     snapshots = {
         snapshot["number"]: snapshot
         for snapshot in raw_snapshots
@@ -266,10 +274,15 @@ def build_pack(
     issue: object,
     codeowners_path: Path | None = None,
 ) -> EvidencePack:
-    body = pr.get("body") if isinstance(pr.get("body"), str) else ""
+    raw_body = pr.get("body")
+    raw_number = pr.get("number")
+    raw_title = pr.get("title")
+    body = raw_body if isinstance(raw_body, str) else ""
     files = _changed_files(files_payload)
     checks = _checks(checks_payload)
     authority = resolve_issue_authority(body)
+    if closing_issue_authority_exceeds_limit(body):
+        raise ValueError("PR issue authority exceeds the bounded limit")
     governing_issue = authority.governing_issue if authority is not None else None
     closing_issues = list(authority.closing_issues) if authority is not None else []
     issue_evidence = _issue_evidence(
@@ -292,8 +305,8 @@ def build_pack(
         or any("agent:needs-human" in evidence.labels for evidence in issue_evidence)
     )
     return EvidencePack(
-        pr_number=pr.get("number") if isinstance(pr.get("number"), int) else None,
-        pr_title=pr.get("title") if isinstance(pr.get("title"), str) else "",
+        pr_number=raw_number if isinstance(raw_number, int) else None,
+        pr_title=raw_title if isinstance(raw_title, str) else "",
         head_sha=_nested_str(pr, "head", "sha"),
         base_branch=_nested_str(pr, "base", "ref"),
         governing_issue=governing_issue,

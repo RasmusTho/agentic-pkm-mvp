@@ -71,7 +71,9 @@ than separate PRs.
 
 Never batch runtime behavior with governance/process changes, Product contract changes with Builder
 System process edits, or children that need different reviewers, CI surfaces, rollback paths, or
-owner-doc writebacks.
+owner-doc writebacks. The shared PR authority contract permits at most ten unique closing issues;
+larger delivery sets must be split before publication so evidence collection and verification remain
+bounded.
 
 ## Review-Before-CI
 

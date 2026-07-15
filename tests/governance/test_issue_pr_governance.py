@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from app.dispatcher.verification_contract import (
+    MAX_CLOSING_ISSUES,
     resolve_issue_authority,
     resolve_issue_contract,
 )
@@ -184,6 +185,22 @@ def test_issue_backed_pr_accepts_single_and_multi_issue_authority() -> None:
     assert authority.governing_issue == 3603
     assert authority.closing_issues == (3626, 3698)
     assert authority.supporting_issues == (3626, 3698)
+
+
+def test_closing_authority_limit_matches_javascript_and_python_contracts() -> None:
+    allowed = "\n".join(
+        ["Governing-Issue: #3603"]
+        + [f"Fixes #{4000 + index}" for index in range(MAX_CLOSING_ISSUES)]
+    )
+    over_limit = allowed + f"\nFixes #{5000 + MAX_CLOSING_ISSUES}"
+
+    assert _js_issue_authority(allowed)["valid"] is True
+    assert resolve_issue_authority(allowed) is not None
+    assert _js_issue_authority(over_limit)["valid"] is False
+    assert _js_issue_authority(over_limit)["closingIssueCount"] == (
+        MAX_CLOSING_ISSUES + 1
+    )
+    assert resolve_issue_authority(over_limit) is None
 
 
 @pytest.mark.parametrize(

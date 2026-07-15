@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping, Sequence, TypeGuard
 
 from app.dispatcher.schema import LEGACY_UNTRUSTED_VERIFICATION_STATUS
+from app.dispatcher.verification_contract import MAX_CLOSING_ISSUES
 from app.dispatcher.store import (
     SqliteStore,
     recognized_ambiguous_v1_closure_request,
@@ -77,6 +78,35 @@ _NESTED_REQUEST_FIELDS = {
         "source_run_id",
     ),
 }
+_LEGACY_RECOVERY_AUDIT_CONTRACT = "verification_legacy_recovery_audit.v1"
+_LEGACY_RECOVERY_ROW_FIELDS = (
+    "run_id",
+    "idempotency_key",
+    "contract_version",
+    "repository",
+    "pr_number",
+    "head_sha",
+    "current_head_sha",
+    "verified_head_sha",
+    "stage",
+    "request_json",
+    "supporting_authority_json",
+    "closing_authority_json",
+    "legacy_recovery_audit_json",
+    "repair_budget_policy",
+    "status",
+    "claimed_by",
+    "lease_id",
+    "lease_expires_at",
+    "last_heartbeat_at",
+    "coordinator_session_id",
+    "context_pack_json",
+    "terminal_receipt_json",
+    "stop_reason",
+    "retry_after",
+    "created_at",
+    "updated_at",
+)
 
 
 class _AuthenticatedVerificationRequest(dict[str, object]):
@@ -189,6 +219,7 @@ def _live_observed_verification_request(
                 not isinstance(observed_supporting_issues, tuple)
                 or not isinstance(observed_closing_issues, tuple)
                 or not observed_closing_issues
+                or len(observed_closing_issues) > MAX_CLOSING_ISSUES
                 or any(
                     not _positive_int(issue) for issue in observed_closing_issues
                 )
@@ -405,6 +436,7 @@ def _validate_request(
         if (
             not isinstance(closing_issues, list)
             or not closing_issues
+            or len(closing_issues) > MAX_CLOSING_ISSUES
             or any(not _positive_int(value) for value in closing_issues)
             or len(set(closing_issues)) != len(closing_issues)
             or not set(closing_issues).issubset({linked_issue, *supporting_issues})
@@ -487,10 +519,14 @@ def _validated_row_request(row: sqlite3.Row) -> dict[str, object]:
     request = _validated_stored_request(row["request_json"])
     idempotency_key = request["idempotency_key"]
     assert isinstance(idempotency_key, str)
+    legacy_recovery_audit = _validated_legacy_recovery_audit(row)
     current_head_sha = row["current_head_sha"]
     verified_head_sha = row["verified_head_sha"]
     if (
-        row["run_id"] != f"vrun-{idempotency_key[:16]}"
+        (
+            row["run_id"] != f"vrun-{idempotency_key[:16]}"
+            and legacy_recovery_audit is None
+        )
         or row["idempotency_key"] != request["idempotency_key"]
         or row["contract_version"] != request["contract_version"]
         or row["repository"] != request["repository"]
@@ -515,8 +551,13 @@ def _validated_row_request(row: sqlite3.Row) -> dict[str, object]:
     return request
 
 
-def _validated_legacy_row_request(row: sqlite3.Row) -> dict[str, object]:
-    loaded = _load(row["request_json"])
+def _validated_legacy_row_request(
+    row: Mapping[str, object] | sqlite3.Row,
+) -> dict[str, object]:
+    request_json = row["request_json"]
+    supporting_authority_json = row["supporting_authority_json"]
+    closing_authority_json = row["closing_authority_json"]
+    loaded = _load(request_json if isinstance(request_json, str) else None)
     if (
         row["status"] != LEGACY_UNTRUSTED_VERIFICATION_STATUS
         or not isinstance(loaded, Mapping)
@@ -524,8 +565,19 @@ def _validated_legacy_row_request(row: sqlite3.Row) -> dict[str, object]:
             recognized_pre_trust_verification_request(row, loaded)
             or recognized_ambiguous_v1_closure_request(row, loaded)
         )
-        or _load(row["supporting_authority_json"]) != []
-        or _load(row["closing_authority_json"]) != []
+        or _load(
+            supporting_authority_json
+            if isinstance(supporting_authority_json, str)
+            else None
+        )
+        != []
+        or _load(
+            closing_authority_json
+            if isinstance(closing_authority_json, str)
+            else None
+        )
+        != []
+        or row["legacy_recovery_audit_json"] is not None
         or row["current_head_sha"] != row["head_sha"]
         or row["verified_head_sha"] is not None
         or any(
@@ -543,6 +595,57 @@ def _validated_legacy_row_request(row: sqlite3.Row) -> dict[str, object]:
     ):
         raise ValueError("legacy verification audit is malformed")
     return dict(loaded)
+
+
+def _validated_legacy_recovery_audit(
+    row: Mapping[str, object] | sqlite3.Row,
+) -> dict[str, object] | None:
+    """Validate the immutable quarantined row archived by same-head recovery."""
+    raw = row["legacy_recovery_audit_json"]
+    if raw is None:
+        return None
+    loaded = _load(raw if isinstance(raw, str) else None)
+    if not isinstance(loaded, Mapping) or set(loaded) != {
+        "contract",
+        "quarantined_row",
+    }:
+        raise ValueError("legacy verification recovery audit is malformed")
+    archived = loaded.get("quarantined_row")
+    if (
+        loaded.get("contract") != _LEGACY_RECOVERY_AUDIT_CONTRACT
+        or not isinstance(archived, Mapping)
+        or set(archived) != set(_LEGACY_RECOVERY_ROW_FIELDS)
+    ):
+        raise ValueError("legacy verification recovery audit is malformed")
+    legacy_request = _validated_legacy_row_request(archived)
+    if (
+        archived["run_id"] != row["run_id"]
+        or archived["repository"] != row["repository"]
+        or archived["pr_number"] != row["pr_number"]
+        or archived["head_sha"] != row["head_sha"]
+        or archived["stage"] != row["stage"]
+        or archived["repair_budget_policy"] != row["repair_budget_policy"]
+        or archived["created_at"] != row["created_at"]
+        or archived["idempotency_key"] == row["idempotency_key"]
+        or legacy_request.get("linked_issue")
+        != _validated_stored_request(
+            row["request_json"] if isinstance(row["request_json"], str) else None
+        ).get("linked_issue")
+    ):
+        raise ValueError("legacy verification recovery audit is malformed")
+    return dict(archived)
+
+
+def _legacy_recovery_audit_snapshot(row: sqlite3.Row) -> str:
+    """Serialize the exact inert row before it becomes the canonical v2 chain."""
+    _validated_legacy_row_request(row)
+    archived = {field: row[field] for field in _LEGACY_RECOVERY_ROW_FIELDS}
+    return _json(
+        {
+            "contract": _LEGACY_RECOVERY_AUDIT_CONTRACT,
+            "quarantined_row": archived,
+        }
+    )
 
 
 def _validated_supporting_authority(
@@ -709,6 +812,97 @@ def _terminal_current_head_replay_matches(
         and set(incoming_closing) == set(candidate_closing)
         and set(incoming_closing) == set(observation.closing_issues)
     )
+
+
+def _same_head_legacy_recovery_authority_matches(
+    observation: _LiveVerificationObservation | None,
+    request: Mapping[str, object],
+    legacy_request: Mapping[str, object],
+) -> bool:
+    """Require fresh exact live authority before promoting one inert v1 row."""
+    incoming_supporting = request.get("supporting_issues")
+    incoming_closing = _request_closing_authority(request)
+    return bool(
+        observation is not None
+        and observation.state == "open"
+        and observation.merged_at is None
+        and not observation.draft
+        and observation.repository == request.get("repository")
+        and observation.pr_number == request.get("pr_number")
+        and observation.head_sha == request.get("current_head_sha")
+        and observation.linked_issue == request.get("linked_issue")
+        and legacy_request.get("repository") == request.get("repository")
+        and legacy_request.get("pr_number") == request.get("pr_number")
+        and legacy_request.get("current_head_sha")
+        == request.get("current_head_sha")
+        and legacy_request.get("stage") == request.get("stage")
+        and legacy_request.get("linked_issue") == request.get("linked_issue")
+        and isinstance(incoming_supporting, list)
+        and set(incoming_supporting).issubset(observation.supporting_issues)
+        and set(incoming_closing) == set(observation.closing_issues)
+    )
+
+
+def _recover_same_head_legacy_run(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    request: Mapping[str, object],
+    observation: _LiveVerificationObservation | None,
+    token: _CanonicalVerificationChainToken | None,
+    *,
+    now: str,
+) -> sqlite3.Row:
+    """Atomically archive inert v1 authority and activate authenticated v2."""
+    legacy_request = _validated_legacy_row_request(row)
+    if not _canonical_chain_token_matches(conn, token, request):
+        raise ValueError(
+            "verification canonical authority changed during live observation"
+        )
+    if not _same_head_legacy_recovery_authority_matches(
+        observation, request, legacy_request
+    ):
+        raise ValueError(
+            "authenticated v2 artifact does not match legacy recovery authority"
+        )
+    incoming_supporting = request.get("supporting_issues")
+    assert isinstance(incoming_supporting, list)
+    conn.execute(
+        """
+        UPDATE verification_runs
+        SET idempotency_key=?, contract_version=?, request_json=?,
+            supporting_authority_json=?, closing_authority_json=?,
+            legacy_recovery_audit_json=?, status='queued',
+            current_head_sha=head_sha, verified_head_sha=NULL,
+            claimed_by=NULL, lease_id=NULL, lease_expires_at=NULL,
+            last_heartbeat_at=NULL, coordinator_session_id=NULL,
+            context_pack_json=NULL, terminal_receipt_json=NULL,
+            stop_reason=NULL, retry_after=NULL, updated_at=?
+        WHERE run_id=? AND idempotency_key=? AND status=?
+          AND legacy_recovery_audit_json IS NULL
+        """,
+        (
+            request["idempotency_key"],
+            request["contract_version"],
+            _json(request),
+            _json(incoming_supporting),
+            _json(_request_closing_authority(request)),
+            _legacy_recovery_audit_snapshot(row),
+            now,
+            row["run_id"],
+            row["idempotency_key"],
+            LEGACY_UNTRUSTED_VERIFICATION_STATUS,
+        ),
+    )
+    if conn.execute("SELECT changes()").fetchone()[0] != 1:
+        raise ValueError(
+            "verification canonical run authority changed during legacy recovery"
+        )
+    recovered = conn.execute(
+        "SELECT * FROM verification_runs WHERE run_id=?", (row["run_id"],)
+    ).fetchone()
+    assert recovered is not None
+    _validated_row_request(recovered)
+    return recovered
 
 
 def _validated_mutation_row(
@@ -987,11 +1181,11 @@ class VerificationDispatchLedger:
         run_id = f"vrun-{str(request['idempotency_key'])[:16]}"
         with self.store._connect() as conn:
             now = _begin_immediate_now(conn)
-            inert_audit_exists = conn.execute(
+            inert_audits = list(conn.execute(
                 """
-                SELECT 1 FROM verification_runs
+                SELECT * FROM verification_runs
                 WHERE repository=? AND pr_number=? AND stage=? AND status=?
-                LIMIT 1
+                ORDER BY created_at ASC, run_id ASC
                 """,
                 (
                     request["repository"],
@@ -999,17 +1193,25 @@ class VerificationDispatchLedger:
                     request["stage"],
                     LEGACY_UNTRUSTED_VERIFICATION_STATUS,
                 ),
-            ).fetchone()
-            if inert_audit_exists is not None and not authenticated_artifact:
+            ))
+            if inert_audits and not authenticated_artifact:
                 raise ValueError(
                     "legacy verification audit requires an authenticated artifact"
                 )
-            if inert_audit_exists is not None and authenticated_artifact:
-                inert_same_head = conn.execute(
+            inert_same_head = [
+                row
+                for row in inert_audits
+                if row["head_sha"] == request["current_head_sha"]
+            ]
+            if inert_same_head:
+                if len(inert_audits) != 1 or len(inert_same_head) != 1:
+                    raise ValueError(
+                        "verification legacy recovery authority is ambiguous"
+                    )
+                other_chain = conn.execute(
                     """
                     SELECT 1 FROM verification_runs
-                    WHERE repository=? AND pr_number=? AND stage=? AND status=?
-                      AND head_sha=?
+                    WHERE repository=? AND pr_number=? AND stage=? AND status<>?
                     LIMIT 1
                     """,
                     (
@@ -1017,11 +1219,22 @@ class VerificationDispatchLedger:
                         request["pr_number"],
                         request["stage"],
                         LEGACY_UNTRUSTED_VERIFICATION_STATUS,
-                        request["current_head_sha"],
                     ),
                 ).fetchone()
-                if inert_same_head is not None:
-                    raise ValueError("legacy verification audit is not executable")
+                if other_chain is not None:
+                    raise ValueError(
+                        "verification legacy recovery authority is ambiguous"
+                    )
+                recovered = _recover_same_head_legacy_run(
+                    conn,
+                    inert_same_head[0],
+                    request,
+                    live_observation,
+                    canonical_chain_token,
+                    now=now,
+                )
+                conn.commit()
+                return _run(recovered)
             active_before_exact = list(
                 conn.execute(
                     """

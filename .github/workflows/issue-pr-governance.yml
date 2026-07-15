@@ -157,6 +157,7 @@ jobs:
               const closingAttemptSeparator = `(?:${explicitWhitespace}+|${explicitWhitespace}*:${explicitWhitespace}*)`;
               const githubIssueUrlTarget = "[Hh][Tt][Tt][Pp][Ss]?://[Gg][Ii][Tt][Hh][Uu][Bb][.][Cc][Oo][Mm]/[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+/[Ii][Ss][Ss][Uu][Ee][Ss]/";
               const closingAttemptTarget = `(?:#|[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+#|${githubIssueUrlTarget})`;
+              const maxClosingIssues = 10;
               const governingIssueLines = canonicalBody.match(
                 new RegExp(`^[ \\t]*${governingKeyword}[ \\t]*:.*$`, "gm")
               ) || [];
@@ -169,6 +170,12 @@ jobs:
               const exactIssueLinkMatches = canonicalBody.match(
                 new RegExp(`${issueTokenPrefix}${closingKeyword}${asciiClosingSeparator}#[1-9][0-9]*${issueTokenTerminator}`, "gm")
               ) || [];
+              const closingIssueNumbers = new Set(
+                exactIssueLinkMatches.map((match) => {
+                  const token = match.match(/#([1-9][0-9]*)(?=$|[ \t\r\n.,;:)\]}])/);
+                  return token ? token[1] : "";
+                })
+              );
               const hasIssueLink = exactIssueLinkMatches.length > 0;
               const hasIssueAuthority = governingIssueLines.length > 0 || issueLinkMentions.length > 0;
               const valid =
@@ -176,8 +183,10 @@ jobs:
                 governingIssueLines.length === 1 &&
                 exactGoverningIssueMatches.length === 1 &&
                 hasIssueLink &&
-                issueLinkMentions.length === exactIssueLinkMatches.length;
+                issueLinkMentions.length === exactIssueLinkMatches.length &&
+                closingIssueNumbers.size <= maxClosingIssues;
               return {
+                closingIssueCount: closingIssueNumbers.size,
                 exactGoverningIssueMatches,
                 exactIssueLinkMatches,
                 governingIssueLines,
@@ -242,7 +251,7 @@ jobs:
             }
             if (hasIssueAuthority) {
               if (!issueAuthority.valid) {
-                core.setFailed("Issue-backed PRs must include exactly one positive `Governing-Issue: #<id>` line and at least one positive closing issue. The governing issue may differ from closed supporting issues in an approved multi-issue PR; issue-free lanes must omit both authority surfaces.");
+                core.setFailed("Issue-backed PRs must include exactly one positive `Governing-Issue: #<id>` line and between one and ten unique positive closing issues. The governing issue may differ from closed supporting issues in an approved multi-issue PR; issue-free lanes must omit both authority surfaces.");
                 return;
               }
               return;

@@ -11,6 +11,7 @@ from threading import Event, Lock, Thread
 import pytest
 
 import app.dispatcher.verification_dispatch as verification_dispatch
+from app.dispatcher.verification_contract import MAX_CLOSING_ISSUES
 from app.dispatcher.verification_dispatch import VerificationRun
 from tests.dispatcher.verification_helpers import (
     b4e2310_pre_trust_request,
@@ -136,6 +137,30 @@ def _migrated_legacy_ledger(tmp_path, legacy_request: dict | None = None):
     assert legacy is not None
     assert legacy.status == "legacy_untrusted"
     return migrated, legacy
+
+
+def _live_observed_request(state, payload: dict[str, object]):
+    authenticated = verification_dispatch._authenticated_verification_request(
+        payload
+    )
+    token = state.canonical_chain_token(authenticated)
+    supporting = payload["supporting_issues"]
+    closing = payload["closing_issues"]
+    assert isinstance(supporting, list)
+    assert isinstance(closing, list)
+    return verification_dispatch._live_observed_verification_request(
+        authenticated,
+        observed_repository=payload["repository"],
+        observed_pr_number=payload["pr_number"],
+        observed_head_sha=payload["current_head_sha"],
+        observed_state="open",
+        observed_merged_at=None,
+        observed_draft=False,
+        observed_linked_issue=payload["linked_issue"],
+        observed_closing_issues=tuple(closing),
+        observed_supporting_issues=tuple(supporting),
+        canonical_chain_token=token,
+    )
 
 
 def test_shared_request_fixture_carries_governing_issue() -> None:
@@ -344,15 +369,120 @@ def test_authenticated_artifact_starts_fresh_chain_beside_inert_legacy_audit(
     assert state.closure_ready(legacy.run_id) is False
 
 
-def test_authenticated_same_head_artifact_cannot_replace_inert_audit(tmp_path) -> None:
-    state, legacy = _migrated_legacy_ledger(tmp_path)
-    authenticated = verification_dispatch._authenticated_verification_request(request())
+def test_authenticated_same_head_v2_recovers_inert_audit_and_budget(tmp_path) -> None:
+    initial = ledger(tmp_path)
+    run_id, legacy_request = _write_deployed_v1_run(
+        initial, supporting_issues=[]
+    )
+    state = ledger(tmp_path)
+    legacy = state.get(run_id)
+    assert legacy is not None
+    assert legacy.status == "legacy_untrusted"
+    attempts_before = state.attempts(run_id)
+    budget_before = state.repair_budget_projection(run_id)
+    observed = _live_observed_request(state, request())
 
-    with pytest.raises(ValueError, match="legacy verification audit is not executable"):
+    recovered = state.ingest(observed)
+
+    assert recovered.run_id == run_id
+    assert recovered.status == "queued"
+    assert recovered.authority_state == "canonical"
+    assert recovered.request == request()
+    assert state.attempts(run_id) == attempts_before
+    assert state.repair_budget_projection(run_id) == budget_before
+    with state.store._connect() as conn:
+        rows = conn.execute("SELECT * FROM verification_runs").fetchall()
+    assert len(rows) == 1
+    audit = json.loads(rows[0]["legacy_recovery_audit_json"])
+    assert audit["contract"] == "verification_legacy_recovery_audit.v1"
+    quarantined = audit["quarantined_row"]
+    assert quarantined["status"] == "legacy_untrusted"
+    assert json.loads(quarantined["request_json"]) == legacy_request
+    assert quarantined["idempotency_key"] == legacy_request["idempotency_key"]
+
+
+def test_concurrent_same_head_v2_recovery_converges_on_one_canonical_run(
+    tmp_path,
+) -> None:
+    initial = ledger(tmp_path)
+    run_id, _ = _write_deployed_v1_run(initial, supporting_issues=[])
+    state = ledger(tmp_path)
+    first = _live_observed_request(state, request())
+    second = _live_observed_request(state, request())
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(state.ingest, (first, second)))
+
+    assert {result.run_id for result in results} == {run_id}
+    assert {result.status for result in results} == {"queued"}
+    with state.store._connect() as conn:
+        row_count = conn.execute(
+            "SELECT COUNT(*) FROM verification_runs"
+        ).fetchone()[0]
+        audit_count = conn.execute(
+            "SELECT COUNT(*) FROM verification_runs "
+            "WHERE legacy_recovery_audit_json IS NOT NULL"
+        ).fetchone()[0]
+    assert row_count == audit_count == 1
+
+
+def test_same_head_v2_recovery_without_fresh_live_fence_is_non_mutating(
+    tmp_path,
+) -> None:
+    initial = ledger(tmp_path)
+    run_id, _ = _write_deployed_v1_run(initial, supporting_issues=[])
+    state = ledger(tmp_path)
+    before = state.get(run_id)
+    authenticated = verification_dispatch._authenticated_verification_request(
+        request()
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="canonical authority changed during live observation",
+    ):
         state.ingest(authenticated)
 
-    assert state.get(legacy.run_id) == legacy
-    assert [run.run_id for run in state.list()] == [legacy.run_id]
+    assert state.get(run_id) == before
+
+
+def test_same_head_v2_recovery_rejects_intervening_ledger_write(
+    tmp_path,
+) -> None:
+    initial = ledger(tmp_path)
+    run_id, _ = _write_deployed_v1_run(initial, supporting_issues=[])
+    state = ledger(tmp_path)
+    observed = _live_observed_request(state, request())
+    with state.store._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO verification_attempts (
+                attempt_id, run_id, attempt_kind, ordinal, session_id,
+                capability, reasoning_effort, context_hash, outcome,
+                finding_id, failure_domain, mechanism_id,
+                receipt_json, created_at
+            ) VALUES (
+                'attempt-after-observation', ?, 'standard_repair', 2,
+                '01900000-0000-7000-8000-000000000003', 'gpt-5.6-terra',
+                'high', 'intervening-context', 'fixed', 'F-intervening',
+                'review_code_correctness', 'legacy-closing-authority', '{}',
+                '2026-07-16T10:00:02+00:00'
+            )
+            """,
+            (run_id,),
+        )
+        conn.commit()
+
+    with pytest.raises(
+        ValueError,
+        match="canonical authority changed during live observation",
+    ):
+        state.ingest(observed)
+
+    retained = state.get(run_id)
+    assert retained is not None
+    assert retained.status == "legacy_untrusted"
+    assert len(state.attempts(run_id)) == 2
 
 
 @pytest.mark.parametrize("corruption", ["legacy_as_queued", "canonical_as_legacy"])
@@ -924,7 +1054,7 @@ def test_claim_lock_wait_never_commits_already_expired_lease(
     assert claimed.lease_expires_at == expected_expiry
 
 
-def test_existing_schema_v2_upgrades_to_verification_schema_v5(tmp_path) -> None:
+def test_existing_schema_v2_upgrades_to_current_verification_schema(tmp_path) -> None:
     db = tmp_path / "dispatcher.sqlite3"
     initial = SqliteStore(db)
     initial.initialize()
@@ -947,7 +1077,7 @@ def test_existing_schema_v2_upgrades_to_verification_schema_v5(tmp_path) -> None
                 "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'verification_%'"
             )
         }
-    assert version == "5"
+    assert version == "6"
     assert tables == {"verification_runs", "verification_attempts", "verification_exceptions"}
 
 
@@ -1026,6 +1156,37 @@ def test_schema_v4_backfills_closing_authority_without_resetting_chain(
     assert migrated_state.attempts(original.run_id) == before_attempts
 
 
+def test_schema_v5_adds_legacy_recovery_audit_without_resetting_chain(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    original = state.ingest(request())
+    with sqlite3.connect(state.store.db_path) as conn:
+        conn.execute(
+            "ALTER TABLE verification_runs DROP COLUMN legacy_recovery_audit_json"
+        )
+        conn.execute(
+            "UPDATE dispatcher_meta SET value='5' WHERE key='schema_version'"
+        )
+        conn.commit()
+
+    migrated_state = ledger(tmp_path)
+    migrated = migrated_state.get(original.run_id)
+
+    assert migrated == original
+    with sqlite3.connect(state.store.db_path) as conn:
+        version = conn.execute(
+            "SELECT value FROM dispatcher_meta WHERE key='schema_version'"
+        ).fetchone()[0]
+        audit = conn.execute(
+            "SELECT legacy_recovery_audit_json FROM verification_runs "
+            "WHERE run_id=?",
+            (original.run_id,),
+        ).fetchone()[0]
+    assert version == "6"
+    assert audit is None
+
+
 @pytest.mark.parametrize("supporting_issues", [[], [3626]])
 @pytest.mark.parametrize("existing_schema", ["3", "4", "5"])
 def test_schema_reconciliation_quarantines_v1_without_authenticated_closure(
@@ -1083,6 +1244,22 @@ def test_ingest_rejects_v1_without_authenticated_closure_before_persistence(
     state = ledger(tmp_path)
 
     with pytest.raises(ValueError, match="fresh v2 artifact"):
+        state.ingest(payload)
+
+    with state.store._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM verification_runs").fetchone()[0] == 0
+
+
+def test_ingest_rejects_over_limit_closing_authority_before_persistence(
+    tmp_path,
+) -> None:
+    payload = request()
+    extra = [4000 + index for index in range(MAX_CLOSING_ISSUES)]
+    payload["closing_issues"] = [3603, *extra]
+    payload["supporting_issues"] = extra
+    state = ledger(tmp_path)
+
+    with pytest.raises(ValueError, match="closing issues are malformed"):
         state.ingest(payload)
 
     with state.store._connect() as conn:

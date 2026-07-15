@@ -1900,6 +1900,35 @@ def test_delivered_truth_accepts_added_supporting_repair_issue(tmp_path) -> None
     assert result.verified_head_sha == HEAD
 
 
+def test_same_head_live_supporting_add_remove_is_never_dispatched(
+    tmp_path,
+) -> None:
+    dispatch_request = request()
+    dispatch_request["supporting_issues"] = [3626]
+    added = eligible_pr(
+        body=(
+            "Governing-Issue: #3603\n\nFixes #3603\n"
+            "Refs #3626\nRefs #9999"
+        )
+    )
+    terminal = merged_pr(
+        body="Governing-Issue: #3603\n\nFixes #3603\nRefs #3626"
+    )
+    truth = TransitionTruth(terminal)
+    truth.prs = iter([added, added, terminal])
+    launcher = DeliveredLauncher()
+
+    result = VerificationConsumer(
+        ledger(tmp_path), truth, Auth(), launcher, "host"
+    ).consume(dispatch_request)
+
+    assert result.status == "completed"
+    pack, _ = launcher.calls[0]
+    assert pack["supporting_issues"] == [3626]
+    assert 9999 not in pack["supporting_issues"]
+    assert result.supporting_authority == (3626,)
+
+
 def test_delivered_receipt_rejects_unnamed_or_missing_required_gate(tmp_path) -> None:
     result = VerificationConsumer(
         ledger(tmp_path),

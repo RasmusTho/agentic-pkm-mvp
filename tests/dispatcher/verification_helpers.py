@@ -21,6 +21,9 @@ def downgrade_verification_schema_to_v3(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE verification_attempts DROP COLUMN mechanism_id")
     conn.execute("ALTER TABLE verification_runs DROP COLUMN repair_budget_policy")
     conn.execute("ALTER TABLE verification_runs DROP COLUMN closing_authority_json")
+    conn.execute(
+        "ALTER TABLE verification_runs DROP COLUMN legacy_recovery_audit_json"
+    )
     conn.execute("UPDATE dispatcher_meta SET value='3' WHERE key='schema_version'")
 
 

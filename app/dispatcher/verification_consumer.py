@@ -2387,7 +2387,11 @@ def context_pack(
         "linked_issue": linked_issue if isinstance(linked_issue, int) else None,
         "governing_issue": issue_authority.governing_issue,
         "closing_issues": list(run.closing_authority),
-        "supporting_issues": list(issue_authority.supporting_issues),
+        # Live additions are not mutation authority. A same-head body edit can
+        # disappear while the coordinator runs, so dispatch only the cumulative
+        # supporting set already fenced in SQLite. Repair-head rebinding may
+        # extend this durable set atomically before a later launch.
+        "supporting_issues": list(run.supporting_authority),
         "head_sha": run.head_sha,
         "requested_head_sha": run.requested_head_sha,
         "stage": run.stage,
