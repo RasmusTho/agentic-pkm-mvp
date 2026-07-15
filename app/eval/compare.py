@@ -106,6 +106,30 @@ FAILURE_ENTRY_KEYS = ("scope", "metric", "value", "threshold")
 FAILURE_ENTRY_NUMERIC_KEYS = ("value", "threshold")
 PROVISIONAL_BOUNDARY_SCHEMA_VERSION = "provisional_memory_boundary.v1"
 PROVISIONAL_FAILURE_ENTRY_KEYS = ("case_id", "reason")
+PROVISIONAL_CASE_KEYS = {
+    "id",
+    "language",
+    "family",
+    "admitted",
+    "may_answer",
+    "may_propose",
+    "may_write",
+    "excluded_reason",
+    "trust_visible",
+    "provenance_visible",
+    "action_blocked",
+    "passed",
+}
+PROVISIONAL_CASE_BOOL_KEYS = {
+    "admitted",
+    "may_answer",
+    "may_propose",
+    "may_write",
+    "trust_visible",
+    "provenance_visible",
+    "action_blocked",
+    "passed",
+}
 
 
 class ScorecardCompareError(ValueError):
@@ -277,6 +301,68 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
             f"scorecard is missing required bilingual coverage at "
             f"{provisional_path}.languages"
         )
+    families = provisional.get("families")
+    if not isinstance(families, list) or not families or not all(
+        isinstance(family, str) and family for family in families
+    ):
+        raise ScorecardCompareError(
+            f"scorecard section at {provisional_path}.families is not a non-empty "
+            "string list"
+        )
+    cases = provisional.get("cases")
+    if not isinstance(cases, list):
+        raise ScorecardCompareError(
+            f"scorecard section at {provisional_path}.cases is not a list"
+        )
+    if len(cases) != int(n_cases):
+        raise ScorecardCompareError(
+            f"case count mismatch at {provisional_path}: n_cases={int(n_cases)} "
+            f"but cases has {len(cases)} entries"
+        )
+    case_ids: set[str] = set()
+    coverage: set[tuple[str, str]] = set()
+    all_cases_passed = True
+    for index, case in enumerate(cases):
+        case_path = f"{provisional_path}.cases[{index}]"
+        if not isinstance(case, dict) or set(case) != PROVISIONAL_CASE_KEYS:
+            raise ScorecardCompareError(
+                f"malformed normalized case at {case_path}: expected exact v1 keys"
+            )
+        for key in ("id", "language", "family"):
+            if not isinstance(case[key], str) or not case[key]:
+                raise ScorecardCompareError(
+                    f"malformed normalized case at {case_path}: invalid {key!r}"
+                )
+        for key in PROVISIONAL_CASE_BOOL_KEYS:
+            _require_bool(case[key], f"{case_path}.{key}")
+        if case["excluded_reason"] is not None and not isinstance(
+            case["excluded_reason"], str
+        ):
+            raise ScorecardCompareError(
+                f"malformed normalized case at {case_path}: invalid 'excluded_reason'"
+            )
+        if case["id"] in case_ids:
+            raise ScorecardCompareError(
+                f"duplicate provisional-memory case id at {case_path}.id: {case['id']}"
+            )
+        case_ids.add(case["id"])
+        coverage.add((case["language"], case["family"]))
+        all_cases_passed = all_cases_passed and case["passed"]
+    if set(languages) != {language for language, _ in coverage}:
+        raise ScorecardCompareError(
+            f"language metadata does not match case evidence at {provisional_path}"
+        )
+    if set(families) != {family for _, family in coverage}:
+        raise ScorecardCompareError(
+            f"family metadata does not match case evidence at {provisional_path}"
+        )
+    expected_coverage = {
+        (language, family) for language in languages for family in families
+    }
+    if coverage != expected_coverage:
+        raise ScorecardCompareError(
+            f"incomplete bilingual family coverage at {provisional_path}.cases"
+        )
     provisional_failures = provisional.get("failures")
     if not isinstance(provisional_failures, list):
         raise ScorecardCompareError(
@@ -293,11 +379,16 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
                     f"malformed entry at {provisional_path}.failures[{index}]: "
                     f"missing non-empty {key!r}"
                 )
+        if entry["case_id"] != "fixture" and entry["case_id"] not in case_ids:
+            raise ScorecardCompareError(
+                f"unknown case_id at {provisional_path}.failures[{index}]"
+            )
     provisional_hard_gate_passed = _require_bool(
         provisional.get("hard_gate_passed"),
         f"{provisional_path}.hard_gate_passed",
     )
-    if provisional_hard_gate_passed != (not provisional_failures):
+    evidence_passed = not provisional_failures and all_cases_passed
+    if provisional_hard_gate_passed != evidence_passed:
         raise ScorecardCompareError(
             f"inconsistent hard-gate state and failures at {provisional_path}"
         )

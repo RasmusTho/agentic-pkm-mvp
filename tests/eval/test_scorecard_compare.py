@@ -214,6 +214,11 @@ def test_verdict_regression_on_provisional_memory_hard_gate(
             "reason": "uncited_proposal_admitted",
         }
     ]
+    next(
+        case
+        for case in candidate["provisional_memory_boundary"]["cases"]
+        if case["id"] == "cited-proposal-en"
+    )["passed"] = False
     candidate["regression"] = False
 
     comparison = compare_scorecards(baseline, candidate)
@@ -247,6 +252,53 @@ def test_verdict_regression_on_provisional_memory_hard_gate(
         ]
     ) == 1
     assert "VERDICT: regression" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "target,mutation",
+    [
+        ("baseline", "missing_families"),
+        ("candidate", "missing_cases"),
+        ("candidate", "count_mismatch"),
+        ("candidate", "incomplete_coverage"),
+    ],
+)
+def test_cli_rejects_incomplete_provisional_case_evidence(
+    target: str,
+    mutation: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    scorecards = {
+        "baseline": load_scorecard(BASELINE_PATH),
+        "candidate": load_scorecard(CANDIDATE_PATH),
+    }
+    boundary = scorecards[target]["provisional_memory_boundary"]
+    if mutation == "missing_families":
+        del boundary["families"]
+    elif mutation == "missing_cases":
+        del boundary["cases"]
+    elif mutation == "count_mismatch":
+        boundary["n_cases"] = 1
+    else:
+        boundary["cases"][0]["family"] = "cited_proposal"
+
+    paths: dict[str, Path] = {}
+    for label, scorecard in scorecards.items():
+        path = tmp_path / f"{label}.json"
+        path.write_text(json.dumps(scorecard), encoding="utf-8")
+        paths[label] = path
+
+    assert eval_run.main(
+        [
+            "compare",
+            "--baseline",
+            str(paths["baseline"]),
+            "--candidate",
+            str(paths["candidate"]),
+        ]
+    ) == 2
+    assert "error:" in capsys.readouterr().err
 
 
 def test_verdict_regression_on_missing_slice() -> None:
