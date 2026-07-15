@@ -63,7 +63,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - Missing or pending checks and auth/rate limits enter time-bounded `backoff`; replay cannot launch
   before `retry_after`. Rate-limit classification requires either a structured `retry` receipt or the
   launcher's structured `failure_class=rate_limit`, derived once from a non-zero provider failure;
-  arbitrary or negated terminal/stderr prose cannot select rate-limit backoff. Terminal completion
+  only parsed provider fields such as status 429 or canonical failure codes can create that signal,
+  while free-form, arbitrary, negated, or explicitly false terminal/stderr prose cannot select
+  rate-limit backoff. Terminal completion
   additionally requires two fresh clean
   review receipts after the final durable repair attempt. Standard and strongest-capability repair
   budgets are persisted across restart.

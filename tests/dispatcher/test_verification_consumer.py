@@ -2945,6 +2945,38 @@ def test_negated_nonzero_rate_limit_text_is_not_backoff_evidence(tmp_path) -> No
     ]
 
 
+def test_contracted_negated_nonzero_rate_limit_text_is_not_backoff_evidence(
+    tmp_path,
+) -> None:
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        _nonzero_codex_launcher(
+            tmp_path, "this isn't a rate limit exceeded response"
+        ),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "codex_exec_failed"
+    assert result.terminal_receipt["failure_class"] == "execution"
+
+
+def test_explicit_false_rate_limit_text_is_not_backoff_evidence(tmp_path) -> None:
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        _nonzero_codex_launcher(tmp_path, "rate limit exceeded: false"),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "codex_exec_failed"
+    assert result.terminal_receipt["failure_class"] == "execution"
+
+
 def test_nonzero_structured_rate_limit_signal_backs_off(tmp_path) -> None:
     state = ledger(tmp_path)
     result = VerificationConsumer(
@@ -3119,8 +3151,8 @@ def test_redacted_nonzero_rate_limit_still_enters_bounded_backoff(tmp_path) -> N
         Auth(),
         _nonzero_codex_launcher(
             tmp_path,
-            '{"error":{"type":"rate_limit_exceeded","status":429}} '
-            + private,
+                '{"error":{"type":"rate_limit_exceeded","status":429}}\n'
+                + private,
         ),
         "host",
     ).consume(request())

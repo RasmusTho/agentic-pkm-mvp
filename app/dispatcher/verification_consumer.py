@@ -746,32 +746,10 @@ def _is_rate_limit_exec_failure(detail: str) -> bool:
         if structured_signal(parsed):
             return True
 
-    lowered = detail.lower()
-    # Raw provider stderr is not trusted as a receipt field. Negated clauses
-    # are removed before matching so "not a rate limit" cannot mint the
-    # structured failure classification consumed by the ledger.
-    evidence = re.sub(
-        r"\b(?:no|not|never|without)\b[^.;\n]{0,80}"
-        r"\b(?:rate[ _-]?limit|quota|credits?|usage[ _-]?limit)\b",
-        "",
-        lowered,
-    )
-    return "http 429" in evidence or any(
-        token in evidence
-        for token in (
-            "rate limit exceeded",
-            "rate_limit_exceeded",
-            "credit exhausted",
-            "credits exhausted",
-            "insufficient credit",
-            "insufficient_quota",
-            "quota exceeded",
-            "quota_exceeded",
-            "too many requests",
-            "usage limit reached",
-            "usage_limit_reached",
-        )
-    )
+    # Free-form diagnostics are untrusted and ambiguous: contractions,
+    # explicit false values, quoted examples, and provider prose cannot mint a
+    # durable backoff classification. Only parsed provider fields above count.
+    return False
 
 
 class CodexExecLauncher:
