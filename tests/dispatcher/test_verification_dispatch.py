@@ -91,6 +91,180 @@ def test_canonical_request_projection_preserves_idempotent_replay(tmp_path) -> N
         assert conn.execute("SELECT COUNT(*) FROM verification_runs").fetchone()[0] == 1
 
 
+_REQUEST_SCALAR_PATHS: tuple[tuple[str | int, ...], ...] = (
+    ("contract_version",),
+    ("stage",),
+    ("repository",),
+    ("pr_number",),
+    ("linked_issue",),
+    ("supporting_issues", 0),
+    ("base_ref",),
+    ("head_ref",),
+    ("current_head_sha",),
+    ("source_workflow", "name"),
+    ("source_workflow", "run_id"),
+    ("source_workflow", "run_attempt"),
+    ("source_workflow", "head_sha"),
+    ("artifact_provenance", "workflow_run_id"),
+    ("artifact_provenance", "repository_id"),
+    ("artifact_provenance", "artifact_name"),
+    ("evidence_pack", "contract"),
+    ("evidence_pack", "workflow_name"),
+    ("evidence_pack", "artifact_name"),
+    ("evidence_pack", "repository"),
+    ("evidence_pack", "pr_number"),
+    ("evidence_pack", "head_sha"),
+    ("live_truth", "repository"),
+    ("live_truth", "pr_number"),
+    ("live_truth", "current_head_sha"),
+    ("live_truth", "source_run_id"),
+    ("generated_at",),
+    ("idempotency_key",),
+)
+
+
+def _replace_request_path(
+    payload: dict[str, object], path: tuple[str | int, ...], value: object
+) -> None:
+    target: object = payload
+    for component in path[:-1]:
+        if isinstance(component, int):
+            assert isinstance(target, list)
+            target = target[component]
+        else:
+            assert isinstance(target, dict)
+            target = target[component]
+    final = path[-1]
+    if isinstance(final, int):
+        assert isinstance(target, list)
+        target[final] = value
+    else:
+        assert isinstance(target, dict)
+        target[final] = value
+
+
+@pytest.mark.parametrize(
+    "path", _REQUEST_SCALAR_PATHS, ids=lambda path: ".".join(map(str, path))
+)
+@pytest.mark.parametrize(
+    "invalid_scalar",
+    [{"secret": "must-not-persist"}, ["must-not-persist"], True],
+    ids=("object", "list", "boolean"),
+)
+def test_ingest_rejects_noncanonical_type_for_every_request_scalar(
+    tmp_path,
+    path: tuple[str | int, ...],
+    invalid_scalar: object,
+) -> None:
+    state = ledger(tmp_path)
+    payload = request()
+    payload["supporting_issues"] = [3626]
+    _replace_request_path(payload, path, invalid_scalar)
+
+    with pytest.raises(ValueError) as rejected:
+        state.ingest(payload)
+
+    assert "must-not-persist" not in str(rejected.value)
+    with state.store._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM verification_runs").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ("pr_number",),
+        ("linked_issue",),
+        ("source_workflow", "run_id"),
+        ("evidence_pack", "pr_number"),
+        ("live_truth", "pr_number"),
+        ("live_truth", "source_run_id"),
+    ],
+    ids=lambda path: ".".join(path),
+)
+def test_ingest_rejects_boolean_identity_aliases(
+    tmp_path, path: tuple[str, ...]
+) -> None:
+    state = ledger(tmp_path)
+    payload = request()
+    _replace_request_path(payload, path, True)
+
+    with pytest.raises(ValueError):
+        state.ingest(payload)
+
+    with state.store._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM verification_runs").fetchone()[0] == 0
+
+
+def test_legacy_unknown_field_replay_fails_closed_without_exposure_or_mutation(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    secret = "legacy-private-key-must-not-escape"
+    with state.store._connect() as conn:
+        legacy = dict(run.request)
+        legacy["credential"] = {"private_key": secret}
+        conn.execute(
+            "UPDATE verification_runs SET request_json=? WHERE run_id=?",
+            (json.dumps(legacy), run.run_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO verification_attempts (
+                attempt_id, run_id, attempt_kind, ordinal, session_id, capability,
+                reasoning_effort, context_hash, outcome, receipt_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-attempt",
+                run.run_id,
+                "standard_repair",
+                1,
+                "legacy-session",
+                "sol",
+                "xhigh",
+                "legacy-context",
+                "failed",
+                None,
+                "2026-07-15T00:00:00+00:00",
+            ),
+        )
+        conn.commit()
+        before_run = dict(
+            conn.execute(
+                "SELECT * FROM verification_runs WHERE run_id=?", (run.run_id,)
+            ).fetchone()
+        )
+        before_attempts = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM verification_attempts WHERE run_id=?", (run.run_id,)
+            )
+        ]
+
+    with pytest.raises(ValueError) as direct_read:
+        state.get(run.run_id)
+    with pytest.raises(ValueError) as replay:
+        state.ingest(request())
+
+    assert secret not in str(direct_read.value)
+    assert secret not in str(replay.value)
+    with state.store._connect() as conn:
+        after_run = dict(
+            conn.execute(
+                "SELECT * FROM verification_runs WHERE run_id=?", (run.run_id,)
+            ).fetchone()
+        )
+        after_attempts = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM verification_attempts WHERE run_id=?", (run.run_id,)
+            )
+        ]
+    assert after_run == before_run
+    assert after_attempts == before_attempts
+
+
 class _ClaimClock:
     def __init__(self) -> None:
         self._value = CLAIM_PRE_LOCK

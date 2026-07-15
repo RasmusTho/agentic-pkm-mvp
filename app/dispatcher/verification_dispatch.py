@@ -10,7 +10,7 @@ import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence, TypeGuard
 
 from app.dispatcher.store import SqliteStore
 
@@ -114,7 +114,7 @@ def _load(value: str | None) -> Any:
     return json.loads(value) if value else None
 
 
-def _positive_int(value: object) -> bool:
+def _positive_int(value: object) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
@@ -148,25 +148,48 @@ def _canonical_request_projection(request: Mapping[str, object]) -> dict[str, ob
     return projected
 
 
+def _required_string(request: Mapping[str, object], field: str) -> str:
+    value = request.get(field)
+    if not isinstance(value, str) or not value:
+        raise ValueError("malformed verification dispatch request")
+    return value
+
+
+def _required_mapping(
+    request: Mapping[str, object], field: str
+) -> Mapping[str, object]:
+    value = request.get(field)
+    if not isinstance(value, Mapping):
+        raise ValueError(f"malformed verification {field.replace('_', '-')} identity")
+    return value
+
+
+def _required_positive_int(request: Mapping[str, object], field: str) -> int:
+    value = request.get(field)
+    if not _positive_int(value):
+        raise ValueError("malformed verification dispatch request")
+    return value
+
+
 def _validate_request(request: Mapping[str, object]) -> None:
     if "base_ref" in request or "head_ref" in request:
         raise ValueError("verification request contains untrusted branch refs")
-    required_strings = (
+    required_strings = {
         "contract_version",
         "stage",
         "repository",
+        "base_ref",
+        "head_ref",
         "current_head_sha",
         "idempotency_key",
         "generated_at",
-    )
-    if any(not isinstance(request.get(key), str) or not request[key] for key in required_strings):
-        raise ValueError("malformed verification dispatch request")
+    }
+    strings = {field: _required_string(request, field) for field in required_strings}
     if request["contract_version"] != CONTRACT_VERSION or request["stage"] != "verification":
         raise ValueError("unsupported verification dispatch request")
-    linked_issue = request.get("linked_issue")
+    pr_number = _required_positive_int(request, "pr_number")
+    linked_issue = _required_positive_int(request, "linked_issue")
     supporting_issues = request.get("supporting_issues")
-    if not _positive_int(linked_issue):
-        raise ValueError("verification request requires one governing issue")
     if (
         not isinstance(supporting_issues, list)
         or any(not _positive_int(value) for value in supporting_issues)
@@ -174,64 +197,89 @@ def _validate_request(request: Mapping[str, object]) -> None:
         or linked_issue in supporting_issues
     ):
         raise ValueError("verification request supporting issues are malformed")
-    repository = str(request["repository"])
+    repository = strings["repository"]
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or any(
         component in {".", ".."} for component in repository.split("/")
     ):
         raise ValueError("malformed verification repository identity")
-    head_sha = str(request["current_head_sha"])
+    head_sha = strings["current_head_sha"]
     if not re.fullmatch(r"[0-9a-fA-F]{40}", head_sha):
         raise ValueError("malformed verification head identity")
-    if not _positive_int(request.get("pr_number")):
-        raise ValueError("malformed verification dispatch request")
-    source = request.get("source_workflow")
-    if not isinstance(source, Mapping) or source.get("name") != "CI" or not all(
-        _positive_int(source.get(key)) for key in ("run_id", "run_attempt")
-    ) or source.get("head_sha") != head_sha:
+    source = _required_mapping(request, "source_workflow")
+    source_name = _required_string(source, "name")
+    source_run_id = _required_positive_int(source, "run_id")
+    _required_positive_int(source, "run_attempt")
+    source_head_sha = _required_string(source, "head_sha")
+    if source_name != "CI" or source_head_sha != head_sha:
         raise ValueError("malformed verification source identity")
-    artifact_provenance = request.get("artifact_provenance")
-    expected_artifact_name = (
-        f"verification-dispatch-{request['pr_number']}-{head_sha}"
-    )
-    if (
-        not isinstance(artifact_provenance, Mapping)
-        or not _positive_int(artifact_provenance.get("workflow_run_id"))
-        or not _positive_int(artifact_provenance.get("repository_id"))
-        or artifact_provenance.get("artifact_name") != expected_artifact_name
-    ):
+    artifact_provenance = _required_mapping(request, "artifact_provenance")
+    _required_positive_int(artifact_provenance, "workflow_run_id")
+    _required_positive_int(artifact_provenance, "repository_id")
+    artifact_name = _required_string(artifact_provenance, "artifact_name")
+    expected_artifact_name = f"verification-dispatch-{pr_number}-{head_sha}"
+    if artifact_name != expected_artifact_name:
         raise ValueError("malformed verification artifact provenance")
-    evidence_pack = request.get("evidence_pack")
+    evidence_pack = _required_mapping(request, "evidence_pack")
+    evidence_contract = _required_string(evidence_pack, "contract")
+    evidence_workflow = _required_string(evidence_pack, "workflow_name")
+    evidence_artifact = _required_string(evidence_pack, "artifact_name")
+    evidence_repository = _required_string(evidence_pack, "repository")
+    evidence_pr_number = _required_positive_int(evidence_pack, "pr_number")
+    evidence_head_sha = _required_string(evidence_pack, "head_sha")
     if (
-        not isinstance(evidence_pack, Mapping)
-        or evidence_pack.get("contract") != "pr_evidence_pack"
-        or evidence_pack.get("workflow_name") != "PR Evidence Pack"
-        or evidence_pack.get("artifact_name")
-        != f"pr-evidence-pack-{request['pr_number']}"
-        or evidence_pack.get("repository") != repository
-        or evidence_pack.get("pr_number") != request["pr_number"]
-        or evidence_pack.get("head_sha") != head_sha
+        evidence_contract != "pr_evidence_pack"
+        or evidence_workflow != "PR Evidence Pack"
+        or evidence_artifact != f"pr-evidence-pack-{pr_number}"
+        or evidence_repository != repository
+        or evidence_pr_number != pr_number
+        or evidence_head_sha != head_sha
     ):
         raise ValueError("malformed verification evidence-pack identity")
-    live_truth = request.get("live_truth")
-    if not isinstance(live_truth, Mapping):
-        raise ValueError("malformed verification live-truth identity")
+    live_truth = _required_mapping(request, "live_truth")
+    live_repository = _required_string(live_truth, "repository")
+    live_pr_number = _required_positive_int(live_truth, "pr_number")
+    live_head_sha = _required_string(live_truth, "current_head_sha")
+    live_source_run_id = _required_positive_int(live_truth, "source_run_id")
     if (
-        live_truth.get("repository") != repository
-        or live_truth.get("pr_number") != request["pr_number"]
-        or live_truth.get("current_head_sha") != head_sha
-        or live_truth.get("source_run_id") != source.get("run_id")
+        live_repository != repository
+        or live_pr_number != pr_number
+        or live_head_sha != head_sha
+        or live_source_run_id != source_run_id
     ):
         raise ValueError("verification live truth does not match request identity")
     identity = {
         "contract_version": CONTRACT_VERSION,
-        "head_sha": request["current_head_sha"],
-        "pr_number": request["pr_number"],
-        "repository": request["repository"],
-        "stage": request["stage"],
+        "head_sha": head_sha,
+        "pr_number": pr_number,
+        "repository": repository,
+        "stage": strings["stage"],
     }
     expected = hashlib.sha256(_json(identity).encode()).hexdigest()
-    if request["idempotency_key"] != expected:
+    if strings["idempotency_key"] != expected:
         raise ValueError("verification request idempotency key does not match identity")
+
+
+def _validated_stored_request(value: str | None) -> dict[str, object]:
+    loaded = _load(value)
+    if not isinstance(loaded, Mapping):
+        raise ValueError("verification canonical run authority is malformed")
+    projected = _canonical_request_projection(loaded)
+    _validate_request(projected)
+    return projected
+
+
+def _validated_row_request(row: sqlite3.Row) -> dict[str, object]:
+    request = _validated_stored_request(row["request_json"])
+    if (
+        row["idempotency_key"] != request["idempotency_key"]
+        or row["contract_version"] != request["contract_version"]
+        or row["repository"] != request["repository"]
+        or row["pr_number"] != request["pr_number"]
+        or row["head_sha"] != request["current_head_sha"]
+        or row["stage"] != request["stage"]
+    ):
+        raise ValueError("verification canonical run authority is malformed")
+    return request
 
 
 @dataclass(frozen=True)
@@ -276,7 +324,7 @@ def _run(row: sqlite3.Row) -> VerificationRun:
         lease_id=row["lease_id"],
         lease_expires_at=row["lease_expires_at"],
         coordinator_session_id=row["coordinator_session_id"],
-        request=_load(row["request_json"]),
+        request=_validated_row_request(row),
         context_pack=_load(row["context_pack_json"]),
         terminal_receipt=_load(row["terminal_receipt_json"]),
         stop_reason=row["stop_reason"],
@@ -338,11 +386,7 @@ class VerificationDispatchLedger:
             active_with_terminal = bool(active_before_exact and terminal_before_exact)
             if multiple_active or active_with_terminal:
                 for candidate in [*active_before_exact, *terminal_before_exact]:
-                    candidate_request = _load(candidate["request_json"])
-                    if not isinstance(candidate_request, Mapping):
-                        raise ValueError(
-                            "verification canonical run authority is malformed"
-                        )
+                    candidate_request = _validated_row_request(candidate)
                     if candidate_request.get("linked_issue") != request.get(
                         "linked_issue"
                     ):
@@ -366,7 +410,7 @@ class VerificationDispatchLedger:
                 (request["idempotency_key"],),
             ).fetchone()
             if existing is not None:
-                existing_request = _load(existing["request_json"])
+                existing_request = _validated_row_request(existing)
                 active_status = existing["status"] in {
                     "queued",
                     "backoff",
@@ -374,8 +418,7 @@ class VerificationDispatchLedger:
                     "running",
                 }
                 if (
-                    not isinstance(existing_request, Mapping)
-                    or existing["repository"] != request["repository"]
+                    existing["repository"] != request["repository"]
                     or existing["pr_number"] != request["pr_number"]
                     or existing["stage"] != request["stage"]
                     or existing["head_sha"] != request["current_head_sha"]
@@ -406,9 +449,7 @@ class VerificationDispatchLedger:
                 """,
                 (request["repository"], request["pr_number"], request["stage"]),
             ):
-                candidate_request = _load(candidate["request_json"])
-                if not isinstance(candidate_request, Mapping):
-                    raise ValueError("verification canonical run authority is malformed")
+                candidate_request = _validated_row_request(candidate)
                 if candidate_request.get("linked_issue") != request.get("linked_issue"):
                     raise ValueError("verification canonical run governing issue mismatch")
                 if candidate["current_head_sha"] != request.get("current_head_sha"):
@@ -475,9 +516,7 @@ class VerificationDispatchLedger:
                 )
             )
             for candidate in terminal_candidates:
-                candidate_request = _load(candidate["request_json"])
-                if not isinstance(candidate_request, Mapping):
-                    raise ValueError("verification canonical run authority is malformed")
+                candidate_request = _validated_row_request(candidate)
                 if candidate_request.get("linked_issue") != request.get("linked_issue"):
                     raise ValueError("verification canonical run governing issue mismatch")
             non_reopenable = [
