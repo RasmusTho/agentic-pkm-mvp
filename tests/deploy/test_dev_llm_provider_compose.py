@@ -51,7 +51,7 @@ def test_dev_services_use_documented_mock_provider() -> None:
     services = compose["services"]
     assert isinstance(services, dict)
 
-    for name in ("api", "worker", "watcher", "heimdal-capture-watch"):
+    for name in ("migrate", "api", "worker", "watcher", "heimdal-capture-watch"):
         service = services[name]
         assert isinstance(service, dict)
         assert _environment(service)["LLM_PROVIDER"] == "mock"

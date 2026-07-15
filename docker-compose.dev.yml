@@ -10,6 +10,10 @@ services:
     volumes:
       - pgdata-dev:/var/lib/postgresql/data
 
+  migrate:
+    environment:
+      LLM_PROVIDER: mock
+
   api:
     ports: !override
       - "18001:8000"
