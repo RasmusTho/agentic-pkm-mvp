@@ -36,7 +36,8 @@ cross-process truth belong here.
 - Persist an intent mode that distinguishes `compatibility` from `explicit`. A missing legacy field
   is initialized exactly once as compatibility mode: MVR-06 snapshots the live bridge binding when
   present, otherwise resolves the current instance default, then the explicit legacy bootstrap
-  (`VAULT_ROOT`/`WATCHER_VAULT_PATH` through the MVR-02 adapter), then no-vault, into nullable durable
+  (`VAULT_ROOT`/`WATCHER_VAULT_PATH` through the MVR-02 adapter and the stable registration produced
+  by MVR-01B), then no-vault, into nullable durable
   `compatibility_binding_id`. Restart reuses that exact binding and never re-derives another from
   unrecorded interaction history or default. While mode remains compatibility, a production legacy
   choose/open command or explicit MVR-02 default set/clear atomically replaces/clears this field and
@@ -237,8 +238,8 @@ migration, preflight, and fail-loud gate merge together.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback`
 - [ ] **MVR-06B:** An existing headless one-vault install with only `VAULT_ROOT` or
   `WATCHER_VAULT_PATH`, no live picker bridge binding, and no explicit instance default migrates that
-  legacy bootstrap to exactly one durable compatibility binding; restart keeps its watcher active
-  instead of persisting no-vault.
+  already-enrolled MVR-01B legacy bootstrap to exactly one durable compatibility binding; restart
+  keeps its watcher active instead of persisting no-vault, and MVR-06 never creates a binding itself.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_env_only_single_vault_upgrade_preserves_compatibility_watcher`
 - [ ] **MVR-06B:** After bridge retirement, a legacy choose/open picker change still atomically updates the
   compatibility binding and drains/rebinds the supervisor; generic scoped selection and every picker
@@ -367,13 +368,39 @@ migration, preflight, and fail-loud gate merge together.
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/integration/test_multi_vault_background_lifecycle.py tests/integration/test_multi_vault_lifecycle_and_dimension.py tests/runtime/test_background_binding_handoff.py tests/api/test_background_binding_admin.py tests/migrations/test_multi_vault_outbox_upgrade.py tests/migrations/test_multi_vault_background_intent_upgrade.py tests/architecture/test_multi_vault_context_boundaries.py`
-- exact-SHA `integration-nightly / pg-contracts`: `pytest -q tests/integration/test_multi_vault_outbox_pg_claims.py`; missing PostgreSQL or claim constraints is an error, never a skip
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration -k "watcher or settings or multi_vault"`
-- `mypy app`
-- `pytest -q -m "not pg"`
-- `ruff check app tests`
-- `python3 scripts/docs_guard.py`
+Issue extraction copies only the matching child subsection plus the shared gates. The exact-SHA
+PostgreSQL receipt belongs only to 06D.
+
+### MVR-06A validation
+
+- `pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_background_service_role_is_bootstrapped_delegated_and_least_privilege tests/api/test_background_binding_admin.py::test_mvr06a_selection_cannot_mutate_staged_intent tests/api/test_background_binding_admin.py::test_mvr06a_rejects_all_intent_mutations_until_supervisor_handoff tests/migrations/test_multi_vault_background_intent_upgrade.py::test_background_intent_sets_mvr06_floor_before_first_write`
+- Verify the 06A PR diff contains its mapped deployment, release, security, and governed-write
+  owner-doc targets.
+
+### MVR-06B validation
+
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_settings_spine_bridge_handoff_is_atomic tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff tests/integration/test_multi_vault_background_lifecycle.py::test_picker_commit_precedes_hint_and_survives_event_loss tests/integration/test_multi_vault_background_lifecycle.py::test_default_mutation_rebinds_only_compatibility_lifecycle tests/integration/test_multi_vault_background_lifecycle.py::test_rebind_reuses_settings_spine_and_is_generation_clean tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback tests/runtime/test_background_binding_handoff.py::test_env_only_single_vault_upgrade_preserves_compatibility_watcher tests/runtime/test_background_binding_handoff.py::test_remove_last_then_restart_preserves_explicit_empty_intent tests/runtime/test_background_binding_handoff.py::test_mvr06b_restart_uses_only_durable_authorized_singleton_or_empty_intent tests/api/test_background_binding_admin.py::test_mvr06b_commands_allow_only_singleton_or_empty_intent tests/api/test_background_binding_admin.py::test_stale_binding_intent_can_be_removed_without_content_authority`
+- Verify the 06B PR diff contains its mapped vault/settings and Settings Spine owner-doc targets.
+
+### MVR-06C validation
+
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_lifecycle_requires_matching_channel_ownership_lease tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window tests/integration/test_multi_vault_background_lifecycle.py::test_authorization_epoch_revokes_running_lifecycle_before_next_effect tests/api/test_background_binding_admin.py::test_mvr06c_rejects_many_until_mvr06d_dispatch_gate tests/runtime/test_background_binding_handoff.py::test_worker_handoff_is_versioned_and_explicit`
+- Verify the 06C PR diff contains its mapped `docs/ENVIRONMENTS.md` and `docs/HEALTH.md` dormant-
+  supervisor writebacks.
+
+### MVR-06D validation
+
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_two_bindings_run_isolated_lifecycles tests/integration/test_multi_vault_background_lifecycle.py::test_zero_one_many_and_partial_failure_are_truthful tests/api/test_background_binding_admin.py::test_mvr06d_enrollment_enables_many_with_dispatch tests/integration/test_multi_vault_lifecycle_and_dimension.py::test_parent_dimension_background_acceptance tests/migrations/test_multi_vault_outbox_upgrade.py::test_mvr06_requires_complete_mvr05_classification_receipt tests/integration/test_multi_vault_background_lifecycle.py::test_pending_rows_quarantine_across_removal_and_rebind tests/integration/test_multi_vault_background_lifecycle.py::test_pending_rows_survive_compatible_restart_generation tests/architecture/test_multi_vault_context_boundaries.py::test_background_consumers_use_lifecycle_seam`
+- Dispatch exact-head `integration-nightly / pg-contracts` for
+  `tests/integration/test_multi_vault_outbox_pg_claims.py::test_concurrent_binding_workers_claim_each_row_once`;
+  missing PostgreSQL or claim constraints is an error, never a skip, and the successful URL/SHA is
+  attached to #2143.
+- Verify the 06D PR diff contains its mapped activated `docs/ENVIRONMENTS.md` and `docs/HEALTH.md`
+  writebacks.
+
+Every child also runs `mypy app`, `pytest -q -m "not pg"`, `ruff check app tests`, and
+`python3 scripts/docs_guard.py` as shared repo gates; those gates do not substitute for its exact
+mapped selectors above.
 
 ## Restart / Durability Posture
 

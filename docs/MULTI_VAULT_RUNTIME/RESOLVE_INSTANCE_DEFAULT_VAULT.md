@@ -25,6 +25,9 @@ fail-closed precedence resolver.
 - Provide one resolver for explicit one-request override, retained session selection, default,
   legacy bootstrap, and no-vault outcomes, with inspectable provenance. MVR-05 exposes the two
   production ingress carriers: `X-Active-Context-Override` and `X-Active-Context-Session`.
+- The explicit legacy-bootstrap adapter resolves only the stable registered binding created or
+  reconciled by MVR-01B. It never turns an env path into a new binding, never uses a path as identity,
+  and fails closed if bootstrap env and registry/ledger truth do not identify exactly one binding.
 - During the one-time schema migration only, materialize a valid legacy
   `last_active_vault_ref` as the default when no default exists, recording
   `legacy_last_active_migration` provenance. Subsequent last-active changes never update default.

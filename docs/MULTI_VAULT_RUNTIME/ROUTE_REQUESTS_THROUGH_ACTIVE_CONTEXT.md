@@ -375,16 +375,35 @@ to cross its floor; independently safe explicit-global work may continue.
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/integration/test_multi_vault_resolution.py tests/integration/test_multi_vault_picker_context.py tests/integration/test_multi_vault_projection_isolation.py tests/integration/test_multi_vault_outbox_producers.py tests/integration/test_multi_vault_write_effect_fence.py tests/integration/test_multi_vault_channel_transfer_foreground.py tests/migrations/test_multi_vault_projection_backfill.py tests/migrations/test_multi_vault_outbox_upgrade.py tests/ops/test_mvr05_mixed_version_fence.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_active_context_resolution.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/workers/test_multi_vault_partial_delivery_gate.py tests/services/test_multi_vault_outbox_idempotency.py tests/architecture/test_multi_vault_context_boundaries.py`
-- MVR-05A adds its migration/backfill/dedup targets to the real-Postgres `pg-contracts` job in
-  `.github/workflows/integration-nightly.yaml`; those tests must error, not skip, when the provisioned
-  database/constraints are unavailable. Before merge, dispatch that workflow on the exact PR head
-  and attach the successful run URL/SHA to #2143.
-- `DATABASE_URL=postgresql+psycopg://app:app@127.0.0.1:15434/app_test pytest -q -m pg tests/migrations/test_multi_vault_projection_backfill.py tests/migrations/test_multi_vault_outbox_upgrade.py tests/services/test_multi_vault_outbox_idempotency_pg.py`
-- `pytest -q tests/architecture/test_multi_vault_pg_ci_lane.py::test_mvr05_pg_targets_run_on_provisioned_postgres_and_cannot_skip`
-- `mypy app`
-- `pytest -q -m "not pg"`
-- `ruff check app tests`
+Issue extraction copies only the matching child subsection plus the shared gates. Each selector below
+maps directly to that child ID; an early child never runs a later slice's acceptance target.
+
+### MVR-05A validation
+
+- `pytest -q tests/integration/test_multi_vault_projection_isolation.py::test_duplicate_uuid_is_namespaced_by_binding tests/migrations/test_multi_vault_projection_backfill.py::test_projection_backfill_is_unambiguous_or_fails_loud tests/migrations/test_multi_vault_projection_backfill.py::test_projection_upgrade_blocks_scalar_rollback_before_first_write tests/migrations/test_multi_vault_outbox_upgrade.py::test_legacy_idempotency_keys_coalesce_before_new_producer_enable tests/ops/test_mvr05_mixed_version_fence.py::test_all_old_scalar_db_clients_are_stopped_before_binding_keyed_migration tests/ops/test_mvr05_mixed_version_fence.py::test_fence_inventory_covers_every_enabled_db_outbox_process tests/ops/test_mvr05_mixed_version_fence.py::test_compatibility_translator_keeps_existing_producers_live_without_legacy_rows tests/workers/test_multi_vault_partial_delivery_gate.py::test_mvr05a_scalar_worker_gates_migrated_rows_before_dispatch tests/architecture/test_multi_vault_pg_ci_lane.py::test_mvr05_pg_targets_run_on_provisioned_postgres_and_cannot_skip`
+- Dispatch exact-head `.github/workflows/integration-nightly.yaml` job `pg-contracts`, whose asserted
+  MVR-05A manifest runs the binding-keyed migration/backfill/dedup targets against provisioned
+  PostgreSQL and errors rather than skips; attach its URL and SHA to #2143.
+- Verify the 05A PR diff contains its mapped `docs/DB_SCHEMA.md`, deployment, and release owner-doc
+  writebacks.
+
+### MVR-05B validation
+
+- `pytest -q tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk tests/integration/test_multi_vault_request_isolation.py::test_authority_or_locator_change_blocks_inflight_read_before_effect tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_read_after_staged_channel_lease_transfer tests/retrieval/test_multi_vault_retrieval.py::test_production_retrieval_preserves_binding_provenance tests/api/test_multi_vault_request_fail_closed.py::test_invalid_selection_never_falls_back tests/api/test_active_context_resolution.py::test_request_override_header_outranks_session_without_mutating_it tests/api/test_active_context_resolution.py::test_request_uses_one_context_generation_end_to_end tests/integration/test_multi_vault_picker_context.py::test_session_selection_reuses_bindings_with_per_request_server_scope tests/integration/test_multi_vault_picker_context.py::test_existing_picker_drives_scoped_request_context tests/integration/test_multi_vault_picker_context.py::test_fresh_vault_initialize_returns_usable_scoped_context tests/integration/test_multi_vault_picker_context.py::test_stale_selection_restart_recovers_only_unambiguous_singleton_default tests/integration/test_multi_vault_picker_context.py::test_legacy_picker_bridge_preserves_single_watcher_until_mvr06 tests/architecture/test_multi_vault_context_boundaries.py::test_request_consumers_use_context_seam tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior`
+- Verify the 05B PR diff contains its mapped `docs/ARCHITECTURE.md` and `docs/SETTINGS.md` writebacks.
+
+### MVR-05C validation
+
+- `pytest -q tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt tests/api/test_multi_vault_governed_writes.py::test_authority_or_locator_change_blocks_inflight_write_before_commit tests/api/test_multi_vault_governed_writes.py::test_capture_token_binds_principal_scope_binding_revision_and_auth_epoch tests/integration/test_multi_vault_write_effect_fence.py::test_locator_or_authority_change_cannot_cross_validation_write_window tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_write_after_channel_lease_transfer tests/integration/test_multi_vault_picker_context.py::test_scoped_picker_governed_write_targets_selected_binding`
+- Verify the 05C PR diff contains its mapped `docs/contracts/GOVERNED_WRITE_PROTOCOL.md` writeback.
+
+### MVR-05D validation
+
+- `pytest -q tests/architecture/test_multi_vault_context_boundaries.py::test_vault_bound_outbox_producers_cannot_emit_legacy_envelopes tests/integration/test_multi_vault_outbox_producers.py::test_production_call_sites_emit_binding_context_envelopes tests/workers/test_multi_vault_partial_delivery_gate.py::test_completed_worker_delivery_retains_mvr05a_fail_closed_gate tests/services/test_multi_vault_outbox_idempotency.py::test_duplicate_identity_events_are_deduplicated_per_binding tests/integration/test_multi_vault_request_isolation.py::test_parent_request_context_acceptance`
+- Verify the 05D PR diff contains its mapped `docs/EVENTS.md` writeback.
+
+Every child also runs `mypy app`, `pytest -q -m "not pg"`, and `ruff check app tests` as shared repo
+gates; those gates do not substitute for its exact mapped selectors above.
 
 ## Restart / Durability Posture
 
