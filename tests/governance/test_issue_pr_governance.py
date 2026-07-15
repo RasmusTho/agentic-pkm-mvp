@@ -30,6 +30,70 @@ def _read_workflow() -> str:
     )
 
 
+def _read_development_workflow() -> str:
+    return (REPO_ROOT / "docs/development/DEV_WORKFLOW.md").read_text(
+        encoding="utf-8"
+    )
+
+
+def _companion_design_audit_path(filename: str) -> Path:
+    return (
+        REPO_ROOT
+        / "companion-ui/design_handoff/2026-07-07-uat-design-audit"
+        / filename
+    )
+
+
+def test_companion_design_audit_handoff_has_durable_sources() -> None:
+    readme = _companion_design_audit_path("README.md").read_text(encoding="utf-8")
+    audit = _companion_design_audit_path("DESIGN_AUDIT.md").read_text(encoding="utf-8")
+    archive = (REPO_ROOT / "companion-ui/design_handoff/README.md").read_text(
+        encoding="utf-8"
+    )
+    sources_path = _companion_design_audit_path("SOURCES.md")
+    sources = sources_path.read_text(encoding="utf-8")
+
+    assert sources_path.is_file()
+    assert "pull/3359" in sources
+    assert "issues/3431" in sources
+    for issue_number in range(3360, 3365):
+        assert f"issues/{issue_number}" in sources
+    assert "not retained as durable evidence" in sources.lower()
+    assert "not reproducible repo evidence" in readme.lower()
+    archive_row = next(
+        line
+        for line in archive.splitlines()
+        if "`2026-07-07-uat-design-audit/`" in line
+    )
+    assert "not retained as reproducible repo evidence" in archive_row.lower()
+    assert "2026-07-07-uat-design-audit/SOURCES.md" in archive_row
+    assert "#3360–#3364" in archive_row
+    for missing_input in (
+        "CLAUDE_DESIGN_AUDIT_PROMPT.md",
+        "UAT_REPORT.md",
+        "findings.json",
+        "findings2.json",
+    ):
+        assert missing_input not in readme
+        assert missing_input not in audit
+
+
+def test_companion_design_audit_handoff_declares_guidance_not_sot() -> None:
+    handoff = "\n".join(
+        _companion_design_audit_path(filename).read_text(encoding="utf-8")
+        for filename in ("README.md", "DESIGN_AUDIT.md", "SOURCES.md")
+    )
+    lowered = handoff.lower()
+
+    assert "design guidance/input" in lowered
+    assert "not a source of truth" in lowered
+    assert "handoff package -> normalized spec -> github issue -> pr -> validation receipt" in lowered
+    assert "#3360" in handoff
+    for issue_number in range(3361, 3365):
+        assert f"#{issue_number}" in handoff
+    assert "durable design source-of-truth" not in lowered
+
+
 def _has_builderops_routing(body: str) -> bool:
     match = _BUILDEROPS_ROUTING_REGEX.search(body)
     if not match:
@@ -138,6 +202,27 @@ def test_pr_body_generator_fixtures_are_governance_lane_allowed() -> None:
     assert '"scripts/pr_body_generator.py"' in text
     assert '"tests/scripts/test_pr_body_generator.py"' in text
     assert '"tests/fixtures/pr_body_generator/"' in text
+
+
+def test_autonomous_runner_prompt_is_governance_lane_allowed() -> None:
+    text = _read_workflow()
+    exact = text.split("const governanceAllowedExact = new Set([", 1)[1].split("]);", 1)[0]
+    prefixes = text.split("const governanceAllowedPrefixes = [", 1)[1].split("];", 1)[0]
+
+    assert '"companion-ui/prompts/codex/deliver-epic-autonomous-runner.md"' in exact
+    assert '"companion-ui/prompts/codex/deliver-epic-autonomous-runner.md"' not in prefixes
+
+
+def test_governance_lane_companion_prompt_surface_matches_owner_doc() -> None:
+    workflow = _read_development_workflow()
+    governance_lane = workflow.split("## Governance lane", 1)[1].split(
+        "## Runtime separation", 1
+    )[0]
+
+    assert (
+        "`companion-ui/prompts/codex/deliver-epic-autonomous-runner.md`"
+        in governance_lane
+    )
 
 
 def test_review_before_ci_gate_is_governance_lane_allowed() -> None:

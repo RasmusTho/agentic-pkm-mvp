@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from app.agent_memory.candidate import ContradictionState, MemoryType, ReviewState
 from app.agent_memory.promotion import PromotedMemory
+from app.agent_memory.provisional_memory import ProvisionalMemoryRecord
 from app.agent_memory.recall_explanation import RecallUseRight
 
 
@@ -106,4 +107,36 @@ def evaluate_memory_authority(
         posture_visibility_required=posture_visibility_required,
         posture_markers=sorted(set(posture_markers)),
         requested_action_scope=requested_action_scope,
+    )
+
+
+def evaluate_provisional_memory_authority(
+    record: ProvisionalMemoryRecord,
+    *,
+    use_right: RecallUseRight,
+) -> MemoryAuthorityDecision:
+    """Clamp direct-write provisional memory below mutation authority.
+
+    Provisional records are deliberately not converted to ``PromotedMemory``:
+    doing so would manufacture a governance transition that never occurred.
+    """
+
+    blocked = [
+        "provisional_memory_noncanonical",
+        "review_state_not_accepted",
+    ]
+    if use_right is RecallUseRight.ACTION_AUTHORIZING:
+        blocked.append("provisional_memory_never_action_authoritative")
+    return MemoryAuthorityDecision(
+        allow_suggestion=True,
+        allow_mutation=False,
+        authority_level=MemoryAuthorityLevel.SUGGESTION_ONLY,
+        blocked_reasons=sorted(blocked),
+        posture_visibility_required=True,
+        posture_markers=[
+            record.authority_state,
+            "provisional",
+            "low-trust",
+            record.review_state.value,
+        ],
     )

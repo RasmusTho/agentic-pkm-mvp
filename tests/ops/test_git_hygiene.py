@@ -227,12 +227,15 @@ def test_preflight_accepts_stale_local_base_when_head_contains_remote(
     }
 
 
-def test_preflight_diverged_base_branch_still_fails(tmp_path, monkeypatch) -> None:
+def test_preflight_accepts_diverged_local_base_when_head_contains_remote(
+    tmp_path, monkeypatch
+) -> None:
     git_dir = tmp_path / ".git"
     git_dir.mkdir()
 
     monkeypatch.setattr(git_hygiene, "run_git", _fake_base_branch_run_git(tmp_path, git_dir))
-    # HEAD containing origin/main does not rescue a diverged local base ref.
+    # A shared root worktree may leave its local main ref diverged. That is
+    # advisory when this isolated publication branch contains origin/main.
     monkeypatch.setattr(
         git_hygiene.subprocess,
         "run",
@@ -241,15 +244,16 @@ def test_preflight_diverged_base_branch_still_fails(tmp_path, monkeypatch) -> No
 
     report = git_hygiene.preflight_report(tmp_path, base_branch="main")
 
-    assert report["ok"] is False
+    assert report["ok"] is True
     assert report["checks"]["base_branch"] == {
         "base_branch": "main",
         "remote_ref": "origin/main",
         "local_sha": "local-main-sha",
         "remote_sha": "origin-main-sha",
         "status": "diverged",
-        "head_contains_remote": None,
-        "mismatch": True,
+        "reason": "advisory_diverged_local_base_ref",
+        "head_contains_remote": True,
+        "mismatch": False,
     }
 
 

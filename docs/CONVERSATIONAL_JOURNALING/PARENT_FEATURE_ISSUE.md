@@ -38,7 +38,7 @@ The capability outcome — not one PR: a deterministic day-context assembler car
 - Derived/rebuildable impact: the day-context bundle is fully derived (every fact traces to an already-durable source); the staged draft is regenerable pre-acceptance; the accepted journal note becomes human-owned and is no longer machine-regenerable without becoming a new addendum
 - Human knowledge impact: the accepted journal entry is new human-authored-in-substance knowledge (the owner's own reflection, ghost-written) — the first capability in this ideation set whose accepted artifact is primarily the owner's voice, not a system-derived summary
 - Memory impact: none — no MEM promotion, no change to recall/decay semantics
-- Retrieval/context impact: none beyond the existing chat-session stream registration (`chat.sessions`, ERE-01); reflection conversations become episode signal for free once ERE lands, unchanged by this capability
+- Retrieval/context impact: none; reflection conversations use the existing chat-session artifact, while ERE episode consumption remains pending on the planned `chat.sessions` adapter
 - Sync/deployment impact: none beyond new note families riding existing vault sync (iCloud/git); no migration
 - External boundary impact: none new; the chat-session surface this capability reuses is local
 - New or changed contract: no new domain contract; reuses the existing candidate-draft frontmatter convention (`derived_by`/`authority_state`/`sources`, `docs/FRONTMATTER.md`) with a new `derived_by: conversation` value, and the existing Panel `AI-åtgärder` in-note checkbox acceptance convention

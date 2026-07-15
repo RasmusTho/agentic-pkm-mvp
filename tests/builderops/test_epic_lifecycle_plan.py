@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from app.builderops.__main__ import _root as builderops_standalone_root
@@ -183,6 +184,113 @@ def test_done_plan_blocks_terminal_projection_when_ci_is_not_green() -> None:
     assert plan["proposed_writes"]["pr_project_status"] == []
 
 
+def test_done_plan_reports_only_ci_blocker_for_terminal_states() -> None:
+    plan = build_lifecycle_transition_plan(
+        transition="done",
+        issue=_issue(state="CLOSED", labels=["type:task"], project_status="Review"),
+        pull_request=_pr(state="CLOSED", merged=True, project_status="Review"),
+        checks=[{"name": "unit", "status": "completed", "conclusion": "failure"}],
+        repo="RasmusTho/agentic-pkm-mvp",
+    )
+
+    assert plan["blocked_reasons"] == ["ci-checks-not-green"]
+    assert plan["proposed_writes"]["issue_project_status"] == []
+    assert plan["proposed_writes"]["pr_project_status"] == []
+
+
+def test_done_plan_reports_actual_non_terminal_states() -> None:
+    plan = build_lifecycle_transition_plan(
+        transition="done",
+        issue=_issue(labels=["type:task"], project_status="In Progress"),
+        pull_request=_pr(project_status="In Progress"),
+        checks=[{"name": "unit", "status": "completed", "conclusion": "success"}],
+        repo="RasmusTho/agentic-pkm-mvp",
+    )
+
+    assert plan["blocked_reasons"] == ["issue-not-closed", "pr-not-terminal"]
+    assert plan["proposed_writes"]["issue_project_status"] == []
+    assert plan["proposed_writes"]["pr_project_status"] == []
+
+
+def test_done_plan_uses_latest_check_run_per_name() -> None:
+    plan = build_lifecycle_transition_plan(
+        transition="done",
+        issue=_issue(state="CLOSED", labels=["type:task"], project_status="Review"),
+        pull_request=_pr(state="CLOSED", merged=True, project_status="Review"),
+        checks=[
+            {
+                "id": 9,
+                "name": "unit",
+                "status": "completed",
+                "conclusion": "cancelled",
+                "started_at": "2026-07-14T22:00:00Z",
+            },
+            {
+                "id": 10,
+                "name": "unit",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-07-14T22:00:00Z",
+            },
+        ],
+        repo="RasmusTho/agentic-pkm-mvp",
+    )
+
+    assert "ci-checks-not-green" not in plan["blocked_reasons"]
+    assert plan["content"]["checks"] == [
+        {
+            "name": "unit",
+            "status": "COMPLETED",
+            "conclusion": "SUCCESS",
+            "id": 10,
+            "started_at": "2026-07-14T22:00:00Z",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("status", "conclusion", "latest_started_at"),
+    [
+        ("completed", "failure", "2026-07-14T22:05:00Z"),
+        ("completed", "cancelled", "2026-07-14T22:05:00Z"),
+        ("completed", "timed_out", "2026-07-14T22:05:00Z"),
+        ("in_progress", None, "2026-07-14T22:05:00Z"),
+        ("queued", None, None),
+    ],
+)
+def test_done_plan_latest_non_green_check_still_blocks(
+    status: str,
+    conclusion: str | None,
+    latest_started_at: str | None,
+) -> None:
+    plan = build_lifecycle_transition_plan(
+        transition="done",
+        issue=_issue(state="CLOSED", labels=["type:task"], project_status="Review"),
+        pull_request=_pr(state="CLOSED", merged=True, project_status="Review"),
+        checks=[
+            {
+                "id": 9,
+                "name": "unit",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-07-14T22:00:00Z",
+            },
+            {
+                "id": 10,
+                "name": "unit",
+                "status": status,
+                "conclusion": conclusion,
+                "started_at": latest_started_at,
+            },
+        ],
+        repo="RasmusTho/agentic-pkm-mvp",
+    )
+
+    assert "ci-checks-not-green" in plan["blocked_reasons"]
+    assert plan["proposed_writes"]["issue_project_status"] == []
+    assert plan["proposed_writes"]["pr_project_status"] == []
+
+
 def test_cli_lifecycle_plan_is_dry_run_and_does_not_write_run_state(tmp_path: Path) -> None:
     issue_file = tmp_path / "issue.json"
     pr_file = tmp_path / "pr.json"
@@ -269,3 +377,72 @@ def test_cli_lifecycle_plan_accepts_github_check_runs_payload(tmp_path: Path) ->
     assert "ci-checks-not-green" in payload["blocked_reasons"]
     assert payload["proposed_writes"]["issue_project_status"] == []
     assert payload["proposed_writes"]["pr_project_status"] == []
+
+
+def test_cli_deduplicates_github_check_runs_by_latest_attempt(tmp_path: Path) -> None:
+    issue_file = tmp_path / "issue.json"
+    pr_file = tmp_path / "pr.json"
+    checks_file = tmp_path / "checks.json"
+    issue_file.write_text(
+        json.dumps({"issue": _issue(state="CLOSED", labels=["type:task"])}),
+        encoding="utf-8",
+    )
+    pr_file.write_text(
+        json.dumps({"pull_request": _pr(state="CLOSED", merged=True)}),
+        encoding="utf-8",
+    )
+    checks_file.write_text(
+        json.dumps(
+            {
+                "total_count": 2,
+                "check_runs": [
+                    {
+                        "id": 9,
+                        "name": "unit",
+                        "status": "completed",
+                        "conclusion": "cancelled",
+                        "started_at": "2026-07-14T22:00:00Z",
+                    },
+                    {
+                        "id": 10,
+                        "name": "unit",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "started_at": "2026-07-14T22:00:00Z",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_builderops(
+        [
+            "epic-run-state",
+            "lifecycle-plan",
+            "--transition",
+            "done",
+            "--issue-file",
+            str(issue_file),
+            "--pr-file",
+            str(pr_file),
+            "--checks-file",
+            str(checks_file),
+            "--repo",
+            "RasmusTho/agentic-pkm-mvp",
+            "--json",
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert "ci-checks-not-green" not in payload["blocked_reasons"]
+    assert payload["content"]["checks"] == [
+        {
+            "conclusion": "SUCCESS",
+            "id": 10,
+            "name": "unit",
+            "started_at": "2026-07-14T22:00:00Z",
+            "status": "COMPLETED",
+        }
+    ]

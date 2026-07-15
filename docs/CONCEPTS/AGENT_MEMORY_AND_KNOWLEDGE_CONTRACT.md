@@ -1,5 +1,5 @@
 State: Concept contract companion (agent memory and knowledge; human-authored truth remains primary).
-Changed: 2026-06-13 — Durable Memory and Recall shipped review-decision receipts, queue reconciliation, governed semantic-memory materialization, guarded recall receipts, and Companion provenance surfacing. `may_write=false` remains the default for recalled memory unless a future governed owner contract changes it.
+Changed: 2026-07-15 — Guarded recall now admits complete same-scope provisional memory only as visible low-trust read or explicitly cited proposal support; it remains permanently `may_write=false`. Durable Memory and Recall continues to ship review-decision receipts, queue reconciliation, governed semantic-memory materialization, guarded recall receipts, and Companion provenance surfacing.
 Changed: 2026-06-12 — `docs/AGENT-FLOWS.md` explicitly declines the `may_write` widening slot reserved below for Mimer-mediated agent memory; `may_write=false` remains universal unless a future governed owner contract changes it. Human-declared direct filesystem write zones (see `docs/AGENT-FLOWS.md` §7) are a separate human-delegated access mode, not a `may_write` widening and not agent memory.
 
 # Agent Memory and Knowledge Contract
@@ -238,7 +238,9 @@ tool-use / APPLY. No-silent-escalation is codified there — promotion, deprecat
 deletion all require a governance transition or human review — re-affirming the `authority_guard`
 conjunction in `app/agent_memory/authority_guard.py` and the unreviewed-memory-never-hidden-authority
 rule (`docs/SEMANTIC_AUTHORITY_MATRIX.md` reading rule 3). Enforcement of the trust-tier ceiling at
-the write boundary is the W7-MEM-02 deliverable (#2354); WriteGuard is health-state-only today.
+the write boundary is the `docs/PROVISIONAL_MEMORY/` implementation chain under epic #2314;
+WriteGuard is health-state-only today. The former #2354 reference was invalid and is superseded by
+that specification directory.
 
 ## Review and promotion rules
 
@@ -418,6 +420,9 @@ Current runtime now ships the Durable Memory and Recall subset:
   actionable;
 - guarded recall invokes the memory authority guard, emits a recall receipt, and does not persist
   activation state as artifact authority;
+- complete same-scope provisional records enter ASK only through the inbound admissibility and
+  outbound authority guards, surface low-trust/review/provenance posture in the bounded context,
+  require an explicit citation for proposal use, and remain permanently `may_write=false`;
 - Companion surfaces materialized-memory provenance, recall provenance, and authority posture.
 
 This shipped subset does not introduce a vector-store choice, context-bundle persistence,

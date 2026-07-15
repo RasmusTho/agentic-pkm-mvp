@@ -87,6 +87,28 @@ def test_ready_producers_do_not_require_project_status() -> None:
         assert "optional" in contract.lower()
 
 
+def test_governance_config_does_not_require_project_status_for_pickup() -> None:
+    governance = _read(".github/github-governance.yml")
+
+    assert "queue-eligible work when Status=Ready" not in governance
+    assert "agents_only_pick: label:agent:ready + status:Ready" not in governance
+    assert "strictly validated" in governance
+    assert "Project Status" in governance
+    assert "optional" in governance
+
+
+def test_worker_adapter_accepts_label_only_dispatch() -> None:
+    adapter = _read(".codex/agents/slice-implementer.toml")
+    roles = _read("docs/development/BUILDER_SUBAGENT_ROLES.md")
+
+    assert "Status=Ready and labeled agent:ready" not in adapter
+    assert "strictly validated issue labeled agent:ready" in adapter
+    assert "Project Status is not a pickup gate" in adapter
+    assert "`Ready` + `agent:ready`" not in roles
+    assert "strictly validated `agent:ready`" in roles
+    assert "Project Status is optional projection" in roles
+
+
 def test_builderops_authority_roles_are_explicit() -> None:
     dispatcher = _read("docs/AGENT_ISSUE_DISPATCHER.md")
     architecture = _read("docs/ARCHITECTURE.md")

@@ -122,6 +122,11 @@ except ImportError:
     capture_router = None
 
 try:
+    from app.api.routes.provisional_memory import router as provisional_memory_router
+except ImportError:
+    provisional_memory_router = None
+
+try:
     from app.api.routes.heimdal_screen import router as heimdal_screen_router
 except ImportError:
     heimdal_screen_router = None
@@ -205,6 +210,21 @@ def _warm_retrieval_cache() -> None:
         logger.warning("Retrieval cache warm from durable index failed: %s", exc)
 
 
+def _ingest_settings_at_startup() -> None:
+    """Resolve vault-authored settings at API startup (SETTINGS-01 / F1).
+
+    Without this, a container that never ran ``settings compile`` silently serves
+    pydantic code defaults. Invalid sources degrade loudly (health
+    ``settings.state``) rather than crashing startup, so this never raises.
+    """
+    from app.settings.ingestion import ingest_settings
+
+    try:
+        ingest_settings(reason="api_startup")
+    except Exception as exc:  # pragma: no cover - defensive; ingest already degrades
+        logger.warning("Settings ingestion at API startup failed: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app.agent_memory.ask_provenance_manifest import start_ask_provenance_runtime
@@ -212,6 +232,7 @@ async def lifespan(app: FastAPI):
     start_ask_provenance_runtime()
     await _run_index_preflight()
     _log_v6_seam_status()
+    _ingest_settings_at_startup()
     _warm_retrieval_cache()
     yield
 
@@ -264,6 +285,8 @@ def _create_app() -> FastAPI:
         application.include_router(source_understanding_router, prefix="/api")
     if capture_router is not None:
         application.include_router(capture_router, prefix="/api")
+    if provisional_memory_router is not None:
+        application.include_router(provisional_memory_router, prefix="/api")
     if heimdal_screen_router is not None:
         application.include_router(heimdal_screen_router)
     if version_router is not None:

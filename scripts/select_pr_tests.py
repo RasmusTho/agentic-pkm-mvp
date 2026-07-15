@@ -281,6 +281,21 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         ),
     ),
     (
+        # Shared CAO reasoning plus its governed Expansion caller. Keep this
+        # result-contract boundary owned so provider/degradation changes run
+        # both cognition suites and the invariants that prevent derived output
+        # from acquiring write authority.
+        "reasoning_expansion",
+        (
+            "app/reasoning/",
+            "app/expansion/",
+            "tests/reasoning/",
+            "tests/expansion/",
+            "docs/MIMER_CAPABILITY_HARDENING/",
+        ),
+        ("tests/reasoning", "tests/expansion", "tests/invariants"),
+    ),
+    (
         "llm_eval",
         (
             "app/llm/",

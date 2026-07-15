@@ -78,7 +78,7 @@ import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Final, Mapping, Sequence
+from typing import Any, Final, Mapping, Protocol, Sequence, runtime_checkable
 
 from app.components.concurrency import DedupTaskQueue
 from app.db.db import conn_rw
@@ -200,6 +200,42 @@ def run_segmenter_stub(
 CONSUMER_ID: Final[str] = "mimer.episode_resolution_engine"
 
 HEIMDAL_STREAM_ID: Final[str] = "heimdal.observations"
+
+
+@dataclass
+class TickContext:
+    """Resources shared by stream adapters during one segmentation tick."""
+
+    consumer_id: str
+    vault_root: Path
+    limit: int | None
+    _register_snapshot: Sequence[RegisterEntrySnapshot] | None = None
+
+    @property
+    def register_snapshot(self) -> Sequence[RegisterEntrySnapshot]:
+        """Load the calendar entity register at most once, and only if needed."""
+        if self._register_snapshot is None:
+            self._register_snapshot = read_register_snapshot(vault_root=self.vault_root)
+        return self._register_snapshot
+
+
+@dataclass(frozen=True)
+class ReadResult:
+    """Raw adapter rows plus the stream's fail-soft degradation channel."""
+
+    rows: Sequence[Any]
+    degraded: Sequence[str] = ()
+
+
+@runtime_checkable
+class StreamAdapter(Protocol):
+    """Registry-resolved ingestion lifecycle for one live stream."""
+
+    def read(self, ctx: TickContext) -> ReadResult: ...
+
+    def normalize(self, row: Any, ctx: TickContext) -> SegmentationSignal | None: ...
+
+    def advance_cursor(self, rows: Sequence[Any], ctx: TickContext) -> None: ...
 
 #: Time-gap dimension (ADR-0051 commitment 2): no signal for this long closes
 #: the open segment window, with or without a new triggering signal.
@@ -729,6 +765,60 @@ def _signal_from_calendar_row(
     )
 
 
+class _HeimdalStreamAdapter:
+    def read(self, ctx: TickContext) -> ReadResult:
+        return ReadResult(read_observations_for_consumer(ctx.consumer_id, limit=ctx.limit))
+
+    def normalize(self, row: Any, ctx: TickContext) -> SegmentationSignal | None:
+        return _signal_from_heimdal_row(row)
+
+    def advance_cursor(self, rows: Sequence[Any], ctx: TickContext) -> None:
+        if rows:
+            advance_cursor_for_consumer(ctx.consumer_id, list(rows))
+
+
+class _VaultActivityStreamAdapter:
+    def read(self, ctx: TickContext) -> ReadResult:
+        return ReadResult(read_vault_activity_for_consumer(ctx.consumer_id, limit=ctx.limit))
+
+    def normalize(self, row: Any, ctx: TickContext) -> SegmentationSignal | None:
+        return _signal_from_vault_activity_row(row, vault_root=ctx.vault_root)
+
+    def advance_cursor(self, rows: Sequence[Any], ctx: TickContext) -> None:
+        if rows:
+            advance_vault_activity_cursor(ctx.consumer_id, rows)
+
+
+class _CalendarStreamAdapter:
+    def read(self, ctx: TickContext) -> ReadResult:
+        rows, degraded = read_calendar_raw_items_for_tick()
+        return ReadResult(rows, degraded)
+
+    def normalize(self, row: Any, ctx: TickContext) -> SegmentationSignal | None:
+        binding, item = row
+        return _signal_from_calendar_row(binding, item, register_snapshot=ctx.register_snapshot)
+
+    def advance_cursor(self, rows: Sequence[Any], ctx: TickContext) -> None:
+        """Calendar re-polls a fixed window and has no durable cursor."""
+
+
+_STREAM_ADAPTERS: Final[Mapping[str, StreamAdapter]] = {
+    HEIMDAL_STREAM_ID: _HeimdalStreamAdapter(),
+    VAULT_ACTIVITY_STREAM_ID: _VaultActivityStreamAdapter(),
+    CALENDAR_STREAM_ID: _CalendarStreamAdapter(),
+}
+
+
+def resolve_stream_adapter(
+    entry: StreamRegistryEntry,
+    *,
+    adapters: Mapping[str, StreamAdapter] | None = None,
+) -> StreamAdapter | None:
+    """Resolve a live registry entry through the declarative adapter table."""
+    bindings = _STREAM_ADAPTERS if adapters is None else adapters
+    return bindings.get(entry.stream_id)
+
+
 # ---------------------------------------------------------------------------
 # Emission (AC5) + production tick entrypoint
 # ---------------------------------------------------------------------------
@@ -1083,6 +1173,7 @@ def run_segmentation_tick(
     write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
     consumer_id: str = CONSUMER_ID,
     limit: int | None = None,
+    adapters: Mapping[str, StreamAdapter] | None = None,
 ) -> dict[str, Any]:
     """THE production entrypoint (``python -m app.cli episodes tick``).
 
@@ -1121,88 +1212,43 @@ def run_segmentation_tick(
     bundle -- not just the ledger row -- is upgraded on the production path.
     """
     root = Path(vault_root)
-    live_streams = {entry.stream_id for entry in enumerate_consumable_streams(registry=registry)}
+    ctx = TickContext(consumer_id=consumer_id, vault_root=root, limit=limit)
 
     consumed: dict[str, int] = {}
     skipped_no_observation_time: dict[str, int] = {}
     degraded: list[str] = []
     signals: list[SegmentationSignal] = []
-    heimdal_rows: list[ObservationRow] = []
-    vault_rows: list[VaultActivityRow] = []
+    pending_cursor_advances: list[tuple[StreamAdapter, list[Any]]] = []
 
-    if HEIMDAL_STREAM_ID in live_streams:
-        heimdal_rows = read_observations_for_consumer(consumer_id, limit=limit)
-        consumed[HEIMDAL_STREAM_ID] = len(heimdal_rows)
-        for h_row in heimdal_rows:
-            signal = _signal_from_heimdal_row(h_row)
+    live_entries = enumerate_consumable_streams(registry=registry)
+    resolved_adapters = [
+        (entry, resolve_stream_adapter(entry, adapters=adapters)) for entry in live_entries
+    ]
+    missing_adapter_ids = [
+        entry.stream_id for entry, adapter in resolved_adapters if adapter is None
+    ]
+    if missing_adapter_ids:
+        missing = ", ".join(repr(stream_id) for stream_id in missing_adapter_ids)
+        raise RuntimeError(
+            f"stream(s) {missing} are status=live but resolve to no adapter; "
+            "every live stream must have exactly one adapter"
+        )
+
+    for entry, adapter in resolved_adapters:
+        assert adapter is not None  # narrowed by the fail-loud correspondence guard above
+        read_result = adapter.read(ctx)
+        rows = list(read_result.rows)
+        consumed[entry.stream_id] = len(rows)
+        degraded.extend(read_result.degraded)
+        for row in rows:
+            signal = adapter.normalize(row, ctx)
             if signal is None:
-                skipped_no_observation_time[HEIMDAL_STREAM_ID] = (
-                    skipped_no_observation_time.get(HEIMDAL_STREAM_ID, 0) + 1
+                skipped_no_observation_time[entry.stream_id] = (
+                    skipped_no_observation_time.get(entry.stream_id, 0) + 1
                 )
             else:
                 signals.append(signal)
-
-    if VAULT_ACTIVITY_STREAM_ID in live_streams:
-        vault_rows = read_vault_activity_for_consumer(consumer_id, limit=limit)
-        consumed[VAULT_ACTIVITY_STREAM_ID] = len(vault_rows)
-        for v_row in vault_rows:
-            signal = _signal_from_vault_activity_row(v_row, vault_root=root)
-            if signal is None:
-                skipped_no_observation_time[VAULT_ACTIVITY_STREAM_ID] = (
-                    skipped_no_observation_time.get(VAULT_ACTIVITY_STREAM_ID, 0) + 1
-                )
-            else:
-                signals.append(signal)
-
-    if CALENDAR_STREAM_ID in live_streams:
-        # ERE-09 (#3184): registry-driven calendar ingestion, mirroring the
-        # vault_activity block above (Coordinator contract clarification,
-        # #3184 -- an additive block here is in scope; the pure shift-
-        # detection core below is untouched). Credential resolution
-        # (`resolve_calendar_bindings`, inside `read_calendar_raw_items_for_tick`)
-        # fails LOUD and propagates out of this tick when the registry says
-        # calendar is live but private-bindings config is missing (AC4) --
-        # deliberately NOT caught here, unlike a per-calendar unreachable
-        # fetch, which the helper already folds into `calendar_degraded`
-        # (AC5) instead of raising. No durable read-position cursor: unlike
-        # the append-only heimdal/outbox logs, a CalDAV poll re-reads the
-        # calendar's current item set each tick (bounded to a fixed past/
-        # future window -- `_CALDAV_TIME_RANGE_PAST`/`_CALDAV_TIME_RANGE_FUTURE`
-        # in calendar_stream.py, ERE-09 review round 1 finding 3) and relies
-        # on `calendar_signal_id` (`app.episodes.calendar_stream`) for
-        # at-least-once idempotency (an unchanged event redelivers the same
-        # signal_id -> no-op fold; an edited event gets a new signal ->
-        # itself append-only evidence of the change) -- the same INV-ERE-F
-        # guarantee, a different mechanism. Review gate rounds 2+3 (findings
-        # 1+2, PR #3519): for a non-recurring event (or any block without a
-        # RECURRENCE-ID) this is still plain `uid:etag`; for one occurrence
-        # of a server-expanded recurring series (review round 1 finding 2)
-        # it is `uid:occurrence_key:content_token` -- IDENTITY
-        # (`occurrence_key`) is this occurrence's own RECURRENCE-ID ALONE,
-        # fully window-independent (finding 1: never gated on how many
-        # sibling occurrences shared this tick's expand/time-range window,
-        # nor on block count -- round 3 removed the last block-count-gated
-        # DTSTART fallback, so the same real occurrence never gets two
-        # identities); the CHANGE-token is a structured-JSON hash of this
-        # occurrence's OWN content, never the shared resource etag and never
-        # a delimiter-joined string (finding 2: a recurring series is one
-        # CalDAV resource with one etag, so editing any single occurrence
-        # must not bump every unmodified sibling's signal_id too).
-        calendar_items, calendar_degraded = read_calendar_raw_items_for_tick()
-        consumed[CALENDAR_STREAM_ID] = len(calendar_items)
-        degraded.extend(calendar_degraded)
-        if calendar_items:
-            calendar_register_snapshot = read_register_snapshot(vault_root=root)
-            for cal_binding, cal_item in calendar_items:
-                signal = _signal_from_calendar_row(
-                    cal_binding, cal_item, register_snapshot=calendar_register_snapshot
-                )
-                if signal is None:
-                    skipped_no_observation_time[CALENDAR_STREAM_ID] = (
-                        skipped_no_observation_time.get(CALENDAR_STREAM_ID, 0) + 1
-                    )
-                else:
-                    signals.append(signal)
+        pending_cursor_advances.append((adapter, rows))
 
     open_state = engine_state.all_state_with_prefix(_OPEN_SEGMENT_KEY_PREFIX)
     open_segments = {
@@ -1337,10 +1383,8 @@ def run_segmentation_tick(
     # re-emission (its ref missing from one proposal's derived_from) -- an
     # under-enrichment, never a duplicate or a lost note. ERE-07's re-cut
     # path is the human correction for any mis-bounded proposal.
-    if heimdal_rows:
-        advance_cursor_for_consumer(consumer_id, heimdal_rows)
-    if vault_rows:
-        advance_vault_activity_cursor(consumer_id, vault_rows)
+    for adapter, rows in pending_cursor_advances:
+        adapter.advance_cursor(rows, ctx)
 
     closed_scopes = {c.scope for c in closed_segments} - set(updated_open)
     for scope in closed_scopes:
@@ -1378,9 +1422,13 @@ __all__ = [
     "ClosedSegment",
     "OpenSegment",
     "SegmentationSignal",
+    "ReadResult",
+    "StreamAdapter",
+    "TickContext",
     "detect_shift",
     "enumerate_consumable_streams",
     "fold_signals_into_segments",
     "run_segmentation_tick",
     "run_segmenter_stub",
+    "resolve_stream_adapter",
 ]

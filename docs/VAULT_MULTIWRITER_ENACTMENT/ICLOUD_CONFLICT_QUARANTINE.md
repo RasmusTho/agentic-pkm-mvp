@@ -2,7 +2,7 @@
 name: iCloud conflict quarantine
 description: Exclude iCloud conflicted-copy Markdown files before ordinary vault ingest.
 task_id: VMW-03
-source_anchor: docs/adr/ADR-0055-vault-multiwriter-consistency-model.md :: item 3
+source_anchor: "docs/adr/ADR-0055-vault-multiwriter-consistency-model.md :: item 3"
 parent_capability: VAULT_MULTIWRITER_ENACTMENT
 prerequisites: [VMW-01]
 depends_on: [WRITE_RECEIPT_PROVENANCE.md]

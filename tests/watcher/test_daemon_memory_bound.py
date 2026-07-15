@@ -114,8 +114,9 @@ def test_scoped_daemon_updates_heartbeat(tmp_path: Path, monkeypatch: pytest.Mon
         now: float,
         states=None,
         process_panel_notes_inline: bool = False,
+        handled_settings_sources: set[Path] | None = None,
     ) -> dict[str, object]:
-        del cfg_arg, spec_arg, states, process_panel_notes_inline
+        del cfg_arg, spec_arg, states, process_panel_notes_inline, handled_settings_sources
         state_arg.ticks_run += 1
         state_arg.last_summary_at = now
         return {"backoff_active": False}

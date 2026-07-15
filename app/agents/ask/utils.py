@@ -86,6 +86,18 @@ def build_ask_context(
     for idx, explanation in enumerate(recalled or [], start=1):
         parts.append(f"[RECALLED MEMORY {idx}] title=\"{explanation.title}\"")
         parts.append(f"why_now={explanation.why_now}")
+        trust_state = getattr(explanation, "trust_state", None) or "unspecified"
+        review_state = getattr(explanation, "review_state", None)
+        review_value = getattr(review_state, "value", review_state) or "unspecified"
+        source_provenance = getattr(explanation, "source_provenance", None)
+        source_refs = getattr(source_provenance, "source_refs", ())
+        parts.append(f"trust_state={trust_state}")
+        parts.append(f"review_state={review_value}")
+        if source_refs:
+            parts.append(
+                "provenance_refs="
+                + ", ".join(source_refs)
+            )
         parts.append("authority_limits=" + ", ".join(explanation.authority_limits))
         # Ground synthesis in the recalled fact itself, not just its metadata.
         # In the recall-only path (no retrieval hits) the body is the only

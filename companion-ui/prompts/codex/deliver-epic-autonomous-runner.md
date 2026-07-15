@@ -67,7 +67,7 @@ Do not stop merely because:
 - a worker, command, test, review, or CI attempt failed once;
 - GitHub Project projection drifted from Issue/PR truth;
 - a design question was discovered;
-- context is large, a session is interrupted, or local run-state is missing;
+- context is large, a session is interrupted, or a local parent/epic run-state is missing;
 - a PR needs review-feedback repair, rebase, conflict resolution, or another CI cycle;
 - the obvious next issue is stale, already delivered, claimed, or lower value than expected.
 
@@ -113,7 +113,7 @@ No wording in this prompt waives a repository gate. In particular:
 - never use the shared root worktree for concurrent implementation;
 - never claim more issues than active isolated workers can immediately own;
 - never silently expand an issue beyond its bounded contract;
-- never treat BuilderOps/run-state/design output as Product/Runtime authority;
+- never treat BuilderOps, parent/epic run-state, or design output as Product/Runtime authority;
 - never force a governance-bearing mutation and never report one that was not executed and verified;
 - never merge a design-only proposal directly into product behavior; and
 - never optimize throughput by accepting hidden defect, authority, data, security, or migration risk.
@@ -169,9 +169,11 @@ safe; do not make every worker reload the entire epic history.
    numbers, and linked PRs. Current GitHub and `origin/main` truth wins over prompt assumptions.
 3. Classify the set as Product/Runtime, Builder System, or boundary work before dispatch. For Builder
    or boundary work, include the required D11/D12 transition-debt outcome.
-4. Create an epic run-state v0 record using the exact helper contract in `deliver-issue-set`. Use a
-   stable safe run id. Dry-run and inspect before the first write.
-5. Treat run-state as discardable coordination evidence. Rebuild it from repository/GitHub facts on
+4. If a real parent/epic issue is resolved, create its epic run-state v0 record using the exact
+   helper contract in `deliver-issue-set`. Use a stable safe run id. Dry-run and inspect before the
+   first write. For a project/lane or explicit issue set without a parent, use normal live-GitHub
+   coordination; never fabricate an issue number just to invoke epic run-state.
+5. Treat any parent run-state as discardable coordination evidence. Rebuild it from repository/GitHub facts on
    resume; never use it to overrule issue, PR, CI, merge, or owner-doc truth.
 6. Produce a compact scope ledger: parent/hub, child, dependency, priority, classification, live
    labels/state, linked PR, readiness verdict, owner docs, likely touch surface, and verification target.
@@ -220,9 +222,10 @@ Before every wave:
 - fetch/reconcile `origin/main`;
 - re-read issue state, labels, latest claim/release receipts, linked PRs, and shipped code;
 - discard stale, duplicate, superseded, already-delivered, or newly foreign-claimed work;
-- use `epic-run-state dispatch-plan` when candidate data is available;
+- use `epic-run-state dispatch-plan` when a resolved parent/epic run-state exists and candidate data is available;
 - cap the wave at immediately active isolated worker capacity; and
-- persist only evidence permitted by the run-state contract.
+- for a parent/epic run, persist only evidence permitted by the run-state contract; otherwise retain
+  normal live-GitHub coordination evidence.
 
 Each worker gets exactly one bounded issue unless a tightly coupled pair has a stated quality reason.
 The context pack must include:
@@ -286,7 +289,8 @@ does not risk conflicting writes.
 After every merge/closure:
 
 1. fetch and re-read `origin/main`;
-2. update parent/hub evidence and epic run-state;
+2. when a resolved parent/epic exists, update its parent/hub evidence and epic run-state; otherwise
+   retain normal live-GitHub coordination evidence only;
 3. re-evaluate dependencies and ready labels;
 4. determine whether the accepted change made another issue stale, ready, smaller, or unnecessary;
 5. process learning/evaluation candidates to terminal outcomes;
@@ -526,14 +530,15 @@ A Human Exception is valid only for one of these classes:
 
 These are not Human Exceptions: ordinary ambiguity resolvable from owner docs; first failures;
 malformed issues; stale labels; CI delay; review feedback; merge conflicts; design work; insufficient
-ready pool; a blocked child with independent siblings; missing local run-state; token/context pressure;
+ready pool; a blocked child with independent siblings; missing local parent/epic run-state; token/context pressure;
 or the need to use a stronger model/specialized workflow.
 
 Before escalating:
 
 - exhaust safe source inspection, maintenance, retry, reroute, stronger capability, and independent work;
 - release or preserve claims truthfully;
-- record the stop condition in run-state and on the governing GitHub surface when required;
+- record the stop condition on the governing GitHub surface and, only for a parent/epic run, in its
+  run-state;
 - consolidate all related decisions into one interruption; and
 - propose a recommended choice that minimizes human reading and decision time.
 

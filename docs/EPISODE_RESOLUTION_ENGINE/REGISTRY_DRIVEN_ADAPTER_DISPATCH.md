@@ -15,7 +15,7 @@ can_parallelize_with: []
 
 ERE-01 frames the architecture as "adding a future stream is a registry entry + adapter, not an engine change," and ERE-09 (calendar) claims to prove it. But `app/episodes/segmenter.py::run_segmentation_tick` still pulls data through **hardcoded per-stream `if <STREAM_ID> in live_streams:` blocks** — one for heimdal, one for vault.activity, one for calendar. Enumeration is registry-driven (AC4/AC5, `enumerate_consumable_streams`); the data-pull loop is not. Calendar (ERE-09) *did* require editing the tick (the calendar block was added to `run_segmentation_tick`), so the ERE-01 claim is today aspirational, not literally true. This task makes it literally true: an adapter-dispatch table where each live registry entry resolves to a reader+normalizer, `run_segmentation_tick` iterates live streams and dispatches, and a future source (location/ERE-10) needs a registry entry + adapter with **zero** edit to `run_segmentation_tick`.
 
-This is an owner-optional architectural/governance investment (`lane:governance`). It changes no segmentation *behavior* — it is a behavior-preserving refactor of the ingestion seam only. The pure five-dimension core (`fold_signals_into_segments`, `detect_shift`) and all ERE-04/ERE-09 behavior and tests are untouched.
+This is an owner-optional Product/Runtime SIP Tier 2 refactor (`lane:core-runtime`). It changes no segmentation *behavior* — it is a behavior-preserving refactor of the ingestion seam only. The pure five-dimension core (`fold_signals_into_segments`, `detect_shift`) and all ERE-04/ERE-09 behavior and tests are untouched.
 
 ## What This Task Does
 
@@ -27,13 +27,12 @@ This is an owner-optional architectural/governance investment (`lane:governance`
 2. **Dispatch resolution.** Resolve each live `StreamRegistryEntry` to exactly one adapter. `module:` transports (heimdal, calendar) can expose their adapter from the named module; `outbox:` transports (vault.activity) name a topic, not a module, so a `stream_id → adapter` binding table (or an explicit `adapter:` resolution field) is the mechanism. **Design decision recorded in the PR:** whichever resolution shape is chosen, it must be declarative and keyed off the registry, never a second hardcoded list inside the segmenter.
 3. **Migrate the three existing blocks.** Re-express the heimdal, vault.activity, and calendar blocks as `StreamAdapter` implementations with **byte-for-byte preserved behavior**: same reader calls (`read_observations_for_consumer`, `read_vault_activity_for_consumer`, `read_calendar_raw_items_for_tick`), same normalizers (`_signal_from_heimdal_row`, `_signal_from_vault_activity_row`, `_signal_from_calendar_row`), same skip-counting, same cursor advances, same degraded reporting.
 4. **Generic tick loop.** Rewrite `run_segmentation_tick` so the data-pull is `for entry in enumerate_consumable_streams(registry): adapter = resolve(entry); ...` — read → normalize → hold rows; **then** (unchanged crash-safe ordering, INV-ERE-F) emit proposals → persist open state → advance each adapter's cursor → delete closed state LAST. The deferred cursor advance (currently `heimdal_rows`/`vault_rows` held to the end of the function) is preserved by holding per-adapter consumed rows and replaying `advance_cursor` after emission.
-5. **Visible skip, not silent drop (bridge to ERE-12).** A live registry entry with no resolvable adapter must be **reported** in the tick summary (a new `no_adapter: [stream_id, ...]` key), not silently ignored as today. ERE-11 preserves current runtime behavior — those streams are still not consumed this slice — but makes the gap observable. ERE-12 turns the observable gap into a fail-loud correspondence guard once the registry is reconciled.
+5. **Visible skip, not silent drop (bridge delivered, then superseded by ERE-12).** ERE-11 reported an unresolved live entry under `no_adapter`. ERE-12 reconciles the seeded registry and replaces that temporary report with a fail-loud correspondence guard before any reader runs.
 
 ## Concretely
 
 ```
-# Before: adding calendar (ERE-09) required editing run_segmentation_tick.
-# After: the tick body names no stream_id. Behavior is identical.
+# ERE-11 bridge output before ERE-12 replaced no_adapter with fail-loud:
 $ python -m app.cli episodes tick --json
 {"consumed": {"heimdal.observations": 4, "vault.activity": 2, "calendar": 3},
  "skipped_no_observation_time": {...}, "proposed": [...], "open_segments": 5,
@@ -57,7 +56,7 @@ The ERE-01 claim is the whole architectural bet: sources are first-class registr
 - [ ] AC3 (behavior preservation): every existing ERE-04 and ERE-09 test passes unchanged, and a golden end-to-end tick over the two-stream + calendar fixture produces byte-identical `consumed` / `skipped_no_observation_time` / `proposed` / `open_segments` / `degraded` output to pre-refactor. Verify: `tests/episodes/test_segmentation_core.py` (whole file, unmodified) + `tests/episodes/test_calendar_adapter.py` (whole file, unmodified) + `tests/episodes/test_adapter_dispatch.py::test_tick_output_byte_identical_to_prerefactor_golden`
 - [ ] AC4 (crash-safe ordering preserved): cursor advance still happens only after proposals + open-state persistence, and closed-segment state is deleted last; a simulated crash between the two cursor advances reconverges without a duplicate proposal (INV-ERE-F). Verify: `tests/episodes/test_adapter_dispatch.py::test_deferred_cursor_advance_preserves_crash_safety`
 - [ ] AC5 (no-engine-change property): adding a brand-new live stream to a fixture registry with a test adapter causes the tick to consume it **with no edit to `run_segmentation_tick`** (the test registers the adapter + registry entry only). Verify: `tests/episodes/test_adapter_dispatch.py::test_new_stream_joins_via_registry_and_adapter_only`
-- [ ] AC6: a live registry entry with no resolvable adapter is reported in the tick summary under a `no_adapter` key and is not silently consumed nor crashes the tick (bridge state for ERE-12). Verify: `tests/episodes/test_adapter_dispatch.py::test_unadapted_live_stream_reported_not_dropped`
+- [ ] AC6: the ERE-11 bridge made adapter gaps observable; the current ERE-12 contract supersedes it with a fail-loud tick-entrypoint guard. Verify: `tests/episodes/test_adapter_dispatch.py::test_live_without_adapter_fails_loud_at_tick`
 
 ## How to Verify (Pre-Merge)
 
@@ -72,8 +71,8 @@ The golden byte-identity check (AC3) captures the pre-refactor tick output as a 
 
 ## Out of Scope
 
-- Building adapters for the four currently-unconsumed live streams (`chat.sessions`, `decision.receipts`, `kap.acquisitions`, `heimdal.attention`) — ERE-11 makes their absence visible; ERE-12 reconciles the registry and either specs those adapters or downgrades the entries.
-- Flipping the `no_adapter` report into a fail-loud error (ERE-12, after the registry is reconciled so `live` ⇒ has-adapter).
+- Building adapters for the four planned streams (`chat.sessions`, `decision.receipts`, `kap.acquisitions`, `heimdal.attention`) and promoting each to `live` only with its adapter.
+- The `no_adapter` bridge report was superseded by ERE-12's fail-loud error after registry reconciliation.
 - Any change to shift detection, thresholds, scope partitioning, or the pure fold core.
 - The location stream (ERE-10) — this task makes it addable without an engine edit; it does not add it.
 
@@ -90,4 +89,4 @@ Not applicable in the user-facing-surface sense: this task ships no new user-fac
 
 ## Related GitHub Issues
 
-Issue **#3523** — `[Episode Resolution Engine] adapter-dispatch: registry-driven ingestion so a new source needs no engine change`. Child of parent #3175, `lane:governance`, `agent:blocked`, `prio:low` (owner-optional investment, not on the critical ERE build path). Spec landed in PR #3522. Pairs with ERE-12 (#3524, fail-loud correspondence); ERE-11 must merge first.
+Issue **#3523** / PR **#3727** delivered the Product/Runtime SIP Tier 2 registry-dispatch refactor. Its ERE-12 pair (#3524 / PR #3731) is active in the core-runtime lane and owns fail-loud correspondence.

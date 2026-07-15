@@ -9,6 +9,7 @@ from uuid import UUID
 
 from app.components.llm.fabric import LLMBackendTimeout, LLMTaskIntent, get_chat_client
 from app.components.llm.router import LLMRoute
+from app.llm.trace import log_llm_call
 from app.reasoning.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.reasoning.schema import ReasoningInput, ReasoningOutput, ReasoningValidationError, validate_output
 from app.reasoning.models import ReasoningMode, ReasoningRun
@@ -200,23 +201,30 @@ def run_reasoning(
         kind_name = "ask.answer"
     if mode == ReasoningMode.CLAIMS:
         if not object_ids:
+            output = ReasoningOutput(
+                outcome="missing_input", degraded_reason="missing_input"
+            )
             return ReasoningRun(
                 mode=mode,
                 trace_id=trace_id,
                 object_uuids=[],
                 status="failed",
                 error="no object ids provided",
+                result=output.model_dump(),
             )
         object_id = object_ids[0]
         text, metadata = _load_object_text(object_id)
         if not text:
+            output = ReasoningOutput(
+                outcome="missing_input", degraded_reason="missing_input"
+            )
             return ReasoningRun(
                 mode=mode,
                 trace_id=trace_id,
                 object_uuids=[object_id],
                 status="failed",
                 error="object missing or has no text",
-                result={"claims": [], "evidence": [], "inferences": []},
+                result=output.model_dump(),
             )
         reasoning_input = ReasoningInput(
             object_uuid=str(object_id),
@@ -225,18 +233,44 @@ def run_reasoning(
             relations=[],
         )
         try:
-            output = get_deliberation_agent().reason(reasoning_input)
+            output = validate_output(get_deliberation_agent().reason(reasoning_input))
         except Exception as exc:  # pragma: no cover - defensive
+            output = ReasoningOutput(
+                outcome="provider_failure", degraded_reason="provider_failure"
+            )
+            trace_payload = {
+                "outcome": output.outcome,
+                "degraded_reason": output.degraded_reason,
+            }
+            log_llm_call(
+                provider=os.getenv("LLM_PROVIDER", "").strip().lower()
+                or _reasoning_backend(),
+                model=os.getenv("REASONING_MODEL", "llama3.1:8b"),
+                agent=agent_name,
+                kind=kind_name,
+                messages=[],
+                response=trace_payload,
+                response_text=json.dumps(trace_payload, sort_keys=True),
+                trace_id=trace_id,
+                status="failed",
+            )
             return ReasoningRun(
                 mode=mode,
                 trace_id=trace_id,
                 object_uuids=[object_id],
                 status="failed",
                 error=str(exc),
-                result={"claims": [], "evidence": [], "inferences": []},
+                result=output.model_dump(),
+            )
+        has_content = bool(output.claims or output.evidence or output.inferences)
+        if not has_content:
+            output = output.model_copy(
+                update={
+                    "outcome": "empty_output",
+                    "degraded_reason": "empty_provider_output",
+                }
             )
         result = output.model_dump()
-        has_content = bool(output.claims or output.evidence)
         status_val = "ok" if has_content else "failed"
         err_val = None if has_content else "no claims or evidence produced"
         return ReasoningRun(

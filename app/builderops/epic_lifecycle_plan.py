@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping, Sequence
 
+from app.builderops.ci_handoff_state import latest_checks_by_name
+
 SCHEMA_VERSION = 1
 PROJECT_TITLE = "Agent Delivery Control Plane"
 VALID_TRANSITIONS = {"claim", "review", "done"}
@@ -34,7 +36,7 @@ def build_lifecycle_transition_plan(
     normalized_transition = _normalize_transition(transition)
     normalized_issue = _normalize_issue(issue)
     normalized_pr = _normalize_pr(pull_request) if pull_request is not None else None
-    normalized_checks = [_normalize_check(item) for item in checks]
+    normalized_checks = latest_checks_by_name(_normalize_check(item) for item in checks)
     normalized_actor = _normalize_optional_string(actor)
     normalized_repo = _normalize_repo(repo)
 
@@ -326,34 +328,39 @@ def _plan_done(
 
     terminal_projection_allowed = check_verdict != "failed"
 
-    if issue_terminal and terminal_projection_allowed:
-        _plan_project_status(
-            plan,
-            bucket="issue_project_status",
-            target=f"issue:{issue_number}",
-            current=issue["project_status"],
-            desired="Done",
-            command=_project_status_command("ISSUE_ITEM_ID", "DONE_OPTION_ID"),
-            reason="closed Issue is terminal GitHub truth",
-        )
-    elif pr_terminal:
+    if issue_terminal:
+        if terminal_projection_allowed:
+            _plan_project_status(
+                plan,
+                bucket="issue_project_status",
+                target=f"issue:{issue_number}",
+                current=issue["project_status"],
+                desired="Done",
+                command=_project_status_command("ISSUE_ITEM_ID", "DONE_OPTION_ID"),
+                reason="closed Issue is terminal GitHub truth",
+            )
+    else:
         plan["blocked_reasons"].append("issue-not-closed")
-        plan["authority_notes"].append(
-            "A terminal PR does not by itself close the Issue; verification-and-closure owns issue closure."
-        )
+        if pr_terminal:
+            plan["authority_notes"].append(
+                "A terminal PR does not by itself close the Issue; "
+                "verification-and-closure owns issue closure."
+            )
 
-    if pull_request is not None and pr_terminal and terminal_projection_allowed:
-        _plan_project_status(
-            plan,
-            bucket="pr_project_status",
-            target=f"pr:{pull_request['number']}",
-            current=pull_request["project_status"],
-            desired="Done",
-            command=_project_status_command("PR_ITEM_ID", "DONE_OPTION_ID"),
-            reason="merged or closed PR is terminal GitHub truth",
-        )
-    elif pull_request is not None:
-        plan["blocked_reasons"].append("pr-not-terminal")
+    if pull_request is not None:
+        if pr_terminal:
+            if terminal_projection_allowed:
+                _plan_project_status(
+                    plan,
+                    bucket="pr_project_status",
+                    target=f"pr:{pull_request['number']}",
+                    current=pull_request["project_status"],
+                    desired="Done",
+                    command=_project_status_command("PR_ITEM_ID", "DONE_OPTION_ID"),
+                    reason="merged or closed PR is terminal GitHub truth",
+                )
+        else:
+            plan["blocked_reasons"].append("pr-not-terminal")
 
     _add_verify(
         plan,
@@ -511,17 +518,24 @@ def _normalize_pr(pull_request: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _normalize_check(check: Mapping[str, Any]) -> dict[str, str | None]:
+def _normalize_check(check: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(check, Mapping):
         raise EpicLifecyclePlanError("checks must contain objects")
     status = check.get("status")
     conclusion = check.get("conclusion")
     name = check.get("name")
-    return {
+    normalized: dict[str, Any] = {
         "name": str(name) if name is not None else None,
         "status": str(status).upper() if status is not None else None,
         "conclusion": str(conclusion).upper() if conclusion is not None else None,
     }
+    check_id = check.get("id")
+    if isinstance(check_id, (int, str)) and not isinstance(check_id, bool):
+        normalized["id"] = check_id
+    started_at = check.get("started_at", check.get("startedAt"))
+    if isinstance(started_at, str) and started_at.strip():
+        normalized["started_at"] = started_at.strip()
+    return normalized
 
 
 def _project_status(content: Mapping[str, Any]) -> str | None:

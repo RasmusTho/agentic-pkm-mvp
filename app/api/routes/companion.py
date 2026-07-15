@@ -24,6 +24,11 @@ from pydantic import BaseModel, Field
 
 import app.api.routes.canvas as canvas_module
 import app.panel.confirmation as confirm_module
+from app.chat.reflection_conversation import (
+    ReflectionConversationService,
+    build_evening_reflection_offer,
+    load_reflection_settings,
+)
 from app.agent_memory.candidate import MemoryCandidate, MemoryType
 from app.agent_memory.materialization import (
     MemoryMaterializationError,
@@ -77,6 +82,7 @@ from app.events.panel import (
 )
 from app.health_contract import DEFAULT_CONTRACT
 from app.knowledge.write_ops import write_note_from_absolute
+from app.journaling.day_context import assemble_day_context
 from app.observability.status_service import OrientationSignals, get_orientation_signals
 from app.orientation.leave_point_cursor import latest_leave_point_projection
 from app.orientation.runtime import build_orientation_frame
@@ -90,6 +96,7 @@ from app.relevance import collect_now_moments
 from app.resurfacing.runtime import evaluate_resurfacing_candidates
 from app.services.artifact_identity import resolve_note_artifact_identity
 from app.services.commitment_persistence import load_commitments
+from app.services.llm import LLMError
 from app.tts.cache import TTSUnsafeCacheRootError, audio_path
 from app.tts.config import load_tts_config
 from app.tts.planning import TTSNormalizedTextEmptyError, build_tts_plan
@@ -118,6 +125,11 @@ from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 router = APIRouter(prefix="/companion", tags=["companion"])
 
 logger = logging.getLogger(__name__)
+
+
+def _reflection_now() -> datetime.datetime:
+    """Local-time seam shared by offer evaluation and deterministic tests."""
+    return datetime.datetime.now().astimezone()
 
 _LAST_ACTIVE_LOAD_ATTEMPTED_ATTR = "_companion_last_active_load_attempted"
 
@@ -1352,6 +1364,12 @@ class SuggestionsState(BaseModel):
     pending_receipts: list[dict[str, str]] = Field(default_factory=list)
 
 
+class ReflectionOfferState(BaseModel):
+    label: str
+    action: Literal["journaling.reflection.begin"]
+    tap_required: Literal[True]
+
+
 class WorkspaceUpdateCapabilityState(BaseModel):
     available: bool
     state: str
@@ -1376,6 +1394,20 @@ class WorkspaceStateResponse(BaseModel):
     panel: PanelState
     suggestions: SuggestionsState
     guards: GuardState
+    reflection_offer: ReflectionOfferState | None = None
+
+
+class ReflectionStartRequest(BaseModel):
+    note_path: str
+    for_date: datetime.date | None = None
+
+
+class ReflectionStartResponse(BaseModel):
+    state: Literal["started"] = "started"
+    note_path: str
+    session_id: str
+    session_log_path: str
+    opening_turn: str
 
 
 ORIENTATION_CONTRACT_VERSION = "workspace_orientation.v1"
@@ -4270,6 +4302,24 @@ def read_companion_workspace(
         writeguard_status=writeguard_status,
     )
     orientation_signals = get_orientation_signals()
+    reflection_offer: ReflectionOfferState | None = None
+    settings_path = vault_root / SETTINGS_DIR_NAME
+    if settings_path.is_dir():
+        reflection_context = VaultContext(
+            status="selected",
+            active_vault_path=str(vault_root),
+            settings_path=str(settings_path),
+        )
+        try:
+            offer = build_evening_reflection_offer(
+                now=_reflection_now(),
+                settings=load_reflection_settings(reflection_context),
+            )
+        except (OSError, ValueError):
+            logger.warning("reflection offer settings unavailable", exc_info=True)
+        else:
+            if offer is not None:
+                reflection_offer = ReflectionOfferState.model_validate(offer.as_payload())
 
     content_hash = _content_hash(body)
     selectable_options: list[PanelSelectableOption] = []
@@ -4314,6 +4364,64 @@ def read_companion_workspace(
             degraded=not canvas_enabled or writeguard_status == "unknown",
             workspace_update=workspace_update,
         ),
+        reflection_offer=reflection_offer,
+    )
+
+
+@router.post(
+    "/journaling/reflection/start",
+    response_model=ReflectionStartResponse | VaultSelectionRequiredResponse,
+)
+def start_companion_reflection(
+    req: ReflectionStartRequest,
+) -> ReflectionStartResponse | VaultSelectionRequiredResponse:
+    """Start only from an explicit Companion action on the active note."""
+    safe_note_path = _validate_workspace_markdown_note_path(req.note_path)
+    vault_root = _active_companion_vault_root_or_picker(
+        requested_note_path=safe_note_path,
+        require_initialized=True,
+    )
+    if isinstance(vault_root, VaultSelectionRequiredResponse):
+        return vault_root
+    note_path = _find_workspace_note(vault_root, safe_note_path)
+    if note_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "note_not_found",
+                "message": "No note exists for the requested reflection note_path",
+                "note_path": safe_note_path,
+            },
+        )
+    context = VaultContext(
+        status="selected",
+        active_vault_path=str(vault_root),
+        settings_path=str(vault_root / SETTINGS_DIR_NAME),
+    )
+    day_context = assemble_day_context(
+        vault_context=context,
+        for_date=req.for_date or _reflection_now().date(),
+    )
+    try:
+        conversation = ReflectionConversationService(vault_root=vault_root).start(
+            note_path=note_path,
+            day_context=day_context,
+        )
+    except LLMError as exc:
+        # Reflection is optional cognition; fail visibly and rely on the
+        # service's pre-artifact opening order to avoid an empty transcript.
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "reflection_provider_unavailable",
+                "message": str(exc),
+            },
+        ) from exc
+    return ReflectionStartResponse(
+        note_path=safe_note_path,
+        session_id=conversation.session.session_id,
+        session_log_path=conversation.session.log_path.relative_to(vault_root).as_posix(),
+        opening_turn=conversation.opening_turn,
     )
 
 

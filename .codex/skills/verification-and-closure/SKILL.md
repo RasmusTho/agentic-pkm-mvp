@@ -135,7 +135,7 @@ Prerequisites for merge:
 - required checks and repo-standard checks that cover the changed surface are green on the current head SHA
 - any red check that covers the changed surface is a hard stop until fixed, rerun green, or explicitly classified as unrelated by evidence; this includes `Unit tests (not pg)` even when branch protection does not require it
 - no unresolved blocking review comments remain
-- the local review gate is resolved (see `Running the local review gate` below, including `Re-triggering after a fix`) — a clean run, or a run whose findings are all fixed-and-re-verified or explicitly waived by the owner, is a pass; any unresolved finding blocks until addressed; a fix alone, without the required re-verification, does not satisfy this prerequisite
+- the local review gate is resolved (see `Running the local review gate` below, including `Re-triggering after a fix`) — only a clean run, or a run whose findings are all fixed-and-re-verified, is a pass; any unresolved finding blocks until addressed; a fix alone, without the required re-verification, does not satisfy this prerequisite
 - when a review-thread closure trigger applies, no addressed review thread remains unresolved without a reply naming the fixing PR or merge commit
 - no scope drift remains
 - the PR fits one of the two verification modes above
@@ -166,16 +166,17 @@ external GitHub-native reviewer bot. Run it once the PR's required and relevant 
 Resolve the verdict:
 
 - **Pass** — the run reports no findings, or every finding it reported has since been fixed and
-  re-verified per `Re-triggering after a fix` below, or explicitly waived by the owner with a stated
-  reason.
-- **Blocking** — any unresolved finding from the run blocks merge until addressed, fixed-and-reverified,
-  or waived.
-- Record the run's outcome (clean / findings-fixed / owner-waived) in the delivery receipt so the gate
-  is auditable after merge.
+  re-verified per `Re-triggering after a fix` below.
+- **Blocking** — any unresolved finding from the run blocks merge until addressed and
+  fixed-and-reverified.
+- Record the run's outcome (clean / findings-fixed) in the delivery receipt so the gate is auditable
+  after merge.
 - Do not block indefinitely on a stalled or failed review run: if the reviewer subagent cannot complete
-  (tool failure, timeout, repeated crash), surface the stall to the owner as a merge-gate decision
-  rather than retrying forever. A demonstrable tooling outage is input, not an absolute block — but the
-  waiver is the owner's call, not a silent default.
+  (tool failure, timeout, repeated crash), classify the stop under
+  `AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier`, use bounded backoff or a
+  `blocked_technical` receipt, and preserve the merge block. A technical outage never creates a
+  CI/review/merge waiver. Route through `owner-decision-brief` only when the classifier finds an
+  explicit authority category; that decision does not relax the gate.
 
 #### Re-triggering after a fix
 
@@ -201,11 +202,13 @@ than independent re-review.
   finding or mechanism. Independently re-review after each substantive attempt, and record the
   selected model/agent family, reasoning level, prior context supplied, fallback (if any), and outcome
   for every escalated round.
-- Stop and route through `owner-decision-brief` only when any blocking finding remains after the
-  PR-wide budget of 2 standard plus 2 escalated fix attempts is exhausted, the strongest available
-  capability cannot run or repeatedly fails, or a genuine authority/scope ambiguity appears. Do not
-  reset the budget when the finding or mechanism changes, and do not ask the owner merely because the
-  standard-capability attempts failed.
+- After the PR-wide budget of 2 standard plus 2 escalated fix attempts is exhausted, or when the
+  strongest available capability cannot run or repeatedly fails, classify the stop under
+  `AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier`. Continue with bounded
+  technical recovery, backoff, or a blocked-technical receipt when safe; route through
+  `owner-decision-brief` only if that classifier identifies an explicit authority/scope category.
+  Do not reset the budget when the finding or mechanism changes, and do not ask the owner merely
+  because the standard-capability attempts failed.
 - Record each round's outcome and the final round count in the delivery receipt so convergence is
   auditable after merge.
 
@@ -234,9 +237,11 @@ Rules:
 
 - A 👍/`+1` reaction is a sufficient Codex pass even when there is no formal review or comment.
 - Do not block indefinitely on a missing verdict: if Codex has posted no reaction, review, or comment
-  and recent sibling PRs show the same silence (a repo-wide Codex stall), surface the stall to the
-  owner as a merge-gate decision rather than waiting forever. A demonstrable outage is input, not an
-  absolute block — but the waiver is the owner's call, not a silent default.
+  and recent sibling PRs show the same silence (a repo-wide Codex stall), classify the outage under
+  `AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Escalation classifier`, use bounded backoff or a
+  `blocked_technical` receipt, and preserve the merge block. A technical outage never creates a
+  CI/review/merge waiver. Route through `owner-decision-brief` only when the classifier finds an
+  explicit authority category; that decision does not relax the gate.
 
 When all prerequisites are met:
 

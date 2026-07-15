@@ -47,6 +47,10 @@ _DEFAULT_AUTHORITY_STATE = "projection"
 _DEFAULT_SENSITIVITY = "internal"
 _DEFAULT_CREATED_BY = "app:retrieval"
 _DEFAULT_CREATED_AT = "2026-01-01T00:00:00+00:00"
+_MEMORY_STATE_ENUM = frozenset({
+    "unreviewed", "reviewed", "corrected", "decayed", "forgotten", "active",
+    "invalidated", "purged_stub",
+})
 
 # Only enum members are accepted from payload; anything else falls back to the conservative default
 # (never fail the envelope on a dirty payload, but never smuggle an out-of-enum value either).
@@ -106,11 +110,21 @@ def _bundle_from_result(item: dict[str, Any]) -> dict[str, Any]:
     # must carry provenance lineage (schema: derived object types require derived_from). The row's
     # object_id is the source it is derived from. object_id stays the doc id so the consumer keys the
     # admitted set on the same identity the retrieval surfaced.
+    admitted_provisional = item.get("_admitted_provisional_memory") is True
+    object_type = "memory_item" if admitted_provisional else _DEFAULT_OBJECT_TYPE
+    raw_provenance = payload.get("provenance_event_ids")
+    provenance_event_ids = (
+        list(raw_provenance)
+        if admitted_provisional
+        and isinstance(raw_provenance, (list, tuple))
+        and raw_provenance
+        and all(isinstance(item, str) and item for item in raw_provenance)
+        else [f"prov:retrieval:{object_id or uuid4().hex[:12]}"]
+    )
     bundle: dict[str, Any] = {
         "object_id": object_id,
-        "object_type": _DEFAULT_OBJECT_TYPE,
+        "object_type": object_type,
         "scope_id": scope_id or "scope:unscoped",
-        "derived_from": [object_id],
         "source_role": _enum_or_default(
             payload.get("source_role"), _SOURCE_ROLE_ENUM, _DEFAULT_SOURCE_ROLE
         ),
@@ -124,13 +138,21 @@ def _bundle_from_result(item: dict[str, Any]) -> dict[str, Any]:
         "suppression_state": "visible",
         "created_by": str(payload.get("created_by") or _DEFAULT_CREATED_BY),
         "created_at": str(payload.get("created_at") or _DEFAULT_CREATED_AT),
-        "provenance_event_ids": [f"prov:retrieval:{object_id or uuid4().hex[:12]}"],
+        "provenance_event_ids": provenance_event_ids,
         # Propagate the payload's episode binding (derivation survival — mirrors
         # mimer_runtime.dri.derive_segment); a payload without one (all live rows today, until
         # ERE-05 assignment lands) gets the honest 'unbound' default
         # (docs/architecture/semantic-dimensions.md :: episode_ref).
         "episode_ref": _episode_ref_from_payload(payload.get("episode_ref")),
     }
+    if not admitted_provisional:
+        bundle["derived_from"] = [object_id]
+    principal_id = payload.get("principal_id")
+    if admitted_provisional and isinstance(principal_id, str) and principal_id:
+        bundle["principal_id"] = principal_id
+    memory_state = payload.get("memory_state")
+    if admitted_provisional and memory_state in _MEMORY_STATE_ENUM:
+        bundle["memory_state"] = memory_state
     sphere = payload.get("sphere") or payload.get("domain")
     if isinstance(sphere, str) and sphere.strip():
         bundle["sphere"] = sphere.strip()

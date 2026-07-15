@@ -1578,6 +1578,16 @@ def run(
             )
             time.sleep(retry_delay)
 
+    # Resolve vault-authored settings at worker startup (SETTINGS-01 / F1): without
+    # this the worker's LLM routing / embeddings run on pydantic code defaults.
+    # Invalid sources degrade loudly on health rather than crashing the worker.
+    try:
+        from app.settings.ingestion import ingest_settings
+
+        ingest_settings(reason="worker_startup")
+    except Exception as exc:  # pragma: no cover - defensive; ingest already degrades
+        logger.warning("Settings ingestion at worker startup failed: %s", exc)
+
     heartbeat_interval = heartbeat_interval if heartbeat_interval is not None else float(
         os.getenv("WORKER_HEARTBEAT_INTERVAL", "1")
     )

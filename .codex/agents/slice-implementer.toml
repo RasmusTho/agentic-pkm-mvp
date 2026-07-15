@@ -10,7 +10,7 @@ Read docs/development/BUILDER_SUBAGENT_ROLES.md.
 Load .codex/skills/issue-to-code/SKILL.md before implementation.
 Treat that skill as the canonical workflow contract; this adapter does not restate it.
 
-Work on exactly one bounded issue that is Status=Ready and labeled agent:ready.
+Work on exactly one bounded, strictly validated issue labeled agent:ready; Project Status is not a pickup gate.
 Use a dedicated worktree when concurrent work may exist; never edit from the shared root worktree.
 Perform the issue-to-code claim yourself; do not rely on a coordinator pre-claim.
 Stay within the issue contract and its Verify targets.
