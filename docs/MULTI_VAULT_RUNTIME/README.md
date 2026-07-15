@@ -50,8 +50,11 @@ Per-channel registry isolation is not sufficient because current containers can 
 roots. A separate host-local **channel ownership ledger** is mounted consistently into every channel
 and native runtime. Under one global mode-`0600` lock it records `channel_id`, stable binding, and
 HMAC fingerprints of canonical filesystem identity plus its canonical ancestor-identity chain
-(never a raw host path). Equality and either direction of ancestor/descendant overlap are conflicts,
-including after symlink or bind-mount alias resolution. One CSPRNG-generated,
+(never a raw host path). Duplicate physical identity under different bindings is always a conflict;
+ancestor/descendant overlap conflicts across different channel/native ownership domains, including
+after symlink or bind-mount alias resolution. One channel/instance may register initialized parent
+and child vaults only under the existing nested-vault boundary contract: parent traversal prunes the
+child and effects target one explicit binding. One CSPRNG-generated,
 host-global ledger key lives mode `0600` in private host app-data outside every channel volume and
 is mounted read-only into all channel/native consumers; generation, permissions, durable backup,
 and key ID are host-bootstrap truth. Missing, ephemeral, channel-specific, mismatched, or permissive
@@ -61,7 +64,8 @@ owner resumes; interrupted rotation recovers one complete generation and never c
 Registration/relocation
 uses a recoverable pending→registry-commit→active reservation protocol; lifecycle start proves the
 active reservation still matches its channel and root. The same physical content root cannot be
-active or nested inside another active root in dev/test/prod/native simultaneously. Explicit transfer
+active in two dev/test/prod/native ownership domains simultaneously, and nested roots cannot straddle
+those domains. Explicit transfer
 remains capability-gated until MVR-05C activates foreground read/write ownership fencing. It then
 drains/stops the source channel, commits release, and claims the destination; crashes leave a
 blocking recoverable reservation, never two owners or an unowned running lifecycle.

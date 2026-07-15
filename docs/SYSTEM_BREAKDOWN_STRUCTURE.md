@@ -2161,10 +2161,15 @@ Use the repository's current eight-subsystem architecture as the bridge. Use thi
 11. Human Interaction vs Domain Ownership.
 12. Observability/Fitness vs Behavior.
 
+### Resolved validation decisions
+
+- **ActiveContextSet V1 fields (#2143, 2026-07-15):** resolved by
+  `docs/contracts/ACTIVE_CONTEXT_SET.md :: Multi-Vault Runtime V1 Decision`; the bounded implementation
+  schema and migrations are delegated to `docs/MULTI_VAULT_RUNTIME/` without widening the WSP/GOV boundary.
+
 ### Open validation questions
 
 - What minimum ArtifactContract supports no-vault operation while preserving human comprehensibility?
-- What exact fields belong in ActiveContextSet V1?
 - Which memory classes require explicit human review, agent review, or policy-only review?
 - What ReplicationEnvelope semantics are required before central/satellite deployment can be safe?
 - Which source-binding guarantees must SourceObservationEvent provide for watchers and external connectors, and when should those observations be wrapped in ReplicationEnvelope delivery semantics?

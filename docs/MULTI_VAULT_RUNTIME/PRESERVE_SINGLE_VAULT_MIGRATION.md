@@ -2,7 +2,7 @@
 name: Preserve Single Vault Migration
 description: Remove unapproved global assumptions while proving no-vault and one-vault compatibility
 task_id: MVR-07
-source_anchor: "docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md :: Reversibility to single vault"
+source_anchor: "docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md :: Topology rules"
 parent_capability: Multi-vault runtime selection
 prerequisites: [MVR-04, MVR-05, MVR-06]
 depends_on: [GROUP_VAULT_BINDINGS_BY_DIMENSION.md, ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md, BIND_BACKGROUND_LIFECYCLES.md]
@@ -58,7 +58,7 @@ can break startup or strand durable state. Both failures are latent outages rath
 
 ## Source Anchors
 
-- `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md :: reversibility to single vault`
+- `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md :: Topology rules` (rule 6, reversibility to single vault)
 - `docs/VAULT_OPTIONAL_RUNTIME/README.md :: Cross-Task Invariants`
 - `docs/MULTI_VAULT_RUNTIME/README.md :: Cross-task invariants`
 - `docs/architecture/SBS_TRANSITION_DEBT.md :: D1 / D13 / D14`
