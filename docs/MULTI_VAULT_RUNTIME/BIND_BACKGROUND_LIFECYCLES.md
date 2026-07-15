@@ -112,10 +112,15 @@ cross-process truth belong here.
   crash converges from durable phase/revision truth without splitting foreground and background.
   The same event cannot alter an `explicit` intent set. A default mutation may not leave a running
   compatibility lifecycle silently bound to the prior vault or rely on process restart.
-- Extend registration removal in the same schema-aware service: compatibility mode atomically clears
-  a removed `compatibility_binding_id`; explicit mode retains a now-stale member as loudly failed
-  intent until instance-authorized removal, preserving the explicit operator decision. MVR-06 never
-  requires MVR-02 to interpret these fields retroactively.
+- Extend registration removal in the same schema-aware service. If the removed registration is the
+  compatibility binding, the removal journal computes the post-removal MVR-02 default in the same
+  transaction: an authorized replacement default runs through the same prepare/quiesce/commit/resume
+  protocol and atomically becomes the compatibility binding, while no replacement persists enabled
+  idle/no-vault. It never clears first and repairs from a later default event. Failure or a revision
+  race leaves the source registration/default/compatibility lifecycle authoritative and unchanged.
+  Explicit mode instead retains a removed member as loudly failed intent until instance-authorized
+  removal, preserving the explicit operator decision. MVR-06 never requires MVR-02 to interpret
+  these fields retroactively.
 - During the MVR-06B handoff, atomically replace the transfer journal's retired
   `settings_rebind.v1` repair hook with a schema-versioned MVR-06 intent hook before the bridge stops
   being authoritative. A later cross-channel transfer must invoke that hook before source retirement:
@@ -278,7 +283,8 @@ migration, preflight, and fail-loud gate merge together.
 - Owner-doc impact: each owning child updates in its PR: 06A security/governed-write plus
   deployment/release-channel floor truth; 06B vault/settings, Settings Spine, environment, and
   health for the safe singleton/empty supervisor; 06C documents dormant multi-binding and safe relocation;
-  06D writes the completed zero/one/many runtime-control and health truth, including many-binding activation
+  06D writes the completed zero/one/many runtime-control and health truth plus DB schema and event
+  semantics for recoverable PostgreSQL queue claims, including many-binding activation
 - Transition debt impact: reduces D13/D14; residual adapters remain for task 07
 - Fitness rule impact: strengthens lifecycle isolation and truthful health
 
@@ -396,6 +402,12 @@ migration, preflight, and fail-loud gate merge together.
   operation holds the matching shared lease from final validation through I/O, dispatch/ack, and
   receipt, so a racing revocation either waits for an authorized effect or blocks it before effect.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_background_effect_fence_closes_authorization_race_window`
+- [ ] **MVR-06B:** When removal of the active compatibility binding also replaces the instance
+  default, the production removal journal atomically prepares and drains the old lifecycle, commits
+  the removal/default/replacement compatibility revision, completes the old-root drain, and resumes
+  the authorized replacement. With no replacement it persists enabled idle/no-vault; injected
+  failure never exposes a new foreground default beside an idle or stale background binding.
+  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_default_changing_removal_atomically_rebinds_compatibility_lifecycle`
 - [ ] **MVR-06C:** After every foreground and background consumer uses the shared-effect lock order,
   the production relocation command activates and takes the ownership fence plus exclusive binding
   lease; it waits for prior authorized effects, commits the new root/revision, and no later effect can
@@ -493,6 +505,11 @@ migration, preflight, and fail-loud gate merge together.
   classification and current authority checks succeed.
   - Verify: doc writeback at `docs/ENVIRONMENTS.md :: Runtime Control Surface` + doc writeback at
     `docs/HEALTH.md :: Runtime health`
+- [ ] **MVR-06D:** Database and event owner contracts describe the shipped atomic recoverable
+  PostgreSQL claim/lease fields, claim expiry/recovery, binding/global routing, acknowledgement,
+  at-least-once crash redelivery, and idempotency obligations in the same PR that activates them.
+  - Verify: doc writeback at `docs/DB_SCHEMA.md :: DB Schema (Current Reality)` + doc writeback at
+    `docs/EVENTS.md :: Outbox envelope (canonical)`
 
 ## Out of Scope
 
@@ -512,7 +529,7 @@ PostgreSQL receipt belongs only to 06D.
 
 ### MVR-06B validation
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_settings_spine_bridge_handoff_is_atomic tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff tests/integration/test_multi_vault_background_lifecycle.py::test_post_handoff_picker_rebind_preserves_two_phase_failure_atomicity tests/integration/test_multi_vault_background_lifecycle.py::test_default_mutation_rebinds_only_compatibility_lifecycle tests/integration/test_multi_vault_background_lifecycle.py::test_rebind_reuses_settings_spine_and_is_generation_clean tests/integration/test_multi_vault_background_lifecycle.py::test_lifecycle_requires_matching_channel_ownership_lease tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window tests/integration/test_multi_vault_background_lifecycle.py::test_registration_removal_activates_after_all_consumer_floors tests/integration/test_multi_vault_background_lifecycle.py::test_removed_binding_rehome_preserves_historical_receipt_audit tests/integration/test_multi_vault_background_lifecycle.py::test_background_effect_fence_closes_authorization_race_window tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback tests/runtime/test_background_binding_handoff.py::test_env_only_single_vault_upgrade_preserves_compatibility_watcher tests/runtime/test_background_binding_handoff.py::test_remove_last_then_restart_preserves_explicit_empty_intent tests/runtime/test_background_binding_handoff.py::test_mvr06b_restart_uses_only_durable_authorized_singleton_or_empty_intent tests/runtime/test_background_binding_handoff.py::test_scalar_worker_handoff_is_atomic_versioned_and_intent_gated tests/runtime/test_background_binding_handoff.py::test_background_context_has_explicit_workspace_and_capability_identity tests/api/test_background_binding_admin.py::test_mvr06b_commands_allow_only_singleton_or_empty_intent tests/api/test_background_binding_admin.py::test_first_explicit_mutation_snapshots_compatibility_singleton_before_apply tests/api/test_background_binding_admin.py::test_stale_binding_intent_can_be_removed_without_content_authority`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_settings_spine_bridge_handoff_is_atomic tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff tests/integration/test_multi_vault_background_lifecycle.py::test_post_handoff_picker_rebind_preserves_two_phase_failure_atomicity tests/integration/test_multi_vault_background_lifecycle.py::test_default_mutation_rebinds_only_compatibility_lifecycle tests/integration/test_multi_vault_background_lifecycle.py::test_default_changing_removal_atomically_rebinds_compatibility_lifecycle tests/integration/test_multi_vault_background_lifecycle.py::test_rebind_reuses_settings_spine_and_is_generation_clean tests/integration/test_multi_vault_background_lifecycle.py::test_lifecycle_requires_matching_channel_ownership_lease tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window tests/integration/test_multi_vault_background_lifecycle.py::test_registration_removal_activates_after_all_consumer_floors tests/integration/test_multi_vault_background_lifecycle.py::test_removed_binding_rehome_preserves_historical_receipt_audit tests/integration/test_multi_vault_background_lifecycle.py::test_background_effect_fence_closes_authorization_race_window tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback tests/runtime/test_background_binding_handoff.py::test_env_only_single_vault_upgrade_preserves_compatibility_watcher tests/runtime/test_background_binding_handoff.py::test_remove_last_then_restart_preserves_explicit_empty_intent tests/runtime/test_background_binding_handoff.py::test_mvr06b_restart_uses_only_durable_authorized_singleton_or_empty_intent tests/runtime/test_background_binding_handoff.py::test_scalar_worker_handoff_is_atomic_versioned_and_intent_gated tests/runtime/test_background_binding_handoff.py::test_background_context_has_explicit_workspace_and_capability_identity tests/api/test_background_binding_admin.py::test_mvr06b_commands_allow_only_singleton_or_empty_intent tests/api/test_background_binding_admin.py::test_first_explicit_mutation_snapshots_compatibility_singleton_before_apply tests/api/test_background_binding_admin.py::test_stale_binding_intent_can_be_removed_without_content_authority`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_handoff_buffers_direct_filesystem_write_through_commit`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_channel_transfer_lifecycle.py::test_post_handoff_transfer_repairs_mvr06_intent_before_restart`
 - Verify the 06B PR diff contains its mapped vault/settings, Settings Spine, environment, and health
@@ -531,8 +548,8 @@ PostgreSQL receipt belongs only to 06D.
   `tests/integration/test_multi_vault_outbox_pg_claims.py::test_concurrent_claim_owner_and_crash_redelivery_preserve_at_least_once`;
   missing PostgreSQL or claim constraints is an error, never a skip, and the successful URL/SHA is
   attached to #2143.
-- Verify the 06D PR diff contains its mapped activated `docs/ENVIRONMENTS.md` and `docs/HEALTH.md`
-  writebacks.
+- Verify the 06D PR diff contains its mapped activated `docs/ENVIRONMENTS.md`, `docs/HEALTH.md`,
+  `docs/DB_SCHEMA.md`, and `docs/EVENTS.md` writebacks.
 
 Every child also runs `mypy app`, `pytest -q -m "not pg"`, `ruff check app tests`, and
 `python3 scripts/docs_guard.py` as shared repo gates; those gates do not substitute for its exact

@@ -311,7 +311,9 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
 - Authority impact: enforces per-binding authorization and explicit write target
 - Persistence impact: additive binding namespace/association migration for durable projection rows;
   ambiguous legacy projection state is quarantined/rebuilt, never guessed
-- Derived/rebuildable impact: caches/retrieval/object/file/vector projections become binding-keyed and rebuildable
+- Derived/rebuildable impact: every production vault-backed projection becomes binding-keyed and
+  rebuildable, including object/file/vector/retrieval state, standing-question projections, episode
+  projections, and any later schema or producer admitted by the closed projection inventory
 - Human knowledge impact: preserves source vault and target attribution
 - Memory impact: retrieval/memory reads are scoped to explicit bindings
 - Retrieval/context impact: production request consumers adopt ActiveContextSet
@@ -352,6 +354,15 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
 - [ ] **MVR-05A:** Two registered bindings containing the same artifact UUID retain independent object,
   file-state, vector/index, retrieval, and receipt provenance without overwrite or cross-read.
   - Verify: `tests/integration/test_multi_vault_projection_isolation.py::test_duplicate_uuid_is_namespaced_by_binding`
+- [ ] **MVR-05A:** A checked-in closed production-projection inventory classifies every durable
+  projection schema, migration, and producer under `app/**` as binding-scoped or explicitly global;
+  it includes the standing-question and episode projections, and an architecture gate fails for any
+  new or existing vault-backed table mutation, replacement, or `TRUNCATE` path that is unclassified.
+  - Verify: `tests/architecture/test_multi_vault_projection_inventory.py::test_every_production_projection_schema_and_producer_is_classified`
+- [ ] **MVR-05A:** Replacing or rebuilding standing-question and episode projections for binding B
+  scopes deletion, uniqueness, and insertion by stable binding, so rows for binding A—including
+  colliding question or episode IDs—remain intact and readable only through A.
+  - Verify: `tests/integration/test_multi_vault_projection_isolation.py::test_binding_scoped_rebuild_preserves_standing_question_and_episode_rows`
 - [ ] **MVR-05A:** Legacy single-vault projection rows backfill only with one provable binding; ambiguous rows
   block mixed-mode startup until quarantined/rebuilt, without destructive guessing.
   - Verify: `tests/migrations/test_multi_vault_projection_backfill.py::test_projection_backfill_is_unambiguous_or_fails_loud`
@@ -612,7 +623,7 @@ maps directly to that child ID; an early child never runs a later slice's accept
 
 ### MVR-05A validation
 
-- `pytest -q tests/integration/test_multi_vault_projection_isolation.py::test_duplicate_uuid_is_namespaced_by_binding tests/migrations/test_multi_vault_projection_backfill.py::test_projection_backfill_is_unambiguous_or_fails_loud tests/migrations/test_multi_vault_projection_backfill.py::test_projection_upgrade_blocks_scalar_rollback_before_first_write tests/migrations/test_multi_vault_outbox_upgrade.py::test_legacy_idempotency_keys_coalesce_before_new_producer_enable tests/ops/test_mvr05_mixed_version_fence.py::test_all_old_scalar_db_clients_are_stopped_before_binding_keyed_migration tests/ops/test_mvr05_mixed_version_fence.py::test_fence_inventory_covers_every_enabled_db_outbox_process tests/ops/test_mvr05_mixed_version_fence.py::test_compatibility_translator_keeps_existing_producers_live_without_legacy_rows tests/workers/test_multi_vault_partial_delivery_gate.py::test_mvr05a_scalar_worker_gates_migrated_rows_before_dispatch tests/architecture/test_multi_vault_pg_ci_lane.py::test_mvr05_pg_targets_run_on_provisioned_postgres_and_cannot_skip`
+- `pytest -q tests/integration/test_multi_vault_projection_isolation.py::test_duplicate_uuid_is_namespaced_by_binding tests/integration/test_multi_vault_projection_isolation.py::test_binding_scoped_rebuild_preserves_standing_question_and_episode_rows tests/architecture/test_multi_vault_projection_inventory.py::test_every_production_projection_schema_and_producer_is_classified tests/migrations/test_multi_vault_projection_backfill.py::test_projection_backfill_is_unambiguous_or_fails_loud tests/migrations/test_multi_vault_projection_backfill.py::test_projection_upgrade_blocks_scalar_rollback_before_first_write tests/migrations/test_multi_vault_outbox_upgrade.py::test_legacy_idempotency_keys_coalesce_before_new_producer_enable tests/ops/test_mvr05_mixed_version_fence.py::test_all_old_scalar_db_clients_are_stopped_before_binding_keyed_migration tests/ops/test_mvr05_mixed_version_fence.py::test_fence_inventory_covers_every_enabled_db_outbox_process tests/ops/test_mvr05_mixed_version_fence.py::test_compatibility_translator_keeps_existing_producers_live_without_legacy_rows tests/workers/test_multi_vault_partial_delivery_gate.py::test_mvr05a_scalar_worker_gates_migrated_rows_before_dispatch tests/architecture/test_multi_vault_pg_ci_lane.py::test_mvr05_pg_targets_run_on_provisioned_postgres_and_cannot_skip`
 - `pytest -q tests/workers/test_multi_vault_partial_delivery_gate.py::test_mvr05a_revocation_cannot_cross_worker_dispatch_effect_window`
 - Dispatch exact-head `.github/workflows/integration-nightly.yaml` job `pg-contracts`, whose asserted
   MVR-05A manifest runs the binding-keyed migration/backfill/dedup targets against provisioned
