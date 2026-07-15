@@ -26,6 +26,8 @@ def _merged_compose(
         "VAULT_HOST_ROOT",
         "VAULT_ROOT",
         "VAULT_ROOT_TEST",
+        "WATCHER_ENABLE",
+        "WATCHER_VAULT_PATH",
     ):
         env.pop(key, None)
     env["WATCHER_RUNTIME_ENV_FILE"] = str(runtime_env)
@@ -78,6 +80,16 @@ def _mount_targets(service: dict[str, object]) -> set[str]:
     }
 
 
+def _mount_source(service: dict[str, object], target: str) -> str | None:
+    volumes = service.get("volumes", [])
+    assert isinstance(volumes, list)
+    for volume in volumes:
+        if isinstance(volume, dict) and volume.get("target") == target:
+            source = volume.get("source")
+            return str(source) if source is not None else None
+    return None
+
+
 def test_test_migrate_uses_app_test_dsn(tmp_path: Path) -> None:
     runtime_env = tmp_path / "runtime.env"
     runtime_env.write_text("", encoding="utf-8")
@@ -100,6 +112,8 @@ def test_test_runtime_services_idle_without_vault_binding(tmp_path: Path) -> Non
         assert runtime_env["LLM_PROVIDER"] == "mock"
         assert "VAULT_ROOT" not in runtime_env
         assert "VAULT_ROOT_TEST" not in runtime_env
+        assert runtime_env["WATCHER_ENABLE"] == "0"
+        assert runtime_env["WATCHER_VAULT_PATH"] == ""
         assert "/app/vault" not in _mount_targets(services[service])
 
     assert _environment(services["heimdal-capture-watch"])["LLM_PROVIDER"] == "mock"
@@ -118,7 +132,10 @@ def test_test_runtime_services_have_mock_provider_and_vault_binding(tmp_path: Pa
         assert service_env["LLM_PROVIDER"] == "mock"
         assert service_env["VAULT_ROOT"] == "/app/vault"
         assert service_env["VAULT_ROOT_TEST"] == "/app/vault"
+        assert service_env["WATCHER_ENABLE"] == "1"
+        assert service_env["WATCHER_VAULT_PATH"] == "/app/vault"
         assert "/app/vault" in _mount_targets(services[service])
+        assert _mount_source(services[service], "/app/vault") == str(selected_vault)
 
     assert _environment(services["migrate"])["LLM_PROVIDER"] == "mock"
     assert _environment(services["heimdal-capture-watch"])["LLM_PROVIDER"] == "mock"

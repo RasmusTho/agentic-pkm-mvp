@@ -27,6 +27,8 @@ services:
     environment:
       VAULT_ROOT: /app/vault
       VAULT_ROOT_TEST: /app/vault
+      WATCHER_ENABLE: "${WATCHER_ENABLE:-1}"
+      WATCHER_VAULT_PATH: "${WATCHER_VAULT_PATH:-/app/vault}"
 
   worker:
     volumes:
@@ -34,6 +36,8 @@ services:
     environment:
       VAULT_ROOT: /app/vault
       VAULT_ROOT_TEST: /app/vault
+      WATCHER_ENABLE: "${WATCHER_ENABLE:-1}"
+      WATCHER_VAULT_PATH: "${WATCHER_VAULT_PATH:-/app/vault}"
 
   watcher:
     volumes:
@@ -41,3 +45,5 @@ services:
     environment:
       VAULT_ROOT: /app/vault
       VAULT_ROOT_TEST: /app/vault
+      WATCHER_ENABLE: "${WATCHER_ENABLE:-1}"
+      WATCHER_VAULT_PATH: "${WATCHER_VAULT_PATH:-/app/vault}"
