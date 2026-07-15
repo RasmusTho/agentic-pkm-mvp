@@ -1518,6 +1518,71 @@ def test_parent_exit_authority_loss_persists_one_backoff_receipt(tmp_path) -> No
     assert result.lease_id is None
 
 
+def test_schema_invalid_terminal_output_records_technical_backoff(tmp_path) -> None:
+    class SchemaInvalidLauncher(Launcher):
+        def launch(
+            self,
+            context_pack,
+            *,
+            resume_session_id=None,
+            on_thread_started=None,
+            on_heartbeat=None,
+        ):
+            if on_thread_started:
+                on_thread_started("thread-invalid")
+            raise RuntimeError("codex exec produced no schema-valid final agent receipt")
+
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        SchemaInvalidLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "backoff"
+    assert result.terminal_receipt["outcome"] == "launcher_contract_failed"
+    assert result.terminal_receipt["reason"] == "invalid_coordinator_output"
+    assert result.terminal_receipt["error_type"] == "RuntimeError"
+    assert result.claimed_by is None
+    assert result.lease_id is None
+    with state.store._connect() as conn:
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM verification_exceptions WHERE run_id=?",
+                (result.run_id,),
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_missing_terminal_output_releases_active_lease(tmp_path) -> None:
+    class MissingTerminalLauncher(Launcher):
+        def launch(
+            self,
+            context_pack,
+            *,
+            resume_session_id=None,
+            on_thread_started=None,
+            on_heartbeat=None,
+        ):
+            raise RuntimeError("codex exec produced no thread identity")
+
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        MissingTerminalLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "backoff"
+    assert result.terminal_receipt["outcome"] == "launcher_contract_failed"
+    assert result.claimed_by is None
+    assert result.lease_id is None
+
+
 def test_auth_preflight_requires_chatgpt_keyring_and_login_status(tmp_path) -> None:
     config = tmp_path / "config.toml"
     config.write_text(

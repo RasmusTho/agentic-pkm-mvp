@@ -75,7 +75,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - The Codex process boundary drains bounded stderr concurrently and rejects non-zero exits or
   terminal error events even when stdout contained an otherwise valid receipt. A bounded rate-limit,
   usage-limit, quota, or credit-exhaustion signal on that non-zero path remains a lease-fenced backoff
-  receipt with no repair-budget use or API-key fallback.
+  receipt with no repair-budget use or API-key fallback. A zero exit without both thread identity
+  and one schema-valid final receipt also enters exact-lease technical backoff; malformed or missing
+  coordinator output can neither terminal the run nor retain an active claim.
 - Heartbeat rejection or failure to persist the thread identity under the exact lease is immediate
   loss of coordinator authority: the consumer terminates the private Codex process group, escalates
   surviving descendants to a bounded group kill, reaps the direct child, rejects any later stdout,

@@ -1090,6 +1090,36 @@ class VerificationConsumer:
                 holder=self.holder,
                 lease_id=lease_id,
             )
+        except (RuntimeError, ValueError) as exc:
+            # A zero-exit launcher can still fail its terminal contract (for
+            # example, no thread identity or no schema-valid final receipt).
+            # Once claim/start has happened that failure needs the same exact
+            # lease-fenced outcome as every other post-claim technical seam;
+            # otherwise a malformed coordinator response strands a live run.
+            retry_after = _retry_at()
+            failure_receipt = {
+                "outcome": "launcher_contract_failed",
+                "reason": "invalid_coordinator_output",
+                "error_type": type(exc).__name__,
+                "api_fallback": False,
+                "retry_after": retry_after,
+            }
+            try:
+                return self.ledger.backoff(
+                    claimed.run_id,
+                    failure_receipt,
+                    retry_after=retry_after,
+                    holder=self.holder,
+                    lease_id=lease_id,
+                )
+            except ValueError:
+                # The lease may have expired or changed while the launcher
+                # failed. Never mutate without the exact token; recovery owns
+                # expired runs and a newer holder owns a replacement lease.
+                current = self.ledger.get(claimed.run_id)
+                if current is not None:
+                    return current
+                raise
         current = self.ledger.get(claimed.run_id)
         if current is not None and current.status == "claimed":
             started(session_id)
