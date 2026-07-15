@@ -17,40 +17,41 @@ from app.dispatcher.store import SqliteStore
 CONTRACT_VERSION = "verification_dispatch_request.v1"
 TERMINAL_STATES = frozenset({"completed", "failed", "needs_human", "superseded"})
 ACTIVE_STATES = frozenset({"claimed", "running"})
-_REQUEST_FIELDS = frozenset(
-    {
-        "contract_version",
-        "stage",
-        "repository",
-        "pr_number",
-        "linked_issue",
-        "supporting_issues",
-        "current_head_sha",
-        "source_workflow",
-        "artifact_provenance",
-        "evidence_pack",
-        "live_truth",
-        "generated_at",
-        "idempotency_key",
-    }
+_REQUEST_FIELDS = (
+    "contract_version",
+    "stage",
+    "repository",
+    "pr_number",
+    "linked_issue",
+    "supporting_issues",
+    "current_head_sha",
+    "source_workflow",
+    "artifact_provenance",
+    "evidence_pack",
+    "live_truth",
+    "generated_at",
+    "idempotency_key",
 )
 _NESTED_REQUEST_FIELDS = {
-    "source_workflow": frozenset({"name", "run_id", "run_attempt", "head_sha"}),
-    "artifact_provenance": frozenset(
-        {"workflow_run_id", "repository_id", "artifact_name"}
+    "source_workflow": ("name", "run_id", "run_attempt", "head_sha"),
+    "artifact_provenance": (
+        "workflow_run_id",
+        "repository_id",
+        "artifact_name",
     ),
-    "evidence_pack": frozenset(
-        {
-            "contract",
-            "workflow_name",
-            "artifact_name",
-            "repository",
-            "pr_number",
-            "head_sha",
-        }
+    "evidence_pack": (
+        "contract",
+        "workflow_name",
+        "artifact_name",
+        "repository",
+        "pr_number",
+        "head_sha",
     ),
-    "live_truth": frozenset(
-        {"repository", "pr_number", "current_head_sha", "source_run_id"}
+    "live_truth": (
+        "repository",
+        "pr_number",
+        "current_head_sha",
+        "source_run_id",
     ),
 }
 
@@ -117,26 +118,34 @@ def _positive_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
-def _canonical_request(request: Mapping[str, object]) -> dict[str, object]:
-    """Project the request onto the complete recursive v1 allowlist."""
-    if set(request) != _REQUEST_FIELDS:
-        raise ValueError("malformed verification dispatch request")
-    canonical: dict[str, object] = {}
-    for key in _REQUEST_FIELDS:
-        value = request[key]
-        nested_fields = _NESTED_REQUEST_FIELDS.get(key)
-        if nested_fields is not None:
-            if not isinstance(value, Mapping) or set(value) != nested_fields:
-                raise ValueError("malformed verification dispatch request")
-            canonical[key] = {nested_key: value[nested_key] for nested_key in nested_fields}
-        elif key == "supporting_issues":
-            if not isinstance(value, list):
-                raise ValueError("malformed verification dispatch request")
-            canonical[key] = list(value)
-        else:
-            canonical[key] = value
-    _validate_request(canonical)
-    return canonical
+def _closed_projection(
+    value: Mapping[str, object], *, fields: Sequence[str], location: str
+) -> dict[str, object]:
+    if any(not isinstance(key, str) or key not in fields for key in value):
+        raise ValueError(
+            f"verification request contains unknown properties in {location}"
+        )
+    if any(field not in value for field in fields):
+        raise ValueError(
+            f"verification request is missing required properties in {location}"
+        )
+    return {field: value[field] for field in fields}
+
+
+def _canonical_request_projection(request: Mapping[str, object]) -> dict[str, object]:
+    """Return the only request shape permitted to cross into durable state."""
+    projected = _closed_projection(request, fields=_REQUEST_FIELDS, location="request")
+    for field, nested_fields in _NESTED_REQUEST_FIELDS.items():
+        value = projected.get(field)
+        if not isinstance(value, Mapping):
+            raise ValueError(f"malformed verification {field.replace('_', '-')} identity")
+        projected[field] = _closed_projection(
+            value, fields=nested_fields, location=field
+        )
+    supporting_issues = projected.get("supporting_issues")
+    if isinstance(supporting_issues, list):
+        projected["supporting_issues"] = list(supporting_issues)
+    return projected
 
 
 def _validate_request(request: Mapping[str, object]) -> None:
@@ -297,7 +306,9 @@ class VerificationDispatchLedger:
 
     def ingest(self, request: Mapping[str, object]) -> VerificationRun:
         authenticated_artifact = isinstance(request, _AuthenticatedVerificationRequest)
-        request = _canonical_request(request)
+        request = _canonical_request_projection(request)
+        _validate_request(request)
+        now = _now()
         run_id = f"vrun-{str(request['idempotency_key'])[:16]}"
         with self.store._connect() as conn:
             now = _begin_immediate_now(conn)

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+import json
 import sqlite3
 from threading import Event, Lock, Thread
 
@@ -23,6 +24,71 @@ def test_shared_request_fixture_carries_governing_issue() -> None:
 
     assert payload["linked_issue"] == 3603
     assert payload["supporting_issues"] == []
+
+
+@pytest.mark.parametrize(
+    ("path", "field"),
+    [
+        ((), "credential"),
+        (("source_workflow",), "token"),
+        (("artifact_provenance",), "secret"),
+        (("evidence_pack",), "private_key"),
+        (("live_truth",), "authorization"),
+    ],
+)
+def test_ingest_rejects_unknown_request_properties_before_persistence(
+    tmp_path, path: tuple[str, ...], field: str
+) -> None:
+    state = ledger(tmp_path)
+    payload = request()
+    target: dict[str, object] = payload
+    for component in path:
+        nested = target[component]
+        assert isinstance(nested, dict)
+        target = nested
+    target[field] = "must-not-persist"
+
+    with pytest.raises(ValueError, match="unknown properties"):
+        state.ingest(payload)
+
+    with state.store._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM verification_runs").fetchone()[0] == 0
+
+
+def test_ingest_persists_canonical_request_projection(tmp_path) -> None:
+    state = ledger(tmp_path)
+    payload = request()
+
+    run = state.ingest(payload)
+
+    with state.store._connect() as conn:
+        stored = conn.execute(
+            "SELECT request_json FROM verification_runs WHERE run_id=?", (run.run_id,)
+        ).fetchone()[0]
+    assert json.loads(stored) == payload
+    assert run.request == payload
+    assert run.request is not payload
+    for key in (
+        "source_workflow",
+        "artifact_provenance",
+        "evidence_pack",
+        "live_truth",
+    ):
+        assert run.request[key] is not payload[key]
+
+
+def test_canonical_request_projection_preserves_idempotent_replay(tmp_path) -> None:
+    state = ledger(tmp_path)
+    first_payload = request()
+    replay_payload = json.loads(json.dumps(first_payload))
+
+    first = state.ingest(first_payload)
+    replay = state.ingest(replay_payload)
+
+    assert replay.run_id == first.run_id
+    assert replay.request == first.request
+    with state.store._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM verification_runs").fetchone()[0] == 1
 
 
 class _ClaimClock:
