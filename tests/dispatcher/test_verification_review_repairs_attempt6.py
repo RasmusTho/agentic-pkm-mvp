@@ -35,6 +35,9 @@ _ADVERSARIAL_PRIVATE_VALUES = (
     r"\\server\share\private-vault\token.txt",
     r'{"x-api-key":"hunter\"vault-secret"}',
     "https://github.com/%2567%2568%2570%255FABCDEF1234567890/repo/issues/1",
+    "https://[github.com/org/repo",
+    "https://github.com：443/org/repo",
+    "https://github.com／org/repo",
 )
 _SAFE_EVIDENCE_URL = "https://github.com/RasmusTho/agentic-pkm-mvp/pull/3620"
 
@@ -250,6 +253,30 @@ def test_encoded_github_components_fail_closed(url: str) -> None:
 
     assert "%" not in str(sanitized["summary"])
     assert str(sanitized["summary"]).endswith("/REDACTED")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://[github.com/org/repo",
+        "https://github.com：443/org/repo",
+        "https://github.com／org/repo",
+    ],
+)
+def test_malformed_https_origins_fail_closed(url: str) -> None:
+    sanitized = sanitize_verification_closer_receipt(
+        {
+            "verdict": "blocked",
+            "head_sha": HEAD,
+            "summary": url,
+            "receipt_ids": [],
+            "retry_after": None,
+            "review_events": None,
+            "human_exception": None,
+        }
+    )
+
+    assert sanitized["summary"] == "[REDACTED_URL]"
 
 
 def test_quoted_safe_github_urls_and_many_placeholders_remain_actionable() -> None:

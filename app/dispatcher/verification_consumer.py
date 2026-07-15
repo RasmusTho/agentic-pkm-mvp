@@ -780,9 +780,9 @@ _HTTPS_URL_CANDIDATE = re.compile(r"https://[^\s,;)\]}\"'<>]+", re.IGNORECASE)
 def _safe_github_url_projection(value: str) -> str:
     """Retain only bounded, recognized GitHub evidence routes without secrets."""
 
-    parsed = urlsplit(value)
-    host = parsed.hostname.lower() if parsed.hostname is not None else ""
     try:
+        parsed = urlsplit(value)
+        host = parsed.hostname.lower() if parsed.hostname is not None else ""
         port = parsed.port
     except ValueError:
         return "[REDACTED_URL]"
