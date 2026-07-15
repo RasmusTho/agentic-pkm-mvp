@@ -59,9 +59,11 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   independently bounded before an in-memory request is accepted. A mismatch or oversized artifact
   fails closed before claim or model launch.
 - Missing or pending checks and auth/rate limits enter time-bounded `backoff`; replay cannot launch
-  before `retry_after`. Terminal completion additionally requires two fresh clean review receipts
-  after the final durable repair attempt. Standard and strongest-capability repair budgets are
-  persisted across restart.
+  before `retry_after`. Rate-limit classification requires either a structured `retry` receipt or a
+  non-zero execution-failure signal with rate/quota evidence; arbitrary prose in another terminal
+  verdict cannot select rate-limit backoff. Terminal completion additionally requires two fresh clean
+  review receipts after the final durable repair attempt. Standard and strongest-capability repair
+  budgets are persisted across restart.
 - The schema-valid coordinator receipt carries ordered repair/review events into the same
   lease-fenced ledger as one atomic, deterministically identified batch. Exact receipt replay is a
   no-op, and a later invalid/conflicting event rolls back the whole batch. A semantic event-batch

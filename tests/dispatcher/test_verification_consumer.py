@@ -134,6 +134,30 @@ class RateLimitedLauncher(Launcher):
         }
 
 
+class NegatedRateLimitLauncher(Launcher):
+    def launch(
+        self,
+        context_pack,
+        *,
+        resume_session_id=None,
+        on_thread_started=None,
+        on_heartbeat=None,
+    ):
+        self.calls.append((context_pack, resume_session_id))
+        session = resume_session_id or "thread-not-rate-limited"
+        if on_thread_started:
+            on_thread_started(session)
+        return session, {
+            "verdict": "blocked",
+            "head_sha": HEAD,
+            "summary": "No rate limit was observed; verification is technically blocked",
+            "receipt_ids": [],
+            "retry_after": None,
+            "review_events": None,
+            "human_exception": None,
+        }
+
+
 class DeliveredLauncher(Launcher):
     def launch(
         self,
@@ -2037,6 +2061,53 @@ def test_rate_limit_queues_without_api_fallback_or_duplicate(tmp_path) -> None:
     assert queued.status == "backoff"
     assert queued.terminal_receipt["api_fallback"] is False
     assert state.ingest(request()).run_id == queued.run_id
+    with state.store._connect() as conn:
+        attempts = conn.execute(
+            "SELECT attempt_kind, outcome FROM verification_attempts"
+        ).fetchall()
+    assert [(row[0], row[1]) for row in attempts] == [("verification", "rate_limited")]
+
+
+def test_negated_rate_limit_summary_does_not_enter_rate_limit_backoff(tmp_path) -> None:
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        NegatedRateLimitLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.terminal_receipt["summary"].startswith("No rate limit")
+    with state.store._connect() as conn:
+        attempts = conn.execute(
+            "SELECT attempt_kind, outcome FROM verification_attempts"
+        ).fetchall()
+    assert [(row[0], row[1]) for row in attempts] == [("verification", "launched")]
+
+
+def test_structured_rate_limit_receipt_replays_without_duplicate_attempt(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    launcher = RateLimitedLauncher()
+    consumer = VerificationConsumer(
+        state, Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    )
+    first = consumer.consume(request())
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET retry_after='2000-01-01T00:00:00+00:00' "
+            "WHERE run_id=?",
+            (first.run_id,),
+        )
+        conn.commit()
+
+    replay = consumer.consume(request())
+
+    assert replay.status == "backoff"
+    assert replay.terminal_receipt["outcome"] == "rate_limited"
     with state.store._connect() as conn:
         attempts = conn.execute(
             "SELECT attempt_kind, outcome FROM verification_attempts"

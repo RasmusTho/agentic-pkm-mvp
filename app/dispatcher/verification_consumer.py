@@ -1161,6 +1161,9 @@ class VerificationConsumer:
         if current is not None and current.status == "claimed":
             started(session_id)
         config = self.launcher.config
+        structured_rate_limit = (
+            receipt.get("verdict") == "retry" and self._rate_limited(receipt)
+        )
         self.ledger.record_attempt(
             claimed.run_id,
             "verification",
@@ -1168,7 +1171,7 @@ class VerificationConsumer:
             config.model,
             config.reasoning_effort,
             pack,
-            "rate_limited" if self._rate_limited(receipt) else "launched",
+            "rate_limited" if structured_rate_limit else "launched",
             receipt,
             holder=self.holder,
             lease_id=lease_id,
@@ -1179,7 +1182,7 @@ class VerificationConsumer:
                 receipt,
             ),
         )
-        if self._rate_limited(receipt):
+        if structured_rate_limit:
             return self.ledger.backoff(
                 claimed.run_id,
                 {"outcome": "rate_limited", "api_fallback": False, "receipt": dict(receipt)},
