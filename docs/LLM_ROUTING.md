@@ -45,8 +45,10 @@ For embeddings, a blank compiled task target also permits the operator activatio
 `EMBED_PROFILE` to select one complete named identity (provider, model, dimension, and
 normalization) before the generic `EMBED_MODEL` / `OLLAMA_EMBED_MODEL` environment fallback is
 applied. The checked-in `profile: default` plus `ollama.embed.nomic_embed_text` compiled target is
-the shipped no-activation placeholder, so an explicit `EMBED_PROFILE` replaces that whole target.
-Any other explicit compiled `primary.{model_id,provider,model,profile}` target remains
+the shipped no-activation placeholder, so it defers as one unit to embedding-profile resolution:
+an explicit `EMBED_PROFILE` or an operator-selected `embedding_profiles.default_profile` replaces
+the whole target, while the unchanged default profile still resolves to nomic. Any other explicit
+compiled `primary.{model_id,provider,model,profile}` target remains
 higher-precedence settings authority. This prevents a profile activation such as `bge-m3` from
 being blocked by the placeholder or combined with the shipped `nomic-embed-text` model fallback
 into a non-existent hybrid identity.

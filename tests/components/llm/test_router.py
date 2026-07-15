@@ -5,7 +5,7 @@ import pytest
 from app.components.llm.fabric import get_embeddings_client
 from app.components.llm.router import LLMRouter, LLMTaskIntent
 from app.config import llm as llm_config
-from app.settings.models import LLMRoutingSettings, SettingsBundle
+from app.settings.models import EmbeddingProfiles, LLMRoutingSettings, SettingsBundle
 
 
 @pytest.fixture(autouse=True)
@@ -151,6 +151,42 @@ def test_shipped_default_embedding_target_stays_nomic_without_profile(
     assert client.identity.provider == "ollama"
     assert client.identity.model == "nomic-embed-text:latest"
     assert client.identity.dim == 768
+
+
+def test_router_honors_settings_default_profile_over_shipped_default_target(
+    monkeypatch,
+    clean_llm_env,
+) -> None:
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            tasks={
+                "embed": LLMRoutingSettings.TaskPolicy(
+                    primary=LLMRoutingSettings.RouteTarget(
+                        model_id="ollama.embed.nomic_embed_text",
+                        provider="ollama",
+                        model="nomic-embed-text:latest",
+                        profile="default",
+                    )
+                )
+            }
+        ),
+        embedding_profiles=EmbeddingProfiles(default_profile="bge-m3"),
+    )
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(
+        "app.components.embeddings.legacy.get_settings_bundle", lambda: bundle
+    )
+
+    intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    route = LLMRouter().route(intent)
+    client = get_embeddings_client(intent)
+
+    assert route.provider == "ollama"
+    assert route.model == "bge-m3:latest"
+    assert client.identity.provider == "ollama"
+    assert client.identity.model == "bge-m3:latest"
+    assert client.identity.dim == 1024
+    assert client.identity.normalize is True
 
 
 def test_explicit_embedding_task_target_remains_higher_precedence_than_env_profile(
