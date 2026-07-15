@@ -70,7 +70,7 @@ turns an invalid explicit selection into a dangerous silent read/write against t
 ## Source Anchors
 
 - `docs/MULTI_VAULT_RUNTIME/README.md :: Identity and selection`
-- `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md :: precedence`
+- `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md :: Runtime selection model`
 - `app/config/paths.py :: resolve_optional_vault_root`
 - `app/vault/manager.py :: load_last_active`
 

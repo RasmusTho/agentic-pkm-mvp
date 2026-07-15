@@ -159,7 +159,8 @@ acceptance criteria prefixed with its ID:
 2. **MVR-06B — compatibility bridge handoff:** atomic #3163 watcher bridge retirement, durable picker
    and default-driven compatibility binding, commit-before-hint, Settings Spine drain/rebind, and
    activation only of governed singleton/explicit-empty transitions after the supervisor can honor
-   them. A second enrollment and every many-binding transition remain capability-gated until 06C.
+   them. A second enrollment and every many-binding transition remain capability-gated through 06C
+   and until 06D atomically enables the matching queue-dispatch contract.
    It updates the vault/settings and Settings Spine owners. Depends on 06A and #3163.
 3. **MVR-06C — isolated lifecycle supervision:** zero/one/many-capable per-binding watcher/worker/settings
    supervisor, ownership-lease checks, revision/auth-epoch reconciliation, truthful gated health, and
