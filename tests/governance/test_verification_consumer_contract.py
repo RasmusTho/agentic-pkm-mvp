@@ -34,7 +34,11 @@ def test_chatgpt_subscription_keyring_auth_is_required() -> None:
     assert 'mode != "chatgpt"' in text
     assert 'store != "keyring"' in text
     assert '["codex", "login", "status"]' in text
-    assert '"OPENAI_API_KEY", "CODEX_API_KEY"' in text
+    assert "_COORDINATOR_ENV_ALLOWLIST" in text
+    assert "_minimal_coordinator_environment()" in text
+    assert "os.environ.items()" not in text
+    assert "OPENAI_API_KEY" not in text
+    assert "CODEX_API_KEY" not in text
     assert "auth.json" in text  # only in the explicit never-read contract docstring
     assert "read_text" not in "\n".join(
         line for line in text.splitlines() if "auth.json" in line

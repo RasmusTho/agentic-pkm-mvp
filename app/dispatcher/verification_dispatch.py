@@ -17,6 +17,52 @@ from app.dispatcher.store import SqliteStore
 CONTRACT_VERSION = "verification_dispatch_request.v1"
 TERMINAL_STATES = frozenset({"completed", "failed", "needs_human", "superseded"})
 ACTIVE_STATES = frozenset({"claimed", "running"})
+_REQUEST_FIELDS = frozenset(
+    {
+        "contract_version",
+        "stage",
+        "repository",
+        "pr_number",
+        "linked_issue",
+        "supporting_issues",
+        "current_head_sha",
+        "source_workflow",
+        "artifact_provenance",
+        "evidence_pack",
+        "live_truth",
+        "generated_at",
+        "idempotency_key",
+    }
+)
+_NESTED_REQUEST_FIELDS = {
+    "source_workflow": frozenset({"name", "run_id", "run_attempt", "head_sha"}),
+    "artifact_provenance": frozenset(
+        {"workflow_run_id", "repository_id", "artifact_name"}
+    ),
+    "evidence_pack": frozenset(
+        {
+            "contract",
+            "workflow_name",
+            "artifact_name",
+            "repository",
+            "pr_number",
+            "head_sha",
+        }
+    ),
+    "live_truth": frozenset(
+        {"repository", "pr_number", "current_head_sha", "source_run_id"}
+    ),
+}
+
+
+class _AuthenticatedVerificationRequest(dict[str, object]):
+    """In-process capability minted only after GitHub producer/source authentication."""
+
+
+def _authenticated_verification_request(
+    request: Mapping[str, object],
+) -> _AuthenticatedVerificationRequest:
+    return _AuthenticatedVerificationRequest(request)
 
 
 class VerificationSubscriptionBusy(ValueError):
@@ -71,6 +117,28 @@ def _positive_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
+def _canonical_request(request: Mapping[str, object]) -> dict[str, object]:
+    """Project the request onto the complete recursive v1 allowlist."""
+    if set(request) != _REQUEST_FIELDS:
+        raise ValueError("malformed verification dispatch request")
+    canonical: dict[str, object] = {}
+    for key in _REQUEST_FIELDS:
+        value = request[key]
+        nested_fields = _NESTED_REQUEST_FIELDS.get(key)
+        if nested_fields is not None:
+            if not isinstance(value, Mapping) or set(value) != nested_fields:
+                raise ValueError("malformed verification dispatch request")
+            canonical[key] = {nested_key: value[nested_key] for nested_key in nested_fields}
+        elif key == "supporting_issues":
+            if not isinstance(value, list):
+                raise ValueError("malformed verification dispatch request")
+            canonical[key] = list(value)
+        else:
+            canonical[key] = value
+    _validate_request(canonical)
+    return canonical
+
+
 def _validate_request(request: Mapping[str, object]) -> None:
     if "base_ref" in request or "head_ref" in request:
         raise ValueError("verification request contains untrusted branch refs")
@@ -123,6 +191,18 @@ def _validate_request(request: Mapping[str, object]) -> None:
         or artifact_provenance.get("artifact_name") != expected_artifact_name
     ):
         raise ValueError("malformed verification artifact provenance")
+    evidence_pack = request.get("evidence_pack")
+    if (
+        not isinstance(evidence_pack, Mapping)
+        or evidence_pack.get("contract") != "pr_evidence_pack"
+        or evidence_pack.get("workflow_name") != "PR Evidence Pack"
+        or evidence_pack.get("artifact_name")
+        != f"pr-evidence-pack-{request['pr_number']}"
+        or evidence_pack.get("repository") != repository
+        or evidence_pack.get("pr_number") != request["pr_number"]
+        or evidence_pack.get("head_sha") != head_sha
+    ):
+        raise ValueError("malformed verification evidence-pack identity")
     live_truth = request.get("live_truth")
     if not isinstance(live_truth, Mapping):
         raise ValueError("malformed verification live-truth identity")
@@ -216,11 +296,11 @@ class VerificationDispatchLedger:
         self.store.initialize()
 
     def ingest(self, request: Mapping[str, object]) -> VerificationRun:
-        _validate_request(request)
-        now = _now()
+        authenticated_artifact = isinstance(request, _AuthenticatedVerificationRequest)
+        request = _canonical_request(request)
         run_id = f"vrun-{str(request['idempotency_key'])[:16]}"
         with self.store._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            now = _begin_immediate_now(conn)
             active_before_exact = list(
                 conn.execute(
                     """
@@ -321,7 +401,49 @@ class VerificationDispatchLedger:
                 if candidate_request.get("linked_issue") != request.get("linked_issue"):
                     raise ValueError("verification canonical run governing issue mismatch")
                 if candidate["current_head_sha"] != request.get("current_head_sha"):
-                    raise ValueError("verification artifact head does not match canonical run")
+                    lease_expires_at = candidate["lease_expires_at"]
+                    candidate_supporting = candidate_request.get("supporting_issues")
+                    authority_matches = (
+                        authenticated_artifact
+                        and candidate["status"] == "running"
+                        and isinstance(lease_expires_at, str)
+                        and _parse_timestamp(lease_expires_at)
+                        <= _parse_timestamp(now)
+                        and candidate_supporting == request.get("supporting_issues")
+                    )
+                    if not authority_matches:
+                        raise ValueError(
+                            "verification artifact head does not match canonical run"
+                        )
+                    next_head = request["current_head_sha"]
+                    conn.execute(
+                        """
+                        UPDATE verification_runs
+                        SET status='queued', current_head_sha=?, verified_head_sha=NULL,
+                            claimed_by=NULL, lease_id=NULL, lease_expires_at=NULL,
+                            last_heartbeat_at=NULL, coordinator_session_id=NULL,
+                            context_pack_json=NULL, terminal_receipt_json=NULL,
+                            stop_reason=NULL, retry_after=NULL, updated_at=?
+                        WHERE run_id=? AND status='running' AND lease_expires_at=?
+                        """,
+                        (
+                            next_head,
+                            now,
+                            candidate["run_id"],
+                            lease_expires_at,
+                        ),
+                    )
+                    if conn.execute("SELECT changes()").fetchone()[0] != 1:
+                        raise ValueError(
+                            "verification canonical run authority changed during reconciliation"
+                        )
+                    reopened = conn.execute(
+                        "SELECT * FROM verification_runs WHERE run_id=?",
+                        (candidate["run_id"],),
+                    ).fetchone()
+                    assert reopened is not None
+                    conn.commit()
+                    return _run(reopened)
                 conn.commit()
                 return _run(candidate)
             terminal_candidates = list(
@@ -403,7 +525,7 @@ class VerificationDispatchLedger:
                     request["current_head_sha"],
                     request["current_head_sha"],
                     request["stage"],
-                    _json(dict(request)),
+                    _json(request),
                     now,
                     now,
                 ),

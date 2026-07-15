@@ -69,6 +69,15 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   within the bounded artifact listing so one retained artifact cannot suppress a later valid request;
   an invalid-only poll remains a fail-loud rejection, while GitHub API and artifact-download
   transport failures still propagate and stop the poll.
+- The authenticated request is projected onto the exact recursive v1 field allowlist before its
+  idempotency identity is used or any JSON reaches SQLite; unknown top-level or nested fields are
+  rejected rather than copied. The auth preflight and coordinator subprocess inherit only the
+  minimal non-secret host environment needed to locate Codex and its ChatGPT/keyring login. If the
+  first authenticated artifact for a repaired head arrives while the prior head's coordinator row
+  still has an expired running lease, ingestion atomically requeues that same run on the new head,
+  clears stale lease/session/terminal state, and retains every existing attempt and the exhausted
+  standard/escalated 2+2 repair budget. An unauthenticated artifact, a live lease, mismatched issue
+  authority, or an ambiguous terminal chain fails closed without changing the run.
 - Missing or pending checks and auth/rate limits enter time-bounded `backoff`; replay cannot launch
   before `retry_after`. Rate-limit classification requires either a structured `retry` receipt or the
   launcher's structured `failure_class=rate_limit`, derived once from a non-zero provider failure;
