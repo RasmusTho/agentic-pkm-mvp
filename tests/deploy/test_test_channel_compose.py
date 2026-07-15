@@ -19,9 +19,15 @@ def _merged_compose(
     explicit_vault: Path | None = None,
 ) -> dict[str, object]:
     env = os.environ.copy()
-    for key in ("COMPOSE_FILE", "TEST_VAULT_ROOT", "VAULT_HOST_ROOT", "VAULT_ROOT", "VAULT_ROOT_TEST"):
+    for key in (
+        "COMPOSE_FILE",
+        "LLM_PROVIDER",
+        "TEST_VAULT_ROOT",
+        "VAULT_HOST_ROOT",
+        "VAULT_ROOT",
+        "VAULT_ROOT_TEST",
+    ):
         env.pop(key, None)
-    env["LLM_PROVIDER"] = "mock"
     env["WATCHER_RUNTIME_ENV_FILE"] = str(runtime_env)
 
     command = [
