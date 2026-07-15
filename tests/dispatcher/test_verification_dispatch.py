@@ -217,10 +217,9 @@ def test_ingest_claim_and_terminal_lifecycle_is_idempotent(tmp_path) -> None:
     with pytest.raises(ValueError):
         state.terminal(first.run_id, "failed", {"outcome": "other"}, holder="coordinator", lease_id=claimed.lease_id)
 
-    second = state.ingest(request("b" * 40))
-    second_claim = state.claim(second.run_id, "coordinator")
-    failed = state.terminal(second.run_id, "failed", {"outcome": "launch_failed"}, holder="coordinator", lease_id=second_claim.lease_id)
-    assert failed.status == "failed"
+    assert state.ingest(request()).status == "failed"
+    with pytest.raises(ValueError, match="canonical chain is terminal: failed"):
+        state.ingest(request("b" * 40))
 
 
 def test_duplicate_and_concurrent_claims_start_one_run(tmp_path) -> None:
