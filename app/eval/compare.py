@@ -465,11 +465,20 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
                     f"categorical failure semantics are inconsistent at "
                     f"{failures_path}[{index}]"
                 )
-        elif entry["value"] >= entry["threshold"]:
-            raise ScorecardCompareError(
-                f"threshold-floor failure does not violate its floor at "
-                f"{failures_path}[{index}]"
-            )
+        else:
+            if entry["scope"] in {
+                "classification:hard_gate",
+                "provisional_memory:hard_gate",
+            }:
+                raise ScorecardCompareError(
+                    f"hard-gate scope cannot be threshold-relative at "
+                    f"{failures_path}[{index}]"
+                )
+            if entry["value"] >= entry["threshold"]:
+                raise ScorecardCompareError(
+                    f"threshold-floor failure does not violate its floor at "
+                    f"{failures_path}[{index}]"
+                )
     if scorecard_regression != bool(failures):
         raise ScorecardCompareError(
             f"scorecard regression flag contradicts failures at {label}"

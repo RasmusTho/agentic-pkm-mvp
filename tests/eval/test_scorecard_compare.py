@@ -648,6 +648,34 @@ def test_cli_rejects_invalid_failure_kind(
 
 
 @pytest.mark.parametrize(
+    "scope", ["classification:hard_gate", "provisional_memory:hard_gate"]
+)
+def test_cli_rejects_threshold_floor_with_hard_gate_scope(
+    scope: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    candidate = load_scorecard(CANDIDATE_PATH)
+    candidate["regression"] = True
+    candidate["failures"] = [
+        {
+            "scope": scope,
+            "metric": "fake_floor",
+            "value": -1.0,
+            "threshold": 0.0,
+            "kind": "threshold_floor",
+        }
+    ]
+    path = tmp_path / "candidate_hard_gate_as_floor.json"
+    path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    assert eval_run.main(
+        ["compare", "--baseline", str(BASELINE_PATH), "--candidate", str(path)]
+    ) == 2
+    assert "hard-gate scope cannot be threshold-relative" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
     "regression,failures",
     [
         (True, []),
