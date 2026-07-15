@@ -127,9 +127,19 @@ def test_deploy_script_recreates_the_new_service() -> None:
     unversioned drift the standard promotion path would silently miss.
     """
     text = (_REPO_ROOT / "scripts" / "deploy_channel.sh").read_text(encoding="utf-8")
-    for line in text.splitlines():
-        if line.strip().startswith(("compose pull", "compose up -d --force-recreate")):
-            assert _SERVICE in line, line
+    lines = [line.strip() for line in text.splitlines()]
+    pull_lines = [line for line in lines if line.startswith("compose pull")]
+    runtime_recreate_lines = [
+        line
+        for line in lines
+        if line.startswith("compose up -d --force-recreate")
+        and " api " in f" {line} "
+    ]
+
+    assert pull_lines, "deploy script must pull channel service images"
+    assert runtime_recreate_lines, "deploy script must recreate runtime services"
+    for line in [*pull_lines, *runtime_recreate_lines]:
+        assert _SERVICE in line, line
 
 
 def test_deploy_script_health_gates_the_new_service() -> None:
