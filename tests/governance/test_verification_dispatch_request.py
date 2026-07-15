@@ -115,11 +115,15 @@ def test_ambiguous_governing_issue_emits_no_request() -> None:
     conflicting["body"] = "Governing-Issue: #3603\nGoverning-Issue: #3626"
     mismatched = _pr()
     mismatched["body"] = "Governing-Issue: #3603\nFixes #3626"
+    folded = _pr()
+    folded["body"] = "Governing-Issue:\n#3603\nFixes #3603"
 
     assert resolve_issue_contract(missing["body"]) is None
     assert resolve_issue_contract(conflicting["body"]) is None
+    assert resolve_issue_contract(folded["body"]) is None
     assert build_request(event=_event(), pr=missing, issue={"number": 3603}) is None
     assert build_request(event=_event(), pr=conflicting, issue={"number": 3603}) is None
+    assert build_request(event=_event(), pr=folded, issue={"number": 3603}) is None
     assert build_request(event=_event(), pr=mismatched, issue={"number": 3626}) is None
 
 

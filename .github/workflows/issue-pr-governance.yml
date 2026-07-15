@@ -144,10 +144,13 @@ jobs:
             // (e.g. a change list describing this very check) is not mistaken for the section.
             const builderOpsRoutingMatch = body.match(/(?:^|\n)## BuilderOps Routing[\s\S]*?(?=\n##\s|\n---)|(?:^|\n)## BuilderOps Routing[\s\S]*/i);
             const builderOpsRoutingSection = builderOpsRoutingMatch ? builderOpsRoutingMatch[0] : "";
-            const issueLinkPattern = /(Fixes|Closes|Resolves)\s+#\d+/i;
+            const issueLinkPattern = /(Fixes|Closes|Resolves)[ \t]+#[1-9][0-9]*\b/i;
             const hasIssueLink = issueLinkPattern.test(body);
-            const governingIssueLines = body.match(/^\s*Governing-Issue\s*:.*$/gim) || [];
-            const exactGoverningIssueMatches = body.match(/^\s*Governing-Issue:\s*#([1-9][0-9]*)\s*$/gim) || [];
+            const issueLinkMentions = body.match(/\b(?:Fixes|Closes|Resolves)[ \t]+#\S+/gi) || [];
+            const exactIssueLinkMatches = body.match(/\b(?:Fixes|Closes|Resolves)[ \t]+#[1-9][0-9]*\b/gi) || [];
+            const governingIssueLines = body.match(/^[ \t]*Governing-Issue[ \t]*:.*$/gim) || [];
+            const exactGoverningIssueMatches = body.match(/^[ \t]*Governing-Issue:[ \t]*#([1-9][0-9]*)[ \t]*$/gim) || [];
+            const hasIssueAuthority = governingIssueLines.length > 0 || issueLinkMentions.length > 0;
             const hasConcreteBuilderOpsValue = (pattern) => {
               const match = builderOpsRoutingSection.match(pattern);
               if (!match) {
@@ -161,14 +164,19 @@ jobs:
               hasConcreteBuilderOpsValue(/(?:^|\n)\s*-\s*Records\/projections\/receipts:\s*(.*?)\s*(?:\n|$)/i) &&
               hasConcreteBuilderOpsValue(/(?:^|\n)\s*-\s*Reason:\s*(.*?)\s*(?:\n|$)/i);
             const builderOpsRoutingSatisfied =
-              hasBuilderOpsRouting || (isTier1Lane && !hasIssueLink && !builderOpsRoutingSection);
+              hasBuilderOpsRouting || (isTier1Lane && !hasIssueAuthority && !builderOpsRoutingSection);
             if (!builderOpsRoutingSatisfied) {
               core.setFailed("PR body must include `## BuilderOps Routing` with concrete `Records/projections/receipts:` and `Reason:` lines. Tier 1 docs-authoring/governance-lane PRs may omit the section entirely when nothing was routed (absence = none); an unfilled template section is still rejected.");
               return;
             }
-            if (hasIssueLink) {
-              if (governingIssueLines.length !== 1 || exactGoverningIssueMatches.length !== 1) {
-                core.setFailed("Issue-backed PRs must include exactly one positive `Governing-Issue: #<id>` line. The governing issue may differ from closed supporting issues in an approved multi-issue PR.");
+            if (hasIssueAuthority) {
+              if (
+                governingIssueLines.length !== 1 ||
+                exactGoverningIssueMatches.length !== 1 ||
+                !hasIssueLink ||
+                issueLinkMentions.length !== exactIssueLinkMatches.length
+              ) {
+                core.setFailed("Issue-backed PRs must include exactly one positive `Governing-Issue: #<id>` line and at least one positive closing issue. The governing issue may differ from closed supporting issues in an approved multi-issue PR; issue-free lanes must omit both authority surfaces.");
                 return;
               }
               return;

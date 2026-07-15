@@ -6,10 +6,10 @@ import re
 
 
 GOVERNING_ISSUE_PATTERN = re.compile(
-    r"(?im)^\s*Governing-Issue:\s*#([1-9][0-9]*)\s*$"
+    r"(?im)^[ \t]*Governing-Issue:[ \t]*#([1-9][0-9]*)[ \t]*$"
 )
 SUPPORTING_ISSUE_PATTERN = re.compile(
-    r"\b(?:Fixes|Closes|Resolves|Refs)\s+#([1-9][0-9]*)\b", re.I
+    r"\b(?:Fixes|Closes|Resolves|Refs)[ \t]+#([1-9][0-9]*)\b", re.I
 )
 
 

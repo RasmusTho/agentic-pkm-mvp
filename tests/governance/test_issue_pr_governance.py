@@ -23,12 +23,17 @@ _TIER1_LANE_REGEX = re.compile(
     r"^\-\s+\[x\]\s+(?:Docs authoring|Governance) lane\b",
     re.IGNORECASE | re.MULTILINE,
 )
-_ISSUE_LINK_REGEX = re.compile(r"(Fixes|Closes|Resolves)\s+#\d+", re.IGNORECASE)
+_ISSUE_LINK_REGEX = re.compile(
+    r"(Fixes|Closes|Resolves)[ \t]+#[1-9][0-9]*\b", re.IGNORECASE
+)
+_ISSUE_LINK_MENTION_REGEX = re.compile(
+    r"\b(?:Fixes|Closes|Resolves)[ \t]+#\S+", re.IGNORECASE
+)
 _GOVERNING_ISSUE_LINE_REGEX = re.compile(
-    r"^\s*Governing-Issue\s*:.*$", re.IGNORECASE | re.MULTILINE
+    r"^[ \t]*Governing-Issue[ \t]*:.*$", re.IGNORECASE | re.MULTILINE
 )
 _EXACT_GOVERNING_ISSUE_REGEX = re.compile(
-    r"^\s*Governing-Issue:\s*#([1-9][0-9]*)\s*$",
+    r"^[ \t]*Governing-Issue:[ \t]*#([1-9][0-9]*)[ \t]*$",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -123,17 +128,23 @@ def _builderops_routing_satisfied(body: str) -> bool:
         return True
     return (
         _TIER1_LANE_REGEX.search(body) is not None
-        and _ISSUE_LINK_REGEX.search(body) is None
+        and _GOVERNING_ISSUE_LINE_REGEX.search(body) is None
+        and _ISSUE_LINK_MENTION_REGEX.search(body) is None
         and _BUILDEROPS_ROUTING_REGEX.search(body) is None
     )
 
 
 def _governing_issue_identity_satisfied(body: str) -> bool:
-    if _ISSUE_LINK_REGEX.search(body) is None:
+    governing_lines = _GOVERNING_ISSUE_LINE_REGEX.findall(body)
+    issue_mentions = _ISSUE_LINK_MENTION_REGEX.findall(body)
+    if not governing_lines and not issue_mentions:
         return True
+    valid_issue_links = _ISSUE_LINK_REGEX.findall(body)
     return (
-        len(_GOVERNING_ISSUE_LINE_REGEX.findall(body)) == 1
+        len(governing_lines) == 1
         and len(_EXACT_GOVERNING_ISSUE_REGEX.findall(body)) == 1
+        and len(valid_issue_links) > 0
+        and len(issue_mentions) == len(valid_issue_links)
     )
 
 
@@ -146,6 +157,12 @@ def _governing_issue_identity_satisfied(body: str) -> bool:
         "Governing-Issue: #-1\nFixes #123",
         "Governing-Issue: #123\nGoverning-Issue: #456\nFixes #123",
         "Governing-Issue : #123\nFixes #123",
+        "Governing-Issue: #123",
+        "Governing-Issue: #123\nFixes #0",
+        "Governing-Issue: #123\nFixes #-1",
+        "Governing-Issue: #123\nFixes #abc",
+        "Governing-Issue:\n#123\nFixes #123",
+        "- [x] Governance lane\nFixes #0",
     ],
 )
 def test_issue_backed_pr_rejects_missing_ambiguous_or_invalid_governing_identity(
@@ -162,8 +179,22 @@ def test_issue_backed_pr_accepts_single_and_multi_issue_authority() -> None:
     assert _governing_issue_identity_satisfied(multi)
 
 
-def test_issue_free_governance_pr_does_not_require_governing_identity() -> None:
-    assert _governing_issue_identity_satisfied("- [x] Governance lane")
+@pytest.mark.parametrize(
+    "body",
+    [
+        "- [x] Governance lane",
+        "- [x] Docs authoring lane",
+        (
+            "## Direct Repair\n"
+            "Type: governance\n"
+            "Reason: bounded\n"
+            "Validation: tests\n"
+            "Issue required: no"
+        ),
+    ],
+)
+def test_issue_free_lanes_do_not_require_governing_identity(body: str) -> None:
+    assert _governing_issue_identity_satisfied(body)
 
 
 def test_issue_backed_code_pr_requires_builderops_routing_even_with_tier1_checkbox() -> None:
@@ -202,8 +233,8 @@ def test_workflow_checks_issue_link_before_allowing_tier1_builderops_omission() 
     text = _read_workflow()
 
     assert "const hasIssueLink = issueLinkPattern.test(body);" in text
-    assert "isTier1Lane && !hasIssueLink && !builderOpsRoutingSection" in text
-    assert text.index("const hasIssueLink = issueLinkPattern.test(body);") < text.index(
+    assert "isTier1Lane && !hasIssueAuthority && !builderOpsRoutingSection" in text
+    assert text.index("const hasIssueAuthority =") < text.index(
         "const builderOpsRoutingSatisfied ="
     )
 
@@ -214,8 +245,12 @@ def test_workflow_requires_exactly_one_positive_governing_identity_for_issue_bac
     for fragment in (
         "const governingIssueLines =",
         "const exactGoverningIssueMatches =",
+        "const issueLinkMentions =",
+        "const exactIssueLinkMatches =",
+        "const hasIssueAuthority =",
         "governingIssueLines.length !== 1",
         "exactGoverningIssueMatches.length !== 1",
+        "issueLinkMentions.length !== exactIssueLinkMatches.length",
         "exactly one positive `Governing-Issue: #<id>` line",
     ):
         assert fragment in text, fragment
