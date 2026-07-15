@@ -195,9 +195,13 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   terminal error events even when stdout contained an otherwise valid receipt. A bounded rate-limit,
   usage-limit, quota, or credit-exhaustion signal on that non-zero path remains a lease-fenced backoff
   receipt with no repair-budget use or API-key fallback; either diagnostic channel can supply the
-  structured provider signal without masking the other, while the canonical Codex usage-limit
-  message is trusted only in a top-level CLI `error` event and never from stderr, nested model/tool
-  output, quoted examples, or arbitrary prose. Raw stderr, terminal event content, exception
+  structured provider signal without masking the other, while canonical Codex usage-limit messages
+  are trusted only in a top-level CLI `error` event. This includes the exact model-specific CLI form
+  (`usage limit for <identifier>` followed by `Switch to another model now`) only when the identifier
+  is a bounded 1-64 character ASCII model token and is not `codex`; the same canonical, semantically
+  future retry suffix remains required. Promo-message text, unbounded or Unicode identifiers, stderr,
+  nested model/tool output, quoted examples, and arbitrary prose cannot select backoff. Raw stderr,
+  terminal event content, exception
   text, paths, and credentials are transient classification input only: durable attempts, terminal
   receipts, and `verification-status` retain only bounded outcome, return-code, failure-class,
   error-type, retry, and canonical UUID coordinator-session fields. A zero exit without both thread

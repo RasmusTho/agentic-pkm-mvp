@@ -1663,6 +1663,7 @@ def _is_codex_usage_limit_event(event: object) -> bool:
         r"(?:AM|PM))"
     )
     retry = rf"(?:later|at {retry_time})"
+    limit_name = r"(?P<limit_name>[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?)"
     plan_copy = (
         r"(?:Upgrade to Pro \(https://chatgpt\.com/explore/pro\), visit "
         r"https://chatgpt\.com/codex/settings/usage to purchase more credits|"
@@ -1671,6 +1672,15 @@ def _is_codex_usage_limit_event(event: object) -> bool:
         r"\(https://chatgpt\.com/explore/plus\),|"
         r"Visit https://chatgpt\.com/codex/settings/usage to purchase more credits)"
     )
+    model_specific = re.fullmatch(
+        rf"You've hit your usage limit for {limit_name}\. "
+        rf"Switch to another model now, or try again (?P<retry>{retry})\.",
+        message,
+    )
+    if model_specific is not None:
+        if model_specific.group("limit_name").lower() == "codex":
+            return False
+        return _is_valid_codex_retry(model_specific.group("retry"))
     for pattern in (
         rf"You've hit your usage limit\. {plan_copy} or try again (?P<retry>{retry})\.",
         rf"You've hit your usage limit\. Try again (?P<retry>{retry})\.",
