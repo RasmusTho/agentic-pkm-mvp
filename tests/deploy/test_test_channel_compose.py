@@ -10,6 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BASE_COMPOSE = REPO_ROOT / "docker-compose.yaml"
 TEST_COMPOSE = REPO_ROOT / "docker-compose.test.yml"
 EXPLICIT_VAULT_COMPOSE = REPO_ROOT / "docker-compose.legacy-vault.yml"
+TEST_VAULT_COMPOSE = REPO_ROOT / "docker-compose.test-vault.yml"
 TEST_ENV = REPO_ROOT / "config/deploy/test.env"
 
 
@@ -26,10 +27,10 @@ def _merged_compose(
         "VAULT_HOST_ROOT",
         "VAULT_ROOT",
         "VAULT_ROOT_TEST",
-        "WATCHER_ENABLE",
-        "WATCHER_VAULT_PATH",
     ):
         env.pop(key, None)
+    env["WATCHER_ENABLE"] = "1" if explicit_vault is None else "0"
+    env["WATCHER_VAULT_PATH"] = "/hostile-inherited-vault"
     env["WATCHER_RUNTIME_ENV_FILE"] = str(runtime_env)
 
     command = [
@@ -44,7 +45,14 @@ def _merged_compose(
     ]
     if explicit_vault is not None:
         env["VAULT_HOST_ROOT"] = str(explicit_vault)
-        command.extend(["-f", str(EXPLICIT_VAULT_COMPOSE)])
+        command.extend(
+            [
+                "-f",
+                str(EXPLICIT_VAULT_COMPOSE),
+                "-f",
+                str(TEST_VAULT_COMPOSE),
+            ]
+        )
     command.extend(["-p", "pkm-test-contract", "config", "--format", "json"])
 
     result = subprocess.run(
