@@ -438,7 +438,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     ),
     (
         "ops_deploy",
-        ("scripts/", "ops/", "tests/ops/", "tests/scripts/", "tests/deploy/"),
+        ("scripts/", "ops/", "config/deploy/", "tests/ops/", "tests/scripts/", "tests/deploy/"),
         ("tests/ops", "tests/scripts", "tests/deploy"),
     ),
     (
@@ -562,6 +562,17 @@ def _pr_targets(targets: list[str]) -> tuple[str, ...]:
     return _dedupe(target for target in targets if not target.startswith("tests/e2e/"))
 
 
+def _unowned_runtime_code_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
+    runtime_prefixes = ("app/", "companion-ui/")
+    owned_prefixes = tuple(prefix for _, prefixes, _ in SUBSYSTEMS for prefix in prefixes)
+    return tuple(
+        path
+        for path in paths
+        if path.startswith(runtime_prefixes)
+        and not any(path.startswith(prefix) for prefix in owned_prefixes)
+    )
+
+
 def select_tests(changed_files: list[str]) -> Selection:
     paths = tuple(path for path in (_normalize(item) for item in changed_files) if path)
     if not paths:
@@ -587,6 +598,16 @@ def select_tests(changed_files: list[str]) -> Selection:
         for path in paths
     ):
         return Selection(True, (), (), FULL_SUITE_REASONS[1])
+
+    unowned_runtime_code = _unowned_runtime_code_paths(paths)
+    if unowned_runtime_code:
+        return Selection(
+            False,
+            ("unowned",),
+            (),
+            FULL_SUITE_REASONS[2],
+            unowned_runtime_code,
+        )
 
     changed_tests = _changed_test_targets(paths)
     targets = list(ALWAYS_TARGETS)

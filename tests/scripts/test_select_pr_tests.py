@@ -59,6 +59,25 @@ def test_unknown_runtime_surface_fails_closed_until_it_has_an_owner() -> None:
     assert selection.unowned_paths == ("app/new_surface/example.py",)
 
 
+def test_deploy_pin_file_selects_ops_deploy() -> None:
+    selection = select_tests(["config/deploy/dev.env"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("ops_deploy",)
+    assert selection.unowned_paths == ()
+    assert "tests/ops" in selection.targets
+    assert "tests/scripts" in selection.targets
+    assert "tests/deploy" in selection.targets
+
+
+def test_deploy_pin_cannot_mask_an_unowned_runtime_path() -> None:
+    selection = select_tests(["config/deploy/dev.env", "app/new_surface/example.py"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("unowned",)
+    assert selection.unowned_paths == ("app/new_surface/example.py",)
+
+
 def test_docs_authoring_and_skill_paths_are_owned() -> None:
     # Reproduces the #3476 / PR #3475 failure: a docs-authoring PR touching
     # docs/contracts/**, docs/HEIMDAL/**, api/openapi.yaml, and .codex/skills/**
