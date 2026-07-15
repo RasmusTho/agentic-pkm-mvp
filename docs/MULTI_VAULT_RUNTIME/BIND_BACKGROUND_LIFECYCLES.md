@@ -26,10 +26,13 @@ cross-process truth belong here.
   bridge, materialize that binding as durable `compatibility_binding_id` in compatibility mode,
   start the revision-reconciling supervisor, and disable the bridge in one fail-closed cutover. Roll back
   the cutover if either handoff step fails. Afterward, the production legacy choose/open picker
-  producer—not the supervisor—uses the locked registry transaction to commit
-  `compatibility_binding_id`, provenance, and a new revision while mode is `compatibility`, then
-  publishes #3163's event only as an idempotent wake-up hint. The supervisor reconciles the durable
-  revision, so event loss or a crash after commit still converges. Generic request/session selection
+  producer and replacement supervisor preserve #3163's full two-phase protocol while mode is
+  `compatibility`: close/drain compatibility-mutation ingress, prepare the candidate revision, final-
+  scan and quiesce the old lifecycle, then atomically commit `compatibility_binding_id`, provenance,
+  and revision before resume. The supervisor cannot resolve/reload/perform candidate-binding effects
+  before committed resume. Pre-commit failure resumes the old lifecycle and reopens old-binding
+  ingress; post-commit failure recovers forward with ingress blocked. Durable phase/revision truth,
+  not the wake-up hint, closes event-loss and restart windows. Generic request/session selection
   never changes background intent. Once a governed add/remove command enters `explicit` mode, picker
   and default changes cannot alter the explicit set.
 - Add a durable, mechanical instance-local `background_vault_binding_ids` intent set. Request or
@@ -173,7 +176,8 @@ acceptance criteria prefixed with its ID:
    Depends on MVR-05D.
 2. **MVR-06B — compatibility bridge handoff:** atomic #3163 watcher bridge retirement plus drain and
    replacement of the MVR-05 scalar worker with a versioned explicit single-binding handoff, durable picker
-   and default-driven compatibility binding, commit-before-hint, Settings Spine drain/rebind, and
+   and default-driven compatibility binding, preserved mutation-gate/final-scan/quiesce → commit →
+   resume semantics, Settings Spine drain/rebind, and
    activation only of governed singleton/explicit-empty transitions after the supervisor can honor
    them. Before any singleton activation it proves the exact channel/root ownership lease, binding
    revision, and auth epoch; continuously reconciles their durable changes; and holds the shared
@@ -273,13 +277,15 @@ migration, preflight, and fail-loud gate merge together.
   keeps its watcher active instead of persisting no-vault, and MVR-06 never creates a binding itself.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_env_only_single_vault_upgrade_preserves_compatibility_watcher`
 - [ ] **MVR-06B:** After bridge retirement, a legacy choose/open picker change still atomically updates the
-  compatibility binding and drains/rebinds the supervisor; generic scoped selection and every picker
+  compatibility binding through the same mutation-gate → old-root final scan/quiescent ack → commit →
+  resume transaction and drains/rebinds the supervisor; generic scoped selection and every picker
   event after explicit-mode transition leave background intent unchanged.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff`
-- [ ] **MVR-06B:** The picker transaction durably commits compatibility binding/provenance/revision before its
-  wake-up hint; event loss and crashes before/after publication restart on the committed binding and
-  never the previous one.
-  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_picker_commit_precedes_hint_and_survives_event_loss`
+- [ ] **MVR-06B:** After bridge retirement, injected faults at mutation-gate, prepare, old-root final
+  scan, quiescent acknowledgement, commit, and resume never strand an accepted old-binding write or
+  let the supervisor perform a candidate-binding effect before commit. Pre-commit recovery resumes
+  the old binding; post-commit recovery rolls forward, including when every wake-up hint is lost.
+  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_post_handoff_picker_rebind_preserves_two_phase_failure_atomicity`
 - [ ] **MVR-06D:** The production supervisor runs independent watcher/worker lifecycles for two bindings and
   attributes ingest, queues, settings, health, and receipts to the correct immutable
   ActiveContextSet/vault/generation.
@@ -412,7 +418,7 @@ migration, preflight, and fail-loud gate merge together.
   - Verify: doc writeback at `docs/SECURITY.md :: Auth And Rate Limiting` + doc writeback at
     `docs/contracts/GOVERNED_WRITE_PROTOCOL.md :: Invariants`
 - [ ] **MVR-06B:** Vault/settings and Settings Spine owner contracts describe the shipped durable
-  compatibility intent, picker/default commit-before-hint, bridge retirement, and drain/rebind
+  compatibility intent, two-phase picker/default rebind, bridge retirement, and drain/rebind
   behavior in the same PR. Environment and health owners describe the shipped ownership-checked,
   revision/auth-reconciling, effect-leased singleton/empty supervisor without claiming multi-binding.
   - Verify: doc writeback at `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md :: Service Gating` + doc
@@ -448,7 +454,7 @@ PostgreSQL receipt belongs only to 06D.
 
 ### MVR-06B validation
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_settings_spine_bridge_handoff_is_atomic tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff tests/integration/test_multi_vault_background_lifecycle.py::test_picker_commit_precedes_hint_and_survives_event_loss tests/integration/test_multi_vault_background_lifecycle.py::test_default_mutation_rebinds_only_compatibility_lifecycle tests/integration/test_multi_vault_background_lifecycle.py::test_rebind_reuses_settings_spine_and_is_generation_clean tests/integration/test_multi_vault_background_lifecycle.py::test_lifecycle_requires_matching_channel_ownership_lease tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window tests/integration/test_multi_vault_background_lifecycle.py::test_registration_removal_activates_after_all_consumer_floors tests/integration/test_multi_vault_background_lifecycle.py::test_background_effect_fence_closes_authorization_race_window tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback tests/runtime/test_background_binding_handoff.py::test_env_only_single_vault_upgrade_preserves_compatibility_watcher tests/runtime/test_background_binding_handoff.py::test_remove_last_then_restart_preserves_explicit_empty_intent tests/runtime/test_background_binding_handoff.py::test_mvr06b_restart_uses_only_durable_authorized_singleton_or_empty_intent tests/runtime/test_background_binding_handoff.py::test_scalar_worker_handoff_is_atomic_versioned_and_intent_gated tests/runtime/test_background_binding_handoff.py::test_background_context_has_explicit_workspace_and_capability_identity tests/api/test_background_binding_admin.py::test_mvr06b_commands_allow_only_singleton_or_empty_intent tests/api/test_background_binding_admin.py::test_stale_binding_intent_can_be_removed_without_content_authority`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_settings_spine_bridge_handoff_is_atomic tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff tests/integration/test_multi_vault_background_lifecycle.py::test_post_handoff_picker_rebind_preserves_two_phase_failure_atomicity tests/integration/test_multi_vault_background_lifecycle.py::test_default_mutation_rebinds_only_compatibility_lifecycle tests/integration/test_multi_vault_background_lifecycle.py::test_rebind_reuses_settings_spine_and_is_generation_clean tests/integration/test_multi_vault_background_lifecycle.py::test_lifecycle_requires_matching_channel_ownership_lease tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window tests/integration/test_multi_vault_background_lifecycle.py::test_registration_removal_activates_after_all_consumer_floors tests/integration/test_multi_vault_background_lifecycle.py::test_background_effect_fence_closes_authorization_race_window tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback tests/runtime/test_background_binding_handoff.py::test_env_only_single_vault_upgrade_preserves_compatibility_watcher tests/runtime/test_background_binding_handoff.py::test_remove_last_then_restart_preserves_explicit_empty_intent tests/runtime/test_background_binding_handoff.py::test_mvr06b_restart_uses_only_durable_authorized_singleton_or_empty_intent tests/runtime/test_background_binding_handoff.py::test_scalar_worker_handoff_is_atomic_versioned_and_intent_gated tests/runtime/test_background_binding_handoff.py::test_background_context_has_explicit_workspace_and_capability_identity tests/api/test_background_binding_admin.py::test_mvr06b_commands_allow_only_singleton_or_empty_intent tests/api/test_background_binding_admin.py::test_stale_binding_intent_can_be_removed_without_content_authority`
 - Verify the 06B PR diff contains its mapped vault/settings, Settings Spine, environment, and health
   owner-doc targets.
 

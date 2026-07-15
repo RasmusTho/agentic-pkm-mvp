@@ -32,13 +32,16 @@ rationale) to record the supersession rather than leaving it as if still current
 
 - Runs selection/switch plus rebind as a recoverable prepare → commit → resume transaction in the
   shared app-local selection state before returning success. When the watcher lifecycle is enabled,
-  the separately deployed watcher drains its captured old tick and durably acknowledges the prepare
+  the picker first closes and drains a durable compatibility-mutation ingress gate. The separately
+  deployed watcher drains its captured old tick, runs one final old-root reconciliation scan after
+  that mutation drain, durably enqueues/receipts the result, and only then acknowledges the prepare
   revision while quiescent; it does not load, scan, emit, or auto-execute against the candidate root.
   The picker then commits selection plus compatibility binding/revision and publishes resume. Only
   after observing that committed resume may the watcher re-resolve the root → reload vault-scoped
   settings via the SETTINGS-01 path (one loader, not a second one — see capability Cross-Task
   Invariants) → resume ingest against the new root. Pre-commit failure cancels while the new root has
-  no watcher effects; post-commit recovery rolls forward and keeps ingress blocked until resume.
+  no watcher effects, resumes A, then reopens A mutation ingress; post-commit recovery rolls forward
+  and keeps ingress blocked until resume.
   An intentionally disabled or omitted watcher is represented durably as `no_lifecycle`, so picker
   commit succeeds without waiting for a nonexistent acknowledgement. `VaultChangedEvent` (emitted by
   `VaultManager._emit_changed`) remains
@@ -77,9 +80,12 @@ the UI says one vault and ingest watches another — captures silently vanish fr
       tick runs against the new root, `ingest_binding` reflects each state truthfully.
   - Verify: `tests/watcher/test_ingest_binding_follows_selection.py::test_switch_is_clean_and_truthful`
 - [ ] A fault at every prepare/acknowledge/selection-commit/resume boundary produces no effect in the
-      candidate vault before selection commit and recovers forward after commit; a configured
+      candidate vault before selection commit and recovers forward after commit. The prepare gate
+      blocks/drains old-binding mutations and the watcher completes a final old-root scan before its
+      quiescent acknowledgement, so no accepted A write is stranded; a configured
       `no_lifecycle` watcher posture completes the foreground selection without a process ack.
   - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_prepare_commit_resume_is_failure_atomic`
+  - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_prepare_drains_and_final_scans_old_binding_writes`
   - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_disabled_watcher_is_durable_no_lifecycle`
 - [ ] Rebind triggers the SETTINGS-01 settings reload for the new vault (vault-scoped settings
       follow the vault; one bundle swap).
@@ -96,6 +102,7 @@ the UI says one vault and ingest watches another — captures silently vanish fr
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/watcher/test_ingest_binding_follows_selection.py`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_watcher_cross_process_rebind.py::test_prepare_commit_resume_is_failure_atomic tests/integration/test_watcher_cross_process_rebind.py::test_prepare_drains_and_final_scans_old_binding_writes tests/integration/test_watcher_cross_process_rebind.py::test_disabled_watcher_is_durable_no_lifecycle`
 - `pytest -q -m "not pg"` and `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration -k "watcher or settings"`
   (vault/watcher hot path)
 

@@ -55,16 +55,20 @@ not background lifecycles.
   takes ownership; no release may leave both or neither mechanism active.
   Treat picker replacement plus compatibility rebind as one recoverable operation: stage the new
   selection as unusable and journal its prior/new binding and compatibility revisions. When a
-  watcher lifecycle is enabled, publish a `prepare` revision; the watcher drains its captured old
-  tick, enters durable quiescent state without loading/scanning/emitting against the new binding,
-  and acknowledges that exact prepare revision. The picker then atomically commits the new durable
+  watcher lifecycle is enabled, the picker first closes a durable compatibility-mutation ingress
+  gate, drains every old-binding mutation already admitted, and publishes a `prepare` revision. The
+  watcher finishes its captured old tick, performs one final old-root reconciliation scan after the
+  mutation drain, durably enqueues/receipts everything found, then enters quiescent state without
+  loading/scanning/emitting against the new binding and acknowledges that exact prepare revision.
+  The picker then atomically commits the new durable
   selection/compatibility binding and prior-selection invalidation before publishing `resume`; only
   that resume lets the watcher resolve/reload B and perform effects, and only the committed picker
   bearer is returned. An intentionally disabled or absent watcher is durably classified
   `no_lifecycle` by instance configuration/preflight, so the same picker commit does not wait for an
-  acknowledgement that no process can produce. A failure or crash before the selection commit keeps
-  the prior selection authoritative, issues a CAS-safe cancel/compensation while the watcher has
-  produced no B effects, and discards the staged bearer. A failure after commit is recovered as
+  acknowledgement that no process can produce; in that posture the mutation gate drains directly
+  into the picker commit because no ingest lifecycle is promised. A failure or crash before the
+  selection commit keeps the prior selection authoritative, issues a CAS-safe cancel/compensation,
+  resumes the watcher on A, then reopens A mutation ingress; B has produced no effects. A failure after commit is recovered as
   committed: ingress remains blocked until recovery publishes/reconciles resume, never compensated
   to A after B effects. Picker bridge operations serialize under the journal revision/CAS so recovery
   cannot roll back a later picker. This alignment invariant applies only to the picker transition
@@ -440,14 +444,16 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
   MVR-06.
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_legacy_picker_bridge_preserves_single_watcher_until_mvr06`
 - [ ] **MVR-05B:** Picker replacement and the #3163 compatibility watcher rebind are recoverable as
-  one operation. An enabled watcher first acknowledges a durable prepared/quiescent revision without
-  effects on the new binding; only then may selection activation/prior invalidation commit and a
+  one operation. Before prepare, carrier-free compatibility mutations are durably gated and drained;
+  the enabled watcher completes a final old-root reconciliation scan, then acknowledges a durable
+  prepared/quiescent revision without effects on the new binding. Only then may selection activation/prior invalidation commit and a
   resume revision permit new-binding effects. Pre-commit faults cancel/compensate while B has no
-  effects; post-commit faults recover forward and block ingress until resume. An intentionally
+  effects, resume A, and reopen A ingress; post-commit faults recover forward and block ingress until resume. An intentionally
   disabled/absent watcher is a durable `no_lifecycle` outcome and needs no process acknowledgement.
   Concurrent picker operations serialize, while unrelated clients' existing scoped reads remain
   valid on their immutable bindings and may intentionally differ from the single watcher.
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_picker_and_watcher_rebind_is_failure_atomic`
+  - Verify: `tests/integration/test_multi_vault_picker_context.py::test_prepare_drains_old_binding_writes_before_quiescent_ack`
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_picker_commit_succeeds_with_durable_no_lifecycle_watcher_posture`
 - [ ] **MVR-05B:** Request-bound production code cannot introduce new direct global vault resolution outside
   named compatibility adapters.
@@ -499,7 +505,7 @@ maps directly to that child ID; an early child never runs a later slice's accept
 
 ### MVR-05B validation
 
-- `pytest -q tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk tests/integration/test_multi_vault_request_isolation.py::test_authority_change_cannot_cross_read_effect_window tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_read_after_staged_channel_lease_transfer tests/retrieval/test_multi_vault_retrieval.py::test_production_retrieval_preserves_binding_provenance tests/integration/test_multi_vault_settings_resolution.py::test_many_binding_request_fails_before_effect_when_request_wide_settings_conflict tests/api/test_multi_vault_request_fail_closed.py::test_invalid_selection_never_falls_back tests/api/test_active_context_resolution.py::test_request_override_header_outranks_session_without_mutating_it tests/api/test_active_context_resolution.py::test_request_uses_one_context_generation_end_to_end tests/integration/test_multi_vault_picker_context.py::test_session_selection_reuses_bindings_with_per_request_server_scope tests/integration/test_multi_vault_partial_delivery.py::test_scoped_write_is_sealed_until_mvr05c tests/integration/test_multi_vault_picker_context.py::test_existing_picker_drives_scoped_request_context tests/integration/test_multi_vault_picker_context.py::test_fresh_vault_initialize_returns_usable_scoped_context tests/integration/test_multi_vault_picker_context.py::test_stale_selection_restart_requires_visible_reselection tests/integration/test_multi_vault_picker_context.py::test_legacy_picker_bridge_preserves_single_watcher_until_mvr06 tests/integration/test_multi_vault_picker_context.py::test_picker_and_watcher_rebind_is_failure_atomic tests/integration/test_multi_vault_picker_context.py::test_picker_commit_succeeds_with_durable_no_lifecycle_watcher_posture tests/architecture/test_multi_vault_context_boundaries.py::test_request_consumers_use_context_seam tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior`
+- `pytest -q tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk tests/integration/test_multi_vault_request_isolation.py::test_authority_change_cannot_cross_read_effect_window tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_read_after_staged_channel_lease_transfer tests/retrieval/test_multi_vault_retrieval.py::test_production_retrieval_preserves_binding_provenance tests/integration/test_multi_vault_settings_resolution.py::test_many_binding_request_fails_before_effect_when_request_wide_settings_conflict tests/api/test_multi_vault_request_fail_closed.py::test_invalid_selection_never_falls_back tests/api/test_active_context_resolution.py::test_request_override_header_outranks_session_without_mutating_it tests/api/test_active_context_resolution.py::test_request_uses_one_context_generation_end_to_end tests/integration/test_multi_vault_picker_context.py::test_session_selection_reuses_bindings_with_per_request_server_scope tests/integration/test_multi_vault_partial_delivery.py::test_scoped_write_is_sealed_until_mvr05c tests/integration/test_multi_vault_picker_context.py::test_existing_picker_drives_scoped_request_context tests/integration/test_multi_vault_picker_context.py::test_fresh_vault_initialize_returns_usable_scoped_context tests/integration/test_multi_vault_picker_context.py::test_stale_selection_restart_requires_visible_reselection tests/integration/test_multi_vault_picker_context.py::test_legacy_picker_bridge_preserves_single_watcher_until_mvr06 tests/integration/test_multi_vault_picker_context.py::test_picker_and_watcher_rebind_is_failure_atomic tests/integration/test_multi_vault_picker_context.py::test_prepare_drains_old_binding_writes_before_quiescent_ack tests/integration/test_multi_vault_picker_context.py::test_picker_commit_succeeds_with_durable_no_lifecycle_watcher_posture tests/architecture/test_multi_vault_context_boundaries.py::test_request_consumers_use_context_seam tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior`
 - Verify the 05B PR diff contains its mapped `docs/ARCHITECTURE.md` and `docs/SETTINGS.md` writebacks.
 
 ### MVR-05C validation

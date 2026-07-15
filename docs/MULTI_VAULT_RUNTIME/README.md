@@ -195,8 +195,8 @@ member binding independently. Removing a dimension does not remove its vault reg
   rebind. MVR-05 temporarily preserves that production behavior only for the legacy picker action;
   generic scoped selections do not drive it. MVR-06 reuses #3163's reload machinery, atomically
   imports the live watcher binding into durable compatibility intent, then retires the bridge while
-  the legacy choose/open producer commits compatibility intent before its wake-up hint and the
-  supervisor reconciles that durable revision. Governed
+  the legacy choose/open producer and replacement supervisor preserve the mutation-gate/final-scan/
+  quiesce → commit → resume protocol. Wake-up hints remain non-authoritative. Governed
   background administration explicitly transitions to multi-binding `explicit` mode; only then do
   picker/default events stop changing lifecycle intent. #3163 is not a multi-active implementation,
   and no duplicate watcher-rebind issue is created here.
@@ -271,9 +271,10 @@ to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup.
   operator role. Missing, stale, or ambiguous delegation blocks lifecycle startup.
 - Background supervisors reconcile durable registry revisions and auth/GOV decision epochs, not
   event delivery: every affected lifecycle drains and re-resolves after relocation, removal,
-  revocation, authority-provenance, default, or intent changes. Picker/default/background producers
-  commit intent before publishing wake-up hints, and per-operation authorization closes races between
-  reconciliation passes.
+  revocation, authority-provenance, default, or intent changes. Compatibility picker/default changes
+  keep mutation ingress gated and the prior lifecycle final-scanned/quiescent until durable commit,
+  then resume; wake-up hints are never the transition authority. Per-operation authorization closes
+  races between reconciliation passes.
 - Zero, one, and many bindings are all valid. One configured vault behaves as before; no-vault
   behavior remains truthful and idle.
 - The durable registry/default/dimension store is instance-local mechanical state; content and
@@ -308,9 +309,10 @@ Partial delivery remains fail-closed:
   callers stay on named single-vault adapters; the architecture guard records the mixed state and
   no global "multi-vault delivered" claim is allowed;
 - after issue 05B but before issue 06B, the existing picker alone prepares #3163's named monotonic
-  cross-process compatibility revision. An enabled watcher acknowledges quiescence on the prepared
-  revision before the picker selection commits, then applies/reloads and resumes only after that
-  commit; an intentionally disabled/absent watcher is represented by durable `no_lifecycle` posture
+  cross-process compatibility revision. Compatibility-mutation ingress is gated/drained first; an
+  enabled watcher final-scans the old root and acknowledges quiescence on the prepared revision
+  before the picker selection commits, then applies/reloads and resumes only after that commit. An
+  intentionally disabled/absent watcher is represented by durable `no_lifecycle` posture
   and requires no process acknowledgement. An in-process event is only a hint and scoped request/
   session selection does not mutate the record. Issue 06B atomically hands
   that live binding plus the MVR-05 scalar worker to versioned durable singleton/empty state before
@@ -325,9 +327,10 @@ Partial delivery remains fail-closed:
   scoped/coalesced under the DB fence; identical retries preserve one canonical lineage and
   ambiguous/conflicting rows quarantine. Issue 05D retires the compatibility translator only after
   native producer migration, and issue 06D cannot backfill a duplicate;
-- after issue 06D, legacy choose/open continues to rebind only `compatibility` lifecycle intent by
-  committing it before the supervisor wake-up hint; the first governed background add/remove enters
-  `explicit` mode, after which picker and default changes cannot mutate the explicit background set;
+- after issue 06B, legacy choose/open continues to rebind only `compatibility` lifecycle intent with
+  the same mutation-gate/final-scan/quiesce → commit → resume transaction; the first governed
+  background add/remove enters `explicit` mode, after which picker and default changes cannot mutate
+  the explicit background set;
 - from issue 05A through issue 06B, the interim scalar worker dispatches a versioned vault-bound row
   only when the row uniquely matches the worker's explicit current single-binding compatibility
   context, current authorization, binding revision, and resolved root, and it holds the binding's
