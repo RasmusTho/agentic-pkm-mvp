@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from app.activation.gate import REASON_LOOP_PRECONDITION_NOT_GREEN
+from app.agent_memory.candidate import ReviewState
 from app.activation.journal_draft import (
     JOURNAL_DRAFT_CAPABILITY_ID,
     build_journal_draft_posture,
@@ -44,3 +45,18 @@ def test_draft_requires_activation_record(tmp_path: Path) -> None:
             write_guard=WriteGuard(lambda: {"state": "healthy"}),
         )
     assert not list(root.rglob("2026-07-15*.md"))
+
+
+def test_draft_activation_preserves_unreviewed_source_posture() -> None:
+    decision = evaluate_journal_draft_activation(
+        ["session:abc", "Sources/capture.md"],
+        review_states={
+            "session:abc": ReviewState.UNREVIEWED,
+            "Sources/capture.md": ReviewState.UNREVIEWED,
+        },
+    )
+
+    assert decision.activatable is True
+    assert {item.admitted_tier.value for item in decision.receipt.evaluated} == {
+        "cited-proposal"
+    }

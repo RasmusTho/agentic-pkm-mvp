@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Mapping
+from uuid import uuid4
 
 from app.activation.gate import (
     ActivationDecision,
@@ -17,6 +19,8 @@ from app.agent_memory.candidate import ReviewState
 
 JOURNAL_DRAFT_CAPABILITY_ID = "journal_draft_proposal"
 JOURNAL_DRAFT_SCOPE = "journaling.draft.staging"
+JOURNAL_DRAFT_RECEIPT_EVENT = "activation.journaling.draft_gate_record"
+JOURNAL_DRAFT_RECEIPT_SOURCE = "app.activation.journal_draft"
 
 
 def build_journal_draft_posture(
@@ -45,6 +49,7 @@ def build_journal_draft_posture(
 def evaluate_journal_draft_activation(
     source_ids: Iterable[str],
     *,
+    review_states: Mapping[str, ReviewState] | None = None,
     posture: ActivationPosture | None = None,
     receipt_id: str | None = None,
     now: datetime | None = None,
@@ -52,13 +57,19 @@ def evaluate_journal_draft_activation(
     """Return the deterministic activation decision and decision receipt."""
 
     resolved = posture or build_journal_draft_posture()
+    source_review_states = review_states or {}
     candidates = [
         CandidateContext(
             artifact_id=source_id.strip(),
             sphere=resolved.scope or JOURNAL_DRAFT_SCOPE,
             is_memory=False,
             has_provenance=True,
-            review_state=ReviewState.REVIEWED,
+            # A missing declaration stays conservative. Owner transcript and
+            # JRNL-01 candidate captures are raw inputs to a proposal, not
+            # silently upgraded reviewed knowledge.
+            review_state=source_review_states.get(
+                source_id.strip(), ReviewState.UNREVIEWED
+            ),
         )
         for source_id in source_ids
         if source_id.strip()
@@ -66,9 +77,41 @@ def evaluate_journal_draft_activation(
     return evaluate_activation(resolved, candidates, receipt_id=receipt_id, now=now)
 
 
+def build_journal_draft_receipt_record(
+    decision: ActivationDecision,
+) -> dict[str, object]:
+    """Build the content-free durable record embedded with the draft.
+
+    The shape mirrors Expansion's append-only activation receipt. JRNL-03
+    embeds it in the atomically replaced proposal so a draft can never point
+    at a receipt that was lost in a separate write transaction.
+    """
+
+    receipt = decision.receipt
+    return {
+        "event": JOURNAL_DRAFT_RECEIPT_EVENT,
+        "event_id": receipt.receipt_id,
+        "trace_id": uuid4().hex,
+        "source": JOURNAL_DRAFT_RECEIPT_SOURCE,
+        "timestamp": receipt.created_at.astimezone(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "payload": {
+            "capability_id": decision.capability_id,
+            "consuming_authority": receipt.consuming_authority.value,
+            "outcome": receipt.outcome,
+            "activatable": decision.activatable,
+            "blocked_reasons": list(decision.blocked_reasons),
+            "admitted_artifact_ids": list(decision.admitted_artifact_ids),
+        },
+    }
+
+
 __all__ = [
     "JOURNAL_DRAFT_CAPABILITY_ID",
+    "JOURNAL_DRAFT_RECEIPT_EVENT",
     "JOURNAL_DRAFT_SCOPE",
+    "build_journal_draft_receipt_record",
     "build_journal_draft_posture",
     "evaluate_journal_draft_activation",
 ]

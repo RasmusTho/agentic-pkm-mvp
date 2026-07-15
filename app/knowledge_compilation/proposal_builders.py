@@ -57,7 +57,9 @@ class ProposalContext(BaseModel):
     trace_ref: Optional[str] = None
 
 
-def _reject_hidden_authority(context: ProposalContext) -> None:
+def _reject_hidden_authority(
+    context: ProposalContext, *, allow_cited_unreviewed: bool = False
+) -> None:
     """Refuse context that would launder hidden authority into a generated proposal.
 
     Raises ``ValueError`` rather than silently degrading the input, so a builder never turns
@@ -76,7 +78,12 @@ def _reject_hidden_authority(context: ProposalContext) -> None:
         )
     for ref in context.source_refs:
         review_state = (ref.review_state or "").strip().lower()
-        if review_state and review_state not in _APPROVED_REVIEW_STATES:
+        cited_unreviewed = allow_cited_unreviewed and review_state == "unreviewed"
+        if (
+            review_state
+            and review_state not in _APPROVED_REVIEW_STATES
+            and not cited_unreviewed
+        ):
             raise ValueError(
                 f"source {ref.artifact_id!r} has non-approved review_state {ref.review_state!r}; "
                 f"only reviewed, accepted, or protected sources can be laundered into a proposal"
@@ -101,6 +108,29 @@ def build_compilation_draft(context: ProposalContext, *, title: str) -> Compilat
     """
 
     _reject_hidden_authority(context)
+    return CompilationDraft(
+        title=title,
+        source_refs=context.source_refs,
+        body=context.content,
+        uncertainty_notes=context.uncertainty_notes,
+        generated_by=context.generated_by,
+        trace_ref=context.trace_ref,
+    )
+
+
+def build_cited_unreviewed_compilation_draft(
+    context: ProposalContext, *, title: str
+) -> CompilationDraft:
+    """Build a proposal that cites raw sources without laundering their state.
+
+    Conversational Journaling must be able to quote owner transcript and
+    JRNL-01 draft captures while keeping them visibly ``unreviewed``. This
+    narrow route permits that review posture only for a non-canonical SUGGEST
+    proposal; stale, ranked, machine-derived, write/promote/action-authorizing,
+    rejected, and otherwise unknown postures remain fail-loud.
+    """
+
+    _reject_hidden_authority(context, allow_cited_unreviewed=True)
     return CompilationDraft(
         title=title,
         source_refs=context.source_refs,

@@ -130,7 +130,10 @@ posture without extending Create's closed output-kind enum: it writes `derived_b
 `authority_state: proposal`, and a `sources` list containing the reflection-session id plus every
 day-context provenance reference folded into the draft. These fields do not make the draft human
 knowledge or authorize promotion. JRNL-04's separate, explicit acceptance path owns any later move
-to `authority_state: accepted`.
+to `authority_state: accepted`. JRNL-03 also writes `activation_receipt_id` plus an
+`activation_receipts` list of content-free gate records into the same atomically replaced proposal;
+the current id and retained earlier same-day ids therefore remain resolvable after restart without a
+separate receipt write that could diverge from the draft.
 
 For active writing-surface notes, frontmatter should remain a bounded human-facing surface.
 It should not become the only durable home for:

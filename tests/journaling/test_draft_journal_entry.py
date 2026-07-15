@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
+import threading
 
 import pytest
 
@@ -10,6 +12,7 @@ from app.journaling.draft import (
     JOURNAL_DRAFT_WRITE_ACTION,
     UnresolvableJournalCitationError,
     draft_journal_entry,
+    resolve_journal_draft_activation_receipt,
 )
 from app.knowledge_acquisition.candidate_writeback import ARTIFACT_CLASS, DEFAULT_SOURCES_DIR
 from app.vault.manager import VaultContext
@@ -36,6 +39,9 @@ def _seed_inputs(tmp_path: Path) -> tuple[Path, VaultContext, str, Path]:
     capture.write_text(
         f"""---
 artifact_class: {ARTIFACT_CLASS}
+review_state: draft
+authority:
+  requires_review: true
 created: 2026-07-15T09:00:00Z
 provenance:
   content_identity: capture-1
@@ -181,7 +187,9 @@ def test_atomic_write_failure_leaves_no_partial_candidate(
 
     root, context, session_id, _capture = _seed_inputs(tmp_path)
 
-    def fail_replace(_source: object, _target: object) -> None:
+    def fail_replace(
+        _source: object, _target: object, **_kwargs: object
+    ) -> None:
         raise OSError("simulated atomic replace failure")
 
     monkeypatch.setattr(draft_module.os, "replace", fail_replace)
@@ -219,6 +227,61 @@ def test_staged_journal_draft_is_invisible_to_retrieval(tmp_path: Path) -> None:
     assert result.path not in candidate_paths
 
 
+def test_symlinked_staging_tree_cannot_escape_into_retrieval(
+    tmp_path: Path,
+) -> None:
+    from app.ingest.vault_alpha import _select_candidates
+    from app.vault.paths import get_vault_system_dir_rel
+
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    inbox = root / "Inbox"
+    inbox.mkdir()
+    journal_parent = root / get_vault_system_dir_rel(root) / "drafts"
+    journal_parent.mkdir(parents=True)
+    (journal_parent / "journal").symlink_to(inbox, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+    candidates, _ignored = _select_candidates(
+        root,
+        include_folders=None,
+        ignore_glob=(),
+        include_test_note=True,
+        max_notes=0,
+    )
+    assert root / "Inbox" / "2026-07-15.md" not in candidates
+
+
+def test_symlinked_final_target_is_rejected_without_touching_target(
+    tmp_path: Path,
+) -> None:
+    from app.vault.paths import get_vault_system_dir_rel
+
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    inbox_note = root / "Inbox" / "owned.md"
+    inbox_note.parent.mkdir()
+    inbox_note.write_text("owner content", encoding="utf-8")
+    journal_dir = root / get_vault_system_dir_rel(root) / "drafts" / "journal"
+    journal_dir.mkdir(parents=True)
+    (journal_dir / "2026-07-15.md").symlink_to(inbox_note)
+
+    with pytest.raises(ValueError, match="symlink"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        )
+
+    assert inbox_note.read_text(encoding="utf-8") == "owner content"
+
+
 def test_draft_is_idempotent_same_day(tmp_path: Path) -> None:
     root, context, session_id, _capture = _seed_inputs(tmp_path)
     first = draft_journal_entry(
@@ -252,6 +315,131 @@ session_id: session-later
     assert set(frontmatter["sources"]) >= {"session:session-abc", "session:session-later"}
     assert "I connected several loose ends." in body
     assert "I also made time to write." in body
+    assert (
+        resolve_journal_draft_activation_receipt(
+            vault_context=context, receipt_id=first.activation_receipt_id
+        )
+        is not None
+    )
+
+
+def test_concurrent_same_day_composition_retains_both_sessions(tmp_path: Path) -> None:
+    root, context, first_session_id, _capture = _seed_inputs(tmp_path)
+    second_session = root / ".chats" / "reflection" / "2026-07-15-later.md"
+    second_session.write_text(
+        """---
+type: chat-session
+session_id: session-later
+---
+
+**Owner:** I also made time to write.
+""",
+        encoding="utf-8",
+    )
+    start = threading.Barrier(2)
+
+    def compose(session_id: str) -> str:
+        start.wait(timeout=5)
+        return draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            write_guard=_allowing_guard(),
+        ).path
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        paths = list(executor.map(compose, (first_session_id, "session-later")))
+
+    assert paths[0] == paths[1]
+    frontmatter, body = _read_result(root, paths[0])
+    assert set(frontmatter["sources"]) >= {
+        f"session:{first_session_id}",
+        "session:session-later",
+    }
+    assert "I connected several loose ends." in body
+    assert "I also made time to write." in body
+
+
+def test_default_cognition_uses_resolvable_objects_and_synthesis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.stores import reset_memory_store_backend
+
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    reset_memory_store_backend()
+    from app.chat.reflection_conversation import ReflectionConversationService
+
+    root, context, _manual_session_id, _capture = _seed_inputs(tmp_path)
+    note = root / "Notes" / "Reflection anchor.md"
+    note.parent.mkdir()
+    note.write_text(
+        "---\nuuid: reflection-anchor\ntype: note\n---\n\nAnchor.\n",
+        encoding="utf-8",
+    )
+    bundle = assemble_day_context(vault_context=context, for_date=DAY)
+    responses = ["What mattered today?", "What made that significant?"]
+    service = ReflectionConversationService(
+        vault_root=root,
+        llm_fn=lambda _kind, _pack: responses.pop(0),
+        now_fn=lambda: datetime(2026, 7, 15, 20, tzinfo=timezone.utc),
+    )
+    conversation = service.start(note_path=note, day_context=bundle)
+    service.submit_owner_turn(conversation, "I connected the real session shape.")
+
+    result = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=conversation.session.session_id,
+        day_context=bundle,
+        write_guard=_allowing_guard(),
+    )
+
+    frontmatter, body = _read_result(root, result.path)
+    cognition = frontmatter["proposed_by"]["cognition"]
+    assert cognition["degraded"] is False
+    assert cognition["claims"] >= 2
+    assert cognition["inferences"] >= 1
+    assert len(cognition["object_ids"]) >= 2
+    assert "Machine cognition (not owner utterance)" in body
+    assert "I connected the real session shape." in body
+
+
+def test_draft_preserves_unreviewed_capture_posture(tmp_path: Path) -> None:
+    root, context, session_id, capture = _seed_inputs(tmp_path)
+
+    result = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+
+    capture_ref = next(
+        ref
+        for ref in result.compilation_draft.source_refs
+        if ref.note_path == capture.relative_to(root).as_posix()
+    )
+    assert capture_ref.review_state == "unreviewed"
+
+
+def test_activation_receipt_resolves_after_restart(tmp_path: Path) -> None:
+    root, context, session_id, _capture = _seed_inputs(tmp_path)
+    result = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        write_guard=_allowing_guard(),
+    )
+
+    receipt = resolve_journal_draft_activation_receipt(
+        vault_context=VaultContext(status="selected", active_vault_path=str(root)),
+        receipt_id=result.activation_receipt_id,
+    )
+
+    assert receipt is not None
+    assert receipt["event_id"] == result.activation_receipt_id
+    assert receipt["payload"]["capability_id"] == "journal_draft_proposal"
+    assert receipt["payload"]["outcome"] == "activatable"
 
 
 def test_draft_after_acceptance_produces_addendum_not_overwrite(tmp_path: Path) -> None:

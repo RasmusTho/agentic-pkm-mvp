@@ -1395,6 +1395,11 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "store_objects payload; episode_ref normalized to 'unbound' via the {**...} rebuild; "
         "save_object -> store_objects."
     ),
+    ("app/reasoning/multi.py", 51): (
+        "carries_unbound_default: UUID-addressable reasoning inputs are rebuildable proposal "
+        "mirrors, not episode-bound vault knowledge; payload explicitly carries honest "
+        "episode_ref='unbound'; store.put -> store_objects."
+    ),
     ("app/knowledge_acquisition/raw_record.py", 128): (
         "carries_unbound_default: raw acquisition record is a frontmatter-less external source; "
         "explicit 'unbound' via {**record_payload, ...}; save_object -> store_objects."
