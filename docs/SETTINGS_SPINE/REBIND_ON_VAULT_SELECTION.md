@@ -54,18 +54,24 @@ rationale) to record the supersession rather than leaving it as if still current
   SETTINGS-05 rollout first creates the protected channel/instance-scoped `instance-state` store that
   MVR-01 later reuses: an external, non-project Compose volume mounted at `/app/instance-state` for
   containers and owner-only native app data outside temp/runtime directories. Under the host rollout
-  fence it atomically copies and validates the last legacy app-local payload from `runtime-tmp`, writes
-  the floor and v1 record to protected storage, and retains a permission-checked backup/restore copy;
+  fence it inventories, blocks, and drains every legacy app-local writer—not only API/watcher, but
+  picker initialize/open, CLI, bootstrap/reconciliation, settings compiler/delta, fixtures, and direct
+  `VaultManager`/store callers—then prevents their process or entrypoint from restarting through the
+  final snapshot/import. It atomically copies and validates that final legacy payload from
+  `runtime-tmp`, writes the floor and v1 record to protected storage, and retains a permission-checked backup/restore copy;
   only then may the disposable source be retired. Missing, disposable, unrestorable, or divergent
   protected state blocks API/watcher start even when `runtime-tmp` has been deleted. Before
   the first v1 prepare, a channel/native rollout fence closes selection ingress, drains and stops
   every old API and watcher producer, and migrates only one provable stable binding: last-active and
   watcher-env aliases must canonicalize to the same root, or one side must be truthfully absent/idle;
-  a disagreement fails loud without choosing. That migration mints one provisional stable
-  `vault_binding_id` for each provable canonical binding and records its canonical legacy reference;
-  MVR-01 must adopt that exact ID rather than derive a new identity from a path. Init/bootstrap
-  scripts, existing-state migration, production fixtures, API/watcher startup, and no-lifecycle
-  producers all write/read the same schema.
+  a disagreement fails loud without choosing. If an authoritative MVR-01 registry already exists,
+  the migration must resolve the canonical root to exactly one live registration and reuse that
+  `vault_binding_id`. Only when no registry authority exists may it mint one provisional stable
+  `vault_binding_id` for each provable canonical binding and record its canonical legacy reference;
+  a later MVR-01 migration must adopt that exact ID rather than derive a new identity from a path.
+  Registry-first ambiguity or a conflicting registration fails without writing rebind state.
+  Init/bootstrap scripts, existing-state migration, production fixtures, API/watcher startup, and
+  no-lifecycle producers all write/read the same schema.
   The migration atomically records `minimum_settings_rebind_runtime=1` before v1 state can become
   authoritative. A host-side channel pre-start guard and the native launcher read that durable floor
   plus the candidate image/runtime capability manifest before starting any API or watcher, so an
@@ -135,9 +141,23 @@ the UI says one vault and ingest watches another — captures silently vanish fr
 - [ ] Before the floor or first v1 record becomes authoritative, SETTINGS-05 migrates the final
       fenced legacy payload into protected non-project `instance-state`, records a restorable backup,
       and proves that deletion of disposable `runtime-tmp` cannot remove or bypass either the floor or
-      handoff truth. The one provable legacy binding receives a provisional stable binding ID for
-      later MVR-01 adoption; ambiguous legacy aliases fail without minting an ID.
+      handoff truth. The one provable legacy binding reuses an existing authoritative registry ID or,
+      when no registry exists, receives a provisional stable ID for later MVR-01 adoption; ambiguous
+      legacy aliases fail without minting an ID.
   - Verify: `tests/ops/test_settings_rebind_protected_state.py::test_floor_and_binding_identity_survive_disposable_volume_loss`
+- [ ] The protected-state cutover inventories, blocks, drains, and restart-fences every legacy
+      app-local writer through final snapshot/import; an injected CLI/bootstrap/direct-store write
+      cannot be acknowledged after the snapshot or lost when authority moves.
+  - Verify: `tests/migrations/test_settings_rebind_state.py::test_protected_cutover_fences_every_legacy_app_local_writer`
+- [ ] Registry-first rollout reuses the one authoritative registration's exact binding ID; settings-
+      first rollout mints a provisional ID for later atomic adoption. Either order converges to one
+      identity, while conflicting or ambiguous registry truth fails without a second ID.
+  - Verify: `tests/migrations/test_settings_rebind_state.py::test_registry_first_and_settings_first_orders_converge_to_one_binding_id`
+- [ ] Deployment and release owner contracts describe the protected external instance-state mount,
+      final-writer fence, backup/restore posture, runtime floor, and compatible rollback requirement in
+      the same #3163 PR.
+  - Verify: doc writeback at `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments` +
+    doc writeback at `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification`
 - [ ] SET-7 registered in the invariant registry with enforcement `runtime_test`; `app/watcher/config.py`'s
       "document the split, do not converge" docstring is updated to record that #2476's verdict is
       superseded by this task (owner ruling 2026-07-07), not silently left to read as current.
@@ -148,7 +168,7 @@ the UI says one vault and ingest watches another — captures silently vanish fr
 
 - `pytest -q tests/watcher/test_ingest_binding_follows_selection.py`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_watcher_cross_process_rebind.py::test_prepare_commit_resume_is_failure_atomic tests/integration/test_watcher_cross_process_rebind.py::test_prepare_drains_and_final_scans_old_binding_writes tests/integration/test_watcher_cross_process_rebind.py::test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_binding tests/integration/test_watcher_cross_process_rebind.py::test_committed_revision_survives_event_loss_and_process_restart tests/integration/test_watcher_cross_process_rebind.py::test_disabled_watcher_is_durable_no_lifecycle`
-- `pytest -q tests/migrations/test_settings_rebind_state.py::test_rebind_schema_migrates_one_provable_binding_or_fails_loud tests/ops/test_settings_rebind_runtime_floor.py::test_rebind_floor_blocks_incompatible_api_and_watcher_before_start tests/ops/test_settings_rebind_protected_state.py::test_floor_and_binding_identity_survive_disposable_volume_loss`
+- `pytest -q tests/migrations/test_settings_rebind_state.py::test_rebind_schema_migrates_one_provable_binding_or_fails_loud tests/migrations/test_settings_rebind_state.py::test_protected_cutover_fences_every_legacy_app_local_writer tests/migrations/test_settings_rebind_state.py::test_registry_first_and_settings_first_orders_converge_to_one_binding_id tests/ops/test_settings_rebind_runtime_floor.py::test_rebind_floor_blocks_incompatible_api_and_watcher_before_start tests/ops/test_settings_rebind_protected_state.py::test_floor_and_binding_identity_survive_disposable_volume_loss`
 - `pytest -q -m "not pg"` and `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration -k "watcher or settings"`
   (vault/watcher hot path)
 

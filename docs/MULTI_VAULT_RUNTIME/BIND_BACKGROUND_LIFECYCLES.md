@@ -73,6 +73,9 @@ cross-process truth belong here.
   the same fsync-backed registry transaction. A lifecycle event is only an idempotent wake-up hint for that revision, never the
   sole handoff. Tests must use these production producers rather than seeding the store.
 - Own the background-principal producer rather than inventing identity inside the supervisor. MVR-06
+  first atomically advances `minimum_runtime_schema=MVR-06` under the MVR-05 channel fence and proves
+  every API/watcher/worker candidate understands the role, delegation, intent, and compatibility
+  schemas; no role/delegation producer may run before that floor commits. It then
   creates a distinct opaque `background_runtime_role_id` in private versioned auth/GOV state,
   delegated from MVR-03's `local_operator_role_id` with schema/revision and delegation provenance.
   Its least-privilege scopes cover only the watcher, worker, settings, queue, and receipt operations
@@ -113,10 +116,11 @@ cross-process truth belong here.
   a removed `compatibility_binding_id`; explicit mode retains a now-stale member as loudly failed
   intent until instance-authorized removal, preserving the explicit operator decision. MVR-06 never
   requires MVR-02 to interpret these fields retroactively.
-- Before writing the first background-intent or compatibility-binding field, use the MVR-05 channel
-  fence to atomically advance `minimum_runtime_schema=MVR-06`. A build below that floor cannot start
-  watcher/worker/API against the registry; recovery preserves the complete lineage and uses an
-  MVR-06-compatible roll-forward/rollback, never a projection that discards background intent.
+- Before writing the first background role/delegation, background-intent, or compatibility-binding
+  field, use the MVR-05 channel fence to atomically advance `minimum_runtime_schema=MVR-06`. A build
+  below that floor cannot start watcher/worker/API against the registry; recovery preserves the
+  complete lineage and uses an MVR-06-compatible roll-forward/rollback, never a projection that
+  discards background intent.
 - Reconcile both durable registry revisions and the auth/GOV authorization-decision epoch at
   supervisor startup and continuously while running, with idempotent event hints only accelerating
   reconciliation. For every unseen registry revision or auth epoch, diff
@@ -428,10 +432,11 @@ migration, preflight, and fail-loud gate merge together.
   PostgreSQL or required lease constraints.
   - Verify: `tests/integration/test_multi_vault_outbox_pg_claims.py::test_concurrent_claim_owner_and_crash_redelivery_preserve_at_least_once` +
     successful exact-SHA `integration-nightly / pg-contracts` workflow receipt on #2143
-- [ ] **MVR-06A:** The MVR-06 minimum-runtime floor commits before the first background-intent field and blocks
-  every older API/watcher/worker before registry access; fault injection leaves either untouched
-  MVR-05 state or an MVR-06-compatible lineage.
-  - Verify: `tests/migrations/test_multi_vault_background_intent_upgrade.py::test_background_intent_sets_mvr06_floor_before_first_write`
+- [ ] **MVR-06A:** The MVR-06 minimum-runtime floor commits before the first background-role,
+  delegation, intent, or compatibility field and blocks every older API/watcher/worker before
+  registry/auth access; fault injection leaves either untouched MVR-05/MVR-03 state or one complete
+  MVR-06-compatible role and intent lineage.
+  - Verify: `tests/migrations/test_multi_vault_background_intent_upgrade.py::test_background_role_and_intent_set_mvr06_floor_before_first_write`
 - [ ] **MVR-06A:** Deployment and release-channel owner docs record the shipped MVR-06 floor,
   compatible rollback/roll-forward images, recovery path, and operator preflight in the same PR that
   advances the floor.
@@ -484,7 +489,7 @@ PostgreSQL receipt belongs only to 06D.
 
 ### MVR-06A validation
 
-- `pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_background_service_role_is_bootstrapped_delegated_and_least_privilege tests/api/test_background_binding_admin.py::test_mvr06a_selection_cannot_mutate_staged_intent tests/api/test_background_binding_admin.py::test_mvr06a_rejects_all_intent_mutations_until_supervisor_handoff tests/migrations/test_multi_vault_background_intent_upgrade.py::test_background_intent_sets_mvr06_floor_before_first_write`
+- `pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_background_service_role_is_bootstrapped_delegated_and_least_privilege tests/api/test_background_binding_admin.py::test_mvr06a_selection_cannot_mutate_staged_intent tests/api/test_background_binding_admin.py::test_mvr06a_rejects_all_intent_mutations_until_supervisor_handoff tests/migrations/test_multi_vault_background_intent_upgrade.py::test_background_role_and_intent_set_mvr06_floor_before_first_write`
 - Verify the 06A PR diff contains its mapped deployment, release, security, and governed-write
   owner-doc targets.
 
