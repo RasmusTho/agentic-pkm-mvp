@@ -119,8 +119,8 @@ required by #2143 without pretending that the move has shipped.
   `legacy_last_active_migration` provenance when no default exists. Later last-active changes never
   mutate the default;
 - request selection outranks session selection; session selection outranks the instance default;
-  default outranks the one-time legacy restoration result and an explicit legacy bootstrap adapter;
-  absence resolves to no-vault;
+  default outranks an explicit legacy bootstrap adapter; absence resolves to no-vault. The
+  one-time legacy restoration is a migration only, not a later runtime-precedence source;
 - unknown, unauthorized, or stale selections fail closed and never fall back silently to another
   vault, CWD, or `./vault`.
 

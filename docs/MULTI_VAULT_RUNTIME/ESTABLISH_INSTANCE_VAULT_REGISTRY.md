@@ -41,11 +41,12 @@ This slice promotes the existing seed without changing content-vault authority.
   project-scoped `down -v` volume), with a versioned encrypted/permission-checked backup and restore
   procedure. Preflight rejects a disposable prod volume, missing/restoration-incompatible backup,
   or a restore whose revision/checksum/lineage disagrees with the shared database floor. The same
-  coordinated backup carries the host-global ownership ledger and ledger-key generation; a `down -v`
-  or host-loss drill restores registry, defaults, dimensions, principal/background state, floors,
-  ledger and key generation before any API/worker starts. If the ledger backup is absent, inconsistent,
-  or collides with a currently running channel, the global fence blocks every claim/start until a
-  fenced inventory/reconstruction proves one owner per canonical root; no consumer bypasses the lease.
+  coordinated backup carries the host-global ownership ledger plus the actual protected ledger HMAC
+  key, key ID, and generation; a `down -v` or host-loss drill restores registry, defaults,
+  dimensions, principal/background state, floors, ledger and key material before any API/worker
+  starts. If the ledger/key backup is absent or inconsistent, startup restores neither by guesswork:
+  the global fence blocks every claim/start until a fenced all-channel re-key and ledger
+  reconstruction proves one owner per canonical root. No consumer bypasses the lease.
 - Add the host-local cross-channel ownership ledger shared by dev/test/prod/native registration and
   lifecycle preflight. It stores channel plus stable binding and an HMAC fingerprint of canonical
   filesystem identity, not raw paths. Registration/relocation holds its global lock and uses a
@@ -247,8 +248,10 @@ never encounter and truncate authoritative new-schema state before fork/merge pr
   - Verify: `tests/ops/test_instance_state_volume_contract.py::test_registry_volume_and_preflight_cover_all_consumers`
 - [ ] **MVR-01B:** Prod uses a protected external instance-state volume; a `down -v`/volume-loss drill
   restores the newest checksum-verified registry, default, dimension, principal/background state,
-  runtime floors, host-global ownership ledger, and ledger-key generation before API/worker startup;
-  missing/divergent state or a collision with a live channel fails closed behind the global fence.
+  runtime floors, host-global ownership ledger, and the actual protected ledger HMAC key/key-ID/
+  generation before API/worker startup; missing/divergent state or a collision with a live channel
+  fails closed behind the global fence (a lost key requires globally fenced re-key plus ledger
+  reconstruction, never metadata-only restore).
   - Verify: `tests/ops/test_instance_state_volume_contract.py::test_prod_instance_state_and_ledger_survive_volume_loss_with_verified_restore`
 - [ ] **MVR-01B:** Registering or starting the same canonical content root in two release channels is rejected by
   the shared ownership ledger; injected crashes in reserve/commit/activate/transfer recover to at

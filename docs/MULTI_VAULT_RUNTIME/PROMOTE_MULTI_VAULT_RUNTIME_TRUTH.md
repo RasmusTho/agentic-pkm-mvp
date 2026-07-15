@@ -111,7 +111,7 @@ operators, or future agents still act on stale single-global-vault truth.
   records shipped scope/residual debt, while the parent reference contains merged MVR-01A–01C,
   MVR-02–04, MVR-05A–05D, MVR-06A–06D, and MVR-07 receipts,
   the MVR-08 candidate, and an explicit pointer making live #2143 authoritative for MVR-08 merge SHA
-  and closure status. The required post-close docs receipt then records that exact live closure
+  and closure status. The parent closure workflow, outside this child, records exact live closure
   evidence in both checked-in lifecycle surfaces.
   - Verify: doc writeback at `docs/MULTI_VAULT_RUNTIME/README.md :: Multi-vault runtime selection` +
     doc writeback at `docs/MULTI_VAULT_RUNTIME/PARENT_FEATURE_ISSUE.md :: Parent reference — Multi-vault runtime selection`

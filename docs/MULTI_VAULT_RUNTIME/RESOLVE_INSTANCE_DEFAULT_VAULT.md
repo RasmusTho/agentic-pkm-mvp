@@ -30,9 +30,11 @@ fail-closed precedence resolver.
 - Expose authenticated Companion API and headless CLI get/set/clear commands through one service.
 - Extend the MVR-01 rollback projection/roll-forward merge for the default schema introduced here:
   a scalar previous image receives only the already validated explicit rollback target, never an
-  inferred default, while the authoritative `default_vault_binding_id` remains immutable in the
-  new-schema lineage and is restored unchanged on roll-forward unless a valid current-schema
-  mutation replaced/cleared it before rollback.
+  inferred default, while the authoritative `default_vault_binding_id` remains in the new-schema
+  lineage. On roll-forward, the locked merge first verifies that its binding still exists: it
+  restores it only if present, otherwise atomically clears it or blocks for an explicit authorized
+  replacement; it never leaves a dangling default or silently chooses another registration. A valid
+  current-schema mutation may also have replaced/cleared it before rollback.
   They validate registration and authority, use MVR-01's locked transaction, emit redacted
   receipts, and never mutate last-active. Tests drive these production commands rather than seeding
   the store or invoking an internal setter directly.

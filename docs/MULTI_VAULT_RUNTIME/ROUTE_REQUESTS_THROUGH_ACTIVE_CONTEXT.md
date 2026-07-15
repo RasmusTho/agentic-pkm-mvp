@@ -180,7 +180,7 @@ to cross its floor; independently safe explicit-global work may continue.
 - External boundary impact: API input maps to context selectors, not raw trusted paths
 - New or changed contract: request-context propagation and explicit multi-binding write target
 - Owner-doc impact: each owning child updates in its PR: 05A `docs/DB_SCHEMA.md`, deployment, and
-  release channels; 05B `docs/ARCHITECTURE.md`; 05C
+  release channels; 05B `docs/ARCHITECTURE.md` and `docs/SETTINGS.md`; 05C
   `docs/contracts/GOVERNED_WRITE_PROTOCOL.md`; 05D `docs/EVENTS.md`
 - Transition debt impact: reduces D1 and request-side D13 global-binding debt
 - Fitness rule impact: adds production-entrypoint context-boundary guard
@@ -301,6 +301,9 @@ to cross its floor; independently safe explicit-global work may continue.
 - [ ] **MVR-05B:** The architecture owner contract describes the shipped immutable request context,
   scoped selection/read resolution, and immediately-before-read revision/auth enforcement.
   - Verify: doc writeback at `docs/ARCHITECTURE.md :: Active context and vault bindings`
+- [ ] **MVR-05B:** The settings owner document describes the shipped instance versus request/binding
+  scope and no longer presents global `VAULT_ROOT` or compiled-vault state as request authority.
+  - Verify: doc writeback at `docs/SETTINGS.md :: Runtime settings (compiled)`
 - [ ] **MVR-05C:** The governed-write owner contract describes the shipped expanded DecisionToken/
   AuthorityReceipt fields and immediately-before-write validation.
   - Verify: doc writeback at `docs/contracts/GOVERNED_WRITE_PROTOCOL.md :: GovernedWriteProtocol`
