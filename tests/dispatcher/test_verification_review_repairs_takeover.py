@@ -120,9 +120,7 @@ def test_unknown_request_fields_never_reach_sqlite(
         }
         payload["live_truth"] = live_truth
 
-    with pytest.raises(
-        ValueError, match="malformed verification dispatch request"
-    ) as captured:
+    with pytest.raises(ValueError, match="unknown properties") as captured:
         state.ingest(payload)
 
     assert SYNTHETIC_PRIVATE_VALUE not in str(captured.value)
@@ -612,7 +610,7 @@ def test_expired_head_reconciliation_rejects_ambiguous_terminal_authority(
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'failed', 'synthetic_terminal', ?, ?)
             """,
             (
-                "ambiguous-terminal",
+                f"vrun-{str(payload['idempotency_key'])[:16]}",
                 payload["idempotency_key"],
                 payload["contract_version"],
                 payload["repository"],
