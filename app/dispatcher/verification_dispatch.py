@@ -219,6 +219,42 @@ class VerificationDispatchLedger:
         run_id = f"vrun-{str(request['idempotency_key'])[:16]}"
         with self.store._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            for candidate in conn.execute(
+                """
+                SELECT * FROM verification_runs
+                WHERE repository=? AND pr_number=? AND stage=?
+                  AND status IN ('queued','backoff','claimed','running')
+                ORDER BY created_at ASC, run_id ASC
+                """,
+                (request["repository"], request["pr_number"], request["stage"]),
+            ):
+                candidate_request = _load(candidate["request_json"])
+                if not isinstance(candidate_request, Mapping):
+                    raise ValueError("verification canonical run authority is malformed")
+                if candidate_request.get("linked_issue") != request.get("linked_issue"):
+                    raise ValueError("verification canonical run governing issue mismatch")
+                if candidate["current_head_sha"] != request.get("current_head_sha"):
+                    raise ValueError("verification artifact head does not match canonical run")
+                conn.commit()
+                return _run(candidate)
+            existing = conn.execute(
+                "SELECT * FROM verification_runs WHERE idempotency_key = ?",
+                (request["idempotency_key"],),
+            ).fetchone()
+            if existing is not None:
+                existing_request = _load(existing["request_json"])
+                if (
+                    not isinstance(existing_request, Mapping)
+                    or existing["repository"] != request["repository"]
+                    or existing["pr_number"] != request["pr_number"]
+                    or existing["stage"] != request["stage"]
+                    or existing["current_head_sha"] != request["current_head_sha"]
+                    or existing_request.get("linked_issue")
+                    != request.get("linked_issue")
+                ):
+                    raise ValueError("verification idempotency authority conflict")
+                conn.commit()
+                return _run(existing)
             conn.execute(
                 """
                 INSERT OR IGNORE INTO verification_runs (

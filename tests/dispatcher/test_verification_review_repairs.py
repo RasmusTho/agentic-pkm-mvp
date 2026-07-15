@@ -22,12 +22,14 @@ def test_subscription_slot_allows_only_one_active_pr_chain(tmp_path) -> None:
     first = state.start(first.run_id, "host", first_claim.lease_id, "thread-1", {"head_sha": HEAD})
     second_request = request("b" * 40)
     second_pr = eligible_pr(head={"ref": "branch-2", "sha": "b" * 40})
-    second = VerificationConsumer(
-        state, Truth(second_pr, GREEN), Auth(), launcher, "host"
-    ).consume(second_request)
+    with pytest.raises(
+        ValueError, match="artifact head does not match canonical run"
+    ):
+        VerificationConsumer(
+            state, Truth(second_pr, GREEN), Auth(), launcher, "host"
+        ).consume(second_request)
 
     assert first.status == "running"
-    assert second.status == "queued"
     assert launcher.calls == []
 
 

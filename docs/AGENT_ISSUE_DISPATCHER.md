@@ -138,6 +138,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - The immutable request head remains the run/idempotency audit identity. A repair receipt may advance
   the separate current head only under the exact active lease after a fresh GitHub read proves that
   exact live PR head; terminal delivery records the verified head only after two clean reviews on it.
+  A later artifact for that repaired head reuses the same active repository/PR/governing-issue run
+  instead of opening an empty verification chain, so redispatch cannot reset prior attempts or the
+  PR-wide standard/escalated repair and fresh-review accounting. A mismatched head or governing
+  authority fails closed instead of sharing the ledger.
   When the repaired head's checks are still pending, its repair event is persisted before bounded
   backoff so replay cannot bypass the 2+2 ledger; review events are rejected until checks are green.
   An exact same-session terminal receipt replay reuses its deterministic verification attempt, so

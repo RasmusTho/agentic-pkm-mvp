@@ -1198,7 +1198,7 @@ def test_pending_repair_replay_preserves_two_plus_two_accounting(tmp_path) -> No
 
     final = VerificationConsumer(
         state, truth, Auth(), ReviewOnlyDeliveryLauncher(), "host"
-    ).consume(request())
+    ).consume(request(new_head))
 
     assert final.status == "completed"
     assert [row["kind"] for row in state.attempts(final.run_id)] == [
