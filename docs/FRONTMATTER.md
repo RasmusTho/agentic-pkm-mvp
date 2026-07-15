@@ -92,7 +92,7 @@ System-written fields must be:
 - Backed by receipts (what wrote it, why, and under what intent).
 - Safe to ignore without losing meaning.
 
-### Cognitive Expansion synthesis-provenance keys (proposed, EXP-3/#2996)
+### Machine-synthesis provenance keys
 
 `docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md` §2.3/§2.4 (owner decision E2)
 proposes four system-owned frontmatter keys for Create's staged synthesis drafts and — once EXP-4
@@ -100,7 +100,8 @@ proposes four system-owned frontmatter keys for Create's staged synthesis drafts
 (bundled with the EXP-3 implementation PR, not deferred); the keys apply narrowly to
 machine-synthesized artifacts, not to ordinary human-authored notes:
 
-- `derived_by` — the generation mechanism, e.g. `synthesis` (Create's cross-note reasoning). Marks
+- `derived_by` — the generation mechanism, e.g. `synthesis` (Create's cross-note reasoning) or
+  `conversation` (Conversational Journaling's transcript-grounded ghost-writing pass). Marks
   the note as machine-derived so it stays visibly distinguishable from human prose (mirrors
   `app.knowledge_compilation.proposal_builders._MACHINE_DERIVATIONS`'s existing use of the same
   vocabulary for non-frontmatter provenance signals).
@@ -123,6 +124,13 @@ Of these, `derived_by`, `authority_state` (=`proposal`), and `sources` are writt
 write path (`app/expansion/create.py`); `authority_state` (=`accepted`), `accepted_by`, `accepted_at`,
 `acceptance_receipt_id`, and `decision_token_ref` are written by EXP-4's acceptance path
 (`app/expansion/accept.py`) — the only path from a staged draft to a canonical note.
+
+Conversational Journaling's JRNL-03 staging path (`app/journaling/draft.py`) uses the same proposal
+posture without extending Create's closed output-kind enum: it writes `derived_by: conversation`,
+`authority_state: proposal`, and a `sources` list containing the reflection-session id plus every
+day-context provenance reference folded into the draft. These fields do not make the draft human
+knowledge or authorize promotion. JRNL-04's separate, explicit acceptance path owns any later move
+to `authority_state: accepted`.
 
 For active writing-surface notes, frontmatter should remain a bounded human-facing surface.
 It should not become the only durable home for:
