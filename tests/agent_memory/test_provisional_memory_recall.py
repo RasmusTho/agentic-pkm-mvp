@@ -49,6 +49,30 @@ def _candidate(tmp_path: Path) -> tuple[Path, ProvisionalReceiptStore, Provision
     return vault, store, search.candidates[0]
 
 
+def _write_provisional(
+    tmp_path: Path,
+    *,
+    content: str,
+) -> tuple[Path, ProvisionalReceiptStore]:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    store = ProvisionalReceiptStore(tmp_path / "provisional.jsonl")
+    write_provisional_memory(
+        ProvisionalWriteRequest(
+            scope_id="scope-personal",
+            principal_id="principal-1",
+            memory_type=MemoryType.PREFERENCE_MEMORY,
+            sensitivity=ProvisionalSensitivity.PRIVATE,
+            content=content,
+            provenance_event_ids=("event-1",),
+        ),
+        vault_root=vault,
+        receipt_store=store,
+        write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+    )
+    return vault, store
+
+
 def test_read_context_preserves_low_trust_posture(tmp_path: Path) -> None:
     _, _, candidate = _candidate(tmp_path)
     result = activate_provisional_recall(
@@ -70,6 +94,39 @@ def test_read_context_preserves_low_trust_posture(tmp_path: Path) -> None:
     assert result.explanation.review_state is ReviewState.UNREVIEWED
     assert "event-1" in result.explanation.source_provenance.source_refs
     assert "never_apply_or_tool_use" in result.explanation.authority_limits
+
+
+def test_stopwords_do_not_create_provisional_recall_match(tmp_path: Path) -> None:
+    vault, store = _write_provisional(
+        tmp_path,
+        content="The and of to in with for.",
+    )
+
+    search = retrieve_relevant_provisional(
+        "the and of",
+        vault_root=vault,
+        receipt_store=store,
+        active_scope_id="scope-personal",
+    )
+
+    assert search.candidates == ()
+
+
+def test_meaningful_terms_survive_stopword_filtering(tmp_path: Path) -> None:
+    vault, store = _write_provisional(
+        tmp_path,
+        content="Prefer deterministic bilingual retrieval evaluation.",
+    )
+
+    search = retrieve_relevant_provisional(
+        "Which retrieval evaluation is preferred?",
+        vault_root=vault,
+        receipt_store=store,
+        active_scope_id="scope-personal",
+    )
+
+    assert len(search.candidates) == 1
+    assert search.candidates[0].score > 0
 
 
 def test_proposal_use_requires_explicit_citation(tmp_path: Path) -> None:

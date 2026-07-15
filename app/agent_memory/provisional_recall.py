@@ -52,6 +52,38 @@ DEFAULT_PROVISIONAL_RECALL_RECEIPTS_PATH = Path(
 )
 PROVISIONAL_RECALL_RECEIPT_EVENT = "agent_memory.provisional_recall.evaluated"
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "att",
+    "av",
+    "det",
+    "en",
+    "ett",
+    "for",
+    "för",
+    "i",
+    "in",
+    "is",
+    "it",
+    "med",
+    "of",
+    "och",
+    "om",
+    "on",
+    "or",
+    "på",
+    "som",
+    "the",
+    "to",
+    "vad",
+    "which",
+    "with",
+}
 
 
 @dataclass(frozen=True)
@@ -412,7 +444,11 @@ def _tier_rank(tier: AdmissionTier) -> int:
 
 
 def _tokens(value: str) -> set[str]:
-    return {match.group(0).lower() for match in _TOKEN_RE.finditer(value)}
+    return {
+        token
+        for match in _TOKEN_RE.finditer(value)
+        if (token := match.group(0).lower()) not in _STOPWORDS
+    }
 
 
 def _score(record: ProvisionalMemoryRecord, query_tokens: set[str]) -> float:
