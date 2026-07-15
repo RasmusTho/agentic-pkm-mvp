@@ -11,7 +11,12 @@ import pytest
 
 import app.dispatcher.verification_dispatch as verification_dispatch
 from app.dispatcher.verification_dispatch import VerificationRun
-from tests.dispatcher.verification_helpers import ledger, pre_trust_request, request
+from tests.dispatcher.verification_helpers import (
+    downgrade_verification_schema_to_v3,
+    ledger,
+    pre_trust_request,
+    request,
+)
 from app.dispatcher.store import SqliteStore
 
 
@@ -37,6 +42,7 @@ def _migrated_legacy_ledger(tmp_path):
             ),
         )
         conn.execute("ALTER TABLE verification_runs DROP COLUMN supporting_authority_json")
+        downgrade_verification_schema_to_v3(conn)
         conn.commit()
     migrated = verification_dispatch.VerificationDispatchLedger(
         SqliteStore(state.store.db_path)
@@ -815,7 +821,7 @@ def test_claim_lock_wait_never_commits_already_expired_lease(
     assert claimed.lease_expires_at == expected_expiry
 
 
-def test_existing_schema_v2_upgrades_to_verification_schema_v3(tmp_path) -> None:
+def test_existing_schema_v2_upgrades_to_verification_schema_v4(tmp_path) -> None:
     db = tmp_path / "dispatcher.sqlite3"
     initial = SqliteStore(db)
     initial.initialize()
@@ -838,7 +844,7 @@ def test_existing_schema_v2_upgrades_to_verification_schema_v3(tmp_path) -> None
                 "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'verification_%'"
             )
         }
-    assert version == "3"
+    assert version == "4"
     assert tables == {"verification_runs", "verification_attempts", "verification_exceptions"}
 
 
@@ -852,6 +858,7 @@ def test_existing_schema_v3_backfills_current_head_without_losing_request_audit(
         conn.execute("ALTER TABLE verification_runs DROP COLUMN verified_head_sha")
         conn.execute("ALTER TABLE verification_runs DROP COLUMN current_head_sha")
         conn.execute("ALTER TABLE verification_runs DROP COLUMN supporting_authority_json")
+        downgrade_verification_schema_to_v3(conn)
         conn.commit()
 
     migrated = ledger(tmp_path).get(original.run_id)

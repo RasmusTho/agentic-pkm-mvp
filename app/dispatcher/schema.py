@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 LEGACY_UNTRUSTED_VERIFICATION_STATUS = "legacy_untrusted"
 
@@ -55,7 +55,12 @@ VERIFICATION_V3_REQUIRED_UNIQUE_KEYS = {
     ),
 }
 
-
+VERIFICATION_V4_ADDITIVE_COLUMNS = {
+    "verification_runs": frozenset({"repair_budget_policy"}),
+    "verification_attempts": frozenset(
+        {"finding_id", "failure_domain", "mechanism_id"}
+    ),
+}
 def has_unique_key(
     conn: sqlite3.Connection, table: str, required_key: tuple[str, ...]
 ) -> bool:
@@ -116,6 +121,33 @@ def verification_v3_schema_error(
                     f"missing required unique key in {table}: "
                     f"{', '.join(required_key)}"
                 )
+    return None
+
+
+def verification_v4_schema_error(
+    conn: sqlite3.Connection,
+    *,
+    allow_additive_migration: bool = False,
+) -> str | None:
+    """Validate v4 repair-budget persistence and inherited audit invariants."""
+    inherited = verification_v3_schema_error(
+        conn, allow_additive_migration=allow_additive_migration
+    )
+    if inherited is not None:
+        return inherited
+    for table, required in VERIFICATION_V4_ADDITIVE_COLUMNS.items():
+        columns = {
+            str(row[1])
+            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        missing_columns = required - columns
+        if allow_additive_migration:
+            missing_columns = frozenset()
+        if missing_columns:
+            return (
+                f"missing dispatcher columns in {table}: "
+                f"{', '.join(sorted(missing_columns))}"
+            )
     return None
 
 DDL_STATEMENTS: tuple[str, ...] = (
@@ -182,6 +214,7 @@ DDL_STATEMENTS: tuple[str, ...] = (
         stage TEXT NOT NULL,
         request_json TEXT NOT NULL,
         supporting_authority_json TEXT NOT NULL DEFAULT '[]',
+        repair_budget_policy TEXT NOT NULL DEFAULT 'v2',
         status TEXT NOT NULL,
         claimed_by TEXT,
         lease_id TEXT,
@@ -208,6 +241,9 @@ DDL_STATEMENTS: tuple[str, ...] = (
         reasoning_effort TEXT NOT NULL,
         context_hash TEXT NOT NULL,
         outcome TEXT NOT NULL,
+        finding_id TEXT,
+        failure_domain TEXT,
+        mechanism_id TEXT,
         receipt_json TEXT,
         created_at TEXT NOT NULL,
         FOREIGN KEY(run_id) REFERENCES verification_runs(run_id),

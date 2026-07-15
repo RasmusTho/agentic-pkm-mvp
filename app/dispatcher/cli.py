@@ -14,7 +14,7 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from app.dispatcher import leases as lease_module
 from app.dispatcher import queue as queue_module
@@ -348,7 +348,9 @@ def _cmd_status(args: argparse.Namespace, store: SqliteStore) -> int:
     return 0
 
 
-def _compact_verification_run(run: Any) -> dict[str, Any]:
+def _compact_verification_run(
+    run: Any, *, repair_budget: Mapping[str, object] | None = None
+) -> dict[str, Any]:
     from app.dispatcher.verification_consumer import (
         bounded_coordinator_session_id,
         redact_durable_diagnostics,
@@ -366,6 +368,13 @@ def _compact_verification_run(run: Any) -> dict[str, Any]:
         "stage": run.stage,
         "status": run.status,
         "authority_state": run.authority_state,
+        "repair_budget": dict(repair_budget) if repair_budget is not None else {
+            "policy_version": run.repair_budget_policy,
+            "mechanism_count": 0,
+            "truncated": False,
+            "omitted_count": 0,
+            "mechanisms": [],
+        },
         "claimed_by": run.claimed_by,
         "lease_id": run.lease_id,
         "lease_expires_at": run.lease_expires_at,
@@ -384,10 +393,19 @@ def _cmd_verification_ingest(args: argparse.Namespace, store: SqliteStore) -> in
         request = json.loads(Path(args.request).read_text(encoding="utf-8"))
         if not isinstance(request, dict):
             raise ValueError("request JSON must be an object")
-        run = VerificationDispatchLedger(store).ingest(request)
+        ledger = VerificationDispatchLedger(store)
+        run = ledger.ingest(request)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         return _emit_error(str(exc), args.json)
-    _emit({"ok": True, "run": _compact_verification_run(run)}, args.json)
+    _emit(
+        {
+            "ok": True,
+            "run": _compact_verification_run(
+                run, repair_budget=ledger.repair_budget_projection(run.run_id)
+            ),
+        },
+        args.json,
+    )
     return 0
 
 
@@ -395,9 +413,16 @@ def _cmd_verification_status(args: argparse.Namespace, store: SqliteStore) -> in
     from app.dispatcher.verification_dispatch import VerificationDispatchLedger
 
     ledger = VerificationDispatchLedger(store)
-    runs = [_compact_verification_run(run) for run in ledger.list(limit=args.limit)]
+    runs = [
+        _compact_verification_run(
+            run, repair_budget=ledger.repair_budget_projection(run.run_id)
+        )
+        for run in ledger.list(limit=args.limit)
+    ]
     active = [
-        _compact_verification_run(run)
+        _compact_verification_run(
+            run, repair_budget=ledger.repair_budget_projection(run.run_id)
+        )
         for status in ("claimed", "running")
         for run in ledger.list(limit=args.limit, status=status)
     ]
