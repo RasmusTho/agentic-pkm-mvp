@@ -24,7 +24,7 @@ Create the durable public semantics that Q1b will execute without exposing mutab
 
 ## Concretely
 
-`CapabilityResource.public_id` survives rebuild and rename, is never reused, and follows the accepted identity-lifecycle policy for deletion, split, and merge. A snapshot manifest binds epoch/revision, schema versions, taxonomy digest, exact watermarks, provenance, effective audience, access-policy version, redaction profile, and a completeness manifest. V1 defines no cursor contract.
+`CapabilityResource.public_id` survives rebuild and rename and is never reused. Deletion tombstones the identifier, split tombstones the original and links new successor identifiers, and merge creates a new identifier with successor aliases from the tombstoned inputs. A snapshot manifest binds epoch/revision, schema versions, taxonomy digest, exact watermarks, provenance, `effective_audience=single_operator_local`, the versioned local policy, `redaction_profile=none`, and a completeness manifest. V1 defines no cursor contract or multi-user security machinery.
 
 ## Why This Matters
 
@@ -32,15 +32,15 @@ Watermarks miss link, confirmation, assessment, and finding mutations. Random ro
 
 ## Acceptance Criteria
 
-- [ ] The accepted owner policy defines rename, deletion, split, merge, alias, tombstone, and non-reuse semantics before schema implementation or migration begins.
-  Verify: doc writeback at `docs/CKM_MEASUREMENT_AND_ACCESS/README.md :: Pre-implementation owner gates`
+- [x] The accepted owner policy defines rename, deletion, split, merge, alias, tombstone, and non-reuse semantics before schema implementation or migration begins.
+  Verify: doc writeback at `docs/CKM_MEASUREMENT_AND_ACCESS/README.md :: Accepted pre-implementation owner decisions`
 - [ ] Seeded and inferred public resource identities are deterministic, survive rebuild/rename, are never reused, and preserve the accepted deletion/split/merge semantics.
   Verify: `tests/builderops/ckm/test_measurement_contract.py::test_public_identity_lifecycle_policy`
 - [ ] Every CKM mutation advances state revision exactly once in the same transaction, including ingestion, linking, confirmation, assessment, findings, rebuild, and migration paths.
   Verify: `tests/builderops/ckm/test_measurement_contract.py::test_all_mutations_advance_state_revision_atomically`
 - [ ] Migration/bootstrap/test producers populate the new identity and state metadata; unsupported legacy state fails loudly rather than half-initializing.
   Verify: `tests/builderops/ckm/test_measurement_contract.py::test_identity_revision_migration_updates_every_producer`
-- [ ] Result/resource DTOs express projection status, candidate separation, provenance, snapshot binding, effective audience/access-policy/redaction metadata, completeness accounting, and distinct `measured`/`missing`/`unassessed`/`unsupported` values.
+- [ ] Result/resource DTOs express projection status, candidate separation, provenance, snapshot binding, the versioned single-operator local policy constants, completeness accounting, and distinct `measured`/`missing`/`unassessed`/`unsupported` values without adding accounts, roles, authentication, or redaction machinery.
   Verify: `tests/builderops/ckm/test_measurement_contract.py::test_envelope_missing_states_and_projection_marker`
 - [ ] Snapshot manifests distinguish included, filtered, omitted, and truncated object classes; incomplete or policy-ambiguous captures cannot claim completeness.
   Verify: `tests/builderops/ckm/test_measurement_contract.py::test_snapshot_manifest_accounts_for_complete_scope`
@@ -72,4 +72,4 @@ Watermarks miss link, confirmation, assessment, and finding mutations. Random ro
 
 ## Related GitHub Issues
 
-Implementation issue #3776 under validation parent #3775. It remains blocked until every owner gate is accepted and the Issue is reconciled to this contract. TCD hint: Sol/high or Terra/high; escalate for unresolved migration, transaction, identity, access-policy, or compatibility risk.
+Implementation issue #3776 under validation parent #3775. The owner decisions are accepted, but the Issue remains blocked until its stale cursor, lifecycle-identity, and access assumptions are reconciled to this contract and strict readiness validation passes. TCD hint: Sol/high or Terra/high; escalate for unresolved migration, transaction, identity, access-policy, or compatibility risk.
