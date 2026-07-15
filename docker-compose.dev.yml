@@ -1,6 +1,7 @@
 services:
   migrate:
     environment:
+      LLM_PROVIDER: mock
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
 
@@ -14,10 +15,6 @@ services:
     # and watcher mtime saturation prevents re-population via normal watch ticks.
     volumes:
       - pgdata-dev:/var/lib/postgresql/data
-
-  migrate:
-    environment:
-      LLM_PROVIDER: mock
 
   api:
     ports: !override
