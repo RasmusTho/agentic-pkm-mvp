@@ -89,7 +89,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   make model-produced text durable-safe: raw coordinator output remains transient, and only the
   bounded projection that redacts credentials—including assignments with quoted JSON/mapping keys—
   and machine-local paths may enter attempts, pending replay receipts, terminal rows, Human Exception
-  packets, or status output. The projection retains
+  packets, or status output. GitHub evidence links retain only bounded repository, issue, pull-request,
+  or Actions-run routes without query or fragment; an unsupported route or a secret-shaped path
+  component becomes a redacted GitHub URL before persistence. The projection retains
   the structured identities and actionable option relationships required for deterministic replay
   and governed owner decisions, then passes the canonical schema and semantic validation again.
   Check eligibility selects the latest GitHub rerun per

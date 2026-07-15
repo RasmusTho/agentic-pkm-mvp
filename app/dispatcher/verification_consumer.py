@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Protocol, Sequence, cast
+from urllib.parse import unquote, urlsplit
 
 import jsonschema
 
@@ -778,6 +779,65 @@ _SAFE_GITHUB_URL = re.compile(
 )
 
 
+def _safe_github_url_projection(value: str) -> str:
+    """Retain only bounded, recognized GitHub evidence routes without secrets."""
+
+    parsed = urlsplit(value)
+    host = parsed.netloc.lower()
+    segments = [unquote(segment) for segment in parsed.path.split("/") if segment]
+    contains_private_component = any(
+        _CREDENTIAL_ASSIGNMENT.search(segment)
+        or _BEARER_VALUE.search(segment)
+        or _KNOWN_TOKEN_VALUE.search(segment)
+        or _JWT_VALUE.search(segment)
+        or _OPAQUE_SECRET_VALUE.search(segment)
+        or _ABSOLUTE_MACHINE_PATH.search(segment)
+        for segment in segments
+    )
+    github_route = (
+        len(segments) == 2
+        or (
+            len(segments) == 4
+            and segments[2] in {"issue", "issues", "pull", "pulls"}
+            and segments[3].isdigit()
+        )
+        or (
+            len(segments) == 5
+            and segments[2:4] == ["actions", "runs"]
+            and segments[4].isdigit()
+        )
+        or (
+            len(segments) == 7
+            and segments[2:4] == ["actions", "runs"]
+            and segments[4].isdigit()
+            and segments[5] == "job"
+            and segments[6].isdigit()
+        )
+    )
+    api_route = (
+        len(segments) == 3
+        and segments[0] == "repos"
+        or (
+            len(segments) == 5
+            and segments[0] == "repos"
+            and segments[3] in {"issue", "issues", "pull", "pulls"}
+            and segments[4].isdigit()
+        )
+        or (
+            len(segments) == 6
+            and segments[0] == "repos"
+            and segments[3:5] == ["actions", "runs"]
+            and segments[5].isdigit()
+        )
+    )
+    recognized_route = (
+        host == "github.com" and github_route
+    ) or (host == "api.github.com" and api_route)
+    if contains_private_component or not recognized_route:
+        return f"https://{host}/REDACTED"
+    return f"https://{host}{parsed.path}"[:256]
+
+
 def bounded_error_type(value: object) -> str | None:
     if isinstance(value, str) and _SAFE_ERROR_TYPE.fullmatch(value):
         return value
@@ -804,9 +864,9 @@ def _sanitize_receipt_text(value: object, *, limit: int = _MAX_RECEIPT_TEXT) -> 
     safe_urls: list[str] = []
 
     def preserve_url(match: re.Match[str]) -> str:
-        url = match.group(0).split("?", 1)[0].split("#", 1)[0]
+        url = _safe_github_url_projection(match.group(0))
         placeholder = f"SAFELINK{len(safe_urls)}"
-        safe_urls.append(url[:256])
+        safe_urls.append(url)
         return placeholder
 
     text = _SAFE_GITHUB_URL.sub(preserve_url, text)

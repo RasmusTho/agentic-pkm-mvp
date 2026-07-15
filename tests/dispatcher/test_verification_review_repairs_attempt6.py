@@ -79,6 +79,82 @@ def test_quoted_credential_assignments_are_sanitized_before_persistence(
     assert encoded.count("[REDACTED]") == 2
 
 
+@pytest.mark.parametrize("quote", ['"', "'"])
+def test_hyphenated_quoted_credential_assignments_are_sanitized_before_persistence(
+    quote: str,
+) -> None:
+    summary = (
+        f"{{{quote}x-api-key{quote}: {quote}hunter2{quote}, "
+        f"{quote}client-secret{quote}: {quote}vault-secret{quote}}}"
+    )
+    sanitized = sanitize_verification_closer_receipt(
+        {
+            "verdict": "blocked",
+            "head_sha": HEAD,
+            "summary": summary,
+            "receipt_ids": [],
+            "retry_after": None,
+            "review_events": None,
+            "human_exception": None,
+        }
+    )
+
+    encoded = json.dumps(sanitized, sort_keys=True)
+    assert "hunter2" not in encoded
+    assert "vault-secret" not in encoded
+
+
+def test_secret_shaped_github_urls_are_sanitized_before_persistence() -> None:
+    aws_key = "AKIA" + "IOSFODNN7EXAMPLE"
+    jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature0123456789"
+    safe_urls = [
+        "https://github.com/RasmusTho/agentic-pkm-mvp",
+        "https://github.com/RasmusTho/agentic-pkm-mvp/issues/3764",
+        "https://github.com/RasmusTho/agentic-pkm-mvp/pull/3620",
+        "https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/123",
+    ]
+    unsafe_urls = [
+        f"https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/123/{aws_key}",
+        f"https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/123/{jwt}",
+        "https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/123/credential=vault-secret",
+        "https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/Users/operator/private-vault",
+    ]
+    safe_projection = sanitize_verification_closer_receipt(
+        {
+            "verdict": "blocked",
+            "head_sha": HEAD,
+            "summary": " ".join(safe_urls),
+            "receipt_ids": [],
+            "retry_after": None,
+            "review_events": None,
+            "human_exception": None,
+        }
+    )
+    safe_summary = safe_projection["summary"]
+    assert isinstance(safe_summary, str)
+
+    for safe_url in safe_urls:
+        assert safe_url in safe_summary
+    for unsafe_url, private_value in zip(
+        unsafe_urls,
+        (aws_key, jwt, "vault-secret", "/Users/operator/private-vault"),
+        strict=True,
+    ):
+        unsafe_projection = sanitize_verification_closer_receipt(
+            {
+                "verdict": "blocked",
+                "head_sha": HEAD,
+                "summary": unsafe_url,
+                "receipt_ids": [],
+                "retry_after": None,
+                "review_events": None,
+                "human_exception": None,
+            }
+        )
+        assert private_value not in str(unsafe_projection["summary"])
+        assert unsafe_projection["summary"] == "https://github.com/REDACTED"
+
+
 def _check(
     *,
     check_id: int,
@@ -330,6 +406,14 @@ def test_receipt_sanitization_is_a_canonical_fixed_point() -> None:
     twice = sanitize_verification_closer_receipt(once)
 
     assert twice == once
+
+
+def test_pending_receipt_replay_uses_only_sanitized_fixed_point() -> None:
+    _, receipt = _UnsafeDeliveredLauncher().launch({})
+
+    sanitized = sanitize_verification_closer_receipt(receipt)
+
+    assert sanitize_verification_closer_receipt(sanitized) == sanitized
 
 
 def test_required_check_rejects_same_app_success_from_foreign_workflow_suite() -> None:
