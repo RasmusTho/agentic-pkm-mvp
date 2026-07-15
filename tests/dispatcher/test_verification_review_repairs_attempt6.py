@@ -55,6 +55,7 @@ def _unsafe_text() -> str:
     [
         'diagnostic {"password": "hunter2", "credential": "vault-secret"}',
         "diagnostic {'password': 'hunter2', 'credential': 'vault-secret'}",
+        'diagnostic {"x-api-key": "hunter2", "db.password": "vault-secret"}',
     ],
 )
 def test_quoted_credential_assignments_are_sanitized_before_persistence(

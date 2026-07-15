@@ -742,9 +742,9 @@ _MAX_RECEIPT_LIST_ITEMS = 16
 _MAX_RECEIPT_IDS = 32
 _SAFE_DURABLE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}\Z")
 _CREDENTIAL_ASSIGNMENT = re.compile(
-    r"(?i)(?<![A-Za-z0-9_])(?P<quote>[\"']?)(?P<key>[A-Za-z0-9_]*"
+    r"(?i)(?<![A-Za-z0-9_.-])(?P<quote>[\"']?)(?P<key>[A-Za-z0-9_.-]*"
     r"(?:api[_ -]?key|access[_ -]?token|auth[_ -]?token|token|credential|"
-    r"password|secret)[A-Za-z0-9_]*)(?P=quote)\s*(?::|=|\s)\s*"
+    r"password|secret)[A-Za-z0-9_.-]*)(?P=quote)\s*(?::|=|\s)\s*"
     r"(?:\"[^\"]*\"|'[^']*'|[^\s;,]+)"
 )
 _BEARER_VALUE = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+")
