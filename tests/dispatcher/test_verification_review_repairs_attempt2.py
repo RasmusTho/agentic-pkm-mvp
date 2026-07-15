@@ -80,6 +80,7 @@ class FailedExecLauncher(Launcher):
         raise CodexExecFailure(
             {
                 "outcome": "codex_exec_failed",
+                "failure_class": "execution",
                 "returncode": 1,
                 "stderr": "bounded diagnostic",
                 "terminal_error": None,

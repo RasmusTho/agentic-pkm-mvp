@@ -59,9 +59,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   independently bounded before an in-memory request is accepted. A mismatch or oversized artifact
   fails closed before claim or model launch.
 - Missing or pending checks and auth/rate limits enter time-bounded `backoff`; replay cannot launch
-  before `retry_after`. Rate-limit classification requires either a structured `retry` receipt or a
-  non-zero execution-failure signal with rate/quota evidence; arbitrary prose in another terminal
-  verdict cannot select rate-limit backoff. Terminal completion additionally requires two fresh clean
+  before `retry_after`. Rate-limit classification requires either a structured `retry` receipt or the
+  launcher's structured `failure_class=rate_limit`, derived once from a non-zero provider failure;
+  arbitrary or negated terminal/stderr prose cannot select rate-limit backoff. Terminal completion
+  additionally requires two fresh clean
   review receipts after the final durable repair attempt. Standard and strongest-capability repair
   budgets are persisted across restart.
 - Completion never relies on coordinator receipt ids or review-event prose alone. The fresh exact-head
@@ -101,7 +102,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   open current-head PR; a `delivered` receipt is accepted only when a fresh GitHub read proves the
   exact repository, PR, head, merged state, merge timestamp, merge commit, and green checks.
   A source or contract-parse failure during that post-launch read enters exact-lease bounded
-  technical backoff while retaining the deterministic verification attempt for safe resume/replay.
+  technical backoff while retaining the deterministic verification attempt and pending terminal
+  receipt for safe resume/replay. A pending delivered receipt bypasses the ordinary open-only intake
+  gate on retry, but can complete only through a fresh authenticated exact-head merged/check read;
+  its event batch remains exact-replay idempotent.
 - Governing-Issue authority is live truth, not an artifact-only assertion. Every authority-bearing
   PR read must still contain exactly the request's explicit governing issue and identical bounded
   supporting-issue evidence; body-only missing, conflicting, or changed authority fails closed.

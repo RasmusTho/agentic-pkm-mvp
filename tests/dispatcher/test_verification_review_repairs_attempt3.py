@@ -111,6 +111,7 @@ class NonzeroRateLimitedLauncher(Launcher):
         raise CodexExecFailure(
             {
                 "outcome": "codex_exec_failed",
+                "failure_class": "rate_limit",
                 "returncode": 1,
                 "stderr": "rate limit exceeded; retry after 900s",
                 "terminal_error": '{"type":"error","message":"credit exhausted"}',

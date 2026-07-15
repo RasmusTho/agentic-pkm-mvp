@@ -96,6 +96,20 @@ class FailingPostLaunchCheckTruth(Truth):
         return super().checks(repository, head_sha)
 
 
+class PostMergeTerminalReadOutageTruth(Truth):
+    def __init__(self) -> None:
+        super().__init__(eligible_pr(), GREEN)
+        self.pull_calls = 0
+
+    def pull_request(self, repository, pr_number):
+        self.pull_calls += 1
+        if self.pull_calls <= 2:
+            return eligible_pr()
+        if self.pull_calls == 3:
+            raise RuntimeError("simulated post-merge terminal read outage")
+        return merged_pr()
+
+
 class Launcher:
     config = LaunchConfig("verification_closer", "gpt-5.6-terra", "high", "workspace-write", "instructions")
     def __init__(self): self.calls = []
@@ -304,11 +318,10 @@ def test_post_launch_live_truth_error_backs_off_running_run(tmp_path) -> None:
     assert result.status == "backoff"
     assert result.claimed_by is None
     assert result.lease_id is None
-    assert result.terminal_receipt == {
-        "outcome": "blocked",
-        "reason": "postlaunch_live_truth_unavailable",
-        "error_type": "RuntimeError",
-    }
+    assert result.terminal_receipt["outcome"] == "blocked"
+    assert result.terminal_receipt["reason"] == "postlaunch_live_truth_unavailable"
+    assert result.terminal_receipt["error_type"] == "RuntimeError"
+    assert result.terminal_receipt["pending_terminal_receipt"]["verdict"] == "needs_human"
     assert [row["kind"] for row in state.attempts(result.run_id)] == ["verification"]
     assert len(launcher.calls) == 1
     with state.store._connect() as conn:
@@ -340,6 +353,66 @@ def test_post_launch_check_error_preserves_verification_anchor(tmp_path) -> None
     assert final.status == "needs_human"
     assert [row["kind"] for row in state.attempts(final.run_id)] == ["verification"]
     assert [call[1] for call in launcher.calls] == [None, "thread-new"]
+
+
+def test_post_merge_terminal_read_outage_replays_exact_delivered_receipt(
+    tmp_path,
+) -> None:
+    state = ledger(tmp_path)
+    launcher = DeliveredLauncher()
+    consumer = VerificationConsumer(
+        state, PostMergeTerminalReadOutageTruth(), Auth(), launcher, "host"
+    )
+
+    first = consumer.consume(request())
+    assert first.status == "backoff"
+    assert first.terminal_receipt["reason"] == "postlaunch_live_truth_unavailable"
+    assert first.terminal_receipt["pending_terminal_receipt"]["verdict"] == "delivered"
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET retry_after='2000-01-01T00:00:00+00:00' "
+            "WHERE run_id=?",
+            (first.run_id,),
+        )
+        conn.commit()
+
+    final = consumer.consume(request())
+
+    assert final.status == "completed"
+    assert final.verified_head_sha == HEAD
+    assert len(launcher.calls) == 1
+    assert [row["kind"] for row in state.attempts(final.run_id)] == [
+        "verification",
+        "review",
+        "review",
+    ]
+
+
+def test_pending_delivered_receipt_replay_is_idempotent(tmp_path) -> None:
+    state = ledger(tmp_path)
+    launcher = DeliveredLauncher()
+    consumer = VerificationConsumer(
+        state, PostMergeTerminalReadOutageTruth(), Auth(), launcher, "host"
+    )
+    first = consumer.consume(request())
+    with state.store._connect() as conn:
+        conn.execute(
+            "UPDATE verification_runs SET retry_after='2000-01-01T00:00:00+00:00' "
+            "WHERE run_id=?",
+            (first.run_id,),
+        )
+        conn.commit()
+
+    completed = consumer.consume(request())
+    replay = consumer.consume(request())
+
+    assert replay == completed
+    assert len(launcher.calls) == 1
+    assert [row["kind"] for row in state.attempts(replay.run_id)] == [
+        "verification",
+        "review",
+        "review",
+    ]
 
 
 def merged_pr(**updates: object) -> dict[str, object]:
@@ -1791,6 +1864,7 @@ def test_heartbeat_authority_loss_persists_one_backoff_receipt(tmp_path) -> None
             raise CodexExecFailure(
                 {
                     "outcome": "heartbeat_authority_lost",
+                    "failure_class": "authority_loss",
                     "returncode": -15,
                     "stderr": "heartbeat authority lost",
                     "terminal_error": "ValueError: verification heartbeat ownership mismatch",
@@ -1825,6 +1899,7 @@ def test_parent_exit_authority_loss_persists_one_backoff_receipt(tmp_path) -> No
             raise CodexExecFailure(
                 {
                     "outcome": "parent_exit_authority_lost",
+                    "failure_class": "authority_loss",
                     "returncode": 0,
                     "stderr": "coordinator parent exited while stdout remained open",
                     "terminal_error": "RuntimeError: descendant retained stdout",
@@ -2222,3 +2297,72 @@ def test_structured_rate_limit_receipt_replays_without_duplicate_attempt(
             "SELECT attempt_kind, outcome FROM verification_attempts"
         ).fetchall()
     assert [(row[0], row[1]) for row in attempts] == [("verification", "rate_limited")]
+
+
+def _nonzero_codex_launcher(tmp_path, stderr: str) -> CodexExecLauncher:
+    class Result:
+        returncode = 1
+        stdout = '{"type":"thread.started","thread_id":"thread-nonzero"}\n'
+
+        def __init__(self, failure_stderr: str) -> None:
+            self.stderr = failure_stderr
+
+    def runner(*args, **kwargs):
+        return Result(stderr)
+
+    return CodexExecLauncher(
+        tmp_path,
+        Path(__file__).resolve().parents[2]
+        / "app/dispatcher/schemas/verification_closer_receipt.schema.json",
+        tmp_path / "context.json",
+        adapter_path=Path(__file__).resolve().parents[2]
+        / ".codex/agents/verification-closer.toml",
+        runner=runner,
+    )
+
+
+def test_negated_nonzero_rate_limit_text_is_not_backoff_evidence(tmp_path) -> None:
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        _nonzero_codex_launcher(tmp_path, "this is not a rate limit"),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "codex_exec_failed"
+    assert result.terminal_receipt["failure_class"] == "execution"
+    with state.store._connect() as conn:
+        attempts = conn.execute(
+            "SELECT attempt_kind, outcome FROM verification_attempts"
+        ).fetchall()
+    assert [(row[0], row[1]) for row in attempts] == [
+        ("verification", "launch_failed")
+    ]
+
+
+def test_nonzero_structured_rate_limit_signal_backs_off(tmp_path) -> None:
+    state = ledger(tmp_path)
+    result = VerificationConsumer(
+        state,
+        Truth(eligible_pr(), GREEN),
+        Auth(),
+        _nonzero_codex_launcher(
+            tmp_path,
+            '{"error":{"type":"rate_limit_exceeded","status":429}}',
+        ),
+        "host",
+    ).consume(request())
+
+    assert result.status == "backoff"
+    assert result.terminal_receipt["api_fallback"] is False
+    assert result.terminal_receipt["failure_receipt"]["failure_class"] == "rate_limit"
+    with state.store._connect() as conn:
+        attempts = conn.execute(
+            "SELECT attempt_kind, outcome FROM verification_attempts"
+        ).fetchall()
+    assert [(row[0], row[1]) for row in attempts] == [
+        ("verification", "rate_limited")
+    ]
