@@ -91,6 +91,15 @@ def test_multi_note_provider_failure_is_degraded_without_synthetic_claims(
     assert missing.evidence == []
     assert missing.inferences == []
 
+    empty_request = run_multi_note_reasoning([])
+
+    assert empty_request.outcome == "missing_input"
+    assert empty_request.degraded is True
+    assert empty_request.degraded_reason == "missing_input"
+    assert empty_request.claims == []
+    assert empty_request.evidence == []
+    assert empty_request.inferences == []
+
 
 def test_multi_note_success_preserves_real_provider_output(
     memory_object_store, monkeypatch: pytest.MonkeyPatch
@@ -146,4 +155,41 @@ def test_multi_note_success_preserves_real_provider_output(
     }
     assert {"inference-concept", "inference-project"}.issubset(
         {inference.id for inference in result.inferences}
+    )
+
+
+def test_multi_note_missing_input_preserves_available_cross_note_synthesis(
+    memory_object_store, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ids = load_pkm_alpha_subset_for_reasoning(memory_object_store)
+    available_ids = [ids["concept"], ids["project"]]
+
+    def provider_result(object_id: str, *, trace_id: str | None = None) -> ReasoningOutput:
+        del trace_id
+        return ReasoningOutput(
+            claims=[
+                Claim(
+                    id=f"claim-{object_id}",
+                    object_uuid=object_id,
+                    text=f"Provider claim for {object_id}",
+                    modality="assertion",
+                    confidence=0.9,
+                )
+            ]
+        )
+
+    monkeypatch.setattr("app.reasoning.multi.run_reasoning_claims_for_object", provider_result)
+
+    result = run_multi_note_reasoning(
+        [available_ids[0], "not-a-stored-object", available_ids[1]]
+    )
+
+    assert result.outcome == "missing_input"
+    assert result.degraded is True
+    assert len(result.claims) == 2
+    assert any(
+        inference.type == "synthesis"
+        and set(inference.premises)
+        == {f"claim-{available_ids[0]}", f"claim-{available_ids[1]}"}
+        for inference in result.inferences
     )

@@ -9,6 +9,7 @@ from uuid import UUID
 
 from app.components.llm.fabric import LLMBackendTimeout, LLMTaskIntent, get_chat_client
 from app.components.llm.router import LLMRoute
+from app.llm.trace import log_llm_call
 from app.reasoning.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.reasoning.schema import ReasoningInput, ReasoningOutput, ReasoningValidationError, validate_output
 from app.reasoning.models import ReasoningMode, ReasoningRun
@@ -237,6 +238,22 @@ def run_reasoning(
             output = ReasoningOutput(
                 outcome="provider_failure", degraded_reason="provider_failure"
             )
+            trace_payload = {
+                "outcome": output.outcome,
+                "degraded_reason": output.degraded_reason,
+            }
+            log_llm_call(
+                provider=os.getenv("LLM_PROVIDER", "").strip().lower()
+                or _reasoning_backend(),
+                model=os.getenv("REASONING_MODEL", "llama3.1:8b"),
+                agent=agent_name,
+                kind=kind_name,
+                messages=[],
+                response=trace_payload,
+                response_text=json.dumps(trace_payload, sort_keys=True),
+                trace_id=trace_id,
+                status="failed",
+            )
             return ReasoningRun(
                 mode=mode,
                 trace_id=trace_id,
@@ -245,7 +262,7 @@ def run_reasoning(
                 error=str(exc),
                 result=output.model_dump(),
             )
-        has_content = bool(output.claims or output.evidence)
+        has_content = bool(output.claims or output.evidence or output.inferences)
         if not has_content:
             output = output.model_copy(
                 update={

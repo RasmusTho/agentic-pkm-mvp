@@ -69,6 +69,16 @@ class ReasoningValidationError(RuntimeError):
 
 
 def validate_output(payload: Any) -> ReasoningOutput:
+    if isinstance(payload, dict):
+        # Provider JSON owns cognition content only. Execution outcome is
+        # derived by the runtime boundary after the provider call completes;
+        # accepting these fields from model output would let an LLM declare
+        # its own success or failure posture.
+        payload = {
+            "claims": payload.get("claims", []),
+            "evidence": payload.get("evidence", []),
+            "inferences": payload.get("inferences", []),
+        }
     try:
         return ReasoningOutput.model_validate(payload or {})
     except ValidationError as exc:

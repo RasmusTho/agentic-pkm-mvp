@@ -172,6 +172,28 @@ def test_relevance_runtime_and_regression_changes_select_relevance_coverage() ->
     assert not selection.unowned_paths
 
 
+def test_reasoning_expansion_paths_select_owned_cognition_coverage() -> None:
+    selection = select_tests(
+        [
+            "app/reasoning/schema.py",
+            "app/reasoning/provider.py",
+            "app/reasoning/multi.py",
+            "app/expansion/create.py",
+            "tests/reasoning/test_reasoning_multi_note.py",
+            "tests/reasoning/test_reasoning_llm_logging.py",
+            "tests/expansion/test_create_draft_lifecycle.py",
+            "docs/MIMER_CAPABILITY_HARDENING/EXPANSION_CONNECT_AND_CREATE.md",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("reasoning_expansion",)
+    assert selection.unowned_paths == ()
+    assert "tests/reasoning" in selection.targets
+    assert "tests/expansion" in selection.targets
+    assert "tests/invariants" in selection.targets
+
+
 def test_curation_adapter_change_selects_curation_coverage() -> None:
     selection = select_tests(
         [

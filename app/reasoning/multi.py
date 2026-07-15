@@ -46,6 +46,11 @@ def run_multi_note_reasoning(object_ids: Sequence[str], *, trace_id: str | None 
     Run reasoning across multiple notes and merge the results.
     Falls back gracefully if any note is missing.
     """
+    if not object_ids:
+        return ReasoningOutput(
+            outcome="missing_input", degraded_reason="missing_input"
+        )
+
     texts = _load_texts(object_ids)
     all_claims: List[Claim] = []
     all_evidence: List[Evidence] = []
@@ -87,7 +92,7 @@ def run_multi_note_reasoning(object_ids: Sequence[str], *, trace_id: str | None 
         degraded_reason = "missing_input"
 
     synthesis = None
-    if outcome == "success":
+    if not {"provider_failure", "empty_output"}.intersection(outcomes):
         synthesis = _build_synthesis_inference(all_claims, [oid for oid, _ in texts])
     if synthesis:
         all_inferences.append(synthesis)
