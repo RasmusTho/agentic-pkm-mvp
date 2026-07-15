@@ -676,6 +676,12 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
         "assert_writes_allowed(MEMORY_MATERIALIZATION_ACTION) immediately "
         "before this call, in addition to the port's own guard (#2953)."
     ),
+    ("app/agent_memory/provisional_write.py", "write_provisional_memory", 1): (
+        "guarded_by_caller: write_provisional_memory asserts write_guard."
+        "assert_writes_allowed(PROVISIONAL_MEMORY_WRITE_ACTION) before the "
+        "staged receipt and passes the same guard/action to the port, in "
+        "addition to the port's own guard (#3719)."
+    ),
     ("app/knowledge_acquisition/candidate_writeback.py", "write_candidate_note", 1): (
         "guarded_by_caller: write_candidate_note asserts write_guard."
         "assert_writes_allowed(CANDIDATE_WRITE_ACTION) immediately before "
