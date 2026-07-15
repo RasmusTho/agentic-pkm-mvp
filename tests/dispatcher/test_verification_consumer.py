@@ -3477,6 +3477,7 @@ CANONICAL_CODEX_USAGE_LIMIT = (
             "You've hit your usage limit. Upgrade to Plus to continue using Codex "
             "(https://chatgpt.com/explore/plus), or try again later."
         ),
+        "You've hit your usage limit. Try again at Feb 29th, 2028 11:59 PM.",
     ],
 )
 def test_codex_json_usage_limit_event_enters_durable_backoff(
@@ -3515,6 +3516,23 @@ def test_codex_json_usage_limit_event_enters_durable_backoff(
         ("You've hit your usage limit. false", False, ""),
         ("You've hit your usage limit! false", False, ""),
         ("You've hit your usage limit. . This is not an actual limit.", False, ""),
+        ("You've hit your usage limit. Try again at 99:99 PM.", False, ""),
+        ("You've hit your usage limit. Try again at 0:00 AM.", False, ""),
+        (
+            "You've hit your usage limit. Try again at Feb 99th, 0000 88:77 AM.",
+            False,
+            "",
+        ),
+        (
+            "You've hit your usage limit. Try again at Jul 11st, 2026 4:30 PM.",
+            False,
+            "",
+        ),
+        (
+            "You've hit your usage limit. Try again at Feb 29th, 2025 4:30 PM.",
+            False,
+            "",
+        ),
         (
             "You've hit your usage limit. Try again later.\" is only an example.",
             False,

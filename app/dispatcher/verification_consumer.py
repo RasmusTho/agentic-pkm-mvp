@@ -1467,6 +1467,46 @@ def _is_rate_limit_exec_failure(detail: str) -> bool:
     return False
 
 
+def _is_valid_codex_retry(retry: str) -> bool:
+    if retry == "later":
+        return True
+    if not retry.startswith("at "):
+        return False
+    timestamp = retry.removeprefix("at ")
+    try:
+        datetime.strptime(timestamp.upper(), "%I:%M %p")
+        return True
+    except ValueError:
+        pass
+    match = re.fullmatch(
+        r"(?P<month>jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec) "
+        r"(?P<day>[0-9]{1,2})(?P<suffix>st|nd|rd|th), "
+        r"(?P<year>[0-9]{4}) (?P<clock>[0-9]{1,2}:[0-9]{2} (?:am|pm))",
+        timestamp,
+    )
+    if match is None:
+        return False
+    day = int(match.group("day"))
+    suffix = (
+        "th"
+        if 11 <= day % 100 <= 13
+        else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+    )
+    if match.group("suffix") != suffix or int(match.group("year")) < 2000:
+        return False
+    try:
+        datetime.strptime(
+            (
+                f"{match.group('month')} {day}, {match.group('year')} "
+                f"{match.group('clock')}"
+            ).upper(),
+            "%b %d, %Y %I:%M %p",
+        )
+    except ValueError:
+        return False
+    return True
+
+
 def _is_codex_usage_limit_event(event: object) -> bool:
     """Recognize the bounded Codex CLI envelope for subscription exhaustion."""
 
@@ -1482,7 +1522,7 @@ def _is_codex_usage_limit_event(event: object) -> bool:
         r"[0-9]{1,2}(?:st|nd|rd|th), [0-9]{4} [0-9]{1,2}:[0-9]{2} "
         r"(?:am|pm))"
     )
-    retry = rf"(?:later|at {retry_time})"
+    retry = rf"(?P<retry>later|at {retry_time})"
     plan_copy = (
         r"(?:upgrade to pro \(https://chatgpt\.com/explore/pro\), visit "
         r"https://chatgpt\.com/codex/settings/usage to purchase more credits|"
@@ -1491,13 +1531,11 @@ def _is_codex_usage_limit_event(event: object) -> bool:
         r"\(https://chatgpt\.com/explore/plus\),|"
         r"visit https://chatgpt\.com/codex/settings/usage to purchase more credits)"
     )
-    return bool(
-        re.fullmatch(
-            rf"you've hit your usage limit\. (?:{plan_copy} or try again {retry}|"
-            rf"try again {retry})\.",
-            normalized,
-        )
+    match = re.fullmatch(
+        rf"you've hit your usage limit\. (?:{plan_copy} or )?try again {retry}\.",
+        normalized,
     )
+    return bool(match is not None and _is_valid_codex_retry(match.group("retry")))
 
 
 class CodexExecLauncher:
