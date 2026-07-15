@@ -29,6 +29,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Protocol, Sequence, cast
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 import jsonschema
 
@@ -1467,15 +1468,44 @@ def _is_rate_limit_exec_failure(detail: str) -> bool:
     return False
 
 
+def _local_now() -> datetime:
+    """Return an aware local instant backed by the host's full timezone rules."""
+
+    try:
+        with Path("/etc/localtime").open("rb") as stream:
+            local_zone = ZoneInfo.from_file(stream)
+    except (OSError, ValueError):
+        return datetime.now().astimezone()
+    return datetime.now(local_zone)
+
+
+def _is_future_local_wall_time(
+    current: datetime, wall_time: datetime, *, max_delta: timedelta
+) -> bool:
+    """Accept a local wall time when at least one real fold is a future instant."""
+
+    if current.tzinfo is None or wall_time.tzinfo is not None:
+        return False
+    current_utc = current.astimezone(timezone.utc)
+    latest_utc = current_utc + max_delta
+    for fold in (0, 1):
+        candidate = wall_time.replace(tzinfo=current.tzinfo, fold=fold)
+        candidate_utc = candidate.astimezone(timezone.utc)
+        round_trip = candidate_utc.astimezone(current.tzinfo)
+        if round_trip.replace(tzinfo=None) != wall_time:
+            continue
+        if current_utc <= candidate_utc <= latest_utc:
+            return True
+    return False
+
+
 def _is_valid_codex_retry(retry: str) -> bool:
     if retry == "later":
         return True
     if not retry.startswith("at "):
         return False
     timestamp = retry.removeprefix("at ")
-    current = datetime.now().astimezone().replace(
-        tzinfo=None, second=0, microsecond=0
-    )
+    current = _local_now().replace(second=0, microsecond=0)
     clock = re.fullmatch(
         r"(?P<hour>[1-9]|1[0-2]):(?P<minute>[0-9]{2}) (?P<period>AM|PM)",
         timestamp,
@@ -1486,11 +1516,16 @@ def _is_valid_codex_retry(retry: str) -> bool:
         if minute > 59:
             return False
         hour = hour % 12 + (12 if clock.group("period") == "PM" else 0)
-        candidate = current.replace(
+        candidate = datetime(
+            current.year,
+            current.month,
+            current.day,
             hour=hour,
             minute=minute,
         )
-        return current <= candidate <= current + timedelta(days=1)
+        return _is_future_local_wall_time(
+            current, candidate, max_delta=timedelta(days=1)
+        )
     match = re.fullmatch(
         r"(?P<month>Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
         r"(?P<day>[1-9]|[12][0-9]|3[01])(?P<suffix>st|nd|rd|th), "
@@ -1534,7 +1569,11 @@ def _is_valid_codex_retry(retry: str) -> bool:
         )
     except ValueError:
         return False
-    return current <= candidate <= current + timedelta(days=5 * 366)
+    if candidate.date() <= current.date():
+        return False
+    return _is_future_local_wall_time(
+        current, candidate, max_delta=timedelta(days=5 * 366)
+    )
 
 
 def _is_codex_usage_limit_event(event: object) -> bool:

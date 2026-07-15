@@ -13,6 +13,7 @@ import sys
 from threading import Condition, Thread
 from typing import Callable, Mapping
 import zipfile
+from zoneinfo import ZoneInfo
 
 import pytest
 import jsonschema
@@ -3565,6 +3566,70 @@ def test_codex_json_usage_limit_event_enters_durable_backoff(
     assert [(row[0], row[1]) for row in attempts] == [
         ("verification", "rate_limited")
     ]
+
+
+def test_codex_time_only_retry_accepts_future_fall_back_fold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stockholm = ZoneInfo("Europe/Stockholm")
+    current = datetime(2026, 10, 25, 2, 30, tzinfo=stockholm, fold=0)
+    monkeypatch.setattr(
+        verification_consumer, "_local_now", lambda: current, raising=False
+    )
+    launcher, _ = _codex_json_usage_failure_launcher(
+        tmp_path,
+        message="You've hit your usage limit. Try again at 2:15 AM.",
+    )
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "backoff"
+    assert result.terminal_receipt["outcome"] == "rate_limited"
+
+
+@pytest.mark.parametrize(
+    ("current", "retry"),
+    [
+        (
+            datetime(
+                2026,
+                10,
+                25,
+                2,
+                0,
+                tzinfo=ZoneInfo("Europe/Stockholm"),
+                fold=0,
+            ),
+            "Oct 25th, 2026 2:45 AM",
+        ),
+        (
+            datetime(
+                2026, 3, 28, 12, 0, tzinfo=ZoneInfo("Europe/Stockholm")
+            ),
+            "Mar 29th, 2026 2:30 AM",
+        ),
+    ],
+)
+def test_noncanonical_or_nonexistent_local_retry_cannot_mint_backoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    current: datetime,
+    retry: str,
+) -> None:
+    monkeypatch.setattr(verification_consumer, "_local_now", lambda: current)
+    launcher, _ = _codex_json_usage_failure_launcher(
+        tmp_path,
+        message=f"You've hit your usage limit. Try again at {retry}.",
+    )
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(eligible_pr(), GREEN), Auth(), launcher, "host"
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.terminal_receipt["failure_class"] == "execution"
 
 
 @pytest.mark.parametrize(
