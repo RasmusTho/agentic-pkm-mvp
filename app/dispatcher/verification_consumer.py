@@ -814,9 +814,7 @@ def _checks_rejection(checks: Sequence[Mapping[str, object]]) -> str | None:
     latest: dict[str, tuple[tuple[int, str, int], Mapping[str, object]]] = {}
     for index, check in enumerate(checks):
         name = check.get("name")
-        if not isinstance(name, str) or not name:
-            continue
-        key = name
+        key = name if isinstance(name, str) and name else f"__unnamed_{index}"
         check_id = check.get("id")
         rank = (
             check_id if isinstance(check_id, int) and not isinstance(check_id, bool) else -1,

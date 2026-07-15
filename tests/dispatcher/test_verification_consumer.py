@@ -1188,6 +1188,31 @@ def test_delivered_receipt_requires_successful_named_unit_typecheck_gate(
 
 
 @pytest.mark.parametrize(
+    ("status", "conclusion"),
+    [("in_progress", None), ("completed", "failure")],
+)
+def test_unnamed_non_green_check_cannot_be_ignored(
+    tmp_path, status, conclusion
+) -> None:
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        TerminalChecksTruth(
+            [
+                *GREEN,
+                {"id": 2, "status": status, "conclusion": conclusion},
+            ]
+        ),
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(request())
+
+    assert result.status == "failed"
+    assert result.stop_reason == "reviews_before_checks_green"
+    assert result.verified_head_sha is None
+
+
+@pytest.mark.parametrize(
     ("terminal_pr", "reason"),
     [
         (
