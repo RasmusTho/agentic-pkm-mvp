@@ -49,6 +49,8 @@ The architecture inquiry deliberately refused to guess M2 history or O2 product 
   Verify: `tests/builderops/ckm/test_observation_capture.py::test_accepted_question_records_authority_without_enabling_history`
 - [ ] Every retained observation records the 365-day policy version; storage count/bytes are inspectable, expiry never occurs before 365 days without explicit operator action, and earlier pruning has a preview plus a non-content deletion marker.
   Verify: `tests/builderops/ckm/test_observation_capture.py::test_observation_retention_requires_accepted_policy`
+- [ ] Observation corrections append a superseding record; required deletion removes payload content while preserving a non-content lifecycle marker, and deleted material cannot be replayed as if still available.
+  Verify: `tests/builderops/ckm/test_observation_capture.py::test_observation_correction_and_deletion_preserve_lifecycle_truth`
 - [ ] The owner spec records observed question categories while keeping M2 and O2 unfiled until a new source-backed executable contract exists.
   Verify: doc writeback at `docs/CKM_MEASUREMENT_AND_ACCESS/README.md :: Observation-gated future work`
 
