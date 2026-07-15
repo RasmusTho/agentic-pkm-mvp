@@ -61,7 +61,12 @@ not background lifecycles.
   revision to the production shared app-local/instance-state seam. The separately deployed watcher
   reconciles that durable revision and then applies the one Settings Spine reload/rebind path;
   `VaultChangedEvent` is only an in-process wake-up hint and never the cross-process handoff. Generic
-  scoped request/session selections never mutate this record. A deployed API-container → watcher-
+  scoped request/session selections never mutate this record. From 05B until 06B takes ownership,
+  every MVR-02 default set/clear producer also derives the candidate through canonical precedence and
+  executes this same mutation-gate → prepare/old-root observation → default+compatibility commit →
+  post-commit drain → resume transaction. It never commits the default before watcher/scalar-worker
+  handoff; failure before commit leaves both default and binding unchanged, while post-commit recovery
+  rolls forward. A deployed API-container → watcher-
   container test is required in #3163/05B. MVR-06 atomically initializes durable background intent
   from the then-current compatibility watcher revision and disables this bridge when its supervisor
   takes ownership; no release may leave both or neither mechanism active.
@@ -488,13 +493,14 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
   reselection. A new client with no stale explicit intent may independently resolve the normal
   instance default; it is not recovery of the stale session.
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_stale_selection_restart_requires_visible_reselection`
-- [ ] **MVR-05B:** Before MVR-06 takes ownership, only the legacy choose/open picker action also drives #3163's
-  single-watcher rebind; it runs the shared prepare/quiesce → selection commit → resume revision
+- [ ] **MVR-05B:** Before MVR-06 takes ownership, the legacy choose/open picker and every MVR-02
+  default set/clear producer drive #3163's single-watcher rebind through the shared bracketing
   transaction that the separately deployed watcher reconciles before reload/effects, while an
-  in-memory event is only a hint. Generic scoped session/
-  request selection does not mutate it, and the bridge is named and guarded for atomic retirement by
-  MVR-06.
+  in-memory event is only a hint. Default mutation either commits atomically with compatibility
+  handoff or fails before changing the default. Generic scoped session/request selection does not
+  mutate it, and the bridge is named and guarded for atomic retirement by MVR-06.
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_legacy_picker_bridge_preserves_single_watcher_until_mvr06`
+  - Verify: `tests/integration/test_multi_vault_picker_context.py::test_interim_default_mutation_rebinds_before_foreground_commit`
 - [ ] **MVR-05B:** Picker replacement and the #3163 compatibility watcher rebind are recoverable as
   one operation. Before prepare, carrier-free compatibility mutations are durably gated and drained;
   the enabled watcher scans A, acknowledges a durable prepared/quiescent revision without effects
@@ -562,7 +568,7 @@ maps directly to that child ID; an early child never runs a later slice's accept
 
 ### MVR-05B validation
 
-- `pytest -q tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk tests/integration/test_multi_vault_request_isolation.py::test_authority_change_cannot_cross_read_effect_window tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_read_after_staged_channel_lease_transfer tests/retrieval/test_multi_vault_retrieval.py::test_production_retrieval_preserves_binding_provenance tests/integration/test_multi_vault_settings_resolution.py::test_many_binding_request_fails_before_effect_when_request_wide_settings_conflict tests/api/test_multi_vault_request_fail_closed.py::test_invalid_selection_never_falls_back tests/api/test_active_context_resolution.py::test_request_override_header_outranks_session_without_mutating_it tests/api/test_active_context_resolution.py::test_request_uses_one_context_generation_end_to_end tests/integration/test_multi_vault_picker_context.py::test_session_selection_reuses_bindings_with_per_request_server_scope tests/integration/test_multi_vault_partial_delivery.py::test_scoped_write_is_sealed_until_mvr05c tests/integration/test_multi_vault_picker_context.py::test_existing_picker_drives_scoped_request_context tests/integration/test_multi_vault_picker_context.py::test_fresh_vault_initialize_returns_usable_scoped_context tests/integration/test_multi_vault_picker_context.py::test_stale_selection_restart_requires_visible_reselection tests/integration/test_multi_vault_picker_context.py::test_legacy_picker_bridge_preserves_single_watcher_until_mvr06 tests/integration/test_multi_vault_picker_context.py::test_picker_and_watcher_rebind_is_failure_atomic tests/integration/test_multi_vault_picker_context.py::test_prepare_drains_old_binding_writes_before_quiescent_ack tests/integration/test_multi_vault_picker_context.py::test_picker_commit_succeeds_with_durable_no_lifecycle_watcher_posture tests/architecture/test_multi_vault_context_boundaries.py::test_request_consumers_use_context_seam tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior`
+- `pytest -q tests/integration/test_multi_vault_request_isolation.py::test_two_sessions_use_distinct_vaults_without_cross_talk tests/integration/test_multi_vault_request_isolation.py::test_authority_change_cannot_cross_read_effect_window tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_read_after_staged_channel_lease_transfer tests/retrieval/test_multi_vault_retrieval.py::test_production_retrieval_preserves_binding_provenance tests/integration/test_multi_vault_settings_resolution.py::test_many_binding_request_fails_before_effect_when_request_wide_settings_conflict tests/api/test_multi_vault_request_fail_closed.py::test_invalid_selection_never_falls_back tests/api/test_active_context_resolution.py::test_request_override_header_outranks_session_without_mutating_it tests/api/test_active_context_resolution.py::test_request_uses_one_context_generation_end_to_end tests/integration/test_multi_vault_picker_context.py::test_session_selection_reuses_bindings_with_per_request_server_scope tests/integration/test_multi_vault_partial_delivery.py::test_scoped_write_is_sealed_until_mvr05c tests/integration/test_multi_vault_picker_context.py::test_existing_picker_drives_scoped_request_context tests/integration/test_multi_vault_picker_context.py::test_fresh_vault_initialize_returns_usable_scoped_context tests/integration/test_multi_vault_picker_context.py::test_stale_selection_restart_requires_visible_reselection tests/integration/test_multi_vault_picker_context.py::test_legacy_picker_bridge_preserves_single_watcher_until_mvr06 tests/integration/test_multi_vault_picker_context.py::test_interim_default_mutation_rebinds_before_foreground_commit tests/integration/test_multi_vault_picker_context.py::test_picker_and_watcher_rebind_is_failure_atomic tests/integration/test_multi_vault_picker_context.py::test_prepare_drains_old_binding_writes_before_quiescent_ack tests/integration/test_multi_vault_picker_context.py::test_picker_commit_succeeds_with_durable_no_lifecycle_watcher_posture tests/architecture/test_multi_vault_context_boundaries.py::test_request_consumers_use_context_seam tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior`
 - `pytest -q tests/integration/test_multi_vault_partial_delivery.py::test_migrated_client_write_precondition_prevents_cross_client_compatibility_redirect tests/integration/test_multi_vault_partial_delivery.py::test_migrated_write_route_rejects_stripped_precondition_without_legacy_downgrade tests/integration/test_multi_vault_picker_context.py::test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_binding`
 - `pytest -q tests/integration/test_multi_vault_picker_context.py::test_first_vault_initialize_bootstrap_is_single_use_and_failure_atomic`
 - Verify the 05B PR diff contains its mapped `docs/ARCHITECTURE.md` and `docs/SETTINGS.md` writebacks.

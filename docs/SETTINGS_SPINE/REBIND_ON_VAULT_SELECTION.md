@@ -49,6 +49,19 @@ rationale) to record the supersession rather than leaving it as if still current
   `VaultManager._emit_changed`) remains
   an optional same-process wake-up hint; it is not delivery between the API and watcher containers,
   and restart/event loss converges from the durable revision.
+- Version that shared record as `settings_rebind.v1` with schema revision, monotonic desired/applied
+  revisions, phase, prior/candidate binding identity, lifecycle posture, and recovery checksum. Before
+  the first v1 prepare, a channel/native rollout fence closes selection ingress, drains and stops
+  every old API and watcher producer, and migrates only one provable stable binding: last-active and
+  watcher-env aliases must canonicalize to the same root, or one side must be truthfully absent/idle;
+  a disagreement fails loud without choosing. Init/bootstrap scripts, existing-state migration,
+  production fixtures, API/watcher startup, and no-lifecycle producers all write/read the same schema.
+  The migration atomically records `minimum_settings_rebind_runtime=1` before v1 state can become
+  authoritative. A host-side channel pre-start guard and the native launcher read that durable floor
+  plus the candidate image/runtime capability manifest before starting any API or watcher, so an
+  incompatible pre-#3163 image cannot ignore a prepared/committed handoff. Rollback is therefore to a
+  compatible build or roll-forward; a missing manifest, partial migration, unprovable binding, or
+  mixed API/watcher capability blocks both processes before either resolves a root.
 - Upgrades the advisory `ingest_binding` status (`bound`/`diverged`/`unbound`/`unknown`) so
   `diverged` becomes a transient state that self-heals on rebind, and a rebind failure is loud.
 - Retires the second, unsynchronized "current vault" notion in
@@ -100,6 +113,15 @@ the UI says one vault and ingest watches another — captures silently vanish fr
 - [ ] Lost wake-up events and independent API/watcher restarts converge from durable phase/revision
       truth without stale-old or premature-candidate effects.
   - Verify: `tests/integration/test_watcher_cross_process_rebind.py::test_committed_revision_survives_event_loss_and_process_restart`
+- [ ] Existing single-watcher state migrates to `settings_rebind.v1` only when last-active and
+      watcher-env truth identify one canonical binding (or one is truthfully absent); disagreement or
+      partial persistence fails before selection/watcher effects and leaves the old state intact.
+  - Verify: `tests/migrations/test_settings_rebind_state.py::test_rebind_schema_migrates_one_provable_binding_or_fails_loud`
+- [ ] The rollout writes `minimum_settings_rebind_runtime=1` before the first authoritative v1 record,
+      updates every init/migration/fixture producer, and the host-side channel guard plus native
+      launcher reject an API/watcher pair whose capability manifest cannot interpret that floor before
+      either process starts or resolves a root.
+  - Verify: `tests/ops/test_settings_rebind_runtime_floor.py::test_rebind_floor_blocks_incompatible_api_and_watcher_before_start`
 - [ ] SET-7 registered in the invariant registry with enforcement `runtime_test`; `app/watcher/config.py`'s
       "document the split, do not converge" docstring is updated to record that #2476's verdict is
       superseded by this task (owner ruling 2026-07-07), not silently left to read as current.
@@ -110,6 +132,7 @@ the UI says one vault and ingest watches another — captures silently vanish fr
 
 - `pytest -q tests/watcher/test_ingest_binding_follows_selection.py`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_watcher_cross_process_rebind.py::test_prepare_commit_resume_is_failure_atomic tests/integration/test_watcher_cross_process_rebind.py::test_prepare_drains_and_final_scans_old_binding_writes tests/integration/test_watcher_cross_process_rebind.py::test_direct_filesystem_write_between_scan_and_commit_is_receipted_under_old_binding tests/integration/test_watcher_cross_process_rebind.py::test_committed_revision_survives_event_loss_and_process_restart tests/integration/test_watcher_cross_process_rebind.py::test_disabled_watcher_is_durable_no_lifecycle`
+- `pytest -q tests/migrations/test_settings_rebind_state.py::test_rebind_schema_migrates_one_provable_binding_or_fails_loud tests/ops/test_settings_rebind_runtime_floor.py::test_rebind_floor_blocks_incompatible_api_and_watcher_before_start`
 - `pytest -q -m "not pg"` and `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration -k "watcher or settings"`
   (vault/watcher hot path)
 
@@ -133,12 +156,15 @@ the UI says one vault and ingest watches another — captures silently vanish fr
 
 ## Restart / Durability Posture
 
-The applied binding is in-memory, but prepare/commit/resume phase and monotonic desired revision are
+The applied binding is in-memory, but the versioned `settings_rebind.v1` prepare/commit/resume phase,
+monotonic desired/applied revisions, binding identities, lifecycle posture, and runtime floor are
 durable in the shared app-local selection seam. On restart the watcher reconciles that record rather
 than relying on an event or process-local manager state: an uncommitted prepare cancels without new-
 root effects, while a committed selection recovers forward to resume. If no durable selection exists,
 env bootstrap applies and the binding status says so; if the lifecycle is intentionally disabled,
-the durable posture is `no_lifecycle` rather than a missing acknowledgement.
+the durable posture is `no_lifecycle` rather than a missing acknowledgement. Candidate API/watcher
+images must advertise floor compatibility before process start; older images cannot silently project
+or discard the record.
 
 ## Related Docs
 

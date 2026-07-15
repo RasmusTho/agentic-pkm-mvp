@@ -312,20 +312,25 @@ Partial delivery remains fail-closed:
   bypassed and two live registrations/owners never coexist;
 - after issue 01B and until issue 06B proves both foreground and background consumer floors, active
   registration removal is implemented but production removal fails capability-not-ready without
-  changing registry/revision/ownership; only 06B may activate its drain/commit/release sequence;
+  changing registry/revision/ownership; only 06B may activate its drain/tombstone/release sequence.
+  Removal retains immutable binding/root/logical lineage, and later reactivation/rehome cannot mint
+  around historical receipt/outbox provenance;
 - after task 02 but before task 03, default resolution is available only through explicit
   background/compatibility adapters; requests do not pretend to be session-scoped;
 - after task 03 but before issues 05A–06D, migrated callers may use ActiveContextSet while unmigrated
   callers stay on named single-vault adapters; the architecture guard records the mixed state and
   no global "multi-vault delivered" claim is allowed;
-- after issue 05B but before issue 06B, the existing picker alone prepares #3163's named monotonic
-  cross-process compatibility revision. Compatibility-mutation ingress is gated/drained first; an
+- after issue 05B but before issue 06B, the existing picker and every MVR-02 default set/clear
+  producer prepare #3163's named monotonic cross-process compatibility revision. Compatibility-
+  mutation ingress is gated/drained first; an
   enabled watcher scans the old root and acknowledges quiescence on the prepared revision while
   retaining durable old-root event observation through commit, then performs the bracketing
   post-commit scan/buffer drain and receipt before it applies/reloads and resumes B. An
   intentionally disabled/absent watcher is represented by durable `no_lifecycle` posture
   and requires no process acknowledgement. An in-process event is only a hint and scoped request/
-  session selection does not mutate the record. Issue 06B atomically hands
+  session selection does not mutate the record. A default mutation cannot commit first and notify
+  later: it uses the same bracketing transaction or fails `capability_not_ready` without changing the
+  default. Issue 06B atomically hands
   that live binding plus the MVR-05 scalar worker to versioned durable singleton/empty state before
   disabling the bridge or enabling intent mutation;
 - after issue 05B but before issue 05C, scoped session/override writes and any write whose resolved
