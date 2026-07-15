@@ -247,23 +247,16 @@ def _legacy_verification_row_is_quarantined(row: sqlite3.Row) -> bool:
     )
 
 
-def _validate_canonical_authority_projection(
-    row: sqlite3.Row, requested_json: str
-) -> None:
-    try:
-        requested = json.loads(requested_json)
-        durable = json.loads(row["supporting_authority_json"])
-    except (TypeError, json.JSONDecodeError) as exc:
-        raise ValueError("verification supporting authority is malformed") from exc
-    if (
-        row["status"] not in _CANONICAL_VERIFICATION_STATUSES
-        or not isinstance(requested, list)
-        or not isinstance(durable, list)
-        or any(not _positive_int(issue) for issue in durable)
-        or len(set(durable)) != len(durable)
-        or not set(requested).issubset(durable)
-    ):
-        raise ValueError("verification supporting authority is malformed")
+def _validate_canonical_verification_row(row: sqlite3.Row) -> None:
+    """Reuse the ledger's complete request/row contract before schema commit."""
+    if row["status"] not in _CANONICAL_VERIFICATION_STATUSES:
+        raise ValueError("verification canonical run authority is malformed")
+    # Local import avoids a module cycle while retaining one canonical
+    # validator for request shape, nested provenance, identity, heads, and
+    # cumulative supporting authority.
+    from app.dispatcher.verification_dispatch import _validated_row_request
+
+    _validated_row_request(row)
 
 
 class SqliteStore:
@@ -361,7 +354,7 @@ class SqliteStore:
                 for verification_row in conn.execute(
                     "SELECT * FROM verification_runs"
                 ).fetchall():
-                    requested_authority, is_inert = (
+                    _, is_inert = (
                         _verification_authority_migration(verification_row)
                     )
                     if is_inert:
@@ -379,9 +372,7 @@ class SqliteStore:
                             raise ValueError(
                                 "legacy verification audit classification is malformed"
                             )
-                        _validate_canonical_authority_projection(
-                            verification_row, requested_authority
-                        )
+                        _validate_canonical_verification_row(verification_row)
                 if not authority_reconciliation_required:
                     return
 
@@ -462,6 +453,7 @@ class SqliteStore:
                             """
                             UPDATE verification_runs
                             SET supporting_authority_json=?, status=?,
+                                current_head_sha=head_sha,
                                 verified_head_sha=NULL, claimed_by=NULL,
                                 lease_id=NULL, lease_expires_at=NULL,
                                 last_heartbeat_at=NULL,
@@ -484,6 +476,19 @@ class SqliteStore:
                                 verification_row["run_id"],
                             ),
                         )
+                for verification_row in conn.execute(
+                    "SELECT * FROM verification_runs"
+                ).fetchall():
+                    _, is_inert = _verification_authority_migration(
+                        verification_row
+                    )
+                    if is_inert:
+                        if not _legacy_verification_row_is_quarantined(
+                            verification_row
+                        ):
+                            raise ValueError(
+                                "legacy verification audit classification is malformed"
+                            )
                     else:
                         if (
                             verification_row["status"]
@@ -492,9 +497,7 @@ class SqliteStore:
                             raise ValueError(
                                 "legacy verification audit classification is malformed"
                             )
-                        _validate_canonical_authority_projection(
-                            verification_row, supporting_authority
-                        )
+                        _validate_canonical_verification_row(verification_row)
                 schema_error = verification_v3_schema_error(conn)
                 if schema_error is not None:
                     raise ValueError(schema_error)

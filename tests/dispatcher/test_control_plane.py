@@ -324,6 +324,62 @@ def test_unrecognized_pre_trust_verification_row_rolls_back_migration(
     assert "supporting_authority_json" not in columns
 
 
+def test_noncanonical_current_request_rolls_back_additive_migration(
+    tmp_path: Path,
+) -> None:
+    store, paths = _store(tmp_path)
+    run = VerificationDispatchLedger(store).ingest(verification_request())
+    malformed = verification_request()
+    malformed.pop("artifact_provenance")
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.execute(
+            "UPDATE verification_runs SET request_json=? WHERE run_id=?",
+            (
+                json.dumps(
+                    malformed,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ),
+                run.run_id,
+            ),
+        )
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN supporting_authority_json")
+        conn.commit()
+    before = paths.db_path.read_bytes()
+
+    with pytest.raises(ValueError, match="missing required properties"):
+        SqliteStore(paths.db_path).get_meta("schema_version")
+
+    assert paths.db_path.read_bytes() == before
+    with sqlite3.connect(paths.db_path) as conn:
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(verification_runs)")
+        }
+    assert "supporting_authority_json" not in columns
+
+
+def test_pre_trust_advanced_head_is_normalized_to_inert_request_head(
+    tmp_path: Path,
+) -> None:
+    paths, original, legacy_request = _write_pre_trust_v3_state(tmp_path)
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.execute(
+            "UPDATE verification_runs SET current_head_sha=? WHERE run_id=?",
+            ("b" * 40, original.run_id),
+        )
+        conn.commit()
+
+    migrated = VerificationDispatchLedger(SqliteStore(paths.db_path)).get(
+        original.run_id
+    )
+
+    assert migrated is not None
+    assert migrated.status == "legacy_untrusted"
+    assert migrated.current_head_sha == original.requested_head_sha
+    assert migrated.request == legacy_request
+
+
 def test_schema_complete_pre_trust_row_still_enters_inert_quarantine(
     tmp_path: Path,
 ) -> None:
