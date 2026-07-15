@@ -15,7 +15,8 @@ authenticated service and PostgreSQL authority while preserving GitHub/repo deli
 
 - deliver and validate BCP-01 through BCP-07 from `docs/BUILDEROPS_CONTROL_PLANE/`;
 - act as the validation hub rather than an implementation pickup;
-- reuse #3603 for Demerzel orchestration and #3690 for owner-doc enactment; and
+- reuse #3603 and the merged PR #3620 baseline for Demerzel orchestration, and #3690 for owner-doc
+  enactment; and
 - reconcile #3686/PR #3695 as migration evidence with a superseded SQLite target.
 
 ## Source Anchors
@@ -40,7 +41,7 @@ reshape a Product SBS subsystem.
 
 ## Acceptance Criteria
 
-- [ ] All BCP-01 through BCP-06 implementation issues are merged and their receipts linked here.
+- [ ] All BCP-01 through BCP-06 implementation work is merged and its receipts linked here.
   Verify: child-issue/PR ledger in this issue.
 - [ ] Capability acceptance in `docs/BUILDEROPS_CONTROL_PLANE/README.md :: Capability acceptance criteria`
   is fully evidenced.
@@ -75,7 +76,7 @@ reshape a Product SBS subsystem.
 | BCP-02 | [#3790](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3790) | `agent:blocked` on BCP-01 |
 | BCP-03 | [#3789](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3789) | `agent:blocked` on BCP-01 |
 | BCP-04 | [#3791](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3791) | `agent:blocked` on BCP-02 |
-| BCP-05 | Existing #3603 / PR #3620 | blocked on BCP-02/04 contract adaptation |
+| BCP-05 | Existing #3603; PR #3620 merged | delivered SQLite-backed baseline; API/PostgreSQL migration blocked on BCP-02/04; host pilot separately keyring-gated |
 | BCP-06 | [#3793](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3793) | `agent:blocked` on BCP-03/04/05 |
 | BCP-07 | Existing #3690 | `agent:blocked` on BCP-06 |
 
@@ -85,8 +86,10 @@ Task specifications and dependency order are linked from
 ## Verification Path
 
 Each child runs the exact `Verify:` targets in its specification and posts a compact receipt here.
-BCP-01 through BCP-05 must each be independently mergeable and verifiable; BCP-06 consumes their
-receipts in the test cutover and authoritative cutover gate.
+BCP-01 through BCP-05 must each be independently mergeable and verifiable. For BCP-05, the merged
+PR #3620 baseline and its later API/PostgreSQL migration are separate receipts under #3603. BCP-06
+consumes the migration receipt, not the pre-migration SQLite delivery alone, in the test and
+authoritative cutover gates.
 
 ## Validation / Acceptance Path
 

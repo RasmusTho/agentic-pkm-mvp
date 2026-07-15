@@ -9,21 +9,23 @@ depends_on: [INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md, API_ONLY_CLIENT_CUTOVER.md
 can_parallelize_with: []
 existing_issue: 3603
 existing_pr: 3620
+existing_pr_status: merged
 ---
 
 # Demerzel Review And Merge Orchestration
 
 ## Purpose
 
-Issue #3603 and PR #3620 already own Demerzel review/repair/verification/merge orchestration,
-including authenticated host execution, retries, recovery, idempotent ingest, attempt ledgers, and
-verification-gated merge. They currently extend dispatcher SQLite, which ADR-0062 retires as
-production authority. This task is the contract delta for that existing work, not a duplicate issue.
+Issue #3603 owns Demerzel review/repair/verification/merge orchestration. PR #3620 merged on
+2026-07-15 and delivers the repo-side consumer, retries, recovery, idempotent ingest, attempt ledger,
+and verification-gated merge baseline; later correctness repairs are also on `main`. That baseline
+extends dispatcher SQLite, which ADR-0062 retires as production authority. This task is the migration
+delta for delivered work, not a duplicate orchestrator and not a request to reopen the merged PR.
 
 ## What This Task Does
 
-- rebase/adapt #3603 / PR #3620 orchestration to claim work and persist attempts/results/receipts
-  through the BCP-02 API and BCP-01 PostgreSQL/outbox;
+- migrate the delivered #3603 / PR #3620 orchestration so claims and attempt/result/receipt state
+  pass through the BCP-02 API and BCP-01 PostgreSQL/outbox;
 - run the privileged executor on Demerzel with host-local model sessions and the narrowest practical
   repo-scoped GitHub credential;
 - bind every attempt to `RepoRef`, governing Issue, PR, exact head SHA, workflow/model identity,
@@ -37,9 +39,10 @@ production authority. This task is the contract delta for that existing work, no
 
 ## Concretely
 
-The existing #3603 consumer claims an API task bound to issue/PR/SHA, runs its bounded reviewer and
-repair policy, persists each attempt through the API, and submits a gated merge intent. The outbox
-executor reconciles GitHub and commits a readback receipt before completion.
+The delivered #3603 consumer is retained, but its dispatcher store port is replaced by an API client.
+It claims a task bound to issue/PR/SHA, runs its bounded reviewer and repair policy, persists each
+attempt through the API, and submits a gated merge intent. The outbox executor reconciles GitHub and
+commits a readback receipt before completion.
 
 ## Why This Matters
 
@@ -60,7 +63,9 @@ weaken them and does not enter Product Runtime.
 
 ## Constraints
 
-- Update existing #3603 / PR #3620; do not create a second verification orchestrator.
+- Keep #3603 as the governing workstream and PR #3620 as immutable delivered history. Land the
+  storage/client migration in later bounded PR work after BCP-02/04; do not create a second
+  verification orchestrator or rewrite the merged PR.
 - The executor is an API client and never opens PostgreSQL/SQLite directly.
 - General clients and Product Runtime never receive model or merge credentials.
 - A merge receipt binds the exact current SHA and GitHub readback; a local success return is
@@ -97,19 +102,20 @@ weaken them and does not enter Product Runtime.
 
 ## How to Verify (Pre-Merge)
 
-- retain and adapt the existing #3603 test suite instead of replacing it;
+- retain and migrate the existing #3603/#3620 test suite instead of replacing it;
 - test crashes before/after attempt commit, provider result, GitHub call, and readback;
 - verify REST-vs-GraphQL budget behavior; and
 - run one Demerzel acceptance receipt before BCP-06.
 
 ## Related Docs
 
-- issue #3603 / PR #3620
+- issue #3603 / merged PR #3620
 - issue #3224 and issue #3604
 - `docs/adr/ADR-0062-builderops-ecosystem-wide-enabling-system.md`
 - `docs/BUILDEROPS_CONTROL_PLANE/README.md`
 
 ## Related GitHub Issues
 
-- Existing implementation issue #3603 and PR #3620; update rather than create a BCP-05 duplicate.
+- Existing implementation issue #3603 and merged PR #3620; keep the issue as the migration and host
+  acceptance workstream rather than creating a BCP-05 duplicate or rewriting the merged PR.
 - Post-merge closure recovery remains issue #3604; parent validation context remains issue #3224.

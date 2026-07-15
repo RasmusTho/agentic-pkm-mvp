@@ -121,9 +121,11 @@ separate source repository remains trigger-gated.
 
 ### D5 — Scoped review and merge authority on Demerzel
 
-Demerzel runs the review/repair/verification/merge orchestration already tracked by issue #3603 and
-PR #3620. That work is adapted, not duplicated: its durable state and claims use the BuilderOps API
-and PostgreSQL authority rather than dispatcher SQLite.
+Demerzel runs the review/repair/verification/merge orchestration tracked by issue #3603. PR #3620
+merged on 2026-07-15 and delivers the repo-side consumer, recovery, review, and gated-merge baseline;
+subsequent correctness repairs are also present on `main`. That work is migrated, not duplicated:
+BCP-05 moves its durable state and claims from dispatcher SQLite to the BuilderOps API and PostgreSQL
+authority. The merged PR is an immutable delivery baseline, not a branch to reopen or rewrite.
 
 The executor is a privileged BuilderOps client. It holds the narrowest practical repo-scoped GitHub
 credential and host-local model/subscription sessions; general MacBook clients and Product Runtime
@@ -200,8 +202,10 @@ requires an owner decision before specification and backlog preparation.
   bounded issue sequence in `docs/BUILDEROPS_CONTROL_PLANE/` after the decision contract is accepted.
 - Issue #3686 and PR #3695 remain valuable defect and migration-inventory evidence, but host-stable
   SQLite is superseded as the production target.
-- Issue #3603 and PR #3620 remain the review/merge-orchestration workstream; they must be adapted to
-  the API/PostgreSQL authority before merge, not replaced with another orchestrator.
+- Issue #3603 remains the review/merge-orchestration workstream after PR #3620 merged. BCP-05 reuses
+  that delivered implementation and migrates its dispatcher-SQLite authority after BCP-02/04; it
+  does not reopen the merged PR or create another orchestrator. The host remains disabled until the
+  separately recorded interactive keyring authorization and pilot receipt exist.
 - Issue #3690 remains the owner-doc enactment task and must be rewritten to reflect this topology
   after ADR acceptance.
 - Current local/file-first BuilderOps records are not silently discarded. Migration preserves
@@ -221,5 +225,6 @@ requires an owner decision before specification and backlog preparation.
 - `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`
 - `docs/audits/BUILDEROPS_CONTROL_PLANE_2026-07-15.md`
 - Issue #3686 / PR #3695 (fragmented SQLite evidence; superseded target)
-- Issue #3603 / PR #3620 (existing Demerzel orchestration work)
+- Issue #3603 / merged PR #3620 (delivered Demerzel orchestration baseline; migration and host
+  acceptance remain open)
 - Issue #3690 (post-acceptance owner-doc enactment)

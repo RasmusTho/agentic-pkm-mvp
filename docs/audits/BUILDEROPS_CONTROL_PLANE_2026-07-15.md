@@ -1,4 +1,4 @@
-State: Advisory architecture audit snapshot, 2026-07-15. Evidence baseline: `origin/main` at `1e66c16120a9bbd0b1c91c3b50162be805d407c7`; PR/Issue state observed the same day. Subordinate to owner docs and ADRs. Executable handoff: `docs/BUILDEROPS_CONTROL_PLANE/`.
+State: Advisory architecture audit snapshot, 2026-07-15. Structural evidence baseline: `origin/main` at `1e66c16120a9bbd0b1c91c3b50162be805d407c7`; lifecycle reconciliation refreshed through `origin/main` at `c4dbfc420564f9e810543737086f1b6808f6ddf3` the same day. Subordinate to owner docs and ADRs. Executable handoff: `docs/BUILDEROPS_CONTROL_PLANE/`.
 Doc role: Reference (architecture audit)
 Authority: Evidence and synthesis only. ADR-0010 owns the authority seam; proposed ADR-0062 owns the target decision after acceptance; GitHub Issues own implementation work.
 Owner: BuilderOps governance / Architecture spine
@@ -15,7 +15,9 @@ The pass inspected the current BuilderOps store/API, dispatcher, Product startup
 topology, deployment/health/backup contracts, open ADR PR #3691, issue #3686 / PR #3695, and the
 existing Demerzel orchestration work in issue #3603 / PR #3620. Three independent read-only evidence
 passes covered runtime/persistence, Demerzel operations, and backlog reconciliation. No live host was
-queried, so host claims below are limited to repository-recorded evidence.
+queried, so host claims below are limited to repository-recorded evidence. A same-day lifecycle
+refresh records PR #3620 as merged, its correctness follow-ups on `main`, and #3603 still open with
+the host disabled pending interactive keyring authorization and pilot evidence.
 
 ## 2. Authority baseline
 
@@ -96,15 +98,15 @@ between separately written intent and receipt artifacts.
 Impact: crash/time-out windows can leave ambiguous external effects, missing receipts, duplicate
 attempts, or event projections that disagree with durable state.
 
-### F5 — High: Demerzel orchestration is being built against the authority being retired
+### F5 — High: Demerzel orchestration landed against the authority being retired
 
-Issue #3603 and PR #3620 correctly own review/repair/verification/merge orchestration, recovery,
-idempotent ingest, and host-authenticated execution, but their durable ledger extends dispatcher
-SQLite.
+Issue #3603 and merged PR #3620 correctly own review/repair/verification/merge orchestration,
+recovery, idempotent ingest, and host-authenticated execution, but their delivered durable ledger
+extends dispatcher SQLite.
 
-Impact: merging the orchestration unchanged would deepen the obsolete store and force a second
-migration. The orchestration logic should be retained and adapted to the BuilderOps API/PostgreSQL
-authority after its foundation exists.
+Impact: enabling or extending the orchestration on the current ledger deepens the obsolete store and
+forces a second migration. The delivered orchestration logic should be retained and migrated to the
+BuilderOps API/PostgreSQL authority after its foundation exists.
 
 ### F6 — High: no production-grade BuilderOps backup/restore or cutover contract exists
 
@@ -201,7 +203,7 @@ that lands their executable enforcement; this audit does not claim they are ship
 |---|---|
 | PR #3691 / ADR-0062 | Canonical decision surface; update in place. |
 | Issue #3686 / PR #3695 | Preserve as fragmentation evidence and migration inventory; host-stable SQLite target is superseded before merge. |
-| Issue #3603 / PR #3620 | Reuse orchestration and executor work; adapt its state/claim boundary to BuilderOps API/PostgreSQL after foundation tasks. Do not create a second orchestrator. |
+| Issue #3603 / merged PR #3620 | Reuse the delivered orchestration/executor baseline; migrate its state/claim boundary to BuilderOps API/PostgreSQL after foundation tasks. Keep #3603 as the workstream; do not rewrite the merged PR or create a second orchestrator. |
 | Issue #3690 | Reuse as post-acceptance owner-doc enactment; replace host-stable SQLite wording. |
 | Issue #3174 | Retains repo-explicit skill-targeting/promotion-copy scope; do not duplicate it in control-plane runtime tasks. |
 | Issue #3288 / model-inquiry specs | Preserve capability; migrate file-only terminal state/receipts into the control plane while retaining hash-addressed artifacts. |

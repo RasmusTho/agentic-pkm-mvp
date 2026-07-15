@@ -35,7 +35,7 @@ required CI, review gates, repository protection, and GitHub merge results remai
 | 2 | [Independent Authenticated Deployment](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md) | BCP-02 | #3790 | Separate service app/Compose project, auth, release pin, health, backup/restore, trust boundary | BCP-01 |
 | 3 | [Legacy Authority Migration](LEGACY_AUTHORITY_MIGRATION.md) | BCP-03 | #3789 | Complete SQLite/JSONL/JSON inventory, read-only import, conflict/quarantine report, authority epoch | BCP-01 |
 | 4 | [API-Only Client Cutover](API_ONLY_CLIENT_CUTOVER.md) | BCP-04 | #3791 | MacBook skills/CLI/automation use authenticated API and fail closed with no local/direct-DB fallback | BCP-02 |
-| 5 | [Demerzel Review And Merge Orchestration](DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md) | BCP-05 | existing #3603 / PR #3620 | Adapt executor to API/PostgreSQL/outbox and scoped merge authority | BCP-02, BCP-04 |
+| 5 | [Demerzel Review And Merge Orchestration](DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md) | BCP-05 | existing #3603; baseline PR #3620 merged | Migrate the delivered executor to API/PostgreSQL/outbox and scoped merge authority | BCP-02, BCP-04 |
 | 6 | [Authority Cutover And Product Separation](AUTHORITY_CUTOVER_PRODUCT_SEPARATION.md) | BCP-06 | #3793 | Import/cutover, disable legacy writers, remove Product routes/startup, prove restore/no-fallback, archive sources | BCP-03, BCP-04, BCP-05 |
 | 7 | [Owner-Doc Enactment And Closure](OWNER_DOC_ENACTMENT_AND_CLOSURE.md) | BCP-07 | existing #3690 | Reconcile shipped Builder System/store/dispatcher/deployment/security/health docs and close parent | BCP-06 |
 
@@ -45,7 +45,9 @@ Execution order:
 `BCP-02 -> BCP-04 -> BCP-05`; `BCP-03 + BCP-04 + BCP-05 -> BCP-06 -> BCP-07`.
 
 Parent validation hub: #3788. No task is `agent:ready` while ADR-0062/specification is unmerged.
-BCP-05 and BCP-07 reuse existing issues rather than creating duplicate work.
+BCP-05 and BCP-07 reuse existing issues rather than creating duplicate work. PR #3620 is the
+merged BCP-05 implementation baseline; later migration lands in a new PR under the existing issue,
+not by rewriting that merge.
 
 ## Cross-task invariants / partial-failure safety
 
@@ -105,12 +107,13 @@ Partial-failure examples:
   Verify: BCP-02 restore-drill receipt and BCP-06 cutover gate.
 - [ ] A verification-gated merge uses the repo-scoped executor credential, binds the current PR SHA,
   and becomes terminal only after GitHub readback.
-  Verify: the adapted #3603 tests and BCP-05 runtime receipt.
+  Verify: the migrated #3603/#3620 test baseline and BCP-05 runtime receipt.
 
 ## Backlog reconciliation
 
-- **Reuse #3603 / PR #3620** for BCP-05. Preserve its review/repair/recovery logic; replace its
-  dispatcher-SQLite ledger and direct claim boundary with the BuilderOps API/PostgreSQL contract.
+- **Reuse #3603 and the merged PR #3620 baseline** for BCP-05. Preserve the delivered
+  review/repair/recovery logic; replace its dispatcher-SQLite ledger and direct claim boundary with
+  the BuilderOps API/PostgreSQL contract in later migration work. Do not reopen or rewrite #3620.
 - **Reuse #3690** for BCP-07. Its old host-stable-SQLite wording is superseded and must be updated
   after ADR acceptance.
 - **Supersede the target of #3686 / PR #3695.** Their fragmentation and host-ack evidence is required
