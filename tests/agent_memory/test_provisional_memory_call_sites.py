@@ -371,16 +371,37 @@ def test_cited_provisional_memory_reaches_production_proposal_context(
     assert uncited.recalled == []
     assert uncited.recalled_content == {}
     assert uncited.recalled_context_items == []
+    assert uncited.proposal_recalled == []
+    assert uncited.proposal_recalled_content == {}
+    assert uncited.proposal_context_items == []
     assert denied_receipt["payload"]["admitted"] is False
     assert denied_receipt["payload"]["citation_present"] is False
-    assert len(state.recalled) == 1
-    assert state.recalled[0].use_right.value == "cited_proposal"
-    assert state.recalled_content[state.recalled[0].artifact_id] == candidate.record.content
-    assert state.recalled_context_items[0]["_admitted_provisional_memory"] is True
-    assert state.recalled_context_items[0]["payload"]["authority_state"] == "noncanonical"
-    assert state.recalled_context_items[0]["payload"]["memory_state"] == "unreviewed"
+    assert state.recalled == []
+    assert state.recalled_content == {}
+    assert state.recalled_context_items == []
+    assert len(state.proposal_recalled) == 1
+    assert state.proposal_recalled[0].use_right.value == "cited_proposal"
+    assert (
+        state.proposal_recalled_content[state.proposal_recalled[0].artifact_id]
+        == candidate.record.content
+    )
+    assert state.proposal_context_items[0]["_admitted_provisional_memory"] is True
+    assert state.proposal_context_items[0]["payload"]["authority_state"] == "noncanonical"
+    assert state.proposal_context_items[0]["payload"]["memory_state"] == "unreviewed"
     assert receipt["payload"]["admitted"] is True
     assert receipt["payload"]["consuming_authority"] == "proposal"
     assert receipt["payload"]["requested_use_right"] == "cited_proposal"
     assert receipt["payload"]["citation_present"] is True
     assert receipt["payload"]["may_write"] is False
+
+    monkeypatch.setattr(
+        ask_graph,
+        "llm_answer",
+        lambda *args, **kwargs: pytest.fail("proposal-only memory reached ASK synthesis"),
+    )
+    answered = ask_graph._answer_node(  # noqa: SLF001 - authority transition proof
+        state,
+        ask_settings=object(),
+    )
+    assert answered.answer == "No results found."
+    assert candidate.record.content not in answered.answer

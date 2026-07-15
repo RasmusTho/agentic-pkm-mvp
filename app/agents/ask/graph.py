@@ -196,11 +196,17 @@ def _recall_node(
         state.recalled = []
         state.recalled_content = {}
         state.recalled_context_items = []
+        state.proposal_recalled = []
+        state.proposal_recalled_content = {}
+        state.proposal_context_items = []
         return state
 
     recalled = []
     recalled_content: dict[str, str] = {}
     recalled_context_items: list[dict[str, Any]] = []
+    proposal_recalled = []
+    proposal_recalled_content: dict[str, str] = {}
+    proposal_context_items: list[dict[str, Any]] = []
     reasoning = list(state.reasoning or [])
     receipt_path = _recall_receipt_path()
     for candidate in candidates:
@@ -236,39 +242,49 @@ def _recall_node(
             receipt_path=_provisional_recall_receipt_path(),
             citation_reference=citation_reference,
         )
-        if (guarded.may_answer or guarded.may_propose) and guarded.explanation is not None:
-            recalled.append(guarded.explanation)
-            recalled_content[guarded.explanation.artifact_id] = candidate.record.content
-            reasoning.append(
-                f"provisional_recall:{guarded.memory_id}:{candidate.reason_code}"
-            )
+        if guarded.explanation is not None and (guarded.may_answer or guarded.may_propose):
             record = candidate.record
-            recalled_context_items.append(
-                {
-                    "id": record.artifact_ref,
-                    "doc_id": record.artifact_ref,
-                    "_admitted_provisional_memory": True,
-                    "payload": {
-                        "uuid": record.artifact_ref,
-                        "object_type": "memory_item",
-                        "scope_id": record.scope_id,
-                        "principal_id": record.principal_id,
-                        "source_role": record.source_role,
-                        "authority_state": record.authority_state,
-                        "evidence_role": record.evidence_role.value,
-                        "sensitivity": record.sensitivity.value,
-                        "created_by": record.created_by,
-                        "created_at": record.created_at.isoformat(),
-                        "provenance_event_ids": list(record.provenance_event_ids),
-                        "memory_state": record.review_state.value,
-                    },
-                    "evidence_role_in_context": record.evidence_role.value,
-                }
-            )
+            context_item = {
+                "id": record.artifact_ref,
+                "doc_id": record.artifact_ref,
+                "_admitted_provisional_memory": True,
+                "payload": {
+                    "uuid": record.artifact_ref,
+                    "object_type": "memory_item",
+                    "scope_id": record.scope_id,
+                    "principal_id": record.principal_id,
+                    "source_role": record.source_role,
+                    "authority_state": record.authority_state,
+                    "evidence_role": record.evidence_role.value,
+                    "sensitivity": record.sensitivity.value,
+                    "created_by": record.created_by,
+                    "created_at": record.created_at.isoformat(),
+                    "provenance_event_ids": list(record.provenance_event_ids),
+                    "memory_state": record.review_state.value,
+                },
+                "evidence_role_in_context": record.evidence_role.value,
+            }
+            if guarded.may_answer:
+                recalled.append(guarded.explanation)
+                recalled_content[guarded.explanation.artifact_id] = record.content
+                recalled_context_items.append(context_item)
+                reasoning.append(
+                    f"provisional_recall:{guarded.memory_id}:{candidate.reason_code}"
+                )
+            elif guarded.may_propose:
+                proposal_recalled.append(guarded.explanation)
+                proposal_recalled_content[guarded.explanation.artifact_id] = record.content
+                proposal_context_items.append(context_item)
+                reasoning.append(
+                    f"provisional_proposal_recall:{guarded.memory_id}:{candidate.reason_code}"
+                )
 
     state.recalled = recalled
     state.recalled_content = recalled_content
     state.recalled_context_items = recalled_context_items
+    state.proposal_recalled = proposal_recalled
+    state.proposal_recalled_content = proposal_recalled_content
+    state.proposal_context_items = proposal_context_items
     if reasoning:
         state.reasoning = reasoning
     return state

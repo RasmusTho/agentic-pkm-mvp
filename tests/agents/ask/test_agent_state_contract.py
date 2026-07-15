@@ -19,6 +19,9 @@ def test_agent_state_minimal_valid_shape_and_documented_fields() -> None:
     assert state.hits == []
     assert state.recalled == []
     assert state.recalled_content == {}
+    assert state.proposal_recalled == []
+    assert state.proposal_recalled_content == {}
+    assert state.proposal_context_items == []
     assert state.answer is None
     assert state.reasoning is None
     assert state.llm_route is None
