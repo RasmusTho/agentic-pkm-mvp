@@ -2382,6 +2382,7 @@ class VerificationConsumer:
                 or pr_number <= 0
             ):
                 raise ValueError("malformed authenticated verification request")
+            canonical_chain_token = self.ledger.canonical_chain_token(request)
             intake_pr = self.truth.pull_request(repository, pr_number)
             issue_contract = resolve_issue_contract(intake_pr.get("body"))
             request = _live_observed_verification_request(
@@ -2400,6 +2401,7 @@ class VerificationConsumer:
                 observed_supporting_issues=(
                     issue_contract[1] if issue_contract is not None else None
                 ),
+                canonical_chain_token=canonical_chain_token,
             )
         run = self.ledger.ingest(request)
         if run.status in {"completed", "failed", "needs_human", "superseded"}:

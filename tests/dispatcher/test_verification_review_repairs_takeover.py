@@ -351,12 +351,14 @@ def _gh_source(
 
 
 def _live_observed_artifact(
+    state: VerificationDispatchLedger,
     payload: dict[str, object],
     *,
     observed_supporting_issues: tuple[int, ...] | None = None,
 ) -> dict[str, object]:
     source, _ = _gh_source(payload)
     authenticated = source.pending_requests(REPO)[0]
+    canonical_chain_token = state.canonical_chain_token(authenticated)
     supporting = payload.get("supporting_issues")
     assert isinstance(supporting, list)
     return _live_observed_verification_request(
@@ -373,6 +375,7 @@ def _live_observed_artifact(
             if observed_supporting_issues is not None
             else tuple(supporting)
         ),
+        canonical_chain_token=canonical_chain_token,
     )
 
 
@@ -536,7 +539,7 @@ def test_first_authenticated_new_head_reopens_expired_chain_without_budget_reset
 ) -> None:
     state = ledger(tmp_path)
     run_id, before = _record_exhausted_chain(state, request())
-    authenticated = _live_observed_artifact(request(REPAIRED_HEAD))
+    authenticated = _live_observed_artifact(state, request(REPAIRED_HEAD))
 
     reopened = state.ingest(authenticated)
 
@@ -571,7 +574,7 @@ def test_authenticated_new_head_accepts_monotonic_supporting_issue_extension(
     run_id, before = _record_exhausted_chain(state, original)
     repaired = request(REPAIRED_HEAD)
     repaired["supporting_issues"] = [3626, 3783, 3784]
-    reopened = state.ingest(_live_observed_artifact(repaired))
+    reopened = state.ingest(_live_observed_artifact(state, repaired))
 
     assert reopened.run_id == run_id
     assert reopened.status == "queued"
@@ -588,7 +591,7 @@ def test_successive_takeovers_enforce_durable_cumulative_supporting_authority(
     run_id, before = _record_exhausted_chain(state, original)
     repaired = request(REPAIRED_HEAD)
     repaired["supporting_issues"] = [3626, 3783]
-    first_takeover = state.ingest(_live_observed_artifact(repaired))
+    first_takeover = state.ingest(_live_observed_artifact(state, repaired))
     assert first_takeover.request["supporting_issues"] == [3626]
     assert first_takeover.supporting_authority == (3626, 3783)
     claimed = state.claim(run_id, "head-b-host")
@@ -612,7 +615,7 @@ def test_successive_takeovers_enforce_durable_cumulative_supporting_authority(
     with pytest.raises(
         ValueError, match="verification artifact head does not match canonical run"
     ):
-        state.ingest(_live_observed_artifact(rolled_back))
+        state.ingest(_live_observed_artifact(state, rolled_back))
 
     retained = state.get(run_id)
     assert retained is not None
@@ -632,7 +635,7 @@ def test_successive_takeovers_enforce_durable_cumulative_supporting_authority(
 
     extended = request(THIRD_REPAIRED_HEAD)
     extended["supporting_issues"] = [3626, 3783, 3784]
-    second_takeover = state.ingest(_live_observed_artifact(extended))
+    second_takeover = state.ingest(_live_observed_artifact(state, extended))
 
     assert first_takeover.run_id == second_takeover.run_id == run_id
     assert second_takeover.status == "queued"
@@ -659,7 +662,7 @@ def test_successive_takeover_cannot_replace_prior_supporting_evidence(
     run_id, before = _record_exhausted_chain(state, original)
     repaired = request(REPAIRED_HEAD)
     repaired["supporting_issues"] = [3626, 3783]
-    state.ingest(_live_observed_artifact(repaired))
+    state.ingest(_live_observed_artifact(state, repaired))
     claimed = state.claim(run_id, "head-b-host")
     lease_id = claimed.lease_id or ""
     state.start(
@@ -700,7 +703,7 @@ def test_takeover_updates_cumulative_authority_projection(tmp_path: Path) -> Non
     run_id, _ = _record_exhausted_chain(state, original)
     repaired = request(REPAIRED_HEAD)
     repaired["supporting_issues"] = [3626, 3783]
-    reopened = state.ingest(_live_observed_artifact(repaired))
+    reopened = state.ingest(_live_observed_artifact(state, repaired))
     complete_body = "Governing-Issue: #3603\n\nFixes #3626\nFixes #3783"
     missing_extension = "Governing-Issue: #3603\n\nFixes #3626"
 
@@ -723,7 +726,7 @@ def test_terminal_stale_head_reopen_enforces_authenticated_cumulative_authority(
     run_id, before = _record_exhausted_chain(state, original)
     repaired = request(REPAIRED_HEAD)
     repaired["supporting_issues"] = [3626, 3783]
-    state.ingest(_live_observed_artifact(repaired))
+    state.ingest(_live_observed_artifact(state, repaired))
     claimed = state.claim(run_id, "head-b-host")
     lease_id = claimed.lease_id or ""
     state.backoff(
@@ -771,7 +774,7 @@ def test_terminal_stale_head_reopen_enforces_authenticated_cumulative_authority(
 
     extended = request(THIRD_REPAIRED_HEAD)
     extended["supporting_issues"] = [3626, 3783, 3784]
-    reopened = state.ingest(_live_observed_artifact(extended))
+    reopened = state.ingest(_live_observed_artifact(state, extended))
 
     assert reopened.run_id == run_id
     assert reopened.status == "queued"
@@ -806,7 +809,7 @@ def test_new_head_reconciliation_rejects_authenticated_artifact_while_lease_is_l
     run_id, before = _record_exhausted_chain(
         state, request(), expire_lease=False
     )
-    authenticated = _live_observed_artifact(request(REPAIRED_HEAD))
+    authenticated = _live_observed_artifact(state, request(REPAIRED_HEAD))
 
     with pytest.raises(
         ValueError, match="verification artifact head does not match canonical run"
@@ -837,7 +840,7 @@ def test_expired_head_reconciliation_rejects_supporting_issue_removal_or_replace
     payload = request(REPAIRED_HEAD)
     payload["supporting_issues"] = incoming_supporting
     with pytest.raises(ValueError):
-        state.ingest(_live_observed_artifact(payload))
+        state.ingest(_live_observed_artifact(state, payload))
 
     retained = state.get(run_id)
     assert retained is not None
@@ -862,7 +865,7 @@ def test_expired_head_reconciliation_rejects_mismatched_primary_authority(
     mutate(payload)
     candidate: dict[str, object] = payload
     if payload.get("repository") == REPO:
-        candidate = _live_observed_artifact(payload)
+        candidate = _live_observed_artifact(state, payload)
 
     with pytest.raises(ValueError):
         state.ingest(candidate)
@@ -904,7 +907,7 @@ def test_expired_head_reconciliation_rejects_ambiguous_terminal_authority(
             ),
         )
         conn.commit()
-    authenticated = _live_observed_artifact(payload)
+    authenticated = _live_observed_artifact(state, payload)
 
     with pytest.raises(ValueError, match="canonical terminal chain is ambiguous"):
         state.ingest(authenticated)
@@ -921,58 +924,87 @@ def test_historical_authenticated_artifact_cannot_move_expired_chain_backward(
 ) -> None:
     state = ledger(tmp_path)
     run_id, _ = _record_exhausted_chain(state, request())
+    delayed_source, _ = _gh_source(request(REPAIRED_HEAD))
+    delayed_head_b = delayed_source.pending_requests(REPO)[0]
+    durable_before: list[dict[str, object]] = []
 
-    state.ingest(_live_observed_artifact(request(REPAIRED_HEAD)))
-    _start_and_expire_head(
-        state,
-        run_id,
-        REPAIRED_HEAD,
-        holder="head-b-host",
-        session_id="01900000-0000-7000-8000-000000000103",
-    )
+    class AdvancingTruth(Truth):
+        def pull_request(self, repository, pr_number):
+            state.ingest(_live_observed_artifact(state, request(REPAIRED_HEAD)))
+            _start_and_expire_head(
+                state,
+                run_id,
+                REPAIRED_HEAD,
+                holder="head-b-host",
+                session_id="01900000-0000-7000-8000-000000000103",
+            )
+            state.ingest(
+                _live_observed_artifact(state, request(SECOND_REPAIRED_HEAD))
+            )
+            _start_and_expire_head(
+                state,
+                run_id,
+                SECOND_REPAIRED_HEAD,
+                holder="head-c-host",
+                session_id="01900000-0000-7000-8000-000000000104",
+            )
+            durable_before.append(_durable_verification_snapshot(state, run_id))
+            return self.pr
 
-    state.ingest(_live_observed_artifact(request(SECOND_REPAIRED_HEAD)))
-    _start_and_expire_head(
-        state,
-        run_id,
-        SECOND_REPAIRED_HEAD,
-        holder="head-c-host",
-        session_id="01900000-0000-7000-8000-000000000104",
-    )
-    before = _durable_verification_snapshot(state, run_id)
-
-    historical_head_b_source, _ = _gh_source(request(REPAIRED_HEAD))
-    historical_head_b = historical_head_b_source.pending_requests(REPO)[0]
-    live_head_c = eligible_pr(
-        head={"ref": "branch", "sha": SECOND_REPAIRED_HEAD}
-    )
+    live_head_b = eligible_pr(head={"ref": "branch", "sha": REPAIRED_HEAD})
 
     with pytest.raises(
-        ValueError, match="verification artifact head does not match canonical run"
+        ValueError, match="verification canonical authority changed during live observation"
     ):
         VerificationConsumer(
             state,
-            Truth(live_head_c, GREEN),
+            AdvancingTruth(live_head_b, GREEN),
             Auth(),
             Launcher(),
             "head-c-host",
-        ).consume(historical_head_b)
+        ).consume(delayed_head_b)
 
-    assert _durable_verification_snapshot(state, run_id) == before
+    assert len(durable_before) == 1
+    assert _durable_verification_snapshot(state, run_id) == durable_before[0]
 
 
 def test_reconciled_new_head_replay_is_idempotent(tmp_path: Path) -> None:
     state = ledger(tmp_path)
     run_id, _ = _record_exhausted_chain(state, request())
-    observed = _live_observed_artifact(request(REPAIRED_HEAD))
-
-    first = state.ingest(observed)
+    first = state.ingest(
+        _live_observed_artifact(state, request(REPAIRED_HEAD))
+    )
+    claimed = state.claim(run_id, "head-b-host")
+    terminal = state.terminal(
+        run_id,
+        "failed",
+        {"outcome": "blocked", "head_sha": REPAIRED_HEAD},
+        reason="synthetic_terminal",
+        holder="head-b-host",
+        lease_id=claimed.lease_id or "",
+    )
     before_replay = _durable_verification_snapshot(state, run_id)
-    replay = state.ingest(observed)
 
-    assert first.run_id == replay.run_id == run_id
-    assert first.status == replay.status == "queued"
-    assert first.current_head_sha == replay.current_head_sha == REPAIRED_HEAD
+    restarted = VerificationDispatchLedger(state.store)
+    replay_source, _ = _gh_source(request(REPAIRED_HEAD))
+    replay = VerificationConsumer(
+        restarted,
+        Truth(
+            eligible_pr(
+                head={"ref": "branch", "sha": REPAIRED_HEAD},
+                state="closed",
+                merged_at="2026-07-15T08:00:00Z",
+            ),
+            GREEN,
+        ),
+        Auth(),
+        Launcher(),
+        "head-b-host",
+    ).consume(replay_source.pending_requests(REPO)[0])
+
+    assert first.run_id == replay.run_id == terminal.run_id == run_id
+    assert replay == terminal
+    assert replay.current_head_sha == REPAIRED_HEAD
     assert _durable_verification_snapshot(state, run_id) == before_replay
 
 
