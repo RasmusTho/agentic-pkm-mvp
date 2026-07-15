@@ -228,6 +228,16 @@ def test_issue_free_lanes_do_not_require_governing_identity(body: str) -> None:
         ("Governing-Issue: #123\nFixes #123\nCloses #\u00a0", False),
         ("Governing-Issue: #123\nFixes #123\nCloses #\u0085", False),
         ("Governing-Issue: #123\nFixes #123\nCloses #\ufeff", False),
+        (
+            "Governing-Issue: #123\nFixes #123\n"
+            "Fixes RasmusTho/agentic-pkm-mvp#456",
+            False,
+        ),
+        (
+            "Governing-Issue: #123\nFixes #123\n"
+            "Closes: octo-org/octo-repo#456",
+            False,
+        ),
     ],
 )
 def test_javascript_and_python_authority_grammar_are_identical(
@@ -255,6 +265,13 @@ def test_pr_contract_rejects_commit_message_closure_authority() -> None:
     assert "github.rest.pulls.listCommits" in workflow
     assert "commitClosureAttempt" in workflow
     assert "commit-message closing references are forbidden" in workflow
+
+
+def test_pr_contract_rejects_repository_qualified_closure_authority() -> None:
+    workflow = _read_workflow()
+
+    assert "closingAttemptTarget" in workflow
+    assert "[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+#" in workflow
 
 
 def test_mixed_tier_pr_uses_highest_required_tier() -> None:

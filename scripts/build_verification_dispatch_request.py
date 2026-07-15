@@ -11,7 +11,7 @@ from typing import Sequence, TypeGuard
 
 from app.dispatcher.verification_contract import (
     resolve_issue_authority,
-    resolve_issue_contract,
+    resolve_issue_contract as resolve_issue_contract,
 )
 
 

@@ -141,6 +141,17 @@ def test_ambiguous_governing_issue_emits_no_request() -> None:
     assert build_request(event=_event(), pr=mismatched, issue={"number": 3626}) is None
 
 
+def test_repository_qualified_closer_emits_no_request() -> None:
+    qualified = _pr()
+    qualified["body"] = (
+        "Governing-Issue: #3602\nFixes #3602\n"
+        "Fixes RasmusTho/agentic-pkm-mvp#9999"
+    )
+
+    assert resolve_issue_contract(qualified["body"]) is None
+    assert build_request(event=_event(), pr=qualified, issue=_issue()) is None
+
+
 @pytest.mark.parametrize(
     "body",
     [

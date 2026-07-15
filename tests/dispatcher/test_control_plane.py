@@ -261,6 +261,59 @@ def test_pre_repair_v3_backup_restore_self_migrates_without_data_loss(
     assert control_plane.health(restored)["ok"] is True
 
 
+def test_pre_closing_v4_recovery_remains_readonly_until_store_migrates(
+    tmp_path: Path,
+) -> None:
+    store, paths = _store(tmp_path)
+    original = VerificationDispatchLedger(store).ingest(verification_request())
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN closing_authority_json")
+        conn.execute("UPDATE dispatcher_meta SET value='4' WHERE key='schema_version'")
+        conn.commit()
+    paths.events_path.touch()
+    before = paths.db_path.read_bytes()
+
+    assert control_plane.health(paths)["ok"] is True
+    assert paths.db_path.read_bytes() == before
+    backup = tmp_path / "backup-v4"
+    control_plane.backup(paths, backup)
+    assert paths.db_path.read_bytes() == before
+    restored = load_paths({"DISPATCHER_STATE_DIR": str(tmp_path / "restored-v4")})
+    assert control_plane.restore(backup, restored)["integrity"] == "ok"
+    with sqlite3.connect(restored.db_path) as conn:
+        version_before = conn.execute(
+            "SELECT value FROM dispatcher_meta WHERE key='schema_version'"
+        ).fetchone()[0]
+        columns_before = {
+            row[1] for row in conn.execute("PRAGMA table_info(verification_runs)")
+        }
+    assert version_before == "4"
+    assert "closing_authority_json" not in columns_before
+
+    migrated = VerificationDispatchLedger(SqliteStore(restored.db_path)).get(
+        original.run_id
+    )
+
+    assert migrated is not None
+    assert migrated.closing_authority == tuple(original.request["closing_issues"])
+    assert control_plane.health(restored)["ok"] is True
+
+
+def test_recovery_rejects_malformed_v5_missing_closing_authority(
+    tmp_path: Path,
+) -> None:
+    _, paths = _store(tmp_path)
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.execute("ALTER TABLE verification_runs DROP COLUMN closing_authority_json")
+        conn.commit()
+    paths.events_path.touch()
+
+    proof = control_plane.health(paths)
+
+    assert proof["ok"] is False
+    assert "closing_authority_json" in proof["db"]["error"]
+
+
 def _assert_pre_trust_row_migrates_to_inert(
     tmp_path: Path,
     legacy_request: dict[str, object],

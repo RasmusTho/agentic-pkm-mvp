@@ -155,6 +155,7 @@ jobs:
               const asciiClosingSeparator = "(?:[ \\t]+|[ \\t]*:[ \\t]*)";
               const explicitWhitespace = "[ \\t\\n\\v\\f\\r\\x85\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]";
               const closingAttemptSeparator = `(?:${explicitWhitespace}+|${explicitWhitespace}*:${explicitWhitespace}*)`;
+              const closingAttemptTarget = "(?:#|[0-9A-Za-z_.-]+/[0-9A-Za-z_.-]+#)";
               const governingIssueLines = canonicalBody.match(
                 new RegExp(`^[ \\t]*${governingKeyword}[ \\t]*:.*$`, "gm")
               ) || [];
@@ -162,7 +163,7 @@ jobs:
                 new RegExp(`^[ \\t]*${governingKeyword}:[ \\t]*#([1-9][0-9]*)[ \\t]*$`, "gm")
               ) || [];
               const issueLinkMentions = canonicalBody.match(
-                new RegExp(`${issueTokenPrefix}${closingKeyword}${closingAttemptSeparator}#`, "gm")
+                new RegExp(`${issueTokenPrefix}${closingKeyword}${closingAttemptSeparator}${closingAttemptTarget}`, "gm")
               ) || [];
               const exactIssueLinkMatches = canonicalBody.match(
                 new RegExp(`${issueTokenPrefix}${closingKeyword}${asciiClosingSeparator}#[1-9][0-9]*${issueTokenTerminator}`, "gm")

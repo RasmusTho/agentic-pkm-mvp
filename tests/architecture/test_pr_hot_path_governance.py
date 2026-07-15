@@ -71,6 +71,8 @@ def test_verification_execution_checklist_uses_exact_closing_issue_set() -> None
         "remove all agent labels from every closed issue",
         "never project an unclosed governing parent `Done`",
         "receipt on every\n    closed issue",
+        "governing and closing identities to\n   match the authenticated context exactly",
+        "accept any bounded monotonic additions as the cumulative\n   evidence set",
     ):
         assert fragment in text
 

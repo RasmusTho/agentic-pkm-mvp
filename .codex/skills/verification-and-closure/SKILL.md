@@ -269,8 +269,10 @@ When all prerequisites are met:
 1. confirm the PR head SHA has not changed since verification started
 2. merge the PR
 3. verify merge succeeded
-4. if issue-backed, re-read the merged PR body and require its exact governing, closing, and
-   supporting identities to match the authenticated context; close every and only `closing_issues`
+4. if issue-backed, re-read the merged PR body and require its governing and closing identities to
+   match the authenticated context exactly; require the live supporting set to contain every
+   authenticated supporting identity, accept any bounded monotonic additions as the cumulative
+   evidence set, and close every and only `closing_issues`
 5. if issue-backed, complete or release each applicable closing-issue dispatcher task
 6. if issue-backed, remove all agent labels from every closed issue; do not remove active-state
    labels from a distinct governing parent unless its own lifecycle contract is complete
