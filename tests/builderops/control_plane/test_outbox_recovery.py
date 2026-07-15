@@ -24,7 +24,7 @@ def test_unknown_external_effect_requires_readback_before_retry(
     first_claim = control_plane_store.claim_outbox(
         envelope=envelope,
         operation_key=result.operation_key,
-        worker_id="demerzel-1",
+        worker_id="executor-1",
         recovered_through=result.recovery_lsn,
         claim_ttl_seconds=1,
         now=now,
@@ -33,7 +33,7 @@ def test_unknown_external_effect_requires_readback_before_retry(
     claim = restarted_store.claim_outbox(
         envelope=envelope,
         operation_key=result.operation_key,
-        worker_id="demerzel-2",
+        worker_id="executor-2",
         recovered_through=first_claim.claim_lsn,
         now=now + timedelta(seconds=2),
     )
@@ -46,7 +46,7 @@ def test_unknown_external_effect_requires_readback_before_retry(
         restarted_store.claim_outbox(
             envelope=envelope,
             operation_key=result.operation_key,
-            worker_id="demerzel-2",
+            worker_id="executor-2",
             recovered_through=claim.claim_lsn,
         )
 

@@ -25,7 +25,7 @@ def test_external_effect_waits_for_intent_and_claim_recovery_lsn(
         store.claim_outbox(
             envelope=envelope,
             operation_key=result.operation_key,
-            worker_id="demerzel",
+            worker_id="executor",
             recovered_through="0/0",
         )
     assert calls == []
@@ -33,7 +33,7 @@ def test_external_effect_waits_for_intent_and_claim_recovery_lsn(
     claim = store.claim_outbox(
         envelope=envelope,
         operation_key=result.operation_key,
-        worker_id="demerzel",
+        worker_id="executor",
         recovered_through=result.recovery_lsn,
     )
     assert store.effect_eligible(claim, recovered_through=result.recovery_lsn) is False
