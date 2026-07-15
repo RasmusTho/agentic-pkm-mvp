@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from app.dispatcher.verification_contract import resolve_issue_contract
 from scripts.pr_body_generator import (
     PRBodyGeneratorError,
     TEMPLATE_SECTION_HEADINGS,
@@ -70,6 +71,19 @@ def test_generates_valid_governance_lane_body() -> None:
     assert "<" not in body
 
 
+def test_issue_backed_body_emits_governing_issue_identity() -> None:
+    body = generate_pr_body_from_mapping(_fixture("governance_issue.json"))
+
+    assert body.count("Governing-Issue: #3275") == 1
+    assert "Closes #3275" in body
+
+
+def test_generated_issue_identity_is_accepted_by_verification_dispatch_contract() -> None:
+    body = generate_pr_body_from_mapping(_fixture("governance_issue.json"))
+
+    assert resolve_issue_contract(body) == (3275, ())
+
+
 def test_direct_repair_body_includes_required_section() -> None:
     body = generate_pr_body_from_mapping(_fixture("direct_repair.json"))
 
@@ -79,6 +93,7 @@ def test_direct_repair_body_includes_required_section() -> None:
     assert "Validation: python3 scripts/docs_guard.py\n" in body
     assert "Issue required: no\n" in body
     assert "Closes #" not in body
+    assert "Governing-Issue:" not in body
     assert _builderops_routing_satisfied(body)
 
 

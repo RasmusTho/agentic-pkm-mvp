@@ -6,10 +6,12 @@
 Docs authoring applies only to docs-only changes in approved docs-authoring surfaces. It must not be used for code, runtime behavior, contracts, shipped reality, or implementation writeback.
 Governance lane applies to bounded repository-governance changes such as repo-local skills, PR/issue policy, and lightweight enforcement for docs/governance workflows. It may include repo-meta governance scripts and focused tests, but it must not be used for product/runtime implementation.
 
+Governing-Issue: #
+
 ## Linked Issue
 Fixes #
 
-Required for implementation lane. Leave blank for docs authoring lane.
+Both lines are required for issue-backed PRs and must identify the same governing issue. Leave both blank for docs authoring lane.
 Leave blank for governance lane when the PR stays within approved governance surfaces.
 
 ## SBS Impact

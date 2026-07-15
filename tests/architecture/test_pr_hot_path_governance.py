@@ -113,6 +113,15 @@ def test_pr_template_includes_builderops_routing_receipt() -> None:
         assert fragment in text, fragment
 
 
+def test_publication_surfaces_require_governing_issue_identity() -> None:
+    template = _read(".github/pull_request_template.md")
+    publish_skill = _read(".codex/skills/publish-pr/SKILL.md")
+
+    assert "Governing-Issue: #" in template
+    assert "Governing-Issue: #<ISSUE_NUMBER>" in publish_skill
+    assert "Fixes #<ISSUE_NUMBER>" in publish_skill
+
+
 import re as _re
 
 

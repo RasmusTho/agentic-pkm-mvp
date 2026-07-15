@@ -40,7 +40,8 @@ conditional path — only when readiness/repair work is still needed before veri
 
 - Do not expand implementation scope during publication.
 - Do not publish unrelated local changes.
-- For implementation lane PRs, the body must include `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>`.
+- For issue-backed PRs, the body must include exactly one `Governing-Issue: #<id>` line and a
+  `Fixes #<id>`, `Closes #<id>`, or `Resolves #<id>` closing keyword for that same Issue.
 - For docs-authoring or governance lane PRs, leave the linked Issue blank unless a governing Issue actually exists.
 - PR-body machinery scales with risk tier per `docs/development/GOVERNANCE_PROPORTIONALITY.md`:
   - Tier 2+ PR bodies must include a `## BuilderOps Routing` section that names relevant BuilderOps
@@ -217,6 +218,8 @@ Execute based on lane classification:
 gh pr create \
   --title "<bounded outcome>" \
   --body "$(cat <<'EOF'
+Governing-Issue: #<ISSUE_NUMBER>
+
 Fixes #<ISSUE_NUMBER>
 
 ## Summary
@@ -294,7 +297,8 @@ EOF
 
 Pre-push PR-body contract gate:
 - Before `gh pr create` or `gh pr edit`, verify the body includes exactly one lane classifier:
-  - implementation lane: `Fixes #<id>` or `Closes #<id>` or `Resolves #<id>`
+  - issue-backed lane: exactly one `Governing-Issue: #<id>` plus `Fixes #<id>`, `Closes #<id>`, or
+    `Resolves #<id>` for the same Issue
   - docs lane: `- [x] Docs authoring lane`
   - governance lane: `- [x] Governance lane`
   - direct repair: a complete `## Direct Repair` block with `Type:`, `Reason:`, `Validation:`, and `Issue required: no`
@@ -319,7 +323,7 @@ echo "Handing off to pr-integration skill"
 
 Implementation lane:
 
-- include `Fixes #<id>`
+- include exactly one `Governing-Issue: #<id>` line and a matching `Fixes #<id>` closing keyword
 - summarize the bounded change
 - state focused validation that actually ran
 

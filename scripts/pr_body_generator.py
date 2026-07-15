@@ -169,7 +169,10 @@ def _change_lane_section(lane: str) -> str:
 def _linked_issue_section(issue_number: int | None) -> str:
     if issue_number is None:
         return "## Linked Issue\n"
-    return f"## Linked Issue\nCloses #{issue_number}"
+    return (
+        f"Governing-Issue: #{issue_number}\n\n"
+        f"## Linked Issue\nCloses #{issue_number}"
+    )
 
 
 def _sbs_impact_section(values: Mapping[str, str]) -> str:
