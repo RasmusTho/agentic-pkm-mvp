@@ -270,6 +270,45 @@ def test_live_governing_issue_drift_fails_closed_before_launch(tmp_path) -> None
     assert launcher.calls == []
 
 
+def test_supporting_issue_addition_during_repair_preserves_governing_authority(
+    tmp_path,
+) -> None:
+    launcher = Launcher()
+    dispatch_request = request()
+    dispatch_request["supporting_issues"] = [3626]
+    pr = eligible_pr(
+        body="Governing-Issue: #3603\n\nRefs #3603\nFixes #3626\nFixes #3745"
+    )
+
+    result = VerificationConsumer(
+        ledger(tmp_path), Truth(pr, GREEN), Auth(), launcher, "host"
+    ).consume(dispatch_request)
+
+    assert result.status == "needs_human"
+    assert len(launcher.calls) == 1
+
+
+def test_supporting_issue_removal_or_governing_drift_fails_closed(tmp_path) -> None:
+    for suffix, body in (
+        ("removed", "Governing-Issue: #3603\n\nRefs #3603"),
+        ("governing", "Governing-Issue: #3626\n\nFixes #3626"),
+    ):
+        dispatch_request = request()
+        dispatch_request["supporting_issues"] = [3626]
+        launcher = Launcher()
+        result = VerificationConsumer(
+            ledger(tmp_path / suffix),
+            Truth(eligible_pr(body=body), GREEN),
+            Auth(),
+            launcher,
+            "host",
+        ).consume(dispatch_request)
+
+        assert result.status == "superseded"
+        assert result.stop_reason == "governing_issue_mismatch"
+        assert launcher.calls == []
+
+
 def test_head_move_during_auth_fails_closed_before_launch(tmp_path) -> None:
     truth = Truth(eligible_pr(), GREEN)
     launcher = Launcher()
@@ -897,6 +936,71 @@ def test_pending_repair_checks_persist_repair_before_backoff(tmp_path) -> None:
     ]
 
 
+def test_supporting_issue_addition_allows_repair_head_rebind_without_budget_reset(
+    tmp_path,
+) -> None:
+    new_head = "b" * 40
+    pending = [
+        {
+            "id": 2,
+            "name": "Unit tests (not pg)",
+            "status": "in_progress",
+            "conclusion": None,
+        }
+    ]
+    original_head = HEAD
+    truth = Truth(
+        eligible_pr(body="Governing-Issue: #3603\n\nRefs #3603\nFixes #3626"),
+        GREEN,
+    )
+
+    class SupportingRepairLauncher(Launcher):
+        def launch(self, context_pack, **kwargs):
+            if callback := kwargs.get("on_thread_started"):
+                callback("supporting-repair-session")
+            truth.pr = eligible_pr(
+                body=(
+                    "Governing-Issue: #3603\n\nRefs #3603\n"
+                    "Fixes #3626\nFixes #3745"
+                ),
+                head={"ref": "branch", "sha": new_head},
+            )
+            truth.check_rows = pending
+            return "supporting-repair-session", {
+                "verdict": "blocked",
+                "head_sha": new_head,
+                "summary": "bounded repair published",
+                "receipt_ids": ["repair-3745"],
+                "review_events": [
+                    {
+                        "kind": "repair",
+                        "session_id": "repair-3745",
+                        "capability": "gpt-5.6-terra",
+                        "reasoning_effort": "high",
+                        "outcome": "fixed",
+                        "finding_id": "F3745",
+                        "strongest": False,
+                    }
+                ],
+            }
+
+    state = ledger(tmp_path)
+    dispatch_request = request()
+    dispatch_request["supporting_issues"] = [3626]
+    result = VerificationConsumer(
+        state, truth, Auth(), SupportingRepairLauncher(), "host"
+    ).consume(dispatch_request)
+
+    assert result.status == "backoff"
+    assert result.requested_head_sha == original_head
+    assert result.head_sha == new_head
+    assert result.request["supporting_issues"] == [3626]
+    assert [row["kind"] for row in state.attempts(result.run_id)] == [
+        "verification",
+        "standard_repair",
+    ]
+
+
 def test_invalid_pending_repair_event_batch_fails_before_backoff(tmp_path) -> None:
     new_head = "b" * 40
     pending = [
@@ -1196,6 +1300,32 @@ def test_delivered_receipt_accepts_matching_post_merge_live_truth(tmp_path) -> N
         DeliveredLauncher(),
         "host",
     ).consume(request())
+
+    assert result.status == "completed"
+    assert result.verified_head_sha == HEAD
+
+
+def test_delivered_truth_accepts_added_supporting_repair_issue(tmp_path) -> None:
+    dispatch_request = request()
+    dispatch_request["supporting_issues"] = [3626]
+    original_pr = eligible_pr(
+        body="Governing-Issue: #3603\n\nRefs #3603\nFixes #3626"
+    )
+    terminal_pr = merged_pr(
+        body=(
+            "Governing-Issue: #3603\n\nRefs #3603\n"
+            "Fixes #3626\nFixes #3745"
+        )
+    )
+    truth = TransitionTruth(terminal_pr)
+    truth.prs = iter([original_pr, original_pr, terminal_pr])
+    result = VerificationConsumer(
+        ledger(tmp_path),
+        truth,
+        Auth(),
+        DeliveredLauncher(),
+        "host",
+    ).consume(dispatch_request)
 
     assert result.status == "completed"
     assert result.verified_head_sha == HEAD

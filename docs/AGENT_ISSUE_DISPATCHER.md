@@ -107,8 +107,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   gate on retry, but can complete only through a fresh authenticated exact-head merged/check read;
   its event batch remains exact-replay idempotent.
 - Governing-Issue authority is live truth, not an artifact-only assertion. Every authority-bearing
-  PR read must still contain exactly the request's explicit governing issue and identical bounded
-  supporting-issue evidence; body-only missing, conflicting, or changed authority fails closed.
+  PR read must still contain exactly the request's explicit governing issue and every original
+  supporting-issue reference. Later bounded repair references may extend that supporting evidence
+  monotonically without becoming governing or closure authority; removing original evidence or
+  changing the governing issue fails closed.
 - Authentication does not extend an earlier live-truth read atomically. After auth and lease claim,
   the consumer re-fetches head, governing contract, and checks immediately before launch; drift
   supersedes the claimed run, while missing or non-green checks back off. Both are technical

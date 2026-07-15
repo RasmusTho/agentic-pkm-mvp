@@ -808,6 +808,17 @@ def _nested(mapping: Mapping[str, object], *keys: str) -> object:
     return value
 
 
+def _governing_contract_matches(run: VerificationRun, pr_body: object) -> bool:
+    issue_contract = resolve_issue_contract(pr_body)
+    requested_support = run.request.get("supporting_issues")
+    return bool(
+        issue_contract is not None
+        and issue_contract[0] == run.request.get("linked_issue")
+        and isinstance(requested_support, list)
+        and set(requested_support).issubset(issue_contract[1])
+    )
+
+
 def live_truth_rejection(
     run: VerificationRun,
     pr: Mapping[str, object],
@@ -823,14 +834,7 @@ def live_truth_rejection(
         return "draft"
     if _nested(pr, "head", "sha") != (expected_head_sha or run.head_sha):
         return "stale_head"
-    issue_contract = resolve_issue_contract(pr.get("body"))
-    linked_issue = run.request.get("linked_issue")
-    supporting_issues = run.request.get("supporting_issues")
-    if (
-        issue_contract is None
-        or issue_contract[0] != linked_issue
-        or list(issue_contract[1]) != supporting_issues
-    ):
+    if not _governing_contract_matches(run, pr.get("body")):
         return "governing_issue_mismatch"
     return _checks_rejection(checks)
 
@@ -853,12 +857,7 @@ def delivered_live_truth_rejection(
         return "repository_mismatch"
     if _nested(pr, "head", "sha") != expected_head_sha:
         return "stale_head"
-    issue_contract = resolve_issue_contract(pr.get("body"))
-    if (
-        issue_contract is None
-        or issue_contract[0] != run.request.get("linked_issue")
-        or list(issue_contract[1]) != run.request.get("supporting_issues")
-    ):
+    if not _governing_contract_matches(run, pr.get("body")):
         return "governing_issue_mismatch"
     if (
         pr.get("state") != "closed"
