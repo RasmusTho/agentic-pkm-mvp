@@ -714,6 +714,7 @@ def test_cli_rejects_regression_failure_contradiction(
 def test_verdict_regression_when_candidate_fails_own_floors() -> None:
     baseline = load_scorecard(BASELINE_PATH)
     candidate = load_scorecard(CANDIDATE_PATH)
+    candidate["aggregate"]["precision@k"] = 0.1
     # Candidate tripped its configured floors (config/eval_thresholds.yaml at
     # build time) even though no relative delta exceeds the tolerance.
     candidate["regression"] = True
@@ -729,6 +730,33 @@ def test_verdict_regression_when_candidate_fails_own_floors() -> None:
     comparison = compare_scorecards(baseline, candidate)
     assert comparison["verdict"] == "regression"
     assert comparison["candidate_gate"]["regression"] is True
+
+
+@pytest.mark.parametrize("target", ["baseline", "candidate"])
+def test_cli_rejects_unreported_configured_floor_failure(
+    target: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    baseline = load_scorecard(BASELINE_PATH)
+    candidate = load_scorecard(CANDIDATE_PATH)
+    scorecard = baseline if target == "baseline" else candidate
+    scorecard["thresholds"]["aggregate"]["precision_at_k"] = 0.9
+    baseline_path = tmp_path / "baseline.json"
+    candidate_path = tmp_path / "candidate.json"
+    baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+    candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+
+    assert eval_run.main(
+        [
+            "compare",
+            "--baseline",
+            str(baseline_path),
+            "--candidate",
+            str(candidate_path),
+        ]
+    ) == 2
+    assert "threshold failures contradict configured floors" in capsys.readouterr().err
 
 
 # ── CLI seam ─────────────────────────────────────────────────────────────

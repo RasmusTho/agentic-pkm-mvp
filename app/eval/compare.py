@@ -105,6 +105,14 @@ CONFUSION_ENTRY_KEYS = ("case_id", "expected_intent", "predicted_intent")
 # numeric ones are finiteness-checked because the renderer formats them.
 FAILURE_ENTRY_KEYS = ("scope", "metric", "value", "threshold", "kind")
 FAILURE_ENTRY_NUMERIC_KEYS = ("value", "threshold")
+THRESHOLD_SECTION_KEYS = {
+    "schema_version",
+    "aggregate",
+    "per_language",
+    "memory_recall",
+    "classification",
+    "k",
+}
 PROVISIONAL_BOUNDARY_SCHEMA_VERSION = "provisional_memory_boundary.v1"
 PROVISIONAL_FAILURE_ENTRY_KEYS = ("case_id", "reason")
 PROVISIONAL_CASE_KEYS = {
@@ -424,6 +432,77 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
         ],
     }
 
+    thresholds = _resolve_dict(scorecard, label, ("thresholds",))
+    if set(thresholds) != THRESHOLD_SECTION_KEYS:
+        raise ScorecardCompareError(f"invalid threshold schema keys at {label}.thresholds")
+    if thresholds["schema_version"] != "eval_thresholds.v1":
+        raise ScorecardCompareError(
+            f"unsupported threshold schema at {label}.thresholds.schema_version"
+        )
+    scorecard_k = _resolve(scorecard, label, ("k",))
+    threshold_k = thresholds["k"]
+    if (
+        isinstance(scorecard_k, bool)
+        or not isinstance(scorecard_k, int)
+        or isinstance(threshold_k, bool)
+        or not isinstance(threshold_k, int)
+        or scorecard_k != threshold_k
+        or scorecard_k <= 0
+    ):
+        raise ScorecardCompareError(f"invalid or inconsistent k at {label}")
+
+    def _floors(bucket_name: str, metric_names: tuple[str, ...]) -> Dict[str, float]:
+        bucket = thresholds[bucket_name]
+        path = f"{label}.thresholds.{bucket_name}"
+        if not isinstance(bucket, dict) or set(bucket) != set(metric_names):
+            raise ScorecardCompareError(f"invalid threshold bucket at {path}")
+        validated = {
+            metric: _require_finite(bucket[metric], f"{path}.{metric}")
+            for metric in metric_names
+        }
+        if any(floor < 0.0 or floor > 1.0 for floor in validated.values()):
+            raise ScorecardCompareError(f"threshold floor outside [0, 1] at {path}")
+        return validated
+
+    retrieval_floor_names = ("precision_at_k", "ndcg_at_k")
+    aggregate_floors = _floors("aggregate", retrieval_floor_names)
+    language_floors = _floors("per_language", retrieval_floor_names)
+    memory_floors = _floors("memory_recall", retrieval_floor_names)
+    classification_floors = _floors("classification", CLASSIFICATION_METRICS)
+    expected_threshold_failures: List[tuple[str, str, float, float, str]] = []
+
+    def _derive_floor_failures(
+        scope: str,
+        metrics: Dict[str, float],
+        floors: Dict[str, float],
+        aliases: Dict[str, str] | None = None,
+    ) -> None:
+        aliases = aliases or {}
+        for floor_name, floor in floors.items():
+            actual = metrics[aliases.get(floor_name, floor_name)]
+            if actual < floor:
+                expected_threshold_failures.append(
+                    (scope, floor_name, actual, floor, "threshold_floor")
+                )
+
+    retrieval_aliases = {"precision_at_k": "precision@k", "ndcg_at_k": "ndcg@k"}
+    _derive_floor_failures(
+        "aggregate", view["flat"]["aggregate"], aggregate_floors, retrieval_aliases
+    )
+    for language, metrics in view["keyed"]["by_language"].items():
+        _derive_floor_failures(
+            f"language:{language}", metrics, language_floors, retrieval_aliases
+        )
+    _derive_floor_failures(
+        "memory_recall",
+        view["flat"]["memory_recall"],
+        memory_floors,
+        retrieval_aliases,
+    )
+    _derive_floor_failures(
+        "classification", view["classification_metrics"], classification_floors
+    )
+
     scorecard_regression = _require_bool(
         _resolve(scorecard, label, ("regression",)),
         f"{label}.regression",
@@ -532,6 +611,21 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
     }
     if len(failure_signatures) != len(failures):
         raise ScorecardCompareError(f"duplicate scorecard failure at {label}.failures")
+    actual_threshold_failures = sorted(
+        (
+            entry["scope"],
+            entry["metric"],
+            float(entry["value"]),
+            float(entry["threshold"]),
+            entry["kind"],
+        )
+        for entry in failures
+        if entry["kind"] == "threshold_floor"
+    )
+    if actual_threshold_failures != sorted(expected_threshold_failures):
+        raise ScorecardCompareError(
+            f"threshold failures contradict configured floors at {label}"
+        )
     view["floor_regression"] = scorecard_regression
     view["failures"] = failures
 
