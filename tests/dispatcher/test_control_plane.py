@@ -329,6 +329,46 @@ def test_health_accepts_compatible_v1_shape_until_store_migrates_it(
     assert migrated.get_meta("schema_version") == str(SCHEMA_VERSION)
 
 
+def test_malformed_v2_migration_does_not_commit_v3(tmp_path: Path) -> None:
+    _, paths = _store(tmp_path)
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.execute(
+            "UPDATE dispatcher_meta SET value = '2' WHERE key = 'schema_version'"
+        )
+        conn.execute(
+            "ALTER TABLE verification_runs DROP COLUMN coordinator_session_id"
+        )
+        conn.commit()
+
+    with pytest.raises(
+        ValueError,
+        match="missing dispatcher columns in verification_runs: coordinator_session_id",
+    ):
+        SqliteStore(paths.db_path).get_meta("schema_version")
+
+    with sqlite3.connect(paths.db_path) as conn:
+        version = conn.execute(
+            "SELECT value FROM dispatcher_meta WHERE key = 'schema_version'"
+        ).fetchone()[0]
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(verification_runs)")
+        }
+    assert version == "2"
+    assert "coordinator_session_id" not in columns
+
+
+def test_valid_v2_migration_still_reaches_v3(tmp_path: Path) -> None:
+    _, paths = _store(tmp_path)
+    with sqlite3.connect(paths.db_path) as conn:
+        conn.execute(
+            "UPDATE dispatcher_meta SET value = '2' WHERE key = 'schema_version'"
+        )
+        conn.commit()
+
+    migrated = SqliteStore(paths.db_path)
+    assert migrated.get_meta("schema_version") == str(SCHEMA_VERSION)
+
+
 def test_health_rejects_unsupported_dispatcher_schema_version(tmp_path: Path) -> None:
     _, paths = _store(tmp_path)
     with sqlite3.connect(paths.db_path) as conn:

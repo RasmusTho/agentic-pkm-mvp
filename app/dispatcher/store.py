@@ -239,6 +239,9 @@ class SqliteStore:
                 )
             for stmt in DDL_STATEMENTS:
                 conn.execute(stmt)
+            schema_error = verification_v3_schema_error(conn)
+            if schema_error is not None:
+                raise ValueError(schema_error)
             conn.execute(
                 "INSERT OR REPLACE INTO dispatcher_meta(key, value) VALUES (?, ?)",
                 ("schema_version", str(SCHEMA_VERSION)),
@@ -250,13 +253,21 @@ class SqliteStore:
 
     def initialize(self) -> None:
         with self._connect() as conn:
-            for stmt in DDL_STATEMENTS:
-                conn.execute(stmt)
-            conn.execute(
-                "INSERT OR REPLACE INTO dispatcher_meta(key, value) VALUES (?, ?)",
-                ("schema_version", str(SCHEMA_VERSION)),
-            )
-            conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for stmt in DDL_STATEMENTS:
+                    conn.execute(stmt)
+                schema_error = verification_v3_schema_error(conn)
+                if schema_error is not None:
+                    raise ValueError(schema_error)
+                conn.execute(
+                    "INSERT OR REPLACE INTO dispatcher_meta(key, value) VALUES (?, ?)",
+                    ("schema_version", str(SCHEMA_VERSION)),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
 
     # ----- coordination metadata -----
 

@@ -71,7 +71,9 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   backup may omit only the two additive current/verified-head columns: recovery preserves that
   artifact, and the first normal store open atomically backfills the current head from the immutable
   request head while retaining all prior audit rows. Missing older audit tables, columns, or unique
-  keys still fail closed before migration.
+  keys still fail closed before migration. Both normal self-migration and explicit initialization
+  validate the complete resulting verification schema inside the migration transaction before the
+  v3 marker can be written or committed.
 - The Codex process boundary drains bounded stderr concurrently and rejects non-zero exits or
   terminal error events even when stdout contained an otherwise valid receipt. A bounded rate-limit,
   usage-limit, quota, or credit-exhaustion signal on that non-zero path remains a lease-fenced backoff
