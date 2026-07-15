@@ -222,7 +222,7 @@ test-start-full: require-vault-root
 	scripts/start_full_system.sh
 
 test-up:
-	@VAULT_ROOT="$(TEST_VAULT_ROOT)" VAULT_HOST_ROOT="$(TEST_VAULT_ROOT)" $(COMPOSE_TEST) -f docker-compose.legacy-vault.yml up -d $(COMPOSE_UP_BUILD)
+	@VAULT_ROOT="$(TEST_VAULT_ROOT)" VAULT_HOST_ROOT="$(TEST_VAULT_ROOT)" $(COMPOSE_TEST) -f docker-compose.legacy-vault.yml -f docker-compose.test-vault.yml up -d $(COMPOSE_UP_BUILD)
 
 test-down:
 	@$(COMPOSE_TEST) down --remove-orphans

@@ -981,6 +981,12 @@ else
     *":docker-compose.legacy-vault.yml:"*) ;;
     *) COMPOSE_FILE="${COMPOSE_FILE}:docker-compose.legacy-vault.yml" ;;
   esac
+  if [ "${COMPOSE_PROJECT_NAME:-}" = "pkm-test" ]; then
+    case ":${COMPOSE_FILE}:" in
+      *":docker-compose.test-vault.yml:"*) ;;
+      *) COMPOSE_FILE="${COMPOSE_FILE}:docker-compose.test-vault.yml" ;;
+    esac
+  fi
   export COMPOSE_FILE
 fi
 

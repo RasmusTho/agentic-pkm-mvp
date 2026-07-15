@@ -11,7 +11,11 @@
 # Compose errors out if `VAULT_HOST_ROOT` is unset rather than falling back to
 # `./vault`, so this overlay cannot be selected by a no-vault startup. The host
 # path is carried by `VAULT_HOST_ROOT` (issue #2141), keeping it independent of
-# the container-facing `VAULT_ROOT=/app/vault`.
+# the container-facing `VAULT_ROOT=/app/vault`. The container bindings live in
+# this overlay too, so a compose path cannot select the baked `/app/vault`
+# fixture unless it also mounts the explicitly selected host vault. The
+# test-scoped alias is harmless outside `PKM_ENVIRONMENT=test` and keeps the
+# explicit test-vault path self-contained.
 #
 # `scripts/start_full_system.sh` appends this overlay to `COMPOSE_FILE` ONLY on
 # the explicit-vault branch (NO_VAULT_MODE != 1). The `/Users` + `/Volumes`
@@ -20,11 +24,20 @@ services:
   api:
     volumes:
       - "${VAULT_HOST_ROOT:?VAULT_HOST_ROOT must be set to use the legacy /app/vault compatibility mount}:/app/vault"
+    environment:
+      VAULT_ROOT: /app/vault
+      VAULT_ROOT_TEST: /app/vault
 
   worker:
     volumes:
       - "${VAULT_HOST_ROOT:?VAULT_HOST_ROOT must be set to use the legacy /app/vault compatibility mount}:/app/vault"
+    environment:
+      VAULT_ROOT: /app/vault
+      VAULT_ROOT_TEST: /app/vault
 
   watcher:
     volumes:
       - "${VAULT_HOST_ROOT:?VAULT_HOST_ROOT must be set to use the legacy /app/vault compatibility mount}:/app/vault"
+    environment:
+      VAULT_ROOT: /app/vault
+      VAULT_ROOT_TEST: /app/vault

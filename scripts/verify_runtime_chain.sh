@@ -165,6 +165,14 @@ case ":${COMPOSE_FILE}:" in
   *":docker-compose.legacy-vault.yml:"*) ;;
   *) COMPOSE_FILE="${COMPOSE_FILE}:docker-compose.legacy-vault.yml" ;;
 esac
+case "${COMPOSE_PROJECT_NAME:-}:${COMPOSE_FILE}:" in
+  pkm-test:*|*:docker-compose.test.yml:*)
+    case ":${COMPOSE_FILE}:" in
+      *":docker-compose.test-vault.yml:"*) ;;
+      *) COMPOSE_FILE="${COMPOSE_FILE}:docker-compose.test-vault.yml" ;;
+    esac
+    ;;
+esac
 export COMPOSE_FILE
 
 _log "START verify_runtime_chain"
