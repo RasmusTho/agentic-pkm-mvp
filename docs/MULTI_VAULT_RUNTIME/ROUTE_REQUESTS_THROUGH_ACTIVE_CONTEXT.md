@@ -53,11 +53,15 @@ not background lifecycles.
   selection as unusable, journal its prior/new binding and compatibility revisions, commit the
   durable compatibility revision, wait for the watcher to acknowledge that exact revision, and only
   then atomically activate/return the new bearer while invalidating the prior selection. A failure or
-  crash before activation blocks picker and vault-bound ingress, appends a compensating monotonic
+  crash before activation keeps that picker's prior scoped selection unchanged, blocks activation/
+  return and compatibility-bridge-dependent mutation, appends a compensating monotonic
   revision to the prior compatibility binding, waits for watcher acknowledgement, and discards the
   staged bearer before service resumes. A failure after activation is recovered as committed from
-  the journal. Neither ordering window may leave a usable foreground selection and watcher on
-  different bindings.
+  the journal. Picker bridge operations serialize under the journal revision/CAS so compensation
+  cannot roll back a later picker. This alignment invariant applies only to the picker transition
+  being replaced: other clients' immutable scoped read sessions may legitimately remain on A while
+  the one compatibility watcher follows the latest legacy picker B, and are never invalidated or
+  redirected by the bridge.
 - Resolve per-binding settings, paths, caches, retrieval scope, and write provenance from the
   snapshot. Settings keys are classified by the canonical settings registry as either
   `binding_local` (resolved and consumed only inside that binding's isolated sub-operation) or
@@ -419,8 +423,9 @@ un-revalidated read/write to cross its floor; independently safe explicit-global
 - [ ] **MVR-05B:** Picker replacement and the #3163 compatibility watcher rebind are recoverable as
   one operation. Faults before/after durable revision commit, watcher acknowledgement, selection
   activation, and prior-selection invalidation either converge fully to the new binding or append
-  and acknowledge a compensating revision to the prior binding while vault-bound ingress remains
-  blocked; no request can observe foreground selection A with watcher B or the reverse.
+  and acknowledge a CAS-safe compensating revision to that picker's prior binding before activating
+  its staged bearer. Concurrent picker operations serialize, while unrelated clients' existing scoped
+  reads remain valid on their immutable bindings and may intentionally differ from the single watcher.
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_picker_and_watcher_rebind_is_failure_atomic`
 - [ ] **MVR-05B:** Request-bound production code cannot introduce new direct global vault resolution outside
   named compatibility adapters.

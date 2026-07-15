@@ -98,8 +98,10 @@ a hidden authority system and can expose material across real confidentiality bo
 - [ ] An unauthorized/unknown/stale member fails the entire production resolution without exposing
   an authorized partial set, conferring authority, or triggering fallback.
   - Verify: `tests/api/test_dimension_context_resolution.py::test_dimension_never_upgrades_authority_or_falls_back`
-- [ ] Removing a dimension preserves registrations/content; removing a registration repairs
-  dangling membership transactionally.
+- [ ] Removing a dimension preserves registrations/content. MVR-04 installs the transactional
+  dimension-membership repair hook in the shared registry service, but production registration
+  removal remains `capability_not_ready` until MVR-06B activates the full consumer floor; the hook
+  cannot be invoked through an early production bypass.
   - Verify: `tests/instance/test_vault_dimensions.py::test_dimension_and_registration_removal_are_safe`
 - [ ] Instance-authorized administration can remove a stale or unauthorized stored member (or delete
   its dimension) without resolving an authorized subset; additions and resolution still fail closed.
@@ -109,12 +111,14 @@ a hidden authority system and can expose material across real confidentiality bo
   - Verify: `tests/integration/test_multi_vault_dimensions.py::test_dimension_preserves_per_binding_authority_and_provenance`
 - [ ] A rollback through an MVR-03-capable pre-MVR-04 image (never below the principal floor)
   preserves unknown dimension metadata and ordered membership in the authoritative lineage;
-  unchanged registrations restore exactly, while a valid rollback-period registration removal
-  transactionally removes that member from every dimension with a receipt.
+  unchanged registrations restore exactly across a valid rollback-period default mutation, which
+  is executable at that runtime floor. It does not pretend the still-dormant registration-removal
+  command can run.
   - Verify: `tests/integration/test_vault_registry_rollback.py::test_mvr04_dimensions_survive_principal_capable_rollback_round_trip`
-- [ ] Roll-forward after the old image removes a dimension member never creates dangling membership,
-  silently restores the removed registration, or prunes any unrelated ordered member.
-  - Verify: `tests/integration/test_vault_registry_rollback.py::test_mvr04_rollforward_repairs_removed_dimension_member_transactionally`
+- [ ] Roll-forward after the old image changes the instance default preserves the complete unknown
+  dimension set and ordered membership while reconciling that default through the normal MVR-02
+  lineage; it neither invents a removal nor prunes unrelated members.
+  - Verify: `tests/integration/test_vault_registry_rollback.py::test_mvr04_rollforward_preserves_dimensions_across_default_mutation`
 - [ ] The topology owner contract describes the shipped non-authoritative dimension metadata,
   all-or-nothing member resolution, and preserved per-binding provenance in the same PR.
   - Verify: doc writeback at `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md :: Dimensions`

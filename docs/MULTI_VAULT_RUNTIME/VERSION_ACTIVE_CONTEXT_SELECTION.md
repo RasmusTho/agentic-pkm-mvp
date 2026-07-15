@@ -220,9 +220,11 @@ retrieval, settings, or write provenance to leak between humans or vaults.
   and the typed principal field stays in the key for future
   authenticated-principal expansion.
   - Verify: `tests/retrieval/test_active_context_cache_isolation.py::test_cache_keys_include_full_context_identity`
-- [ ] Relocating a binding or changing its authority provenance/verdict rotates the production
-  request context and invalidates affected cache entries before the next request can reuse data.
-  - Verify: `tests/integration/test_multi_vault_request_isolation.py::test_binding_revision_rotates_context_and_cache_before_next_request`
+- [ ] A changed binding revision or authority verdict makes the MVR-03 selection resolver return a
+  new immutable generation plus cache-invalidation descriptor before the next snapshot is issued,
+  without bypassing the still-sealed HTTP carrier or relocation production gates. MVR-05B/06C own
+  the later production request and relocation call-site proof.
+  - Verify: `tests/instance/test_context_selection_store.py::test_binding_revision_rotates_resolver_generation`
 
 ## Out of Scope
 
@@ -230,7 +232,7 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 
 ## How to Verify (Pre-Merge)
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/instance/test_context_selection_store.py tests/api/test_active_context_resolution.py tests/api/test_active_context_selection_api.py tests/retrieval/test_active_context_cache_isolation.py tests/integration/test_multi_vault_request_isolation.py tests/integration/test_local_operator_principal_bootstrap.py tests/migrations/test_local_operator_principal_upgrade.py`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/instance/test_context_selection_store.py tests/api/test_active_context_resolution.py tests/api/test_active_context_selection_api.py tests/retrieval/test_active_context_cache_isolation.py tests/integration/test_local_operator_principal_bootstrap.py tests/migrations/test_local_operator_principal_upgrade.py`
 - `mypy app`
 - `pytest -q -m "not pg"`
 - `ruff check app tests`

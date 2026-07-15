@@ -67,7 +67,12 @@ cross-process truth belong here.
 - Introduce a lifecycle supervisor that treats the durable set only as intent. At start/rebind it
   derives one immutable full `ActiveContextSet` per lifecycle binding, including context ID,
   generation, stable binding, server-derived instance-background principal, explicit cognitive
-  scope/sphere/situated-identity values, topology posture, and `background_intent`,
+  scope/sphere/situated-identity values, topology posture, typed `no_workspace` (instance background
+  work is not silently assigned to a human workspace), and a non-reversible domain-separated
+  background capability digest derived server-side from instance identity, durable intent ID/
+  revision, binding, and generation. This digest occupies the required context-capability identity
+  field without inventing a bearer selection and never grants authority. Selection provenance is
+  `background_intent`,
   `compatibility_handoff`, or `compatibility_default` provenance. Each lifecycle operation passes
   its action/write class/permission separately to GOV. Watcher, worker, settings, queues, health,
   and receipts propagate the bounded context projection authorized for their EBF/PDM mechanism
@@ -338,6 +343,10 @@ migration, preflight, and fail-loud gate merge together.
   exclusive relocation waits for an authorized shared effect or advances the locator revision before
   a stale effect can touch either root.
   - Verify: `tests/integration/test_multi_vault_write_effect_fence.py::test_relocation_cannot_cross_foreground_or_background_effect_windows_after_activation`
+- [ ] **MVR-06C:** Activated production relocation advances the binding revision so the next
+  production request resolves a new ActiveContextSet generation and invalidates affected cache
+  entries before data from the old root can be reused.
+  - Verify: `tests/integration/test_multi_vault_request_isolation.py::test_binding_revision_rotates_context_and_cache_before_next_request`
 - [ ] **MVR-06D:** Zero bindings idle truthfully; one binding preserves current behavior; a failed member is
   loud and cannot redirect or mark the whole set healthy.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_zero_one_many_and_partial_failure_are_truthful`
@@ -360,6 +369,11 @@ migration, preflight, and fail-loud gate merge together.
   resolved to the full background ActiveContextSet. Failure leaves the old worker/bridge authoritative
   and intent mutation sealed; it never leaves duplicate workers or a worker on the prior binding.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_scalar_worker_handoff_is_atomic_versioned_and_intent_gated`
+- [ ] **MVR-06B:** Every production watcher/worker/settings lifecycle receives a full background
+  ActiveContextSet with typed `no_workspace` and a server-derived, domain-separated non-reversible
+  background capability digest bound to instance, durable intent revision, binding, and generation;
+  it carries no bearer selection and cannot use the digest as authority.
+  - Verify: `tests/runtime/test_background_binding_handoff.py::test_background_context_has_explicit_workspace_and_capability_identity`
 - [ ] **MVR-06D:** MVR-06 validates MVR-05's legacy classification/coalescing receipt before multi-binding start:
   global topics retain one canonical row lineage and at-least-once dispatch, scoped vault-bound rows
   retain one canonical lineage, and unknown/ambiguous rows remain quarantined without dispatch or
@@ -434,13 +448,13 @@ PostgreSQL receipt belongs only to 06D.
 
 ### MVR-06B validation
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_settings_spine_bridge_handoff_is_atomic tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff tests/integration/test_multi_vault_background_lifecycle.py::test_picker_commit_precedes_hint_and_survives_event_loss tests/integration/test_multi_vault_background_lifecycle.py::test_default_mutation_rebinds_only_compatibility_lifecycle tests/integration/test_multi_vault_background_lifecycle.py::test_rebind_reuses_settings_spine_and_is_generation_clean tests/integration/test_multi_vault_background_lifecycle.py::test_lifecycle_requires_matching_channel_ownership_lease tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window tests/integration/test_multi_vault_background_lifecycle.py::test_registration_removal_activates_after_all_consumer_floors tests/integration/test_multi_vault_background_lifecycle.py::test_background_effect_fence_closes_authorization_race_window tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback tests/runtime/test_background_binding_handoff.py::test_env_only_single_vault_upgrade_preserves_compatibility_watcher tests/runtime/test_background_binding_handoff.py::test_remove_last_then_restart_preserves_explicit_empty_intent tests/runtime/test_background_binding_handoff.py::test_mvr06b_restart_uses_only_durable_authorized_singleton_or_empty_intent tests/runtime/test_background_binding_handoff.py::test_scalar_worker_handoff_is_atomic_versioned_and_intent_gated tests/api/test_background_binding_admin.py::test_mvr06b_commands_allow_only_singleton_or_empty_intent tests/api/test_background_binding_admin.py::test_stale_binding_intent_can_be_removed_without_content_authority`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_settings_spine_bridge_handoff_is_atomic tests/integration/test_multi_vault_background_lifecycle.py::test_picker_rebinds_only_compatibility_mode_after_bridge_handoff tests/integration/test_multi_vault_background_lifecycle.py::test_picker_commit_precedes_hint_and_survives_event_loss tests/integration/test_multi_vault_background_lifecycle.py::test_default_mutation_rebinds_only_compatibility_lifecycle tests/integration/test_multi_vault_background_lifecycle.py::test_rebind_reuses_settings_spine_and_is_generation_clean tests/integration/test_multi_vault_background_lifecycle.py::test_lifecycle_requires_matching_channel_ownership_lease tests/integration/test_multi_vault_background_lifecycle.py::test_registry_revision_rebinds_and_closes_event_crash_window tests/integration/test_multi_vault_background_lifecycle.py::test_registration_removal_activates_after_all_consumer_floors tests/integration/test_multi_vault_background_lifecycle.py::test_background_effect_fence_closes_authorization_race_window tests/runtime/test_background_binding_handoff.py::test_compatibility_handoff_binding_survives_restart_without_default_fallback tests/runtime/test_background_binding_handoff.py::test_env_only_single_vault_upgrade_preserves_compatibility_watcher tests/runtime/test_background_binding_handoff.py::test_remove_last_then_restart_preserves_explicit_empty_intent tests/runtime/test_background_binding_handoff.py::test_mvr06b_restart_uses_only_durable_authorized_singleton_or_empty_intent tests/runtime/test_background_binding_handoff.py::test_scalar_worker_handoff_is_atomic_versioned_and_intent_gated tests/runtime/test_background_binding_handoff.py::test_background_context_has_explicit_workspace_and_capability_identity tests/api/test_background_binding_admin.py::test_mvr06b_commands_allow_only_singleton_or_empty_intent tests/api/test_background_binding_admin.py::test_stale_binding_intent_can_be_removed_without_content_authority`
 - Verify the 06B PR diff contains its mapped vault/settings, Settings Spine, environment, and health
   owner-doc targets.
 
 ### MVR-06C validation
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_relocation_activates_only_after_all_consumer_effect_leases tests/integration/test_multi_vault_write_effect_fence.py::test_relocation_cannot_cross_foreground_or_background_effect_windows_after_activation tests/api/test_background_binding_admin.py::test_mvr06c_rejects_many_until_mvr06d_dispatch_gate tests/integration/test_multi_vault_background_lifecycle.py::test_mvr06c_dormant_supervisor_isolates_two_internal_bindings`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration/test_multi_vault_background_lifecycle.py::test_relocation_activates_only_after_all_consumer_effect_leases tests/integration/test_multi_vault_write_effect_fence.py::test_relocation_cannot_cross_foreground_or_background_effect_windows_after_activation tests/integration/test_multi_vault_request_isolation.py::test_binding_revision_rotates_context_and_cache_before_next_request tests/api/test_background_binding_admin.py::test_mvr06c_rejects_many_until_mvr06d_dispatch_gate tests/integration/test_multi_vault_background_lifecycle.py::test_mvr06c_dormant_supervisor_isolates_two_internal_bindings`
 - Verify the 06C PR diff contains its mapped `docs/ENVIRONMENTS.md` and `docs/HEALTH.md` dormant-
   supervisor writebacks.
 
