@@ -470,6 +470,28 @@ def test_embedding_force_override_carries_exact_identity_under_conflicting_profi
     assert client.identity == route.embedding_identity
 
 
+def test_invalid_embedding_force_provider_degrades_with_exact_mock_identity(
+    clean_llm_env,
+) -> None:
+    clean_llm_env.setenv("EMBED_PROFILE", "bge-m3")
+    clean_llm_env.setenv("EMBED_DIM", "768")
+    clean_llm_env.setenv("LLM_FORCE_PROVIDER", "nonexistent-provider")
+    clean_llm_env.setenv("LLM_FORCE_MODEL", "nomic-embed-text:latest")
+
+    intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    route = LLMRouter().route(intent)
+    client = get_embeddings_client(intent)
+
+    assert route.provider == "mock"
+    assert route.model == "mock-embedding"
+    assert route.reason == "invalid provider: nonexistent-provider"
+    assert route.degraded is True
+    assert route.embedding_identity is not None
+    assert route.embedding_identity.provider == route.provider
+    assert route.embedding_identity.model == route.model
+    assert client.identity == route.embedding_identity
+
+
 def test_router_uses_settings_task_policy(monkeypatch, clean_llm_env) -> None:
     clean_llm_env.delenv("LLM_PROVIDER", raising=False)
     bundle = SettingsBundle(

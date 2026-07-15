@@ -15,7 +15,8 @@ Related docs:
 
 ## Concepts
 
-- **Router**: Deterministic route selector. Produces `LLMRoute {provider, model, mode, reason, degraded}`
+- **Router**: Deterministic route selector. Produces
+  `LLMRoute {provider, model, mode, reason, degraded, embedding_identity}`
   from `LLMTaskIntent`. It is deterministic and settings-aware.
 - **Fabric**: Runtime entrypoint that binds a route to an actual client. It exposes:
   - `get_chat_client(LLMTaskIntent)` → `ChatClient` with `.chat(...)`
@@ -52,6 +53,12 @@ compiled `primary.{model_id,provider,model,profile}` target remains
 higher-precedence settings authority. This prevents a profile activation such as `bge-m3` from
 being blocked by the placeholder or combined with the shipped `nomic-embed-text` model fallback
 into a non-existent hybrid identity.
+
+For a forced embedding route, the router resolves and attaches one exact
+`embedding_identity` before returning. Implicit named, global, and default embedding profiles do
+not alter that forced identity. Provider and model are canonicalized together: an untagged Ollama
+model gains `:latest`, while an invalid forced provider degrades coherently to
+`mock/mock-embedding`. The fabric consumes the attached identity without resolving it again.
 
 Current state:
 - Chat, reasoning, eval, and embedding routes can each carry separate preferred model choices.
