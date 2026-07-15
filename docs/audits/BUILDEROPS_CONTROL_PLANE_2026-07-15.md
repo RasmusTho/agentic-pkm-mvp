@@ -185,8 +185,9 @@ Minimum deployable unit:
 - `/healthz` for process liveness and `/readyz` for database/schema/outbox readiness;
 - structured secret-safe status for queue age, dead letters, lease conflicts, API auth failures,
   GitHub rate-limit/credential state, and executor heartbeat;
-- scheduled encrypted full backup plus continuous synchronous WAL durability outside the primary
-  volume, acknowledged-LSN tracking, retention, and a disposable restore-through-watermark drill; and
+- scheduled encrypted full backup plus continuous synchronous WAL durability in a target that
+  survives Demerzel primary-host/storage failure, acknowledged-LSN tracking, retention, and a
+  disposable restore-through-watermark drill; and
 - a host-level probe independent of Product `/readyz` and Product worker heartbeat.
 
 ## 7. Invariant kernel

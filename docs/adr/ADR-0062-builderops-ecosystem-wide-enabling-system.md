@@ -92,9 +92,10 @@ transaction:
 4. an outbox intent.
 
 The API does not acknowledge that transition until its commit/recovery LSN is synchronously durable
-in an encrypted recovery target outside the primary PostgreSQL volume. Durable recovery state tracks
-the highest acknowledged LSN/receipt sequence; authority readiness fails closed when that invariant
-cannot be maintained.
+in an encrypted recovery target outside Demerzel's primary host and storage failure domains. A
+co-resident volume or storage backend is not independent recovery durability. Durable recovery state
+tracks the highest acknowledged LSN/receipt sequence; authority readiness fails closed when that
+invariant cannot be maintained.
 
 GitHub cannot participate in that transaction. A privileged executor claims the durable outbox
 intent, performs the external effect with deterministic reconciliation, reads GitHub back, and then
@@ -121,8 +122,9 @@ and lifecycle, separate from `pkm-dev`, `pkm-test`, and `pkm-prod`. It owns dist
 - versioned migration lineage and migration gate;
 - immutable release pin and deployment/rollback receipt;
 - `/healthz`, `/readyz`, structured status/metrics, and alert/probe path;
-- scheduled full backup plus continuous encrypted WAL/recovery durability outside the primary
-  volume, retention, restore tooling, and a proved restore-through-acknowledged-LSN drill; and
+- scheduled full backup plus continuous encrypted WAL/recovery durability in a target that survives
+  loss of Demerzel's primary host/storage failure domain, retention, restore tooling, and a proved
+  restore-through-acknowledged-LSN drill; and
 - API and executor credentials with rotation/revocation procedures.
 
 Product Runtime must not start, stop, proxy, health-gate, migrate, back up, mount, authenticate, or

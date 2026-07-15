@@ -31,8 +31,9 @@ Product ownership.
 - implement `/healthz`, `/readyz`, and secret-safe status/metrics for database/schema, outbox age and
   dead letters, lease conflicts, auth failures, rate limits/credential state, and executor heartbeat;
 - provide scheduled encrypted full backups plus continuous WAL durability to an independent
-  recovery target outside the primary database volume, retention, acknowledged-LSN tracking,
-  documented point-in-time restore, and an automated restore-through-watermark drill; and
+  recovery target that survives loss of Demerzel's primary host and storage failure domains,
+  retention, acknowledged-LSN tracking, documented point-in-time restore, and an automated
+  restore-through-watermark drill; and
 - prove Product Compose and Product credentials/config are not dependencies.
 
 ## Concretely
@@ -69,7 +70,8 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
   persisted in repo config, PostgreSQL, outbox payloads, receipts, artifacts, logs/metrics, or
   BuilderOps backups/restores. Durable records carry non-secret references and scope metadata only.
 - `/healthz` is process liveness; `/readyz` fails on unavailable DB, wrong schema/epoch, an
-  authority-threatening outbox condition, or inability to keep the commit/recovery LSN synchronously
+  authority-threatening outbox condition, a recovery target co-resident with Demerzel or sharing
+  its primary storage failure domain, or inability to keep the commit/recovery LSN synchronously
   durable in the independent recovery target.
 - A persistent volume or snapshot alone is not accepted as recoverability. Full backup + continuous
   WAL must restore through the highest acknowledged LSN/receipt sequence; backup/restore negative
@@ -94,9 +96,10 @@ trust/lifecycle unit and forbids Product Runtime ownership. It does not create a
   image SHA, schema version, and authority epoch without restoring an older authoritative snapshot.
   Verify: `tests/ops/test_builderops_deploy_contract.py::test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch`.
 - [ ] Authority-bearing API responses are withheld until the transaction's recovery LSN is
-  synchronously durable outside the primary volume, and readiness fails closed when that guarantee
-  or its lag bound is unavailable.
-  Verify: `tests/builderops/control_plane/test_recovery_durability.py::test_authority_ack_waits_for_independent_recovery_lsn`.
+  synchronously durable outside Demerzel's primary host/storage failure domain; readiness rejects a
+  co-resident/shared-storage target and fails closed when the durability guarantee or lag bound is
+  unavailable.
+  Verify: `tests/builderops/control_plane/test_recovery_durability.py::test_authority_ack_requires_separate_failure_domain_and_recovery_lsn`.
 - [ ] An encrypted full backup plus continuous WAL restores into a disposable database through the
   highest acknowledged LSN/receipt sequence and passes schema, count, integrity, outbox/lease, and
   readiness checks.

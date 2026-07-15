@@ -58,7 +58,8 @@ not by rewriting that merge.
    authenticated API. Only the BuilderOps data layer reaches PostgreSQL.
 3. **Atomic local transition.** Idempotency result, guarded state mutation, receipt, and outbox intent
    commit in one PostgreSQL transaction. If any part fails, none becomes visible. The API
-   acknowledges only after the commit/recovery LSN is durable outside the primary volume.
+   acknowledges only after the commit/recovery LSN is durable outside Demerzel's primary host and
+   storage failure domains; a co-resident target fails readiness.
 4. **Reconciled external effects.** An outbox timeout is `unknown`, not `failed`. Retry reads GitHub
    before repeating; terminal success requires GitHub readback bound to repo and current SHA.
 5. **Fenced leases.** Stale workers cannot mutate after expiry/reassignment; fencing survives API,
