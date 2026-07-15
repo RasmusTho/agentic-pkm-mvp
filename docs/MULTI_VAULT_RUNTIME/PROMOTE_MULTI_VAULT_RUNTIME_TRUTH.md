@@ -153,7 +153,9 @@ operators, or future agents still act on stale single-global-vault truth.
   The MVR-07 compatibility slice owns this harness and its production-path/root-safety tests. Before
   registration it must canonicalize every manifest root, prove each is a distinct descendant of the
   declared test sandbox, and reject known prod/dev/native roots, overlap, or symlink escape with zero
-  effects. It then asserts two
+  effects. Each invocation uses a unique disposable namespace and failure-safe teardown; its receipt
+  is FAIL unless fixture lifecycles, projections, dimensions/default/registrations, roots, and
+  ownership leases are removed and the exact pre-run non-fixture test baseline is restored. It then asserts two
   registered bindings, two independent sessions, one dimension read, one governed write to the
   explicit target, and per-binding background health, then emit only SHA, opaque fixture IDs,
   boolean outcomes, and receipt IDs for the #2143 comment—never paths, names, tokens, or content.

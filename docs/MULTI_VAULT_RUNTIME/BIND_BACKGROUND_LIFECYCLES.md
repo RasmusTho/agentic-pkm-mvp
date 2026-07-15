@@ -145,7 +145,8 @@ acceptance criteria prefixed with its ID:
 1. **MVR-06A — intent and service authority:** durable compatibility/explicit intent schema,
    staged admin service/read surface, explicit-empty semantics, delegated background-runtime role,
    producer migrations/fixtures/preflight, the MVR-06 minimum-runtime floor, and security/governed-
-   write owner-doc updates. All intent-changing admin commands remain capability-gated until 06B.
+   write plus deployment/release-channel owner-doc updates. All intent-changing admin commands
+   remain capability-gated until 06B.
    Depends on MVR-05D.
 2. **MVR-06B — compatibility bridge handoff:** atomic #3163 watcher bridge retirement, durable picker
    and default-driven compatibility binding, commit-before-hint, Settings Spine drain/rebind, and
@@ -196,7 +197,8 @@ migration, preflight, and fail-loud gate merge together.
 - Sync/deployment impact: replaces frozen env snapshot with explicit cross-process binding truth
 - External boundary impact: env remains bootstrap adapter only
 - New or changed contract: per-binding lifecycle supervision through ActiveContextSet and truthful state transitions
-- Owner-doc impact: each owning child updates in its PR: 06A security/governed-write; 06B
+- Owner-doc impact: each owning child updates in its PR: 06A security/governed-write plus
+  deployment/release-channel floor truth; 06B
   vault/settings and Settings Spine; 06C documents the one-binding gated/dormant supervisor;
   06D writes the activated zero/one/many runtime-control and health truth
 - Transition debt impact: reduces D13/D14; residual adapters remain for task 07
@@ -304,6 +306,11 @@ migration, preflight, and fail-loud gate merge together.
   every older API/watcher/worker before registry access; fault injection leaves either untouched
   MVR-05 state or an MVR-06-compatible lineage.
   - Verify: `tests/migrations/test_multi_vault_background_intent_upgrade.py::test_background_intent_sets_mvr06_floor_before_first_write`
+- [ ] **MVR-06A:** Deployment and release-channel owner docs record the shipped MVR-06 floor,
+  compatible rollback/roll-forward images, recovery path, and operator preflight in the same PR that
+  advances the floor.
+  - Verify: doc writeback at `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments` +
+    doc writeback at `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification`
 - [ ] **MVR-06D:** Pending vault-bound rows are revalidated before dispatch; lifecycle removal, lost authority,
   or incompatible binding/locator change quarantines them durably without dispatch/ack, and governed reissue can
   target only the same re-authorized stable binding with lineage/idempotency preserved.

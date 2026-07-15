@@ -95,16 +95,20 @@ not background lifecycles.
 - Make many-binding reads explicit and provenance-preserving; require an explicit target binding
   for writes unless the command contract already provides one unambiguously.
 - At every production filesystem, settings, projection, cache-fill, and retrieval read call site,
-  immediately before data is read or returned, compare the current binding revision/root and auth
-  epoch with the request snapshot and re-authorize the principal/scope/operation. Relocation,
+  immediately before data is read or returned, require the MVR-01 host-global ownership ledger to
+  hold an active lease for the current `(channel, vault_binding_id, canonical-root fingerprint)`,
+  compare the current binding revision/root and auth epoch with the request snapshot, and
+  re-authorize the principal/scope/operation. A pending, missing, released, or foreign-channel lease
+  fails closed even when a stale registry/selection still names the root. Relocation,
   removal, or revocation drains the affected in-flight read or returns a stale-context/
   reauthorization error without reading or serving cached data from the old root. Long-running read
   transactions use an owner-defined snapshot/drain fence; immutable request context alone is not an
   authorization lease.
 - At every governed mutation seam, acquire a cross-process shared effect lease for the stable
   binding, then—while holding it through the filesystem/store effect—re-resolve the target binding,
-  compare its current revision/root plus the current authorization epoch with the request snapshot,
-  and validate a live GOV `DecisionToken` for that principal, scope, operation, and binding.
+  require the matching active channel/binding/root ownership lease, compare its current
+  revision/root plus the current authorization epoch with the request snapshot, and validate a live
+  GOV `DecisionToken` for that principal, scope, operation, and binding.
   Registration relocation/removal and GOV revocation acquire the same binding's exclusive lease
   before changing locator/authority state and wait for shared effects to drain. The lock-order
   contract is host-global ownership fence → binding effect fence → registry/auth transaction →
@@ -147,11 +151,12 @@ acceptance criteria prefixed with its ID:
    writebacks.
 2. **MVR-05B — request ingress and reads:** production resolver, picker, API/CLI/agent/MCP context
    propagation including distinct one-request-override and retained-session carriers,
-   retrieval/cache provenance, pre-read revision/auth revalidation, stale selection, the temporary
-   #3163 picker bridge, and active-context architecture writeback. Depends on 05A and #3163.
+   server-derived per-call scope, foreground channel-ownership lease enforcement, retrieval/cache
+   provenance, pre-read revision/auth revalidation, stale selection, the temporary #3163 picker
+   bridge, and active-context architecture writeback. Depends on 05A and #3163.
 3. **MVR-05C — governed writes:** explicit target selection plus expanded DecisionToken/
    AuthorityReceipt producers, migration, fixtures, preflight, and the cross-process per-binding
-   effect fence spanning final revalidation through I/O/receipt, including exclusive
+   effect fence plus active channel-ownership lease spanning final revalidation through I/O/receipt, including exclusive
    relocation/removal/revocation producers and lock-order enforcement, with governed-write
    owner-contract writeback. Depends on 05B.
 4. **MVR-05D — outbox producers and delivery completion:** production envelope registry, binding-keyed
@@ -270,6 +275,14 @@ to cross its floor; independently safe explicit-global work may continue.
   filesystem/retrieval/cache read revalidates or drains that in-flight request and never returns data
   from the stale root or authorization snapshot.
   - Verify: `tests/integration/test_multi_vault_request_isolation.py::test_authority_or_locator_change_blocks_inflight_read_before_effect`
+- [ ] **MVR-05B:** After an explicit cross-channel transfer releases the source lease, a restarted source
+  API rejects foreground resolution/read from its stale registry and selection; only the destination
+  channel with the active binding/root-fingerprint lease may read.
+  - Verify: `tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_read_after_channel_lease_transfer`
+- [ ] **MVR-05C:** The same transfer/restart scenario rejects governed writes from the stale source
+  before token use or filesystem effect, while the destination can write only after current GOV
+  authorization under its active ownership lease.
+  - Verify: `tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_write_after_channel_lease_transfer`
 - [ ] **MVR-05C:** The production capture path issues, persists, validates, and receipts the expanded token bound
   to principal/instance/scope/binding revision/auth epoch; legacy-shaped tokens and stale epochs fail
   before mutation, and all token producers/fixtures satisfy the same schema.
@@ -295,6 +308,14 @@ to cross its floor; independently safe explicit-global work may continue.
   production request without mutating the retained session; an invalid explicit override fails closed
   rather than using the valid session selection.
   - Verify: `tests/api/test_active_context_resolution.py::test_request_override_header_outranks_session_without_mutating_it`
+- [ ] **MVR-05B:** One retained selection bearer can drive an authorized production read and, later,
+  an independently authorized governed-write request because operational scope is server-derived per
+  call rather than stored on the selection; a denied operation stays denied without widening the bearer.
+  - Verify: `tests/integration/test_multi_vault_picker_context.py::test_session_selection_reuses_bindings_with_per_request_server_scope`
+- [ ] **MVR-05B:** The production request dependency resolves and propagates exactly one immutable
+  ActiveContextSet per request, including per-call scope and active ownership lease evidence, without
+  consulting mutable global selection again.
+  - Verify: `tests/api/test_active_context_resolution.py::test_request_uses_one_context_generation_end_to_end`
 - [ ] **MVR-05B:** The shipped Companion picker creates/replaces a scoped selection and its client sends that
   bearer ID through production read requests; choosing B changes later reads to B, and stale-ID
   recovery with zero, many, ambiguous, or default-mismatched bindings visibly asks for reselection.
@@ -351,7 +372,7 @@ to cross its floor; independently safe explicit-global work may continue.
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/integration/test_multi_vault_resolution.py tests/integration/test_multi_vault_picker_context.py tests/integration/test_multi_vault_projection_isolation.py tests/integration/test_multi_vault_outbox_producers.py tests/migrations/test_multi_vault_projection_backfill.py tests/migrations/test_multi_vault_outbox_upgrade.py tests/ops/test_mvr05_mixed_version_fence.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/workers/test_multi_vault_partial_delivery_gate.py tests/services/test_multi_vault_outbox_idempotency.py tests/architecture/test_multi_vault_context_boundaries.py`
+- `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/integration/test_multi_vault_resolution.py tests/integration/test_multi_vault_picker_context.py tests/integration/test_multi_vault_projection_isolation.py tests/integration/test_multi_vault_outbox_producers.py tests/integration/test_multi_vault_write_effect_fence.py tests/integration/test_multi_vault_channel_transfer_foreground.py tests/migrations/test_multi_vault_projection_backfill.py tests/migrations/test_multi_vault_outbox_upgrade.py tests/ops/test_mvr05_mixed_version_fence.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_active_context_resolution.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/workers/test_multi_vault_partial_delivery_gate.py tests/services/test_multi_vault_outbox_idempotency.py tests/architecture/test_multi_vault_context_boundaries.py`
 - MVR-05A adds its migration/backfill/dedup targets to the real-Postgres `pg-contracts` job in
   `.github/workflows/integration-nightly.yaml`; those tests must error, not skip, when the provisioned
   database/constraints are unavailable. Before merge, dispatch that workflow on the exact PR head

@@ -36,6 +36,14 @@ producer and consumer has a replacement and proves reversibility to the single-v
   roots known to channel preflight, overlap between fixture roots, an unresolvable root, or any
   symlink/path escape before the first registration or write. Checking only the singular
   `TEST_VAULT_ROOT` is insufficient.
+- Run each smoke invocation in a unique disposable fixture namespace and record the pre-run test
+  registry/default/dimension/background-intent/projection plus host-ledger baseline. A failure-safe
+  teardown always drains fixture lifecycles, removes fixture projections through their production
+  cleanup contract, removes dimensions/default/registrations, releases fixture ownership leases,
+  deletes only canonicalized sandbox descendants, and proves the non-fixture baseline is restored.
+  Cleanup runs after both PASS and injected failure; a cleanup error makes the smoke receipt FAIL and
+  blocks later deployment/parent closure. No prior test-channel registration or operator state may be
+  overwritten as a shortcut.
 
 ## Concretely
 
@@ -94,6 +102,10 @@ can break startup or strand durable state. Both failures are latent outages rath
   declared test sandbox, overlaps a known prod/dev/native root, aliases the other fixture, or escapes
   through a symlink, and performs zero registrations/writes on rejection.
   - Verify: `tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_rejects_non_test_manifest_roots_before_registration`
+- [ ] Successful and failure-injected smoke runs drain and remove every fixture lifecycle,
+  projection, dimension/default/registration, sandbox root, and host-global ownership lease, then
+  prove the exact pre-run non-fixture test-channel baseline; incomplete teardown returns FAIL.
+  - Verify: `tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_restores_prior_test_state_on_success_and_failure`
 - [ ] Existing no-vault and one-vault journeys preserve startup, picker, request, restart, watcher
   idle/bind, CLI/agent/MCP, retrieval, governed-write, and receipt behavior.
   - Verify: `tests/integration/test_single_vault_compatibility.py::test_existing_single_vault_journey_is_preserved`
@@ -115,6 +127,7 @@ can break startup or strand durable state. Both failures are latent outages rath
 
 - `pytest -q tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_harness_is_production_path_and_redacted`
 - `pytest -q tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_rejects_non_test_manifest_roots_before_registration`
+- `pytest -q tests/ops/test_multi_vault_test_channel_smoke.py::test_smoke_restores_prior_test_state_on_success_and_failure`
 - `pytest -q tests/architecture/test_multi_vault_context_boundaries.py tests/integration/test_single_vault_compatibility.py tests/instance/test_vault_registry_migration.py tests/runtime/test_multi_vault_channel_bootstrap.py`
 - `mypy app`
 - `pytest -q -m "not pg"`

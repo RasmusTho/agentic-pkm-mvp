@@ -29,17 +29,20 @@ generation unknown. A process-global mutable manager cannot safely represent con
   capability, not a claim of multi-user identity: every operation also passes the existing #2223
   Companion authentication gate. The server resolves `principal_context` from an authenticated
   human principal or a server-owned delegated operator-role principal supplied by the auth/GOV
-  boundary, plus a server-owned operational scope for the endpoint/command. The current local-only
+  boundary. Each later request derives its operational scope independently from the server-owned
+  endpoint/command contract; a selection never grants or stores operation authority. The current local-only
   bootstrap may use a private `local_operator_role_id` owned by that boundary; it denotes an
   instance-scoped delegated role, not the human's global identity. `appInstallId` is carried
   separately as instance identity and can never derive, equal, or substitute for a principal. API
   keys are credentials rather than principals; paths, correlation IDs, and client-supplied
   principal/scope strings never become identity or authority. A governed operation with no resolved
-  principal/delegated role fails closed. The record is bound to that principal, instance, and allowed
-  server-derived scope; possession of a different selection ID is required to access a different
-  session selection. The production
-  resolver snapshots one context per request without mutating process-global state and GOV
-  re-authorizes every binding on every resolution.
+  principal/delegated role fails closed. The selection record is bound to that principal, instance,
+  and selected binding set, not to an endpoint scope. Possession of a different selection ID is
+  required to access a different session selection. At later request resolution the server derives
+  the operation scope for that call, GOV authorizes the principal/bindings/operation independently,
+  and the resulting immutable context snapshot carries that per-call scope. The same selection may
+  therefore support an authorized read and governed write without either an over-broad stored scope
+  or a scope mismatch; an unauthorized operation still fails closed.
 - Own the missing current-runtime producer for that delegated role. On an existing single-user
   installation, a one-shot auth/GOV bootstrap maps the one configured #2223 credential fingerprint
   (never the raw key) to a freshly generated opaque `local_operator_role_id` in private mode-`0600`
@@ -66,8 +69,9 @@ generation unknown. A process-global mutable manager cannot safely represent con
   ambiguous auth state fails closed without overwriting either lineage. The floor may be lowered
   only by a later explicitly verified reversible migration, never by scalar rollback.
 - Add production Companion endpoints to create, replace, inspect, and clear a TTL-bound selection.
-  Creation returns the server-minted ID; later mutation/read requires that bearer ID plus the
-  #2223 gate and the same server-resolved principal/instance/allowed scope. The existing
+  Creation returns the server-minted ID; later selection-record mutation/read requires that bearer
+  ID plus the #2223 gate, the same server-resolved principal/instance, and the selection-management
+  command's independently derived scope. The existing
   `/api/companion/vault/select` remains only a
   named legacy-global adapter until task 05 migrates its production client; it cannot be the new
   session-selection command or mutate a scoped selection implicitly.
@@ -126,7 +130,8 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 - Sync/deployment impact: concurrent requests no longer require process-level rebinding
 - External boundary impact: adapters translate legacy vault inputs only at ingress
 - New or changed contract: `ACTIVE_CONTEXT_SET.md` moves from v0 target stub to versioned runtime seam
-- Owner-doc impact: will-update-in-PR at `docs/contracts/ACTIVE_CONTEXT_SET.md` and `docs/SECURITY.md`
+- Owner-doc impact: will-update-in-PR at `docs/contracts/ACTIVE_CONTEXT_SET.md`, `docs/SECURITY.md`,
+  `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, and `docs/RELEASE_CHANNELS/README.md`
 - Transition debt impact: reduces WSP global-context deviation; legacy adapters remain bounded for task 07
 - Fitness rule impact: adds request snapshot/generation/no-cross-talk fitness tests
 
@@ -138,9 +143,10 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 
 ## Acceptance Criteria
 
-- [ ] The production request dependency resolves one immutable, versioned ActiveContextSet and
-  propagates it through downstream context without consulting mutable global selection again.
-  - Verify: `tests/api/test_active_context_resolution.py::test_request_uses_one_context_generation_end_to_end`
+- [ ] The selection store/resolver returns one immutable, versioned ActiveContextSet snapshot from
+  explicit selection inputs without consulting mutable global selection; production HTTP carrier
+  propagation remains sealed until MVR-05B.
+  - Verify: `tests/instance/test_context_selection_store.py::test_selection_resolution_is_immutable_and_global_free`
 - [ ] Two concurrent sessions select different vaults without mutating each other or the instance
   default.
   - Verify: `tests/api/test_active_context_resolution.py::test_concurrent_sessions_are_isolated`
@@ -155,8 +161,10 @@ retrieval, settings, or write provenance to leak between humans or vaults.
   - Verify: `tests/api/test_active_context_resolution.py::test_each_binding_is_authorized_independently`
 - [ ] Session selection uses an expiring high-entropy server-minted bearer ID in addition to #2223
   authentication, binds to the server-resolved human/delegated-role principal, separate instance
-  identity, and operational scope, and rejects arbitrary client correlation/principal/scope inputs
-  or a different ID. `appInstallId` is never principal identity.
+  identity, and selected bindings—but stores no operational authority. The resolver derives scope
+  per call, permits the same selection for separately authorized read/write operations, and rejects
+  arbitrary client correlation/principal/scope inputs, unauthorized operations, or a different ID.
+  `appInstallId` is never principal identity.
   - Verify: `tests/api/test_active_context_resolution.py::test_selection_id_is_single_user_bearer_with_server_derived_context`
 - [ ] Principal derivation uses only the auth/GOV-owned human or delegated-role record; two
   installations cannot be conflated with two humans, and multiple human/agent roles on one instance
@@ -170,6 +178,11 @@ retrieval, settings, or write provenance to leak between humans or vaults.
   durable role write; credential-only rollback is blocked, while compatible roll-forward preserves
   role identity and reconciles only an unambiguous credential rotation from its final old-image export.
   - Verify: `tests/migrations/test_local_operator_principal_upgrade.py::test_principal_floor_blocks_credential_only_rollback_and_reconciles_safe_rollforward`
+- [ ] **MVR-03:** Deployment and release-channel owner docs record the shipped
+  `minimum_runtime_principal` floor, compatible rollback/roll-forward images, and operator preflight
+  in the same PR that advances the floor.
+  - Verify: doc writeback at `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Deployment and Environments` +
+    doc writeback at `docs/RELEASE_CHANNELS/README.md :: Release Channels Specification`
 - [ ] Existing auth-disabled/no-key loopback and server-configured trusted Companion proxy installs
   bootstrap the same private delegated role and keep production selection/governed writes working;
   forwarded-header spoofing and every other non-loopback peer fail until governed credential
@@ -201,7 +214,7 @@ retrieval, settings, or write provenance to leak between humans or vaults.
 
 ## How to Verify (Pre-Merge)
 
-- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/api/test_active_context_resolution.py tests/api/test_active_context_selection_api.py tests/retrieval/test_active_context_cache_isolation.py tests/integration/test_multi_vault_request_isolation.py tests/integration/test_local_operator_principal_bootstrap.py tests/migrations/test_local_operator_principal_upgrade.py`
+- `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/instance/test_context_selection_store.py tests/api/test_active_context_resolution.py tests/api/test_active_context_selection_api.py tests/retrieval/test_active_context_cache_isolation.py tests/integration/test_multi_vault_request_isolation.py tests/integration/test_local_operator_principal_bootstrap.py tests/migrations/test_local_operator_principal_upgrade.py`
 - `mypy app`
 - `pytest -q -m "not pg"`
 - `ruff check app tests`

@@ -138,9 +138,11 @@ snapshot; later work sees the new generation. Caches, retrieval results, and set
 keyed by `context_id` plus generation and every scope-affecting input (server-derived principal,
 operational scope, non-reversible selection-capability digest, dimension/filter, and binding set); receipts and writes
 record that identity and their target binding. In the current single-user runtime the opaque
-selection ID is an expiring bearer capability used in addition to #2223 authentication, while the
-server resolves a human or delegated operator-role principal from the auth/GOV boundary and owns
-operational scope; `appInstallId` remains separate instance identity, API keys remain credentials,
+  selection ID is an expiring bearer capability used in addition to #2223 authentication, while the
+  server resolves a human or delegated operator-role principal from the auth/GOV boundary and owns
+  operational scope per request. The selection record binds principal/instance/bindings but stores
+  no operation authority; the same selection can support separately authorized read and write calls
+  without widening either. `appInstallId` remains separate instance identity, API keys remain credentials,
 and client identity/scope strings are never trusted. The local-only bootstrap role is explicitly an
 instance-scoped delegated role, not a claim of the human's global identity. MVR-03 owns its missing
 producer: existing one-credential installs atomically migrate a credential fingerprint to a private,
@@ -216,6 +218,9 @@ to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup.
 - A selected vault is a content root with stable identity; mount paths, instances, devices,
   dimensions, defaults, and sessions are not vaults.
 - Selection cannot upgrade authority. Every binding is independently authorized by GOV.
+- Foreground request resolution, reads, and writes also require the MVR-01 host-global ownership
+  ledger to hold the active lease for the exact channel, binding, and canonical-root fingerprint;
+  a stale source registry/selection cannot access a root after cross-channel transfer and restart.
 - No request, session, worker, restart, or migration silently falls back to another vault,
   `last_active`, CWD, or `./vault` after an explicit selection fails.
 - One request uses one immutable context generation. A session-only selection change lets in-flight
