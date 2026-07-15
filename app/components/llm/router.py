@@ -450,12 +450,22 @@ class LLMRouter:
             model = forced_model or (
                 _default_embed_model() if intent.task_kind == "embed" else _default_chat_model()
             )
+            embedding_identity = None
+            if intent.task_kind == "embed":
+                embedding_identity = resolve_embedding_identity(
+                    override_model=model,
+                    override_provider=provider,
+                    use_implicit_profiles=False,
+                )
+                provider = embedding_identity.provider
+                model = embedding_identity.model
             return LLMRoute(
                 provider=provider,
                 model=model,
                 mode=_default_mode(intent.task_kind),
                 reason=reason,
                 degraded=degraded,
+                embedding_identity=embedding_identity,
             )
 
         candidates = self._route_candidates(intent)

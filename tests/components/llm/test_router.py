@@ -443,8 +443,31 @@ def test_router_force_override_beats_determinism(clean_llm_env) -> None:
     embed = router.route(LLMTaskIntent(task_kind="embed", determinism_required=True))
 
     assert embed.provider == "ollama"
-    assert embed.model == "forced-embed"
+    assert embed.model == "forced-embed:latest"
     assert embed.reason == "forced"
+    assert embed.embedding_identity is not None
+    assert embed.embedding_identity.model == embed.model
+
+
+def test_embedding_force_override_carries_exact_identity_under_conflicting_profile(
+    clean_llm_env,
+) -> None:
+    clean_llm_env.setenv("EMBED_PROFILE", "bge-m3")
+    clean_llm_env.setenv("EMBED_DIM", "768")
+    clean_llm_env.setenv("LLM_FORCE_PROVIDER", "ollama")
+    clean_llm_env.setenv("LLM_FORCE_MODEL", "nomic-embed-text:latest")
+
+    intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    route = LLMRouter().route(intent)
+    client = get_embeddings_client(intent)
+
+    assert route.provider == "ollama"
+    assert route.model == "nomic-embed-text:latest"
+    assert route.embedding_identity is not None
+    assert route.embedding_identity.provider == route.provider
+    assert route.embedding_identity.model == route.model
+    assert route.embedding_identity.dim == 768
+    assert client.identity == route.embedding_identity
 
 
 def test_router_uses_settings_task_policy(monkeypatch, clean_llm_env) -> None:
