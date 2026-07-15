@@ -187,6 +187,9 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
 - [ ] Zero bindings idle truthfully; one binding preserves current behavior; a failed member is
   loud and cannot redirect or mark the whole set healthy.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_zero_one_many_and_partial_failure_are_truthful`
+- [ ] The parent lifecycle-and-dimension acceptance target composes the MVR-04 dimension authority
+  contract with isolated zero/one/many watcher and worker behavior before MVR-06 merges.
+  - Verify: `tests/integration/test_multi_vault_lifecycle_and_dimension.py::test_parent_dimension_background_acceptance`
 - [ ] Cross-process worker startup consumes explicit versioned binding state, not an untracked
   process-global/env snapshot, and resolves it into the full background ActiveContextSet before
   work starts.
@@ -215,7 +218,7 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/integration/test_multi_vault_background_lifecycle.py tests/runtime/test_background_binding_handoff.py tests/api/test_background_binding_admin.py tests/migrations/test_multi_vault_outbox_upgrade.py tests/architecture/test_multi_vault_context_boundaries.py`
+- `pytest -q tests/integration/test_multi_vault_background_lifecycle.py tests/integration/test_multi_vault_lifecycle_and_dimension.py tests/runtime/test_background_binding_handoff.py tests/api/test_background_binding_admin.py tests/migrations/test_multi_vault_outbox_upgrade.py tests/architecture/test_multi_vault_context_boundaries.py`
 - `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q tests/integration -k "watcher or settings or multi_vault"`
 - `ruff check app tests`
 

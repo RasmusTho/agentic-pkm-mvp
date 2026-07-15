@@ -134,7 +134,7 @@ call site can leak retrieval context or write to the wrong human artifact surfac
   the interim scalar worker dispatches only a provable registry/authorization/root-matching
   singleton; it leaves every ambiguous/mismatched row pending/unacknowledged with blocked readiness,
   while global work remains independently processable until MVR-06.
-  - Verify: `tests/workers/test_multi_vault_partial_delivery_gate.py::test_scalar_worker_never_dispatches_mvr05_vault_bound_rows`
+  - Verify: `tests/workers/test_multi_vault_partial_delivery_gate.py::test_scalar_worker_dispatches_only_provable_singleton_rows`
 - [ ] Vault-bound outbox idempotency keys include the stable binding: duplicate logical identities
   in two bindings persist independently, while same-binding retries deduplicate.
   - Verify: `tests/services/test_multi_vault_outbox_idempotency.py::test_duplicate_identity_events_are_deduplicated_per_binding`
@@ -143,11 +143,13 @@ call site can leak retrieval context or write to the wrong human artifact surfac
   - Verify: `tests/api/test_multi_vault_request_fail_closed.py::test_invalid_selection_never_falls_back`
 - [ ] The shipped Companion picker creates/replaces a scoped selection and its client sends that
   bearer ID through production read and governed-write requests; choosing B changes later requests
-  to B, and stale-ID recovery visibly asks for reselection.
+  to B, and stale-ID recovery with zero, many, ambiguous, or default-mismatched bindings visibly
+  asks for reselection.
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_existing_picker_drives_scoped_request_context`
 - [ ] After API restart, a stale bearer never authorizes or falls back for its failed request; the
-  client may transparently mint and retry only after a fresh authenticated resolution proves one
-  authorized binding equal to the explicit default, otherwise reselection remains visible.
+  client never retries that failed request. Before a later, newly initiated request it may
+  transparently mint a replacement only after fresh authenticated resolution proves exactly one
+  authorized binding equal to the explicit default; otherwise reselection remains visible.
   - Verify: `tests/integration/test_multi_vault_picker_context.py::test_stale_selection_restart_recovers_only_unambiguous_singleton_default`
 - [ ] Before MVR-06 takes ownership, only the legacy choose/open picker action also drives #3163's
   single-watcher rebind; generic scoped session/request selection does not. The bridge is named and
@@ -156,6 +158,13 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 - [ ] Request-bound production code cannot introduce new direct global vault resolution outside
   named compatibility adapters.
   - Verify: `tests/architecture/test_multi_vault_context_boundaries.py::test_request_consumers_use_context_seam`
+- [ ] The parent request acceptance target composes two-session isolation, resolution precedence,
+  fail-closed stale selection, projection separation, retrieval provenance, and governed writes on
+  the production request seam.
+  - Verify: `tests/integration/test_multi_vault_request_isolation.py::test_parent_request_context_acceptance`
+- [ ] Production resolution applies explicit selection, instance default, and no-vault precedence
+  without consulting last-active, CWD, or another binding after an invalid explicit choice.
+  - Verify: `tests/integration/test_multi_vault_resolution.py::test_resolution_precedence_and_fail_closed_behavior`
 
 ## Out of Scope
 
@@ -164,7 +173,7 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/integration/test_multi_vault_picker_context.py tests/integration/test_multi_vault_projection_isolation.py tests/migrations/test_multi_vault_projection_backfill.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/workers/test_multi_vault_partial_delivery_gate.py tests/services/test_multi_vault_outbox_idempotency.py tests/architecture/test_multi_vault_context_boundaries.py`
+- `pytest -q tests/integration/test_multi_vault_request_isolation.py tests/integration/test_multi_vault_resolution.py tests/integration/test_multi_vault_picker_context.py tests/integration/test_multi_vault_projection_isolation.py tests/migrations/test_multi_vault_projection_backfill.py tests/retrieval/test_multi_vault_retrieval.py tests/api/test_multi_vault_governed_writes.py tests/api/test_multi_vault_request_fail_closed.py tests/workers/test_multi_vault_partial_delivery_gate.py tests/services/test_multi_vault_outbox_idempotency.py tests/architecture/test_multi_vault_context_boundaries.py`
 - `ruff check app tests`
 
 ## Restart / Durability Posture

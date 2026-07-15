@@ -186,6 +186,9 @@ single-vault package or can silently lose identity during migration.
   as the next registry revision on roll-forward; divergent mutation, ambiguous identity, or invalid
   lineage fails before recreate without overwriting either side.
   - Verify: `tests/integration/test_vault_registry_rollback.py::test_rollback_mutations_round_trip_on_roll_forward`
+- [ ] The parent registry acceptance target composes the delivered registry, migration, durability,
+  concurrency, recovery, and rollback contracts and passes before MVR-01 merges.
+  - Verify: `tests/instance/test_vault_registry_migration.py::test_parent_registry_acceptance`
 
 ## Out of Scope
 

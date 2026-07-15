@@ -91,6 +91,9 @@ a hidden authority system and can expose material across real confidentiality bo
 - [ ] Removing a dimension preserves registrations/content; removing a registration repairs
   dangling membership transactionally.
   - Verify: `tests/instance/test_vault_dimensions.py::test_dimension_and_registration_removal_are_safe`
+- [ ] The parent dimension contract proves that stored membership preserves each binding's
+  independent authority and provenance and never upgrades access through grouping.
+  - Verify: `tests/integration/test_multi_vault_dimensions.py::test_dimension_preserves_per_binding_authority_and_provenance`
 
 ## Out of Scope
 
@@ -98,7 +101,7 @@ a hidden authority system and can expose material across real confidentiality bo
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/instance/test_vault_dimensions.py tests/api/test_vault_dimension_admin.py tests/api/test_dimension_context_resolution.py`
+- `pytest -q tests/instance/test_vault_dimensions.py tests/api/test_vault_dimension_admin.py tests/api/test_dimension_context_resolution.py tests/integration/test_multi_vault_dimensions.py`
 - `ruff check app tests`
 
 ## Restart / Durability Posture
