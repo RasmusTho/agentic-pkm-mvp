@@ -41,6 +41,11 @@ cross-process truth belong here.
   binding-plus-generation model. For migrated one-vault installs with no explicit set, the instance
   default/legacy bootstrap yields exactly one compatibility context; no request/session state
   participates.
+- Subscribe the supervisor to MVR-02's versioned default-mutation event. While intent mode is
+  `compatibility_default`, replacing or clearing the default drains the current generation and
+  re-resolves the replacement binding or truthful no-vault state before later work is accepted.
+  The same event cannot alter an `explicit` intent set. A default mutation may not leave a running
+  compatibility lifecycle silently bound to the prior vault or rely on process restart.
 - Define start/rebind/drain/stop behavior for zero/one/many bindings, including clean in-flight
   completion and loud partial failure.
 - Propagate the complete background `ActiveContextSet` identity, including binding and generation,
@@ -125,6 +130,9 @@ Mixed bindings would silently index or mutate the wrong vault while health remai
 - [ ] Removing the final explicit member persists explicit-empty intent; restart and list remain
   empty/idle and never re-enrol the instance default.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_remove_last_then_restart_preserves_explicit_empty_intent`
+- [ ] Replacing or clearing the instance default through MVR-02's production API/CLI drains and
+  re-resolves a compatibility lifecycle before later work, but does not rebind explicit intent.
+  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_default_mutation_rebinds_only_compatibility_lifecycle`
 - [ ] Rebind drains in-flight work on the old generation and routes later work to the new one using
   #3163's production event/reload path.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_rebind_reuses_settings_spine_and_is_generation_clean`

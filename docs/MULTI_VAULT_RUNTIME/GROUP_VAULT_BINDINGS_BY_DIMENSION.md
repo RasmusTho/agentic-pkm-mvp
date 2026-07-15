@@ -46,7 +46,7 @@ a hidden authority system and can expose material across real confidentiality bo
 ## Source Anchors
 
 - `docs/MULTI_VAULT_RUNTIME/README.md :: Dimensions`
-- `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md :: boundary rules`
+- `docs/CONCEPTS/VAULT_TOPOLOGY_CONTRACT.md :: Topology rules`
 - `docs/SCOPE_SPHERE_SITUATED_IDENTITY/README.md :: separation`
 
 ## SBS Impact

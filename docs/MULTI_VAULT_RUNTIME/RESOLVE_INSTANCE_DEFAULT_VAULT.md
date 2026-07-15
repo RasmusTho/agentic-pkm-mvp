@@ -31,6 +31,10 @@ fail-closed precedence resolver.
   They validate registration and authority, use MVR-01's locked transaction, emit redacted
   receipts, and never mutate last-active. Tests drive these production commands rather than seeding
   the store or invoking an internal setter directly.
+- Publish the versioned default-mutation event consumed by MVR-06. While background intent remains
+  `compatibility_default`, set/clear must drain the current compatibility lifecycle and make the
+  supervisor re-resolve the new default or truthful no-vault result before accepting later work.
+  Explicit background intent is unaffected.
 - Preserve no-vault startup and headless bootstrap behavior through explicit adapters.
 
 ## Concretely
@@ -88,6 +92,9 @@ turns an invalid explicit selection into a dangerous silent read/write against t
 - [ ] Authenticated production API and CLI get/set/clear commands are the tested producers, reject
   unknown/unauthorized bindings, and converge on the same locked registry state and receipt.
   - Verify: `tests/api/test_default_vault_admin.py::test_production_default_commands_share_one_service`
+- [ ] Default set/clear publishes exactly one versioned mutation event carrying the new registry
+  revision and no raw binding payload; MVR-06 consumes this contract for compatibility rebind.
+  - Verify: `tests/api/test_default_vault_admin.py::test_default_mutation_publishes_versioned_rebind_event`
 - [ ] A picker-only one-vault legacy store with no explicit default restarts on the same binding
   through the one-time provenance-tagged migration; later selections do not mutate that default.
   - Verify: `tests/instance/test_default_vault_resolution.py::test_legacy_last_active_materializes_default_once`
