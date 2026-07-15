@@ -91,6 +91,12 @@ This slice promotes the existing seed without changing content-vault authority.
   that denies picker select/initialize mutations, and mounts only the chosen content root at the
   canonical legacy path. Startup preflight proves the direct port is absent, the gateway policy is
   active, and no broader host vault roots are mounted. A failed guard blocks rollback startup.
+- Native-host scalar rollback is an equally constrained supported path, never an exemption from that
+  fence: a root-owned launcher accepts only the validated binding's canonical root, applies a
+  deny-by-default filesystem sandbox/allow-list before exec, removes picker select/initialize
+  routes behind the same authenticated mutation filter, and rejects a missing sandbox, broad root,
+  or bypass listener. If the host cannot provide that launcher/sandbox posture, native scalar
+  rollback is unsupported and preflight fails rather than starting the old image.
 - Treat later `minimum_runtime_schema` as a hard rollback floor. Once MVR-05 records that binding-
   keyed database producers may exist, scalar rollback is forbidden even when the registry currently
   names one binding: the old API/worker cannot safely query, dispatch, or acknowledge that shared
@@ -260,6 +266,10 @@ never encounter and truncate authoritative new-schema state before fork/merge pr
   filtering gateway, publishes no bypass port, and mounts no content root except the validated
   target; production picker select/initialize calls for another path are rejected.
   - Verify: `tests/ops/test_scalar_rollback_guard.py::test_rollback_gateway_and_mounts_enforce_selected_binding`
+- [ ] **MVR-01C:** Native-host scalar rollback either starts only through the root-owned selected-binding
+  launcher with deny-by-default filesystem and mutation/listener guards, or fails preflight when
+  that sandbox posture is unavailable; it cannot access or select another registered host root.
+  - Verify: `tests/ops/test_scalar_rollback_guard.py::test_native_scalar_rollback_launcher_enforces_selected_binding_or_fails_closed`
 - [ ] **MVR-01C:** A recorded MVR-05-or-later minimum-runtime floor blocks scalar API/worker startup before any
   database connection or queue acknowledgement, preserving the full lineage for a compatible
   rollback/roll-forward.

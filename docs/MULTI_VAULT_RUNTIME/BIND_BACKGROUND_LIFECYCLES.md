@@ -149,9 +149,9 @@ acceptance criteria prefixed with its ID:
    Depends on MVR-05D.
 2. **MVR-06B — compatibility bridge handoff:** atomic #3163 watcher bridge retirement, durable picker
    and default-driven compatibility binding, commit-before-hint, Settings Spine drain/rebind, and
-   activation of governed add/remove commands only after the supervisor can honor explicit/
-   explicit-empty intent. It updates the vault/settings and Settings Spine owners. Depends on 06A
-   and #3163.
+   activation only of governed singleton/explicit-empty transitions after the supervisor can honor
+   them. A second enrollment and every many-binding transition remain capability-gated until 06C.
+   It updates the vault/settings and Settings Spine owners. Depends on 06A and #3163.
 3. **MVR-06C — isolated lifecycle supervision:** zero/one/many per-binding watcher/worker/settings
    lifecycles, ownership-lease checks, revision/auth-epoch reconciliation, truthful health, and
    cross-process ActiveContextSet handoff, with environment runtime-control writeback. Depends on 06B.
@@ -164,7 +164,8 @@ Four distinct merged receipts are required on #2143; no child recreates #3163 or
 Partial-delivery gates are explicit: after 06A, durable intent/auth schema exists but the legacy
 single-watcher bridge remains authoritative and every add/remove or other intent-changing command
 returns `capability_not_ready`; list/inspect is read-only. 06B atomically replaces the bridge with the revision-reconciling single-binding
-compatibility supervisor; 06C lifts the capability gate for explicit zero/one/many lifecycles; 06D
+compatibility supervisor and permits only empty/singleton intent; a second binding is rejected.
+06C lifts the capability gate for explicit zero/one/many lifecycles; 06D
 enables multi-binding queued dispatch only after the MVR-05 classification receipt and current
 binding/authority checks pass. A later stage never becomes observable before its producer,
 migration, preflight, and fail-loud gate merge together.
@@ -243,19 +244,22 @@ migration, preflight, and fail-loud gate merge together.
   least-privilege background runtime role delegated from the local operator role before lifecycle
   startup; missing, stale, ambiguous, or over-broad delegation fails preflight and cannot dispatch.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_background_service_role_is_bootstrapped_delegated_and_least_privilege`
-- [ ] **MVR-06A:** Request/session selection does not alter durable background intent; after restart the
-  supervisor reconstructs exactly the explicitly enrolled, deduplicated, re-authorized set.
-  - Verify: `tests/runtime/test_background_binding_handoff.py::test_restart_uses_only_durable_authorized_binding_set`
+- [ ] **MVR-06A:** Request/session selection cannot mutate staged durable background intent; list/inspect
+  remains read-only until the 06B supervisor handoff.
+  - Verify: `tests/api/test_background_binding_admin.py::test_mvr06a_selection_cannot_mutate_staged_intent`
 - [ ] **MVR-06B:** Governed production API and CLI add/remove/list operations are the tested producers of
-  background intent, reject unknown/unauthorized bindings, atomically commit a durable revision,
-  and publish an idempotent wake-up event for that revision.
-  - Verify: `tests/api/test_background_binding_admin.py::test_production_enrollment_commands_drive_lifecycle_intent`
+  singleton or explicit-empty background intent, reject unknown/unauthorized or second bindings,
+  atomically commit a durable revision, and publish an idempotent wake-up event for that revision.
+  - Verify: `tests/api/test_background_binding_admin.py::test_mvr06b_commands_allow_only_singleton_or_empty_intent`
 - [ ] **MVR-06B:** Instance-authorized removal clears stale stored intent idempotently even after its registry
   entry disappears or content authority is lost; add still requires live membership and authority.
   - Verify: `tests/api/test_background_binding_admin.py::test_stale_binding_intent_can_be_removed_without_content_authority`
 - [ ] **MVR-06B:** Removing the final explicit member persists explicit-empty intent; restart and list remain
   empty/idle and never re-enrol the instance default.
   - Verify: `tests/runtime/test_background_binding_handoff.py::test_remove_last_then_restart_preserves_explicit_empty_intent`
+- [ ] **MVR-06B:** After the handoff, restart reconstructs only the durable, re-authorized
+  compatibility/singleton/explicit-empty state; request/session selection cannot alter it.
+  - Verify: `tests/runtime/test_background_binding_handoff.py::test_mvr06b_restart_uses_only_durable_authorized_singleton_or_empty_intent`
 - [ ] **MVR-06A:** Before the 06B supervisor handoff, production list/inspect may read staged intent
   state but every add/remove or other intent-changing API/CLI command fails capability-not-ready and
   cannot diverge durable intent from the still-authoritative legacy watcher.
@@ -277,6 +281,10 @@ migration, preflight, and fail-loud gate merge together.
 - [ ] **MVR-06C:** Zero bindings idle truthfully; one binding preserves current behavior; a failed member is
   loud and cannot redirect or mark the whole set healthy.
   - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_zero_one_many_and_partial_failure_are_truthful`
+- [ ] **MVR-06C:** Governed production enrollment may first persist a two-or-more binding explicit set only
+  after the multi-binding supervisor exists; restart reconstructs exactly that deduplicated,
+  re-authorized set.
+  - Verify: `tests/api/test_background_binding_admin.py::test_mvr06c_enrollment_enables_many_only_with_supervisor`
 - [ ] **MVR-06D:** The parent lifecycle-and-dimension acceptance target composes the MVR-04 dimension authority
   contract with isolated zero/one/many watcher and worker behavior before MVR-06 merges.
   - Verify: `tests/integration/test_multi_vault_lifecycle_and_dimension.py::test_parent_dimension_background_acceptance`

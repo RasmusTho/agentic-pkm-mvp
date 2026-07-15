@@ -32,9 +32,10 @@ no new runtime behavior.
   MVR-01A–01C, MVR-02–04, MVR-05A–05D, MVR-06A–06D, and MVR-07 receipts plus the MVR-08 PR/head candidate, but explicitly delegates MVR-08's eventual
   merge SHA and the live open/closed state to GitHub #2143; it never predicts its own merge.
 - After MVR-08 merges, run the merged-head closure gate, append MVR-08's exact merge SHA and every
-  final AC/Verify/owner-doc receipt to live #2143, then close it only when no gap remains. No
-  post-close repo write is required: README already says shipped, and the parent reference says live
-  GitHub is authoritative for closure state, avoiding an impossible self-referential child.
+  final AC/Verify/owner-doc receipt to live #2143, then close it only when no gap remains. Immediately
+  after close, create and deliver one docs-only post-close receipt PR which updates the checked-in
+  parent reference/README with the live close state and MVR-08 merge SHA. That PR is a required
+  closure writeback, not a reopened implementation child and does not invent further runtime scope.
 
 ## Concretely
 
@@ -110,13 +111,15 @@ operators, or future agents still act on stale single-global-vault truth.
   records shipped scope/residual debt, while the parent reference contains merged MVR-01A–01C,
   MVR-02–04, MVR-05A–05D, MVR-06A–06D, and MVR-07 receipts,
   the MVR-08 candidate, and an explicit pointer making live #2143 authoritative for MVR-08 merge SHA
-  and closure status. Neither repo file predicts or must later mirror the parent close event.
+  and closure status. The required post-close docs receipt then records that exact live closure
+  evidence in both checked-in lifecycle surfaces.
   - Verify: doc writeback at `docs/MULTI_VAULT_RUNTIME/README.md :: Multi-vault runtime selection` +
     doc writeback at `docs/MULTI_VAULT_RUNTIME/PARENT_FEATURE_ISSUE.md :: Parent reference — Multi-vault runtime selection`
 - [ ] #2566 and #3156/#3163 show truthful dependency/status receipts with no duplicate scope.
   - Verify: GitHub comment receipts on issues `#2566`, `#3156`, and `#3163`
 - [ ] #2143 contains a complete child/AC/Verify/PR/SHA/owner-doc ledger and has no residual open
-  executable scope after MVR-08 merges; only then is the live issue closed.
+  executable runtime scope after MVR-08 merges; only then is the live issue closed, followed by the
+  required docs-only closure receipt PR.
   - Verify: runtime receipt on GitHub issue `#2143`
 
 ## Out of Scope
@@ -150,8 +153,9 @@ operators, or future agents still act on stale single-global-vault truth.
 - Run the opt-in integrated UAT in the same worktree and attach its exact merged SHA and result to
   #2143. A branch-local, dirty, stale, skipped, or missing-target run cannot close the parent.
 - Verify the merged README says shipped and the merged parent reference delegates live closure state
-  to #2143; post MVR-08's exact merge SHA to #2143 before closing it. Do not open a post-close docs PR
-  merely to mirror GitHub state.
+  to #2143; post MVR-08's exact merge SHA to #2143 before closing it. Immediately create the required
+  docs-only post-close receipt PR, verify its merged writeback of the live close state, and link that
+  PR from #2143 as the final historical receipt.
 
 ## Restart / Durability Posture
 

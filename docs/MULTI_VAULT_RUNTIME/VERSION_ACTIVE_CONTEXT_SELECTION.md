@@ -57,6 +57,13 @@ generation unknown. A process-global mutable manager cannot safely represent con
   provisioning action. A governed credential rotation preserves the role ID, while an explicitly
   added human/agent role receives a distinct principal. Update bootstrap, existing-install migration,
   channel init, and test fixtures in this slice before fail-closed enforcement is enabled.
+- Treat this new private delegated-principal record as a versioned runtime boundary. Before its first
+  durable write MVR-03 records a `minimum_runtime_principal` floor; the MVR-01 rollback launcher
+  and native preflight refuse an earlier credential-only image while that floor exists. Compatible
+  roll-forward exports the prior image's final credential/auth revision under lock, verifies its
+  recorded fork, and reconciles a credential rotation into the same role ID; missing, divergent, or
+  ambiguous auth state fails closed without overwriting either lineage. The floor may be lowered
+  only by a later explicitly verified reversible migration, never by scalar rollback.
 - Add production Companion endpoints to create, replace, inspect, and clear a TTL-bound selection.
   Creation returns the server-minted ID; later mutation/read requires that bearer ID plus the
   #2223 gate and the same server-resolved principal/instance/allowed scope. The existing
@@ -152,6 +159,10 @@ retrieval, settings, or write provenance to leak between humans or vaults.
   all produce the private versioned delegated-role binding before request selection is enabled;
   production API/CLI resolve it, rotation preserves it, and ambiguous/missing/unsafe state fails loud.
   - Verify: `tests/integration/test_local_operator_principal_bootstrap.py::test_existing_single_user_auth_migrates_to_distinct_delegated_role`
+- [ ] **MVR-03:** The delegated-principal migration records its minimum-runtime floor before its first
+  durable role write; credential-only rollback is blocked, while compatible roll-forward preserves
+  role identity and reconciles only an unambiguous credential rotation from its final old-image export.
+  - Verify: `tests/migrations/test_local_operator_principal_upgrade.py::test_principal_floor_blocks_credential_only_rollback_and_reconciles_safe_rollforward`
 - [ ] Existing auth-disabled/no-key loopback and server-configured trusted Companion proxy installs
   bootstrap the same private delegated role and keep production selection/governed writes working;
   forwarded-header spoofing and every other non-loopback peer fail until governed credential
