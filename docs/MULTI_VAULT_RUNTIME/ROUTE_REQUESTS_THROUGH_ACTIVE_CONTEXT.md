@@ -4,8 +4,8 @@ description: Migrate production HTTP retrieval and governed-write paths to immut
 task_id: MVR-05
 source_anchor: "docs/MULTI_VAULT_RUNTIME/README.md :: Active context and isolation"
 parent_capability: Multi-vault runtime selection
-prerequisites: [MVR-03, MVR-04]
-depends_on: [VERSION_ACTIVE_CONTEXT_SELECTION.md, GROUP_VAULT_BINDINGS_BY_DIMENSION.md]
+prerequisites: [MVR-03, MVR-04, SETTINGS-05]
+depends_on: [VERSION_ACTIVE_CONTEXT_SELECTION.md, GROUP_VAULT_BINDINGS_BY_DIMENSION.md, "#3163"]
 can_parallelize_with: []
 ---
 
@@ -39,6 +39,12 @@ not background lifecycles.
   consumer, fixture, and query together. Existing single-vault rows are assigned only when the
   legacy binding is provably unique; ambiguous rows are quarantined and rebuilt from their source
   vault under a fail-loud preflight—never copied to several bindings or guessed from a default.
+- Before enabling the first binding-keyed database producer or migrating any row, atomically set a
+  durable `minimum_runtime_schema=MVR-05` compatibility floor in instance state. Scalar pre-MVR
+  rollback is blocked from that point even on a one-binding instance, because the old API/worker
+  cannot safely filter or acknowledge binding-keyed projection/outbox rows. Promotion preflight
+  names this forward-only boundary; rollback remains available only to a build that understands at
+  least MVR-05. Apply invariant→producers to startup, migrations, fixtures, and rollback preflight.
 - Make many-binding reads explicit and provenance-preserving; require an explicit target binding
   for writes unless the command contract already provides one unambiguously.
 - Add an architecture guard against new direct process-global vault resolution in request code.
@@ -102,6 +108,10 @@ call site can leak retrieval context or write to the wrong human artifact surfac
 - [ ] Legacy single-vault projection rows backfill only with one provable binding; ambiguous rows
   block mixed-mode startup until quarantined/rebuilt, without destructive guessing.
   - Verify: `tests/migrations/test_multi_vault_projection_backfill.py::test_projection_backfill_is_unambiguous_or_fails_loud`
+- [ ] The migration records the MVR-05 minimum-runtime floor before any binding-keyed database
+  state is written; scalar rollback then fails before starting an old API/worker, including on a
+  one-binding instance, while a compatible roll-forward retains the full lineage.
+  - Verify: `tests/migrations/test_multi_vault_projection_backfill.py::test_projection_upgrade_blocks_scalar_rollback_before_first_write`
 - [ ] Production capture/governed-write paths require one explicit authorized target and record
   vault/context provenance in their receipt.
   - Verify: `tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt`
@@ -144,7 +154,7 @@ session/default context and never inherit an unrecorded process selection.
 
 ## Related GitHub Issues
 
-Create one child under #2143 after MVR-03/04. Use Sol/high for binding-key schema/backfill and
+Create one child under #2143 after MVR-03/04 and #3163. Use Sol/high for binding-key schema/backfill and
 authority review; Terra/high is acceptable only for decomposed mechanical call-site migration after
 those gates are fixed. This slice owns compatibility migration of the already-shipped picker;
 #2566 remains the separate downstream visual switcher/overlay issue.

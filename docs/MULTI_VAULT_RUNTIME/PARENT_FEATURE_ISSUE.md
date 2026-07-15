@@ -129,7 +129,7 @@ Preserves the invariant→producers rule from #1991/#1997, the no-silent-fallbac
 | 02 | [RESOLVE_INSTANCE_DEFAULT_VAULT](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/RESOLVE_INSTANCE_DEFAULT_VAULT.md) | filed after spec merge | blocked on 01 |
 | 03 | [VERSION_ACTIVE_CONTEXT_SELECTION](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/VERSION_ACTIVE_CONTEXT_SELECTION.md) | filed after spec merge | blocked on 01–02 |
 | 04 | [GROUP_VAULT_BINDINGS_BY_DIMENSION](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/GROUP_VAULT_BINDINGS_BY_DIMENSION.md) | filed after spec merge | blocked on 01 and 03 |
-| 05 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md) | filed after spec merge | blocked on 04 |
+| 05 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md) | filed after spec merge | blocked on 04 and #3163 |
 | 06 | [BIND_BACKGROUND_LIFECYCLES](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/BIND_BACKGROUND_LIFECYCLES.md) | filed after spec merge | blocked on 05 and #3163 |
 | 07 | [PRESERVE_SINGLE_VAULT_MIGRATION](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/PRESERVE_SINGLE_VAULT_MIGRATION.md) | filed after spec merge | blocked on 04–06 |
 | 08 | [PROMOTE_MULTI_VAULT_RUNTIME_TRUTH](https://github.com/RasmusTho/agentic-pkm-mvp/blob/main/docs/MULTI_VAULT_RUNTIME/PROMOTE_MULTI_VAULT_RUNTIME_TRUTH.md) | filed after spec merge | final validation child |

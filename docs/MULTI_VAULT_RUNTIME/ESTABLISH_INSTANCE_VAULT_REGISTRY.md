@@ -60,6 +60,11 @@ This slice promotes the existing seed without changing content-vault authority.
   that denies picker select/initialize mutations, and mounts only the chosen content root at the
   canonical legacy path. Startup preflight proves the direct port is absent, the gateway policy is
   active, and no broader host vault roots are mounted. A failed guard blocks rollback startup.
+- Treat later `minimum_runtime_schema` as a hard rollback floor. Once MVR-05 records that binding-
+  keyed database producers may exist, scalar rollback is forbidden even when the registry currently
+  names one binding: the old API/worker cannot safely query, dispatch, or acknowledge that shared
+  database state. Preserve the full registry/database lineage for a compatible roll-forward or a
+  rollback image at/above the recorded floor; do not synthesize a scalar database projection.
 - Before rolling forward again from the previous image, export and validate its latest legacy
   payload while it is still running, compare its recorded fork/base revision with the durable
   registry lineage, and transform rollback-period mutations into the next locked monotonic registry
@@ -173,6 +178,10 @@ single-vault package or can silently lose identity during migration.
   filtering gateway, publishes no bypass port, and mounts no content root except the validated
   target; production picker select/initialize calls for another path are rejected.
   - Verify: `tests/ops/test_scalar_rollback_guard.py::test_rollback_gateway_and_mounts_enforce_selected_binding`
+- [ ] A recorded MVR-05-or-later minimum-runtime floor blocks scalar API/worker startup before any
+  database connection or queue acknowledgement, preserving the full lineage for a compatible
+  rollback/roll-forward.
+  - Verify: `tests/ops/test_scalar_rollback_guard.py::test_binding_keyed_database_floor_blocks_scalar_runtime`
 - [ ] Registrations and last-active changes made by the previous image during rollback are imported
   as the next registry revision on roll-forward; divergent mutation, ambiguous identity, or invalid
   lineage fails before recreate without overwriting either side.

@@ -149,7 +149,7 @@ member binding independently. Removing a dimension does not remove its vault reg
 | 02 | [RESOLVE_INSTANCE_DEFAULT_VAULT](RESOLVE_INSTANCE_DEFAULT_VAULT.md) | explicit default and fail-closed precedence | 01 | Sol/high |
 | 03 | [VERSION_ACTIVE_CONTEXT_SELECTION](VERSION_ACTIVE_CONTEXT_SELECTION.md) | versioned request/session `ActiveContextSet` | 01, 02 | Sol/xhigh |
 | 04 | [GROUP_VAULT_BINDINGS_BY_DIMENSION](GROUP_VAULT_BINDINGS_BY_DIMENSION.md) | non-authoritative dimension membership and context resolution | 01, 03 | Sol/high design; Terra/high execution after contract freeze |
-| 05 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md) | production picker/HTTP/retrieval/write migration plus binding-scoped projections | 03, 04 | Sol/high schema/authority; Terra/high mechanical consumers |
+| 05 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md) | production picker/HTTP/retrieval/write migration plus binding-scoped projections | 03, 04, #3163 | Sol/high schema/authority; Terra/high mechanical consumers |
 | 06 | [BIND_BACKGROUND_LIFECYCLES](BIND_BACKGROUND_LIFECYCLES.md) | watcher/worker/settings lifecycle bindings and queued-work migration | 02–05, #3163 | Sol/xhigh |
 | 07 | [PRESERVE_SINGLE_VAULT_MIGRATION](PRESERVE_SINGLE_VAULT_MIGRATION.md) | compatibility adapters and migration fitness | 04, 05, 06 | Terra/high |
 | 08 | [PROMOTE_MULTI_VAULT_RUNTIME_TRUTH](PROMOTE_MULTI_VAULT_RUNTIME_TRUTH.md) | integrated proof, owner-doc/debt promotion, parent closure ledger | 01–07 | Terra/high review; Sol/high if residual architecture risk |
@@ -185,6 +185,9 @@ to #2143 and re-evaluates live GitHub and `origin/main` before the next pickup.
 - Rollback to a scalar image from non-scalar state requires one validated explicit target and keeps
   the complete new-schema lineage intact; ambiguity blocks startup instead of choosing by env or
   interaction history.
+- Once MVR-05 enables binding-keyed database state, a durable minimum-runtime floor blocks every
+  scalar pre-MVR rollback, including one-binding instances; rollback must use a compatible image
+  and never project shared projection/outbox tables into unsafe scalar semantics.
 
 Partial delivery remains fail-closed:
 

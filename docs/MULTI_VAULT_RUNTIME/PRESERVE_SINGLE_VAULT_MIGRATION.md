@@ -70,7 +70,9 @@ can break startup or strand durable state. Both failures are latent outages rath
 - Apply invariant→producers symmetrically: startup, migrations, fixtures, and preflights move in
   the same change as any fail-loud runtime precondition.
 - Do not delete a compatibility path without evidence for its production/external callers.
-- A rollback to one configured vault preserves meaning, attribution, receipts, and data.
+- A rollback to one configured vault preserves meaning, attribution, receipts, and data. After the
+  MVR-05 minimum-runtime floor is recorded, this means a rollback image that understands binding-
+  keyed database/outbox state; scalar pre-MVR rollback remains fail-closed.
 
 ## Acceptance Criteria
 
@@ -104,7 +106,9 @@ can break startup or strand durable state. Both failures are latent outages rath
 ## Restart / Durability Posture
 
 Migrated registry/default/dimension state survives restart and remains readable by the documented
-rollback path. No-vault remains idle; one-vault restarts against the same explicit identity. Any
+compatible rollback path. No-vault remains idle; one-vault restarts against the same explicit
+identity. The durable MVR-05 floor prevents a scalar image from touching binding-keyed shared
+database/outbox state. Any
 retained adapter is durable transition debt with a removal condition, not hidden behavior.
 
 ## Related Docs
