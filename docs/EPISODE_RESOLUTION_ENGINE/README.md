@@ -19,10 +19,10 @@ The owner requires every input source identified and part of the architecture. T
 | --- | --- | --- | --- | --- | --- |
 | `heimdal.observations` | **live** | observation-log cursor (`heimdal.observation.published`) | time, protagonist, goal, causation | Heimdal consent-gated (grant_ref) | Heimdal |
 | `vault.activity` | **live** | outbox `ingest.vault.changed` / `ingest.object.created` / `ingest.object.deleted` + frontmatter dimensions | time, goal, causation | vault-implicit, scope from frontmatter | Mimer |
-| `chat.sessions` | **live** | session log (`.chats/`, `session_id`, per-turn timestamps) | time, goal | vault-implicit | Mimer |
-| `decision.receipts` | **live** | receipt log + `decisions` projection / `decision.receipt` topic | time, goal, causation | vault-implicit | Mimer |
-| `kap.acquisitions` | **live** | `knowledge_acquisition.stage.completed` | time, goal (content-origin; low situational weight) | vault-implicit | Mimer |
-| `heimdal.attention` | **live** | attention log (daily `attention/YYYY-MM-DD.md`) | goal, protagonist | Heimdal-adjacent | Heimdal |
+| `chat.sessions` | **planned** (adapter pending) | session log (`.chats/`, `session_id`, per-turn timestamps); no ERE normalizer yet | time, goal | vault-implicit | Mimer |
+| `decision.receipts` | **planned** (adapter pending) | receipt log + `decisions` projection / `decision.receipt` topic; no ERE normalizer yet | time, goal, causation | vault-implicit | Mimer |
+| `kap.acquisitions` | **planned** (adapter pending) | `knowledge_acquisition.stage.completed`; no ERE normalizer yet | time, goal (content-origin; low situational weight) | vault-implicit | Mimer |
+| `heimdal.attention` | **planned** (adapter pending) | attention log (daily `attention/YYYY-MM-DD.md`); no ERE normalizer yet | goal, protagonist | Heimdal-adjacent | Heimdal |
 | `calendar` | **live** (ERE-09, #3184) | read-only CalDAV/ICS poll; credentials in private-bindings | time, protagonist, space (text), goal | per-calendar scope mapping | external via C3 |
 | `bifrost.native_capture` | **planned** (Epic B) | governed capture API / direct FS per MIMER_CLIENT_CONTRACT | space, protagonist, causation enrichment | Heimdal consent-gated | Bifrost→Heimdal |
 | `location` | **future** (ERE-10) | Heimdal v2 `modality: location` observations | space, time | Heimdal consent-gated (strict, opt-in per place/session) | Heimdal |
@@ -45,7 +45,7 @@ The owner requires every input source identified and part of the architecture. T
 | 9 | [CALENDAR_STREAM_ADAPTER](CALENDAR_STREAM_ADAPTER.md) | ERE-09 | 1, 4 |
 | 10 | [LOCATION_STREAM_FUTURE_POSTURE](LOCATION_STREAM_FUTURE_POSTURE.md) | ERE-10 | spec-only posture; no issue until the Heimdal v2 trigger fires |
 | 11 | [REGISTRY_DRIVEN_ADAPTER_DISPATCH](REGISTRY_DRIVEN_ADAPTER_DISPATCH.md) | ERE-11 | implementation receipt #3523 / PR #3727; 4, 9 (owner-optional Product/Runtime refactor) |
-| 12 | [RECONCILE_LIVE_STREAM_ADAPTER_CORRESPONDENCE](RECONCILE_LIVE_STREAM_ADAPTER_CORRESPONDENCE.md) | ERE-12 | 11 (owner-optional governance/refactor) |
+| 12 | [RECONCILE_LIVE_STREAM_ADAPTER_CORRESPONDENCE](RECONCILE_LIVE_STREAM_ADAPTER_CORRESPONDENCE.md) | ERE-12 | implementation active in #3524 / PR #3731; 11 (Product/Runtime SIP refactor) |
 
 Flat order: 1‖2‖3 → 4 → 5 → 6‖7‖8 → 9. ERE-10 is a declared posture, not a build step. ERE-11 → 12 is an owner-optional Product/Runtime refactor lane, off the critical build path: it generalizes the ingestion seam so the ERE-01 "registry entry + adapter, not an engine change" claim becomes literally true and the Input-source inventory's 1:1 registry-match property becomes fail-loud enforced. It changes no segmentation behavior.
 
@@ -59,7 +59,7 @@ Multiple tasks read/write the episode substrate; these invariants hold *across* 
 - **INV-ERE-D — no unflowed cross-scope state, ever.** At every seam (segment partition ERE-04, binding ERE-05, fusion ERE-08, decay derivation ERE-06) absence of a flow means the per-scope default. Partial failure: a fuse allowed but receipt write fails → the fuse aborts (receipt-before-note ordering); a denied fuse is audit-logged and dropped.
 - **INV-ERE-E — the engine never overwrites a human cut.** `accepted`/`re-cut` dimensions and cut are machine-terminal; new evidence becomes new proposals (ERE-07). Partial failure: re-cut detected but binding reconciliation crashes → stale bindings correct on next tick; the note (human truth) is already right, and bindings are corrections toward it.
 - **INV-ERE-F — idempotent under at-least-once.** Cursor replay and outbox redelivery never duplicate episodes, bindings, or closure events (fold-by-key + idempotency keys per house pattern). Partial failure: crash between consume and cursor-advance → reprocessing next tick, deduped.
-- **INV-ERE-G — live ⇒ has-adapter ⇒ consumed (ERE-11/12).** Every `status: live` registry entry resolves to exactly one dispatch adapter, and `run_segmentation_tick` consumes all and only the live-with-adapter streams via that dispatch — never a hardcoded per-stream block, never a silently-unconsumed live entry. The Input-source inventory's 1:1 registry-match property (above) is thereby machine-enforced, not aspirational. Partial-failure / transition walk: ERE-11's implementation and this owner-doc writeback travel atomically in #3523 / PR #3727: the tick resolves adapters from the registry-driven loop and makes an adapterless live entry *visible* (`no_adapter` tick-summary key) while preserving current runtime behavior (it stays unconsumed, tick does not crash). ERE-12 then reconciles the registry (a live entry with no adapter is downgraded to `planned` or gets one) and flips the guard to fail-loud, so after ERE-12 an adapterless live entry raises at the tick entrypoint instead of being skipped. Until ERE-12 lands this invariant remains **known-violated**: four live entries (`chat.sessions`, `decision.receipts`, `kap.acquisitions`, `heimdal.attention`) are reported but unconsumed, and the capability AC below (`test_engine_consumes_only_registered_streams`) asserts only enumeration parity, not consumption.
+- **INV-ERE-G — live ⇒ has-adapter ⇒ consumed (ERE-11/12).** Every `status: live` registry entry resolves to exactly one dispatch adapter, and `run_segmentation_tick` consumes all and only those live streams via registry-driven dispatch — never a hardcoded per-stream block, never a silently-unconsumed live entry. ERE-11 (#3523 / PR #3727) introduced registry-driven dispatch and exposed adapter gaps. ERE-12 (#3524) reconciles the four adapterless declarations to `planned` and validates the entire live set before any reader runs; an adapterless live entry now raises at the tick entrypoint. The capability test drives that production path and compares the streams actually read with the registry live set.
 
 ## Provisional thresholds (RQ-E1)
 
@@ -88,7 +88,7 @@ Delivered (ERE-06, #3181):
 
 ## Capability acceptance criteria
 
-- [ ] All live streams in the inventory are registered and consumed only via the registry (ERE-01/04). Verify: `tests/episodes/test_stream_registry.py::test_engine_consumes_only_registered_streams`
+- [x] All live streams in the inventory are registered and consumed only via the registry (ERE-01/04, enforced fail-loud by ERE-12). Verify: `tests/episodes/test_stream_registry.py::test_engine_consumes_only_registered_streams`
 - [ ] End-to-end on a fixture day: signals → proposed episodes → pending bindings → quiesce → closure → derived salience drop, all idempotent. Verify: `tests/episodes/test_capability_end_to_end.py::test_fixture_day_full_loop` (lands with ERE-06)
 - [ ] `observation_episode_binding_survives` enforced at `schema_enforced` + `runtime_test` (ERE-03/05). Verify: `tests/invariants/test_episode_binding.py::test_observation_episode_binding_survives`
 - [ ] No unflowed cross-scope episode/binding/decay path exists (ERE-08). Verify: `tests/invariants/test_cross_scope_flow.py::test_episode_fusion_denied_without_flow`
@@ -98,7 +98,7 @@ Delivered (ERE-06, #3181):
 
 ## Relationship to GitHub issues
 
-Parent feature issue: **#3175** (live validation hub, `agent:blocked`; see [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)). Children: ERE-01 → #3176, ERE-02 → #3177 (Tier 3: migration), ERE-03 → #3178; ERE-04 → #3179, ERE-05 → #3180, ERE-06 → #3181, ERE-07 → #3182, ERE-08 → #3183, ERE-09 → #3184; ERE-10 gets no issue until its trigger. ERE-11 → #3523 is a Product/Runtime SIP Tier 2 refactor (`lane:core-runtime`) implemented together with its owner-doc writeback in PR #3727. ERE-12 → #3524 is a separate follow-up that remains `agent:blocked` until ERE-11 merges; it owns registry reconciliation and the fail-loud flip, and directly repairs #3175's capability AC (the `test_engine_consumes_only_registered_streams` criterion currently asserts enumeration, not consumption — see INV-ERE-G). The spec is the source of truth; issues track execution state.
+Parent feature issue: **#3175** (live validation hub, `agent:blocked`; see [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)). Children: ERE-01 → #3176, ERE-02 → #3177 (Tier 3: migration), ERE-03 → #3178; ERE-04 → #3179, ERE-05 → #3180, ERE-06 → #3181, ERE-07 → #3182, ERE-08 → #3183, ERE-09 → #3184; ERE-10 gets no issue until its trigger. ERE-11 → #3523 is delivered by PR #3727 as a Product/Runtime SIP Tier 2 refactor. ERE-12 → #3524 is active in the same core-runtime lane via PR #3731; it reconciles the registry, flips adapter gaps to fail-loud, and makes `test_engine_consumes_only_registered_streams` drive the production tick and compare actual reads with the live set. The spec is the source of truth; issues track execution state.
 
 ## Open research carried (not blocking)
 

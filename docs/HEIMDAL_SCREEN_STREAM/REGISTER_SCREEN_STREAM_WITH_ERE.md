@@ -55,7 +55,7 @@ up before #3176 is delivered.
 $ python -m app.cli episodes streams --json | jq '.streams[] | select(.stream_id=="screen") | .status'
 "live"
 $ python -m app.cli episodes tick --json     # a day of screen spans now segments into episodes
-{"proposed_episodes": 6, "streams_consumed": ["screen", "vault.activity", "chat.sessions", ...]}
+{"proposed_episodes": 6, "streams_consumed": ["screen", "vault.activity", "calendar", ...]}
 ```
 
 ## Why This Matters

@@ -54,42 +54,6 @@ streams:
     owner_constituent: Mimer
     notes: "also outbox ingest.object.created / ingest.object.deleted + extract_context_dimensions_for_note"
 
-  - stream_id: chat.sessions
-    status: live
-    transport: "module:app.chat.session_log"
-    dimensions_fed: [time, goal]
-    consent_class: vault_implicit
-    cadence: continuous
-    owner_constituent: Mimer
-    notes: "session log under .chats/, session_id, per-turn timestamps"
-
-  - stream_id: decision.receipts
-    status: live
-    transport: "module:app.receipts.decision_receipt_log"
-    dimensions_fed: [time, goal, causation]
-    consent_class: vault_implicit
-    cadence: sparse
-    owner_constituent: Mimer
-    notes: "WriteGuard-gated receipt log + decisions projection"
-
-  - stream_id: kap.acquisitions
-    status: live
-    transport: "outbox:knowledge_acquisition.stage.completed"
-    dimensions_fed: [time, goal]
-    consent_class: vault_implicit
-    cadence: sparse
-    owner_constituent: Mimer
-    notes: "content-origin, low situational weight"
-
-  - stream_id: heimdal.attention
-    status: live
-    transport: "module:app.heimdal.attention_log"
-    dimensions_fed: [goal, protagonist]
-    consent_class: heimdal_adjacent
-    cadence: continuous
-    owner_constituent: Heimdal
-    notes: "attention log, daily attention/YYYY-MM-DD.md"
-
   - stream_id: calendar
     status: live
     transport: "module:app.episodes.calendar_stream"
@@ -100,6 +64,42 @@ streams:
     notes: "ERE-09 (#3184); read-only CalDAV/ICS poll, credentials in private-bindings, no register mutation"
 
   # --- planned ----------------------------------------------------------
+  - stream_id: chat.sessions
+    status: planned
+    transport: "module:app.chat.session_log"
+    dimensions_fed: [time, goal]
+    consent_class: vault_implicit
+    cadence: continuous
+    owner_constituent: Mimer
+    notes: "adapter pending; session log exists under .chats/ but no ERE normalizer consumes it"
+
+  - stream_id: decision.receipts
+    status: planned
+    transport: "module:app.receipts.decision_receipt_log"
+    dimensions_fed: [time, goal, causation]
+    consent_class: vault_implicit
+    cadence: sparse
+    owner_constituent: Mimer
+    notes: "adapter pending; receipt log/projection exists but no ERE normalizer consumes it"
+
+  - stream_id: kap.acquisitions
+    status: planned
+    transport: "outbox:knowledge_acquisition.stage.completed"
+    dimensions_fed: [time, goal]
+    consent_class: vault_implicit
+    cadence: sparse
+    owner_constituent: Mimer
+    notes: "adapter pending; acquisition events have no ERE normalizer"
+
+  - stream_id: heimdal.attention
+    status: planned
+    transport: "module:app.heimdal.attention_log"
+    dimensions_fed: [goal, protagonist]
+    consent_class: heimdal_adjacent
+    cadence: continuous
+    owner_constituent: Heimdal
+    notes: "adapter pending; attention log has no ERE normalizer"
+
   - stream_id: bifrost.native_capture
     status: planned
     transport: "governed_capture_api"
