@@ -129,6 +129,20 @@ def test_meaningful_terms_survive_stopword_filtering(tmp_path: Path) -> None:
     assert search.candidates[0].score > 0
 
 
+def test_cross_case_combining_mark_tokens_match(tmp_path: Path) -> None:
+    vault, store = _write_provisional(tmp_path, content="\u01f0")
+
+    search = retrieve_relevant_provisional(
+        "J\u030c",
+        vault_root=vault,
+        receipt_store=store,
+        active_scope_id="scope-personal",
+    )
+
+    assert len(search.candidates) == 1
+    assert search.candidates[0].score > 0
+
+
 def test_proposal_use_requires_explicit_citation(tmp_path: Path) -> None:
     _, _, candidate = _candidate(tmp_path)
     denied = activate_provisional_recall(

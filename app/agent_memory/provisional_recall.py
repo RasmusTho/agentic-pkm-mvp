@@ -445,10 +445,11 @@ def _tier_rank(tier: AdmissionTier) -> int:
 
 
 def _tokens(value: str) -> set[str]:
+    normalized = unicodedata.normalize("NFC", value.casefold())
     return {
-        token
-        for match in _TOKEN_RE.finditer(unicodedata.normalize("NFC", value))
-        if (token := match.group(0).casefold()) not in _STOPWORDS
+        match.group(0)
+        for match in _TOKEN_RE.finditer(normalized)
+        if match.group(0) not in _STOPWORDS
     }
 
 
