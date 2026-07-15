@@ -1,4 +1,4 @@
-State: Specification. Execution source for the undelivered provisional/low-trust direct-write memory boundary in epic #2314. No runtime support is claimed until all tasks and parent validation are complete.
+State: Delivered capability execution source for the provisional/low-trust direct-write memory boundary. Issues #3718–#3721 implement the record, governed producer, bounded consumer, and deterministic security/eval gate; epic #2314 remains the broader validation hub.
 Doc role: Capability specification and execution index
 Authority: Breaks down ADR-0025 and the Agent Memory / MemoryItem contracts into bounded implementation tasks. Semantic authority remains in those owner contracts.
 
@@ -76,16 +76,16 @@ security/eval closure. The last task validates the composed capability, not only
 
 ## Capability-Level Acceptance Criteria
 
-- [ ] Direct writes create a provisional, noncanonical memory artifact with provenance and a
+- [x] Direct writes create a provisional, noncanonical memory artifact with provenance and a
   receipt-bearing lifecycle; no silent promotion occurs.
   Verify: `tests/agent_memory/test_provisional_memory_api.py::test_direct_write_creates_provisional_artifact_and_receipt`
-- [ ] The production write and recall paths enforce the read/cited-proposal ceiling and can never
+- [x] The production write and recall paths enforce the read/cited-proposal ceiling and can never
   authorize mutation.
   Verify: `tests/agent_memory/test_provisional_memory_call_sites.py::test_provisional_memory_cannot_reach_action_authority`
-- [ ] Failure between artifact and receipt persistence is recoverable and never produces an
+- [x] Failure between artifact and receipt persistence is recoverable and never produces an
   admitted orphan.
   Verify: `tests/agent_memory/test_provisional_memory_failures.py::test_partial_write_fails_closed_and_reconciles`
-- [ ] The bilingual deterministic eval and poisoning suite remain green for provisional-memory
+- [x] The bilingual deterministic eval and poisoning suite remain green for provisional-memory
   scenarios.
   Verify: `tests/eval/test_provisional_memory_boundary.py::test_bilingual_provisional_memory_boundary`
 
@@ -118,8 +118,8 @@ Parent validation hub: #2314. Strictly validated task Issues:
 
 1. #3718 — PROVISIONAL-MEMORY-01 (delivered)
 2. #3719 — PROVISIONAL-MEMORY-02 (delivered)
-3. #3720 — PROVISIONAL-MEMORY-03 (implemented; delivery governed by #3720)
-4. #3721 — PROVISIONAL-MEMORY-04 (blocked by #3720 until its merge receipt)
+3. #3720 — PROVISIONAL-MEMORY-03 (delivered by PR #3743)
+4. #3721 — PROVISIONAL-MEMORY-04 (delivered security/eval closure)
 
 No task may claim #2314 itself. After each merge, the coordinator updates the validation ledger on
 #2314 and recalculates which single dependent Issue can truthfully become ready.
